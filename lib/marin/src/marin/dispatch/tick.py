@@ -3,6 +3,7 @@
 
 """Single-tick dispatch logic: query status, decide, launch agent, persist."""
 
+import fcntl
 import json
 import logging
 import subprocess
@@ -126,7 +127,39 @@ def should_dispatch(
     return False
 
 
+def _lock_path(repo_root: Path, collection_name: str) -> Path:
+    lock_dir = repo_root / ".agents" / "collections"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    return lock_dir / f"{collection_name}.lock"
+
+
 def process_tick(
+    collection_name: str,
+    event_kind: TickEventKind,
+    agent: AgentSession,
+    repo_root: Path,
+) -> TickOutcome:
+    outcome = TickOutcome(collection_name=collection_name)
+
+    lock_file = _lock_path(repo_root, collection_name)
+    lock_fd = open(lock_file, "w")
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        logger.warning("Collection %s is already being processed, skipping", collection_name)
+        lock_fd.close()
+        return outcome
+
+    try:
+        outcome = _process_tick_locked(collection_name, event_kind, agent, repo_root)
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+
+    return outcome
+
+
+def _process_tick_locked(
     collection_name: str,
     event_kind: TickEventKind,
     agent: AgentSession,
@@ -212,17 +245,27 @@ def _handle_result(
         else:
             logger.error("Failed to push logbook update for %s", event.collection_name)
             state.consecutive_failures += 1
-            state.last_error = "push failed after rebase retries"
+            state.last_error = "push failed after merge retries"
             outcome.failed += 1
     else:
         state.consecutive_failures += 1
         state.last_error = result.error or "unknown error"
         outcome.failed += 1
 
+    # Post issue comment: include failure context when the agent itself failed.
     if result.issue_comment:
         post_progress_comment(
             event.issue,
             result.issue_comment,
+            event.collection_name,
+            event.branch,
+            event.logbook,
+        )
+    elif not result.success:
+        error_detail = result.error or state.last_error or "unknown error"
+        post_progress_comment(
+            event.issue,
+            f"Agent dispatch failed: {error_detail}",
             event.collection_name,
             event.branch,
             event.logbook,

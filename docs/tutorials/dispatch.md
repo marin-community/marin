@@ -92,8 +92,14 @@ uv run scripts/dispatch.py update isoflop-sweep --paused false
 # Update the prompt
 uv run scripts/dispatch.py update isoflop-sweep --prompt "New instructions..."
 
-# Remove a run by index
-uv run scripts/dispatch.py remove-run isoflop-sweep --index 0
+# Remove a run by job ID
+uv run scripts/dispatch.py remove-run isoflop-sweep --job-id raysubmit_abc123
+
+# Reset failure count after manual intervention
+uv run scripts/dispatch.py reset-failures isoflop-sweep
+
+# Reset a specific run only
+uv run scripts/dispatch.py reset-failures isoflop-sweep --job-id raysubmit_abc123
 
 # Delete a collection entirely
 uv run scripts/dispatch.py delete isoflop-sweep
@@ -116,6 +122,6 @@ Each `tick` invocation:
 
 **Agent produces no output:** Check that `claude` or `codex` CLI is installed and authenticated.
 
-**Push failures:** The dispatcher retries with `git pull --rebase` up to 3 times. If rebase conflicts occur on non-logbook files, the push is aborted and logged as a failure.
+**Push failures:** The dispatcher retries with `git pull --no-rebase` (merge) up to 3 times. If merge conflicts occur, the push is aborted and logged as a failure.
 
-**Escalation posted:** After 3 consecutive agent failures on a run, the dispatcher posts an escalation comment and stops dispatching for that run. Fix the issue manually, then reset by updating the state file or re-registering.
+**Escalation posted:** After 3 consecutive agent failures on a run, the dispatcher posts an escalation comment and stops dispatching for that run. Fix the issue manually, then run `reset-failures` to resume dispatching.

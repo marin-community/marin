@@ -108,7 +108,7 @@ def test_add_and_remove_run(mock_root, tmp_path):
     assert len(c.runs) == 1
     assert c.runs[0].ray.job_id == "ray-123"
 
-    result = runner.invoke(cli, ["remove-run", "s2", "--index", "0"])
+    result = runner.invoke(cli, ["remove-run", "s2", "--job-id", "ray-123"])
     assert result.exit_code == 0
     c = load_collection(tmp_path, "s2")
     assert len(c.runs) == 0
@@ -164,8 +164,8 @@ def test_remove_run_updates_state(mock_root, tmp_path):
         ],
     )
 
-    # Remove the middle run (index 1).
-    result = runner.invoke(cli, ["remove-run", "s5", "--index", "1"])
+    # Remove the middle run by job-id.
+    result = runner.invoke(cli, ["remove-run", "s5", "--job-id", "ray-2"])
     assert result.exit_code == 0
 
     c = load_collection(tmp_path, "s5")
@@ -177,6 +177,26 @@ def test_remove_run_updates_state(mock_root, tmp_path):
     assert len(states) == 2
     assert states[0].last_status == RunStatus.RUNNING
     assert states[1].last_status == RunStatus.SUCCEEDED
+
+
+@patch("marin.dispatch.cli._resolve_repo_root")
+def test_reset_failures(mock_root, tmp_path):
+    """reset-failures zeroes consecutive_failures so dispatching resumes."""
+    mock_root.return_value = tmp_path
+    runner = CliRunner()
+    runner.invoke(
+        cli,
+        ["register", "--name", "s6", "--prompt", "p", "--logbook", "l.md", "--branch", "b", "--issue", "1"],
+    )
+    runner.invoke(cli, ["add-run", "s6", "--track", "ray", "--job-id", "ray-1", "--cluster", "c", "--experiment", "e"])
+    save_state(tmp_path, "s6", [RunState(last_status=RunStatus.FAILED, consecutive_failures=5, last_error="OOM")])
+
+    result = runner.invoke(cli, ["reset-failures", "s6"])
+    assert result.exit_code == 0
+
+    states = load_state(tmp_path, "s6")
+    assert states[0].consecutive_failures == 0
+    assert states[0].last_error == ""
 
 
 @patch("marin.dispatch.cli._resolve_repo_root")

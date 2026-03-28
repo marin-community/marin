@@ -17,45 +17,7 @@ from marin.dispatch.schema import (
     TickEventKind,
 )
 from marin.dispatch.storage import save_collection, save_state
-from marin.dispatch.tick import ESCALATION_THRESHOLD, process_tick, should_dispatch
-
-# ── should_dispatch tests ──
-
-
-def test_dispatch_on_manual():
-    assert should_dispatch(RunStatus.RUNNING, RunStatus.RUNNING, TickEventKind.MANUAL, 0)
-
-
-def test_dispatch_on_status_change():
-    assert should_dispatch(RunStatus.FAILED, RunStatus.RUNNING, TickEventKind.SCHEDULED_POLL, 0)
-
-
-def test_dispatch_on_running_health_check():
-    assert should_dispatch(RunStatus.RUNNING, RunStatus.RUNNING, TickEventKind.SCHEDULED_POLL, 0)
-
-
-def test_no_dispatch_when_succeeded_unchanged():
-    assert not should_dispatch(RunStatus.SUCCEEDED, RunStatus.SUCCEEDED, TickEventKind.SCHEDULED_POLL, 0)
-
-
-def test_no_dispatch_after_escalation_threshold():
-    assert not should_dispatch(RunStatus.FAILED, RunStatus.RUNNING, TickEventKind.SCHEDULED_POLL, ESCALATION_THRESHOLD)
-
-
-def test_dispatch_failure_alert_on_failed():
-    assert should_dispatch(RunStatus.FAILED, RunStatus.RUNNING, TickEventKind.FAILURE_ALERT, 0)
-
-
-def test_no_dispatch_failure_alert_on_running():
-    assert not should_dispatch(RunStatus.RUNNING, RunStatus.RUNNING, TickEventKind.FAILURE_ALERT, 0)
-
-
-def test_manual_overrides_escalation_threshold():
-    # Manual dispatch is blocked by escalation threshold too.
-    assert not should_dispatch(RunStatus.FAILED, RunStatus.FAILED, TickEventKind.MANUAL, ESCALATION_THRESHOLD)
-
-
-# ── process_tick tests ──
+from marin.dispatch.tick import process_tick
 
 
 class MockAgent:

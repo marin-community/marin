@@ -16,6 +16,7 @@ from marin.dispatch.schema import (
     MonitoringCollection,
     RayRunConfig,
     RunPointer,
+    RunState,
     RunTrack,
     TickEventKind,
 )
@@ -186,15 +187,24 @@ def add_run(
 
 @cli.command("remove-run")
 @click.argument("name")
-@click.option("--index", required=True, type=int, help="Run index to remove")
+@click.option("--job-id", required=True, help="Job ID of the run to remove")
 @click.pass_context
-def remove_run(ctx: click.Context, name: str, index: int) -> None:
-    """Remove a run pointer by index."""
+def remove_run(ctx: click.Context, name: str, job_id: str) -> None:
+    """Remove a run pointer by job ID."""
     repo_root = ctx.obj["repo_root"]
     collection = load_collection(repo_root, name)
+
+    index: int | None = None
+    for i, rp in enumerate(collection.runs):
+        rp_job_id = rp.ray.job_id if rp.ray else (rp.iris.job_id if rp.iris else None)
+        if rp_job_id == job_id:
+            index = i
+            break
+
+    if index is None:
+        raise click.UsageError(f"No run with job-id '{job_id}' in collection {name}")
+
     runs = list(collection.runs)
-    if index < 0 or index >= len(runs):
-        raise click.UsageError(f"Invalid index {index}, collection has {len(runs)} runs")
     removed = runs.pop(index)
     updated = replace(collection, runs=tuple(runs))
     save_collection(repo_root, updated)
@@ -205,8 +215,7 @@ def remove_run(ctx: click.Context, name: str, index: int) -> None:
         states.pop(index)
         save_state(repo_root, name, states)
 
-    job_id = removed.ray.job_id if removed.ray else (removed.iris.job_id if removed.iris else "?")
-    click.echo(f"Removed run [{index}] ({removed.track}: {job_id}) from {name}")
+    click.echo(f"Removed run ({removed.track}: {job_id}) from {name}")
 
 
 @cli.command()
@@ -236,6 +245,39 @@ def tick(ctx: click.Context, collection: str | None, event_kind: str, agent_type
             f"  dispatched={outcome.dispatched} succeeded={outcome.succeeded} "
             f"failed={outcome.failed} escalated={outcome.escalated}"
         )
+
+
+@cli.command("reset-failures")
+@click.argument("name")
+@click.option("--job-id", default=None, help="Reset only this run; omit to reset all")
+@click.pass_context
+def reset_failures(ctx: click.Context, name: str, job_id: str | None) -> None:
+    """Reset consecutive failure count so dispatching resumes after manual intervention."""
+    repo_root = ctx.obj["repo_root"]
+    collection = load_collection(repo_root, name)
+    states = load_state(repo_root, name)
+    while len(states) < len(collection.runs):
+        states.append(RunState())
+
+    if job_id is not None:
+        index: int | None = None
+        for i, rp in enumerate(collection.runs):
+            rp_job_id = rp.ray.job_id if rp.ray else (rp.iris.job_id if rp.iris else None)
+            if rp_job_id == job_id:
+                index = i
+                break
+        if index is None:
+            raise click.UsageError(f"No run with job-id '{job_id}' in collection {name}")
+        states[index].consecutive_failures = 0
+        states[index].last_error = ""
+        click.echo(f"Reset failures for run {job_id} in {name}")
+    else:
+        for s in states:
+            s.consecutive_failures = 0
+            s.last_error = ""
+        click.echo(f"Reset failures for all runs in {name}")
+
+    save_state(repo_root, name, states)
 
 
 @cli.command()

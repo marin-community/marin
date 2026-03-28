@@ -20,14 +20,24 @@ def _run_git(args: list[str], cwd: Path, check: bool = True) -> subprocess.Compl
 def setup_worktree(repo_root: Path, branch: str) -> Path:
     """Create a temporary git worktree checked out at the given branch.
 
-    If the branch does not exist locally, attempts to check it out from origin.
+    If the branch does not exist locally or on the remote, it is created from HEAD.
     Returns the path to the worktree directory.
     """
     worktree_dir = Path(tempfile.mkdtemp(prefix="dispatch-wt-"))
 
+    # Try to fetch the remote branch (harmless if it doesn't exist).
     _run_git(["fetch", "origin", branch], cwd=repo_root, check=False)
-    # Create local branch from remote if it doesn't exist yet (harmless if it does).
-    _run_git(["branch", branch, f"origin/{branch}"], cwd=repo_root, check=False)
+
+    # Check if the branch exists locally or on the remote.
+    local_exists = _run_git(["rev-parse", "--verify", branch], cwd=repo_root, check=False).returncode == 0
+    remote_exists = _run_git(["rev-parse", "--verify", f"origin/{branch}"], cwd=repo_root, check=False).returncode == 0
+
+    if not local_exists and remote_exists:
+        _run_git(["branch", branch, f"origin/{branch}"], cwd=repo_root, check=False)
+    elif not local_exists and not remote_exists:
+        # Bootstrap: create the branch from HEAD so first tick doesn't fail.
+        _run_git(["branch", branch], cwd=repo_root)
+        logger.info("Created new branch %s from HEAD", branch)
 
     _run_git(["worktree", "add", str(worktree_dir), branch], cwd=repo_root)
     logger.info("Created worktree at %s for branch %s", worktree_dir, branch)
@@ -56,7 +66,7 @@ def commit_and_push(
     branch: str,
     max_retries: int = 3,
 ) -> bool:
-    """Stage the logbook, commit, and push. Retries with rebase on conflict.
+    """Stage the logbook, commit, and push. Retries with merge on conflict.
 
     Returns True on success, False if all retries are exhausted.
     """
@@ -81,10 +91,10 @@ def commit_and_push(
 
         logger.warning("Push failed (attempt %d/%d): %s", attempt, max_retries, push.stderr.strip())
         if attempt < max_retries:
-            rebase = _run_git(["pull", "--rebase", "origin", branch], cwd=worktree_path, check=False)
-            if rebase.returncode != 0:
-                logger.error("Rebase failed: %s", rebase.stderr.strip())
-                _run_git(["rebase", "--abort"], cwd=worktree_path, check=False)
+            merge = _run_git(["pull", "--no-rebase", "origin", branch], cwd=worktree_path, check=False)
+            if merge.returncode != 0:
+                logger.error("Merge failed: %s", merge.stderr.strip())
+                _run_git(["merge", "--abort"], cwd=worktree_path, check=False)
                 return False
 
     return False

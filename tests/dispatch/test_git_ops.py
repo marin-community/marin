@@ -111,7 +111,7 @@ def test_commit_and_push_conflict_retry(tmp_path):
         subprocess.run(["git", "push", "origin", "research/conflict"], cwd=str(clone2), check=True, capture_output=True)
 
         # Now commit_and_push from wt1 — first push will fail (non-fast-forward),
-        # rebase will succeed (no real conflict), and retry push will work.
+        # merge will succeed (no real conflict), and retry push will work.
         # Since we already committed, git add + status will show nothing new,
         # but the existing unpushed commit still needs to be pushed.
         # We need to call the push-retry part. Let's add another entry so there's
