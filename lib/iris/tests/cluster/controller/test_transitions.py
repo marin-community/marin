@@ -3145,6 +3145,80 @@ def test_prune_noop_when_nothing_old(state):
 
 
 # =============================================================================
+# drain_dispatch_all Tests
+# =============================================================================
+
+
+def test_drain_dispatch_all_excludes_reservation_holders(state):
+    """drain_dispatch_all returns running tasks but filters out reservation-holder tasks."""
+    wid = register_worker(state, "w1", "host:8080", make_worker_metadata())
+
+    # Submit a normal job and assign/run its task
+    normal_req = make_job_request("normal-job")
+    normal_tasks = submit_job(state, "normal-job", normal_req)
+    dispatch_task(state, normal_tasks[0], wid)
+
+    # Submit a reservation-holder job: mark it as is_reservation_holder in the DB
+    holder_req = make_job_request("holder-job")
+    holder_tasks = submit_job(state, "holder-job", holder_req)
+    holder_job_id = JobName.root("test-user", "holder-job")
+    state._db.execute(
+        "UPDATE jobs SET is_reservation_holder = 1 WHERE job_id = ?",
+        (holder_job_id.to_wire(),),
+    )
+    dispatch_task(state, holder_tasks[0], wid)
+
+    batches = state.drain_dispatch_all()
+    assert len(batches) == 1
+    batch = batches[0]
+    running_task_ids = {entry.task_id for entry in batch.running_tasks}
+
+    # Normal task should be present, reservation-holder task should be excluded.
+    assert normal_tasks[0].task_id in running_task_ids
+    assert holder_tasks[0].task_id not in running_task_ids
+
+
+def test_drain_dispatch_all_drains_dispatch_queue(state):
+    """drain_dispatch_all drains queued dispatches and deletes them from the queue."""
+    wid = register_worker(state, "w1", "host:8080", make_worker_metadata())
+
+    req = make_job_request("j1")
+    tasks = submit_job(state, "j1", req)
+    state.queue_assignments([Assignment(task_id=tasks[0].task_id, worker_id=wid)])
+
+    # Queue should have an entry
+    rows_before = state._db.fetchall("SELECT * FROM dispatch_queue WHERE worker_id = ?", (str(wid),))
+    assert len(rows_before) > 0
+
+    batches = state.drain_dispatch_all()
+    assert len(batches) == 1
+    assert len(batches[0].tasks_to_run) > 0
+
+    # Queue should be empty after drain
+    rows_after = state._db.fetchall("SELECT * FROM dispatch_queue WHERE worker_id = ?", (str(wid),))
+    assert len(rows_after) == 0
+
+
+def test_prune_old_data_short_circuits_when_nothing_prunable(state):
+    """prune_old_data skips the write lock when a read_snapshot shows nothing to prune."""
+    # Submit a running job so the DB is non-empty but nothing is terminal/old.
+    wid = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = make_job_request("active-job")
+    tasks = submit_job(state, "active-job", req)
+    dispatch_task(state, tasks[0], wid)
+
+    result = state.prune_old_data(
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        log_retention=Duration.from_seconds(86400),
+        txn_action_retention=Duration.from_seconds(86400),
+    )
+
+    assert result == PruneResult()
+    assert result.total == 0
+
+
+# =============================================================================
 # Direct Provider Transition Tests
 # =============================================================================
 

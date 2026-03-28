@@ -1629,15 +1629,26 @@ class ControllerTransitions:
             ).fetchall()
             if dispatch_rows:
                 cur.execute("DELETE FROM dispatch_queue WHERE worker_id = ?", (str(worker_id),))
-            running_rows = cur.execute(
-                "SELECT t.task_id, t.current_attempt_id "
+            running_rows_raw = cur.execute(
+                "SELECT t.task_id, t.current_attempt_id, t.job_id "
                 "FROM tasks t "
                 "JOIN task_attempts ta ON t.task_id = ta.task_id AND t.current_attempt_id = ta.attempt_id "
-                "JOIN jobs j ON j.job_id = t.job_id "
-                "WHERE ta.worker_id = ? AND t.state IN (?, ?, ?) AND j.is_reservation_holder = 0 "
+                "WHERE ta.worker_id = ? AND t.state IN (?, ?, ?) "
                 "ORDER BY t.task_id ASC",
                 (str(worker_id), *ACTIVE_TASK_STATES),
             ).fetchall()
+            # Filter out reservation-holder tasks in Python.
+            running_job_ids = {str(row["job_id"]) for row in running_rows_raw}
+            if running_job_ids:
+                holder_placeholders = ",".join("?" for _ in running_job_ids)
+                holder_rows = cur.execute(
+                    f"SELECT job_id FROM jobs WHERE job_id IN ({holder_placeholders}) AND is_reservation_holder = 1",
+                    tuple(running_job_ids),
+                ).fetchall()
+                holder_ids = {str(r["job_id"]) for r in holder_rows}
+            else:
+                holder_ids = set()
+            running_rows = [r for r in running_rows_raw if str(r["job_id"]) not in holder_ids]
             tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest] = []
             tasks_to_kill: list[str] = []
             for row in dispatch_rows:
@@ -1662,7 +1673,37 @@ class ControllerTransitions:
             )
 
     def drain_dispatch_all(self) -> list[DispatchBatch]:
-        """Drain buffered dispatches and snapshot running tasks for all healthy active workers in one transaction."""
+        """Drain buffered dispatches and snapshot running tasks for all healthy active workers.
+
+        The running-tasks read uses a read_snapshot (no write lock) to avoid
+        blocking RPCs. Only the dispatch-queue drain needs the write lock.
+        """
+        # Phase 1: read running tasks without the write lock (2-way JOIN, no JOIN jobs).
+        # Reservation-holder tasks are filtered in Python via a cheap job_id lookup.
+        with self._db.read_snapshot() as snap:
+            running_rows_raw = snap.raw(
+                "SELECT ta.worker_id, t.task_id, t.current_attempt_id, t.job_id "
+                "FROM tasks t "
+                "JOIN task_attempts ta ON t.task_id = ta.task_id AND t.current_attempt_id = ta.attempt_id "
+                "WHERE t.state IN (?, ?, ?) "
+                "ORDER BY t.task_id ASC",
+                (*ACTIVE_TASK_STATES,),
+            )
+            # Collect job_ids that are reservation holders so we can filter them out.
+            job_ids_in_running = {str(row.job_id) for row in running_rows_raw}
+            if job_ids_in_running:
+                job_placeholders = ",".join("?" for _ in job_ids_in_running)
+                holder_rows = snap.raw(
+                    f"SELECT job_id FROM jobs WHERE job_id IN ({job_placeholders}) AND is_reservation_holder = 1",
+                    tuple(job_ids_in_running),
+                )
+                reservation_holder_ids = {str(r.job_id) for r in holder_rows}
+            else:
+                reservation_holder_ids = set()
+
+            running_rows = [row for row in running_rows_raw if str(row.job_id) not in reservation_holder_ids]
+
+        # Phase 2: drain dispatch queue (requires write lock).
         with self._db.transaction() as cur:
             worker_rows = cur.execute(
                 "SELECT worker_id, address, metadata_proto FROM workers WHERE active = 1 AND healthy = 1"
@@ -1683,23 +1724,13 @@ class ControllerTransitions:
                     tuple(worker_id_set),
                 )
 
-            running_rows = cur.execute(
-                "SELECT ta.worker_id, t.task_id, t.current_attempt_id "
-                "FROM tasks t "
-                "JOIN task_attempts ta ON t.task_id = ta.task_id AND t.current_attempt_id = ta.attempt_id "
-                "JOIN jobs j ON j.job_id = t.job_id "
-                "WHERE t.state IN (?, ?, ?) AND j.is_reservation_holder = 0 "
-                "ORDER BY t.task_id ASC",
-                (*ACTIVE_TASK_STATES,),
-            ).fetchall()
-
             dispatch_by_worker: dict[str, list[Any]] = defaultdict(list)
             for row in dispatch_rows:
                 dispatch_by_worker[str(row["worker_id"])].append(row)
 
             running_by_worker: dict[str, list[Any]] = defaultdict(list)
             for row in running_rows:
-                running_by_worker[str(row["worker_id"])].append(row)
+                running_by_worker[str(row.worker_id)].append(row)
 
             batches: list[DispatchBatch] = []
             for worker_row in worker_rows:
@@ -1723,8 +1754,8 @@ class ControllerTransitions:
                         worker_address=str(worker_row["address"]),
                         running_tasks=[
                             RunningTaskEntry(
-                                task_id=JobName.from_wire(str(row["task_id"])),
-                                attempt_id=int(row["current_attempt_id"]),
+                                task_id=JobName.from_wire(str(row.task_id)),
+                                attempt_id=int(row.current_attempt_id),
                             )
                             for row in w_running
                         ],
@@ -1818,7 +1849,32 @@ class ControllerTransitions:
         log_cutoff_ms = now_ms - log_retention.to_ms()
         txn_cutoff_ms = now_ms - txn_action_retention.to_ms()
 
+        # Short-circuit: check if any prunable data exists before taking the write lock.
+        # This avoids holding the lock for hundreds of milliseconds when nothing needs deletion.
         terminal_states = tuple(TERMINAL_JOB_STATES)
+        with self._db.read_snapshot() as snap:
+            terminal_placeholders = ",".join("?" * len(terminal_states))
+            has_old_jobs = snap.fetchone(
+                f"SELECT 1 FROM jobs WHERE state IN ({terminal_placeholders})"
+                " AND finished_at_ms IS NOT NULL AND finished_at_ms < ? LIMIT 1",
+                (*terminal_states, job_cutoff_ms),
+            )
+            has_old_workers = snap.fetchone(
+                "SELECT 1 FROM workers WHERE (active = 0 OR healthy = 0) AND last_heartbeat_ms < ? LIMIT 1",
+                (worker_cutoff_ms,),
+            )
+            has_old_logs = snap.fetchone(
+                "SELECT 1 FROM logs WHERE epoch_ms < ? LIMIT 1",
+                (log_cutoff_ms,),
+            )
+            has_old_txn = snap.fetchone(
+                "SELECT 1 FROM txn_actions WHERE created_at_ms < ? LIMIT 1",
+                (txn_cutoff_ms,),
+            )
+
+        if not (has_old_jobs or has_old_workers or has_old_logs or has_old_txn):
+            return PruneResult()
+
         actions: list[tuple[str, str, dict[str, object]]] = []
 
         with self._db.transaction() as cur:
