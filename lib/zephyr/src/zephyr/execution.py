@@ -131,6 +131,10 @@ class CounterSnapshot:
     counters: dict[str, int]
     generation: int
 
+    @staticmethod
+    def empty(generation: int = 0) -> CounterSnapshot:
+        return CounterSnapshot(counters={}, generation=generation)
+
 
 @dataclass
 class TaskResult:
@@ -515,7 +519,7 @@ class ZephyrCoordinator:
         # from the old task are rejected.
         existing = self._worker_counters.get(worker_id)
         if existing is not None:
-            self._worker_counters[worker_id] = CounterSnapshot(counters={}, generation=existing.generation)
+            self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
 
     def _check_worker_heartbeats(self, timeout: float = 120.0) -> None:
         """Internal heartbeat check (called with lock held)."""
@@ -604,7 +608,7 @@ class ZephyrCoordinator:
             self._completed_counters.append(counter_snapshot)
             # Zero the in-flight counters but keep the generation watermark
             # so late heartbeats from this task are rejected.
-            self._worker_counters[worker_id] = CounterSnapshot(counters={}, generation=counter_snapshot.generation)
+            self._worker_counters[worker_id] = CounterSnapshot.empty(counter_snapshot.generation)
 
     def report_error(self, worker_id: str, shard_idx: int, error_info: str) -> None:
         """Worker reports a task failure. All errors are fatal."""
@@ -616,7 +620,7 @@ class ZephyrCoordinator:
             # heartbeats from this task are rejected.
             existing = self._worker_counters.get(worker_id)
             if existing is not None:
-                self._worker_counters[worker_id] = CounterSnapshot(counters={}, generation=existing.generation)
+                self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
             self._fatal_error = error_info
             self._worker_states[worker_id] = WorkerState.DEAD
 
