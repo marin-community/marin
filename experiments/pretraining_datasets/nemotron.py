@@ -9,7 +9,7 @@ import os.path
 from experiments.defaults import DEFAULT_NEW_RUN_DATA_SHUFFLE
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from marin.datakit.download.nemotron_v1 import download_nemotron_v1_step
-from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
@@ -18,14 +18,18 @@ def nemotron_cc_download() -> ExecutorStep:
     return download_nemotron_v1_step().as_executor_step()
 
 
+# These globs use .jsonl.gz (not .jsonl.*) to preserve the version hash that
+# NEMOTRON_LLAMA3_OVERRIDES were computed against. The tokenize steps never
+# re-execute because with_output_path() pins them to existing outputs.
+# If retokenizing, update these to .jsonl.zst (current download format).
 NEMOTRON_DATASETS = {
-    "hq_actual": ["quality=high/kind=actual/**/*.jsonl.*"],
-    "hq_synth": ["quality=high/kind=synthetic/**/*.jsonl.*"],
-    "medium_high": ["quality=medium-high/**/*.jsonl.*"],
-    "medium": ["quality=medium/**/*.jsonl.*"],
-    "medium_low": ["quality=medium-low/**/*.jsonl.*"],
-    "low_actual": ["quality=low/kind=actual/**/*.jsonl.*"],
-    "low_synth": ["quality=low/kind=synthetic/**/*.jsonl.*"],
+    "hq_actual": ["quality=high/kind=actual/**/*.jsonl.gz"],
+    "hq_synth": ["quality=high/kind=synthetic/**/*.jsonl.gz"],
+    "medium_high": ["quality=medium-high/**/*.jsonl.gz"],
+    "medium": ["quality=medium/**/*.jsonl.gz"],
+    "medium_low": ["quality=medium-low/**/*.jsonl.gz"],
+    "low_actual": ["quality=low/kind=actual/**/*.jsonl.gz"],
+    "low_synth": ["quality=low/kind=synthetic/**/*.jsonl.gz"],
 }
 
 # Weights for each split based on their size in TiB
@@ -51,16 +55,10 @@ NEMOTRON_LLAMA3_OVERRIDES = {
 }
 
 
-# Hardcoded path to the nemotron download output. Using InputName.hardcoded()
-# instead of output_path_of(nemotron_cc_download(), ...) so that changes to
-# the download step or glob patterns don't alter the tokenize step's version
-# hash, which would cascade to all downstream training steps.
-_NEMOTRON_CC_DATA_PATH = InputName.hardcoded("raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/")
-
-
 def _get_nemotron_split_paths(split: str):
     """Helper to get file paths for a nemotron split."""
-    return [_NEMOTRON_CC_DATA_PATH / pattern for pattern in NEMOTRON_DATASETS[split]]
+    base = output_path_of(nemotron_cc_download(), "contrib/Nemotron/Nemotron-CC/data-jsonl/")
+    return [base / pattern for pattern in NEMOTRON_DATASETS[split]]
 
 
 def tokenize_nemotron(
