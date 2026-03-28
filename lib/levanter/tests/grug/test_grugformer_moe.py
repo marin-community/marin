@@ -9,6 +9,7 @@ import jax.numpy as jnp
 from jax._src import config as jax_config
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
+from experiments.grug.moe.model import _router_logits
 from levanter.grug.grug_moe import MoeImplementation, _shard_a2a_params, moe_mlp
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -72,6 +73,15 @@ def _make_inputs(
     w_up_gate = jax.random.normal(k_w13, (num_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.float32)
     w_down = jax.random.normal(k_w2, (num_experts, intermediate_dim, hidden_dim), dtype=jnp.float32)
     return x, selected_experts, combine_weights, w_up_gate, w_down
+
+
+def test_router_logits_upcasts_to_fp32():
+    x_flat = jnp.ones((3, 4), dtype=jnp.bfloat16)
+    router = jnp.ones((4, 5), dtype=jnp.bfloat16)
+
+    logits = _router_logits(x_flat, router)
+
+    assert logits.dtype == jnp.float32
 
 
 def test_moe_mlp_runs_without_ep_axis():
