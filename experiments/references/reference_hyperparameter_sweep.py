@@ -112,7 +112,7 @@ NEMOTRON_MIX_WITH_EVAL = add_validation_sets_to_mixture(
 class VizierSuggestConfig:
     study_owner: str
     study_id: str
-    input_db_path: str | None
+    input_db_path: str | MirroredValue | None
     output_path: str
     num_suggestions: int
     client_id: str
@@ -138,7 +138,7 @@ class VizierTrainConfig:
 class VizierUpdateConfig:
     study_id: str
     study_resource_name: str
-    input_db_path: str | None
+    input_db_path: str | MirroredValue | None
     suggestions_path: str
     run_paths: list[str | MirroredValue]
     metric_file: str
@@ -152,7 +152,7 @@ class VizierUpdateConfig:
 class VizierOptimalConfig:
     study_id: str
     study_resource_name: str
-    input_db_path: str
+    input_db_path: str | MirroredValue
     output_path: str
 
 
@@ -529,7 +529,7 @@ def run_vizier_optimal(config: VizierOptimalConfig) -> None:
 def _build_suggest_step(
     *,
     loop_index: int,
-    input_db_path: str | None,
+    input_db_path: str | MirroredValue | None,
 ) -> ExecutorStep:
     client_id = f"{SWEEP.client_id_prefix}-loop-{loop_index}"
     return ExecutorStep(
@@ -580,7 +580,7 @@ def _build_update_step(
     *,
     loop_index: int,
     study_resource_name: str,
-    input_db_path: str | None,
+    input_db_path: str | MirroredValue | None,
     suggestions_path: str,
     training_steps: list[ExecutorStep],
 ) -> ExecutorStep:
@@ -604,7 +604,7 @@ def _build_update_step(
 
 def _build_optimal_step(
     *,
-    input_db_path: str,
+    input_db_path: str | MirroredValue,
     study_resource_name: str,
 ) -> ExecutorStep:
     return ExecutorStep(
@@ -629,7 +629,7 @@ if __name__ == "__main__":
     base_launch_config = _build_base_launch_config()
 
     for loop_index in range(num_loops):
-        input_db_path = previous_update_step / VIZIER_DB_FILENAME if previous_update_step else None
+        input_db_path = (previous_update_step / VIZIER_DB_FILENAME).as_mirrored_value() if previous_update_step else None
         suggest_step = _build_suggest_step(loop_index=loop_index, input_db_path=input_db_path)
 
         suggestions_path = suggest_step / SUGGESTIONS_FILENAME
@@ -646,14 +646,14 @@ if __name__ == "__main__":
         update_step = _build_update_step(
             loop_index=loop_index,
             study_resource_name=SWEEP.study_resource_name,
-            input_db_path=suggest_step / VIZIER_DB_FILENAME,
+            input_db_path=(suggest_step / VIZIER_DB_FILENAME).as_mirrored_value(),
             suggestions_path=suggestions_path,
             training_steps=training_steps,
         )
         previous_update_step = update_step
 
     optimal_step = _build_optimal_step(
-        input_db_path=previous_update_step / VIZIER_DB_FILENAME,
+        input_db_path=(previous_update_step / VIZIER_DB_FILENAME).as_mirrored_value(),
         study_resource_name=SWEEP.study_resource_name,
     )
     executor_main(steps=[optimal_step])
