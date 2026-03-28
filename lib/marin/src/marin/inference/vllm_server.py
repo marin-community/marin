@@ -281,6 +281,9 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     load_format = engine_kwargs.get("load_format")
     if load_format is not None:
         args.extend(["--load-format", load_format])
+    tensor_parallel_size = engine_kwargs.get("tensor_parallel_size")
+    if tensor_parallel_size is not None:
+        args.extend(["--tensor-parallel-size", str(tensor_parallel_size)])
     max_model_len = engine_kwargs.get("max_model_len")
     if max_model_len is not None:
         args.extend(["--max-model-len", str(max_model_len)])
