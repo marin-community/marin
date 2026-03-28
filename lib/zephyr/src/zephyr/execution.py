@@ -365,12 +365,11 @@ class ZephyrCoordinator:
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
         self._no_workers_timeout: float = 60.0
-        # User-defined counters: in-flight per-worker snapshots and global accumulator.
-        # Each heartbeat/report carries a generation tag so the coordinator can
-        # discard stale heartbeats that arrive after report_result.
-        self._worker_counters: dict[str, dict[str, int]] = {}
-        self._worker_counter_gen: dict[str, int] = {}
-        self._global_counters: dict[str, int] = {}
+        # Per-worker in-flight counter snapshots and completed snapshots.
+        # Each snapshot carries a monotonic generation so the coordinator
+        # can discard stale or out-of-order heartbeats.
+        self._worker_counters: dict[str, CounterSnapshot] = {}
+        self._completed_counters: list[CounterSnapshot] = []
 
         # Worker management state (workers self-register via register_worker)
         self._worker_handles: dict[str, ActorHandle] = {}
@@ -436,8 +435,6 @@ class ZephyrCoordinator:
                 # the worker as unhealthy via heartbeat and re-registration. If we do not requeue we may silently
                 # lose tasks.
                 self._maybe_requeue_worker_task(worker_id)
-                # Reset generation so the new worker's counters are accepted.
-                self._worker_counter_gen.pop(worker_id, None)
                 return
 
             self._worker_handles[worker_id] = worker_handle
@@ -584,7 +581,7 @@ class ZephyrCoordinator:
         shard_idx: int,
         attempt: int,
         result: TaskResult,
-        counter_snapshot: CounterSnapshot | None = None,
+        counter_snapshot: CounterSnapshot,
     ) -> None:
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
@@ -602,28 +599,18 @@ class ZephyrCoordinator:
             self._completed_shards += 1
             self._in_flight.pop(worker_id, None)
             self._worker_states[worker_id] = WorkerState.READY
-            # Use the authoritative final snapshot from the worker rather than
-            # whatever the last heartbeat delivered.
-            if counter_snapshot is not None:
-                final_counters = counter_snapshot.counters
-                self._worker_counter_gen[worker_id] = counter_snapshot.generation
-            else:
-                final_counters = self._worker_counters.get(worker_id, {})
-            self._worker_counters.pop(worker_id, None)
-            for name, value in final_counters.items():
-                self._global_counters[name] = self._global_counters.get(name, 0) + value
+            self._completed_counters.append(counter_snapshot)
+            # Zero the in-flight counters but keep the generation watermark
+            # so late heartbeats from this task are rejected.
+            self._worker_counters[worker_id] = CounterSnapshot(counters={}, generation=counter_snapshot.generation)
 
-    def report_error(
-        self, worker_id: str, shard_idx: int, error_info: str, counter_snapshot: CounterSnapshot | None = None
-    ) -> None:
+    def report_error(self, worker_id: str, shard_idx: int, error_info: str) -> None:
         """Worker reports a task failure. All errors are fatal."""
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
             self._assert_in_flight_consistent(worker_id, shard_idx)
             self._in_flight.pop(worker_id, None)
             self._worker_counters.pop(worker_id, None)
-            if counter_snapshot is not None:
-                self._worker_counter_gen[worker_id] = counter_snapshot.generation
             self._fatal_error = error_info
             self._worker_states[worker_id] = WorkerState.DEAD
 
@@ -631,12 +618,9 @@ class ZephyrCoordinator:
         self._last_seen[worker_id] = time.monotonic()
         if counter_snapshot is not None:
             with self._lock:
-                # Only accept strictly newer generations.  Handles both
-                # out-of-order heartbeats and stale heartbeats arriving
-                # after report_result.
-                if counter_snapshot.generation > self._worker_counter_gen.get(worker_id, 0):
-                    self._worker_counters[worker_id] = counter_snapshot.counters
-                    self._worker_counter_gen[worker_id] = counter_snapshot.generation
+                existing = self._worker_counters.get(worker_id)
+                if existing is None or counter_snapshot.generation > existing.generation:
+                    self._worker_counters[worker_id] = counter_snapshot
 
     def get_status(self) -> JobStatus:
         with self._lock:
@@ -662,17 +646,21 @@ class ZephyrCoordinator:
         """Return counter values, optionally filtered to a single worker.
 
         Args:
-            worker_id: If provided, return the latest heartbeat snapshot for
-                this worker only. If None, return global totals accumulated
-                across all stages (completed + in-flight).
+            worker_id: If provided, return the latest snapshot for this worker
+                only. If None, return totals derived from completed and
+                in-flight snapshots.
         """
         with self._lock:
             if worker_id is not None:
-                return dict(self._worker_counters.get(worker_id, {}))
+                snap = self._worker_counters.get(worker_id)
+                return dict(snap.counters) if snap is not None else {}
 
-            totals = dict(self._global_counters)
-            for ctrs in self._worker_counters.values():
-                for name, value in ctrs.items():
+            totals: dict[str, int] = {}
+            for snap in self._completed_counters:
+                for name, value in snap.counters.items():
+                    totals[name] = totals.get(name, 0) + value
+            for snap in self._worker_counters.values():
+                for name, value in snap.counters.items():
                     totals[name] = totals.get(name, 0) + value
             return totals
 
@@ -704,8 +692,8 @@ class ZephyrCoordinator:
             self._task_attempts = {task.shard_idx: 0 for task in tasks}
             self._fatal_error = None
             self._is_last_stage = is_last_stage
-            # Only reset in-flight worker snapshots; global and per-shard
-            # counters accumulate across stages for full pipeline visibility.
+            # Only reset in-flight worker snapshots; completed snapshots
+            # accumulate across stages for full pipeline visibility.
             self._worker_counters = {}
 
     def _wait_for_stage(self) -> None:
@@ -1162,7 +1150,6 @@ class ZephyrWorker:
                     self._worker_id,
                     task.shard_idx,
                     "".join(traceback.format_exc()),
-                    self.get_counter_snapshot(),
                 ).result()
 
     def _execute_shard(self, task: ShardTask, config: dict) -> TaskResult:
