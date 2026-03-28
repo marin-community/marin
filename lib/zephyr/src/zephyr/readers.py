@@ -22,6 +22,7 @@ import msgspec
 import numpy as np
 import pyarrow as pa
 
+from zephyr import counters
 from zephyr.expr import Expr
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,9 @@ logger = logging.getLogger(__name__)
 _READ_BLOCK_SIZE = 16_000_000
 _READ_CACHE_TYPE = "background"
 _READ_MAX_BLOCKS = 2
+
+# How often per-record counters are flushed (to avoid lock-per-record).
+_COUNTER_FLUSH_INTERVAL = 1024
 
 
 @dataclass
@@ -129,12 +133,19 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
     """
     spec = _as_spec(source)
     decoder = msgspec.json.Decoder()
+    pending_counter = 0
 
     with open_file(spec.path, "rt") as f:
         for line in f:
             line = line.strip()
             if line:
+                pending_counter += 1
+                if pending_counter >= _COUNTER_FLUSH_INTERVAL:
+                    counters.increment("zephyr/records_in", pending_counter)
+                    pending_counter = 0
                 yield decoder.decode(line)
+
+    counters.increment("zephyr/records_in", pending_counter)
 
 
 def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
@@ -198,6 +209,7 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
                     if is_interior:
                         # Entirely within range: push filter down, yield all
                         table = rg_fragment.to_table(columns=columns, filter=pa_filter)
+                        counters.increment("zephyr/records_in", len(table))
                         yield from table.to_pylist()
                     else:
                         # Boundary row group: slice first, then filter
@@ -207,8 +219,11 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
                         sliced = table.slice(local_start, local_end - local_start)
 
                         if pa_filter is not None:
-                            yield from sliced.filter(pa_filter).to_pylist()
+                            filtered = sliced.filter(pa_filter)
+                            counters.increment("zephyr/records_in", len(filtered))
+                            yield from filtered.to_pylist()
                         else:
+                            counters.increment("zephyr/records_in", len(sliced))
                             yield from sliced.to_pylist()
 
                 cumulative_rows = rg_end
@@ -216,9 +231,11 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
                     return
     elif pa_filter is not None:
         table = dataset.to_table(columns=columns, filter=pa_filter)
+        counters.increment("zephyr/records_in", len(table))
         yield from table.to_pylist()
     else:
         for batch in dataset.to_batches(columns=columns):
+            counters.increment("zephyr/records_in", len(batch))
             yield from batch.to_pylist()
 
 
@@ -269,9 +286,11 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
         indices = np.arange(spec.row_start, spec.row_end, dtype=np.uint64)
         indices = pa.array(indices)
         table = dataset.take(indices, columns=columns, filter=pa_filter)
+        counters.increment("zephyr/records_in", len(table))
         yield from table.to_pylist()
     else:
         table = dataset.to_table(columns=columns, filter=pa_filter)
+        counters.increment("zephyr/records_in", len(table))
         yield from table.to_pylist()
 
 
@@ -359,12 +378,19 @@ def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterato
         >>> output_files = list(ctx.execute(ds))
     """
     spec = _as_spec(source)
+    pending_counter = 0
     with open_url(spec.path, "rb") as f:
         with zipfile.ZipFile(f) as zf:
             for member_name in zf.namelist():
                 if not member_name.endswith("/") and fnmatch.fnmatch(member_name, pattern):
                     with zf.open(member_name, "r") as member_file:
+                        pending_counter += 1
+                        if pending_counter >= _COUNTER_FLUSH_INTERVAL:
+                            counters.increment("zephyr/records_in", pending_counter)
+                            pending_counter = 0
                         yield {
                             "filename": member_name,
                             "content": member_file.read(),
                         }
+
+    counters.increment("zephyr/records_in", pending_counter)
