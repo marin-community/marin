@@ -4,6 +4,7 @@
 import atexit
 import copy
 import functools
+import json
 import logging as pylogging
 import os
 import sys
@@ -29,6 +30,7 @@ from typing import (
 )
 
 import equinox as eqx
+import fsspec
 import haliax as hax
 from iris.marin_fs import open_url
 import haliax.tree_util
@@ -60,6 +62,7 @@ from levanter.config import JsonAtom
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.loader import _round_to_nearest_multiple
 from levanter.distributed import DistributedConfig, RayConfig
+from levanter.elastic import ElasticTrainingConfig, ElasticTrainingFinished, FileBackedPeerSyncController
 from levanter.grad_accum import microbatched
 from levanter.metrics import Metric, auto_metric_from_name, unwrap_metrics
 from levanter.optim.model_averaging import ModelAveragingConfig
@@ -83,6 +86,8 @@ DEFAULT_JAX_CONFIG: Dict[str, JsonAtom] = {
     "jax_threefry_partitionable": True,
     "jax_softmax_custom_jvp": True,
 }
+MARIN_FAULT_INJECTION_STATE_PATH_ENV = "MARIN_FAULT_INJECTION_STATE_PATH"
+MARIN_FAULT_INJECTION_STEPS_ENV = "MARIN_FAULT_INJECTION_STEPS"
 
 
 # A note on the semantics of "step" vs "next_step":
@@ -100,6 +105,72 @@ class _Hook:
 class _JitHook:
     fn: JitCallback
     every: int
+
+
+class _InjectedFaults:
+    def __init__(self, *, steps: set[int], marker_root: str, run_id: str):
+        self._remaining_steps = set(steps)
+        self._marker_root = marker_root
+        self._run_id = run_id
+
+    @classmethod
+    def from_env(cls, *, checkpoint_path: str, run_id: str) -> "_InjectedFaults | None":
+        raw_steps = os.environ.get(MARIN_FAULT_INJECTION_STEPS_ENV)
+        if not raw_steps:
+            return None
+
+        steps = _parse_fault_injection_steps(raw_steps)
+        if not steps:
+            return None
+
+        marker_root = os.environ.get(MARIN_FAULT_INJECTION_STATE_PATH_ENV)
+        if marker_root is None:
+            marker_root = fsspec_utils.join_path(os.path.dirname(checkpoint_path.rstrip("/")), "_fault_injection")
+
+        return cls(steps=steps, marker_root=marker_root, run_id=run_id)
+
+    def maybe_raise(self, step: int) -> None:
+        if step not in self._remaining_steps:
+            return
+
+        marker_path = fsspec_utils.join_path(self._marker_root, f"{self._run_id}-step-{step}.json")
+        if fsspec_utils.exists(marker_path):
+            self._remaining_steps.remove(step)
+            return
+
+        _write_fault_marker(
+            marker_path,
+            {
+                "run_id": self._run_id,
+                "step": step,
+                "pid": os.getpid(),
+            },
+        )
+        self._remaining_steps.remove(step)
+        raise RuntimeError(f"Injected fault for run {self._run_id} at step {step}")
+
+
+def _parse_fault_injection_steps(raw_steps: str) -> set[int]:
+    try:
+        payload = json.loads(raw_steps)
+    except json.JSONDecodeError:
+        payload = None
+
+    if isinstance(payload, int):
+        return {payload}
+    if isinstance(payload, list):
+        return {int(step) for step in payload}
+
+    return {int(step.strip()) for step in raw_steps.split(",") if step.strip()}
+
+
+def _write_fault_marker(path: str, payload: dict[str, Any]) -> None:
+    fs, _, (plain_path,) = fsspec.get_fs_token_paths(path)
+    parent = os.path.dirname(plain_path)
+    if parent:
+        fs.makedirs(parent, exist_ok=True)
+    with fs.open(plain_path, "w") as f:
+        json.dump(payload, f, sort_keys=True)
 
 
 @dataclass
@@ -255,6 +326,8 @@ class Trainer:
     is_trainable_param: PyTree[FilterSpec]
     _raw_loss_function: Callable
     _cmanagers: List[typing.ContextManager] = []
+    _elastic_controller: FileBackedPeerSyncController | None = None
+    _fault_injector: _InjectedFaults | None = None
 
     def __init__(
         self,
@@ -290,6 +363,8 @@ class Trainer:
                 self.tracker = config.tracker.init(self.run_id)
 
         self._cmanagers = []
+        self._elastic_controller = None
+        self._fault_injector = _InjectedFaults.from_env(checkpoint_path=self.checkpoint_path, run_id=self.run_id)
 
         if add_default_hooks:
             self._add_default_hooks()
@@ -342,6 +417,15 @@ class Trainer:
     def run_hooks(self, info: StepInfo, force: bool = False):
         self.hooks.run_hooks(info, force=force)
 
+    def configure_elastic_progress_reporting(self, *, tokens_per_example: int, prefix: str = "elastic") -> None:
+        if self._elastic_controller is None:
+            return
+        self._elastic_controller.configure_progress_reporting(
+            tokens_per_example=tokens_per_example,
+            batch_schedule=self.config.batch_schedule,
+            prefix=prefix,
+        )
+
     @property
     def parameter_axis_mapping(self) -> ResourceMapping:
         return self.config.parameter_axis_mapping
@@ -379,6 +463,11 @@ class Trainer:
 
     def __exit__(self, *args):
         problems = []
+        if self._elastic_controller is not None:
+            try:
+                self._elastic_controller.close()
+            except Exception as e:
+                problems.append(e)
         for cmanager in reversed(self._cmanagers):
             try:
                 cmanager.__exit__(*args)
@@ -501,6 +590,8 @@ class Trainer:
                 raise RuntimeError("Loss is Inf")
 
             info = StepInfo(result.new_state, loss, step_time())
+            if self._elastic_controller is not None:
+                self._elastic_controller.stage_publish_state(info.state)
 
             with capture_time() as hook_time:
                 self.run_hooks(info)
@@ -542,6 +633,11 @@ class Trainer:
                 is_first_step = False
 
             levanter.tracker.log({"throughput/loading_time": loading_time()}, step=info.step)
+            if self._elastic_controller is not None:
+                info = self._elastic_controller.maybe_update_state(info)
+                state = info.state
+            if self._fault_injector is not None:
+                self._fault_injector.maybe_raise(info.step)
 
             yield info
 
@@ -557,11 +653,24 @@ class Trainer:
             )
             info = StepInfo(state, 0.0, 0.0)
             self.run_hooks(info, force=True)
+            if self._elastic_controller is not None:
+                self._elastic_controller.mark_completed(info)
             return info
 
         info: Optional[StepInfo[S]] = None
-        for info in self.training_steps(state, train_loader):
-            pass
+        if self._elastic_controller is not None:
+            state = self._elastic_controller.bootstrap_state(state)
+
+        try:
+            for info in self.training_steps(state, train_loader):
+                pass
+        except ElasticTrainingFinished as exc:
+            logger.info(
+                "Elastic training already completed by peer %s at step %s",
+                exc.completion.worker_id,
+                exc.completion.completed_step,
+            )
+            return exc.info
 
         if info is None:
             raise RuntimeError(
@@ -570,6 +679,8 @@ class Trainer:
 
         # force hooks to run at the end
         self.run_hooks(info, force=True)
+        if self._elastic_controller is not None:
+            self._elastic_controller.mark_completed(info)
 
         return info
 
@@ -585,6 +696,14 @@ class Trainer:
             checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
+        if self.config.elastic.enabled:
+            self._elastic_controller = FileBackedPeerSyncController(
+                config=self.config.elastic,
+                checkpoint_base_path=self.checkpoint_path,
+                run_id=self.run_id,
+                axis_mapping=self.parameter_axis_mapping,
+                mesh=self.device_mesh,
+            )
 
         # Add watch callback if configured
         if self.config.watch.is_enabled:
@@ -850,6 +969,7 @@ class TrainerConfig:
     max_eval_batches: Optional[int] = None  # max number of batches to evaluate on. None means all batches
 
     checkpointer: CheckpointerConfig = field(default_factory=CheckpointerConfig)
+    elastic: ElasticTrainingConfig = field(default_factory=ElasticTrainingConfig)
     load_checkpoint: Optional[bool] = None
     """if None (default), we'll load a checkpoint if it exists. If true, we must load a checkpoint"""
     load_checkpoint_path: Optional[str] = None
@@ -898,6 +1018,39 @@ class TrainerConfig:
         if self.per_device_parallelism < 0:
             return None
         return self.per_device_parallelism * self.data_axis_size
+
+    def _mesh_axis_totals_for_slice_count(self, *, num_slices: int, num_devices_per_slice: int) -> Dict[str, int]:
+        total_devices = num_slices * num_devices_per_slice
+        ici, dcn = self.mesh.axis_shapes(total_devices, num_slices)
+        return {name: ici.get(name, 1) * dcn.get(name, 1) for name in set(ici) | set(dcn)}
+
+    def data_axis_size_for_slice_count(self, *, num_slices: int, num_devices_per_slice: int) -> int:
+        axis_totals = self._mesh_axis_totals_for_slice_count(
+            num_slices=num_slices,
+            num_devices_per_slice=num_devices_per_slice,
+        )
+        batch_map = self.compute_axis_mapping.get(self.batch_axis_name, self.compute_axis_mapping.get("batch"))
+        if batch_map is None:
+            raise ValueError(f"No mapping found for batch axis {self.batch_axis_name} in compute axis mapping.")
+        axes = batch_map if isinstance(batch_map, tuple) else (batch_map,)
+        prod_size = 1
+        for ax in axes:
+            prod_size *= axis_totals.get(ax, 1)
+        return prod_size
+
+    def grad_accumulation_steps_at_step(self, step: int, *, num_slices: int | None = None) -> int | None:
+        if self.per_device_parallelism < 0:
+            return None
+
+        if num_slices is None:
+            num_slices = self.num_slices
+
+        train_batch_size = value_at_step(self.train_batch_size, step)
+        microbatch_size = self.per_device_parallelism * self.data_axis_size_for_slice_count(
+            num_slices=num_slices,
+            num_devices_per_slice=self.num_devices_per_slice,
+        )
+        return train_batch_size // microbatch_size
 
     def __post_init__(self):
         if self.wandb is not None:
@@ -1088,6 +1241,18 @@ class TrainerConfig:
                 self.per_device_eval_parallelism = self.per_device_parallelism
 
             logger.info(f"Setting per_device_eval_parallelism to {self.per_device_eval_parallelism}")
+
+        self._validate_elastic_batching()
+
+    def _validate_elastic_batching(self):
+        if not self.elastic.enabled:
+            return
+
+        if self.num_slices != 1:
+            raise ValueError(
+                "Elastic peer-sync training requires each cohort to run on exactly one slice. "
+                f"Found num_slices={self.num_slices}."
+            )
 
 
 class AllConfig(Protocol):

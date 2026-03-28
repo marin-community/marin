@@ -89,12 +89,17 @@ def get_job_info() -> JobInfo | None:
         return info
 
     # Fall back to environment variables.
-    raw_task_id = os.environ.get("IRIS_TASK_ID")
-    if raw_task_id:
+    raw_task_attempt = os.environ.get("IRIS_TASK_ID")
+    raw_legacy_task_id = os.environ.get("IRIS_JOB_ID")
+    if raw_task_attempt or raw_legacy_task_id:
         try:
-            parsed = TaskAttempt.from_wire(raw_task_id)
-            task_id = parsed.task_id
-            attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
+            if raw_task_attempt:
+                parsed = TaskAttempt.from_wire(raw_task_attempt)
+                task_id = parsed.task_id
+                attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
+            else:
+                task_id = JobName.from_wire(raw_legacy_task_id)
+                attempt_id = int(os.environ.get("IRIS_ATTEMPT_ID", "0"))
             task_id.require_task()
         except ValueError:
             return None
@@ -104,7 +109,12 @@ def get_job_info() -> JobInfo | None:
         constraints: list[Constraint] = []
         if constraints_json:
             for item in json.loads(constraints_json):
-                constraints.append(Constraint.from_proto(json_format.ParseDict(item, cluster_pb2.Constraint())))
+                constraint_proto = json_format.ParseDict(
+                    item,
+                    cluster_pb2.Constraint(),
+                    ignore_unknown_fields=True,
+                )
+                constraints.append(Constraint.from_proto(constraint_proto))
 
         info = JobInfo(
             task_id=task_id,

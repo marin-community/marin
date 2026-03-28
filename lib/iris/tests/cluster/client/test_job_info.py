@@ -37,6 +37,65 @@ def test_resolve_job_user_falls_back_to_root_when_os_user_lookup_fails(monkeypat
     assert resolve_job_user() == "root"
 
 
+def test_get_job_info_accepts_iris_task_id_env(monkeypatch):
+    set_job_info(None)
+    monkeypatch.delenv("IRIS_JOB_ID", raising=False)
+    monkeypatch.setenv("IRIS_TASK_ID", "/alice/train/0:0")
+    monkeypatch.setenv("IRIS_NUM_TASKS", "2")
+    monkeypatch.setenv("IRIS_ATTEMPT_ID", "3")
+    monkeypatch.setenv("IRIS_WORKER_ID", "worker-7")
+    monkeypatch.setenv("IRIS_CONTROLLER_ADDRESS", "http://10.0.0.1:10000")
+
+    info = get_job_info()
+
+    assert info is not None
+    assert info.task_id == JobName.from_wire("/alice/train/0")
+    assert info.job_id == JobName.from_wire("/alice/train")
+    assert info.num_tasks == 2
+    assert info.attempt_id == 3
+    assert info.worker_id == "worker-7"
+    assert info.controller_address == "http://10.0.0.1:10000"
+    set_job_info(None)
+
+
+def test_get_job_info_accepts_legacy_iris_job_id_env(monkeypatch):
+    set_job_info(None)
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    monkeypatch.setenv("IRIS_JOB_ID", "/alice/train/0")
+    monkeypatch.setenv("IRIS_ATTEMPT_ID", "3")
+    monkeypatch.setenv("IRIS_NUM_TASKS", "2")
+    monkeypatch.setenv("IRIS_WORKER_ID", "worker-7")
+    monkeypatch.setenv("IRIS_CONTROLLER_ADDRESS", "http://10.0.0.1:10000")
+
+    info = get_job_info()
+
+    assert info is not None
+    assert info.task_id == JobName.from_wire("/alice/train/0")
+    assert info.job_id == JobName.from_wire("/alice/train")
+    assert info.num_tasks == 2
+    assert info.attempt_id == 3
+    assert info.worker_id == "worker-7"
+    assert info.controller_address == "http://10.0.0.1:10000"
+    set_job_info(None)
+
+
+def test_get_job_info_ignores_unknown_constraint_fields(monkeypatch):
+    set_job_info(None)
+    monkeypatch.delenv("IRIS_JOB_ID", raising=False)
+    monkeypatch.setenv("IRIS_TASK_ID", "/alice/train/0:0")
+    monkeypatch.setenv(
+        "IRIS_JOB_CONSTRAINTS",
+        '[{"key":"region","op":0,"mode":"cohort"}]',
+    )
+
+    info = get_job_info()
+
+    assert info is not None
+    assert len(info.constraints) == 1
+    assert info.constraints[0].key == "region"
+    set_job_info(None)
+
+
 def test_worker_region_from_env(monkeypatch):
     """IRIS_WORKER_REGION is read into JobInfo.worker_region."""
     set_job_info(None)
