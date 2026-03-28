@@ -119,6 +119,35 @@ def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state)
     assert len(job.request.bundle_id) == 64
 
 
+def test_launch_job_externalizes_large_workdir_files(service, state):
+    request = make_job_request("big-pickle-job")
+    small_file = b"tiny"
+    large_file = b"x" * (200 * 1024)  # 200KB, above 100KB threshold
+    request.entrypoint.workdir_files["small.txt"] = small_file
+    request.entrypoint.workdir_files["_callable.pkl"] = large_file
+    service.launch_job(request, None)
+
+    job = _query_job(state, JobName.root("test-user", "big-pickle-job"))
+    assert job is not None
+    # Small file stays inline
+    assert job.request.entrypoint.workdir_files["small.txt"] == small_file
+    # Large file externalized to blob ref
+    assert "_callable.pkl" not in job.request.entrypoint.workdir_files
+    assert len(job.request.entrypoint.workdir_file_refs["_callable.pkl"]) == 64
+
+
+def test_launch_job_keeps_small_workdir_files_inline(service, state):
+    request = make_job_request("small-pickle-job")
+    small_file = b"x" * 1024  # 1KB
+    request.entrypoint.workdir_files["_callable.pkl"] = small_file
+    service.launch_job(request, None)
+
+    job = _query_job(state, JobName.root("test-user", "small-pickle-job"))
+    assert job is not None
+    assert job.request.entrypoint.workdir_files["_callable.pkl"] == small_file
+    assert "_callable.pkl" not in job.request.entrypoint.workdir_file_refs
+
+
 def test_launch_job_rejects_duplicate_name(service):
     """Verify launch_job rejects duplicate job names for running jobs."""
     request = make_job_request("duplicate-job")
