@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 from iris.cluster.client.job_info import JobInfo, get_job_info, resolve_job_user, set_job_info
 from iris.cluster.types import JobName
 
@@ -56,4 +58,27 @@ def test_worker_region_absent_when_env_not_set(monkeypatch):
     info = get_job_info()
     assert info is not None
     assert info.worker_region is None
+    set_job_info(None)
+
+
+def test_constraints_with_unknown_fields_in_json(monkeypatch):
+    """get_job_info tolerates unknown fields in IRIS_JOB_CONSTRAINTS JSON."""
+    set_job_info(None)
+    monkeypatch.setenv("IRIS_TASK_ID", "/test-user/my-job/0:1")
+    constraints_json = json.dumps(
+        [
+            {
+                "key": "region",
+                "op": "CONSTRAINT_OP_EQ",
+                "value": {"string_value": "us-central2"},
+                "unknown_future_field": "some_value",
+            }
+        ]
+    )
+    monkeypatch.setenv("IRIS_JOB_CONSTRAINTS", constraints_json)
+    info = get_job_info()
+    assert info is not None
+    assert len(info.constraints) == 1
+    assert info.constraints[0].key == "region"
+    assert info.constraints[0].value == "us-central2"
     set_job_info(None)
