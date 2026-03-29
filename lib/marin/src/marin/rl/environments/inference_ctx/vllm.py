@@ -8,6 +8,7 @@ import re
 import time
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
 import jax
 import jax.numpy as jnp
@@ -89,6 +90,7 @@ class vLLMInferenceContextConfig:
     tensor_parallel_size: int
     gpu_memory_utilization: float
     sampling_params: VLLMSamplingConfig
+    device_kind: Literal["gpu", "tpu"] = "tpu"
     canonical_model_name: str | None = None
     mode: InferenceMode = InferenceMode.SYNC
     load_format: str = "auto"
@@ -174,7 +176,8 @@ class vLLMInferenceContext(BaseInferenceContext):
 
     @staticmethod
     def _get_llm_engine(inference_config: vLLMInferenceContextConfig):
-        vLLMInferenceContext._patch_tpu_inference_registry()
+        if inference_config.device_kind == "tpu":
+            vLLMInferenceContext._patch_tpu_inference_registry()
 
         if inference_config.mode == InferenceMode.SYNC:
             if LLM is None:
