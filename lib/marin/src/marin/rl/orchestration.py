@@ -79,7 +79,7 @@ def submit_rl_job(config: RLJobConfig) -> JobHandle:
     # Coordinator stays lean to avoid large runtime package installs on CPU.
     return client.submit(
         JobRequest(
-            name=f"rl-{config.run_id}",
+            name=f"rl-{config.resolved_instance_id}",
             entrypoint=Entrypoint.from_callable(_run_rl_coordinator, args=(config,)),
             resources=RL_COORDINATOR_RESOURCES,
             environment=create_environment(
@@ -118,6 +118,8 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         rollout_extras = _rollout_worker_extras(config)
 
         env = {"EQX_ON_ERROR": "nan"}
+        if train_config.trainer.checkpointer.debug_checkpointer:
+            env["PYTHONUNBUFFERED"] = "1"
         env = _add_run_env_variables(env)
         train_worker_env = create_environment(
             env_vars=env,
@@ -162,7 +164,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         jobs.append(
             client.submit(
                 JobRequest(
-                    name=f"rl-{config.run_id}-train",
+                    name=f"rl-{config.resolved_instance_id}-train",
                     entrypoint=Entrypoint.from_callable(_train_worker_entry, args=(train_config, runtime)),
                     resources=train_resources,
                     environment=train_worker_env,
@@ -174,16 +176,21 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
 
         # Rollout workers
         for i in range(run_config.num_rollout_workers):
+            worker_run_id = f"{rollout_config.run_id}-rollout-{i}"
+            tracker_config = rollout_config.tracker_config
+            if tracker_config is not None:
+                tracker_config = dataclasses.replace(tracker_config, name=worker_run_id)
             worker_config = dataclasses.replace(
                 rollout_config,
                 seed=rollout_config.seed + i,
-                run_id=f"{rollout_config.run_id}-rollout-{i}",
+                run_id=worker_run_id,
                 worker_index=i,
+                tracker_config=tracker_config,
             )
             jobs.append(
                 client.submit(
                     JobRequest(
-                        name=f"rl-{config.run_id}-rollout-{i}",
+                        name=f"rl-{config.resolved_instance_id}-rollout-{i}",
                         entrypoint=Entrypoint.from_callable(_rollout_worker_entry, args=(worker_config, runtime)),
                         resources=rollout_resources,
                         environment=rollout_worker_env,
@@ -227,13 +234,13 @@ def _create_runtime_handles(client: Client, config: RLJobConfig) -> _HostedRunti
         curriculum_hosted = client.host_actor(
             Curriculum,
             config.curriculum,
-            name=f"rl-{config.run_id}-curriculum",
+            name=f"rl-{config.resolved_instance_id}-curriculum",
         )
         hosted_actors.append(curriculum_hosted)
 
         run_state_hosted = client.host_actor(
             RLRunState,
-            name=f"rl-{config.run_id}-run-state",
+            name=f"rl-{config.resolved_instance_id}-run-state",
         )
         hosted_actors.append(run_state_hosted)
 
@@ -242,7 +249,7 @@ def _create_runtime_handles(client: Client, config: RLJobConfig) -> _HostedRunti
         if config.weight_transfer.mode == WeightTransferMode.ARROW_FLIGHT:
             arrow_hosted = client.host_actor(
                 ArrowFlightCoordinator,
-                name=config.weight_transfer.coordinator_name or f"rl-{config.run_id}-wt-coord",
+                name=config.weight_transfer.coordinator_name or f"rl-{config.resolved_instance_id}-wt-coord",
             )
             hosted_actors.append(arrow_hosted)
             arrow_coordinator = arrow_hosted.handle

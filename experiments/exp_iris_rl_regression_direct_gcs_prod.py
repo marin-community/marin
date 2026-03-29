@@ -43,10 +43,10 @@ MARIN_PREFIX = "gs://marin-us-central1"
 DEFAULT_SUFFIX = "e4p"
 DEFAULT_NUM_TRAIN_STEPS = 500
 PROD_TPU_WORKER_RAM = "400g"
-DEFAULT_N_PROMPTS = 16
+DEFAULT_N_PROMPTS = 64
 DEFAULT_EVAL_FREQUENCY = 1
 DEFAULT_REGION = "us-central1"
-DEFAULT_NUM_ROLLOUT_WORKERS = 1
+DEFAULT_NUM_ROLLOUT_WORKERS = 2
 
 
 def parse_args() -> argparse.Namespace:
@@ -95,6 +95,30 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable vLLM KV-cache metrics on rollout workers.",
     )
+    parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Stable run name for checkpoint and W&B resume across preemption retries. "
+        "When set, checkpoints and W&B use this name so retries resume progress. "
+        "If not set, generates a fresh timestamp-based name (no resume on retry).",
+    )
+    parser.add_argument(
+        "--debug-checkpointer",
+        action="store_true",
+        help="Enable verbose trainer-side checkpoint diagnostics for debugging checkpoint failures.",
+    )
+    parser.add_argument(
+        "--debug-checkpointer-log-interval",
+        type=float,
+        default=60.0,
+        help="Seconds between checkpoint progress logs when --debug-checkpointer is enabled.",
+    )
+    parser.add_argument(
+        "--debug-checkpointer-dump-stacks-after",
+        type=float,
+        default=None,
+        help="If set, dump Python thread stacks after this many seconds in one checkpoint phase.",
+    )
     return parser.parse_args()
 
 
@@ -102,7 +126,16 @@ def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.INFO)
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    name = f"{args.experiment_name_suffix}-{datestamp}"
+
+    # Stable name: survives preemption retries. Used for checkpoints, W&B, rollout storage.
+    # Instance name: unique per coordinator invocation. Used for Iris child job names and actors.
+    if args.run_name:
+        stable_name = args.run_name
+        instance_name = f"{stable_name}-{datestamp}"
+    else:
+        stable_name = f"{args.experiment_name_suffix}-{datestamp}"
+        instance_name = stable_name
+    name = stable_name
 
     converter = HFCheckpointConverter(
         LlamaConfig,
@@ -137,7 +170,7 @@ def main() -> None:
         },
         eval_frequency=args.eval_frequency,
         micro_eval_frequency=None,
-        actor_name=f"curriculum-{name}",
+        actor_name=f"curriculum-{instance_name}",
         eval_n_examples=500,
         max_seq_len=2048,
     )
@@ -159,6 +192,9 @@ def main() -> None:
             checkpointer=CheckpointerConfig(
                 base_path=f"{MARIN_PREFIX}/checkpoints/{name}",
                 save_interval=datetime.timedelta(seconds=600),
+                debug_checkpointer=args.debug_checkpointer,
+                debug_checkpointer_log_interval=args.debug_checkpointer_log_interval,
+                debug_checkpointer_dump_stacks_after=args.debug_checkpointer_dump_stacks_after,
             ),
             mesh=MeshConfig(
                 axes={"context": 1, "model": 1},
@@ -209,10 +245,11 @@ def main() -> None:
             mode=WeightTransferMode.ARROW_FLIGHT,
             sync_interval_steps=1,
             max_weight_transfer_wait_time=0,
-            coordinator_name=f"wt-coord-{name}",
+            coordinator_name=f"wt-coord-{instance_name}",
         ),
         inflight_weight_updates=args.inflight_weight_updates,
         run_id=name,
+        instance_id=instance_name if instance_name != name else None,
         log_freq=1,
         run_config=RunConfig(
             train_tpu_type="v5p-8",
@@ -224,17 +261,18 @@ def main() -> None:
         ),
         rollout_tracker=RolloutTrackerConfig(
             project="marin_iris_rl_debug",
-            name=f"{name}-rollout",
+            name=f"{instance_name}-rollout",
             tags=["rl", "iris-debug", "regression", "e4", "rollout"],
         ),
         pip_dependency_groups=["vllm", "math"],
     )
 
     logger.info(
-        "Running E4 direct + GCS + prod probe: %s "
+        "Running E4 direct + GCS + prod probe: %s (instance=%s) "
         "(n_prompts=%d, eval_frequency=%d, inflight=%s, rollout_workers=%d, "
         "region=%s, kv_cache_metrics=%s)",
         name,
+        instance_name,
         args.n_prompts,
         args.eval_frequency,
         args.inflight_weight_updates,

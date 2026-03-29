@@ -3,11 +3,13 @@
 
 import dataclasses
 import datetime
+import faulthandler
 import json
 import logging
 import os
 import pathlib
 import queue
+import sys
 import threading
 import time
 import urllib.parse
@@ -42,6 +44,106 @@ M = TypeVar("M", bound=PyTree)
 Sig = ParamSpec("Sig")
 
 
+try:
+    import psutil
+except ImportError:  # pragma: no cover - optional dependency for richer checkpoint diagnostics
+    psutil = None
+
+
+def _format_gib_from_bytes(num_bytes: int | None) -> str | None:
+    if num_bytes is None:
+        return None
+    return f"{num_bytes / (1024**3):.2f}GiB"
+
+
+def _current_process_rss_bytes() -> int | None:
+    if psutil is None:
+        return None
+
+    try:
+        return int(psutil.Process().memory_info().rss)
+    except Exception:
+        return None
+
+
+class _CheckpointProgressLogger:
+    def __init__(
+        self,
+        *,
+        step: int,
+        checkpoint_path: str,
+        interval: float = 60.0,
+        dump_stacks_after: float | None = None,
+    ):
+        self.step = step
+        self.checkpoint_path = checkpoint_path
+        self.interval = interval
+        self.phase = "starting"
+        self.started_at = time.time()
+        self.phase_started_at = self.started_at
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._lock = threading.Lock()
+        self._stack_dumped = False
+        self._dump_after = dump_stacks_after
+
+    def start(self) -> None:
+        logger.info(
+            "PHASE: CHECKPOINT step=%d phase=%s path=%s",
+            self.step,
+            self.phase,
+            self.checkpoint_path,
+        )
+        self._thread.start()
+
+    def set_phase(self, phase: str) -> None:
+        with self._lock:
+            self.phase = phase
+            self.phase_started_at = time.time()
+        logger.info("PHASE: CHECKPOINT step=%d phase=%s path=%s", self.step, phase, self.checkpoint_path)
+
+    def finish(self, status: str) -> None:
+        self._stop_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+
+        elapsed = time.time() - self.started_at
+        logger.info(
+            "PHASE: CHECKPOINT step=%d phase=%s path=%s elapsed=%.2fs",
+            self.step,
+            status,
+            self.checkpoint_path,
+            elapsed,
+        )
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self.interval):
+            with self._lock:
+                phase = self.phase
+                phase_elapsed = time.time() - self.phase_started_at
+
+            total_elapsed = time.time() - self.started_at
+            rss = _format_gib_from_bytes(_current_process_rss_bytes())
+            rss_suffix = f", rss={rss}" if rss is not None else ""
+            logger.info(
+                "Checkpoint still running: step=%d phase=%s total_elapsed=%.1fs phase_elapsed=%.1fs%s",
+                self.step,
+                phase,
+                total_elapsed,
+                phase_elapsed,
+                rss_suffix,
+            )
+
+            if self._dump_after is not None and not self._stack_dumped and total_elapsed >= self._dump_after:
+                self._stack_dumped = True
+                logger.warning(
+                    "Checkpoint exceeded %.1fs at step %d; dumping Python thread stacks",
+                    self._dump_after,
+                    self.step,
+                )
+                faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+
+
 @dataclass(frozen=True)
 class CheckpointInterval:
     every: int  # how often to checkpoint
@@ -73,6 +175,9 @@ class Checkpointer:
         keep_params: PyTree[FilterSpec] = True,
         dt_now_injection: Optional[Callable[[], datetime.datetime]] = None,
         delete_old_temp_checkpoints: bool = True,
+        debug_checkpointer: bool = False,
+        debug_checkpointer_log_interval: float = 60.0,
+        debug_checkpointer_dump_stacks_after: float | None = None,
     ):
         """
         Class for managing checkpoints. Saves checkpoints according to two policies: time and step.
@@ -97,6 +202,9 @@ class Checkpointer:
         self._dt_now_injection = dt_now_injection or datetime.datetime.now
         self._last_save_time = self._dt_now_injection()
         self._last_save_step = 0
+        self.debug_checkpointer = debug_checkpointer
+        self.debug_checkpointer_log_interval = debug_checkpointer_log_interval
+        self.debug_checkpointer_dump_stacks_after = debug_checkpointer_dump_stacks_after
 
         # ensure that the step_policies are sorted. We could sort, but instead we'll just insist that they are sorted
         # since it's probably a typo if they aren't
@@ -301,6 +409,9 @@ class Checkpointer:
             manager=self._manager,
             commit_callback=commit_callback,
             is_temporary=is_temporary,
+            debug_checkpointer=self.debug_checkpointer,
+            debug_checkpointer_log_interval=self.debug_checkpointer_log_interval,
+            debug_checkpointer_dump_stacks_after=self.debug_checkpointer_dump_stacks_after,
         )
         self._last_save_step = step
         self._last_save_time = self._dt_now_injection()
@@ -321,6 +432,9 @@ def save_checkpoint(
     *,
     commit_callback: Optional[Callable[[], None]] = None,
     is_temporary: bool = True,
+    debug_checkpointer: bool = False,
+    debug_checkpointer_log_interval: float = 60.0,
+    debug_checkpointer_dump_stacks_after: float | None = None,
 ):
     """
     Save a checkpoint to a given path using TensorStore with OCDBT.
@@ -341,21 +455,57 @@ def save_checkpoint(
     step = int(step)
     checkpoint_path = str(checkpoint_path)
     logger.info(f"Saving checkpoint to {checkpoint_path} for step {step}")
+    progress_logger: _CheckpointProgressLogger | None = None
+    if debug_checkpointer:
+        progress_logger = _CheckpointProgressLogger(
+            step=step,
+            checkpoint_path=checkpoint_path,
+            interval=debug_checkpointer_log_interval,
+            dump_stacks_after=debug_checkpointer_dump_stacks_after,
+        )
+        progress_logger.start()
 
     fs: AbstractFileSystem
     fs, plain_path = _get_fs_and_plain_path(checkpoint_path)
     fs.makedirs(plain_path, exist_ok=True)
+    if progress_logger is not None:
+        progress_logger.set_phase("filesystem_ready")
 
     def my_callback():
-        _save_metadata(checkpoint_path, fs, step, is_temporary)
-        logger.info(f"Saved checkpoint to {checkpoint_path} for step {step}")
+        if progress_logger is not None:
+            progress_logger.set_phase("metadata_write")
+        status = "completed"
+        try:
+            _save_metadata(checkpoint_path, fs, step, is_temporary)
+            logger.info(f"Saved checkpoint to {checkpoint_path} for step {step}")
 
-        if commit_callback is not None:
-            commit_callback()
+            if commit_callback is not None:
+                commit_callback()
+        except Exception:
+            status = "failed"
+            raise
+        finally:
+            if progress_logger is not None:
+                progress_logger.finish(status)
 
     tree = equinox.filter(tree, lambda x: is_jax_array_like(x) or isinstance(x, (int, float, bool, complex)))
 
-    tree_serialize_leaves_tensorstore(checkpoint_path, tree, manager, commit_callback=my_callback)
+    try:
+        if progress_logger is not None:
+            progress_logger.set_phase("tensorstore_serialize")
+        tree_serialize_leaves_tensorstore(
+            checkpoint_path,
+            tree,
+            manager,
+            commit_callback=my_callback,
+            debug_checkpointer=debug_checkpointer,
+        )
+        if progress_logger is not None:
+            progress_logger.set_phase("async_commit_in_flight")
+    except Exception:
+        if progress_logger is not None:
+            progress_logger.finish("failed")
+        raise
 
     return checkpoint_path
 
@@ -599,6 +749,12 @@ class CheckpointerConfig:
 
     This is useful if the run is being preempted and restarted, and you want to keep the old checkpoints.
     """
+    debug_checkpointer: bool = False
+    """Enable verbose checkpoint diagnostics for debugging checkpoint-path failures."""
+    debug_checkpointer_log_interval: float = 60.0
+    """Seconds between checkpoint progress logs when ``debug_checkpointer`` is enabled."""
+    debug_checkpointer_dump_stacks_after: float | None = None
+    """If set, dump Python thread stacks after this many seconds in one checkpoint phase."""
 
     def expanded_path(self, run_id) -> str:
         if self.append_run_id_to_base_path:
@@ -612,6 +768,9 @@ class CheckpointerConfig:
             save_interval=self.save_interval,
             step_policies=keeps,
             delete_old_temp_checkpoints=self.delete_old_temp_checkpoints,
+            debug_checkpointer=self.debug_checkpointer,
+            debug_checkpointer_log_interval=self.debug_checkpointer_log_interval,
+            debug_checkpointer_dump_stacks_after=self.debug_checkpointer_dump_stacks_after,
         )
 
     def __post_init__(self):
@@ -629,6 +788,12 @@ class CheckpointerConfig:
                     interval["until"] is None or interval["until"] > prev_interval["until"]
                 ), "Checkpoint intervals must be monotonic"
             prev_interval = interval
+
+        assert self.debug_checkpointer_log_interval > 0, "debug_checkpointer_log_interval must be positive"
+        if self.debug_checkpointer_dump_stacks_after is not None:
+            assert (
+                self.debug_checkpointer_dump_stacks_after > 0
+            ), "debug_checkpointer_dump_stacks_after must be positive when set"
 
 
 def is_checkpoint_path(path: str) -> bool:

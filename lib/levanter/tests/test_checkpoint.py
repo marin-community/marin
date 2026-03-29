@@ -26,6 +26,7 @@ from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import (
     Checkpointer,
+    CheckpointerConfig,
     CheckpointInterval,
     _load_metadata,
     discover_latest_checkpoint,
@@ -257,6 +258,21 @@ def test_checkpoint_discovery():
         assert latest == f"{tempdir}/step-30"
 
         assert discover_latest_checkpoint("file:///tmp/does-not-exist") is None
+
+
+def test_checkpointer_config_propagates_debug_settings():
+    config = CheckpointerConfig(
+        base_path="/tmp/checkpoints",
+        debug_checkpointer=True,
+        debug_checkpointer_log_interval=12.5,
+        debug_checkpointer_dump_stacks_after=45.0,
+    )
+
+    checkpointer = config.create("run-1")
+
+    assert checkpointer.debug_checkpointer is True
+    assert checkpointer.debug_checkpointer_log_interval == 12.5
+    assert checkpointer.debug_checkpointer_dump_stacks_after == 45.0
 
 
 def test_checkpointer_deletes_previous_checkpoints():

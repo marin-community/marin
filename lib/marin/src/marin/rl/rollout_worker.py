@@ -40,6 +40,7 @@ from typing import Literal
 from levanter.utils.mesh import MeshConfig
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.runtime import RLRuntimeHandles
+from marin.rl.run_state import RolloutTransferCounters
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
 from marin.rl.environments.inference_ctx import (
@@ -70,6 +71,73 @@ from .weight_transfer.base import WeightUpdate
 from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_weight_transfer_client
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RolloutTransferCounterSnapshot:
+    """Attempt-local weight receive counters for a rollout worker process."""
+
+    total_polls: int = 0
+    successful_receives: int = 0
+    failed_receives: int = 0
+
+
+def _rollout_transfer_counter_delta(
+    current: RolloutTransferCounterSnapshot,
+    previous: RolloutTransferCounterSnapshot,
+) -> RolloutTransferCounterSnapshot:
+    """Return non-negative deltas for possibly-reset attempt-local counters."""
+
+    def _delta(metric_name: str, current_value: int, previous_value: int) -> int:
+        if current_value < previous_value:
+            logger.warning(
+                "Rollout transfer metric %s decreased from %d to %d; "
+                "treating current value as a fresh attempt-local counter",
+                metric_name,
+                previous_value,
+                current_value,
+            )
+            return current_value
+        return current_value - previous_value
+
+    return RolloutTransferCounterSnapshot(
+        total_polls=_delta("total_polls", current.total_polls, previous.total_polls),
+        successful_receives=_delta(
+            "successful_receives",
+            current.successful_receives,
+            previous.successful_receives,
+        ),
+        failed_receives=_delta("failed_receives", current.failed_receives, previous.failed_receives),
+    )
+
+
+def _rollout_transfer_counter_snapshot(metrics: Mapping[str, Any]) -> RolloutTransferCounterSnapshot:
+    """Extract cumulative counter fields from transfer-client metrics."""
+
+    return RolloutTransferCounterSnapshot(
+        total_polls=int(metrics["total_polls"]),
+        successful_receives=int(metrics["successful_receives"]),
+        failed_receives=int(metrics["failed_receives"]),
+    )
+
+
+def _rollout_transfer_metrics_for_logging(
+    metrics: Mapping[str, Any],
+    cumulative_counters: RolloutTransferCounters,
+) -> dict[str, float | int]:
+    """Format rollout transfer metrics for W&B logging."""
+
+    return {
+        "attempt_total_polls": int(metrics["total_polls"]),
+        "attempt_successful_receives": int(metrics["successful_receives"]),
+        "attempt_failed_receives": int(metrics["failed_receives"]),
+        "total_polls": cumulative_counters.total_polls,
+        "successful_receives": cumulative_counters.successful_receives,
+        "failed_receives": cumulative_counters.failed_receives,
+        "fetch_time": metrics["fetch_time"],
+        "decode_time": metrics["decode_time"],
+        "poll_time": metrics["poll_time"],
+    }
 
 
 class _NoOpTracker:
@@ -114,10 +182,11 @@ class RolloutTracker:
     """
 
     def __init__(self, config: RolloutTrackerConfig, run_id: str):
+        run_name = config.name or run_id
         self._run = wandb.init(
             entity=config.entity,
             project=config.project,
-            name=config.name,
+            name=run_name,
             tags=config.tags,
             id=run_id,
             resume="allow",
@@ -422,6 +491,7 @@ class RolloutWorker:
         self._shutdown_condition = threading.Condition()
         self._current_weight_step: int = -2
         self._current_train_step: int = -1
+        self._last_transfer_counters = RolloutTransferCounterSnapshot()
         self._last_eval_train_step: int | None = None
         self._eval_lock = threading.Lock()
         self._eval_executor: concurrent.futures.ThreadPoolExecutor | None = None
@@ -892,6 +962,22 @@ class RolloutWorker:
         for result in results:
             self._consume_lesson_eval(result)
 
+    def _resume_safe_transfer_metrics(self) -> dict[str, float | int]:
+        if self._transfer_client is None:
+            return {}
+
+        current_metrics = self._transfer_client.get_metrics()
+        current_counters = _rollout_transfer_counter_snapshot(current_metrics)
+        delta = _rollout_transfer_counter_delta(current_counters, self._last_transfer_counters)
+        cumulative_counters = self._runtime.run_state.add_rollout_transfer_counters.remote(
+            self.config.worker_index,
+            delta.total_polls,
+            delta.successful_receives,
+            delta.failed_receives,
+        ).result()
+        self._last_transfer_counters = current_counters
+        return _rollout_transfer_metrics_for_logging(current_metrics, cumulative_counters)
+
     def _shutdown_eval_executor(self) -> None:
         if self._eval_executor is None:
             return
@@ -1126,8 +1212,7 @@ class RolloutWorker:
                 if self.config.log_freq > 0 and step % self.config.log_freq == 0:
                     self._poll_eval_jobs()
                     log_metrics = eval_metrics
-                    if self._transfer_client is not None:
-                        log_metrics.update(self._transfer_client.get_metrics())
+                    log_metrics.update(self._resume_safe_transfer_metrics())
                     log_metrics.update(self._policy_ctx.get_metrics())
                     log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
                     # Add storage metrics if available

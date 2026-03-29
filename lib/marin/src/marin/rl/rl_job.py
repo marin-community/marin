@@ -142,6 +142,13 @@ class RLJobConfig:
 
     # Logging
     run_id: str = field(default_factory=lambda: f"rl-{uuid.uuid4().hex[:8]}")
+    instance_id: str | None = None
+    """Volatile instance identifier, unique per coordinator invocation.
+
+    Used for Iris child job names and hosted actor names so retries after
+    preemption do not collide with dead children from previous attempts.
+    When ``None``, defaults to :pyattr:`run_id` (legacy single-name behaviour).
+    """
     log_freq: int = 10
 
     rollout_tracker: RolloutTrackerConfig | None = None
@@ -149,6 +156,11 @@ class RLJobConfig:
 
     pip_dependency_groups: list[str] = field(default_factory=list)
     """Extra pip dependency groups to include for all workers."""
+
+    @property
+    def resolved_instance_id(self) -> str:
+        """Return the volatile instance id, falling back to run_id."""
+        return self.instance_id if self.instance_id is not None else self.run_id
 
     def with_on_policy_training(self) -> "RLJobConfig":
         """Configure for on-policy training.

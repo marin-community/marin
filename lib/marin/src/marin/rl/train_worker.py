@@ -12,6 +12,8 @@ checkpoints are read by the rollout workers to update their models.
 import dataclasses
 import faulthandler
 import logging
+import signal
+import sys
 import time
 from dataclasses import dataclass
 
@@ -21,6 +23,7 @@ import jax.random as jrandom
 import levanter
 import wandb
 from levanter import callbacks
+from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook
 from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig
@@ -41,6 +44,32 @@ from .rollout_storage import RolloutStorageConfig
 from .train_batch import create_training_batch_from_rollouts
 
 logger = logging.getLogger(__name__)
+
+
+def _resume_safe_weight_transfer_metrics(step: int, sync_interval_steps: int) -> dict[str, int]:
+    """Return monotonic weight-transfer counters for a resumed trainer run.
+
+    The trainer serves one bootstrap weight update at step `-1`, then serves one
+    update every `sync_interval_steps` training steps starting at step `0`.
+    These metrics are intended for run-global W&B charts, so they are derived
+    from the restored trainer step instead of from process-local server state.
+    """
+
+    if step < 0:
+        raise ValueError(f"weight transfer metrics require non-negative step, got {step}")
+    if sync_interval_steps <= 0:
+        raise ValueError(f"sync_interval_steps must be positive, got {sync_interval_steps}")
+    if step % sync_interval_steps != 0:
+        raise ValueError(
+            "weight transfer hook ran at step "
+            f"{step}, which is not aligned with sync_interval_steps={sync_interval_steps}"
+        )
+
+    successful_transfers = 2 + step // sync_interval_steps
+    return {
+        "total_transfers": successful_transfers,
+        "successful_transfers": successful_transfers,
+    }
 
 
 @dataclass
@@ -313,6 +342,9 @@ class TrainWorker:
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
         faulthandler.enable()
+        debug_checkpointer = self.config.trainer.checkpointer.debug_checkpointer
+        if debug_checkpointer and hasattr(signal, "SIGUSR2"):
+            faulthandler.register(signal.SIGUSR2, file=sys.stderr, all_threads=True)
         logger.info("Starting RLOO training with Levanter...")
 
         try:
@@ -328,6 +360,8 @@ class TrainWorker:
                 Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer,
                 self.replay_loader,
             ):
+                if debug_checkpointer:
+                    install_tensorstore_metrics_hook(trainer, every=1)
                 _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
                 state = trainer.initial_state(training_key, model=self.initial_model)
                 self._drop_bootstrap_model_references()
@@ -456,7 +490,17 @@ class TrainWorker:
         self.transfer_server.serve_weights(step, model_params)
         transfer_time = time.time() - transfer_start
 
-        metrics = {f"weight_transfer/{k}": v for k, v in dataclasses.asdict(self.transfer_server.get_metrics()).items()}
+        attempt_metrics = dataclasses.asdict(self.transfer_server.get_metrics())
+        metrics = {f"weight_transfer/attempt_{k}": v for k, v in attempt_metrics.items()}
+        metrics.update(
+            {
+                f"weight_transfer/{k}": v
+                for k, v in _resume_safe_weight_transfer_metrics(
+                    step=step,
+                    sync_interval_steps=self.config.weight_transfer.sync_interval_steps,
+                ).items()
+            }
+        )
         metrics["weight_transfer/serve_time_seconds"] = transfer_time
 
         trainer.tracker.log(metrics, step=step)

@@ -32,6 +32,15 @@ class RunStateSnapshot:
     failure_message: str | None
 
 
+@dataclass(frozen=True)
+class RolloutTransferCounters:
+    """Resume-safe cumulative transfer counters for a rollout worker."""
+
+    total_polls: int = 0
+    successful_receives: int = 0
+    failed_receives: int = 0
+
+
 class RLRunState:
     """Lightweight actor that tracks RL run lifecycle.
 
@@ -42,6 +51,7 @@ class RLRunState:
         self._status: RunStatus = RunStatus.RUNNING
         self._failure_message: str | None = None
         self._train_step: int = -1
+        self._rollout_transfer_counters: dict[int, RolloutTransferCounters] = {}
 
     def get_status(self) -> str:
         return self._status.value
@@ -62,6 +72,29 @@ class RLRunState:
 
     def get_train_step(self) -> int:
         return self._train_step
+
+    def get_rollout_transfer_counters(self, worker_index: int) -> RolloutTransferCounters:
+        return self._rollout_transfer_counters.get(worker_index, RolloutTransferCounters())
+
+    def add_rollout_transfer_counters(
+        self,
+        worker_index: int,
+        total_polls_delta: int,
+        successful_receives_delta: int,
+        failed_receives_delta: int,
+    ) -> RolloutTransferCounters:
+        deltas = (total_polls_delta, successful_receives_delta, failed_receives_delta)
+        if any(delta < 0 for delta in deltas):
+            raise ValueError(f"rollout transfer deltas must be non-negative, got {deltas}")
+
+        previous = self.get_rollout_transfer_counters(worker_index)
+        updated = RolloutTransferCounters(
+            total_polls=previous.total_polls + total_polls_delta,
+            successful_receives=previous.successful_receives + successful_receives_delta,
+            failed_receives=previous.failed_receives + failed_receives_delta,
+        )
+        self._rollout_transfer_counters[worker_index] = updated
+        return updated
 
     def mark_completed(self) -> None:
         if self._status == RunStatus.RUNNING:

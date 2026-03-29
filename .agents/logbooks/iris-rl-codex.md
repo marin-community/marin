@@ -7382,3 +7382,667 @@ Run a short packed RL smoke on Iris with the new implementation and check:
 - rollout-side metrics show eval requests only on `replica 1`
 - train generate requests continue on `replica 0` during eval windows
 - trainer `batch_prep` improves materially versus `PKR-001`
+
+## 2026-03-26 23:43 PDT - Launch plan for `PKR-002`
+
+Next experiment:
+
+- `PKR-002`
+- goal: rerun the short 5-step packed RL smoke after the eval-isolation changes
+- success criteria:
+  - root / trainer / rollout all succeed cleanly
+  - rollout metrics show eval requests pinned to `replica 1`
+  - train requests continue on `replica 0` during eval windows
+  - trainer `batch_prep` improves versus `PKR-001`
+
+Launch command:
+
+- `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-packed-pkr002-20260326-2343 --region us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/exp_iris_rl_regression_direct_gcs_packed.py --experiment-name-suffix pkr002 --num-train-steps 5 --n-prompts 64 --eval-frequency 1 --region us-central1`
+
+## 2026-03-27 00:21 PDT - Launch plan for `PKR-003`
+
+Next experiment:
+
+- `PKR-003`
+- goal: isolate packed-rollout throughput with eval effectively out of the way
+- shape: same packed rollout topology as `PKR-002`, but extend to `10` train steps and make eval sparse enough that it should not materially affect the run
+- assumption: setting `eval_frequency=100` on a `10`-step run is sufficient to remove eval as the main source of rollout contention
+
+Success criteria:
+
+- root / trainer / rollout all succeed cleanly
+- first packed rollout batch arrives without a hard startup failure
+- trainer steady-state cadence is substantially better than the eval-heavy packed runs
+- `batch_prep` stays near the low-single-digit baseline instead of repeatedly spiking into the `40-60s` range
+
+Launch command:
+
+- `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-packed-pkr003-20260327-0021 --region us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/exp_iris_rl_regression_direct_gcs_packed.py --experiment-name-suffix pkr003 --num-train-steps 10 --n-prompts 64 --eval-frequency 100 --region us-central1`
+
+## 2026-03-27 00:55 PDT - `PKR-003` capacity status
+
+Current Iris state:
+
+- root job `/ahmed/iris-rl-packed-pkr003-20260327-0021`: `JOB_STATE_RUNNING`
+- trainer child `/ahmed/iris-rl-packed-pkr003-20260327-0021/rl-pkr003-20260327-072722-train`: `JOB_STATE_RUNNING`
+- rollout child `/ahmed/iris-rl-packed-pkr003-20260327-0021/rl-pkr003-20260327-072722-rollout-0`: `JOB_STATE_PENDING`
+- `failure_count=0` and `preemption_count=0` across the whole tree
+
+Current blocker is scheduler capacity, not a code/runtime failure:
+
+- `Insufficient TPUs (need 4, available 0)`
+- `Insufficient memory (need 400.0GB, available 304.8GB)`
+- autoscaler backoff on `tpu_v5p_8-us-central1-a`
+
+Implication:
+
+- trainer is alive but still waiting for initial rollouts
+- rollout has not started yet, so there is no rollout-side correctness or throughput signal from `PKR-003` yet
+- no traceback, OOM, or packed-vLLM startup error has appeared so far; this is purely a cluster-capacity stall
+
+## 2026-03-27 00:58 PDT - 8-hour babysit queue
+
+User requested continuous monitoring for the next `8` hours and asked that follow-up jobs launch automatically as earlier runs complete.
+
+Queue for this monitoring window:
+
+1. keep babysitting `PKR-003` until it reaches a terminal state
+2. if `PKR-003` succeeds cleanly, launch `PKR-004`
+3. if `PKR-004` also succeeds cleanly and the monitoring window still has time left, launch `PKR-005`
+
+Planned follow-up experiments:
+
+- `PKR-004`
+  - goal: measure packed RL with normal eval cadence after the eval-isolation changes
+  - shape: same packed topology, `10` train steps, `eval_frequency=1`
+- `PKR-005`
+  - goal: longer packed confirmation run if `PKR-004` looks healthy enough to justify extending the run
+  - shape: same packed topology, `30` train steps, `eval_frequency=1`
+
+Assumptions for the automated queue:
+
+- use the same packed experiment file: `experiments/exp_iris_rl_regression_direct_gcs_packed.py`
+- keep `n_prompts=64`
+- treat scheduler capacity waits as non-failures and continue waiting
+- do not mutate the cluster; only submit/monitor Iris jobs
+
+## 2026-03-27 02:08 PDT - `PKR-003` capacity cleared and run started
+
+`PKR-003` is no longer blocked on rollout capacity.
+
+Observed transition:
+
+- at `02:06 PDT`, Iris status changed from rollout `PENDING` to rollout `RUNNING`
+- root and trainer both remained `RUNNING`
+- no failures or preemptions were recorded at the moment capacity cleared
+
+Early runtime signal after rollout startup:
+
+- trainer already completed `training step 1` with `duration=88.39s` and `batch_prep=4.54s`
+- packed rollout logs show both local children active:
+  - child `0` activated weight `0` and started a `64`-prompt generate
+  - child `1` activated weight `0`, fetched weight `1`, and started a `500`-prompt generate
+
+Interpretation:
+
+- the job has moved from scheduler wait into real packed-RL execution
+- the immediate next thing to watch is whether steady-state cadence stays near the low `batch_prep` seen at step `1`, and whether sparse eval actually keeps rollout contention low
+
+## 2026-03-27 02:37 PDT - `PKR-003` succeeded; continuing to `PKR-004`
+
+`PKR-003` finished successfully on Iris:
+
+- root `/ahmed/iris-rl-packed-pkr003-20260327-0021`: `JOB_STATE_SUCCEEDED`
+- trainer child: `JOB_STATE_SUCCEEDED`
+- rollout child: `JOB_STATE_SUCCEEDED`
+- `failure_count=0`, `preemption_count=0`
+
+Operational note:
+
+- the queue monitor hit a wrapper-side post-success status-resolution bug after `PKR-003` completed
+- this was a monitor bug, not an Iris or RL job failure
+- fix applied locally: add retries around post-monitor root-state resolution before deciding whether to advance the queue
+
+Next action:
+
+- launch `PKR-004` directly and reattach the fixed queue monitor on top of the new active job
+
+Planned launch command:
+
+- `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-packed-pkr004-20260327-0237 --region us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/exp_iris_rl_regression_direct_gcs_packed.py --experiment-name-suffix pkr004 --num-train-steps 10 --n-prompts 64 --eval-frequency 1 --region us-central1`
+
+## 2026-03-27 03:19 PDT - `PKR-004` launched and is running after one preemption
+
+Launch result:
+
+- root job `/ahmed/iris-rl-packed-pkr004-20260327-0237`
+- trainer child `/ahmed/iris-rl-packed-pkr004-20260327-0237/rl-pkr004-20260327-094215-train`
+- rollout child `/ahmed/iris-rl-packed-pkr004-20260327-0237/rl-pkr004-20260327-094215-rollout-0`
+
+Current state at this checkpoint:
+
+- root: `JOB_STATE_RUNNING`
+- trainer: `JOB_STATE_RUNNING`, `preemption_count=1`
+- rollout: `JOB_STATE_RUNNING`, `preemption_count=1`
+- no child has a recorded failure yet
+
+Observed runtime pattern so far:
+
+- startup again emitted the scoped-Vmem `INVALID_ARGUMENT` spam seen in earlier packed runs, but recovered
+- early steps matched the packed/eval-heavy expectation:
+  - step `0`: `111.33s`, `batch_prep=4.71s`
+  - step `1`: `91.12s`, `batch_prep=4.50s`
+  - step `2`: `60.85s`, `batch_prep=46.43s`
+  - step `3`: `60.92s`, `batch_prep=44.23s`
+- eval metrics advanced:
+  - step `-1`: `avg_at_1=0.292`
+  - step `0`: `avg_at_1=0.344`
+
+Operational note:
+
+- later logs showed a restart-like sequence and Iris now reports `preemption_count=1` on both trainer and rollout
+- the job recovered and remains `RUNNING`, so the babysit loop stayed attached instead of resubmitting
+- `PKR-005` remains queued to launch automatically if `PKR-004` reaches a clean terminal success
+
+## 2026-03-27 09:12 PDT - `PKR-004` succeeded; overall verdict unchanged
+
+Final Iris state:
+
+- root `/ahmed/iris-rl-packed-pkr004-20260327-0237`: `JOB_STATE_SUCCEEDED`
+- trainer child: `JOB_STATE_SUCCEEDED`, `preemption_count=2`
+- rollout child: `JOB_STATE_SUCCEEDED`, `preemption_count=1`
+- `failure_count=0` everywhere
+
+What `PKR-004` showed:
+
+- the packed direct Iris RL path is operational under normal eval cadence too, not just sparse-eval mode
+- the same qualitative throughput pattern reappeared:
+  - very low `batch_prep` on the first two steps
+  - then large `batch_prep` inflation once eval work overlaps rollout supply
+- startup again emitted the scoped-Vmem `INVALID_ARGUMENT` spam seen in earlier packed runs, but the run recovered
+
+Current verdict:
+
+- correctness verdict: **yes**
+  - direct packed RL on Iris is validated
+  - one rollout `v5p-8` can host the packed `2 x TP=2` path end-to-end in real RL
+- production-throughput verdict: **not yet**
+  - sparse-eval packed RL (`PKR-003`) looked materially healthier
+  - normal-eval packed RL (`PKR-004`) still exhibits the eval-heavy contention pattern that keeps it from being an obvious `e4ms2` replacement
+
+Decision at this point:
+
+- packed rollout is a real and working topology
+- but a single packed rollout worker is still not a proven drop-in replacement for the old two-rollout-worker shape under `eval_frequency=1`
+- the next promotion step should be gated on whether we want to invest in better eval isolation / ownership, not on sampler correctness anymore
+
+## 2026-03-27 09:12 PDT - Bottom-line status
+
+Bottom line after `PKR-003` and `PKR-004`:
+
+- direct packed RL on Iris: **validated**
+- packed rollout as the new default RL topology: **not yet promoted**
+
+Recommended interpretation:
+
+- use `PKR-003` as evidence that the packed sampler path itself is healthy when eval pressure is mostly removed
+- use `PKR-004` as evidence that normal eval cadence still reintroduces enough rollout contention to block promotion over `e4ms2`
+
+Recommended next decision:
+
+- either invest in stronger eval isolation / scheduling changes
+- or keep the packed path as a validated capability without making it the production default yet
+
+## 2026-03-28 - Claude handoff findings imported
+
+Source: `.agents/logbooks/iris-rl-claude.md`
+
+This section imports the main conclusions from the separate Claude session so the Codex logbook keeps the migration, performance, and reliability story in one place.
+
+### 1. Root cause of the early Iris performance gap
+
+Claude's main performance finding was that the slow `r4` Iris run was not trainer-bound. The trainer-side compute was already competitive with on-demand; the gap was rollout-side.
+
+With `n_prompts=16`, Iris needed `4` rollout batches to fill one `1024`-sample trainer batch. Because rollout eval was keyed off the rollout worker's internal batch counter, `eval_frequency=1` accidentally meant `4` full MATH-500 evals per trainer step instead of `1`. That is the dominant explanation for the `~7.9 min/step` behavior in `r4`.
+
+See `.agents/logbooks/iris-rl-claude.md`:
+- `Root Cause: eval_frequency interacts badly with small n_prompts`
+- `Performance Comparison: Iris r4 vs On-Demand nb-inflight2`
+
+### 2. Validation that the simple config fix worked
+
+Claude then validated the obvious corrective action: match the on-demand rollout shape by setting `n_prompts=64`, so one rollout batch naturally feeds one trainer step.
+
+That `e4par` Iris run recovered the expected cadence almost exactly:
+- `r4`: `~7.9 min/step`
+- `e4par`: `~2.3 min/step`
+- on-demand `nb-inflight2`: `~2.3 min/step`
+
+This is important context for the later packed-rollout work in this logbook: the first major Iris slowdown was a rollout/eval-cadence bug, not evidence that Iris itself was intrinsically slower.
+
+See `.agents/logbooks/iris-rl-claude.md`:
+- `Validation: Iris e4par run (n_prompts=64, inflight updates)`
+
+### 3. Best-performing non-packed Iris topology observed by Claude
+
+Claude's strongest throughput result before the packed-rollout branch here was `e4ms2`: `1` trainer plus `2` rollout workers, each with `n_prompts=64`.
+
+Recorded outcome:
+- median wall clock `~1.7 min/step`
+- materially faster than both `r4` and the best on-demand reference
+- trainer `batch_prep` dropped sharply because the trainer was almost always fed
+
+Claude also quantified the cost of that speedup:
+- rollout production averaged `~1.43` batches per trainer step
+- roughly `29-30%` of produced rollout data was discarded
+- this was not a replay-buffer bug; it was the expected price of overproducing to keep the trainer saturated
+
+Claude's analysis also concluded that `max_samples=2` would not help under the current `max_rollout_step_delay=1` setting. The better levers were:
+- move eval off the critical sampler path
+- reduce checkpoint cost/frequency
+- reduce per-sampler prompt count if we want a different throughput/waste tradeoff
+
+This provides the baseline that the later packed `PKR-*` work in this logbook was trying to match or beat.
+
+See `.agents/logbooks/iris-rl-claude.md`:
+- `Multi-Sampler Run: e4ms2 (1 trainer + 2 rollout workers)`
+- `Replay Buffer Mechanics and Rollout Overproduction Analysis`
+
+### 4. Pure-inference findings that motivated the packed-rollout branch
+
+Claude ran the pure-inference ladder to answer whether packed `TP=2x2` on one `v5p-8` was even worth attempting.
+
+The high-signal result was that `TP=4` throughput stayed effectively flat while `gpu_memory_utilization` dropped from `0.90` to `0.60`. That meant the KV cache reservation was oversized for this workload and that packed `TP=2x2` looked memory-feasible on `v5p-8`.
+
+That inference-side conclusion is the direct precursor to the packed-rollout implementation and `PKR-001` through `PKR-004` validation recorded later in this Codex logbook.
+
+See `.agents/logbooks/iris-rl-claude.md`:
+- `INF-001 Results: TP=4 Baseline (2026-03-26)`
+- `INF-002: TP=4 Cache-Budget Sweep (2026-03-26)`
+- `INF-004 Plan: Data-Parallel TP=2x2 on Single v5p-8`
+
+### 5. Reliability finding: retry did not resume until naming was split
+
+Claude found a separate high-impact reliability bug during the long `e4ms2` thread: preempted Iris RL runs were not actually resuming.
+
+Root cause:
+- the experiment script generated a fresh timestamp-based name on every invocation
+- Iris retry re-ran the script
+- checkpoint paths, W&B run IDs, rollout storage paths, and actor names all changed on retry
+- Levanter then correctly saw an empty checkpoint directory and restarted from the base model
+
+The required fix was to split:
+- stable run identity for checkpoints, W&B, and rollout storage
+- per-attempt instance identity for child-job names and actor names
+
+Claude's logbook records this fix as implemented and production-validated on the long `iris-rl-e4ms2-500` run. That work is now part of the carry-forward state for this thread.
+
+See `.agents/logbooks/iris-rl-claude.md`:
+- `Critical Bug: RL runs do not resume after preemption (2026-03-27)`
+- `Fix implemented and validated (2026-03-28)`
+
+### 6. Remaining carry-forward issue from the Claude session
+
+The main unresolved issue at Claude handoff was not checkpoint/W&B resume anymore; that part was working. The remaining issue was trainer liveness after certain failures.
+
+Observed behavior:
+- trainer could fail or hang mid-step
+- Arrow Flight / background threads kept the process alive long enough that Iris still showed the job as `RUNNING`
+- W&B stopped advancing
+- the run eventually recovered through Iris retry, but only after a delayed failure-detection window
+
+This is consistent with the coordinator-liveness / zombie-process concern already noted elsewhere in this logbook. The practical consequence is that resume works, but failure surfacing and fast teardown are still not fully solved.
+
+See `.agents/logbooks/iris-rl-claude.md`:
+- `Trainer stuck/zombie issue at step 143 - detailed crash log`
+- `1-hour status check (2026-03-28 ~10:30 UTC)`
+
+## 2026-03-28 18:45 PDT - e4ms2-500 final trainer failure signature narrowed; diagnostics patch landed
+
+Context:
+- root job: `/ahmed/iris-rl-e4ms2-500-0327-v2`
+- trainer run: `iris-rl-e4ms2-500-train`
+- local debug note: `docs/debug-log-iris-rl-e4ms2-500-final-failure.md`
+
+This follow-up was specifically to answer:
+1. what exact signature the repeated trainer failures share
+2. whether the late failure should still be treated as a simple host-RAM / OOM issue
+3. how to improve logging so the next failure is materially easier to diagnose
+
+### 1. Repeated failure signature is now much narrower than "generic coordination error"
+
+Trainer attempts `0`, `2`, `3`, and `4` all show the same sequence:
+
+- training continues normally up to a checkpoint boundary
+- Levanter logs:
+  - `Saving temporary checkpoint at step ...`
+  - `Saving checkpoint at step ...`
+- JAX checkpoint logs:
+  - `Waiting for previous serialization to finish`
+  - `Thread joined successfully`
+  - `Error check finished successfully`
+- then the main trainer thread goes silent
+- replay-buffer / rollout-ingest background threads continue logging briefly
+- the task finally dies with:
+  - `UNAVAILABLE: The following tasks are unhealthy (stopped sending heartbeats): /job:jax_worker/replica:0/task:0`
+  - `RPC: /tensorflow.CoordinationService/PollForError`
+
+Crucial narrowing observation:
+- the failing checkpoints never emit:
+  - `Starting commit to storage layer by process: 0`
+- but successful earlier checkpoints in the same attempts do emit:
+  - `Starting commit to storage layer by process: 0`
+  - `Finished committing to storage layer by process: 0`
+  - `on_commit_callback successfully ran!`
+
+Interpretation:
+- the coordination error is still the outer death notice
+- the shared inner signature is now checkpoint-path failure before async commit starts
+- more precisely: the trainer appears to wedge or die in JAX/TensorStore pre-commit serialization, not in the later commit/on-commit callback stage
+
+The local code path supports that reading:
+- `levanter.checkpoint.save_checkpoint(...)` enters `tree_serialize_leaves_tensorstore(...)`
+- that calls `GlobalAsyncCheckpointManager.serialize(...)`
+- JAX runs `asyncio.run(_run_serializer())`
+- only after that returns does it start the async commit thread that logs `Starting commit to storage layer`
+
+So the best current phrase for the failure family is:
+- checkpoint-triggered trainer death during pre-commit TensorStore serialization
+
+### 2. Revised interpretation: this is not strong evidence for a simple `400g`-budget OOM
+
+An earlier hypothesis was that this might still be "basically checkpoint OOM" in a broader sense. That should now be weakened.
+
+What changed the interpretation:
+- this run requested `400g` TPU host RAM
+- decoded Iris task resource usage for the trainer showed:
+  - `memory_peak_mb = 319590` (~`312 GiB`)
+- that is very large, but it is still below the requested `400g` envelope
+
+Most careful interpretation now:
+- checkpointing is still the trigger boundary
+- but the available evidence does **not** justify calling this a straightforward cgroup-limit OOM
+- a better current guess is:
+  - native JAX / TensorStore / TPU-host-transfer wedge or abort during serialization
+  - possibly worker-specific flakiness
+  - possibly some form of resource pressure / fragmentation that does not surface cleanly as `exit 137`
+
+This is a more defensible statement than "it ran out of RAM again."
+
+### 3. Logging / diagnostics improvements implemented immediately
+
+Because the main blocker is now observability, a diagnostics-oriented patch was landed rather than continuing to speculate from the same weak signal.
+
+Changes made:
+
+1. Unbuffered worker logs
+- RL worker environments now set:
+  - `PYTHONUNBUFFERED=1`
+- goal: reduce the chance that the true last logs are lost behind Python buffering
+
+2. Train-worker manual thread dumps
+- train worker now mirrors rollout worker behavior:
+  - `faulthandler.enable()`
+  - register `SIGUSR2` to dump all Python thread stacks to stderr
+- goal: if a trainer is visibly wedged, we can get an immediate multi-thread stack snapshot without waiting for process death
+
+3. Existing TensorStore metrics hook now enabled for RL trainer
+- `install_tensorstore_metrics_hook_if_enabled(trainer)` is now wired into the RL train worker
+- when `LEVANTER_LOG_TENSORSTORE_METRICS_EVERY` is set, RL runs will log TensorStore counters per step just like `train_lm`
+
+4. Explicit checkpoint phase markers in Levanter checkpoint save path
+- checkpoint saves now emit:
+  - `PHASE: CHECKPOINT step=... phase=starting`
+  - `filesystem_ready`
+  - `tensorstore_serialize`
+  - `async_commit_in_flight`
+  - `metadata_write`
+  - terminal `completed` / `failed`
+- goal: make the exact checkpoint subphase visible in logs instead of inferring it indirectly from JAX internal messages
+
+5. Periodic "checkpoint still running" progress logs
+- long-running checkpoints now periodically log:
+  - step
+  - current checkpoint phase
+  - total elapsed
+  - phase elapsed
+  - current process RSS when available via `psutil`
+- goal: distinguish "slow checkpoint" from "silent hang" and provide lightweight host-memory context
+
+6. Optional automatic Python thread dump on long checkpoint stall
+- new env knob:
+  - `LEVANTER_CHECKPOINT_DUMP_STACKS_AFTER_SECONDS`
+- if set, a long-running checkpoint will automatically dump Python thread stacks once the timeout is exceeded
+- goal: catch where Python-visible threads are blocked when the trainer never makes it to commit logs
+
+7. TensorStore serialization entry/exit markers
+- added logs around `manager.serialize(...)` with:
+  - checkpoint dir
+  - number of arrays
+  - estimated total serialized array size
+  - largest leaf path + size
+  - explicit enter / return markers around `manager.serialize(...)`
+- goal: prove whether the failure occurs before or after JAX returns from the serializer call and capture the checkpoint scale at the failing step
+
+Validation:
+- `./infra/pre-commit.py --fix lib/marin/src/marin/rl/orchestration.py lib/marin/src/marin/rl/train_worker.py lib/levanter/src/levanter/checkpoint.py lib/levanter/src/levanter/tensorstore_serialization.py`
+- result: `OK`
+
+### 4. Practical next-run guidance
+
+For the next long Iris RL run, the highest-value debug configuration is:
+
+- `LEVANTER_LOG_TENSORSTORE_METRICS_EVERY=1`
+- `LEVANTER_CHECKPOINT_DUMP_STACKS_AFTER_SECONDS=180`
+
+And if the trainer appears hung while the process is still alive:
+- send `SIGUSR2` to the trainer process to dump all Python thread stacks
+
+Expected outcome next time:
+- we should know which checkpoint phase the run died in
+- whether `manager.serialize(...)` returned
+- whether async commit began
+- whether metadata write began
+- whether Python threads were stuck in a visible blocking point
+
+Bottom line:
+- the run still failed because the trainer exhausted ordinary failure retries
+- but the deeper failure family is now best described as:
+  - repeated checkpoint-path trainer death in pre-commit serialization
+- and the repository now has substantially better instrumentation to identify the exact failing boundary on the next reproduction
+
+## 2026-03-28 19:09 PDT - fixed resumed `weight_transfer/*` trainer metrics
+
+Follow-up on the trainer W&B run `iris-rl-e4ms2-500-train`:
+
+- user noticed that `weight_transfer/total_transfers` kept restarting near zero inside a single resumed trainer run
+- question was whether W&B resume had failed, or whether this was a metric-definition problem on our side
+
+### 1. W&B resume was not the bug
+
+Direct history inspection of:
+- `https://wandb.ai/marin-community/marin_iris_rl_debug/runs/iris-rl-e4ms2-500-train`
+
+showed:
+- `weight_transfer/total_transfers` dropped at trainer steps:
+  - `67`
+  - `143`
+  - `281`
+  - `405`
+- `weight_transfer/successful_transfers` dropped at those same steps
+- `weight_transfer/failed_transfers` did not show the same reset pattern
+
+Cross-checks:
+- `throughput/total_tokens` stayed monotonic
+- `throughput/total_gflops` stayed monotonic
+
+Interpretation:
+- the trainer W&B run id resumed correctly
+- only the weight-transfer server counters were being reset
+
+### 2. Root cause: process-local transfer-server counters were being logged as if they were run-global counters
+
+The code path before the fix was:
+
+- `TrainWorker.__init__` recreated a fresh transfer server on every trainer child retry
+- `ArrowFlightServer.__init__` created a fresh in-memory `WeightTransferServerMetrics()` dataclass with zeros
+- `weight_transfer_hook(...)` logged `dataclasses.asdict(self.transfer_server.get_metrics())` directly to W&B
+
+So after a trainer retry:
+- the W&B run resumed under the same stable trainer id
+- but the source counters were back at `0`
+- therefore the W&B chart showed a reset even though the run itself had resumed correctly
+
+This was a metric-semantics bug, not a W&B resume bug.
+
+### 3. Simplest fix implemented: split attempt-local vs resume-safe global counters
+
+Instead of adding persistence plumbing through `RLRunState`, the fix implemented the smallest correct change:
+
+1. Keep the existing server counters, but rename them explicitly as attempt-local metrics:
+- `weight_transfer/attempt_total_transfers`
+- `weight_transfer/attempt_successful_transfers`
+- `weight_transfer/attempt_failed_transfers`
+
+2. Publish run-global cumulative counters from restored trainer step state:
+- `weight_transfer/total_transfers`
+- `weight_transfer/successful_transfers`
+
+Reason this works:
+- there is exactly one bootstrap transfer before training starts
+- then one transfer hook every `sync_interval_steps`, starting at trainer step `0`
+
+So for a logged transfer step:
+- global cumulative transfers = `2 + step // sync_interval_steps`
+
+For the observed run with `sync_interval_steps=1`, that gives:
+- step `0` -> `2`
+- step `67` -> `69`
+- step `143` -> `145`
+
+which matches the intended run-global semantics and removes the retry-induced resets.
+
+### 4. Code / test updates
+
+Code:
+- added `_resume_safe_weight_transfer_metrics(...)` in `lib/marin/src/marin/rl/train_worker.py`
+- updated `weight_transfer_hook(...)` to log:
+  - attempt-local counters from the transfer server dataclass
+  - run-global monotonic counters derived from trainer step
+
+Tests:
+- extended `tests/rl/test_train_worker.py` with:
+  - direct coverage for `_resume_safe_weight_transfer_metrics(...)`
+  - a focused hook test verifying that a restarted trainer can log:
+    - attempt-local counters such as `8`
+    - run-global counters such as `69`
+    at the same trainer step
+
+Validation:
+- `uv run pytest -q tests/rl/test_train_worker.py tests/rl/test_orchestration.py`
+- `./infra/pre-commit.py --fix lib/marin/src/marin/rl/train_worker.py tests/rl/test_train_worker.py .agents/logbooks/iris-rl-codex.md docs/debug-log-weight-transfer-metric-reset.md`
+
+Outcome:
+- resumed trainer runs should now keep the main weight-transfer charts monotonic
+- and the attempt-local values remain available for debugging per-process behavior after retries
+
+## 2026-03-28 19:32 PDT - fixed rollout W&B naming and rollout receive counter semantics
+
+Follow-up on the two rollout runs from `iris-rl-e4ms2-500`:
+
+- `iris-rl-e4ms2-500-rollout-0`
+- `iris-rl-e4ms2-500-rollout-1`
+
+The user noticed two related but distinct issues:
+
+1. W&B sidebar confusion
+- the two rollout runs had distinct URLs and ids
+- but both displayed the same visible name:
+  - `iris-rl-e4ms2-500-20260328-031315-rollout`
+
+2. Resume-unfriendly receive counters
+- rollout-side counters such as `inference.successful_receives` could reset inside a resumed run
+- this looked like the rollout analogue of the trainer-side `weight_transfer/total_transfers` issue
+
+### 1. W&B rollout display-name fix
+
+Diagnosis:
+- this was a display-name collision, not a run-id collision
+- both rollout runs were distinct in W&B:
+  - ids / URLs were `...-rollout-0` and `...-rollout-1`
+- but the visible name had been shared
+
+Important design constraint:
+- rollout W&B labels must be robust to preemption
+- therefore they cannot key off the volatile Iris instance name
+
+Fix implemented:
+- rollout W&B naming now uses the stable per-worker identity
+- coordinator stamps each rollout worker with:
+  - `run_id = <stable-run-id>-rollout-<worker_index>`
+  - `tracker_config.name = <stable-run-id>-rollout-<worker_index>`
+- rollout tracker now uses:
+  - `name = config.name or run_id`
+  - `id = run_id`
+
+Implication:
+- worker `0` now stays visibly `...-rollout-0`
+- worker `1` now stays visibly `...-rollout-1`
+- retries of the same logical worker resume into the same W&B run and keep the same visible label
+
+### 2. Rollout receive counters now split into attempt-local vs resume-safe global metrics
+
+Diagnosis:
+- rollout workers were logging `WeightTransferClientMetrics` directly
+- those counters live in an in-memory client object
+- after a rollout retry, the W&B run resumed but the counter source restarted
+
+That meant the main W&B series:
+- `inference.total_polls`
+- `inference.successful_receives`
+- `inference.failed_receives`
+
+were not truly run-global counters; they were attempt-local counters masquerading as global ones.
+
+Fix implemented:
+
+1. Added coordinator-hosted cumulative storage in `RLRunState`
+- per `worker_index`, track cumulative:
+  - `total_polls`
+  - `successful_receives`
+  - `failed_receives`
+
+2. Rollout worker now keeps the last locally observed attempt counters
+- at each log step it computes non-negative deltas
+- if a local counter decreases, that is treated as a fresh attempt-local counter after retry
+
+3. Logging semantics now match trainer-side conventions
+- attempt-local metrics:
+  - `inference.attempt_total_polls`
+  - `inference.attempt_successful_receives`
+  - `inference.attempt_failed_receives`
+- resume-safe cumulative metrics:
+  - `inference.total_polls`
+  - `inference.successful_receives`
+  - `inference.failed_receives`
+
+This makes the main rollout receive charts monotonic across retries while preserving per-attempt debug visibility.
+
+### 3. Tests / validation
+
+Tests added / updated:
+- `tests/rl/test_rollout_worker.py`
+  - rollout tracker uses explicit stable name
+  - rollout receive metrics log attempt-local and cumulative values correctly after a counter reset
+- `tests/rl/test_run_state.py`
+  - `RLRunState` accumulates rollout transfer counters per worker
+- `tests/rl/test_orchestration.py`
+  - coordinator assigns stable per-worker rollout W&B names
+
+Planned validation commands for this patch:
+- `uv run pytest -q tests/rl/test_rollout_worker.py tests/rl/test_run_state.py tests/rl/test_orchestration.py`
+- `make-fix`
+
+Outcome:
+- rollout W&B sidebar labels should now be unambiguous and preemption-safe
+- rollout receive counters should now have the same resume-safe semantics as the trainer-side transfer counters

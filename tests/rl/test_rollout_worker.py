@@ -5,6 +5,7 @@ import concurrent.futures
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import fsspec
 import pytest
@@ -12,8 +13,12 @@ import pytest
 from marin.rl.environments.inference_ctx import PackedvLLMInferenceContextConfig
 from marin.rl.environments.inference_ctx.staging import stage_vllm_metadata_locally
 from marin.rl.environments.inference_ctx.vllm import VLLMSamplingConfig, vLLMInferenceContextConfig
+from marin.rl.run_state import RolloutTransferCounters
 from marin.rl.rollout_worker import (
     CompletedLessonEval,
+    RolloutTracker,
+    RolloutTrackerConfig,
+    RolloutTransferCounterSnapshot,
     RolloutWorker,
     ScheduledEvalJob,
     _should_run_curriculum_eval,
@@ -22,6 +27,86 @@ from marin.rl.rollout_worker import (
     create_inference_context,
 )
 from marin.rl.weight_transfer import WeightTransferConfig
+
+
+def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
+    captured = {}
+
+    class _FakeRun:
+        def log(self, _metrics, step=None):
+            pass
+
+        def finish(self):
+            pass
+
+    monkeypatch.setattr(
+        "marin.rl.rollout_worker.wandb.init",
+        lambda **kwargs: captured.update(kwargs) or _FakeRun(),
+    )
+
+    RolloutTracker(
+        RolloutTrackerConfig(project="marin_iris_rl_debug", name="iris-rl-e4ms2-500-rollout-0"),
+        run_id="iris-rl-e4ms2-500-rollout-0",
+    )
+
+    assert captured["name"] == "iris-rl-e4ms2-500-rollout-0"
+    assert captured["id"] == "iris-rl-e4ms2-500-rollout-0"
+    assert captured["resume"] == "allow"
+
+
+def test_resume_safe_transfer_metrics_logs_attempt_and_cumulative_values_after_counter_reset():
+    recorded_calls: list[tuple[int, int, int, int]] = []
+
+    class _FakeRemoteResult:
+        def result(self) -> RolloutTransferCounters:
+            return RolloutTransferCounters(total_polls=97, successful_receives=10, failed_receives=1)
+
+    class _FakeRemoteMethod:
+        def remote(
+            self,
+            worker_index: int,
+            total_polls_delta: int,
+            successful_receives_delta: int,
+            failed_receives_delta: int,
+        ) -> _FakeRemoteResult:
+            recorded_calls.append((worker_index, total_polls_delta, successful_receives_delta, failed_receives_delta))
+            return _FakeRemoteResult()
+
+    class _FakeTransferClient:
+        def get_metrics(self) -> dict[str, float | int]:
+            return {
+                "total_polls": 5,
+                "successful_receives": 5,
+                "failed_receives": 0,
+                "fetch_time": 1.25,
+                "decode_time": 0.75,
+                "poll_time": 0.5,
+            }
+
+    worker = object.__new__(RolloutWorker)
+    worker.config = SimpleNamespace(worker_index=1)
+    worker._transfer_client = _FakeTransferClient()
+    worker._runtime = SimpleNamespace(run_state=SimpleNamespace(add_rollout_transfer_counters=_FakeRemoteMethod()))
+    worker._last_transfer_counters = RolloutTransferCounterSnapshot(
+        total_polls=92,
+        successful_receives=5,
+        failed_receives=1,
+    )
+
+    metrics = worker._resume_safe_transfer_metrics()
+
+    assert recorded_calls == [(1, 5, 0, 0)]
+    assert metrics == {
+        "attempt_total_polls": 5,
+        "attempt_successful_receives": 5,
+        "attempt_failed_receives": 0,
+        "total_polls": 97,
+        "successful_receives": 10,
+        "failed_receives": 1,
+        "fetch_time": 1.25,
+        "decode_time": 0.75,
+        "poll_time": 0.5,
+    }
 
 
 def test_stage_vllm_metadata_locally_copies_hf_metadata(tmp_path, monkeypatch):

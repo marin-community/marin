@@ -4,7 +4,8 @@
 from types import SimpleNamespace
 
 from marin.rl.rl_losses import RLOOLoss
-from marin.rl.train_worker import TrainWorker
+from marin.rl.train_worker import TrainWorker, _resume_safe_weight_transfer_metrics
+from marin.rl.weight_transfer.base import WeightTransferServerMetrics
 
 
 def test_drop_bootstrap_model_references_clears_reference_model_when_kl_disabled():
@@ -50,3 +51,57 @@ def test_record_train_step_updates_replay_buffer_and_shared_run_state():
     worker._record_train_step(7)
 
     assert recorded_steps == [7, 7]
+
+
+def test_resume_safe_weight_transfer_metrics_counts_bootstrap_and_sync_hooks():
+    assert _resume_safe_weight_transfer_metrics(step=0, sync_interval_steps=1) == {
+        "total_transfers": 2,
+        "successful_transfers": 2,
+    }
+    assert _resume_safe_weight_transfer_metrics(step=6, sync_interval_steps=3) == {
+        "total_transfers": 4,
+        "successful_transfers": 4,
+    }
+
+
+def test_weight_transfer_hook_logs_global_and_attempt_metrics(monkeypatch):
+    logged_metrics: list[tuple[dict[str, float | int], int]] = []
+    served_weights: list[tuple[int, object]] = []
+
+    class _FakeTransferServer:
+        def serve_weights(self, weight_id: int, model: object) -> None:
+            served_weights.append((weight_id, model))
+
+        def get_metrics(self) -> WeightTransferServerMetrics:
+            return WeightTransferServerMetrics(total_transfers=8, successful_transfers=8, failed_transfers=0)
+
+    class _FakeTracker:
+        def log(self, metrics: dict[str, float | int], *, step: int) -> None:
+            logged_metrics.append((metrics, step))
+
+    monkeypatch.setattr("marin.rl.train_worker.time.time", lambda: 100.0)
+
+    worker = TrainWorker.__new__(TrainWorker)
+    worker.config = SimpleNamespace(weight_transfer=SimpleNamespace(sync_interval_steps=1))
+    worker.transfer_server = _FakeTransferServer()
+
+    trainer = SimpleNamespace(tracker=_FakeTracker())
+    model = object()
+    info = SimpleNamespace(step=67, state=SimpleNamespace(model=model), loss=1.23)
+
+    worker.weight_transfer_hook(trainer, info)
+
+    assert served_weights == [(67, model)]
+    assert logged_metrics == [
+        (
+            {
+                "weight_transfer/attempt_total_transfers": 8,
+                "weight_transfer/attempt_successful_transfers": 8,
+                "weight_transfer/attempt_failed_transfers": 0,
+                "weight_transfer/total_transfers": 69,
+                "weight_transfer/successful_transfers": 69,
+                "weight_transfer/serve_time_seconds": 0.0,
+            },
+            67,
+        )
+    ]
