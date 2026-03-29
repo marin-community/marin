@@ -223,7 +223,6 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
                     "TF_CPP_MIN_LOG_LEVEL": "0",
                 }
             )
-
         train_worker_env = _worker_environment(
             config,
             run_config.train_resources,

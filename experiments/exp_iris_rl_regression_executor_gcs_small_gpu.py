@@ -166,8 +166,7 @@ def main() -> None:
         executor_main_config_for_rl_experiment(debug_config),
         steps=[step],
         description=(
-            f"Iris RL regression probe E6: executor + GCS + small GPU-only "
-            f"({args.num_train_steps} training steps)"
+            f"Iris RL regression probe E6: executor + GCS + small GPU-only " f"({args.num_train_steps} training steps)"
         ),
     )
 

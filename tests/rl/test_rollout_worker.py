@@ -243,7 +243,6 @@ def test_create_inference_context_uses_local_metadata_for_remote_inflight_vllm(m
     assert captured["config"].load_format == "dummy"
     assert captured["config"].kv_cache_metrics is True
 
-
 def test_create_inference_context_rejects_gpu_inflight_vllm():
     with pytest.raises(ValueError, match="does not yet support inflight_weight_updates"):
         create_inference_context(
