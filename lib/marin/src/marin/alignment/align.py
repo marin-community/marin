@@ -87,7 +87,16 @@ def _serialize_inference_config(config: InferenceConfig) -> dict:
 
 def _inference_dependency_groups(model: InferenceConfig) -> list[str]:
     """Dependency groups required for a given inference backend."""
-    return ["cpu"] if model.is_api else ["vllm", "tpu"]
+    return model.pip_dependency_groups
+
+
+def _merge_inference_pip_packages(*models: InferenceConfig) -> list[str]:
+    packages: list[str] = []
+    for model in models:
+        for package in model.pip_packages:
+            if package not in packages:
+                packages.append(package)
+    return packages
 
 
 _BINARY_SIZE_UNITS = {
@@ -179,7 +188,7 @@ class AlignConfig:
         concretize_workers: Parallelism for Stage 2 concretization.
         extract_workers: Parallelism for Stage 3 extraction.
         prompt_batch_size: Local vLLM serve microbatch size for prompt-generation requests.
-        concretize_batch_size: Number of covering-array configs per Stage 2 concretization prompt.
+        response_batch_size: Local vLLM serve microbatch size for chosen/rejected response generation.
         understanding_max_tokens: Max tokens for prompt-generation Stage 1.
         understanding_temperature: Sampling temperature for prompt-generation Stage 1.
         understanding_max_attempts: Total Stage 1 attempts before failing unresolved statements.
@@ -218,7 +227,7 @@ class AlignConfig:
     concretize_workers: int = 32
     extract_workers: int = 128
     prompt_batch_size: int = 8
-    concretize_batch_size: int = 10
+    response_batch_size: int = 8
     understanding_max_tokens: int = 4000
     understanding_temperature: float = 1.0
     understanding_max_attempts: int = 5
@@ -352,7 +361,17 @@ def align(
         fn=remote(
             generate_prompts_from_spec,
             resources=prompts_resources,
-            pip_dependency_groups=["cpu"] if not prompts_use_local else ["vllm", "tpu"],
+            pip_dependency_groups=(
+                ["cpu"] if not prompts_use_local else align_config.ideation_model.pip_dependency_groups
+            ),
+            pip_packages=(
+                []
+                if not prompts_use_local
+                else _merge_inference_pip_packages(
+                    align_config.ideation_model,
+                    align_config.extract_model,
+                )
+            ),
             env_vars=_llm_env_vars(),
         ),
         config=PromptGenConfig(
@@ -362,8 +381,6 @@ def align(
             extract_model=align_config.extract_model,
             covering_strength=versioned(align_config.covering_strength),
             covering_seed=versioned(align_config.covering_seed),
-            concretize_batch_size=versioned(align_config.concretize_batch_size),
-            extract_batch_size=versioned(10),
             local_serve_batch_size=align_config.prompt_batch_size,
             ideation_workers=align_config.ideation_workers,
             concretize_workers=align_config.concretize_workers,
@@ -394,6 +411,7 @@ def align(
                 generate_response_pair,
                 resources=_merge_local_response_resources(teacher_model, rejected_model),
                 pip_dependency_groups=["vllm", "tpu"],
+                pip_packages=_merge_inference_pip_packages(teacher_model, rejected_model),
                 env_vars=_llm_env_vars(),
             ),
             config=ResponsePairGenConfig(
@@ -406,6 +424,7 @@ def align(
                 chosen_temperature=align_config.teacher_temperature,
                 chosen_max_tokens=align_config.teacher_max_tokens,
                 chosen_behavior_statements_path=spec_gcs_path,
+                local_serve_batch_size=align_config.response_batch_size,
                 rejected_n=align_config.rejected_n,
                 rejected_temperature=align_config.rejected_temperature,
                 rejected_max_tokens=align_config.rejected_max_tokens,
@@ -426,6 +445,7 @@ def align(
                 generate_responses,
                 resources=teacher_model.resources,
                 pip_dependency_groups=_inference_dependency_groups(teacher_model),
+                pip_packages=teacher_model.pip_packages,
                 env_vars=_llm_env_vars(),
             ),
             config=ResponseGenConfig(
@@ -436,6 +456,7 @@ def align(
                 n=align_config.teacher_n,
                 temperature=align_config.teacher_temperature,
                 max_tokens=align_config.teacher_max_tokens,
+                local_serve_batch_size=align_config.response_batch_size,
                 behavior_statements_path=spec_gcs_path,
             ),
         )
@@ -446,6 +467,7 @@ def align(
                 generate_responses,
                 resources=rejected_model.resources,
                 pip_dependency_groups=_inference_dependency_groups(rejected_model),
+                pip_packages=rejected_model.pip_packages,
                 env_vars=_llm_env_vars(),
             ),
             config=ResponseGenConfig(
@@ -457,6 +479,7 @@ def align(
                 n=align_config.rejected_n,
                 temperature=align_config.rejected_temperature,
                 max_tokens=align_config.rejected_max_tokens,
+                local_serve_batch_size=align_config.response_batch_size,
                 behavior_statements_path=(
                     spec_gcs_path if align_config.rejected_prompt_strategy == RejectedPromptStrategy.OPPOSITE else None
                 ),
@@ -478,7 +501,8 @@ def align(
         fn=remote(
             judge_responses,
             resources=judge_resources,
-            pip_dependency_groups=["cpu"] if not judge_is_local else ["vllm", "tpu"],
+            pip_dependency_groups=["cpu"] if not judge_is_local else align_config.judge_model.pip_dependency_groups,
+            pip_packages=[] if not judge_is_local else align_config.judge_model.pip_packages,
             env_vars=_llm_env_vars(),
         ),
         config=JudgeConfig(

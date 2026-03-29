@@ -896,6 +896,62 @@ class TestResponseHelpers:
     @patch("marin.alignment.generate_responses.write_sharded_jsonl_gz")
     @patch("marin.alignment.generate_responses.load_sharded_jsonl_gz")
     @patch("marin.alignment.generate_responses.BatchedVllmServeSession")
+    def test_generate_responses_vllm_microbatches_prompts_for_live_progress(
+        self,
+        mock_session_cls,
+        mock_load_shards,
+        mock_write_shards,
+        mock_write_metrics,
+        sample_prompt,
+    ):
+        prompt_one = dict(sample_prompt)
+        prompt_two = dict(sample_prompt, config_id="cfg_001", user_message="Need help with billing.")
+        prompt_three = dict(sample_prompt, config_id="cfg_002", user_message="Need help with shipping.")
+        mock_load_shards.return_value = [prompt_one, prompt_two, prompt_three]
+        mock_session = mock_session_cls.return_value.__enter__.return_value
+        mock_session.generate_from_messages.side_effect = [
+            [["Response 0"], ["Response 1"]],
+            [["Response 2"]],
+        ]
+        mock_session.metrics_snapshot.return_value = {"stages": {"rejected": {}}, "totals": {}}
+
+        config = ResponseGenConfig(
+            prompts_path="gs://bucket/prompts",
+            output_path="gs://bucket/output",
+            model_config=VLLMConfig(model="gs://bucket/model", tensor_parallel_size=4, tpu_type="v5p-8"),
+            role=ResponseRole.REJECTED,
+            rejected_prompt_strategy=RejectedPromptStrategy.UNGUIDED,
+            n=1,
+            temperature=0.7,
+            max_tokens=512,
+            local_serve_batch_size=2,
+        )
+
+        generate_responses(config)
+
+        assert mock_session.generate_from_messages.call_count == 2
+        first_batch = mock_session.generate_from_messages.call_args_list[0].args[0]
+        second_batch = mock_session.generate_from_messages.call_args_list[1].args[0]
+        assert len(first_batch) == 2
+        assert len(second_batch) == 1
+
+        written_records = mock_write_shards.call_args.args[0]
+        assert [record["prompt_id"] for record in written_records] == [
+            "be_helpful/cfg_000",
+            "be_helpful/cfg_001",
+            "be_helpful/cfg_002",
+        ]
+        assert [record["responses"][0]["content"] for record in written_records] == [
+            "Response 0",
+            "Response 1",
+            "Response 2",
+        ]
+        mock_write_metrics.assert_called_once()
+
+    @patch("marin.alignment.generate_responses.write_vllm_metrics_artifact")
+    @patch("marin.alignment.generate_responses.write_sharded_jsonl_gz")
+    @patch("marin.alignment.generate_responses.load_sharded_jsonl_gz")
+    @patch("marin.alignment.generate_responses.BatchedVllmServeSession")
     def test_generate_response_pair_reuses_session_for_same_local_model(
         self,
         mock_session_cls,
@@ -3076,6 +3132,94 @@ class TestJudgeE2E:
         assert len(filter_decisions) == 1
         assert filter_decisions[0]["passed"] is True
         assert filter_decisions[0]["reason"] == "passed"
+
+    @patch("marin.alignment.judge.BatchedVllmServeSession")
+    def test_local_batched_judge_logs_live_token_throughput(self, mock_session_cls, sample_spec_jsonl, tmp_path, caplog):
+        chosen_records = [
+            {
+                "prompt_id": "be_helpful/cfg_000",
+                "behavior_id": "be_helpful",
+                "system_prompt": "You are helpful.",
+                "user_message": "Help me reset my password.",
+                "rubric": "GOOD: clear steps. BAD: refusal or rudeness.",
+                "responses": [{"content": "Use the reset link in settings.", "index": 0}],
+            },
+            {
+                "prompt_id": "be_honest/cfg_000",
+                "behavior_id": "be_honest",
+                "system_prompt": "You are honest.",
+                "user_message": "Do you know the answer?",
+                "rubric": "GOOD: admit uncertainty. BAD: bluff.",
+                "responses": [{"content": "I am not fully sure; here is what I know.", "index": 0}],
+            },
+        ]
+        rejected_records = [
+            {
+                "prompt_id": "be_helpful/cfg_000",
+                "behavior_id": "be_helpful",
+                "system_prompt": "You are helpful.",
+                "user_message": "Help me reset my password.",
+                "rubric": "GOOD: clear steps. BAD: refusal or rudeness.",
+                "responses": [{"content": "No.", "index": 0}],
+            },
+            {
+                "prompt_id": "be_honest/cfg_000",
+                "behavior_id": "be_honest",
+                "system_prompt": "You are honest.",
+                "user_message": "Do you know the answer?",
+                "rubric": "GOOD: admit uncertainty. BAD: bluff.",
+                "responses": [{"content": "Definitely yes, even though I am guessing.", "index": 0}],
+            },
+        ]
+        chosen_path = tmp_path / "chosen"
+        rejected_path = tmp_path / "rejected"
+        judgments_path = tmp_path / "judgments"
+        write_sharded_jsonl_gz(chosen_records, str(chosen_path), shard_size=5000)
+        write_sharded_jsonl_gz(rejected_records, str(rejected_path), shard_size=5000)
+
+        mock_session = mock_session_cls.return_value.__enter__.return_value
+        mock_session.generate_from_messages.side_effect = [
+            [
+                ['{"score": 9, "confidence": 0.9, "explanation": "Helpful", "highlights": []}'],
+                ['{"score": 1, "confidence": 0.9, "explanation": "Rude", "highlights": []}'],
+            ],
+            [
+                ['{"score": 8, "confidence": 0.8, "explanation": "Honest", "highlights": []}'],
+                ['{"score": 2, "confidence": 0.8, "explanation": "Bluffing", "highlights": []}'],
+            ],
+        ]
+        mock_session.metrics_snapshot.return_value = {
+            "backend": "vllm_serve",
+            "model": "gs://bucket/model",
+            "tensor_parallel_size": 4,
+            "max_model_len": 4096,
+            "tokenizer_load_seconds": 0.0,
+            "server_start_seconds": 0.0,
+            "session_enter_seconds": 0.0,
+            "totals": {},
+            "stages": {
+                "judge": {
+                    "input_tokens_per_second": 1234.0,
+                    "output_tokens_per_second": 321.0,
+                }
+            },
+        }
+
+        with caplog.at_level(logging.INFO):
+            judge_responses(
+                JudgeConfig(
+                    chosen_responses_path=str(chosen_path),
+                    rejected_responses_path=str(rejected_path),
+                    spec_path=str(sample_spec_jsonl),
+                    output_path=str(judgments_path),
+                    judge_model=VLLMConfig(model="gs://bucket/model", tensor_parallel_size=4, tpu_type="v5p-8"),
+                    batch_size=1,
+                )
+            )
+
+        progress_messages = [record.message for record in caplog.records if "Judge progress:" in record.message]
+        assert any("prompt 1.2k tok/s" in message for message in progress_messages)
+        assert any("completion 321 tok/s" in message for message in progress_messages)
 
     def test_build_preference_pairs_preserves_filtered_decisions(self, tmp_path):
         judgments_path = tmp_path / "judgments"

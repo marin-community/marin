@@ -1914,3 +1914,343 @@ ideations = _run_concretization_stage(
     - "restart the whole 3339-item stage"
   - to:
     - "rerun only statements that were still incomplete when the worker died"
+
+### 2026-03-28 23:56 - GTPU-030 failure: Harmony token protocol violation crashed the vLLM server at 98.7% Stage 2 completion on the full-spec 120B run
+
+- **Job:** `/ahmed/goss-120b-full-spec-ckpt-east5-20260328`
+- **Terminal state:** `JOB_STATE_FAILED` (prompts child), `failure_count=1`, `preemption_count=0`
+- **Checkpointing status:** 44/46 statements saved to `ideation_by_statement/` before crash — checkpointing worked correctly
+
+#### Timeline
+
+- 17:17 — vLLM server started, weights loading (615 shards)
+- 17:27 — `vLLM environment ready`
+- 17:27 — Stage 1: 46 statements, completed 46/46
+- 17:27 — Stage 2: 3339 concretize items started
+- 19:42–23:54 — Stage 2 progressing steadily at ~8 items/min, checkpointing statements as they complete
+- 23:50:08 — Stage 2 progress: 3262/3339 (97.7%)
+- 23:54:25 — Stage 2 progress: 3294/3339 (98.7%) — last successful progress log
+- 23:55:55 — `Stage2 attempt 1 left 2 concretize item(s) pending retry` — first sign of trouble
+- 23:55:55 — retry batch sent to `/v1/chat/completions`
+- 23:56:15 — `RuntimeError: Stage 2 failed` — all remaining items returned 500
+
+#### The error
+
+Every failing request returned the same vLLM server-side error:
+
+```json
+{
+  "error": {
+    "message": "Unexpected token 200002 while expecting start token 200006",
+    "type": "Internal Server Error",
+    "param": null,
+    "code": 500
+  }
+}
+```
+
+- Token `200002` and `200006` are Harmony special tokens (channel control tokens in the GPT-OSS vocabulary)
+- `200006` is likely the `<|start|>` conversation/turn start token
+- `200002` is likely the `<|channel|>analysis` or another channel start token
+- The error means: the model generated a channel control token in a position where vLLM's Harmony state machine expected a conversation start token
+
+#### Failure pattern
+
+- The error first appeared on `avoid_errors` cfg_056 — this is partway through the 45th statement (out of 46)
+- Items cfg_000 through cfg_055 of `avoid_errors` completed successfully before the crash
+- After the first 500 error, **every subsequent request** also returned the same 500 error:
+  - `avoid_errors` cfg_056 through cfg_075 (20 items)
+  - `avoid_extremist_content` cfg_000 through cfg_011 (12 items)
+- The retry mechanism fired (`concretize_max_attempts`), but retries also failed because the server was permanently broken
+- Total: 32 items lost across 2 statements
+
+#### Root cause analysis
+
+- **This is a vLLM Harmony protocol bug, not a Marin bug.**
+- The vLLM server's Harmony token state machine entered an unrecoverable state after the model produced an unexpected token sequence.
+- Possible triggers:
+  - A specific prompt content in `avoid_errors` cfg_056 caused the model to generate tokens in an order that violated Harmony protocol expectations
+  - The server's internal state (KV cache, token tracking) accumulated corruption over ~3294 requests / ~6 hours of continuous inference
+  - An edge case in the `openai_gptoss` reasoning parser's state tracking
+- **The server cannot self-recover** — once the Harmony state is corrupted, every new request fails with the same error because the parser rejects the conversation before inference even runs
+
+#### Visibility gap
+
+- We only see the HTTP response body (`{"error":{"message":"Unexpected token 200002..."}}`)
+- We do NOT have:
+  - The vLLM server-side Python traceback that produced this 500
+  - The exact request payload for cfg_056 of `avoid_errors` (the triggering request)
+  - The vLLM EngineCore logs showing what the model actually generated
+  - Whether the Harmony parser state was corrupted before or during that specific request
+- The stderr tee (ALIGN-255) captures vLLM startup logs but may not capture all runtime errors — the 500 is generated inside the FastAPI handler, which logs to its own stream
+
+#### What the next agent should investigate
+
+1. **Find where this error is raised in the vLLM codebase:**
+   - Search `vllm_kcbs` for `"Unexpected token"` and `"expecting start token"`
+   - This is likely in `vllm/entrypoints/harmony_utils.py` or `vllm/reasoning/gptoss_reasoning_parser.py`
+   - Understand the Harmony state machine: what states expect token 200006, and what token 200002 means
+
+2. **Determine if this is per-request or server-global corruption:**
+   - If the error is raised during response parsing (after generation), the model output bad tokens and the parser is correct to reject — but the server should recover for the next request
+   - If the error is raised during request construction (before generation), something in the server's persistent state is broken — this explains why all subsequent requests fail
+   - Key question: does vLLM maintain per-connection Harmony state that survives across requests?
+
+3. **Reproduce with the triggering prompt:**
+   - The `avoid_errors` statement's Stage 1 understanding and Stage 2 covering configs are checkpointed in `gs://marin-us-east5/align/goss_120b_full_spec/prompts-c623f9/artifacts/checkpoints/`
+   - Reconstruct the exact cfg_056 prompt and send it to a fresh vLLM server to see if it's prompt-content-triggered or accumulated-state-triggered
+   - If a fresh server handles cfg_056 fine, the bug is in state accumulation over thousands of requests
+
+4. **Check if this is a known issue:**
+   - Search the `vllm_kcbs` or upstream vLLM issue tracker for Harmony token validation failures
+   - Check if there are similar reports for GPT-OSS on long-running inference sessions
+
+5. **Defensive improvements in Marin (regardless of root cause):**
+   - Add a consecutive-500 circuit breaker: if N consecutive requests return 500, treat the server as dead and abort early instead of burning through all remaining items
+   - Consider restarting the vLLM server subprocess after a server-side 500 (not just client-side errors)
+   - The per-statement checkpointing already limits blast radius — 44/46 statements survived this crash
+
+#### Checkpointed artifacts that survived
+
+```
+gs://marin-us-east5/align/goss_120b_full_spec/prompts-c623f9/artifacts/checkpoints/ideation_by_statement/
+  ask_clarifying_questions.json
+  assume_objective_pov.json
+  avoid_abuse.json
+  avoid_being_condescending.json
+  avoid_hateful_content.json
+  avoid_info_hazards.json
+  avoid_overstepping.json
+  avoid_regulated_advice.json
+  avoid_sycophancy.json
+  avoid_targeted_political_manipulation.json
+  be_clear.json
+  be_creative.json
+  be_empathetic.json
+  be_engaging.json
+  be_kind.json
+  ... (44 total)
+```
+
+Missing (need rerun): `avoid_errors`, `avoid_extremist_content`
+
+#### Recovery plan
+
+A simple relaunch will:
+1. Load Stage 1 checkpoint (skip Stage 1 entirely)
+2. Load 44/46 per-statement Stage 2 checkpoints
+3. Only process `avoid_errors` and `avoid_extremist_content` (~156 items)
+4. Get a fresh vLLM server that isn't in a corrupted Harmony state
+5. Complete Stage 2 in ~20 minutes instead of ~6.5 hours
+
+### 2026-03-28 15:35 PDT - GTPU-031 TODO if the Harmony 500 comes back and becomes a real time sink
+
+This is the short resumption note for the next person who has to touch this.
+
+#### Current best understanding
+
+- The most likely failure mode is no longer "Marin built the wrong request."
+- Marin is already on the validated GPT-OSS path:
+  - `/v1/chat/completions`
+  - top-level `reasoning_effort="low"`
+  - `MODEL_IMPL_TYPE=vllm`
+- The exact exception text comes from the upstream `openai/harmony` parser, not from Marin.
+- Token mapping correction:
+  - `200006` = `<|start|>`
+  - `200002` = `<|return|>`
+- So the failing parse means:
+  - Harmony was waiting for the start of a new assistant message
+  - but instead saw a return/stop token
+- That is much more consistent with malformed GPT-OSS Harmony output than with a bad client request.
+
+#### Strongest external clue
+
+- OpenAI Harmony issue `#80` reports a known GPT-OSS 120B failure mode on refusal-style outputs:
+  - the model emits structurally invalid Harmony text/tokens
+  - strict parsing then fails
+- That matches the remaining failed statements unusually well:
+  - `avoid_errors`
+  - `avoid_extremist_content`
+
+#### Most important thing we still do NOT have
+
+We still do not have the one artifact that would settle this quickly:
+
+- the exact request payload and raw generated token ids for `avoid_errors` `cfg_056`
+
+Without that, it is too easy to keep hand-waving between:
+
+- prompt-triggered malformed refusal output
+- long-run server state corruption after thousands of requests
+
+#### TODO: minimal reproduction sequence
+
+If this failure comes back and starts wasting time, do these in order.
+
+1. Reconstruct the exact failed request offline.
+   - Use:
+     - `gs://marin-us-east5/align/goss_120b_full_spec/prompts-c623f9/artifacts/checkpoints/understandings.jsonl.gz`
+     - `artifacts/avoid_errors/understanding.json`
+   - Recreate the concretization plan with the same covering config.
+   - Select `avoid_errors` `cfg_056`.
+   - Build the request with the same repo helpers used in production:
+     - `_prepare_concretization_plans(...)`
+     - `_build_concretize_messages(...)`
+     - `_ConcretizeConfig(index=56, ...)`
+   - Write out the final JSON payload exactly as Marin would POST to `/v1/chat/completions`.
+
+2. Run that one request against a completely fresh GPT-OSS 120B vLLM server.
+   - Same validated stack:
+     - GPT-OSS
+     - `MODEL_IMPL_TYPE=vllm`
+     - Harmony path enabled
+   - Turn on diagnostics first:
+     - `VLLM_SERVER_DEV_MODE=1`
+     - `VLLM_LOGGING_LEVEL=DEBUG`
+     - `--enable-log-requests`
+     - optionally `--enable-log-outputs`
+
+3. Run immediate neighbors as controls.
+   - `avoid_errors cfg_055`
+   - `avoid_errors cfg_056`
+   - `avoid_errors cfg_057`
+
+4. Interpret the result conservatively.
+   - If `cfg_056` fails immediately on a fresh server:
+     - treat this as prompt-triggered malformed GPT-OSS Harmony output first
+   - If all three succeed on a fresh server:
+     - only then escalate the "long-run server/engine state" hypothesis
+
+5. If the fresh repro still only gives a generic 500, patch vLLM once to log token ids before re-raising.
+   - Patch the non-streaming Harmony parse site around:
+     - `parse_chat_output(token_ids)`
+     - in `vllm/entrypoints/openai/chat_completion/serving.py`
+   - Log:
+     - request id
+     - token ids
+     - decoded text
+     - finish reason
+   - Re-raise unchanged.
+
+#### Important caveat about logging
+
+- `--enable-log-outputs` alone is not enough.
+- In non-streaming chat mode, vLLM logs outputs after successful response assembly.
+- If Harmony parsing throws first, you will NOT get the raw failing completion from normal output logging.
+
+#### Cheap follow-up only if fresh repro succeeds
+
+Do not jump straight to another 6-hour run.
+
+Instead:
+
+1. replay a small set of known-safe Stage 2 prompts
+2. then send `avoid_errors cfg_056`
+3. gradually increase the warmup count if needed
+
+That is the cheapest way to test whether prior request history matters.
+
+#### Where the fuller notes live
+
+- See `docs/debug-log-gpt-oss-harmony-failure.md` for the evidence chain and the full minimal reproduction plan.
+
+### 2026-03-28 16:20 PDT - GTPU-032 live progress / ETA / token-throughput visibility plan
+
+#### Problem
+
+We can now resume long prompt-generation runs correctly, but the live operator visibility is still weak:
+
+- Stage 1/2/3 progress logs only show `completed/total (%)`
+- there is no dynamic ETA like `tqdm`
+- local vLLM token throughput is collected internally but only written to `artifacts/vllm_metrics.json` at the end
+- response generation via local vLLM currently sends the full prompt set in one `generate_from_messages(...)` call, so there is no intermediate hook for live progress at all
+
+This is why a live job can look "stuck" even when the worker is healthy and pushing tokens.
+
+#### Existing state
+
+- `BatchedVllmServeSession` already accumulates per-stage metrics:
+  - request count
+  - prompt count
+  - input token count
+  - output token count
+  - request seconds
+- Those metrics are exposed via `metrics_snapshot()`
+- Prompt generation already has natural progress boundaries:
+  - Stage 1 local: one batch of statements
+  - Stage 2 local: one concretize microbatch
+  - Stage 3 local: one extraction microbatch
+  - API paths also have per-future / per-batch boundaries
+- Response generation does **not** have those boundaries yet on the local path because it batches the entire prompt set in one call
+- Judge already has an outer batch loop, so it is easy to instrument
+
+#### Design
+
+Add one shared live progress reporter for alignment inference stages.
+
+The reporter should:
+
+- track elapsed wall-clock time
+- maintain a smoothed recent throughput estimate instead of a naive whole-run average
+- log:
+  - `completed/total`
+  - percent
+  - smoothed `items/s`
+  - ETA
+  - optional contextual fields like `attempt=...` or `retries pending=...`
+  - optional local vLLM `prompt tok/s` and `completion tok/s`
+
+Important implementation detail:
+
+- token throughput should come from the live `BatchedVllmServeSession.metrics_snapshot()` for the specific logical stage
+- this should be surfaced in logs during the run, not only in the final artifact
+
+#### Scope
+
+Apply the reporter to:
+
+1. prompt generation
+   - Stage 1 understanding
+   - Stage 2 concretization
+   - Stage 3 extraction
+   - both local vLLM and API paths
+
+2. response generation
+   - local vLLM chosen generation
+   - local vLLM rejected generation
+   - shared-session chosen+rejected generation
+
+3. judging
+   - local vLLM judge
+   - API judge can reuse the same ETA reporter without token stats
+
+#### Required structural change
+
+To get live progress for local response generation, stop sending the entire prompt set in one monolithic `generate_from_messages(...)` call.
+
+Instead:
+
+- add an explicit local microbatch size to the response-generation config
+- iterate prompts in batches
+- log progress after each batch
+- preserve output order exactly
+
+This is the only substantive behavioral change required for visibility.
+
+#### Non-goals
+
+- do **not** redesign checkpointing
+- do **not** change vLLM request semantics
+- do **not** try to estimate cost from model internals; use observed recent throughput only
+
+#### Success criteria
+
+Healthy long-running jobs should emit lines shaped roughly like:
+
+```text
+Stage 3 progress: 767/3339 (23.0%) [attempt 1, retries pending=0, 0.41 items/s, ETA 1h 43m, prompt 2.8k tok/s, completion 380 tok/s]
+Rejected progress: 512/3339 (15.3%) [0.35 items/s, ETA 2h 15m, prompt 3.1k tok/s, completion 420 tok/s]
+Judge progress: 900/3339 (27.0%) [0.58 items/s, ETA 1h 13m, prompt 2.4k tok/s, completion 210 tok/s]
+```
+
+The final structured metrics artifact should remain unchanged; this work is about live visibility while the job is running.

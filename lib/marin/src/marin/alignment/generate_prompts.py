@@ -30,6 +30,7 @@ from zephyr import load_jsonl, write_jsonl_file
 from marin.alignment.batched_vllm_serve import BatchedVllmServeSession, write_vllm_metrics_artifact
 from marin.alignment.coverage import compute_coverage_stats, generate_covering_configs, make_tags
 from marin.alignment.inference_config import InferenceConfig, VLLMConfig
+from marin.alignment.live_progress import LiveProgressReporter, vllm_stage_metrics_provider
 from marin.alignment.llm_client import llm_chat_single
 from marin.alignment.prompts.concretize import make_concretize_prompt
 from marin.alignment.prompts.extract import make_extraction_prompt
@@ -438,35 +439,6 @@ def _make_stage1_attempt_record(statement_id: str, attempt: int, raw_response: s
     }
 
 
-def _progress_log_interval(total_items: int, batch_size: int) -> int:
-    if total_items <= 0:
-        return 1
-    return max(batch_size, 1)
-
-
-def _maybe_log_stage_progress(
-    *,
-    stage_name: str,
-    completed_items: int,
-    total_items: int,
-    last_logged_items: int,
-    batch_size: int,
-    suffix: str = "",
-) -> int:
-    if total_items <= 0:
-        return last_logged_items
-    interval = _progress_log_interval(total_items, batch_size)
-    should_log = completed_items == total_items or completed_items - last_logged_items >= interval
-    if not should_log:
-        return last_logged_items
-    percent = 100.0 * completed_items / total_items
-    message = f"{stage_name} progress: {completed_items}/{total_items} ({percent:.1f}%)"
-    if suffix:
-        message += f" {suffix}"
-    logger.info(message)
-    return completed_items
-
-
 def _parse_understanding_response(statement: Statement, content: str, model: InferenceConfig | str) -> dict[str, Any]:
     understanding = _extract_tag(content, "behavior_understanding")
     scientific_motivation = _extract_tag(content, "scientific_motivation")
@@ -546,7 +518,12 @@ def _run_understanding_local(
     pending_statements = list(statements.items())
     failures: dict[str, str] = {}
     total_statements = len(statements)
-    last_logged_items = 0
+    reporter = LiveProgressReporter(
+        stage_name="Stage 1",
+        total_items=total_statements,
+        batch_size=config.local_serve_batch_size,
+        metrics_provider=vllm_stage_metrics_provider(session, stage_name="understanding"),
+    )
 
     for attempt in range(1, config.understanding_max_attempts + 1):
         if not pending_statements:
@@ -578,14 +555,7 @@ def _run_understanding_local(
                     failures[sid] = str(exc)
                     next_pending.append((sid, statement))
                     logger.warning("Stage1 attempt %d failed for '%s': %s", attempt, sid, exc)
-            last_logged_items = _maybe_log_stage_progress(
-                stage_name="Stage 1",
-                completed_items=len(understandings),
-                total_items=total_statements,
-                last_logged_items=last_logged_items,
-                batch_size=config.local_serve_batch_size,
-                suffix=f"[attempt {attempt}]",
-            )
+            reporter.maybe_log(len(understandings), details=[f"attempt {attempt}"])
         pending_statements = next_pending
 
     if pending_statements:
@@ -972,7 +942,12 @@ def _run_concretization_stage_local(
         if statement_id not in completed_statement_ids
     }
     failures: list[str] = []
-    last_logged_items = 0
+    reporter = LiveProgressReporter(
+        stage_name="Stage 2",
+        total_items=total_items,
+        batch_size=config.local_serve_batch_size,
+        metrics_provider=vllm_stage_metrics_provider(session, stage_name="concretize"),
+    )
 
     def on_statement_completed(
         statement_id: str,
@@ -1002,14 +977,9 @@ def _run_concretization_stage_local(
             completed_before_attempt: int = completed_before_attempt,
             attempt_label: int = attempt,
         ) -> None:
-            nonlocal last_logged_items
-            last_logged_items = _maybe_log_stage_progress(
-                stage_name="Stage 2",
-                completed_items=completed_before_attempt + completed_in_round,
-                total_items=total_items,
-                last_logged_items=last_logged_items,
-                batch_size=config.local_serve_batch_size,
-                suffix=f"[attempt {attempt_label}]",
+            reporter.maybe_log(
+                completed_before_attempt + completed_in_round,
+                details=[f"attempt {attempt_label}"],
             )
 
         retry_items, round_failures = _run_concretize_round_local_global(
@@ -1028,6 +998,11 @@ def _run_concretization_stage_local(
         pending_items = retry_items
         log_progress(sum(len(scenarios) for scenarios in parsed_by_statement.values()) - completed_before_attempt)
         if pending_items:
+            reporter.maybe_log(
+                sum(len(scenarios) for scenarios in parsed_by_statement.values()),
+                details=[f"attempt {attempt}", f"retries pending={len(pending_items)}"],
+                force=True,
+            )
             logger.warning(
                 "Stage2 attempt %d left %d concretize item(s) pending retry",
                 attempt,
@@ -1164,9 +1139,14 @@ def _run_extraction_stage_api(
         len(extracted_by_item),
         len(ideations),
     )
-    last_logged_items = 0
     flush_size = max(1, config.local_serve_batch_size)
     failures_by_item: dict[tuple[str, int], str] = {}
+    reporter = LiveProgressReporter(
+        stage_name="Stage 3",
+        total_items=total_items,
+        batch_size=flush_size,
+        initial_completed_items=len(extracted_by_item),
+    )
 
     for attempt in range(1, config.extract_max_attempts + 1):
         if not pending_items:
@@ -1192,17 +1172,18 @@ def _run_extraction_stage_api(
                 if checkpoint_callback is not None and len(staged_records) >= flush_size:
                     checkpoint_callback(staged_records, len(extracted_by_item))
                     staged_records = []
-                last_logged_items = _maybe_log_stage_progress(
-                    stage_name="Stage 3",
-                    completed_items=len(extracted_by_item),
-                    total_items=total_items,
-                    last_logged_items=last_logged_items,
-                    batch_size=flush_size,
-                    suffix=f"[attempt {attempt}, retries pending={len(next_pending)}]",
+                reporter.maybe_log(
+                    len(extracted_by_item),
+                    details=[f"attempt {attempt}", f"retries pending={len(next_pending)}"],
                 )
         if checkpoint_callback is not None and staged_records:
             checkpoint_callback(staged_records, len(extracted_by_item))
         if next_pending:
+            reporter.maybe_log(
+                len(extracted_by_item),
+                details=[f"attempt {attempt}", f"retries pending={len(next_pending)}"],
+                force=True,
+            )
             logger.warning(
                 "Stage3 attempt %d left %d extraction item(s) pending retry",
                 attempt,
@@ -1234,8 +1215,14 @@ def _run_extraction_stage_local(
         len(extracted_by_item),
         len(ideations),
     )
-    last_logged_items = 0
     failures_by_item: dict[tuple[str, int], str] = {}
+    reporter = LiveProgressReporter(
+        stage_name="Stage 3",
+        total_items=total_items,
+        batch_size=config.local_serve_batch_size,
+        metrics_provider=vllm_stage_metrics_provider(session, stage_name="extract"),
+        initial_completed_items=len(extracted_by_item),
+    )
 
     for attempt in range(1, config.extract_max_attempts + 1):
         if not pending_items:
@@ -1265,15 +1252,16 @@ def _run_extraction_stage_local(
                     next_pending.append(item)
             if checkpoint_callback is not None and batch_records:
                 checkpoint_callback(batch_records, len(extracted_by_item))
-            last_logged_items = _maybe_log_stage_progress(
-                stage_name="Stage 3",
-                completed_items=len(extracted_by_item),
-                total_items=total_items,
-                last_logged_items=last_logged_items,
-                batch_size=config.local_serve_batch_size,
-                suffix=f"[attempt {attempt}, retries pending={len(next_pending)}]",
+            reporter.maybe_log(
+                len(extracted_by_item),
+                details=[f"attempt {attempt}", f"retries pending={len(next_pending)}"],
             )
         if next_pending:
+            reporter.maybe_log(
+                len(extracted_by_item),
+                details=[f"attempt {attempt}", f"retries pending={len(next_pending)}"],
+                force=True,
+            )
             logger.warning(
                 "Stage3 attempt %d left %d extraction item(s) pending retry",
                 attempt,
@@ -1549,6 +1537,11 @@ def _run_understanding_stage(
     failures: dict[str, str] = {}
     pending_statements = list(statements.items())
     ideation_workers = config.ideation_workers
+    reporter = LiveProgressReporter(
+        stage_name="Stage 1",
+        total_items=len(statements),
+        batch_size=max(1, ideation_workers),
+    )
 
     for attempt in range(1, config.understanding_max_attempts + 1):
         if not pending_statements:
@@ -1576,7 +1569,19 @@ def _run_understanding_stage(
                     failures[sid] = str(exc)
                     next_pending.append((sid, statement))
                     logger.warning("Stage1 attempt %d failed for '%s': %s", attempt, sid, exc)
+                    reporter.maybe_log(
+                        len(understandings),
+                        details=[f"attempt {attempt}", f"retries pending={len(next_pending)}"],
+                    )
+                    continue
+                reporter.maybe_log(len(understandings), details=[f"attempt {attempt}"])
         pending_statements = next_pending
+        if pending_statements:
+            reporter.maybe_log(
+                len(understandings),
+                details=[f"attempt {attempt}", f"retries pending={len(pending_statements)}"],
+                force=True,
+            )
 
     if pending_statements:
         detail = "; ".join(f"{sid}: {failures[sid]}" for sid, _statement in pending_statements)
@@ -1624,6 +1629,12 @@ def _run_concretization_stage(
     # API path already executes per statement via ThreadPoolExecutor, but still
     # persists all-or-nothing after all futures complete.
     concretize_workers = min(8, config.concretize_workers)
+    reporter = LiveProgressReporter(
+        stage_name="Stage 2",
+        total_items=len(understandings),
+        batch_size=max(1, concretize_workers),
+    )
+    processed_statements = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=concretize_workers) as pool:
         future_map = {
             pool.submit(_run_concretization, sid, understanding, config): sid
@@ -1636,6 +1647,11 @@ def _run_concretization_stage(
             except Exception as exc:
                 failures.append((sid, str(exc)))
                 logger.error("Stage2 failed for '%s': %s", sid, exc)
+            processed_statements += 1
+            reporter.maybe_log(
+                processed_statements,
+                details=[f"succeeded={len(ideations)}", f"failed={len(failures)}"],
+            )
 
     if failures:
         detail = "; ".join(f"{sid}: {msg}" for sid, msg in failures)

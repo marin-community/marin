@@ -21,11 +21,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from levanter.data.utils import batched
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
 from marin.alignment.batched_vllm_serve import BatchedVllmServeSession, write_vllm_metrics_artifact
 from marin.alignment.generate_prompts import load_sharded_jsonl_gz, write_sharded_jsonl_gz
 from marin.alignment.inference_config import InferenceConfig, OpenAIConfig, VLLMConfig
+from marin.alignment.live_progress import LiveProgressReporter, vllm_stage_metrics_provider
 from marin.alignment.llm_client import llm_chat
 
 logger = logging.getLogger(__name__)
@@ -78,6 +80,7 @@ class ResponseGenConfig:
     n: int = 1
     temperature: float = 0.7
     max_tokens: int = 2048
+    local_serve_batch_size: int = 8
 
     role: ResponseRole = ResponseRole.REJECTED
     rejected_prompt_strategy: RejectedPromptStrategy | None = None
@@ -114,6 +117,7 @@ class ResponsePairGenConfig:
     chosen_temperature: float = 0.7
     chosen_max_tokens: int = 2048
     chosen_behavior_statements_path: str | None = None
+    local_serve_batch_size: int = 8
     rejected_n: int = 1
     rejected_temperature: float = 0.7
     rejected_max_tokens: int = 2048
@@ -154,6 +158,8 @@ def _load_behavior_statements(path: str) -> dict[str, str]:
 
 
 def _validate_response_gen_config(config: ResponseGenConfig) -> None:
+    if config.local_serve_batch_size < 1:
+        raise ValueError("local_serve_batch_size must be >= 1.")
     if config.role == ResponseRole.CHOSEN:
         if config.behavior_statements_path is None:
             raise ValueError("Chosen responses require behavior_statements_path.")
@@ -172,6 +178,8 @@ def _validate_response_gen_config(config: ResponseGenConfig) -> None:
 
 
 def _validate_response_pair_gen_config(config: ResponsePairGenConfig) -> None:
+    if config.local_serve_batch_size < 1:
+        raise ValueError("local_serve_batch_size must be >= 1.")
     if config.chosen_behavior_statements_path is None:
         raise ValueError("Chosen responses require chosen_behavior_statements_path.")
     if config.rejected_prompt_strategy == RejectedPromptStrategy.UNGUIDED:
@@ -281,35 +289,46 @@ def _generate_vllm_response_records(
     max_tokens: int,
     n: int,
     stage_name: str,
+    local_serve_batch_size: int,
 ) -> list[dict[str, Any]]:
-    if role == ResponseRole.CHOSEN:
-        all_message_batches = [_build_chosen_messages(prompt, behavior_statements) for prompt in prompts]
-    else:
-        if rejected_prompt_strategy is None:
-            raise ValueError("Rejected responses must specify rejected_prompt_strategy.")
-        all_message_batches = [
-            _build_rejected_messages(prompt, rejected_prompt_strategy, behavior_statements) for prompt in prompts
-        ]
-    outputs = session.generate_from_messages(
-        all_message_batches,
-        stage_name=stage_name,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        n=n,
+    reporter = LiveProgressReporter(
+        stage_name=stage_name.replace("_", " ").title(),
+        total_items=len(prompts),
+        batch_size=local_serve_batch_size,
+        metrics_provider=vllm_stage_metrics_provider(session, stage_name=stage_name),
     )
-
     results: list[dict[str, Any]] = []
-    for prompt, output in zip(prompts, outputs, strict=True):
-        responses = [{"content": completion_text, "index": j} for j, completion_text in enumerate(output)]
-        results.append(
-            _make_response_record(
-                prompt,
-                inference_config.model,
-                responses,
-                role=role,
-                rejected_prompt_strategy=rejected_prompt_strategy,
-            )
+
+    for prompt_batch in batched(prompts, local_serve_batch_size):
+        if role == ResponseRole.CHOSEN:
+            message_batches = [_build_chosen_messages(prompt, behavior_statements) for prompt in prompt_batch]
+        else:
+            if rejected_prompt_strategy is None:
+                raise ValueError("Rejected responses must specify rejected_prompt_strategy.")
+            message_batches = [
+                _build_rejected_messages(prompt, rejected_prompt_strategy, behavior_statements)
+                for prompt in prompt_batch
+            ]
+        outputs = session.generate_from_messages(
+            message_batches,
+            stage_name=stage_name,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            n=n,
         )
+
+        for prompt, output in zip(prompt_batch, outputs, strict=True):
+            responses = [{"content": completion_text, "index": j} for j, completion_text in enumerate(output)]
+            results.append(
+                _make_response_record(
+                    prompt,
+                    inference_config.model,
+                    responses,
+                    role=role,
+                    rejected_prompt_strategy=rejected_prompt_strategy,
+                )
+            )
+        reporter.maybe_log(len(results))
 
     return results
 
@@ -386,6 +405,7 @@ def _generate_via_vllm(
             max_tokens=config.max_tokens,
             n=config.n,
             stage_name=config.role.value,
+            local_serve_batch_size=config.local_serve_batch_size,
         )
     metrics_snapshot = session.metrics_snapshot()
 
@@ -469,6 +489,7 @@ def generate_response_pair(config: ResponsePairGenConfig) -> None:
                 max_tokens=config.chosen_max_tokens,
                 n=config.chosen_n,
                 stage_name=ResponseRole.CHOSEN.value,
+                local_serve_batch_size=config.local_serve_batch_size,
             )
             rejected_records = _generate_vllm_response_records(
                 prompts,
@@ -481,6 +502,7 @@ def generate_response_pair(config: ResponsePairGenConfig) -> None:
                 max_tokens=config.rejected_max_tokens,
                 n=config.rejected_n,
                 stage_name=ResponseRole.REJECTED.value,
+                local_serve_batch_size=config.local_serve_batch_size,
             )
         metrics_sessions.append(("shared", session.metrics_snapshot()))
     else:
@@ -497,6 +519,7 @@ def generate_response_pair(config: ResponsePairGenConfig) -> None:
                 max_tokens=config.chosen_max_tokens,
                 n=config.chosen_n,
                 stage_name=ResponseRole.CHOSEN.value,
+                local_serve_batch_size=config.local_serve_batch_size,
             )
         metrics_sessions.append((ResponseRole.CHOSEN.value, chosen_session.metrics_snapshot()))
         with BatchedVllmServeSession(rejected_inference_config) as rejected_session:
@@ -511,6 +534,7 @@ def generate_response_pair(config: ResponsePairGenConfig) -> None:
                 max_tokens=config.rejected_max_tokens,
                 n=config.rejected_n,
                 stage_name=ResponseRole.REJECTED.value,
+                local_serve_batch_size=config.local_serve_batch_size,
             )
         metrics_sessions.append((ResponseRole.REJECTED.value, rejected_session.metrics_snapshot()))
 

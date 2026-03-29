@@ -26,6 +26,7 @@ from marin.alignment.batched_vllm_serve import BatchedVllmServeSession, write_vl
 from marin.alignment.generate_prompts import load_sharded_jsonl_gz, load_spec, write_sharded_jsonl_gz
 from marin.alignment.inference_config import InferenceConfig, VLLMConfig
 from marin.alignment.llm_client import llm_chat_single
+from marin.alignment.live_progress import LiveProgressReporter, vllm_stage_metrics_provider
 from marin.alignment.prompts.judge import build_compliance_judge_prompt, build_judge_system_prompt
 from marin.alignment.types import ComplianceResult, Statement
 
@@ -384,6 +385,13 @@ def judge_responses(config: JudgeConfig) -> None:
 
     session_metrics: dict[str, object] | None = None
     with session_manager as session:
+        reporter = LiveProgressReporter(
+            stage_name="Judge",
+            total_items=len(common_ids),
+            batch_size=max(1, config.batch_size),
+            metrics_provider=vllm_stage_metrics_provider(session, stage_name="judge") if session is not None else None,
+        )
+        processed_prompt_pairs = 0
         for start in range(0, len(common_ids), config.batch_size):
             batch_ids = common_ids[start : start + config.batch_size]
             requests: list[_JudgeRequest] = []
@@ -477,6 +485,8 @@ def judge_responses(config: JudgeConfig) -> None:
                     )
 
             if not requests:
+                processed_prompt_pairs += len(batch_ids)
+                reporter.maybe_log(processed_prompt_pairs, details=[f"failures={len(failure_messages)}"])
                 continue
 
             try:
@@ -510,6 +520,8 @@ def judge_responses(config: JudgeConfig) -> None:
                             errors=[str(exc)],
                         )
                     )
+                processed_prompt_pairs += len(batch_ids)
+                reporter.maybe_log(processed_prompt_pairs, details=[f"failures={len(failure_messages)}"])
                 continue
 
             grouped_candidates: dict[str, dict[str, list[dict[str, Any]]]] = {}
@@ -554,6 +566,8 @@ def judge_responses(config: JudgeConfig) -> None:
                         rejected_candidates=rejected_candidates,
                     )
                 )
+            processed_prompt_pairs += len(batch_ids)
+            reporter.maybe_log(processed_prompt_pairs, details=[f"failures={len(failure_messages)}"])
         if is_local and session is not None:
             session_metrics = session.metrics_snapshot()
 
