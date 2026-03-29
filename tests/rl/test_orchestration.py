@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import sys
 from types import SimpleNamespace
 
 import pytest
 
-from marin.rl.orchestration import _HostedRuntime, _run_rl_coordinator
+from marin.rl.orchestration import _HostedRuntime, _run_rl_coordinator, _train_worker_entry
 from marin.rl.rl_job import RunConfig
 from marin.rl.rollout_worker import RolloutTrackerConfig
 
@@ -33,6 +34,21 @@ class _FakeClient:
     def submit(self, request):
         self.submissions.append(request)
         return _FakeJobHandle(request.name)
+
+
+class _FakeActorMethod:
+    def __init__(self):
+        self.calls = []
+
+    def remote(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return SimpleNamespace(result=lambda: None)
+
+
+class _FakeRunStateHandle:
+    def __init__(self):
+        self.mark_completed = _FakeActorMethod()
+        self.mark_failed = _FakeActorMethod()
 
 
 class _FakeRLJob:
@@ -130,6 +146,37 @@ def test_run_rl_coordinator_uses_run_config_ram_overrides(monkeypatch):
     assert client.submissions[1].resources.ram == "300g"
 
 
+def test_run_rl_coordinator_uses_run_config_zone_for_child_tpu_jobs(monkeypatch):
+    client = _FakeClient()
+    hosted_runtime = _HostedRuntime(runtime=SimpleNamespace(), hosted_actors=[])
+    config = SimpleNamespace(
+        run_id="rl-test",
+        resolved_instance_id="rl-test",
+        pip_dependency_groups=["math"],
+        run_config=RunConfig(
+            train_tpu_type="v6e-8",
+            inference_tpu_type="v6e-8",
+            num_rollout_workers=1,
+            regions=["us-east1"],
+            zone="us-east1-d",
+        ),
+    )
+
+    monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
+    monkeypatch.setattr("marin.rl.orchestration.RLJob", _FakeRLJob)
+    monkeypatch.setattr(
+        "marin.rl.orchestration._create_runtime_handles",
+        lambda _client, _config: hosted_runtime,
+    )
+    monkeypatch.setattr("marin.rl.orchestration.wait_all", lambda _jobs, raise_on_failure: None)
+
+    _run_rl_coordinator(config)
+
+    assert len(client.submissions) == 2
+    assert client.submissions[0].resources.zone == "us-east1-d"
+    assert client.submissions[1].resources.zone == "us-east1-d"
+
+
 def test_run_rl_coordinator_enables_unbuffered_logs_for_debug_checkpointer(monkeypatch):
     client = _FakeClient()
     hosted_runtime = _HostedRuntime(runtime=SimpleNamespace(), hosted_actors=[])
@@ -200,3 +247,26 @@ def test_run_rl_coordinator_assigns_stable_rollout_wandb_names(monkeypatch):
     assert rollout0_config.tracker_config.name == "rl-test-rollout-0"
     assert rollout1_config.run_id == "rl-test-rollout-1"
     assert rollout1_config.tracker_config.name == "rl-test-rollout-1"
+
+
+def test_train_worker_entry_does_not_mark_run_state_failed_on_attempt_crash(monkeypatch):
+    runtime = SimpleNamespace(run_state=_FakeRunStateHandle())
+
+    class _CrashingTrainWorker:
+        def __init__(self, config, runtime):
+            del config, runtime
+
+        def train(self):
+            raise RuntimeError("boom")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "marin.rl.train_worker",
+        SimpleNamespace(TrainWorker=_CrashingTrainWorker),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        _train_worker_entry(train_config=SimpleNamespace(), runtime=runtime)
+
+    assert runtime.run_state.mark_failed.calls == []
+    assert runtime.run_state.mark_completed.calls == []

@@ -66,6 +66,9 @@ class RunConfig:
     regions: list[str] | None = None
     """Concrete region(s) to use for all RL worker jobs."""
 
+    zone: str | None = None
+    """Concrete zone to use for all RL worker jobs."""
+
     max_retries_failure: int = 3
     """Maximum retries on worker failure (task code crashes, OOM, etc.)"""
 

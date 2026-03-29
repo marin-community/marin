@@ -645,3 +645,631 @@ As of this session, both benchmark scripts (`exp_inf_001_tp4_baseline.py`, `exp_
 - `kv_cache/gpu_memory_utilization` — the actual value used
 
 This data was previously only in ephemeral Iris job logs (preserved manually in the INF-002 results section above). Future runs will have it in W&B automatically. The currently running INF-003a and INF-003b jobs do NOT have this change — they launched before the update.
+
+## Critical Bug: RL runs do not resume after preemption (2026-03-27)
+
+### Observed in run `/ahmed/iris-rl-e4ms2-500-0327`
+
+Launched a 500-step e4ms2 run (1 trainer + 2 rollout workers, each v5p-8). The first generation (`e4p-20260327-200646`) ran, got preempted, and Iris retried by re-running the experiment script. This created a second generation (`e4p-20260327-224846`) which started from the **base Llama model** instead of resuming from the first generation's checkpoints.
+
+W&B shows 6 runs: 3 dead from `200646`, 3 live from `224846`. The `224846` trainer started from step 0, not from wherever `200646` left off. If this keeps happening, the run will never reach 500 steps.
+
+### Root cause
+
+`experiments/exp_iris_rl_regression_direct_gcs_prod.py` line 104-105:
+
+```python
+datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+name = f"{args.experiment_name_suffix}-{datestamp}"
+```
+
+Every invocation generates a **unique timestamp-based name**. This `name` becomes the `run_id` and flows into:
+
+| Artifact | Path / ID | Result on retry |
+|---|---|---|
+| Checkpoint dir | `gs://marin-us-central1/checkpoints/{name}/` | New empty dir — starts from base model |
+| W&B run ID | `{name}-train` | New W&B run — no continuity |
+| Rollout storage | `gs://marin-us-central1/rollouts/{name}/` | New dir — old rollouts orphaned |
+| Curriculum actor | `curriculum-{name}` | New actor — curriculum state lost |
+| Weight transfer coord | `wt-coord-{name}` | New coordinator — expected (old one is dead) |
+| Iris child job names | `rl-{name}-train` etc. | New names — no collision with dead children |
+
+When Iris retries the outer job after preemption, it re-runs the script → new datestamp → all state is orphaned.
+
+### Why Levanter doesn't auto-resume
+
+Levanter's `Trainer.initial_state()` does look for existing checkpoints:
+
+```python
+# trainer.py line 428-429
+load_checkpoint = levanter.checkpoint.is_checkpoint_path(checkpoint_path)
+```
+
+Where `checkpoint_path = checkpointer.expanded_path(self.run_id)`. But since `run_id` changes on every retry, the checkpoint path is new and empty. Levanter correctly falls back to initializing from `initial_checkpoint` (base model).
+
+### Plan to fix
+
+The fix requires separating **stable identity** (survives retries) from **instance identity** (unique per attempt).
+
+**Stable identity** — used for state that must persist across preemption:
+- Checkpoint base path
+- W&B run ID (for `resume="allow"`)
+- Rollout storage path (stale rollouts are harmless — replay buffer rejects them by freshness)
+
+**Instance identity** — must be unique per attempt to avoid collisions:
+- Iris child job names (dead children from previous attempt still exist)
+- Weight transfer coordinator actor name (old actor is dead, new one must register)
+- Curriculum actor name (same reason)
+
+#### Step 1: Add `--run-name` CLI arg to experiment scripts
+
+```python
+parser.add_argument(
+    "--run-name",
+    default=None,
+    help="Stable run name for checkpoint/W&B resume across preemption retries. "
+         "If not set, generates a fresh timestamp-based name (no resume).",
+)
+```
+
+When `--run-name` is provided:
+- `stable_name = args.run_name` — used for checkpoints, W&B ID, rollout storage
+- `instance_name = f"{stable_name}-{datestamp}"` — used for child job names, actor names
+
+When `--run-name` is not provided (backward compat):
+- `stable_name = instance_name = f"{suffix}-{datestamp}"` — current behavior, no resume
+
+#### Step 2: Split naming in the experiment script
+
+```python
+datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+if args.run_name:
+    stable_name = args.run_name
+    instance_name = f"{stable_name}-{datestamp}"
+else:
+    stable_name = f"{args.experiment_name_suffix}-{datestamp}"
+    instance_name = stable_name
+```
+
+Then use:
+- `stable_name` for: `checkpointer.base_path`, `rollout_storage.path`, `run_id` (which becomes the W&B ID via `trainer.id`)
+- `instance_name` for: `weight_transfer.coordinator_name`, `curriculum.actor_name`
+
+#### Step 3: Update RLJobConfig to carry both names
+
+Add an `instance_id` field alongside `run_id`:
+
+```python
+@dataclass
+class RLJobConfig:
+    run_id: str          # stable — checkpoint/W&B resume
+    instance_id: str     # volatile — child job names, actor names
+```
+
+Update `orchestration.py` to use `instance_id` for:
+- Child job names: `rl-{config.instance_id}-train`
+- Coordinator actor: `wt-coord-{config.instance_id}`
+- Curriculum actor: `curriculum-{config.instance_id}`
+
+Keep `run_id` for:
+- Checkpoint path (via `trainer.checkpointer`)
+- W&B run ID (via `trainer.id`)
+- Rollout storage path
+
+#### Step 4: W&B resume (already works)
+
+Levanter's WandbConfig already defaults to `resume="allow"`. With a stable `run_id`, `trainer.id` = `{stable_name}-train` is stable across retries. W&B will detect the existing run and resume it, continuing the same charts.
+
+#### Step 5: Levanter checkpoint resume (already works)
+
+With a stable checkpoint path, Levanter's `initial_state` will:
+1. Check `is_checkpoint_path(checkpoint_path)` → True (previous generation saved checkpoints)
+2. Load the latest checkpoint → resume from where the first generation left off
+3. Training continues from the checkpointed step
+
+#### Step 6: Update launch commands
+
+```bash
+uv run iris ... --job-name iris-rl-e4ms2-500-0327 ... \
+  -- uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py \
+       --run-name iris-rl-e4ms2-500-0327 \
+       --inflight-weight-updates --kv-cache-metrics
+```
+
+The `--run-name` matches the Iris job name, providing a human-readable stable identity.
+
+#### What this does NOT change
+
+- Rollout workers still start fresh on retry (no rollout checkpoint). This is fine — the replay buffer fills quickly from new rollout generation.
+- The first few rollout batches after retry may be rejected as stale (from the old lineage). This self-resolves once the trainer serves fresh weights.
+- Old W&B rollout runs from the dead generation remain as dead artifacts. Only the trainer W&B run resumes.
+
+#### Files to change
+
+1. `experiments/exp_iris_rl_regression_direct_gcs_prod.py` — add `--run-name`, split naming
+2. `lib/marin/src/marin/rl/rl_job.py` — add `instance_id` field to `RLJobConfig`
+3. `lib/marin/src/marin/rl/orchestration.py` — use `instance_id` for child job names and actor names
+4. `lib/marin/src/marin/rl/train_worker.py` — no changes needed (uses `run_id` for checkpoint path, already correct)
+5. Tests for the naming split
+
+### Fix implemented and validated (2026-03-28)
+
+All changes landed. See commit diff for details.
+
+### Validation run: `/ahmed/iris-rl-e4ms2-500-0327-v2`
+
+Launched with `--run-name iris-rl-e4ms2-500`. 500-step e4ms2 run (1 trainer + 2 rollout workers, each v5p-8).
+
+**W&B runs** (stable IDs, survive retries):
+- Trainer: https://wandb.ai/marin-community/marin_iris_rl_debug/runs/iris-rl-e4ms2-500-train
+- Rollout-0: https://wandb.ai/marin-community/marin_iris_rl_debug/runs/iris-rl-e4ms2-500-rollout-0
+- Rollout-1: https://wandb.ai/marin-community/marin_iris_rl_debug/runs/iris-rl-e4ms2-500-rollout-1
+
+**Checkpoint resume validated in production** — the run has already survived multiple failures:
+
+| Event | Time (UTC) | Details |
+|---|---|---|
+| Initial launch | 2026-03-28 ~03:13 | All 3 children started, training began from base model |
+| Rollout-0 preemption | ~05:39 | `preemption_count=1`, Iris retried rollout-0 |
+| W&B resume confirmed | 05:39:48 | `wandb: Resuming run iris-rl-e4ms2-500` — same W&B run |
+| Checkpoint resume confirmed | 05:39:55 | `Resuming wandb run. Attempting to mitigate issues.` |
+| Training continued | ~05:40 onward | Progress from step ~63 onward (resumed from checkpoint) |
+| Trainer failure | 08:46:17 | Arrow Flight `FlightUnavailableError: Connection refused` during weight fetch on rollout-1 |
+| Trainer process died | ~08:46 | Last training step was 143, batch_prep for step 144 completed but no further steps |
+| Iris auto-retry | ~09:20 | New trainer process started |
+| W&B resume (2nd time) | 09:20:13 | `wandb: Resuming run iris-rl-e4ms2-500` — same W&B run again |
+| Checkpoint loaded | 09:21:15 | `Loading checkpoint from gs://marin-us-central1/checkpoints/iris-rl-e4ms2-500/iris-rl-e4ms2-500-train/step-136` |
+| Curriculum restored | 09:20:18 | `Restored curriculum checkpoint from .../curriculum_state.json at step 139` |
+
+Step-143 checkpoint did not fully commit (the crash happened during `Starting commit to storage layer`). Levanter correctly fell back to the latest complete checkpoint at step-136.
+
+**Key metrics before the step-143 crash:**
+- Rate: ~104s/step steady state
+- batch_prep: ~3.5-4s (both rollout workers feeding trainer)
+- Loss: ~-0.0004 to -0.0007
+
+### Trainer stuck/zombie issue at step 143 — detailed crash log
+
+**Timeline (all UTC, 2026-03-28):**
+
+```
+08:43:23  Saving checkpoint at step 143 to .../step-143
+08:43:23  Waiting for previous serialization to finish.
+08:43:23  Thread joined successfully
+08:43:23  Error check finished successfully
+08:45:53  Starting commit to storage layer by process: 0
+08:45:53  Transferring weights at step 143, loss=-0.000439
+08:46:06  Serialized model to Arrow with 291 parameters, total size 15316.51 MB
+08:46:06  Served weights for weight_id 143 (transfer_time=13.54s)
+08:46:06  Training step 143 completed (batch_prep=3.80s, fwd_bwd=57.18s)
+08:46:06  Updated server: weight_id=143, params=291, servers=52
+08:46:11  Batch prep for step 144: fetch=0.002s, create=3.971s, total=3.981s, rollouts=1024
+08:46:17  [ROLLOUT-1] Failed to receive weights via Arrow Flight
+          FlightUnavailableError: failed to connect to all addresses;
+          last error: UNKNOWN: ipv4:10.128.0.79:33035: Connection refused
+08:46:20  [ROLLOUT-0] Received 291 params for weight_id 143 (success)
+08:46:20  [ROLLOUT-1] Second fetch attempt also failed: Connection refused
+08:46:52  [ROLLOUT-0] generate: done in 73.6s (still producing rollouts)
+08:46:53  [ROLLOUT-1] generate: done in 97.7s (still producing rollouts)
+--- No further "Training step" or "Progress on:train" messages after this point ---
+--- Rollout workers continue polling "step > 143" endlessly ---
+--- Trainer process stays alive on Iris but produces no output ---
+```
+
+**What happened:**
+1. Trainer completed step 143 and served weights successfully
+2. Trainer started batch_prep for step 144 (3.98s, had rollout data ready)
+3. Rollout-1's background weight-sync thread failed to fetch weight 143 from the trainer's Arrow Flight server (connection refused at `10.128.0.79:33035`)
+4. Rollout-0 successfully received weight 143
+5. The trainer appears to have entered the JAX train step for step 144 but never completed it
+6. The trainer process remained alive on Iris (Arrow Flight server threads kept it from exiting) but the main training thread was dead or hung
+
+**Root cause hypothesis:**
+The trainer's Arrow Flight server at `10.128.0.79:33035` briefly became unavailable during the checkpoint commit at step 143. Rollout-1 got `Connection refused` but this was handled gracefully (logged and continued). The trainer itself may have hit an unlogged exception during the step-144 forward pass, or the checkpoint commit thread interfered with the training thread. The zombie process issue (Iris shows RUNNING while W&B shows dead) is the same coordinator-liveness bug documented earlier in the Codex logbook.
+
+**Impact:** Lost steps 137-143 (7 steps, ~12 minutes). Trainer auto-recovered via Iris retry, resumed from step-136 checkpoint, resumed same W&B run. The `--run-name` fix worked exactly as designed.
+
+### 1-hour status check (2026-03-28 ~10:30 UTC)
+
+**Progress**: ~167/500 steps (33.4%), rate ~145s/step (inflated by recent checkpoint save)
+
+**Iris job status — no new failures since last incident:**
+
+| Component | State | Failures | Preemptions |
+|---|---|---|---|
+| Root | RUNNING | 0 | 0 |
+| Trainer | RUNNING | 1 | 1 |
+| Rollout-0 | RUNNING | 0 | 1 |
+| Rollout-1 | RUNNING | 0 | 0 |
+
+**Cumulative preemption/recovery history:**
+
+| Event # | Time (UTC) | Component | Type | Recovery | Steps lost |
+|---|---|---|---|---|---|
+| 1 | ~05:39 | Rollout-0 | Preemption | Iris auto-retry, W&B resumed | 0 (rollout state is stateless) |
+| 2 | ~08:46 | Trainer | Failure (Arrow Flight crash during step 144) | Iris auto-retry, checkpoint resume from step-136, W&B resumed | 7 steps (137-143) |
+
+**Training metrics at step 166:**
+- `batch_prep=4.03s` (both rollout workers feeding trainer)
+- `fwd_bwd=77.73s`
+- `loss=-0.0005`
+
+**Eval metrics (MATH-500 pass@1):**
+- Step 163: **46.6%**
+- Step 164: **46.8%**
+
+**Checkpoint status:**
+- Latest saved: step-165 at `gs://marin-us-central1/checkpoints/iris-rl-e4ms2-500/iris-rl-e4ms2-500-train/step-165`
+- Previous (step-158) cleaned up after step-165 saved
+
+**Preemption robustness assessment so far:**
+- Checkpoint resume: **working** — trainer loaded step-136 checkpoint after failure at step 143
+- W&B resume: **working** — trainer run shows continuous curve across restarts
+- Rollout recovery: **working** — rollout-0 restarted cleanly after preemption, continued producing batches
+- Rollout W&B: **cosmetic issue** — both rollout workers have identical W&B display names (`iris-rl-e4ms2-500-20260328-031315-rollout`). Fix landed locally (use `run_id` as display name) but not yet deployed to this run. W&B IDs are unique (`iris-rl-e4ms2-500-rollout-0` / `-rollout-1`), so no data collision.
+- Steps lost per incident: **7 steps** (gap between last committed checkpoint and crash point). Checkpoint save interval is 600s (~5-6 steps at current pace). Worst case loss per preemption ≈ 1 checkpoint interval.
+
+**Known issue — zombie trainer process:**
+When the trainer crashes mid-step, the process stays alive on Iris (Arrow Flight server threads prevent exit) but the main training thread is dead. Iris shows `RUNNING` while W&B shows dead. The trainer eventually gets killed by Iris failure detection and retried, but there's a delay window where the run appears stuck. This is the same coordinator-liveness bug documented in the Codex logbook.
+
+**ETA**: ~167/500 = 33.4% complete. At current rate (~110s/step steady state, ~145s with checkpoint overhead), ~333 steps remaining ≈ 10-13 hours.
+
+## v6e us-east1-d reproduction attempt (2026-03-28 ~21:00 UTC)
+
+Goal: reproduce the checkpoint-serialization trainer failure on a different TPU generation (v6e) in a different zone (us-east1-d) to determine if the issue is v5p-specific or generic.
+
+### New region-aware experiment script
+
+Created `experiments/xp_iris_rl_regression_direct_gcs_prod.py` — drop-in replacement for `exp_iris_rl_regression_direct_gcs_prod.py` that derives all GCS paths from `--region`:
+
+- `MODEL_PATH` = `gs://marin-{region}/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f`
+- `MARIN_PREFIX` = `gs://marin-{region}`
+- Checkpoints, rollout storage, model loading all region-local
+- Added `--train-tpu-type` for separate trainer/rollout TPU types
+
+This fixes the `TransferBudgetExceeded` cross-region blocker that killed Codex's earlier east1-d attempts (see Codex logbook Stage 5).
+
+### Attempt 1: v6e-8 trainer + v6e-8 rollouts — OOM
+
+- **Root job**: `/ahmed/iris-rl-e4ms2-500-0328-v6e8-e1d-v2`
+- **Stable run name**: `iris-rl-e4ms2-500-v6e8-e1d`
+- **Root placement**: no region pin (CPU coordinator landed wherever available)
+
+Root coordinator came up immediately. All 3 child jobs reached RUNNING and started executing. Model loaded successfully from `gs://marin-us-east1/` (no cross-region transfer). **Region-aware script worked correctly.**
+
+Trainer crashed immediately at the weight transfer step:
+
+```
+RESOURCE_EXHAUSTED: Error loading program 'jit_copy_and_flatten':
+Attempting to reserve 9.62G at the bottom of memory.
+That was not possible. There are 7.14G free, 0B reserved, and 7.14G reservable.
+```
+
+**Root cause**: v6e chips have ~32 GiB HBM each (vs v5p's ~95 GiB). With TP=4 on a v6e-8 (4 chips), the 8B model + weight transfer serialization buffer doesn't fit. The `copy_and_flatten` call during Arrow Flight weight serialization needs 9.62 GiB but only 7.14 GiB is free per chip after model loading.
+
+### Attempt 2: v6e-16 trainer + v6e-8 rollouts — multi-host barrier timeout
+
+- **Root job**: `/ahmed/iris-rl-v6e-e1d-0328`
+- **Stable run name**: `iris-rl-v6e-e1d`
+- **Config**: trainer on v6e-16 (4 hosts × 4 chips = 16 chips), rollouts on v6e-8
+
+Placement worked correctly:
+- Root coordinator: unpinned, landed on available CPU
+- Trainer: targeted `tpu_v6e_16-us-east1-d`, all 4 tasks running
+- Rollout-0: running on v6e-8 in us-east1-d, vLLM loaded and ready
+- Rollout-1: running on v6e-8 in us-east1-d
+
+Trainer crashed during JAX multi-host initialization:
+
+```
+DEADLINE_EXCEEDED: Barrier timed out. Id: levanter_barrier_sync_3::0.
+This usually happens because a task triggered the barrier too early or too slowly.
+```
+
+**Root cause**: mesh config mismatch. The experiment uses `MeshConfig(axes={"context": 1, "model": 1})` which was designed for v5p-8 (single-host, 4 chips). v6e-16 is a multi-host TPU (4 hosts × 4 chips = 16 chips) and needs a mesh configuration that properly spans 16 chips — e.g. `model: 4` or `model: 8` to partition across hosts. The single-host mesh config caused the multi-host barrier coordination to fail.
+
+### Current status
+
+| Attempt | Trainer TPU | Rollout TPU | Outcome | Blocker |
+|---|---|---|---|---|
+| 1 | v6e-8 | v6e-8 | OOM | 9.62 GiB needed, 7.14 GiB free per chip |
+| 2 | v6e-16 | v6e-8 | Barrier timeout | `barrier_sync()` default 200s timeout too short for multi-host weight serve |
+| 3 | v6e-16 | v6e-8 | Repeated preemption | Barrier fix worked, but v6e-16 spot pool too contested |
+
+### Attempt 2 root cause: barrier timeout (NOT mesh config)
+
+Initial diagnosis was wrong — the mesh config was fine. Levanter's `axis_shapes(16, 2)` correctly computes:
+- ICI: `data=8, replica=1, model=1, context=1` (per-slice, 8 chips)
+- DCN: `replica_dcn=2` (2 hosts)
+
+JAX distributed initialized successfully: **16 devices, 4 processes** (v6e-16 = 2 hosts × 2 processes/host × 4 chips/process).
+
+The actual failure was in `serve_weights()` at `lib/marin/src/marin/rl/weight_transfer/arrow_flight.py`:
+1. All 4 processes hit `barrier_sync()` before the weight serve
+2. Only process 0 does the actual work: `copy_and_flatten` + `jax.device_get` + Arrow serialization
+3. Processes 1-3 skip the `if jax.process_index() == 0` block and immediately hit the post-serve `barrier_sync()`
+4. Process 0 was still doing first-time JIT compilation + device_get for the 8B model
+5. The default `barrier_sync(timeout=200)` expired before process 0 finished
+
+**Fix**: increased the post-serve barrier timeout from 200s to 600s.
+
+### Attempt 3: barrier timeout fix + spot volatility (us-east1-d)
+
+- **Root job**: `/ahmed/iris-rl-v6e-e1d-0328-v2`
+- **Stable run name**: `iris-rl-v6e-e1d`
+
+Initial barrier timeout fix (200s → 600s) appeared to work: JAX init succeeded, model loaded across all 4 processes, "Starting RLOO training with Levanter" logged on all processes with no barrier error during one provisioning window. However the trainer accumulated **8 preemptions** in us-east1-d.
+
+Eventually the barrier timeout returned — even at 600s:
+```
+DEADLINE_EXCEEDED: Barrier timed out. Id: levanter_barrier_sync_3::0.
+# of tasks that reached the barrier: 3/4.
+barrier_sync(timeout=600)
+```
+
+This revealed the **real root cause**: the barrier timeout was a symptom, not the disease. The `copy_and_flatten` + `device_get` calls inside the `if jax.process_index() == 0` block trigger JAX collective operations (all-gather) that require ALL processes to participate. On single-host v5p-8, all data is local so no collectives fire. On multi-host v6e-16, `hsd.to_state_dict(model)` unshards parameters across hosts, which needs cross-host coordination from every process — but processes 1-3 had already skipped past and were waiting at the barrier. **Result: deadlock.**
+
+### Fix: multi-host-safe weight transfer (attempt 4)
+
+Changed `serve_weights()` in `lib/marin/src/marin/rl/weight_transfer/arrow_flight.py`:
+
+**Before** (single-host assumption):
+```python
+barrier_sync()
+if jax.process_index() == 0:
+    flat_dict, shape_dict = copy_and_flatten(model, ...)  # JAX collectives inside!
+    flat_dict = jax.device_get(flat_dict)                 # cross-host transfer!
+    # ... Arrow Flight serving ...
+barrier_sync(timeout=600)
+```
+
+**After** (multi-host safe):
+```python
+barrier_sync()
+# ALL processes participate in copy_and_flatten + device_get
+# because the underlying JAX ops trigger cross-host collectives
+flat_dict, shape_dict = copy_and_flatten(model, ...)
+flat_dict = jax.device_get(flat_dict)
+
+if jax.process_index() == 0:
+    # Only process 0 does Arrow Flight serving
+    # ... serialize, store, update coordinator ...
+else:
+    del flat_dict  # free gathered data on non-serving processes
+
+barrier_sync(timeout=600)
+```
+
+This ensures all processes participate in the JAX collectives, preventing the deadlock. Only the Arrow Flight serving (pure CPU/network work) remains process-0-only.
+
+### Attempt 4: parallel launches in two zones
+
+Launched both zones simultaneously to race for spot capacity:
+
+| Job | Zone | Status |
+|---|---|---|
+| `/ahmed/iris-rl-v6e-e1d-0328-v3` | us-east1-d | Submitted, includes multi-host fix |
+| `/ahmed/iris-rl-v6e-e5b-0328-v3` | us-east5-b | Submitted, includes multi-host fix |
+
+The us-east5-b launch required copying the model to `gs://marin-us-east5/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f` (confirmed complete).
+
+Preemption budget: `max_retries_preemption=100` per child job (default in `RunConfig`), so both runs will keep retrying.
+
+### Current status
+
+Both runs are active. The multi-host weight transfer fix is the critical code change — it should eliminate the barrier deadlock that killed all previous v6e-16 attempts. Next signal: whether either run gets past the bootstrap weight serve and starts training steps.
+
+### Iris placement learnings (consolidated from Codex + this session)
+
+The correct launch shape for cross-region runs is:
+
+```
+# Root: no region/zone pin — CPU coordinator lands wherever available
+iris job run --user ahmed --job-name <name> ...
+  -- python xp_iris_rl_regression_direct_gcs_prod.py \
+       --region us-east1 \        # GCS paths + child job region
+       --zone us-east1-d \        # child TPU zone pin
+       --tpu-type v6e-8 \         # rollout TPU
+       --train-tpu-type v6e-16    # trainer TPU (optional, defaults to --tpu-type)
+```
+
+Pinning the root to `--region us-east1` fails because the only east1 CPU executor is in `us-east1-b` and has intermittent capacity issues. Leaving the root unpinned lets it land on any available CPU group (us-central1-a, us-east1-b, us-west1-a, europe-west4-a).
+
+## Detailed session narrative (2026-03-28 ~21:00–23:10 UTC)
+
+### Context
+
+Codex had been trying to launch an RL training run on v6e TPUs in us-east1-d to reproduce
+the checkpoint-serialization trainer crash observed on the v5p-8 us-central1 runs.  The
+goal: determine whether the crash is v5p-specific or a general bug in the checkpoint path.
+
+Codex got blocked at Stage 5 of the east1-d thread: the experiment script
+`exp_iris_rl_regression_direct_gcs_prod.py` hardcodes `gs://marin-us-central1` for model
+weights, checkpoints, and rollout storage.  When TPU workers run in us-east1-d but try to
+read model weights from a us-central1 bucket, Iris's cross-region transfer budget guard
+fires `TransferBudgetExceeded` (10 GB limit).  The model's safetensors alone are ~16 GB.
+
+Codex had already proven the child-zone placement infrastructure worked (root CPU
+coordinator lands wherever, child TPU jobs pin to us-east1-d) but couldn't get past the
+GCS path mismatch.
+
+### What was built
+
+#### 1. Region-aware experiment script: `xp_iris_rl_regression_direct_gcs_prod.py`
+
+Created a new script that derives ALL GCS paths from the `--region` flag:
+
+```python
+def _marin_prefix(region: str) -> str:
+    return f"gs://marin-{region}"
+
+def _model_path(region: str) -> str:
+    return f"{_marin_prefix(region)}/{MODEL_SUBPATH}"
+```
+
+Instead of hardcoding `MODEL_PATH = "gs://marin-us-central1/models/..."`, the script now
+uses `gs://marin-{region}/models/...`.  This flows into every artifact path:
+
+- **Model weights**: `gs://marin-{region}/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f`
+- **Checkpoints**: `gs://marin-{region}/checkpoints/{run_name}/`
+- **Rollout storage**: `gs://marin-{region}/rollouts/{run_name}/`
+- **Tokenizer**: same as model path
+- **Initial checkpoint**: same as model path
+
+Also added `--train-tpu-type` flag so trainer and rollout workers can use different TPU
+types (needed because v6e-8 OOMs on the trainer but works for rollout).
+
+#### 2. Attempt 1: v6e-8 trainer — OOM
+
+Launched `/ahmed/iris-rl-e4ms2-500-0328-v6e8-e1d-v2` with both trainer and rollouts on
+v6e-8.  The region-aware paths worked perfectly — model loaded from `gs://marin-us-east1/`
+at ~500-800 MB/s, no cross-region transfer error.
+
+But the trainer immediately OOMed:
+
+```
+RESOURCE_EXHAUSTED: Error loading program 'jit_copy_and_flatten':
+Attempting to reserve 9.62G at the bottom of memory.
+That was not possible. There are 7.14G free.
+```
+
+v6e chips have ~32 GiB HBM each (vs v5p's ~95 GiB).  With the 8B model loaded at TP=4
+across 4 chips, the remaining 7.14 GiB per chip can't fit the 9.62 GiB needed by
+`copy_and_flatten` during Arrow Flight weight serialization.
+
+#### 3. Attempt 2: v6e-16 trainer + v6e-8 rollouts — barrier timeout
+
+Relaunched `/ahmed/iris-rl-v6e-e1d-0328` with the trainer on v6e-16 (2 hosts, 16 chips)
+and rollouts on v6e-8.  v6e-16 has 2x the chips so TP=4 leaves more HBM headroom.
+
+JAX distributed initialized correctly: **16 devices, 4 processes** (2 hosts × 2
+processes/host).  Model loaded.  Then:
+
+```
+DEADLINE_EXCEEDED: Barrier timed out. Id: levanter_barrier_sync_3::0.
+# of tasks that reached the barrier: 3/4.
+```
+
+**First diagnosis (wrong)**: mesh config `{context: 1, model: 1}` is wrong for 16-chip
+multi-host.  I traced through Levanter's `axis_shapes()` and found the mesh was actually
+fine: default `data` axis absorbs the 8 chips per slice, `replica_dcn` absorbs the 2
+hosts.
+
+**Second diagnosis (partially right)**: the default `barrier_sync()` timeout of 200s is
+too short.  Process 0 does `copy_and_flatten` + `jax.device_get` (first-time JIT
+compilation + full 8B model transfer to host RAM) while processes 1-3 skip the work and
+immediately hit the post-serve barrier.  On v6e-16 the first-time weight serve could take
+>200s.
+
+Applied fix: increased post-serve barrier timeout from 200s to 600s.
+
+#### 4. Attempt 3: 600s barrier — still times out
+
+Relaunched `/ahmed/iris-rl-v6e-e1d-0328-v2`.  The 600s timeout let the run get further —
+JAX init worked, model loaded on all 4 processes, "Starting RLOO training" logged.  But
+the trainer kept getting preempted (8 preemptions in us-east1-d).
+
+When it finally held a v6e-16 long enough, the barrier timed out again — at 600s:
+
+```
+DEADLINE_EXCEEDED: Barrier timed out. Id: levanter_barrier_sync_3::0.
+# of tasks that reached the barrier: 3/4.
+barrier_sync(timeout=600)
+```
+
+3 of 4 processes reached the barrier.  One was stuck for >10 minutes.
+
+**Third diagnosis (correct)**: the timeout was a symptom, not the disease.  The real
+problem was a **JAX collective deadlock**.
+
+Here's what was happening inside `serve_weights()`:
+
+```python
+barrier_sync()                          # all 4 processes sync here ✓
+
+if jax.process_index() == 0:            # only process 0 enters
+    flat_dict = copy_and_flatten(model)  # calls hsd.to_state_dict(model)
+    flat_dict = jax.device_get(flat_dict)
+    # ... Arrow Flight serving ...
+
+barrier_sync(timeout=600)               # all 4 processes try to sync here ✗
+```
+
+The problem is `copy_and_flatten`.  It calls `hsd.to_state_dict(model)` which converts
+sharded NamedArrays into a flat dict.  On **single-host** v5p-8, all shards are local —
+no cross-device communication needed.  On **multi-host** v6e-16, the parameters are
+sharded across 2 hosts.  When process 0 calls `to_state_dict`, JAX needs to all-gather
+the shards from process 1, 2, and 3.  This triggers JAX collective operations that
+**require all processes to participate**.
+
+But processes 1-3 skipped the `if process_index() == 0` block and went straight to the
+post-serve `barrier_sync()`.  They're sitting in a barrier wait while process 0 is stuck
+waiting for them to participate in the all-gather.  **Classic deadlock**: process 0 waits
+for 1-3 to join the collective, 1-3 wait for 0 to reach the barrier.
+
+No timeout increase would fix this — it's structurally broken for multi-host.
+
+#### 5. The fix: multi-host-safe weight transfer
+
+The fix moves `copy_and_flatten` and `device_get` **outside** the `if process_index() == 0`
+block so all processes participate in the JAX collectives:
+
+```python
+barrier_sync()
+
+# ALL processes participate — JAX collectives need everyone
+flat_dict, shape_dict = copy_and_flatten(model, ...)
+flat_dict = jax.device_get(flat_dict)
+
+if jax.process_index() == 0:
+    # Only process 0 does Arrow Flight serving (pure CPU/network work)
+    params_dict = state_dict_to_batches(flat_dict, shape_dict, weight_id)
+    for flight_server in self._flight_servers:
+        flight_server.store_weights(weight_id, params_dict)
+    self._coordinator.update_server.remote(...)
+else:
+    del flat_dict  # free gathered data on non-serving processes
+
+barrier_sync(timeout=600)
+```
+
+This means processes 1-3 do "wasted work" (they gather the full model to their host RAM
+and then discard it), but the JAX collectives complete correctly.  The Arrow Flight
+serving is pure CPU/network and genuinely only needs process 0.
+
+This fix is backward-compatible with single-host: on v5p-8 with 1 process,
+`copy_and_flatten` and `device_get` are local operations with no collectives, and the
+`if process_index() == 0` block always runs.
+
+#### 6. Parallel zone launches
+
+Launched the fixed version in two zones simultaneously:
+
+- `/ahmed/iris-rl-v6e-e1d-0328-v3` in us-east1-d
+- `/ahmed/iris-rl-v6e-e5b-0328-v3` in us-east5-b
+
+us-east5-b required copying the model to `gs://marin-us-east5/` first (21 files, ~16 GB,
+completed successfully via `gcloud storage cp -r`).
+
+Both runs use the same `--run-name` scheme for checkpoint/W&B resume across preemptions.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `experiments/xp_iris_rl_regression_direct_gcs_prod.py` | **New.** Region-aware experiment script. Derives GCS paths from `--region`. Adds `--train-tpu-type`. |
+| `lib/marin/src/marin/rl/weight_transfer/arrow_flight.py` | **Modified.** `serve_weights()`: moved `copy_and_flatten` + `device_get` outside the `if process_index() == 0` block so all processes participate in JAX collectives. Increased post-serve barrier timeout to 600s. |
+
+### Why this was invisible on v5p-8
+
+The weight transfer code was written and tested on single-host TPUs (v5p-8).  On a single
+host:
+
+- `jax.process_count() == 1`
+- All model shards are local to the one process
+- `copy_and_flatten` triggers no cross-process communication
+- The `if process_index() == 0` block is always true
+- `barrier_sync()` is a no-op (early return when `process_count == 1`)
+
+So the single-host path never exercises the multi-process coordination.  The deadlock only
+manifests when `process_count > 1`, which only happens on multi-host TPUs like v6e-16.

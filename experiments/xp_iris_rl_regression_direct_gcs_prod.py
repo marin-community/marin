@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Regression probe E4: direct + GCS + production-like RL launch.
+"""Region-aware RL regression probe: derives GCS paths from --region.
 
-This preserves the direct coordinator topology while restoring the heavy 500-step
-production-like envelope. It uses the cached regional GCS model artifact rather
-than live Hugging Face bootstrap.
+Drop-in replacement for exp_iris_rl_regression_direct_gcs_prod.py that does not
+hardcode us-central1 paths.  MODEL_PATH, MARIN_PREFIX, and all artifact
+locations are derived from the --region flag so the script works in any region
+that has a corresponding gs://marin-<region> bucket with the model cached.
 """
 
 import argparse
@@ -38,8 +39,7 @@ from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 logger = logging.getLogger(__name__)
 
 CANONICAL_MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-MODEL_PATH = "gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f"
-MARIN_PREFIX = "gs://marin-us-central1"
+MODEL_SUBPATH = "models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f"
 DEFAULT_SUFFIX = "e4p"
 DEFAULT_NUM_TRAIN_STEPS = 500
 PROD_TPU_WORKER_RAM = "400g"
@@ -48,6 +48,17 @@ DEFAULT_EVAL_FREQUENCY = 1
 DEFAULT_REGION = "us-central1"
 DEFAULT_NUM_ROLLOUT_WORKERS = 2
 DEFAULT_TPU_TYPE = "v5p-8"
+DEFAULT_ROLLOUT_TENSOR_PARALLEL_SIZE = 4
+DEFAULT_ROLLOUT_GPU_MEMORY_UTILIZATION = 0.90
+DEFAULT_ROLLOUT_MAX_MODEL_LEN = 2048
+
+
+def _marin_prefix(region: str) -> str:
+    return f"gs://marin-{region}"
+
+
+def _model_path(region: str) -> str:
+    return f"{_marin_prefix(region)}/{MODEL_SUBPATH}"
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,7 +72,7 @@ def parse_args() -> argparse.Namespace:
         "--num-train-steps",
         type=int,
         default=DEFAULT_NUM_TRAIN_STEPS,
-        help="Number of trainer steps for the direct + GCS + prod probe.",
+        help="Number of trainer steps.",
     )
     parser.add_argument(
         "--n-prompts",
@@ -78,18 +89,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--region",
         default=DEFAULT_REGION,
-        help="Concrete region for trainer and rollout TPU jobs.",
+        help="Region for trainer/rollout TPU jobs AND GCS artifact paths.",
     )
     parser.add_argument(
         "--zone",
         default=None,
-        help="Optional concrete zone for trainer and rollout TPU jobs. "
-        "Lets the root coordinator stay region-pinned while child TPU jobs pin to one zone.",
+        help="Optional zone for trainer and rollout TPU jobs.",
     )
     parser.add_argument(
         "--tpu-type",
         default=DEFAULT_TPU_TYPE,
-        help="TPU type for both trainer and rollout workers.",
+        help="TPU type for rollout workers (and trainer unless --train-tpu-type is set).",
+    )
+    parser.add_argument(
+        "--train-tpu-type",
+        default=None,
+        help="TPU type for trainer. Defaults to --tpu-type if not set.",
     )
     parser.add_argument(
         "--inflight-weight-updates",
@@ -108,16 +123,32 @@ def parse_args() -> argparse.Namespace:
         help="Enable vLLM KV-cache metrics on rollout workers.",
     )
     parser.add_argument(
+        "--rollout-tensor-parallel-size",
+        type=int,
+        default=DEFAULT_ROLLOUT_TENSOR_PARALLEL_SIZE,
+        help="vLLM tensor-parallel size for rollout workers.",
+    )
+    parser.add_argument(
+        "--rollout-gpu-memory-utilization",
+        type=float,
+        default=DEFAULT_ROLLOUT_GPU_MEMORY_UTILIZATION,
+        help="vLLM gpu_memory_utilization for rollout workers.",
+    )
+    parser.add_argument(
+        "--rollout-max-model-len",
+        type=int,
+        default=DEFAULT_ROLLOUT_MAX_MODEL_LEN,
+        help="vLLM max_model_len for rollout workers.",
+    )
+    parser.add_argument(
         "--run-name",
         default=None,
-        help="Stable run name for checkpoint and W&B resume across preemption retries. "
-        "When set, checkpoints and W&B use this name so retries resume progress. "
-        "If not set, generates a fresh timestamp-based name (no resume on retry).",
+        help="Stable run name for checkpoint and W&B resume across preemption retries.",
     )
     parser.add_argument(
         "--debug-checkpointer",
         action="store_true",
-        help="Enable verbose trainer-side checkpoint diagnostics for debugging checkpoint failures.",
+        help="Enable verbose trainer-side checkpoint diagnostics.",
     )
     parser.add_argument(
         "--debug-checkpointer-log-interval",
@@ -129,7 +160,7 @@ def parse_args() -> argparse.Namespace:
         "--debug-checkpointer-dump-stacks-after",
         type=float,
         default=None,
-        help="If set, dump Python thread stacks after this many seconds in one checkpoint phase.",
+        help="Dump Python thread stacks after this many seconds in one checkpoint phase.",
     )
     return parser.parse_args()
 
@@ -139,8 +170,11 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    # Stable name: survives preemption retries. Used for checkpoints, W&B, rollout storage.
-    # Instance name: unique per coordinator invocation. Used for Iris child job names and actors.
+    region = args.region
+    marin_prefix = _marin_prefix(region)
+    model_path = _model_path(region)
+    train_tpu_type = args.train_tpu_type or args.tpu_type
+
     if args.run_name:
         stable_name = args.run_name
         instance_name = f"{stable_name}-{datestamp}"
@@ -151,14 +185,14 @@ def main() -> None:
 
     converter = HFCheckpointConverter(
         LlamaConfig,
-        reference_checkpoint=MODEL_PATH,
-        tokenizer=MODEL_PATH,
+        reference_checkpoint=model_path,
+        tokenizer=model_path,
     )
     hf_config = converter.default_hf_config
     model_config = replace(
         LlamaConfig.from_hf_config(hf_config),
         max_seq_len=2048,
-        tokenizer=MODEL_PATH,
+        tokenizer=model_path,
         attn_backend=AttentionBackend.SPLASH,
     )
 
@@ -194,7 +228,7 @@ def main() -> None:
             tracker=WandbConfig(
                 project="marin_iris_rl_debug",
                 name=name,
-                tags=["rl", "iris-debug", "regression", "e4", "direct-gcs-prod"],
+                tags=["rl", "iris-debug", "regression", "e4", "direct-gcs-prod", region],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=1024,
@@ -202,7 +236,7 @@ def main() -> None:
             num_train_steps=args.num_train_steps,
             steps_per_eval=100,
             checkpointer=CheckpointerConfig(
-                base_path=f"{MARIN_PREFIX}/checkpoints/{name}",
+                base_path=f"{marin_prefix}/checkpoints/{name}",
                 save_interval=datetime.timedelta(seconds=600),
                 debug_checkpointer=args.debug_checkpointer,
                 debug_checkpointer_log_interval=args.debug_checkpointer_log_interval,
@@ -228,14 +262,14 @@ def main() -> None:
             replay_buffer=ReplayBufferConfig(capacity=4096, alpha=3.0, max_samples=1, max_rollout_step_delay=1),
         ),
         curriculum=curriculum,
-        tokenizer=MODEL_PATH,
+        tokenizer=model_path,
         inference_type="vllm",
         inference_config=vLLMInferenceContextConfig(
-            model_name=MODEL_PATH,
+            model_name=model_path,
             canonical_model_name=CANONICAL_MODEL_NAME,
-            max_model_len=2048,
-            tensor_parallel_size=4,
-            gpu_memory_utilization=0.90,
+            max_model_len=args.rollout_max_model_len,
+            tensor_parallel_size=args.rollout_tensor_parallel_size,
+            gpu_memory_utilization=args.rollout_gpu_memory_utilization,
             sampling_params=VLLMSamplingConfig(
                 temperature=1.0,
                 n=8,
@@ -248,10 +282,10 @@ def main() -> None:
             load_format="runai_streamer",
             kv_cache_metrics=args.kv_cache_metrics,
         ),
-        initial_checkpoint=MODEL_PATH,
+        initial_checkpoint=model_path,
         rollout_storage=RolloutStorageConfig(
             storage_type=StorageType.FILE,
-            path=f"{MARIN_PREFIX}/rollouts/{name}",
+            path=f"{marin_prefix}/rollouts/{name}",
         ),
         weight_transfer=WeightTransferConfig(
             mode=WeightTransferMode.ARROW_FLIGHT,
@@ -264,36 +298,44 @@ def main() -> None:
         instance_id=instance_name if instance_name != name else None,
         log_freq=1,
         run_config=RunConfig(
-            train_tpu_type=args.tpu_type,
+            train_tpu_type=train_tpu_type,
             num_rollout_workers=args.num_rollout_workers,
             inference_tpu_type=args.tpu_type,
             train_ram=PROD_TPU_WORKER_RAM,
             inference_ram=PROD_TPU_WORKER_RAM,
-            regions=[args.region],
+            regions=[region],
             zone=args.zone,
         ),
         rollout_tracker=RolloutTrackerConfig(
             project="marin_iris_rl_debug",
             name=f"{instance_name}-rollout",
-            tags=["rl", "iris-debug", "regression", "e4", "rollout"],
+            tags=["rl", "iris-debug", "regression", "e4", "rollout", region],
         ),
         pip_dependency_groups=["vllm", "math"],
     )
 
     logger.info(
-        "Running E4 direct + GCS + prod probe: %s (instance=%s) "
-        "(n_prompts=%d, eval_frequency=%d, inflight=%s, rollout_workers=%d, "
-        "region=%s, zone=%s, tpu_type=%s, kv_cache_metrics=%s)",
+        "Running E4 region-aware probe: %s (instance=%s) "
+        "(region=%s, zone=%s, train_tpu=%s, rollout_tpu=%s, n_prompts=%d, eval_frequency=%d, "
+        "inflight=%s, rollout_workers=%d, rollout_tp=%d, "
+        "rollout_gpu_mem=%.2f, rollout_max_model_len=%d, kv_cache_metrics=%s, "
+        "model=%s, prefix=%s)",
         name,
         instance_name,
+        region,
+        args.zone,
+        train_tpu_type,
+        args.tpu_type,
         args.n_prompts,
         args.eval_frequency,
         args.inflight_weight_updates,
         args.num_rollout_workers,
-        args.region,
-        args.zone,
-        args.tpu_type,
+        args.rollout_tensor_parallel_size,
+        args.rollout_gpu_memory_utilization,
+        args.rollout_max_model_len,
         args.kv_cache_metrics,
+        model_path,
+        marin_prefix,
     )
     _run_rl_coordinator(job_config)
 

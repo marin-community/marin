@@ -141,6 +141,8 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         else:
             tpu_regions = singleton_region_list(resolve_launcher_region(run_config.train_tpu_type, inference_tpu_type))
         train_resource_kwargs: dict[str, object] = {"regions": tpu_regions}
+        if run_config.zone is not None:
+            train_resource_kwargs["zone"] = run_config.zone
         if run_config.train_ram is not None:
             train_resource_kwargs["ram"] = run_config.train_ram
         train_resources = ResourceConfig.with_tpu(
@@ -150,6 +152,8 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         )
 
         rollout_resource_kwargs: dict[str, object] = {"regions": tpu_regions}
+        if run_config.zone is not None:
+            rollout_resource_kwargs["zone"] = run_config.zone
         if run_config.inference_ram is not None:
             rollout_resource_kwargs["ram"] = run_config.inference_ram
         rollout_resources = ResourceConfig.with_tpu(
@@ -279,10 +283,12 @@ def _train_worker_entry(train_config, runtime: RLRuntimeHandles) -> None:
             runtime.run_state.mark_completed.remote().result()
         except Exception:
             logger.exception("TRAIN WORKER CRASHED (orchestration entrypoint)")
-            try:
-                runtime.run_state.mark_failed.remote("trainer crashed").result()
-            except Exception:
-                logger.exception("Failed to signal run_state failure")
+            # Do not mark the shared run state failed here. This function runs
+            # inside a single trainer task attempt, and Iris may retry the same
+            # child job under the still-running coordinator. If we flip the
+            # shared run_state to FAILED on an attempt-local crash, rollout
+            # workers interpret that as whole-run terminal failure and exit
+            # cleanly, leaving the retried trainer without rollout jobs.
             raise
 
 

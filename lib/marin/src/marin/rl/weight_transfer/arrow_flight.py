@@ -35,6 +35,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
 from haliax.partitioning import ResourceMapping
+from jax.experimental import multihost_utils
 from jax.sharding import Mesh
 from jaxtyping import PyTree
 from levanter.utils.jax_utils import barrier_sync
@@ -373,6 +374,23 @@ def copy_and_flatten(
     return flat_dict, shape_dict
 
 
+def _materialize_flat_leaf_for_transfer(leaf) -> np.ndarray:
+    """Materialize one flattened leaf as a host-local numpy array.
+
+    On multi-host trainers, flattened parameters can be global jax.Arrays that are
+    not fully addressable from one process.  A raw ``jax.device_get`` fails in that
+    case. ``process_allgather(..., tiled=True)`` gathers those shards into a
+    host-local numpy array with the original flattened shape.
+    """
+    if isinstance(leaf, np.ndarray):
+        return leaf
+    if not isinstance(leaf, jax.Array):
+        return np.asarray(leaf)
+    if leaf.is_fully_addressable:
+        return np.asarray(leaf)
+    return multihost_utils.process_allgather(leaf, tiled=True)
+
+
 class ArrowFlightServer(WeightTransferServer):
     """Arrow Flight-based weight transfer server for Haliax/Equinox models.
 
@@ -438,6 +456,11 @@ class ArrowFlightServer(WeightTransferServer):
         """Serve weights via Arrow Flight using Haliax state_dict serialization.
 
         Distributes parameters across multiple flight servers for parallel serving.
+
+        On multi-host TPUs, copy_and_flatten and device_get trigger JAX collective
+        operations (all-gather) that require ALL processes to participate.  Therefore
+        these calls must run on every process, not just process 0.  Only the Arrow
+        Flight serving (store_weights + coordinator update) is process-0-only.
         """
         self.metrics.total_transfers += 1
 
@@ -445,13 +468,15 @@ class ArrowFlightServer(WeightTransferServer):
         try:
             barrier_sync()
 
-            if jax.process_index() == 0:
-                # Fetching the entire state dict to CPU allows JAX to parallelize the individual transfers
-                flat_dict, shape_dict = copy_and_flatten(model, self.config.convert_to_bfloat16)
-                state_dict_time = time.time()
-                flat_dict = jax.device_get(flat_dict)
-                copy_time = time.time()
+            # All processes must participate in copy_and_flatten + device_get because
+            # the underlying JAX operations (to_state_dict, reshape, astype) trigger
+            # collective communications across hosts for sharded arrays.
+            flat_dict, shape_dict = copy_and_flatten(model, self.config.convert_to_bfloat16)
+            state_dict_time = time.time()
+            flat_dict = jax.tree.map(_materialize_flat_leaf_for_transfer, flat_dict)
+            copy_time = time.time()
 
+            if jax.process_index() == 0:
                 # Convert to Arrow RecordBatch per parameter
                 params_dict = state_dict_to_batches(flat_dict, shape_dict, weight_id)
                 serialize_time = time.time()
@@ -482,8 +507,12 @@ class ArrowFlightServer(WeightTransferServer):
                     store_time - serialize_time,
                     update_time - store_time,
                 )
+            else:
+                # Non-zero processes: free the gathered data, count as successful
+                del flat_dict
+                self.metrics.successful_transfers += 1
 
-            barrier_sync()
+            barrier_sync(timeout=600)
 
         except Exception:
             self.metrics.failed_transfers += 1

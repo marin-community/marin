@@ -4,7 +4,12 @@
 from types import SimpleNamespace
 
 from marin.rl.rl_losses import RLOOLoss
-from marin.rl.train_worker import TrainWorker, _resume_safe_weight_transfer_metrics
+from marin.rl.train_worker import (
+    BatchPrepTiming,
+    TrainWorker,
+    _resume_safe_weight_transfer_metrics,
+    _training_step_timing_metrics,
+)
 from marin.rl.weight_transfer.base import WeightTransferServerMetrics
 
 
@@ -61,6 +66,23 @@ def test_resume_safe_weight_transfer_metrics_counts_bootstrap_and_sync_hooks():
     assert _resume_safe_weight_transfer_metrics(step=6, sync_interval_steps=3) == {
         "total_transfers": 4,
         "successful_transfers": 4,
+    }
+
+
+def test_training_step_timing_metrics_keep_step_duration_separate_from_batch_prep():
+    metrics = _training_step_timing_metrics(
+        step_duration=17.28,
+        batch_prep_timing=BatchPrepTiming(fetch_time=40.0, batch_time=1.0, shard_time=0.26),
+    )
+
+    assert metrics == {
+        "throughput/train_step_duration_seconds": 17.28,
+        "throughput/forward_backward_duration_seconds": 17.28,
+        "throughput/rollout_wait_duration_seconds": 40.0,
+        "throughput/batch_create_duration_seconds": 1.0,
+        "throughput/batch_shard_duration_seconds": 0.26,
+        "throughput/batch_prep_duration_seconds": 41.26,
+        "throughput/iteration_duration_seconds": 58.54,
     }
 
 

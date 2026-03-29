@@ -8046,3 +8046,1194 @@ Planned validation commands for this patch:
 Outcome:
 - rollout W&B sidebar labels should now be unambiguous and preemption-safe
 - rollout receive counters should now have the same resume-safe semantics as the trainer-side transfer counters
+
+## 2026-03-28 19:40 PDT - launch plan for checkpoint-debug 500-step rerun
+
+Next experiment:
+
+- relaunch the `e4ms2` 500-step Iris RL job with the new checkpoint diagnostics enabled
+- goal: if the trainer dies again in the checkpoint path, capture explicit checkpoint phase logs and automatic Python thread dumps instead of only the outer JAX coordination failure
+
+Fresh stable run identity for this debug reproduction:
+
+- stable run name: `iris-rl-e4ms2-500-ckptdbg`
+- root Iris job name: `iris-rl-e4ms2-500-0328-ckptdbg`
+
+Why a fresh stable run name:
+
+- keep debug artifacts separate from the earlier crashed run
+- avoid mixing old checkpoint / rollout / W&B state with the new reproduction
+- still preserve preemption-safe resume inside this new run via `--run-name`
+
+Config for this relaunch:
+
+- trainer steps: `500`
+- rollout workers: `2`
+- `n_prompts=64`
+- `eval_frequency=1`
+- region: `us-central1`
+- checkpoint diagnostics:
+  - `--debug-checkpointer`
+  - `--debug-checkpointer-dump-stacks-after 180`
+
+Launch command:
+
+- `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-e4ms2-500-0328-ckptdbg --region us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py --run-name iris-rl-e4ms2-500-ckptdbg --num-train-steps 500 --n-prompts 64 --eval-frequency 1 --num-rollout-workers 2 --region us-central1 --debug-checkpointer --debug-checkpointer-dump-stacks-after 180`
+
+Submission result:
+
+- root Iris job: `/ahmed/iris-rl-e4ms2-500-0328-ckptdbg`
+
+Monitoring plan for this run:
+
+- keep detailed babysit state and poll-by-poll signals out of this main logbook
+- instead, use dedicated tracking files under `scratch/`
+- main logbook should only carry pointers and major conclusions
+
+Tracking files:
+
+- state JSON:
+  - `scratch/20260328-1955_monitoring_state.json`
+- event JSONL:
+  - `scratch/20260328-1955_iris-rl-e4ms2-500-0328-ckptdbg_events.jsonl`
+- babysit text log:
+  - `scratch/20260328-1955_iris-rl-e4ms2-500-0328-ckptdbg_babysit.log`
+
+Babysit cadence:
+
+- immediate snapshot on startup
+- one follow-up poll after `120s`
+- then steady-state polls every `1800s` (`30 min`)
+
+Monitoring mode:
+
+- monitor-only, no automatic resubmit
+- reason: if this run fails again, preserve the exact failed state and checkpoint-debug evidence for manual diagnosis
+
+## 2026-03-28 20:19 PDT - parallel east1-d v6e-8 debug run plan
+
+While the `us-central1` checkpoint-debug rerun is still active, launch a parallel
+reproduction on `v6e-8` in `us-east1-d`.
+
+Purpose:
+
+- check whether the late checkpoint-path trainer failure reproduces on a different TPU generation and zone
+- keep checkpoint diagnostics enabled so a second failure yields the same richer evidence
+
+Small launcher cleanup before submit:
+
+- `experiments/exp_iris_rl_regression_direct_gcs_prod.py` no longer hardcodes `v5p-8`
+- added `--tpu-type` so the same experiment can target `v6e-8` without a one-off edit
+
+Placement note:
+
+- Fray `ResourceConfig` only exposes `regions`, not `zones`
+- Iris child jobs inherit the parent job's zone constraint, so the root submit should carry:
+  - `--region us-east1`
+  - `--zone us-east1-d`
+- the experiment itself should set `--region us-east1` and `--tpu-type v6e-8`
+
+Planned identity and command:
+
+- stable run name: `iris-rl-e4ms2-500-ckptdbg-v6e8-e1d`
+- root Iris job name: `iris-rl-e4ms2-500-0328-ckptdbg-v6e8-e1d`
+- command:
+  - `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-e4ms2-500-0328-ckptdbg-v6e8-e1d --region us-east1 --zone us-east1-d -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py --run-name iris-rl-e4ms2-500-ckptdbg-v6e8-e1d --num-train-steps 500 --n-prompts 64 --eval-frequency 1 --num-rollout-workers 2 --region us-east1 --tpu-type v6e-8 --debug-checkpointer --debug-checkpointer-dump-stacks-after 180`
+
+Submission result:
+
+- submitted root Iris job:
+  - `/ahmed/iris-rl-e4ms2-500-0328-ckptdbg-v6e8-e1d`
+
+Immediate scheduler result:
+
+- root job is `JOB_STATE_PENDING`
+- pending reason:
+  - `Autoscaler: Unsatisfied autoscaler demand: no_matching_group: no groups in zone us-east1-d (did you mean us-east1-b?)`
+
+Interpretation:
+
+- the launcher patch worked and the job submit itself is valid
+- the pending diagnostic is about the root CPU coordinator job, not TPU `v6e-8` availability
+- `lib/iris/examples/marin.yaml` has `v6e` TPU groups in `us-east1-d`, but the non-preemptible CPU executor group only exists in:
+  - `us-central1-a`
+  - `us-east1-b`
+  - `us-west1-a`
+  - `europe-west4-a`
+- because the root submit used `--zone us-east1-d`, Iris tried to place the small CPU coordinator in that same zone first, and the executor heuristic auto-tagged it non-preemptible
+- the autoscaler therefore compared against non-preemptible CPU groups, saw none in `us-east1-d`, and suggested the closest CPU zone `us-east1-b`
+
+Correct takeaway:
+
+- this does **not** prove `v6e-8` TPU capacity is unavailable in `us-east1-d`
+- it proves the current RL launch topology cannot zone-pin children to `us-east1-d` through the root job unless there is also a schedulable CPU coordinator path in `us-east1-d`
+
+## 2026-03-28 20:33 PDT - child-zone hack for east1-d v6e-8
+
+User does not have Iris admin access, so the operational fix of adding a small
+non-preemptible CPU executor group in `us-east1-d` is not available.
+
+Pragmatic code-side workaround:
+
+- let the root RL coordinator stay only region-pinned
+- add explicit child TPU job zone support so trainer and rollout workers can pin to `us-east1-d`
+
+Minimal patch shape:
+
+- Fray `ResourceConfig` now has an optional `zone`
+- Fray Iris backend now converts `ResourceConfig.zone` into an Iris `zone` constraint
+- RL `RunConfig` now carries an optional child-worker `zone`
+- RL orchestration forwards that zone into trainer and rollout `ResourceConfig.with_tpu(...)`
+- `experiments/exp_iris_rl_regression_direct_gcs_prod.py` now accepts `--zone` and passes it through to `RunConfig`
+
+Validation:
+
+- `uv run pytest -q lib/fray/tests/test_v2_iris.py tests/rl/test_orchestration.py`
+- result: `19 passed`
+- experiment CLI smoke check confirms `--zone` is exposed and parsed
+
+Corrected east1-d launch shape:
+
+- root submit should carry `--region us-east1` and **no** `--zone`
+- experiment should carry:
+  - `--region us-east1`
+  - `--zone us-east1-d`
+  - `--tpu-type v6e-8`
+
+This should allow:
+
+- root CPU coordinator to land on any schedulable east1 CPU executor, likely `us-east1-b`
+- child TPU jobs to pin explicitly to `us-east1-d`
+
+Submission result:
+
+- terminated the earlier bad root-zoned pending job:
+  - `/ahmed/iris-rl-e4ms2-500-0328-ckptdbg-v6e8-e1d`
+- submitted corrected root job:
+  - `/ahmed/iris-rl-e4ms2-500-0328-ckptdbg-v6e8-e1d-childzone`
+
+Corrected command:
+
+- `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-e4ms2-500-0328-ckptdbg-v6e8-e1d-childzone --region us-east1 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/exp_iris_rl_regression_direct_gcs_prod.py --run-name iris-rl-e4ms2-500-ckptdbg-v6e8-e1d-childzone --num-train-steps 500 --n-prompts 64 --eval-frequency 1 --num-rollout-workers 2 --region us-east1 --zone us-east1-d --tpu-type v6e-8 --debug-checkpointer --debug-checkpointer-dump-stacks-after 180`
+
+Immediate scheduler result:
+
+- root job is `JOB_STATE_PENDING`
+- pending reason now says:
+  - `Autoscaler: (scaling up) Waiting for worker scale-up in scale group 'cpu_vm_e2_highmem_2_ondemand-us-east1-b'`
+
+Interpretation:
+
+- this is the expected coordinator placement path
+- the earlier `us-east1-d` mismatch is gone
+- next thing to watch is whether the root coordinator becomes running and then launches child TPU jobs pinned to `us-east1-d`
+
+## 2026-03-28 20:46 PDT - complete east1-d v6e-8 launch chronology, constraints, and blocker
+
+This entry consolidates the full `us-east1-d` / `v6e-8` launch thread. The
+earlier entries above capture each step as it happened; this section records the
+final precise interpretation.
+
+Goal:
+
+- run the same 500-step checkpoint-debug RL reproduction on `v6e-8`
+- keep trainer + rollout TPU jobs in `us-east1-d`
+- allow the small CPU coordinator to run wherever Iris can place it
+
+### Stage 1 - direct root zone pin failed for the wrong reason
+
+Initial launch:
+
+- root job:
+  - `/ahmed/iris-rl-e4ms2-500-0328-ckptdbg-v6e8-e1d`
+- command shape:
+  - root submit used:
+    - `--region us-east1`
+    - `--zone us-east1-d`
+  - experiment used:
+    - `--region us-east1`
+    - `--tpu-type v6e-8`
+
+Observed scheduler result:
+
+- root job stayed `JOB_STATE_PENDING`
+- pending reason said:
+  - `no groups in zone us-east1-d (did you mean us-east1-b?)`
+
+What this actually meant:
+
+- it was **not** saying `v6e-8` TPU capacity was missing in `us-east1-d`
+- it was complaining about the root CPU coordinator placement
+- Iris CLI auto-tagged the tiny root CPU job as non-preemptible
+- the relevant root-job constraints at this stage were:
+  - `region`
+  - `zone`
+  - `preemptible`
+  - `reservation-job`
+- the only non-preemptible CPU executor groups in `lib/iris/examples/marin.yaml` are in:
+  - `us-central1-a`
+  - `us-east1-b`
+  - `us-west1-a`
+  - `europe-west4-a`
+- there is no such CPU executor group in `us-east1-d`
+
+Important correction:
+
+- `lib/iris/examples/marin.yaml` really does define `v6e` TPU groups in:
+  - `europe-west4-a`
+  - `us-east1-d`
+  - `us-east5-b`
+- so the root-zoned failure was a CPU-coordinator mismatch, not a TPU-capacity proof
+
+### Stage 2 - code-side child-zone support hack
+
+Because the user does not have Iris admin access, the operational fix
+(adding a small CPU executor in `us-east1-d`) was not available.
+
+The minimal code workaround implemented here was:
+
+- Fray `ResourceConfig` gained optional `zone`
+- Fray Iris backend now converts `ResourceConfig.zone` into an Iris `zone` constraint
+- RL `RunConfig` gained optional `zone`
+- RL orchestration now forwards `RunConfig.zone` into trainer + rollout TPU `ResourceConfig.with_tpu(...)`
+- `experiments/exp_iris_rl_regression_direct_gcs_prod.py` gained:
+  - `--tpu-type`
+  - `--zone`
+
+Validation run after the patch:
+
+- `uv run pytest -q lib/fray/tests/test_v2_iris.py tests/rl/test_orchestration.py`
+- result:
+  - `19 passed`
+
+Semantics of the hack:
+
+- root submit may be left unzoned, or even unpinned entirely
+- child TPU jobs can still carry explicit:
+  - `region=us-east1`
+  - `zone=us-east1-d`
+- this works because child jobs now carry their own explicit region + zone instead
+  of relying only on parent inherited placement
+
+### Stage 3 - root region pinned, child zone pinned
+
+Second launch after the hack:
+
+- terminated bad root-zoned job:
+  - `/ahmed/iris-rl-e4ms2-500-0328-ckptdbg-v6e8-e1d`
+- submitted:
+  - `/ahmed/iris-rl-e4ms2-500-0328-ckptdbg-v6e8-e1d-childzone`
+
+Command shape:
+
+- root submit used:
+  - `--region us-east1`
+  - no root `--zone`
+- experiment used:
+  - `--region us-east1`
+  - `--zone us-east1-d`
+  - `--tpu-type v6e-8`
+
+Observed scheduler result:
+
+- root job stayed `JOB_STATE_PENDING`
+- pending reason first showed:
+  - waiting for scale-up in `cpu_vm_e2_highmem_2_ondemand-us-east1-b`
+- later showed:
+  - `no_capacity: cpu_vm_e2_highmem_2_ondemand-us-east1-b=backoff`
+
+Interpretation:
+
+- this confirmed the stage-1 bug was fixed
+- the root coordinator no longer tried to land in `us-east1-d`
+- however, pinning the root to `region=us-east1` still restricted it to east1 CPU
+  executor capacity
+- so this version still did not satisfy the stronger requirement of
+  “CPU job can run wherever”
+
+### Stage 4 - final successful placement shape: any CPU region for root, east1-d for children
+
+Third launch after relaxing the root placement:
+
+- terminated region-pinned root job:
+  - `/ahmed/iris-rl-e4ms2-500-0328-ckptdbg-v6e8-e1d-childzone`
+- submitted final placement variant:
+  - `/ahmed/iris-rl-e4ms2-500-0328-ckptdbg-v6e8-e1d-anycpu`
+
+Final command shape:
+
+- root submit used:
+  - **no** `--region`
+  - **no** `--zone`
+- experiment used:
+  - `--region us-east1`
+  - `--zone us-east1-d`
+  - `--tpu-type v6e-8`
+  - `--debug-checkpointer`
+  - `--debug-checkpointer-dump-stacks-after 180`
+
+This is the first launch shape that actually matches the user request:
+
+- CPU coordinator may run anywhere Iris can place it
+- RL TPU children are explicitly pinned to `us-east1-d`
+
+Observed states:
+
+- root coordinator:
+  - `JOB_STATE_RUNNING`
+- trainer child:
+  - `JOB_STATE_PENDING` initially, then later `JOB_STATE_FAILED`
+- rollout children:
+  - initially `JOB_STATE_PENDING`
+  - final state `JOB_STATE_SUCCEEDED`
+
+Most important scheduler proof:
+
+- trainer child resources showed:
+  - TPU variant `v6e-8`
+- rollout child resources also showed:
+  - TPU variant `v6e-8`
+- child pending reasons explicitly referenced:
+  - scale group `tpu_v6e_8-us-east1-d`
+- child-job scheduler constraints at that point were:
+  - `device-type`
+  - `device-variant`
+  - `zone`
+  - `region`
+  - `reservation-job`
+
+That is the key success criterion for the placement hack:
+
+- the root coordinator no longer blocks on east1 CPU placement
+- the expensive RL children really do target the correct TPU scale group in `us-east1-d`
+
+### Stage 5 - actual remaining blocker: cross-region artifact paths, not placement
+
+The final `anycpu` run did **not** fail on placement. It failed later in the
+trainer bootstrap path with:
+
+- `iris.marin_fs.TransferBudgetExceeded`
+- specific path:
+  - `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f/model-00001-of-00004.safetensors`
+- message:
+  - transfer would exceed the shared 10 GB cross-region budget
+
+Root cause:
+
+- the experiment still hardcodes:
+  - `MODEL_PATH = "gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f"`
+  - `MARIN_PREFIX = "gs://marin-us-central1"`
+- so even though the trainer and rollout workers are running in `us-east1-d`,
+  they are still trying to:
+  - read model weights from `us-central1`
+  - write checkpoints / rollouts / other outputs under `us-central1`
+
+This means the current east1 launch is only partially regionalized:
+
+- compute placement is east1-d
+- artifact paths are still us-central1
+
+That mismatch is what triggered the transfer-budget failure.
+
+### Verified storage fact: east1 copy already exists
+
+To rule out “maybe east1 doesn’t have the model,” I explicitly checked GCS.
+
+Verified present:
+
+- `gs://marin-us-east1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f/...`
+- `gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f/...`
+
+So the problem is **not** missing east1 model availability.
+The problem is that this experiment is still pointed at the central1 copy.
+
+### Current conclusion
+
+What is proven:
+
+- the child-zone placement hack works
+- root CPU coordinator can be unpinned and run elsewhere
+- trainer + rollout children can be explicitly pinned to `us-east1-d`
+- Iris does in fact route those children to the `tpu_v6e_8-us-east1-d` scale group
+
+What is still broken:
+
+- `exp_iris_rl_regression_direct_gcs_prod.py` is not region-local for artifacts
+- model bootstrap still points at `gs://marin-us-central1/...`
+- output/checkpoint prefix still points at `gs://marin-us-central1/...`
+
+What must change next for a truly valid east1-d run:
+
+- derive `MODEL_PATH` from the selected region, e.g. `gs://marin-us-east1/...`
+- derive `MARIN_PREFIX` from the selected region, e.g. `gs://marin-us-east1`
+- relaunch only after both compute placement and artifact paths are east1-local
+
+## 2026-03-28 23:13 PDT - rollout workers exiting cleanly on trainer retry is a control-plane bug
+
+Observed on Claude's `v6e` run:
+
+- root job:
+  - `/ahmed/iris-rl-v6e-e5b-0328-v3`
+- current Iris state:
+  - root `RUNNING`
+  - trainer child `RUNNING` with `failure_count=8`
+  - rollout-0 `SUCCEEDED`
+  - rollout-1 `SUCCEEDED`
+
+That state is wrong for a 500-step RL run. The rollout workers should not
+conclude the run is terminal while the trainer child is still retrying under
+the same coordinator.
+
+Root cause:
+
+- `_train_worker_entry()` in `lib/marin/src/marin/rl/orchestration.py` was
+  marking the shared lifecycle actor failed on any trainer *attempt* exception:
+  - `runtime.run_state.mark_failed.remote("trainer crashed").result()`
+- but the coordinator and `RLRunState` actor survive across Iris child-job
+  retries
+- rollout workers poll `RLRunState` and exit normally when they see:
+  - `snapshot.status in ("completed", "failed")`
+  - in `lib/marin/src/marin/rl/rollout_worker.py`
+
+Observed live log evidence on `/ahmed/iris-rl-v6e-e5b-0328-v3`:
+
+- `RL run marked as failed: trainer crashed`
+- followed by:
+  - `Run state is 'failed', stopping rollout worker`
+  - for both rollout workers
+
+This exactly explains why Iris showed the rollout children as `SUCCEEDED`:
+
+- they were not being killed by the coordinator
+- they were exiting normally after a false terminal signal from shared run state
+
+Fix applied:
+
+- removed the attempt-local `mark_failed()` call from `_train_worker_entry()`
+- rationale:
+  - an attempt-local trainer crash is not equivalent to whole-run terminal
+    failure when Iris is still retrying the same trainer child job
+  - rollout workers must remain alive across those retries
+
+Validation:
+
+- added regression test in `tests/rl/test_orchestration.py`
+- command:
+  - `uv run pytest -q tests/rl/test_orchestration.py`
+- result:
+  - `6 passed`
+
+Debug note:
+
+- `docs/debug-log-rollout-workers-exit-on-trainer-retry.md`
+
+Operational consequence:
+
+- already-submitted runs like `/ahmed/iris-rl-v6e-e5b-0328-v3` still carry the old bug
+- they need relaunch to benefit from this fix
+
+## 2026-03-28 23:36 PDT - v6e relaunch blocked by a second multi-host Arrow Flight bug
+
+While preparing to relaunch the `v3` east jobs, I checked the terminal states of:
+
+- `/ahmed/iris-rl-v6e-e1d-0328-v3`
+- `/ahmed/iris-rl-v6e-e5b-0328-v3`
+
+Both were already terminal, so there was nothing left to kill. The immediate reason
+to avoid a blind relaunch was that the east5 trainer still had a second bootstrap
+weight-transfer failure:
+
+- `RuntimeError: Fetching value for jax.Array that spans non-addressable (non process local) devices is not possible...`
+
+This narrowed the state of the Arrow Flight fix:
+
+- Claude's earlier patch correctly fixed the collective deadlock by moving
+  `copy_and_flatten(...)` outside the `process_index() == 0` block
+- but `serve_weights()` still did a raw:
+  - `jax.device_get(flat_dict)`
+- on multi-host `v6e-16`, those flattened leaves can still be global arrays that are
+  not fully addressable from one process
+
+So the previous fix was necessary but incomplete.
+
+### Patch applied
+
+In `lib/marin/src/marin/rl/weight_transfer/arrow_flight.py`:
+
+- added `_materialize_flat_leaf_for_transfer(...)`
+- behavior:
+  - fully-addressable leaves:
+    - `np.asarray(leaf)`
+  - non-fully-addressable leaves:
+    - `jax.experimental.multihost_utils.process_allgather(leaf, tiled=True)`
+- replaced:
+  - `flat_dict = jax.device_get(flat_dict)`
+- with:
+  - `flat_dict = jax.tree.map(_materialize_flat_leaf_for_transfer, flat_dict)`
+
+Why this is the correct narrower fix:
+
+- it preserves the earlier "all processes must participate" invariant
+- it stops trying to `device_get` a non-addressable global array directly
+- it materializes each flattened tensor leaf to host memory in a way JAX explicitly
+  supports for multi-process arrays
+
+Debug note:
+
+- [debug-log-v6e-multihost-weight-transfer-materialization.md](../../docs/debug-log-v6e-multihost-weight-transfer-materialization.md)
+
+### Relaunch plan
+
+With both `v3` jobs already terminal and both code fixes now local:
+
+- rollout workers no longer exit permanently on trainer retry
+- Arrow Flight no longer tries to raw-`device_get` non-addressable flattened
+  arrays during bootstrap serve
+
+the next step is to submit fresh `v4` runs in:
+
+- `us-east1-d`
+- `us-east5-b`
+
+using the region-aware `experiments/xp_iris_rl_regression_direct_gcs_prod.py`
+launcher so artifact paths remain region-local.
+
+### Relaunch executed
+
+There was nothing left to kill because both `v3` jobs were already terminal, so I
+submitted fresh `v4` roots instead.
+
+Submitted:
+
+- `/ahmed/iris-rl-v6e-e1d-0328-v4`
+- `/ahmed/iris-rl-v6e-e5b-0328-v4`
+
+Stable run names:
+
+- `iris-rl-v6e-e1d-v4`
+- `iris-rl-v6e-e5b-v4`
+
+Launch shape:
+
+- root coordinator:
+  - no explicit region/zone pin
+- child TPU jobs:
+  - `--region us-east1 --zone us-east1-d` for east1 run
+  - `--region us-east5 --zone us-east5-b` for east5 run
+- rollout TPU:
+  - `v6e-8`
+- trainer TPU:
+  - `v6e-16`
+- checkpoint debugger:
+  - enabled
+  - stack dumps after `180` seconds in one checkpoint phase
+
+Exact submit commands:
+
+- `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-v6e-e1d-0328-v4 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/xp_iris_rl_regression_direct_gcs_prod.py --run-name iris-rl-v6e-e1d-v4 --num-train-steps 500 --n-prompts 64 --eval-frequency 1 --num-rollout-workers 2 --region us-east1 --zone us-east1-d --tpu-type v6e-8 --train-tpu-type v6e-16 --debug-checkpointer --debug-checkpointer-dump-stacks-after 180`
+- `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-v6e-e5b-0328-v4 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/xp_iris_rl_regression_direct_gcs_prod.py --run-name iris-rl-v6e-e5b-v4 --num-train-steps 500 --n-prompts 64 --eval-frequency 1 --num-rollout-workers 2 --region us-east5 --zone us-east5-b --tpu-type v6e-8 --train-tpu-type v6e-16 --debug-checkpointer --debug-checkpointer-dump-stacks-after 180`
+
+Immediate post-submit state check:
+
+- `/ahmed/iris-rl-v6e-e1d-0328-v4`
+  - root `JOB_STATE_RUNNING`
+  - `failure_count=0`
+  - `preemption_count=0`
+- `/ahmed/iris-rl-v6e-e5b-0328-v4`
+  - root `JOB_STATE_RUNNING`
+  - `failure_count=0`
+  - `preemption_count=0`
+
+## 2026-03-28 23:34 PDT - v6e-8 rollout workers now fail in hot-reload, not generic inference
+
+The new `v4` runs answered the earlier question cleanly:
+
+- the trainer-side multi-host Arrow Flight fix works
+- the rollout "false `SUCCEEDED` while trainer retries" control-plane fix works
+- but rollout workers on `v6e-8` are still not viable because they now fail
+  during bootstrap weight application
+
+This is a **different** failure from the old non-addressable trainer-side issue.
+
+### What is now proven
+
+On both:
+
+- `/ahmed/iris-rl-v6e-e1d-0328-v4`
+- `/ahmed/iris-rl-v6e-e5b-0328-v4`
+
+the logs show the following sequence:
+
+1. trainer successfully serves bootstrap weights for `weight_id -1`
+2. rollout successfully receives all `291` params via Arrow Flight
+3. rollout enters:
+   - `reload_model: starting prefix cache reset`
+   - `reload_model: converting state dict`
+   - `reload_model: calling sync_weights`
+4. rollout crashes inside TPU inference weight reload:
+   - `jax.device_put(...)`
+   - `x._multi_slice(...)`
+   - `RESOURCE_EXHAUSTED`
+
+So the failure is **not**:
+
+- generic `v6e-8` inability to run Llama 8B inference
+- Arrow Flight transport
+- trainer-side weight serving
+
+It is specifically rollout-side live weight reload on top of a running vLLM TPU
+engine.
+
+Detailed debug note:
+
+- [debug-log-v6e-rollout-sync-oom.md](../../docs/debug-log-v6e-rollout-sync-oom.md)
+
+### Important memory facts from the live logs
+
+The high-signal evidence:
+
+- rollout job type:
+  - `v6e-8`
+- current rollout inference config:
+  - `tensor_parallel_size=4`
+  - `gpu_memory_utilization=0.90`
+- live vLLM cache init log shows:
+  - mesh `model: 4`
+  - about `28.12 / 31.25 GiB` HBM reserved per active chip
+- right before the crash TPU inference logs:
+  - processing `lm_head`
+  - shape `(128256, 4096)`
+  - dtype `bfloat16`
+- the failing allocation is about:
+  - `1002 MiB`
+- allocator summary shows:
+  - only about `1.17 GiB` free
+  - largest contiguous block only about `448 MiB`
+
+This strongly suggests fragmentation / temporary-buffer pressure during
+`sync_weights()`, not a simple steady-state model-fit problem.
+
+### Interpretation
+
+The current rollout worker is using only 4 of the 8 available chips on a
+`v6e-8` slice because TP is still fixed at `4`.
+
+That means:
+
+- half the chips are not helping absorb model state
+- the active 4 chips are also carrying an aggressive KV-cache reservation at
+  `gpu_memory_utilization=0.90`
+- hot-reloading the bootstrap weights then needs a large temporary device
+  allocation during `jax.device_put(...)->_multi_slice(...)`
+
+That is why this does **not** conflict with "Llama 8B inference can run on
+`v6e-8`":
+
+- ordinary inference fit is a steady-state question
+- RL hot-reload fit is a temporary-buffer + fragmentation question
+
+### Not the first lever: rollout batch size
+
+Reducing rollout batch size is not the first experiment here.
+
+Reason:
+
+- the crash happens at `step=0`
+- it happens before the first generation batch is produced
+- so `n_prompts` / `n_generations_per_prompt` do not explain this bootstrap OOM
+
+### Secondary hypothesis: redundant bootstrap reload
+
+There is also a plausible optimization opportunity:
+
+- the rollout vLLM engine already boots from the checkpoint path on disk
+- the trainer then immediately sends bootstrap weights for `weight_id -1`
+- those are likely the same initial weights on a fresh run
+
+So the system may be paying a full live `sync_weights()` cost before step `0`
+for no actual model change.
+
+This is **not** the primary hypothesis for long-term viability, because later
+trainer steps would still require the same reload path. But if the cache/TP
+experiments get close and still fail, skipping the redundant bootstrap reload is
+a reasonable follow-up experiment.
+
+### Launcher support added for the next probes
+
+To avoid one-off edits for each sweep, `experiments/xp_iris_rl_regression_direct_gcs_prod.py`
+now accepts:
+
+- `--rollout-tensor-parallel-size`
+- `--rollout-gpu-memory-utilization`
+- `--rollout-max-model-len`
+
+These feed directly into the rollout `vLLMInferenceContextConfig`.
+
+### Next experiment ladder
+
+Run short feasibility probes first:
+
+- one rollout worker
+- `20` train steps
+- very infrequent eval, e.g. `--eval-frequency 1000`
+
+Success criterion for each probe:
+
+- rollout completes bootstrap weight sync
+- rollout survives through first real rollout generation
+- trainer receives initial rollouts instead of waiting forever at step `-1`
+
+Proposed order:
+
+1. `ROL-V6E8-001`: hold TP=`4`, lower `gpu_memory_utilization` to `0.60`
+   - rationale:
+     - directly targets the oversized cache reservation / fragmentation story
+     - prior inference work showed cache budget can often be reduced without
+       throughput loss
+2. `ROL-V6E8-002`: set rollout TP=`8`, keep `gpu_memory_utilization=0.90`
+   - rationale:
+     - use all 8 chips on the `v6e-8` worker instead of only 4
+     - test whether TP alone fixes the hot-reload memory profile
+3. `ROL-V6E8-003`: rollout TP=`8` and `gpu_memory_utilization=0.60`
+   - rationale:
+     - most likely "make it work" configuration if either single knob is
+       insufficient
+4. `ROL-V6E8-004`: if needed, keep TP=`8`, lower `gpu_memory_utilization`, and
+   reduce `rollout_max_model_len` below `2048`
+   - rationale:
+     - last-resort cache reduction knob if the live reload path still needs more
+       contiguous HBM headroom
+
+Candidate commands for the first three probes:
+
+- `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-v6e-e5b-rol-v6e8-001 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/xp_iris_rl_regression_direct_gcs_prod.py --run-name iris-rl-v6e-e5b-rol-v6e8-001 --num-train-steps 20 --n-prompts 64 --eval-frequency 1000 --num-rollout-workers 1 --region us-east5 --zone us-east5-b --tpu-type v6e-8 --train-tpu-type v6e-16 --rollout-tensor-parallel-size 4 --rollout-gpu-memory-utilization 0.60 --debug-checkpointer --debug-checkpointer-dump-stacks-after 180`
+- `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-v6e-e5b-rol-v6e8-002 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/xp_iris_rl_regression_direct_gcs_prod.py --run-name iris-rl-v6e-e5b-rol-v6e8-002 --num-train-steps 20 --n-prompts 64 --eval-frequency 1000 --num-rollout-workers 1 --region us-east5 --zone us-east5-b --tpu-type v6e-8 --train-tpu-type v6e-16 --rollout-tensor-parallel-size 8 --rollout-gpu-memory-utilization 0.90 --debug-checkpointer --debug-checkpointer-dump-stacks-after 180`
+- `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-v6e-e5b-rol-v6e8-003 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/xp_iris_rl_regression_direct_gcs_prod.py --run-name iris-rl-v6e-e5b-rol-v6e8-003 --num-train-steps 20 --n-prompts 64 --eval-frequency 1000 --num-rollout-workers 1 --region us-east5 --zone us-east5-b --tpu-type v6e-8 --train-tpu-type v6e-16 --rollout-tensor-parallel-size 8 --rollout-gpu-memory-utilization 0.60 --debug-checkpointer --debug-checkpointer-dump-stacks-after 180`
+
+## 2026-03-28 23:40 PDT - launching the first TP=8 rollout feasibility probe
+
+User selected the TP=`8` branch first, so the next run is `ROL-V6E8-002`.
+
+Purpose:
+
+- test whether using all 8 chips on the `v6e-8` rollout worker is enough to
+  avoid the bootstrap hot-reload OOM
+- keep all other major knobs fixed so this isolates TP as the changed variable
+
+Probe shape:
+
+- region / zone:
+  - `us-east5`
+  - `us-east5-b`
+- trainer:
+  - `v6e-16`
+- rollout:
+  - `v6e-8`
+  - `tensor_parallel_size=8`
+  - `gpu_memory_utilization=0.90`
+  - `max_model_len=2048`
+- only `1` rollout worker
+- only `20` train steps
+- `eval_frequency=1000` to keep eval out of the way
+
+Exact submit command:
+
+- `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-v6e-e5b-rol-v6e8-002 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/xp_iris_rl_regression_direct_gcs_prod.py --run-name iris-rl-v6e-e5b-rol-v6e8-002 --num-train-steps 20 --n-prompts 64 --eval-frequency 1000 --num-rollout-workers 1 --region us-east5 --zone us-east5-b --tpu-type v6e-8 --train-tpu-type v6e-16 --rollout-tensor-parallel-size 8 --rollout-gpu-memory-utilization 0.90 --debug-checkpointer --debug-checkpointer-dump-stacks-after 180`
+
+Submission result:
+
+- root job:
+  - `/ahmed/iris-rl-v6e-e5b-rol-v6e8-002`
+- immediate state check:
+  - root `JOB_STATE_RUNNING`
+  - `failure_count=0`
+  - `preemption_count=0`
+  - task state counts:
+    - `building=1`
+
+Outcome:
+
+- root job:
+  - `JOB_STATE_FAILED`
+- rollout child:
+  - `JOB_STATE_FAILED`
+  - `failure_count=4`
+- trainer child:
+  - `JOB_STATE_KILLED`
+  - collateral shutdown after rollout failure
+
+What happened:
+
+- trainer bootstrap serve still succeeded
+- rollout still received bootstrap weights for `weight_id -1`
+- rollout still died in:
+  - `reload_model -> sync_weights -> jax.device_put -> _multi_slice`
+- failure signature was materially the same as TP=`4`:
+  - `RESOURCE_EXHAUSTED`
+  - attempted allocation about `1002 MiB`
+
+Important negative result:
+
+- changing rollout TP from `4` to `8` **did not** by itself fix the bootstrap
+  hot-reload OOM on `v6e-8`
+
+Allocator detail from the TP=`8` run:
+
+- free memory still about `1.17 GiB`
+- largest contiguous free block improved only modestly:
+  - about `541 MiB` vs about `448 MiB` before
+- still not enough to satisfy the ~`1002 MiB` temporary allocation
+
+Interpretation:
+
+- TP=`8` alone is not the primary lever
+- the peak allocation seems dominated by the live reload path itself, not just
+  by how the final model state is sharded
+- the next stronger probe should pair TP=`8` with lower cache reservation
+
+Next concrete move:
+
+- run `ROL-V6E8-003`:
+  - TP=`8`
+  - `gpu_memory_utilization=0.60`
+
+## 2026-03-28 23:58 PDT - launching `ROL-V6E8-003` (`TP=8`, `gpu_memory_utilization=0.60`)
+
+`ROL-V6E8-002` established that TP=`8` alone is not sufficient.
+
+So the next probe keeps the same rollout TP and changes only the cache-pressure
+knob:
+
+- rollout TP:
+  - `8`
+- rollout `gpu_memory_utilization`:
+  - `0.60`
+
+Everything else stays in the short feasibility shape:
+
+- region / zone:
+  - `us-east5`
+  - `us-east5-b`
+- trainer:
+  - `v6e-16`
+- rollout:
+  - `v6e-8`
+- one rollout worker
+- `20` train steps
+- `eval_frequency=1000`
+
+Exact submit command:
+
+- `uv run iris --config=lib/iris/examples/marin.yaml job run --no-wait --user ahmed --job-name iris-rl-v6e-e5b-rol-v6e8-003 -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- uv run python experiments/xp_iris_rl_regression_direct_gcs_prod.py --run-name iris-rl-v6e-e5b-rol-v6e8-003 --num-train-steps 20 --n-prompts 64 --eval-frequency 1000 --num-rollout-workers 1 --region us-east5 --zone us-east5-b --tpu-type v6e-8 --train-tpu-type v6e-16 --rollout-tensor-parallel-size 8 --rollout-gpu-memory-utilization 0.60 --debug-checkpointer --debug-checkpointer-dump-stacks-after 180`
+
+## 2026-03-29 00:21 PDT - `ROL-V6E8-003` is alive; rollout bootstrap is fixed; trainer weight export is on the HBM cliff
+
+Current live controller state for `/ahmed/iris-rl-v6e-e5b-rol-v6e8-003`:
+
+- root job:
+  - `JOB_STATE_RUNNING`
+  - `failure_count=0`
+- trainer child:
+  - `JOB_STATE_RUNNING`
+  - `failure_count=0`
+- rollout child:
+  - `JOB_STATE_RUNNING`
+  - `failure_count=0`
+
+So this probe did **not** reproduce the earlier fatal rollout bootstrap failure.
+
+### What is now clearly fixed
+
+Lowering rollout `gpu_memory_utilization` to `0.60` while keeping TP=`8`
+appears to have fixed the rollout-side bootstrap hot-reload OOM.
+
+Evidence:
+
+- rollout received bootstrap weights for `weight_id -1`
+- rollout finished:
+  - `reload_model: sync_weights done in 7.3s`
+  - `First weight transfer complete, inference can proceed`
+- rollout advanced into real generation:
+  - `PHASE: GENERATE step=0 lesson=math_full`
+
+### Real RL progress observed
+
+This run is now past bootstrap and into real RL activity.
+
+Observed trainer progress:
+
+- initial rollouts arrived after about `275s`
+- trainer step `0` completed with real work:
+  - `fwd_bwd=56.36s`
+- trainer step `1` completed with real work:
+  - `fwd_bwd=17.14s`
+- trainer step `3` also completed with real work:
+  - `fwd_bwd=32.83s`
+
+Observed rollout progress:
+
+- generated `500` groups from `math_full` at trainer step `0`
+- later generated additional `64`-group rollout batches for later trainer steps
+- latest visible phase was:
+  - `PHASE: GENERATE step=6 lesson=math_full`
+
+### The new issue: trainer-side allocator pressure during weight export
+
+The run is still logging repeated TPU allocator failures during the trainer's
+per-step weight-transfer hook.
+
+These happen in the Arrow Flight export path:
+
+- trainer hook:
+  - [train_worker.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/train_worker.py#L479)
+- export path:
+  - [arrow_flight.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/weight_transfer/arrow_flight.py#L344)
+  - [arrow_flight.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/weight_transfer/arrow_flight.py#L455)
+
+What that code does:
+
+- casts the current training model to bf16 on TPU
+- flattens each parameter
+- materializes flattened leaves to host for Arrow Flight serving
+
+Because `sync_interval_steps=1`, this export path runs **every training step**.
+
+### Exact HBM math
+
+The allocator warnings line up exactly with specific Llama 3.1 8B bf16 tensor
+sizes.
+
+Exact bf16 sizes:
+
+- MLP `up_proj` / `gate_proj` / `down_proj`:
+  - `14336 x 4096 x 2 bytes = 117,440,512 bytes = 112.00 MiB`
+- attention `q_proj` / `o_proj`:
+  - `32 x 128 x 4096 x 2 bytes = 33,554,432 bytes = 32.00 MiB`
+- `lm_head`:
+  - `128256 x 4096 x 2 bytes = 1,050,673,152 bytes = 1002.00 MiB`
+
+These match the live TPU allocator errors exactly:
+
+- `Attempting to allocate 112.00M`
+- `Attempting to allocate 32.00M`
+
+Approximate total bf16 parameter footprint for Llama 3.1 8B:
+
+- one transformer layer:
+  - about `416 MiB`
+- `32` layers:
+  - about `13.0 GiB`
+- embeddings + `lm_head`:
+  - about `1.96 GiB`
+- total:
+  - about `14.96 GiB`
+
+Interpretation:
+
+- the model clearly fits well enough for steady-state training and rollout
+- the trainer's **live export path** is what is operating at the memory cliff
+- this is compatible with "8B runs on v6e"; the problem is not static model fit,
+  it is temporary/export-buffer pressure during per-step weight transfer
+
+### Important nuance: these allocator failures are real, but not currently fatal
+
+The trainer still successfully served weights after the allocator failures.
+
+Confirmed successful transfers:
+
+- bootstrap:
+  - `weight_id -1`
+- later per-step transfers:
+  - `weight_id 0`
+  - `weight_id 1`
+  - `weight_id 2`
+  - `weight_id 3`
+  - `weight_id 4`
+  - `weight_id 5`
+
+So this is **not** currently "the job died from OOM."
+
+The more precise statement is:
+
+- TPU allocator warnings are real
+- trainer export is right on the HBM edge
+- the job is still alive and continuing
+
+### More concerning than the allocator warnings: some "completed" trainer steps do not look real
+
+Not every logged completed step looks trustworthy.
+
+Trainer step breakdown so far:
+
+- step `0`:
+  - `fwd_bwd=56.36s`
+  - looks like a normal real step
+- step `1`:
+  - `fwd_bwd=17.14s`
+  - looks like a normal real step
+- step `2`:
+  - `fwd_bwd=0.00s`
+  - suspicious
+- step `3`:
+  - `fwd_bwd=32.83s`
+  - looks real again
+- step `4`:
+  - `fwd_bwd=0.00s`
+  - suspicious
+- step `5`:
+  - `fwd_bwd=0.00s`
+  - suspicious
+
+So the current state is:
+
+- rollout bootstrap on `v6e-8` is fixed
+- trainer-side per-step weight export is memory-tight
+- the run is alive
+- but some later "completed" trainer steps are not yet credible as full
+  forward/backward optimizer steps
+
+### Updated interpretation
+
+The earlier question was "did we hit OOM?"
+
+Refined answer:
+
+- yes, we are seeing **real TPU allocator exhaustion events**
+- no, they are **not** currently killing the job
+- the more important unresolved bug is why some steps still increment while
+  reporting `fwd_bwd=0.00s`
+
+That step-integrity issue now looks like the next thing to debug.
+
+## 2026-03-29 00:29 PDT - MAJOR: RL trainer `fwd_bwd` timing metric is invalid
+
+The suspicious `fwd_bwd=0.00s` values do **not** currently look like proof that
+the trainer skipped forward/backward work.
+
+After tracing the code and the live run, the stronger conclusion is:
+
+- this is a **MAJOR instrumentation bug**
+- the current `fwd_bwd` metric is computed from incompatible timing windows
+- the zeroes are therefore misleading
+
+### Root cause
+
+Current implementation:
+
+- [trainer.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/levanter/src/levanter/trainer.py#L524)
+  measures data loading in `training_steps()` via:
+  - `with capture_time() as loading_time: example = next(iter_data)`
+- [trainer.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/levanter/src/levanter/trainer.py#L484)
+  measures `StepInfo.step_duration` **inside** `train_step()`
+- [train_worker.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/lib/marin/src/marin/rl/train_worker.py#L417)
+  then does:
+  - `forward_backward_duration = max(0.0, info.step_duration - batch_prep_time)`
+
+Why this is wrong:
+
+- `batch_prep_time` is measured **before** `train_step()` begins
+- `info.step_duration` is measured **inside** `train_step()`
+- these are disjoint sequential intervals, not a parent interval and child
+  interval
+- subtracting them is mathematically invalid
+
+There is a second bug hiding inside the same metric:
+
+- the so-called `batch_prep_time` is not just "batch prep"
+- it includes the blocking wait for new rollouts from the replay buffer:
+  - fetch
+  - batch creation
+  - sharding
+- so it is partly rollout wait time, not purely data transformation time
+
+### Why the live logs looked so strange
+
+The suspicious steps are exactly the ones where the data-loader wait time
+exceeded the train-step compute time.
+
+Examples from the live `ROL-V6E8-003` run:
+
+- step `2`:
+  - `duration=17.28s`
+  - `batch_prep=41.26s`
+  - current code clamps `17.28 - 41.26` to `0.00`
+- step `4`:
+  - `duration=17.29s`
+  - `batch_prep=45.56s`
+  - again clamps to `0.00`
+- step `5`:
+  - `duration=22.93s`
+  - `batch_prep=24.88s`
+  - again clamps to `0.00`
+
+Those zeroes are therefore expected from the buggy formula, not proof of an
+empty optimizer step.
+
+### Strong evidence this is metric corruption, not immediate trainer non-progress
+
+The run continues to make forward progress after the suspicious zeroes:
+
+- trainer served:
+  - `weight_id 2`
+  - `weight_id 3`
+  - `weight_id 4`
+  - `weight_id 5`
+  - `weight_id 6`
+- trainer loss kept changing across steps
+- rollout kept advancing to later generate phases
+- later step `6` logged:
+  - `duration=22.92s`
+  - `batch_prep=20.68s`
+  - `fwd_bwd=2.24s`
+
+That pattern is much more consistent with a bad decomposition than with the
+trainer alternately doing and not doing optimization steps.
+
+### Impact
+
+This is a major RL observability bug because it can cause a healthy-but-slow or
+rollout-starved run to look like it is silently skipping training.
+
+Affected signals:
+
+- trainer log line:
+  - `Training step ... (batch_prep=..., fwd_bwd=...)`
+- W&B metric:
+  - `throughput/forward_backward_duration_seconds`
+
+### Correct semantic fix
+
+The timing metrics should be split into non-overlapping phases:
+
+- trainer step compute duration:
+  - just `info.step_duration`
+- rollout wait duration:
+  - time blocked waiting for rollouts / fetching batch inputs
+- batch create duration:
+  - CPU batch construction
+- batch shard duration:
+  - host-to-device / sharding prep
+- end-to-end iteration duration:
+  - `rollout_wait + batch_create + batch_shard + train_step`
+
+So the old `fwd_bwd = step_duration - batch_prep` logic should be removed.
+
+### Current status
+
+This bug now has priority `MAJOR`.
+
+Reason:
+
+- it directly distorts interpretation of live RL progress on Iris
+- it created a false alarm that the trainer might be incrementing steps without
+  doing work
+- it obscures the real distinction between:
+  - rollout starvation / input wait
+  - trainer compute time
+  - trainer weight-transfer overhead
+
+Planned next action:
+
+- patch RL timing metrics so they log separate phase durations with correct
+  semantics
+- stop reporting the invalid subtraction-based `fwd_bwd` metric

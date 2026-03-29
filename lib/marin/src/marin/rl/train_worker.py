@@ -72,6 +72,38 @@ def _resume_safe_weight_transfer_metrics(step: int, sync_interval_steps: int) ->
     }
 
 
+@dataclass(frozen=True)
+class BatchPrepTiming:
+    """Timing breakdown for preparing one trainer batch."""
+
+    fetch_time: float = 0.0
+    batch_time: float = 0.0
+    shard_time: float = 0.0
+
+    @property
+    def total_time(self) -> float:
+        return self.fetch_time + self.batch_time + self.shard_time
+
+
+def _training_step_timing_metrics(step_duration: float, batch_prep_timing: BatchPrepTiming) -> dict[str, float]:
+    """Return RL trainer timing metrics with non-overlapping phase semantics.
+
+    `step_duration` comes from Levanter and measures only the train-step compute path.
+    Batch preparation happens outside that interval, so the correct end-to-end
+    iteration time is `batch_prep_timing.total_time + step_duration`.
+    """
+
+    return {
+        "throughput/train_step_duration_seconds": step_duration,
+        "throughput/forward_backward_duration_seconds": step_duration,
+        "throughput/rollout_wait_duration_seconds": batch_prep_timing.fetch_time,
+        "throughput/batch_create_duration_seconds": batch_prep_timing.batch_time,
+        "throughput/batch_shard_duration_seconds": batch_prep_timing.shard_time,
+        "throughput/batch_prep_duration_seconds": batch_prep_timing.total_time,
+        "throughput/iteration_duration_seconds": batch_prep_timing.total_time + step_duration,
+    }
+
+
 @dataclass
 class TrainWorkerConfig:
     """Configuration for Levanter-based RL training worker."""
@@ -138,8 +170,8 @@ class StreamingRolloutLoader:
         if self.pad_token_id is None:
             self.pad_token_id = self.config.tokenizer.eos_token_id
 
-        # Track batch prep time for forward/backward calculation
-        self._last_batch_prep_time: float = 0.0
+        # Track batch preparation timing for RL throughput diagnostics.
+        self._last_batch_prep_timing = BatchPrepTiming()
         self._last_rollouts: list[RolloutWithCount] | None = None
 
     def __iter__(self):
@@ -179,14 +211,14 @@ class StreamingRolloutLoader:
                 sharded_batch = hax.shard(batch, self.config.trainer.compute_axis_mapping)
             shard_time = time.time() - shard_start
 
-            total_time = fetch_time + batch_time + shard_time
-            self._last_batch_prep_time = total_time
+            timing = BatchPrepTiming(fetch_time=fetch_time, batch_time=batch_time, shard_time=shard_time)
+            self._last_batch_prep_timing = timing
             logger.info(
                 "Batch prep: fetch=%.3fs, create=%.3fs, shard=%.3fs, total=%.3fs, rollouts=%d",
                 fetch_time,
                 batch_time,
                 shard_time,
-                total_time,
+                timing.total_time,
                 len(rollouts),
             )
 
@@ -413,25 +445,19 @@ class TrainWorker:
 
         # Log training step timing for RL analysis
         def _log_step_timing(info: levanter.callbacks.StepInfo):
-            # Get batch prep time from the data loader
-            batch_prep_time = self.data_loader._last_batch_prep_time
-
-            # Forward/backward = total step duration - batch prep time
-            forward_backward_duration = max(0.0, info.step_duration - batch_prep_time)
-
-            metrics = {
-                "throughput/step_duration_seconds": info.step_duration,
-                "throughput/batch_prep_duration_seconds": batch_prep_time,
-                "throughput/forward_backward_duration_seconds": forward_backward_duration,
-                "train/loss": float(info.loss),
-            }
+            batch_prep_timing = self.data_loader._last_batch_prep_timing
+            metrics = _training_step_timing_metrics(info.step_duration, batch_prep_timing)
+            metrics["train/loss"] = float(info.loss)
             trainer.tracker.log(metrics, step=info.step)
             logger.info(
-                "Training step %d completed: duration=%.2fs (batch_prep=%.2fs, fwd_bwd=%.2fs), loss=%.4f",
+                "Training step %d completed: train_step=%.2fs, rollout_wait=%.2fs, "
+                "batch_create=%.2fs, batch_shard=%.2fs, iteration=%.2fs, loss=%.4f",
                 info.step,
-                info.step_duration,
-                batch_prep_time,
-                forward_backward_duration,
+                metrics["throughput/train_step_duration_seconds"],
+                metrics["throughput/rollout_wait_duration_seconds"],
+                metrics["throughput/batch_create_duration_seconds"],
+                metrics["throughput/batch_shard_duration_seconds"],
+                metrics["throughput/iteration_duration_seconds"],
                 info.loss,
             )
 
