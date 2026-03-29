@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 
-from marin.dispatch.git_ops import append_logbook, cleanup_worktree, commit_and_push, setup_worktree
+from marin.dispatch.git_ops import PushResult, append_logbook, cleanup_worktree, commit_and_push, setup_worktree
 
 
 def _init_bare_repo(path: Path) -> Path:
@@ -67,7 +67,7 @@ def test_commit_and_push(tmp_path):
     try:
         append_logbook(wt, "log.md", "## Test entry")
         result = commit_and_push(wt, "log.md", "test: add entry", "research/test")
-        assert result is True
+        assert result == PushResult.SUCCESS
     finally:
         cleanup_worktree(repo, wt)
 
@@ -79,7 +79,7 @@ def test_commit_and_push_nothing_to_commit(tmp_path):
     try:
         # Don't append anything — should return True (nothing to commit).
         result = commit_and_push(wt, "log.md", "noop", "research/test")
-        assert result is True
+        assert result == PushResult.SUCCESS
     finally:
         cleanup_worktree(repo, wt)
 
@@ -118,6 +118,6 @@ def test_commit_and_push_conflict_retry(tmp_path):
         # something to commit.
         append_logbook(wt1, "log.md", "Entry 2 from wt1")
         result = commit_and_push(wt1, "log.md", "wt1 second entry", "research/conflict")
-        assert result is True
+        assert result == PushResult.SUCCESS
     finally:
         cleanup_worktree(repo, wt1)

@@ -16,6 +16,7 @@ from marin.dispatch.schema import (
     TickEvent,
     TickEventKind,
 )
+from marin.dispatch.git_ops import PushResult
 from marin.dispatch.storage import save_collection, save_state
 from marin.dispatch.tick import process_tick
 
@@ -50,7 +51,7 @@ def _make_collection(name: str = "test") -> MonitoringCollection:
 @patch("marin.dispatch.tick.setup_worktree")
 @patch("marin.dispatch.tick.cleanup_worktree")
 @patch("marin.dispatch.tick.append_logbook")
-@patch("marin.dispatch.tick.commit_and_push", return_value=True)
+@patch("marin.dispatch.tick.commit_and_push", return_value=PushResult.SUCCESS)
 @patch("marin.dispatch.tick.post_progress_comment")
 @patch("marin.dispatch.tick.post_escalation")
 def test_process_tick_success(
@@ -113,7 +114,7 @@ def test_process_tick_paused_collection(mock_status, tmp_path):
 @patch("marin.dispatch.tick.setup_worktree")
 @patch("marin.dispatch.tick.cleanup_worktree")
 @patch("marin.dispatch.tick.append_logbook")
-@patch("marin.dispatch.tick.commit_and_push", return_value=True)
+@patch("marin.dispatch.tick.commit_and_push", return_value=PushResult.SUCCESS)
 @patch("marin.dispatch.tick.post_progress_comment")
 @patch("marin.dispatch.tick.post_escalation")
 def test_process_tick_completed_run_next_step(

@@ -6,6 +6,7 @@
 import logging
 import subprocess
 import tempfile
+from enum import StrEnum
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -59,17 +60,51 @@ def append_logbook(worktree_path: Path, logbook_rel_path: str, entry: str) -> No
     logger.info("Appended logbook entry to %s", logbook_rel_path)
 
 
+def has_conflicts(worktree_path: Path) -> bool:
+    """Check whether the worktree has unresolved merge conflicts."""
+    status = _run_git(["status", "--porcelain"], cwd=worktree_path, check=False)
+    # Unmerged paths show up as UU, AA, etc. in the first two columns.
+    for line in status.stdout.splitlines():
+        if line and line[0] in "UAD" and line[1] in "UAD":
+            return True
+    return False
+
+
+def conflicted_files(worktree_path: Path) -> list[str]:
+    """Return the list of files with unresolved merge conflicts."""
+    result = _run_git(["diff", "--name-only", "--diff-filter=U"], cwd=worktree_path, check=False)
+    return [f for f in result.stdout.strip().splitlines() if f]
+
+
+class PushResult(StrEnum):
+    SUCCESS = "success"
+    CONFLICT = "conflict"
+    FAILED = "failed"
+
+
+def complete_merge(worktree_path: Path, message: str, branch: str) -> PushResult:
+    """Stage all files, commit the merge resolution, and push."""
+    _run_git(["add", "--all"], cwd=worktree_path, check=False)
+    if has_conflicts(worktree_path):
+        logger.error("Conflicts remain after agent resolution attempt")
+        _run_git(["merge", "--abort"], cwd=worktree_path, check=False)
+        return PushResult.FAILED
+    _run_git(["commit", "-m", message], cwd=worktree_path, check=False)
+    push = _run_git(["push", "origin", branch], cwd=worktree_path, check=False)
+    if push.returncode != 0:
+        logger.error("Push failed after conflict resolution: %s", push.stderr.strip())
+        return PushResult.FAILED
+    return PushResult.SUCCESS
+
+
 def commit_and_push(
     worktree_path: Path,
     logbook_rel_path: str,
     message: str,
     branch: str,
     max_retries: int = 3,
-) -> bool:
-    """Stage the logbook, commit, and push. Retries with merge on conflict.
-
-    Returns True on success, False if all retries are exhausted.
-    """
+) -> PushResult:
+    """Stage the logbook, commit, and push. Retries with merge on conflict."""
     _run_git(["add", logbook_rel_path], cwd=worktree_path, check=False)
 
     # Commit if there are staged changes.
@@ -81,20 +116,24 @@ def commit_and_push(
     ahead = _run_git(["rev-list", "--count", f"origin/{branch}..HEAD"], cwd=worktree_path, check=False)
     if ahead.returncode == 0 and ahead.stdout.strip() == "0":
         logger.info("Nothing to push")
-        return True
+        return PushResult.SUCCESS
 
     for attempt in range(1, max_retries + 1):
         push = _run_git(["push", "origin", branch], cwd=worktree_path, check=False)
         if push.returncode == 0:
             logger.info("Pushed to %s on attempt %d", branch, attempt)
-            return True
+            return PushResult.SUCCESS
 
         logger.warning("Push failed (attempt %d/%d): %s", attempt, max_retries, push.stderr.strip())
         if attempt < max_retries:
             merge = _run_git(["pull", "--no-rebase", "origin", branch], cwd=worktree_path, check=False)
             if merge.returncode != 0:
+                if has_conflicts(worktree_path):
+                    # Leave the worktree in a conflicted state for the agent.
+                    logger.info("Merge conflict detected, deferring to agent")
+                    return PushResult.CONFLICT
                 logger.error("Merge failed: %s", merge.stderr.strip())
                 _run_git(["merge", "--abort"], cwd=worktree_path, check=False)
-                return False
+                return PushResult.FAILED
 
-    return False
+    return PushResult.FAILED

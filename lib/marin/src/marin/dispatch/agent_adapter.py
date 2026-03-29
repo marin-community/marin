@@ -84,6 +84,11 @@ def build_agent_prompt(event: TickEvent) -> str:
     )
 
 
+def build_conflict_prompt(conflicted_files: list[str], branch: str) -> str:
+    files_list = ", ".join(conflicted_files)
+    return f"Merge conflict on `{branch}`. Resolve conflict markers in: {files_list}"
+
+
 def parse_agent_output(output: str) -> AgentResult:
     logbook_entry = _extract_between(output, LOGBOOK_START, LOGBOOK_END)
     issue_comment = _extract_between(output, COMMENT_START, COMMENT_END)

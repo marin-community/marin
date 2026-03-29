@@ -11,8 +11,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from marin.dispatch.agent_adapter import AgentResult, AgentSession
-from marin.dispatch.git_ops import append_logbook, cleanup_worktree, commit_and_push, setup_worktree
+from marin.dispatch.agent_adapter import AgentResult, AgentSession, build_conflict_prompt
+from marin.dispatch.git_ops import (
+    PushResult,
+    append_logbook,
+    cleanup_worktree,
+    commit_and_push,
+    complete_merge,
+    conflicted_files,
+    setup_worktree,
+)
 from marin.dispatch.github_ops import post_escalation, post_progress_comment
 from marin.dispatch.schema import (
     RayRunConfig,
@@ -211,7 +219,7 @@ def _process_tick_locked(
                 worktree_path = setup_worktree(repo_root, collection.branch)
 
             result = agent.launch(event, worktree_path)
-            _handle_result(result, event, worktree_path, state, outcome)
+            _handle_result(result, event, worktree_path, state, outcome, agent)
 
             state.last_status = current_status
             state.last_check = now
@@ -224,22 +232,55 @@ def _process_tick_locked(
     return outcome
 
 
+def _attempt_conflict_resolution(
+    agent: AgentSession,
+    worktree_path: Path,
+    event: TickEvent,
+) -> PushResult:
+    """Ask the agent to resolve merge conflicts, then complete the merge."""
+    files = conflicted_files(worktree_path)
+    logger.info("Asking agent to resolve conflicts in: %s", files)
+    prompt = build_conflict_prompt(files, event.branch)
+
+    # Build a minimal TickEvent so the agent adapter can launch.
+    conflict_event = TickEvent(
+        kind=event.kind,
+        collection_name=event.collection_name,
+        run_index=event.run_index,
+        run_pointer=event.run_pointer,
+        prompt=prompt,
+        logbook=event.logbook,
+        branch=event.branch,
+        issue=event.issue,
+        timestamp=event.timestamp,
+    )
+    agent.launch(conflict_event, worktree_path)
+    return complete_merge(
+        worktree_path,
+        f"dispatch: resolve merge conflict for {event.collection_name}",
+        event.branch,
+    )
+
+
 def _handle_result(
     result: AgentResult,
     event: TickEvent,
     worktree_path: Path,
     state: RunState,
     outcome: TickOutcome,
+    agent: AgentSession,
 ) -> None:
     if result.success and result.logbook_entry:
         append_logbook(worktree_path, event.logbook, result.logbook_entry)
-        pushed = commit_and_push(
+        push_result = commit_and_push(
             worktree_path,
             event.logbook,
             f"dispatch: update logbook for {event.collection_name} run {event.run_index}",
             event.branch,
         )
-        if pushed:
+        if push_result == PushResult.CONFLICT:
+            push_result = _attempt_conflict_resolution(agent, worktree_path, event)
+        if push_result == PushResult.SUCCESS:
             state.consecutive_failures = 0
             outcome.succeeded += 1
         else:
