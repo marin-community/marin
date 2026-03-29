@@ -6,10 +6,12 @@ Canonical set of evals.
 """
 
 import logging
+import os
 import re
 from collections.abc import Sequence
 
 from fray.cluster import ResourceConfig
+from iris.marin_fs import marin_prefix
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
@@ -33,11 +35,13 @@ from experiments.evals.task_configs import (
     CORE_TASKS_PLUS_LEADERBOARD,
     KEY_GENERATION_TASKS,
     KEY_MULTIPLE_CHOICE_TASKS,
+    LONG_CONTEXT_TASKS_BY_LENGTH,
     MMLU_0_SHOT,
     MMLU_5_SHOT,
     MMLU_PRO_5_SHOT,
     OPEN_LM_LEADERBOARD_GEN,
     OPEN_LM_LEADERBOARD_MCQ,
+    long_context_tasks_for_lengths,
 )
 
 EVAL_DEPENDENCY_GROUPS = ["eval", "vllm", "tpu"]
@@ -93,7 +97,11 @@ def _infer_model_name_for_path(model_path: str) -> str:
     if model_path.endswith("/"):
         model_path = model_path[:-1]
 
-    return "_".join(model_path.split("/")[-2:])
+    path_parts = model_path.split("/")
+    if len(path_parts) >= 3 and path_parts[-2] == "hf" and path_parts[-1].startswith("step-"):
+        return f"{path_parts[-3]}_{path_parts[-1]}"
+
+    return "_".join(path_parts[-2:])
 
 
 def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[str, InputName | str]:
@@ -111,7 +119,10 @@ def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[s
         if step.step is None:
             if step.name is None:
                 raise ValueError("Invalid InputName: both `step` and `name` are None.")
-            model_step_path = step.name
+            if "://" in step.name or os.path.isabs(step.name):
+                model_step_path = step.name
+            else:
+                model_step_path = os.path.join(marin_prefix(), step.name)
             name = _infer_model_name_for_path(step.name)
         else:
             # If `name` is already set, the InputName refers to a specific subpath under the step's output.
@@ -333,6 +344,94 @@ def default_sft_eval(
             )
             eval_jobs.append(olmo_generation)
     return eval_jobs
+
+
+def _required_long_context_max_model_len(evals: Sequence[EvalTaskConfig]) -> int:
+    max_context_len = 0
+    max_gen_toks = 0
+    for eval_task in evals:
+        task_kwargs = dict(eval_task.task_kwargs or {})
+        max_context_len = max(max_context_len, int(task_kwargs.get("context_len", 0)))
+        max_gen_toks = max(max_gen_toks, int(task_kwargs.get("max_gen_toks", 32)))
+    return max_context_len + max_gen_toks + 256
+
+
+def evaluate_long_context(
+    model_name: str,
+    model_path: str,
+    evals: Sequence[EvalTaskConfig],
+    *,
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = None,
+    generation_params: dict | None = None,
+    resource_config: ResourceConfig | None = None,
+    apply_chat_template: bool = False,
+    wandb_tags: list[str] | None = None,
+    discover_latest_checkpoint: bool = False,
+) -> ExecutorStep:
+    task_names = "_".join(sorted(eval_task.name for eval_task in evals))
+    return ExecutorStep(
+        name=f"evaluation/long_context/{model_name}/{task_names}",
+        fn=evaluate,
+        config=EvaluationConfig(
+            evaluator="long_context",
+            model_name=model_name,
+            model_path=model_path,
+            evaluation_path=this_output_path(),
+            evals=versioned(list(evals)),
+            max_eval_instances=max_eval_instances,
+            launch_with_ray=True,
+            discover_latest_checkpoint=discover_latest_checkpoint,
+            engine_kwargs=engine_kwargs,
+            generation_params=generation_params,
+            resource_config=resource_config,
+            apply_chat_template=apply_chat_template,
+            wandb_tags=wandb_tags,
+        ),
+    )
+
+
+def default_long_context_eval(
+    step: ExecutorStep | InputName | str,
+    *,
+    lengths: Sequence[int] | None = None,
+    finepdf_manifest_path: str | None = None,
+    evals: Sequence[EvalTaskConfig] | None = None,
+    resource_config: ResourceConfig = ResourceConfig.with_tpu("v5p-8"),
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = None,
+    generation_params: dict | None = None,
+    apply_chat_template: bool = False,
+    discover_latest_checkpoint: bool = False,
+) -> ExecutorStep:
+    name, model_step_path = extract_model_name_and_path(step)
+
+    if evals is None:
+        selected_lengths = tuple(lengths) if lengths is not None else tuple(sorted(LONG_CONTEXT_TASKS_BY_LENGTH))
+        evals = long_context_tasks_for_lengths(
+            selected_lengths,
+            finepdf_manifest_path=finepdf_manifest_path,
+        )
+
+    resolved_engine_kwargs = dict(engine_kwargs or {})
+    resolved_engine_kwargs.setdefault("tensor_parallel_size", 4)
+    resolved_engine_kwargs.setdefault("max_model_len", _required_long_context_max_model_len(evals))
+
+    resolved_generation_params = dict(generation_params or {})
+    resolved_generation_params.setdefault("temperature", 0.0)
+
+    return evaluate_long_context(
+        name,
+        model_step_path,
+        evals,
+        max_eval_instances=max_eval_instances,
+        engine_kwargs=resolved_engine_kwargs,
+        generation_params=resolved_generation_params,
+        resource_config=resource_config,
+        apply_chat_template=apply_chat_template,
+        wandb_tags=["long_context"],
+        discover_latest_checkpoint=discover_latest_checkpoint,
+    )
 
 
 def default_key_evals(
