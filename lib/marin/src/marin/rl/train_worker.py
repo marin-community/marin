@@ -28,7 +28,7 @@ from levanter.checkpoint import (
     unregister_debug_checkpointer_state_provider,
 )
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook
-from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
+from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend, default_attention_type
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig
 from levanter.models.lm_model import LmHeadModel
@@ -133,6 +133,13 @@ def _training_step_timing_metrics(step_duration: float, batch_prep_timing: Batch
     }
 
 
+def _resolved_attention_backend(attn_backend: AttentionBackend | None) -> AttentionBackend:
+    """Resolve accelerator-dependent attention defaults at worker runtime."""
+    if attn_backend is None or attn_backend == AttentionBackend.DEFAULT:
+        return default_attention_type()
+    return attn_backend
+
+
 @dataclass
 class TrainWorkerConfig:
     """Configuration for Levanter-based RL training worker."""
@@ -187,7 +194,8 @@ class StreamingRolloutLoader:
         # Get max_seq_len from curriculum (total sequence length for prompt + response)
         self.max_tokens = self.config.curriculum_config.max_seq_len
 
-        is_splash = getattr(self.config.model, "attn_backend", None) == AttentionBackend.SPLASH
+        resolved_attention_backend = _resolved_attention_backend(getattr(self.config.model, "attn_backend", None))
+        is_splash = resolved_attention_backend == AttentionBackend.SPLASH
         flash_block_size = getattr(self.config.model, "flash_attention_block_size", None)
 
         if is_splash:
