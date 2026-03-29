@@ -71,7 +71,6 @@ align_config = AlignConfig(
     concretize_workers=1,
     extract_workers=1,
     prompt_batch_size=4,
-    concretize_batch_size=4,
     understanding_max_tokens=1024,
     understanding_temperature=1.0,
     understanding_max_attempts=5,

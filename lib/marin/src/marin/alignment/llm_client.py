@@ -86,18 +86,24 @@ def get_or_create_vllm_engine(config: VLLMConfig):
     """
     if config in _vllm_engine_cache:
         return _vllm_engine_cache[config]
+    if config.resolved_serve_mode == "docker":
+        raise ValueError("Direct vLLM engine construction does not support docker-backed VLLMConfig.")
 
     try:
         from vllm import LLM
     except ImportError as exc:
         raise ImportError("vLLM is required for local model inference. Install with: pip install vllm") from exc
 
-    llm_kwargs = {
+    llm_kwargs: dict[str, object] = {
         "model": config.model,
         "max_model_len": config.max_model_len,
         "tensor_parallel_size": config.tensor_parallel_size,
         "gpu_memory_utilization": config.gpu_memory_utilization,
     }
+    if config.tokenizer is not None:
+        llm_kwargs["tokenizer"] = config.tokenizer
+    if config.hf_overrides is not None:
+        llm_kwargs["hf_overrides"] = config.hf_overrides
     load_format = _resolve_vllm_load_format(config)
     if load_format is not None:
         llm_kwargs["load_format"] = load_format

@@ -53,6 +53,7 @@ class RemoteCallable(Generic[P, R]):
     resources: ResourceConfig
     env_vars: dict[str, str] = field(default_factory=dict)
     pip_dependency_groups: list[str] = field(default_factory=list)
+    pip_packages: list[str] = field(default_factory=list)
     name: str | None = None
 
     def named(self, name: str) -> RemoteCallable:
@@ -78,6 +79,7 @@ class RemoteCallable(Generic[P, R]):
                 resources=self.resources,
                 environment=create_environment(
                     extras=self.pip_dependency_groups,
+                    pip_packages=self.pip_packages,
                     env_vars=self.env_vars,
                 ),
             )
@@ -93,6 +95,7 @@ def remote(
     resources: ResourceConfig | None = None,
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
+    pip_packages: list[str] | None = None,
 ) -> RemoteCallable[P, R]: ...
 
 
@@ -103,6 +106,7 @@ def remote(
     resources: ResourceConfig | None = None,
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
+    pip_packages: list[str] | None = None,
 ) -> Callable[[Callable[P, R]], RemoteCallable[P, R]]: ...
 
 
@@ -113,6 +117,7 @@ def remote(
     resources: ResourceConfig | None = None,
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
+    pip_packages: list[str] | None = None,
 ) -> RemoteCallable[P, R] | Callable[[Callable[P, R]], RemoteCallable[P, R]]:
     """Mark a step function for remote execution via Fray.
 
@@ -129,6 +134,7 @@ def remote(
             resources=resources,
             env_vars=env_vars or {},
             pip_dependency_groups=pip_dependency_groups or [],
+            pip_packages=pip_packages or [],
             name=name,
         )
 

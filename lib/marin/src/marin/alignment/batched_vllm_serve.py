@@ -26,10 +26,20 @@ from iris.marin_fs import url_to_fs
 from marin.alignment.inference_config import VLLMConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.lm_evaluation_harness_evaluator import LMEvaluationHarnessEvaluator
-from marin.inference.vllm_server import VllmEnvironment
+from marin.inference.vllm_server import VllmEnvironment, _looks_like_gpt_oss_model
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
+
+# WARNING: GPT-OSS must stay on the explicit /v1/chat/completions path in this
+# module. The old local-rendered /v1/completions path broke Harmony behavior on
+# TPU during bring-up: it produced corrupt outputs on the bad backend and
+# truncated/unsafe response handling on the good backend. Do not "simplify"
+# GPT-OSS back onto the generic completions path unless you rerun the probes in
+# .agents/logbooks/gpt-oss-tpu.md and prove the alternate path still works.
+# This code is intentionally loud and refuses the old path for GPT-OSS.
+GPT_OSS_REASONING_EFFORT = "low"
+GPT_OSS_REQUIRED_FINISH_REASON = "stop"
 
 
 @dataclass
@@ -194,6 +204,42 @@ def _group_completion_texts(choice_texts: list[str], *, prompt_count: int, n: in
     return grouped
 
 
+def _token_lengths(tokenizer: PreTrainedTokenizerBase, texts: Sequence[str]) -> list[int]:
+    input_ids = tokenizer(list(texts), add_special_tokens=False)["input_ids"]
+    return [len(token_ids) for token_ids in input_ids]
+
+
+def _validate_completion_budget(
+    config: VLLMConfig,
+    *,
+    prompt_token_counts: Sequence[int],
+    max_tokens: int,
+) -> None:
+    if max_tokens < 1:
+        raise ValueError(f"Expected max_tokens >= 1, got {max_tokens}")
+
+    available_prompt_tokens = config.max_model_len - max_tokens
+    if available_prompt_tokens < 1:
+        raise ValueError(
+            "Requested vLLM completion budget leaves no room for prompt tokens: "
+            f"max_model_len={config.max_model_len}, max_tokens={max_tokens}, "
+            f"available_prompt_tokens={available_prompt_tokens}. "
+            "Lower max_tokens or raise max_model_len."
+        )
+
+    longest_prompt_tokens = max(prompt_token_counts, default=0)
+    if longest_prompt_tokens > available_prompt_tokens:
+        over_limit_count = sum(1 for token_count in prompt_token_counts if token_count > available_prompt_tokens)
+        raise ValueError(
+            "Requested vLLM completion budget exceeds the model context window for at least one prompt: "
+            f"max_model_len={config.max_model_len}, max_tokens={max_tokens}, "
+            f"available_prompt_tokens={available_prompt_tokens}, "
+            f"longest_prompt_tokens={longest_prompt_tokens}, "
+            f"over_limit_prompts={over_limit_count}. "
+            "Lower max_tokens or raise max_model_len."
+        )
+
+
 def _build_model_config(config: VLLMConfig) -> ModelConfig:
     parsed = urlparse(config.model)
     is_object_store = parsed.scheme in {"gs", "s3"}
@@ -201,30 +247,84 @@ def _build_model_config(config: VLLMConfig) -> ModelConfig:
     load_format = config.load_format
     if load_format is None and is_object_store:
         load_format = "runai_streamer"
+    engine_kwargs: dict[str, object] = {
+        "load_format": load_format,
+        "max_model_len": config.max_model_len,
+        "tensor_parallel_size": config.tensor_parallel_size,
+        "gpu_memory_utilization": config.gpu_memory_utilization,
+    }
+    if config.tokenizer is not None:
+        engine_kwargs["tokenizer"] = config.tokenizer
+    if config.hf_overrides is not None:
+        engine_kwargs["hf_overrides"] = config.hf_overrides
+    if config.additional_config is not None:
+        engine_kwargs["additional_config"] = config.additional_config
+    if config.stage_remote_model_locally:
+        engine_kwargs["stage_remote_model_locally"] = True
     return ModelConfig(
         name=model_name,
         path=config.model if is_object_store or os.path.exists(config.model) else None,
-        engine_kwargs={
-            "load_format": load_format,
-            "max_model_len": config.max_model_len,
-            "tensor_parallel_size": config.tensor_parallel_size,
-            "gpu_memory_utilization": config.gpu_memory_utilization,
-        },
+        engine_kwargs=engine_kwargs,
         apply_chat_template=False,
     )
 
 
+def _gpt_oss_override_candidates(config: VLLMConfig) -> list[str]:
+    if config.hf_overrides is None:
+        return []
+
+    candidates: list[str] = []
+    model_type = config.hf_overrides.get("model_type")
+    if isinstance(model_type, str):
+        candidates.append(model_type)
+
+    architectures = config.hf_overrides.get("architectures")
+    if isinstance(architectures, list):
+        candidates.extend(arch for arch in architectures if isinstance(arch, str))
+
+    return candidates
+
+
+def _config_uses_gpt_oss(config: VLLMConfig) -> bool:
+    return _looks_like_gpt_oss_model(
+        config.model,
+        config.tokenizer,
+        *_gpt_oss_override_candidates(config),
+    )
+
+
+def _vllm_env_overrides(config: VLLMConfig) -> dict[str, str]:
+    env_overrides: dict[str, str] = {}
+    if config.model_impl_type is not None:
+        env_overrides["MODEL_IMPL_TYPE"] = config.model_impl_type
+    # GPT-OSS models produce gibberish tokens under the flax_nnx backend
+    # (proven in .agents/logbooks/gpt-oss-tpu.md, GTPU-001 vs GTPU-004).
+    # The only validated backend is MODEL_IMPL_TYPE=vllm. Block flax_nnx
+    # early so nobody rediscovers this failure mode by accident.
+    if _config_uses_gpt_oss(config):
+        resolved = env_overrides.get("MODEL_IMPL_TYPE", "vllm")
+        if resolved == "flax_nnx":
+            raise ValueError(
+                "GPT-OSS models must not use model_impl_type='flax_nnx' — it produces "
+                "incoherent token soup on TPU. Use model_impl_type='vllm' (the default). "
+                "See .agents/logbooks/gpt-oss-tpu.md GTPU-001 through GTPU-004 for the "
+                "A/B evidence that proved this."
+            )
+    return env_overrides
+
+
 @contextmanager
-def _load_tokenizer(model_path: str):
-    parsed = urlparse(model_path)
+def _load_tokenizer(model_path: str, *, tokenizer_path: str | None = None):
+    tokenizer_source = tokenizer_path or model_path
+    parsed = urlparse(tokenizer_source)
     if parsed.scheme in {"gs", "s3"}:
-        with LMEvaluationHarnessEvaluator._stage_remote_tokenizer_dir(model_path) as tokenizer_dir:
+        with LMEvaluationHarnessEvaluator._stage_remote_tokenizer_dir(tokenizer_source) as tokenizer_dir:
             if tokenizer_dir is None:
-                raise RuntimeError(f"Could not stage tokenizer files for {model_path}")
+                raise RuntimeError(f"Could not stage tokenizer files for {tokenizer_source}")
             yield AutoTokenizer.from_pretrained(tokenizer_dir)
         return
 
-    yield AutoTokenizer.from_pretrained(model_path)
+    yield AutoTokenizer.from_pretrained(tokenizer_source)
 
 
 @dataclass
@@ -246,13 +346,15 @@ class BatchedVllmServeSession:
 
     def __enter__(self) -> BatchedVllmServeSession:
         tokenizer_start = time.perf_counter()
-        self._tokenizer_context = _load_tokenizer(self.config.model)
+        self._tokenizer_context = _load_tokenizer(self.config.model, tokenizer_path=self.config.tokenizer)
         self._tokenizer = self._tokenizer_context.__enter__()
         self._metrics.tokenizer_load_seconds = time.perf_counter() - tokenizer_start
         env = VllmEnvironment(
             model=_build_model_config(self.config),
-            mode="native",
+            mode=self.config.resolved_serve_mode,
             timeout_seconds=self.timeout_seconds,
+            docker_image=self.config.docker_image,
+            env_overrides=_vllm_env_overrides(self.config),
         )
         self._remove_lock_context = remove_tpu_lockfile_on_exit()
         self._remove_lock_context.__enter__()
@@ -277,12 +379,31 @@ class BatchedVllmServeSession:
         self._env = None
         self._tokenizer = None
 
+    def _uses_gpt_oss_chat_path(self) -> bool:
+        if _config_uses_gpt_oss(self.config):
+            return True
+        if self._env is not None:
+            return _looks_like_gpt_oss_model(self._env.model_id)
+        return False
+
+    def _gpt_oss_path_error(self, attempted_path: str) -> ValueError:
+        return ValueError(
+            "GPT-OSS local inference must use generate_from_messages() -> /v1/chat/completions "
+            f"with fixed reasoning_effort={GPT_OSS_REASONING_EFFORT!r}. "
+            f"The attempted path {attempted_path!r} is disabled because it breaks the validated "
+            "Harmony serving contract. If you think this restriction is wrong, rerun the GPT-OSS "
+            "TPU probes in .agents/logbooks/gpt-oss-tpu.md before changing this code."
+        )
+
     def render_messages(
         self,
         message_batches: Sequence[Sequence[dict[str, str]]],
         *,
         stage_name: str = "unlabeled",
     ) -> list[str]:
+        if self._uses_gpt_oss_chat_path():
+            raise self._gpt_oss_path_error("render_messages() / local apply_chat_template")
+
         tokenizer = self._require_tokenizer()
 
         logger.info("Rendering %d chat prompts for batched vLLM serve", len(message_batches))
@@ -309,10 +430,20 @@ class BatchedVllmServeSession:
         max_tokens: int,
         n: int = 1,
     ) -> list[list[str]]:
+        if self._uses_gpt_oss_chat_path():
+            raise self._gpt_oss_path_error("generate_from_prompt_texts() / /v1/completions")
+
         if self._env is None:
             raise RuntimeError("vLLM environment is not available outside the active session.")
         if self._env.model_id is None:
             raise RuntimeError("Expected vLLM server to expose a model id.")
+        tokenizer = self._require_tokenizer()
+        prompt_token_counts = _token_lengths(tokenizer, prompt_texts)
+        _validate_completion_budget(
+            self.config,
+            prompt_token_counts=prompt_token_counts,
+            max_tokens=max_tokens,
+        )
 
         logger.info(
             "Sending batched vLLM serve request to /v1/completions for %d prompts (n=%d)",
@@ -339,8 +470,7 @@ class BatchedVllmServeSession:
             raise requests.HTTPError(f"{exc}; response body: {body}") from exc
         payload = response.json()
         choice_texts = [choice["text"] for choice in payload["choices"]]
-        tokenizer = self._require_tokenizer()
-        input_token_count = _token_count(tokenizer, prompt_texts)
+        input_token_count = sum(prompt_token_counts)
         output_token_count = _token_count(tokenizer, choice_texts)
         self._metrics.record_request(
             stage_name,
@@ -352,6 +482,62 @@ class BatchedVllmServeSession:
         )
         return _group_completion_texts(choice_texts, prompt_count=len(prompt_texts), n=n)
 
+    def _generate_from_messages_gpt_oss(
+        self,
+        message_batches: Sequence[Sequence[dict[str, str]]],
+        *,
+        stage_name: str,
+        temperature: float,
+        max_tokens: int,
+        n: int,
+    ) -> list[list[str]]:
+        if self._env is None:
+            raise RuntimeError("vLLM environment is not available outside the active session.")
+        if self._env.model_id is None:
+            raise RuntimeError("Expected vLLM server to expose a model id.")
+
+        logger.info(
+            "Sending GPT-OSS vLLM serve requests to /v1/chat/completions one conversation at a time "
+            "(the generic /v1/completions path is intentionally disabled)"
+        )
+        outputs: list[list[str]] = []
+        for messages in message_batches:
+            request_start = time.perf_counter()
+            response = requests.post(
+                f"{self._env.server_url}/chat/completions",
+                json={
+                    "model": self._env.model_id,
+                    "messages": list(messages),
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "n": n,
+                    "reasoning_effort": GPT_OSS_REASONING_EFFORT,
+                },
+                timeout=900,
+            )
+            try:
+                response.raise_for_status()
+            except requests.HTTPError as exc:
+                body = response.text[:2000]
+                logger.error("GPT-OSS chat request failed: status=%s body=%s", response.status_code, body)
+                raise requests.HTTPError(f"{exc}; response body: {body}") from exc
+
+            payload = response.json()
+            choice_texts = _extract_gpt_oss_chat_texts(payload)
+            usage = payload.get("usage")
+            input_token_count = usage.get("prompt_tokens", 0) if isinstance(usage, dict) else 0
+            output_token_count = usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0
+            self._metrics.record_request(
+                stage_name,
+                request_prompt_count=1,
+                completion_count=len(choice_texts),
+                input_token_count=input_token_count if isinstance(input_token_count, int) else 0,
+                output_token_count=output_token_count if isinstance(output_token_count, int) else 0,
+                request_seconds=time.perf_counter() - request_start,
+            )
+            outputs.append(choice_texts)
+        return outputs
+
     def generate_from_messages(
         self,
         message_batches: Sequence[Sequence[dict[str, str]]],
@@ -361,6 +547,15 @@ class BatchedVllmServeSession:
         max_tokens: int,
         n: int = 1,
     ) -> list[list[str]]:
+        if self._uses_gpt_oss_chat_path():
+            return self._generate_from_messages_gpt_oss(
+                message_batches,
+                stage_name=stage_name,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                n=n,
+            )
+
         prompt_texts = self.render_messages(message_batches, stage_name=stage_name)
         return self.generate_from_prompt_texts(
             prompt_texts,
@@ -392,3 +587,39 @@ class BatchedVllmServeSession:
 def _token_count(tokenizer: PreTrainedTokenizerBase, texts: Sequence[str]) -> int:
     input_ids = tokenizer(list(texts), add_special_tokens=False)["input_ids"]
     return sum(len(token_ids) for token_ids in input_ids)
+
+
+def _extract_gpt_oss_chat_texts(payload: dict[str, object]) -> list[str]:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError(f"GPT-OSS chat response is missing choices: {json.dumps(payload, default=str)[:2000]}")
+
+    outputs: list[str] = []
+    for choice in choices:
+        if not isinstance(choice, dict):
+            raise ValueError(
+                "GPT-OSS chat response contained a non-dict choice: " f"{json.dumps(payload, default=str)[:2000]}"
+            )
+        finish_reason = choice.get("finish_reason")
+        if finish_reason != GPT_OSS_REQUIRED_FINISH_REASON:
+            raise ValueError(
+                "GPT-OSS chat response did not finish cleanly. "
+                f"Expected finish_reason={GPT_OSS_REQUIRED_FINISH_REASON!r}, got {finish_reason!r}. "
+                f"Response excerpt: {json.dumps(payload, default=str)[:2000]}"
+            )
+
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise ValueError(
+                "GPT-OSS chat response is missing message content. "
+                f"Response excerpt: {json.dumps(payload, default=str)[:2000]}"
+            )
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(
+                "GPT-OSS chat response is missing final assistant content. "
+                "This usually means the request fell back to reasoning-only output or the serving contract changed. "
+                f"Response excerpt: {json.dumps(payload, default=str)[:2000]}"
+            )
+        outputs.append(content)
+    return outputs
