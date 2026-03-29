@@ -36,6 +36,7 @@ message LogEntry {
   string data = 3;    // Log line content
   int32 attempt_id = 4;  // Which attempt produced this log
   LogLevel level = 5;   // Best-effort parsed log level (UNKNOWN if unparseable)
+  string key = 6;     // Log store key (e.g. "/user/job/0:3"). Populated on multi-key queries.
 }
 
 // Collection of log entries for a single source (stdout/stderr/build).

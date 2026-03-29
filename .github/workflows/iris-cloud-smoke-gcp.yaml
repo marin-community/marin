@@ -91,7 +91,7 @@ jobs:
 
       - name: Install Playwright system deps
         if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: cd lib/iris && uv run playwright install-deps chromium
+        run: npx --yes playwright@1.57.0 install-deps chromium
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -108,6 +108,9 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.MARIN_SSH_KEY }}" > ~/.ssh/marin_ray_cluster.pem
           chmod 600 ~/.ssh/marin_ray_cluster.pem
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -130,7 +133,7 @@ jobs:
             --worker-timeout 600 &
           START_PID=$!
           echo "START_PID=$START_PID" >> "$GITHUB_ENV"
-          for i in $(seq 1 360); do
+          for i in $(seq 1 900); do
             if [ -f /tmp/iris-controller-url ]; then
               echo "Cluster ready!"
               echo "IRIS_CONTROLLER_URL=$(cat /tmp/iris-controller-url)" >> "$GITHUB_ENV"

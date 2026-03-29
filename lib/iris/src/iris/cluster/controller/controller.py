@@ -32,23 +32,20 @@ from iris.cluster.controller.checkpoint import (
     write_checkpoint,
 )
 from iris.cluster.controller.db import (
-    ATTEMPTS,
-    JOBS,
-    RESERVATION_CLAIMS,
-    TASKS,
-    WORKERS,
+    Attempt,
     ControllerDB,
-    Join,
     Job,
     Task,
     Worker,
+    _decode_row,
     _tasks_with_attempts,
+    decode_rows,
     healthy_active_workers_with_attributes,
     insert_task_profile,
     running_tasks_by_worker,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.k8s.provider import KubernetesProvider
+from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.scheduler import (
     JobRequirements,
@@ -259,13 +256,9 @@ def compute_demand_entries(
 def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClaim]:
     """Read reservation claims from the canonical DB table."""
     with db.snapshot() as snapshot:
-        rows = snapshot.select(
-            RESERVATION_CLAIMS,
-            columns=(
-                RESERVATION_CLAIMS.c.worker_id,
-                RESERVATION_CLAIMS.c.job_id,
-                RESERVATION_CLAIMS.c.entry_idx,
-            ),
+        rows = snapshot.raw(
+            "SELECT rc.worker_id, rc.job_id, rc.entry_idx FROM reservation_claims rc",
+            decoders={"worker_id": WorkerId},
         )
     return {
         row.worker_id: ReservationClaim(
@@ -279,23 +272,40 @@ def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClai
 def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, Job]:
     if not job_ids:
         return {}
+    wires = [job_id.to_wire() for job_id in job_ids]
+    placeholders = ",".join("?" for _ in wires)
     with queries.snapshot() as snapshot:
-        jobs = snapshot.select(JOBS, where=JOBS.c.job_id.in_([job_id.to_wire() for job_id in job_ids]))
+        jobs = decode_rows(
+            Job, snapshot.fetchall(f"SELECT * FROM jobs j WHERE j.job_id IN ({placeholders})", tuple(wires))
+        )
     return {job.job_id: job for job in jobs}
+
+
+def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[Job]:
+    """Fetch only jobs that have reservations, filtering at the SQL level.
+
+    Uses the denormalized has_reservation column to avoid deserializing
+    request_proto for all active jobs.
+    """
+    placeholders = ",".join("?" for _ in states)
+    with queries.snapshot() as snapshot:
+        rows = snapshot._fetchall(
+            f"SELECT * FROM jobs WHERE state IN ({placeholders}) AND has_reservation = 1",
+            list(states),
+        )
+    return [_decode_row(Job, row) for row in rows]
 
 
 def _schedulable_tasks(queries: ControllerDB) -> list[Task]:
     # Only PENDING tasks can pass can_be_scheduled(); no need to fetch ASSIGNED/BUILDING/RUNNING.
-    SCHEDULABLE_STATES = (cluster_pb2.TASK_STATE_PENDING,)
     with queries.snapshot() as snapshot:
-        tasks = snapshot.select(
-            TASKS,
-            where=TASKS.c.state.in_(list(SCHEDULABLE_STATES)),
-            order_by=(
-                TASKS.c.priority_neg_depth.asc(),
-                TASKS.c.priority_root_submitted_ms.asc(),
-                TASKS.c.submitted_at_ms.asc(),
-                TASKS.c.task_id.asc(),
+        tasks = decode_rows(
+            Task,
+            snapshot.fetchall(
+                "SELECT * FROM tasks t WHERE t.state = ? "
+                "ORDER BY t.priority_neg_depth ASC, t.priority_root_submitted_ms ASC, "
+                "t.submitted_at_ms ASC, t.task_id ASC",
+                (cluster_pb2.TASK_STATE_PENDING,),
             ),
         )
     return [task for task in tasks if task.can_be_scheduled()]
@@ -305,16 +315,22 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
     if not task_ids:
         return {}
     task_wires = [task_id.to_wire() for task_id in task_ids]
+    placeholders = ",".join("?" for _ in task_wires)
     with queries.snapshot() as snapshot:
-        tasks = snapshot.select(
-            TASKS,
-            where=TASKS.c.task_id.in_(task_wires),
-            order_by=(TASKS.c.task_id.asc(),),
+        tasks = decode_rows(
+            Task,
+            snapshot.fetchall(
+                f"SELECT * FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
+                tuple(task_wires),
+            ),
         )
-        attempts = snapshot.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id.in_(task_wires),
-            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
+        attempts = decode_rows(
+            Attempt,
+            snapshot.fetchall(
+                f"SELECT * FROM task_attempts a WHERE a.task_id IN ({placeholders}) "
+                "ORDER BY a.task_id ASC, a.attempt_id ASC",
+                tuple(task_wires),
+            ),
         )
     return {task.task_id: task for task in _tasks_with_attempts(tasks, attempts)}
 
@@ -346,10 +362,11 @@ def _building_counts(queries: ControllerDB, workers: list[Worker]) -> dict[Worke
 def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, Worker]:
     if not worker_ids:
         return {}
+    wires = [str(wid) for wid in worker_ids]
+    placeholders = ",".join("?" for _ in wires)
     with queries.snapshot() as snapshot:
-        workers = snapshot.select(
-            WORKERS,
-            where=WORKERS.c.worker_id.in_([str(worker_id) for worker_id in worker_ids]),
+        workers = decode_rows(
+            Worker, snapshot.fetchall(f"SELECT * FROM workers w WHERE w.worker_id IN ({placeholders})", tuple(wires))
         )
     return {worker.worker_id: worker for worker in workers}
 
@@ -357,14 +374,15 @@ def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[Wor
 def _task_worker_mapping(queries: ControllerDB, task_ids: set[JobName]) -> dict[JobName, WorkerId]:
     if not task_ids:
         return {}
+    task_wires = [task_id.to_wire() for task_id in task_ids]
+    placeholders = ",".join("?" for _ in task_wires)
     with queries.snapshot() as snapshot:
-        rows = snapshot.select(
-            TASKS,
-            columns=(TASKS.c.task_id, ATTEMPTS.c.worker_id),
-            joins=(Join(table=ATTEMPTS, on=TASKS.c.task_id == ATTEMPTS.c.task_id),),
-            where=TASKS.c.task_id.in_([task_id.to_wire() for task_id in task_ids])
-            & (TASKS.c.current_attempt_id == ATTEMPTS.c.attempt_id)
-            & ATTEMPTS.c.worker_id.not_null(),
+        rows = snapshot.raw(
+            f"SELECT t.task_id, a.worker_id FROM tasks t "
+            f"JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
+            f"WHERE t.task_id IN ({placeholders}) AND a.worker_id IS NOT NULL",
+            tuple(task_wires),
+            decoders={"task_id": JobName.from_wire, "worker_id": WorkerId},
         )
     return {row.task_id: row.worker_id for row in rows}
 
@@ -643,7 +661,7 @@ class ControllerConfig:
     """How often the controller captures CPU profiles for all running tasks."""
 
     profile_duration: int = 10
-    """Duration in seconds for each py-spy profile capture."""
+    """Duration in seconds for each profile capture (CPU and memory)."""
 
     prune_interval: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
     """How often to run the data pruning sweep (default: 1 hour)."""
@@ -674,6 +692,9 @@ class ControllerConfig:
 
     auth: ControllerAuth | None = None
     """Full auth config passed to the service layer for login and API key management."""
+
+    dry_run: bool = False
+    """Start in dry-run mode: compute scheduling but suppress all side effects."""
 
 
 class Controller:
@@ -712,7 +733,7 @@ class Controller:
     def __init__(
         self,
         config: ControllerConfig,
-        provider: TaskProvider | KubernetesProvider,
+        provider: TaskProvider | K8sTaskProvider,
         autoscaler: "Autoscaler | None" = None,
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
@@ -724,7 +745,7 @@ class Controller:
             )
 
         self._config = config
-        self._provider: TaskProvider | KubernetesProvider = provider
+        self._provider: TaskProvider | K8sTaskProvider = provider
         self._provider_scheduling_events: list[SchedulingEvent] = []
         self._provider_capacity: ClusterCapacity | None = None
 
@@ -760,6 +781,7 @@ class Controller:
             port=config.port,
             auth_verifier=config.auth_verifier,
             auth_provider=config.auth_provider,
+            auth_optional=config.auth.optional if config.auth else False,
         )
 
         # Ingest process logs into the LogStore so they are available via FetchLogs.
@@ -831,12 +853,15 @@ class Controller:
     def start(self) -> None:
         """Start main controller loop, dashboard server, and optionally autoscaler."""
         self._started = True
-        if isinstance(self._provider, KubernetesProvider):
+        if self._config.dry_run:
+            logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
+        if isinstance(self._provider, K8sTaskProvider):
             self._heartbeat_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
         else:
             self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
             self._heartbeat_thread = self._threads.spawn(self._run_provider_loop, name="provider-loop")
-            self._profile_thread = self._threads.spawn(self._run_profile_loop, name="profile-loop")
+            if not self._config.dry_run:
+                self._profile_thread = self._threads.spawn(self._run_profile_loop, name="profile-loop")
 
         # Create and start uvicorn server via spawn_server, which bridges the
         # ManagedThread stop_event to server.should_exit automatically.
@@ -911,6 +936,8 @@ class Controller:
 
     def _atexit_checkpoint(self) -> None:
         """Best-effort checkpoint at interpreter shutdown for post-mortem analysis."""
+        if self._config.dry_run:
+            return
         try:
             path, _result = write_checkpoint(self._db, self._config.remote_state_dir)
             logger.info("atexit checkpoint written: %s", path)
@@ -936,6 +963,8 @@ class Controller:
 
     def _maybe_prune(self) -> None:
         """Run a data pruning sweep if the rate limiter allows."""
+        if self._config.dry_run:
+            return
         if not self._prune_limiter.should_run():
             return
         try:
@@ -963,10 +992,11 @@ class Controller:
                 logger.exception("Autoscaler loop iteration failed")
 
             if self._periodic_checkpoint_limiter is not None and self._periodic_checkpoint_limiter.should_run():
-                try:
-                    write_checkpoint(self._db, self._config.remote_state_dir)
-                except Exception:
-                    logger.exception("Periodic checkpoint failed")
+                if not self._config.dry_run:
+                    try:
+                        write_checkpoint(self._db, self._config.remote_state_dir)
+                    except Exception:
+                        logger.exception("Periodic checkpoint failed")
 
     def _run_provider_loop(self, stop_event: threading.Event) -> None:
         """Provider sync loop on its own thread so slow RPCs don't block scheduling."""
@@ -986,7 +1016,7 @@ class Controller:
                 logger.exception("Provider sync round failed, will retry next interval")
 
     def _run_direct_provider_loop(self, stop_event: threading.Event) -> None:
-        """Provider sync loop for KubernetesProvider: no scheduling, no workers."""
+        """Provider sync loop for K8sTaskProvider: no scheduling, no workers."""
         limiter = RateLimiter(interval_seconds=self._config.heartbeat_interval.to_seconds())
         while not stop_event.is_set():
             self._heartbeat_event.wait(timeout=limiter.time_until_next())
@@ -1002,10 +1032,14 @@ class Controller:
                 logger.exception("Direct provider sync round failed, will retry next interval")
 
     def _sync_direct_provider(self) -> None:
-        assert isinstance(self._provider, KubernetesProvider)
+        if self._config.dry_run:
+            return
+        assert isinstance(self._provider, K8sTaskProvider)
         provider = self._provider
         with self._heartbeat_lock:
-            batch = self._transitions.drain_for_direct_provider()
+            batch = self._transitions.drain_for_direct_provider(
+                capacity=self._provider_capacity,
+            )
             if not batch.tasks_to_run and not batch.running_tasks and not batch.tasks_to_kill:
                 return
             result = provider.sync(batch)
@@ -1016,13 +1050,12 @@ class Controller:
                 self.kill_tasks_on_workers(tx_result.tasks_to_kill)
 
     def _run_profile_loop(self, stop_event: threading.Event) -> None:
-        """Periodically capture CPU profiles for all running tasks.
+        """Periodically capture CPU and memory profiles for all running tasks.
 
-        Runs on its own thread with a 10-minute rate limiter. For each running
-        task, sends a ProfileTask RPC to the task's worker and stores the result
-        in the controller DB. Profile RPCs are dispatched with bounded concurrency.
+        Runs on its own thread with a rate limiter. For each running task, sends
+        ProfileTask RPCs (CPU then memory, sequentially) to the task's worker and
+        stores the results in the controller DB.
         """
-
         limiter = RateLimiter(interval_seconds=self._config.profile_interval.to_seconds())
         while not stop_event.is_set():
             remaining = limiter.time_until_next()
@@ -1039,7 +1072,7 @@ class Controller:
                 logger.exception("Profile loop iteration failed")
 
     def _profile_all_running_tasks(self) -> None:
-        """Capture a CPU profile for every running task and store in the DB."""
+        """Capture CPU and memory profiles for every running task and store in the DB."""
         workers = healthy_active_workers_with_attributes(self._db)
         if not workers:
             return
@@ -1055,42 +1088,68 @@ class Controller:
         if not profile_targets:
             return
 
-        concurrency = min(self._config.profile_concurrency, len(profile_targets))
+        cpu_profile_type = cluster_pb2.ProfileType(
+            cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.RAW),
+        )
+        self._dispatch_profiles(profile_targets, cpu_profile_type, "cpu", self._config.profile_duration)
+
+        memory_profile_type = cluster_pb2.ProfileType(
+            memory=cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.STATS),
+        )
+        self._dispatch_profiles(profile_targets, memory_profile_type, "memory", self._config.profile_duration)
+
+        logger.info("Profile round (cpu+memory): captured for %d tasks", len(profile_targets))
+
+    def _dispatch_profiles(
+        self,
+        targets: list[tuple[JobName, Worker]],
+        profile_type: cluster_pb2.ProfileType,
+        profile_kind: str,
+        duration: int,
+    ) -> None:
+        """Send profile RPCs for the given targets with bounded concurrency."""
+        concurrency = min(self._config.profile_concurrency, len(targets))
         with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="profile") as pool:
-            futures = [pool.submit(self._capture_one_profile, task_id, worker) for task_id, worker in profile_targets]
+            futures = [
+                pool.submit(self._capture_one_profile, task_id, worker, profile_type, profile_kind, duration)
+                for task_id, worker in targets
+            ]
             for future in as_completed(futures):
                 future.result()
 
-        logger.info("Profile round: captured profiles for %d tasks", len(profile_targets))
-
-    def _capture_one_profile(self, task_id: JobName, worker: Worker) -> None:
+    def _capture_one_profile(
+        self,
+        task_id: JobName,
+        worker: Worker,
+        profile_type: cluster_pb2.ProfileType,
+        profile_kind: str,
+        duration: int,
+    ) -> None:
         """Capture a single task profile via RPC and store it in the DB."""
         try:
-            duration = self._config.profile_duration
             request = cluster_pb2.ProfileTaskRequest(
                 target=task_id.to_wire(),
                 duration_seconds=duration,
-                profile_type=cluster_pb2.ProfileType(
-                    cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.RAW),
-                ),
+                profile_type=profile_type,
             )
             timeout_ms = duration * 1000 + 30000
             resp = self._provider.profile_task(worker.address, request, timeout_ms=timeout_ms)
             if resp.error:
-                logger.debug("Profile failed for %s: %s", task_id, resp.error)
+                logger.debug("Profile (%s) failed for %s: %s", profile_kind, task_id, resp.error)
                 return
             if not resp.profile_data:
-                logger.debug("Empty profile for %s", task_id)
+                logger.debug("Empty %s profile for %s", profile_kind, task_id)
                 return
             insert_task_profile(
                 self._db,
                 task_id=task_id.to_wire(),
                 profile_data=resp.profile_data,
                 captured_at=Timestamp.now(),
+                profile_kind=profile_kind,
             )
-            logger.debug("Stored %d byte profile for %s", len(resp.profile_data), task_id)
+            logger.debug("Stored %d byte %s profile for %s", len(resp.profile_data), profile_kind, task_id)
         except Exception:
-            logger.debug("Profile capture failed for %s", task_id, exc_info=True)
+            logger.debug("Profile capture (%s) failed for %s", profile_kind, task_id, exc_info=True)
 
     def _is_reservation_satisfied(
         self,
@@ -1121,12 +1180,8 @@ class Controller:
             persisted = True
         with self._db.snapshot() as snapshot:
             active_worker_ids = {
-                row.worker_id
-                for row in snapshot.select(
-                    WORKERS,
-                    columns=(WORKERS.c.worker_id,),
-                    where=WORKERS.c.active == 1,
-                )
+                WorkerId(str(row[0]))
+                for row in snapshot.fetchall("SELECT w.worker_id FROM workers w WHERE w.active = 1")
             }
         claimed_job_ids = {JobName.from_wire(claim.job_id) for claim in claims.values()}
         claimed_jobs = list(_jobs_by_id(self._db, claimed_job_ids).values()) if claimed_job_ids else []
@@ -1165,12 +1220,8 @@ class Controller:
             cluster_pb2.JOB_STATE_BUILDING,
             cluster_pb2.JOB_STATE_RUNNING,
         )
-        with self._db.snapshot() as snapshot:
-            reservable_jobs = snapshot.select(JOBS, where=JOBS.c.state.in_(list(reservable_states)))
-        for job in reservable_jobs:
-            if not job.request.HasField("reservation"):
-                continue
-
+        reservation_jobs = _jobs_with_reservations(self._db, reservable_states)
+        for job in reservation_jobs:
             job_wire = job.job_id.to_wire()
             for idx, res_entry in enumerate(job.request.reservation.entries):
                 if (job_wire, idx) in claimed_entries:
@@ -1222,7 +1273,10 @@ class Controller:
         claims_changed = self._cleanup_stale_claims(claims)
         claims_changed = self._claim_workers_for_reservations(claims) or claims_changed
         if claims_changed:
-            self._transitions.replace_reservation_claims(claims)
+            if self._config.dry_run:
+                logger.info("[DRY-RUN] Would update %d reservation claims", len(claims))
+            else:
+                self._transitions.replace_reservation_claims(claims)
 
         timer = Timer()
         with slow_log(logger, "scheduling state reads", threshold_ms=50):
@@ -1358,6 +1412,10 @@ class Controller:
         assignments: list[tuple[JobName, WorkerId]],
     ) -> None:
         """Commit assignments and enqueue worker dispatches in one state command."""
+        if self._config.dry_run:
+            for task_id, worker_id in assignments:
+                logger.info("[DRY-RUN] Would assign task %s to worker %s", task_id, worker_id)
+            return
         command = [Assignment(task_id=task_id, worker_id=worker_id) for task_id, worker_id in assignments]
         result = self._transitions.queue_assignments(command)
         if result.has_real_dispatch:
@@ -1365,6 +1423,9 @@ class Controller:
 
     def _mark_task_unschedulable(self, task: Task) -> None:
         """Mark a task as unschedulable due to timeout."""
+        if self._config.dry_run:
+            logger.info("[DRY-RUN] Would mark task %s as unschedulable", task.task_id)
+            return
         job = _jobs_by_id(self._db, {task.job_id}).get(task.job_id)
         if job and job.request.HasField("scheduling_timeout"):
             timeout = Duration.from_proto(job.request.scheduling_timeout)
@@ -1392,8 +1453,11 @@ class Controller:
         Called after state has marked tasks as killed. For each task that had
         a worker assigned, buffers the kill request for delivery via the next
         heartbeat to that worker. Tasks without a worker assignment are routed
-        to the direct kill queue when a KubernetesProvider is configured.
+        to the direct kill queue when a K8sTaskProvider is configured.
         """
+        if self._config.dry_run:
+            logger.info("[DRY-RUN] Would kill %d tasks on workers: %s", len(task_ids), list(task_ids)[:5])
+            return
         any_buffered = False
         mapping = _task_worker_mapping(self._db, task_ids)
         workers = _workers_by_id(self._db, set(mapping.values()))
@@ -1405,7 +1469,7 @@ class Controller:
             any_buffered = True
 
         # Route kills for tasks without worker assignment to the direct kill queue.
-        if isinstance(self._provider, KubernetesProvider):
+        if isinstance(self._provider, K8sTaskProvider):
             for task_id in task_ids:
                 if task_id not in mapping:
                     self._transitions.buffer_direct_kill(task_id.to_wire())
@@ -1425,7 +1489,9 @@ class Controller:
         short-circuits that by failing any worker that hasn't heartbeated in
         HEARTBEAT_STALENESS_THRESHOLD (15 minutes).
         """
-        if isinstance(self._provider, KubernetesProvider):
+        if isinstance(self._provider, K8sTaskProvider):
+            return
+        if self._config.dry_run:
             return
         threshold_ms = HEARTBEAT_STALENESS_THRESHOLD.to_ms()
         workers = healthy_active_workers_with_attributes(self._db)
@@ -1449,6 +1515,8 @@ class Controller:
                 self._autoscaler.notify_worker_failed(str(wid))
 
     def _sync_all_execution_units(self) -> None:
+        if self._config.dry_run:
+            return
         round_timer = Timer()
 
         # Phase 0: fail workers whose last heartbeat exceeds the staleness
@@ -1539,7 +1607,11 @@ class Controller:
         if _HEALTH_SUMMARY_INTERVAL.should_run():
             workers = healthy_active_workers_with_attributes(self._db)
             with self._db.snapshot() as snap:
-                active = snap.count(JOBS, where=JOBS.c.state == cluster_pb2.JOB_STATE_RUNNING)
+                active = snap.fetchone(
+                    "SELECT COUNT(*) FROM jobs j WHERE j.state = ?", (cluster_pb2.JOB_STATE_RUNNING,)
+                )[
+                    0
+                ]  # type: ignore[index]
             pending = len(_schedulable_tasks(self._db))
             logger.info(
                 "Controller status: %d workers (%d failed), %d active jobs, %d pending tasks",
@@ -1557,6 +1629,10 @@ class Controller:
         if not self._autoscaler:
             return
 
+        if self._config.dry_run:
+            logger.info("[DRY-RUN] Skipping autoscaler cycle (refresh + update)")
+            return
+
         worker_status_map = self._build_worker_status_map()
         self._autoscaler.refresh(worker_status_map)
         workers = healthy_active_workers_with_attributes(self._db)
@@ -1572,7 +1648,7 @@ class Controller:
         """Build a map of worker_id to worker status for autoscaler idle tracking."""
         result: WorkerStatusMap = {}
         with self._db.snapshot() as snapshot:
-            workers = snapshot.select(WORKERS, where=WORKERS.c.active == 1)
+            workers = decode_rows(Worker, snapshot.fetchall("SELECT * FROM workers w WHERE w.active = 1"))
         running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in workers})
         for worker in workers:
             result[worker.worker_id] = WorkerStatus(
@@ -1583,6 +1659,9 @@ class Controller:
 
     def begin_checkpoint(self) -> tuple[str, CheckpointResult]:
         """Pause loops and write a consistent SQLite checkpoint copy."""
+        if self._config.dry_run:
+            logger.info("[DRY-RUN] Skipping checkpoint write")
+            return ("dry-run", CheckpointResult(created_at=Timestamp.now(), job_count=0, task_count=0, worker_count=0))
         self._checkpoint_in_progress = True
         try:
             # Wait for any in-flight heartbeat round to complete.
@@ -1629,12 +1708,12 @@ class Controller:
         return self._transitions
 
     @property
-    def provider(self) -> TaskProvider | KubernetesProvider:
+    def provider(self) -> TaskProvider | K8sTaskProvider:
         return self._provider
 
     @property
     def has_direct_provider(self) -> bool:
-        return isinstance(self._provider, KubernetesProvider)
+        return isinstance(self._provider, K8sTaskProvider)
 
     @property
     def provider_scheduling_events(self) -> list[SchedulingEvent]:

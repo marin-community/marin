@@ -217,6 +217,23 @@ class CompositeTokenVerifier:
         raise ValueError(f"All verifiers failed: {'; '.join(errors)}")
 
 
+def resolve_auth(
+    token: str | None,
+    verifier: TokenVerifier,
+    optional: bool,
+) -> VerifiedIdentity | None:
+    """Shared auth policy for gRPC interceptors and HTTP middleware.
+
+    Returns VerifiedIdentity on success, None for anonymous passthrough.
+    Raises ValueError on rejected tokens (invalid token, or missing when required).
+    """
+    if token is None:
+        if optional:
+            return None
+        raise ValueError("Missing authentication")
+    return verifier.verify(token)
+
+
 class AuthInterceptor:
     """Server-side Connect RPC interceptor that enforces bearer token auth.
 

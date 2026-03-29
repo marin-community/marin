@@ -13,7 +13,6 @@ bugs where orphaned coordinators and workers consume resources indefinitely.
 
 from __future__ import annotations
 
-import dataclasses
 import enum
 import itertools
 import logging
@@ -25,16 +24,14 @@ import threading
 import time
 import uuid
 from collections import defaultdict, deque
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, NamedTuple, Protocol
+from typing import Any, Protocol
 
 import cloudpickle
 import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.parquet as pq
 from iris.marin_fs import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from fray.v2.client import JobHandle
@@ -44,14 +41,13 @@ from iris.time_utils import ExponentialBackoff
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (
-    ExecutionHint,
     Join,
     PhysicalOp,
     PhysicalPlan,
     Scatter,
+    Shard,
     SourceItem,
     StageContext,
-    StageResultChunk,
     StageType,
     compute_plan,
     run_stage,
@@ -59,16 +55,6 @@ from zephyr.plan import (
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
-
-
-class Chunk(Protocol):
-    def __iter__(self) -> Iterator: ...
-
-
-_ZEPHYR_SHUFFLE_SHARD_IDX_COL = "shard_idx"
-_ZEPHYR_SHUFFLE_CHUNK_IDX_COL = "chunk_idx"
-_ZEPHYR_SHUFFLE_ITEM_COL = "item"
-_ZEPHYR_SHUFFLE_PICKLED_COL = "pickled"
 
 
 @dataclass(frozen=True)
@@ -112,89 +98,55 @@ class PickleDiskChunk:
             return pickle.load(f)
 
 
-@dataclass(frozen=True)
-class ParquetDiskChunk:
-    """Slice of a shared Parquet scatter file, filtered by target shard and chunk.
+# ---------------------------------------------------------------------------
+# Scatter Parquet support (imported from shuffle.py)
+# ---------------------------------------------------------------------------
 
-    Multiple ParquetDiskChunk instances share the same file path but filter
-    for different (shard_idx, chunk_idx) pairs. Each chunk is pre-sorted
-    by key, preserving the invariant needed for k-way merge in Reduce.
+from zephyr.shuffle import (  # noqa: E402
+    ListShard,
+    MemChunk,
+    ScatterParquetIterator,  # noqa: F401 — re-exported for external callers
+    ScatterShard,  # noqa: F401 — re-exported for plan.py and external callers
+    _build_scatter_shard_from_manifest,  # noqa: F401 — re-exported for plan.py
+    _make_envelope,
+    _write_parquet_scatter,
+    _write_scatter_manifest,
+    _SCATTER_MANIFEST_NAME,
+)
 
-    Items are stored in one of two envelope formats:
+# ---------------------------------------------------------------------------
+# Task result
+# ---------------------------------------------------------------------------
 
-    * **Native** (``is_pickled=False``): ``{"shard_idx", "chunk_idx", "item": <data>}``
-    * **Pickle** (``is_pickled=True``): ``{"shard_idx", "chunk_idx", "pickled": <bytes>}``
 
-    The pickle envelope is used when items are not Arrow-serializable.
+@dataclass
+class CounterSnapshot:
+    """Bundled counter values and monotonically increasing generation tag.
+
+    The generation increments on every snapshot, so each heartbeat and
+    report_result carries a unique tag.  The coordinator uses strict
+    ordering (>) to discard stale or out-of-order updates.
     """
 
-    path: str
-    filter_shard: int
-    filter_chunk: int
-    count: int
-    is_pickled: bool = False
+    counters: dict[str, int]
+    generation: int
 
-    def __iter__(self) -> Iterator:
-        return iter(self.read())
-
-    def read(self) -> list:
-        """Load filtered chunk data from a Parquet file, unwrapping envelope."""
-        col = _ZEPHYR_SHUFFLE_PICKLED_COL if self.is_pickled else _ZEPHYR_SHUFFLE_ITEM_COL
-        table = pq.read_table(
-            self.path,
-            columns=[col],
-            filters=(
-                (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == self.filter_shard)
-                & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == self.filter_chunk)
-            ),
-        )
-        items = table.column(col).to_pylist()
-        if self.is_pickled:
-            return [pickle.loads(b) for b in items]
-        return items
-
-
-@dataclass
-class MemChunk:
-    """In-memory chunk."""
-
-    items: list[Any]
-
-    def __iter__(self) -> Iterator:
-        return iter(self.items)
-
-
-@dataclass
-class Shard:
-    """An ordered sequence of chunks assigned to a single worker."""
-
-    chunks: list[Chunk]
-
-    def __iter__(self) -> Iterator:
-        """Flatten iteration over all items, loading chunks as needed."""
-        for chunk in self.chunks:
-            yield from chunk
-
-    def iter_chunks(self) -> Iterator[list]:
-        """Yield each chunk as a materialized list. Used by k-way merge in Reduce."""
-        for chunk in self.chunks:
-            yield list(chunk)
-
-
-@dataclass
-class ResultChunk:
-    """Output chunk from a single worker task before resharding."""
-
-    source_shard: int
-    target_shard: int
-    data: Chunk
+    @staticmethod
+    def empty(generation: int = 0) -> CounterSnapshot:
+        return CounterSnapshot(counters={}, generation=generation)
 
 
 @dataclass
 class TaskResult:
-    """Result of a single task."""
+    """Result of a single worker task.
 
-    chunks: list[ResultChunk]
+    Always contains a ListShard. For non-scatter stages, refs are
+    PickleDiskChunks. For scatter stages, refs contain file paths
+    (the actual metadata lives in ``.scatter_meta`` sidecar files
+    read lazily by reducers).
+    """
+
+    shard: ListShard
 
 
 def _generate_execution_id() -> str:
@@ -225,209 +177,70 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
             logger.info(f"Cleaned up execution directory {exec_dir} in {elapsed:.1f}s")
 
 
-def _make_envelope(items: list, target_shard: int, chunk_idx: int) -> list[dict]:
-    return [
-        {
-            _ZEPHYR_SHUFFLE_SHARD_IDX_COL: target_shard,
-            _ZEPHYR_SHUFFLE_CHUNK_IDX_COL: chunk_idx,
-            _ZEPHYR_SHUFFLE_ITEM_COL: item,
-        }
-        for item in items
-    ]
-
-
-def _make_pickle_envelope(items: list, target_shard: int, chunk_idx: int) -> list[dict]:
-    """Wrap items as pickle-serialized bytes for Arrow-incompatible types."""
-    return [
-        {
-            _ZEPHYR_SHUFFLE_SHARD_IDX_COL: target_shard,
-            _ZEPHYR_SHUFFLE_CHUNK_IDX_COL: chunk_idx,
-            _ZEPHYR_SHUFFLE_PICKLED_COL: cloudpickle.dumps(item),
-        }
-        for item in items
-    ]
-
-
-def _segment_path(base_path: str, seg_idx: int) -> str:
-    """Return the file path for a given segment index.
-
-    ``shard-0000.parquet`` → ``shard-0000-seg0000.parquet``
-    """
-    stem, ext = os.path.splitext(base_path)
-    return f"{stem}-seg{seg_idx:04d}{ext}"
-
-
-class _ChunkMetadata(NamedTuple):
-    path: str
-    target_shard: int
-    chunk_idx: int
-    cnt: int
-
-
-def _write_parquet_scatter(
-    stage_gen: Iterator[StageResultChunk],
-    source_shard: int,
-    parquet_path: str,
-    pickled: bool = False,
-) -> list[ResultChunk]:
-    """Stream scatter chunks into Parquet files as row groups.
-
-    Writes batches to a Parquet file until a schema mismatch is detected
-    (e.g. a field evolves from null to a concrete type). On mismatch the
-    current file is closed, the schema is unified via ``pa.unify_schemas``,
-    and a new segment file is opened with the evolved schema.
-
-    When ``pickled=True``, items are serialized via pickle into a binary
-    ``pickled`` column instead of being stored natively in the ``item`` column.
-    """
-    chunk_results: list[_ChunkMetadata] = []
-    per_shard_chunk_cnt: dict[int, int] = defaultdict(int)
-    n_chunks_flushed = 0
-    seg_idx = 0
-    schema: pa.Schema | None = None
-    writer: pq.ParquetWriter | None = None
-    seg_file = ""
-
-    pending_chunk: pa.RecordBatch | None = None
-    pending_chunk_metadata: _ChunkMetadata | None = None
-
-    def _flush_pending():
-        nonlocal n_chunks_flushed
-        if pending_chunk is None:
-            return
-        writer.write_batch(pending_chunk)
-        chunk_results.append(pending_chunk_metadata)
-        n_chunks_flushed += 1
-        if n_chunks_flushed % 10 == 0:
-            logger.info(
-                "[shard %d segment %d] Wrote %d parquet chunks so far (latest chunk size: %d items)",
-                source_shard,
-                seg_idx,
-                n_chunks_flushed,
-                pending_chunk_metadata.cnt,
-            )
-
-    for result in stage_gen:
-        chunk_items = list(result.chunk)
-        target_shard = result.target_shard
-        shard_chunk_idx = per_shard_chunk_cnt[target_shard]
-        per_shard_chunk_cnt[target_shard] += 1
-        envelope_fn = _make_pickle_envelope if pickled else _make_envelope
-        envelope = envelope_fn(chunk_items, target_shard, shard_chunk_idx)
-        chunk_arrow = pa.RecordBatch.from_pylist(envelope)
-
-        if schema is None:
-            # First batch — initialize writer
-            schema = chunk_arrow.schema
-            seg_file = _segment_path(parquet_path, seg_idx)
-            ensure_parent_dir(seg_file)
-            writer = pq.ParquetWriter(seg_file, schema)
-        elif chunk_arrow.schema != schema:
-            # Schema evolved — flush pending, start new segment
-            _flush_pending()
-            writer.close()
-
-            schema = pa.unify_schemas([schema, chunk_arrow.schema])
-            seg_idx += 1
-            seg_file = _segment_path(parquet_path, seg_idx)
-            ensure_parent_dir(seg_file)
-            writer = pq.ParquetWriter(seg_file, schema)
-            logger.info(
-                "[shard %d] Schema evolved after %d chunks; starting segment %d",
-                source_shard,
-                n_chunks_flushed,
-                seg_idx,
-            )
-            chunk_arrow = chunk_arrow.cast(schema)
-        else:
-            _flush_pending()
-
-        pending_chunk = chunk_arrow
-        pending_chunk_metadata = _ChunkMetadata(
-            path=seg_file, target_shard=target_shard, chunk_idx=shard_chunk_idx, cnt=len(chunk_items)
-        )
-
-    _flush_pending()
-    if writer is not None:
-        writer.close()
-
-    return [
-        ResultChunk(
-            source_shard=source_shard,
-            target_shard=rec.target_shard,
-            data=ParquetDiskChunk(
-                path=rec.path,
-                filter_shard=rec.target_shard,
-                filter_chunk=rec.chunk_idx,
-                count=rec.cnt,
-                is_pickled=pickled,
-            ),
-        )
-        for rec in chunk_results
-    ]
-
-
 def _write_pickle_chunks(
-    stage_gen: Iterator[StageResultChunk],
+    items: Iterator,
     source_shard: int,
     chunk_path_fn: Callable[[int], str],
-) -> list[ResultChunk]:
-    """Write stage output chunks as pickle files."""
-    results: list[ResultChunk] = []
-    for pidx, result in enumerate(stage_gen):
-        items = list(result.chunk)
-        chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), items)
-        results.append(ResultChunk(source_shard=source_shard, target_shard=result.target_shard, data=chunk_ref))
-        if (pidx + 1) % 10 == 0:
-            logger.info(
-                "[shard %d] Wrote %d chunks so far (latest: %d items)",
-                source_shard,
-                pidx + 1,
-                chunk_ref.count,
-            )
-    return results
+) -> ListShard:
+    """Batch a plain item stream into pickle chunk files.
+
+    Returns a ListShard containing PickleDiskChunk references.
+    """
+    # TODO: make chunk_size configurable per writer
+    chunk_size = 100_000
+    chunks: list[Iterable] = []
+    batch: list = []
+    pidx = 0
+
+    for item in items:
+        batch.append(item)
+        if chunk_size > 0 and len(batch) >= chunk_size:
+            chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
+            chunks.append(chunk_ref)
+            pidx += 1
+            batch = []
+            if pidx % 10 == 0:
+                logger.info(
+                    "[shard %d] Wrote %d pickle chunks so far (latest: %d items)",
+                    source_shard,
+                    pidx,
+                    chunk_ref.count,
+                )
+
+    if batch:
+        chunks.append(PickleDiskChunk.write(chunk_path_fn(pidx), batch))
+
+    return ListShard(refs=chunks)
 
 
-def _write_stage_chunks(
-    stage_gen: Iterator[StageResultChunk],
+def _write_stage_output(
+    stage_gen: Iterator,
     source_shard: int,
     stage_dir: str,
     shard_idx: int,
-    is_scatter: bool,
-) -> list[ResultChunk]:
-    """Write stage output chunks to disk.
+    scatter_op: Scatter | None,
+    total_shards: int,
+) -> TaskResult:
+    """Write stage output to disk.
 
-    For scatter stages, attempts to stream all chunks into Parquet files
-    with envelope wrapping. Falls back to pickle if Arrow conversion fails
-    on the first chunk.
+    For scatter stages (``scatter_op`` is set), writes Parquet with envelope
+    wrapping and ``.scatter_meta`` sidecars. Returns TaskResult with compact
+    scatter metadata.
 
-    For non-scatter stages, writes each chunk as a PickleDiskChunk.
-
-    Args:
-        stage_gen: Generator of StageResultChunks from run_stage
-        source_shard: Source shard index
-        stage_dir: Directory for this stage's output (``{prefix}/{execution_id}/{stage_name}``)
-        shard_idx: Shard index (used to derive file paths)
-        is_scatter: Whether this stage contains a scatter operation
-
-    Returns:
-        List of ResultChunks with ParquetDiskChunk or PickleDiskChunk data
+    For non-scatter stages, batches items into pickle chunk files. Returns
+    TaskResult with a ListShard.
     """
-    first_result = next(stage_gen, None)
-    if first_result is None:
-        return []
+    if scatter_op is not None:
+        # Peek first item to test Arrow serializability
+        first_item = next(stage_gen, None)
+        if first_item is None:
+            return TaskResult(shard=ListShard(refs=[]))
 
-    first_items = list(first_result.chunk)
+        full_gen = itertools.chain([first_item], stage_gen)
 
-    # Prepend the already-consumed first result back into the stream
-    first_with_materialized_chunk = dataclasses.replace(first_result, chunk=first_items)
-    full_gen = itertools.chain([first_with_materialized_chunk], stage_gen)
-
-    if is_scatter:
-        # Test Arrow serializability on the first chunk to decide native vs pickle envelope
         use_pickle_envelope = False
         try:
-            test_envelope = _make_envelope(first_items, 0, 0)
+            test_envelope = _make_envelope([first_item], 0, 0)
             pa.RecordBatch.from_pylist(test_envelope)
             logger.info("Using Parquet for scatter serialization for shard %d", source_shard)
         except Exception:
@@ -437,13 +250,24 @@ def _write_stage_chunks(
                 source_shard,
             )
 
+        num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
         parquet_path = f"{stage_dir}/shard-{shard_idx:04d}.parquet"
-        return _write_parquet_scatter(full_gen, source_shard, parquet_path, pickled=use_pickle_envelope)
+        shard = _write_parquet_scatter(
+            full_gen,
+            source_shard,
+            parquet_path,
+            key_fn=scatter_op.key_fn,
+            num_output_shards=num_output_shards,
+            sort_fn=scatter_op.sort_fn,
+            combiner_fn=scatter_op.combiner_fn,
+            pickled=use_pickle_envelope,
+        )
+        return TaskResult(shard=shard)
 
     def chunk_path_fn(idx: int) -> str:
         return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
 
-    return _write_pickle_chunks(full_gen, source_shard, chunk_path_fn)
+    return TaskResult(shard=_write_pickle_chunks(stage_gen, source_shard, chunk_path_fn))
 
 
 class WorkerState(enum.Enum):
@@ -460,7 +284,6 @@ class ShardTask:
 
     shard_idx: int
     total_shards: int
-    chunk_size: int
     shard: Shard
     operations: list[PhysicalOp]
     stage_name: str = "output"
@@ -486,6 +309,8 @@ _NON_RETRYABLE_ERRORS = (ZephyrWorkerError, ValueError, TypeError, KeyError, Att
 
 class WorkerContext(Protocol):
     def get_shared(self, name: str) -> Any: ...
+    def increment_counter(self, name: str, value: int = 1) -> None: ...
+    def get_counter_snapshot(self) -> CounterSnapshot: ...
 
 
 _worker_ctx_var: ContextVar[ZephyrWorker | None] = ContextVar("zephyr_worker_ctx", default=None)
@@ -544,6 +369,11 @@ class ZephyrCoordinator:
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
         self._no_workers_timeout: float = 60.0
+        # Per-worker in-flight counter snapshots and completed snapshots.
+        # Each snapshot carries a monotonic generation so the coordinator
+        # can discard stale or out-of-order heartbeats.
+        self._worker_counters: dict[str, CounterSnapshot] = {}
+        self._completed_counters: list[CounterSnapshot] = []
 
         # Worker management state (workers self-register via register_worker)
         self._worker_handles: dict[str, ActorHandle] = {}
@@ -622,13 +452,18 @@ class ZephyrCoordinator:
         last_log_time = 0.0
 
         while not self._shutdown_event.is_set():
-            self.check_heartbeats()
-            self._check_worker_group()
+            try:
+                self.check_heartbeats()
+                self._check_worker_group()
 
-            now = time.monotonic()
-            if self._has_active_execution() and now - last_log_time > 5.0:
-                self._log_status()
-                last_log_time = now
+                now = time.monotonic()
+                if self._has_active_execution() and now - last_log_time > 5.0:
+                    self._log_status()
+                    last_log_time = now
+            except Exception:
+                logger.exception("Coordinator loop crashed, aborting pipeline")
+                self.abort("Coordinator loop crashed unexpectedly")
+                return
 
             self._shutdown_event.wait(timeout=0.5)
 
@@ -636,6 +471,11 @@ class ZephyrCoordinator:
         """Abort the pipeline if the worker job has permanently terminated."""
         if self._worker_group is None or self._fatal_error is not None:
             return
+        # After the last stage completes, workers exit cleanly via SHUTDOWN.
+        # The worker job finishing at that point is expected, not a crash.
+        with self._lock:
+            if self._total_shards > 0 and self._completed_shards >= self._total_shards:
+                return
         try:
             if self._worker_group.is_done():
                 self.abort(
@@ -649,8 +489,10 @@ class ZephyrCoordinator:
         return self._execution_id != "" and self._total_shards > 0 and self._completed_shards < self._total_shards
 
     def _log_status(self) -> None:
-        alive = sum(1 for s in self._worker_states.values() if s in {WorkerState.READY, WorkerState.BUSY})
-        dead = sum(1 for s in self._worker_states.values() if s in {WorkerState.FAILED, WorkerState.DEAD})
+        with self._lock:
+            states = list(self._worker_states.values())
+        alive = sum(1 for s in states if s in {WorkerState.READY, WorkerState.BUSY})
+        dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
         logger.info(
             "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
             self._execution_id,
@@ -673,6 +515,11 @@ class ZephyrCoordinator:
             self._task_attempts[task.shard_idx] += 1
             self._task_queue.append(task)
             self._retries += 1
+        # Zero counters but keep the generation watermark so late heartbeats
+        # from the old task are rejected.
+        existing = self._worker_counters.get(worker_id)
+        if existing is not None:
+            self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
 
     def _check_worker_heartbeats(self, timeout: float = 120.0) -> None:
         """Internal heartbeat check (called with lock held)."""
@@ -703,7 +550,7 @@ class ZephyrCoordinator:
                 return None
 
             if not self._task_queue:
-                if self._is_last_stage:
+                if self._is_last_stage and not self._in_flight:
                     self._worker_states[worker_id] = WorkerState.DEAD
                     return "SHUTDOWN"
                 return None
@@ -734,7 +581,14 @@ class ZephyrCoordinator:
                 f"This indicates report_result/pull_task reordering — workers must block on report_result."
             )
 
-    def report_result(self, worker_id: str, shard_idx: int, attempt: int, result: TaskResult) -> None:
+    def report_result(
+        self,
+        worker_id: str,
+        shard_idx: int,
+        attempt: int,
+        result: TaskResult,
+        counter_snapshot: CounterSnapshot,
+    ) -> None:
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
             self._assert_in_flight_consistent(worker_id, shard_idx)
@@ -751,6 +605,10 @@ class ZephyrCoordinator:
             self._completed_shards += 1
             self._in_flight.pop(worker_id, None)
             self._worker_states[worker_id] = WorkerState.READY
+            self._completed_counters.append(counter_snapshot)
+            # Zero the in-flight counters but keep the generation watermark
+            # so late heartbeats from this task are rejected.
+            self._worker_counters[worker_id] = CounterSnapshot.empty(counter_snapshot.generation)
 
     def report_error(self, worker_id: str, shard_idx: int, error_info: str) -> None:
         """Worker reports a task failure. All errors are fatal."""
@@ -758,13 +616,21 @@ class ZephyrCoordinator:
             self._last_seen[worker_id] = time.monotonic()
             self._assert_in_flight_consistent(worker_id, shard_idx)
             self._in_flight.pop(worker_id, None)
+            # Zero counters but keep the generation watermark so late
+            # heartbeats from this task are rejected.
+            existing = self._worker_counters.get(worker_id)
+            if existing is not None:
+                self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
             self._fatal_error = error_info
             self._worker_states[worker_id] = WorkerState.DEAD
 
-    def heartbeat(self, worker_id: str) -> None:
-        # No lock needed: _last_seen is only read by _check_worker_heartbeats
-        # (which holds the lock), and monotonic float writes are atomic on CPython.
+    def heartbeat(self, worker_id: str, counter_snapshot: CounterSnapshot | None = None) -> None:
         self._last_seen[worker_id] = time.monotonic()
+        if counter_snapshot is not None:
+            with self._lock:
+                existing = self._worker_counters.get(worker_id)
+                if existing is None or counter_snapshot.generation > existing.generation:
+                    self._worker_counters[worker_id] = counter_snapshot
 
     def get_status(self) -> JobStatus:
         with self._lock:
@@ -785,6 +651,28 @@ class ZephyrCoordinator:
                     for wid, state in self._worker_states.items()
                 },
             )
+
+    def get_counters(self, worker_id: str | None = None) -> dict[str, int]:
+        """Return counter values, optionally filtered to a single worker.
+
+        Args:
+            worker_id: If provided, return the latest snapshot for this worker
+                only. If None, return totals derived from completed and
+                in-flight snapshots.
+        """
+        with self._lock:
+            if worker_id is not None:
+                snap = self._worker_counters.get(worker_id)
+                return dict(snap.counters) if snap is not None else {}
+
+            totals: dict[str, int] = {}
+            for snap in self._completed_counters:
+                for name, value in snap.counters.items():
+                    totals[name] = totals.get(name, 0) + value
+            for snap in self._worker_counters.values():
+                for name, value in snap.counters.items():
+                    totals[name] = totals.get(name, 0) + value
+            return totals
 
     def get_fatal_error(self) -> str | None:
         with self._lock:
@@ -814,6 +702,9 @@ class ZephyrCoordinator:
             self._task_attempts = {task.shard_idx: 0 for task in tasks}
             self._fatal_error = None
             self._is_last_stage = is_last_stage
+            # Only reset in-flight worker snapshots; completed snapshots
+            # accumulate across stages for full pipeline visibility.
+            self._worker_counters = {}
 
     def _wait_for_stage(self) -> None:
         """Block until current stage completes or error occurs."""
@@ -877,7 +768,6 @@ class ZephyrCoordinator:
         self,
         plan: PhysicalPlan,
         execution_id: str,
-        hints: ExecutionHint,
     ) -> list:
         """Run complete pipeline, blocking until done. Returns flattened results."""
         with self._lock:
@@ -909,10 +799,11 @@ class ZephyrCoordinator:
                     continue
 
                 # Compute aux data for joins
-                aux_per_shard = self._compute_join_aux(stage.operations, shards, hints, stage_idx)
+                aux_per_shard = self._compute_join_aux(stage.operations, shards, stage_idx)
 
                 # Build and submit tasks
-                tasks = _compute_tasks_from_shards(shards, stage, hints, aux_per_shard, stage_name=stage_label)
+                tasks = _compute_tasks_from_shards(shards, stage, aux_per_shard, stage_name=stage_label)
+                output_stage_name = tasks[0].stage_name if tasks else stage_label
                 logger.info("[%s] Starting stage %s with %d tasks", self._execution_id, stage_label, len(tasks))
                 self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
 
@@ -921,13 +812,19 @@ class ZephyrCoordinator:
 
                 # Collect and regroup results for next stage
                 result_refs = self._collect_results()
-                shards = _regroup_result_refs(result_refs, len(shards), output_shard_count=stage.output_shards)
+                stage_is_scatter = any(isinstance(op, Scatter) for op in stage.operations)
+                shards = _regroup_result_refs(
+                    result_refs,
+                    len(shards),
+                    output_shard_count=stage.output_shards,
+                    is_scatter=stage_is_scatter,
+                    scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{output_stage_name}",
+                )
 
             # Flatten final results
             flat_result = []
             for shard in shards:
-                for chunk in shard.chunks:
-                    flat_result.extend(list(chunk))
+                flat_result.extend(shard)
 
             # Signal workers to shut down now that all stages are complete.
             self.shutdown()
@@ -941,7 +838,6 @@ class ZephyrCoordinator:
         self,
         operations: list[PhysicalOp],
         shard_refs: list[Shard],
-        hints: ExecutionHint,
         parent_stage_idx: int,
     ) -> list[dict[int, Shard]] | None:
         """Execute right sub-plans for join operations, returning aux refs per shard."""
@@ -959,11 +855,19 @@ class ZephyrCoordinator:
                     continue
 
                 join_stage_label = f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}"
-                right_tasks = _compute_tasks_from_shards(right_refs, right_stage, hints, stage_name=join_stage_label)
+                right_tasks = _compute_tasks_from_shards(right_refs, right_stage, stage_name=join_stage_label)
+                join_output_stage_name = right_tasks[0].stage_name if right_tasks else join_stage_label
                 self._start_stage(join_stage_label, right_tasks)
                 self._wait_for_stage()
                 raw = self._collect_results()
-                right_refs = _regroup_result_refs(raw, len(right_refs), output_shard_count=right_stage.output_shards)
+                right_is_scatter = any(isinstance(op, Scatter) for op in right_stage.operations)
+                right_refs = _regroup_result_refs(
+                    raw,
+                    len(right_refs),
+                    output_shard_count=right_stage.output_shards,
+                    is_scatter=right_is_scatter,
+                    scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{join_output_stage_name}",
+                )
 
             if len(shard_refs) != len(right_refs):
                 raise ValueError(
@@ -986,6 +890,11 @@ class ZephyrCoordinator:
     def shutdown(self) -> None:
         """Signal workers to exit. Worker group is managed by ZephyrContext."""
         logger.info("[coordinator.shutdown] Starting shutdown")
+
+        counters = self.get_counters()
+        if counters:
+            logger.info("[coordinator.shutdown] Final counters: %s", counters)
+
         self._shutdown_event.set()
 
         # Wait for coordinator thread to exit
@@ -1049,9 +958,17 @@ class ZephyrWorker:
         self._shutdown_event = threading.Event()
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
+        # Single-writer (task thread) / single-reader (heartbeat thread).
+        # increment_counter is lock-free.  The heartbeat thread copies
+        # _counters via dict() which is safe for approximate reads.
+        self._counters: dict[str, int] = {}
+        self._counter_generation: int = 0
+        self._last_reported_counters: dict[str, int] = {}
 
-        # Build descriptive worker ID from actor context
+        # Capture shutdown_event from the actor context while the ContextVar
+        # is still set (child threads in Python <3.12 don't inherit it).
         actor_ctx = current_actor()
+        self._host_shutdown_event = actor_ctx.shutdown_event
         self._worker_id = f"{actor_ctx.group_name}-{actor_ctx.index}"
 
         # Register with coordinator - wait is not stricly necessary, but it reduces the complexity
@@ -1084,6 +1001,25 @@ class ZephyrWorker:
             )
         return self._shared_data_cache[name]
 
+    def increment_counter(self, name: str, value: int = 1) -> None:
+        self._counters[name] = self._counters.get(name, 0) + value
+
+    def get_counter_snapshot(self) -> CounterSnapshot:
+        self._counter_generation += 1
+        return CounterSnapshot(counters=dict(self._counters), generation=self._counter_generation)
+
+    def _reset_counters(self) -> None:
+        """Clear counters for a new task."""
+        self._counters = {}
+
+    def _counters_changed(self) -> bool:
+        """Return True if counters have changed since the last heartbeat report."""
+        current = self._counters
+        if current == self._last_reported_counters:
+            return False
+        self._last_reported_counters = dict(current)
+        return True
+
     def _run_polling(self, coordinator: ActorHandle) -> None:
         """Main polling loop. Runs in a background thread started by __init__."""
         logger.info("[%s] Starting polling loop", self._worker_id)
@@ -1102,7 +1038,9 @@ class ZephyrWorker:
         finally:
             self._shutdown_event.set()
             heartbeat_thread.join(timeout=5.0)
-            logger.debug("[%s] Polling loop ended", self._worker_id)
+            logger.debug("[%s] Polling loop ended, signaling host shutdown", self._worker_id)
+            if self._host_shutdown_event is not None:
+                self._host_shutdown_event.set()
 
     def _heartbeat_loop(
         self, coordinator: ActorHandle, interval: float = 5.0, max_consecutive_failures: int = 5
@@ -1113,8 +1051,13 @@ class ZephyrWorker:
         while not self._shutdown_event.is_set():
             try:
                 # Block on result to avoid congesting the coordinator RPC pipe
-                # with fire-and-forget heartbeats.
-                coordinator.heartbeat.remote(self._worker_id).result()
+                # with fire-and-forget heartbeats. Only send counter snapshot
+                # when values have changed.
+                snapshot = self.get_counter_snapshot() if self._counters_changed() else None
+                coordinator.heartbeat.remote(
+                    self._worker_id,
+                    snapshot,
+                ).result()
                 heartbeat_count += 1
                 consecutive_failures = 0
                 if heartbeat_count % 10 == 1:
@@ -1199,8 +1142,15 @@ class ZephyrWorker:
                 )
                 # Block until coordinator records the result. This ensures
                 # report_result is fully processed before the next pull_task,
-                # preventing _in_flight tracking races.
-                coordinator.report_result.remote(self._worker_id, task.shard_idx, attempt, result).result()
+                # preventing _in_flight tracking races.  Send the final counter
+                # snapshot so no increments are lost between heartbeats.
+                coordinator.report_result.remote(
+                    self._worker_id,
+                    task.shard_idx,
+                    attempt,
+                    result,
+                    self.get_counter_snapshot(),
+                ).result()
                 task_count += 1
             except Exception as e:
                 logger.error("Worker %s error on shard %d: %s", self._worker_id, task.shard_idx, e)
@@ -1221,15 +1171,17 @@ class ZephyrWorker:
         self._chunk_prefix = config["chunk_prefix"]
         self._execution_id = config["execution_id"]
 
+        # Reset counters for the new task
+        self._reset_counters()
+
         _worker_ctx_var.set(self)
 
         logger.info(
-            "[%s] [shard %d/%d] Starting stage=%s, %d input chunks, %d ops",
+            "[%s] [shard %d/%d] Starting stage=%s, %d ops",
             self._execution_id,
             task.shard_idx,
             task.total_shards,
             task.stage_name,
-            len(task.shard.chunks),
             len(task.operations),
         )
 
@@ -1237,22 +1189,23 @@ class ZephyrWorker:
             shard=task.shard,
             shard_idx=task.shard_idx,
             total_shards=task.total_shards,
-            chunk_size=task.chunk_size,
             aux_shards=task.aux_shards,
         )
 
         stage_dir = f"{self._chunk_prefix}/{self._execution_id}/{task.stage_name}"
-        is_scatter = any(isinstance(op, Scatter) for op in task.operations)
+        external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
+        scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
 
-        results = _write_stage_chunks(
-            run_stage(stage_ctx, task.operations),
+        result = _write_stage_output(
+            run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir),
             source_shard=task.shard_idx,
             stage_dir=stage_dir,
             shard_idx=task.shard_idx,
-            is_scatter=is_scatter,
+            scatter_op=scatter_op,
+            total_shards=task.total_shards,
         )
-        logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, len(results))
-        return TaskResult(chunks=results)
+        logger.info("[shard %d] Complete: %d refs produced", task.shard_idx, len(result.shard.refs))
+        return result
 
     def __repr__(self) -> str:
         return f"ZephyrWorker(id={self._worker_id})"
@@ -1268,18 +1221,35 @@ def _regroup_result_refs(
     result_refs: dict[int, TaskResult],
     input_shard_count: int,
     output_shard_count: int | None = None,
+    is_scatter: bool = False,
+    scatter_manifest_dir: str = "",
 ) -> list[Shard]:
-    """Regroup worker output refs by output shard index without loading data."""
-    output_by_shard: dict[int, list[Chunk]] = defaultdict(list)
+    """Regroup worker output refs by output shard index without loading data.
 
-    for _input_idx, result in result_refs.items():
-        for chunk in result.chunks:
-            output_by_shard[chunk.target_shard].append(chunk.data)
-
-    num_output = max(max(output_by_shard.keys(), default=0) + 1, input_shard_count)
+    Non-scatter: each worker's ListShard maps to its own index (identity).
+    Scatter: writes a consolidated scatter manifest combining all sidecar
+    metadata into a single file, then gives each reducer a shard containing
+    just the manifest path.
+    """
+    num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
     if output_shard_count is not None:
         num_output = max(num_output, output_shard_count)
-    return [Shard(chunks=output_by_shard.get(idx, [])) for idx in range(num_output)]
+
+    if is_scatter:
+        # Collect all scatter file paths from all workers
+        all_paths: list[str] = []
+        for result in result_refs.values():
+            all_paths.extend(result.shard)
+
+        # Write consolidated manifest and point reducers at it
+        manifest_path = f"{scatter_manifest_dir}/{_SCATTER_MANIFEST_NAME}"
+        _write_scatter_manifest(all_paths, manifest_path)
+        shared_refs = MemChunk(items=[manifest_path])
+
+        return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
+
+    # Non-scatter: each result's shard maps to its own index
+    return [result_refs[idx].shard if idx in result_refs else ListShard(refs=[]) for idx in range(num_output)]
 
 
 # ---------------------------------------------------------------------------
@@ -1293,7 +1263,6 @@ class _CoordinatorJobConfig:
 
     plan: PhysicalPlan
     execution_id: str
-    hints: ExecutionHint
     chunk_storage_prefix: str
     no_workers_timeout: float
     max_workers: int
@@ -1302,7 +1271,7 @@ class _CoordinatorJobConfig:
     pipeline_id: int
 
 
-def _run_coordinator_job(config: _CoordinatorJobConfig, result_path: str) -> None:
+def _run_coordinator_job(config_path: str, result_path: str) -> None:
     """Entrypoint for the coordinator job.
 
     Hosts the coordinator actor in-process via host_actor(), creates
@@ -1311,12 +1280,21 @@ def _run_coordinator_job(config: _CoordinatorJobConfig, result_path: str) -> Non
     maintenance loop (no separate watchdog thread).
     """
     from fray.v2.client import current_client
+    from iris.cluster.client.job_info import get_job_info
+
+    logger.info("Loading coordinator config from %s", config_path)
+    with open_url(config_path, "rb") as f:
+        config: _CoordinatorJobConfig = cloudpickle.loads(f.read())
+
+    job_info = get_job_info()
+    attempt_id = job_info.attempt_id if job_info else 0
 
     logger.info(
-        "Coordinator job starting: name=%s, execution_id=%s, pipeline=%d",
+        "Coordinator job starting: name=%s, execution_id=%s, pipeline=%d, attempt=%d",
         config.name,
         config.execution_id,
         config.pipeline_id,
+        attempt_id,
     )
 
     client = current_client()
@@ -1341,11 +1319,15 @@ def _run_coordinator_job(config: _CoordinatorJobConfig, result_path: str) -> Non
     worker_group = None
 
     if actual_workers > 0:
+        # Worker name includes attempt ID so that if a stale coordinator
+        # process from a previous attempt is still running, its shutdown
+        # targets the old name and cannot kill this attempt's workers.
+        worker_name = f"zephyr-{config.name}-p{config.pipeline_id}-workers-a{attempt_id}"
         logger.info("Starting %d workers (max=%d, shards=%d)", actual_workers, config.max_workers, num_shards)
         worker_group = client.create_actor_group(
             ZephyrWorker,
             coordinator,
-            name=f"zephyr-{config.name}-p{config.pipeline_id}-workers",
+            name=worker_name,
             count=actual_workers,
             resources=config.worker_resources,
             actor_config=ActorConfig(max_task_retries=10),
@@ -1356,7 +1338,7 @@ def _run_coordinator_job(config: _CoordinatorJobConfig, result_path: str) -> Non
         coordinator.set_worker_group.remote(worker_group).result()
 
     try:
-        results = coordinator.run_pipeline.remote(config.plan, config.execution_id, config.hints).result()
+        results = coordinator.run_pipeline.remote(config.plan, config.execution_id).result()
 
         ensure_parent_dir(result_path)
         with open_url(result_path, "wb") as f:
@@ -1370,11 +1352,14 @@ def _run_coordinator_job(config: _CoordinatorJobConfig, result_path: str) -> Non
                 f.write(cloudpickle.dumps(e))
         raise
     finally:
+        # Signal coordinator shutdown first so workers receive SHUTDOWN from
+        # pull_task and self-terminate via shutdown_event → exit_actor()
+        # before worker_group.shutdown() sends __ray_terminate__.
+        with suppress(Exception):
+            coordinator.shutdown.remote().result(timeout=10.0)
         if worker_group is not None:
             with suppress(Exception):
                 worker_group.shutdown()
-        with suppress(Exception):
-            coordinator.shutdown.remote().result()
         with suppress(Exception):
             hosted.shutdown()
 
@@ -1413,6 +1398,9 @@ class ZephyrContext:
             min(max_workers, num_shards), computed at first execute(). If None,
             defaults to os.cpu_count() for LocalClient, or 128 for distributed clients.
         resources: Resource config per worker.
+        coordinator_resources: Resource config for the coordinator job. The coordinator
+            accumulates scatter manifests for all shards in memory; increase ram for
+            large pipelines (many shards). Defaults to 5 GB.
         chunk_storage_prefix: Storage prefix for intermediate chunks. If None, defaults
             to MARIN_PREFIX/tmp/zephyr or /tmp/zephyr.
         name: Descriptive name for this context, used in actor group names for debugging.
@@ -1427,6 +1415,7 @@ class ZephyrContext:
     client: Client | None = None
     max_workers: int | None = None
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
+    coordinator_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="5g"))
     chunk_storage_prefix: str | None = None
     name: str = ""
     no_workers_timeout: float | None = None
@@ -1460,7 +1449,8 @@ class ZephyrContext:
             self.no_workers_timeout = 6 * 60 * 60  # 6 hours
 
         if self.chunk_storage_prefix is None:
-            self.chunk_storage_prefix = marin_temp_bucket(ttl_days=3, prefix="zephyr")
+            # TODO: consider increasing TTL for long-running pipelines (e.g. multi-day fuzzy dedup)
+            self.chunk_storage_prefix = marin_temp_bucket(ttl_days=1, prefix="zephyr")
 
         # make sure each context is unique
         self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"
@@ -1498,7 +1488,6 @@ class ZephyrContext:
     def execute(
         self,
         dataset: Dataset,
-        hints: ExecutionHint = ExecutionHint(),
         verbose: bool = False,
         dry_run: bool = False,
     ) -> Sequence:
@@ -1510,7 +1499,7 @@ class ZephyrContext:
         pipeline is retried up to ``max_execution_retries`` times.
         Application errors (``ZephyrWorkerError``) are never retried.
         """
-        plan = compute_plan(dataset, hints)
+        plan = compute_plan(dataset)
         if verbose or dry_run:
             _print_plan(dataset.operations, plan)
         if dry_run:
@@ -1528,6 +1517,7 @@ class ZephyrContext:
                 "Starting zephyr pipeline: %s (pipeline %d, attempt %d)", execution_id, self._pipeline_id, attempt
             )
 
+            config_path = f"{self.chunk_storage_prefix}/{execution_id}/job-config.pkl"
             result_path = f"{self.chunk_storage_prefix}/{execution_id}/results.pkl"
 
             try:
@@ -1536,7 +1526,6 @@ class ZephyrContext:
                 config = _CoordinatorJobConfig(
                     plan=plan,
                     execution_id=execution_id,
-                    hints=hints,
                     chunk_storage_prefix=self.chunk_storage_prefix,
                     no_workers_timeout=self.no_workers_timeout,
                     max_workers=self.max_workers,
@@ -1544,6 +1533,9 @@ class ZephyrContext:
                     name=self.name,
                     pipeline_id=self._pipeline_id,
                 )
+                ensure_parent_dir(config_path)
+                with open_url(config_path, "wb") as f:
+                    f.write(cloudpickle.dumps(config))
 
                 job_name = f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}"
                 # The wrapper job just blocks on child actors; real
@@ -1558,9 +1550,9 @@ class ZephyrContext:
                             name=job_name,
                             entrypoint=Entrypoint.from_callable(
                                 _run_coordinator_job,
-                                args=(config, result_path),
+                                args=(config_path, result_path),
                             ),
-                            resources=ResourceConfig(cpu=1, ram="1g"),
+                            resources=self.coordinator_resources,
                         )
                     )
 
@@ -1621,14 +1613,19 @@ class ZephyrContext:
 
 
 def _reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
-    """Reshard shard refs by output shard index without loading data."""
-    output_by_shard: dict[int, list[Chunk]] = defaultdict(list)
+    """Reshard shard refs by output shard index without loading data.
+
+    Only supported on ListShards (non-scatter data).
+    """
+    output_by_shard: dict[int, list[Iterable]] = defaultdict(list)
     output_idx = 0
     for shard in shards:
-        for chunk in shard.chunks:
+        if not isinstance(shard, ListShard):
+            raise ValueError("Reshard is only supported on ListShard (non-scatter data)")
+        for chunk in shard.refs:
             output_by_shard[output_idx].append(chunk)
             output_idx = (output_idx + 1) % num_shards
-    return [Shard(chunks=output_by_shard.get(idx, [])) for idx in range(num_shards)]
+    return [ListShard(refs=output_by_shard.get(idx, [])) for idx in range(num_shards)]
 
 
 def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
@@ -1641,9 +1638,9 @@ def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
         items_by_shard[item.shard_idx].append(item.data)
 
     num_shards = max(items_by_shard.keys()) + 1 if items_by_shard else 0
-    shards = []
+    shards: list[Shard] = []
     for i in range(num_shards):
-        shards.append(Shard(chunks=[MemChunk(items=items_by_shard.get(i, []))]))
+        shards.append(ListShard(refs=[MemChunk(items=items_by_shard.get(i, []))]))
 
     return shards
 
@@ -1651,7 +1648,6 @@ def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
 def _compute_tasks_from_shards(
     shard_refs: list[Shard],
     stage,
-    hints: ExecutionHint,
     aux_per_shard: list[dict[int, Shard]] | None = None,
     stage_name: str | None = None,
 ) -> list[ShardTask]:
@@ -1671,7 +1667,6 @@ def _compute_tasks_from_shards(
             ShardTask(
                 shard_idx=i,
                 total_shards=total,
-                chunk_size=hints.chunk_size,
                 shard=shard,
                 operations=stage.operations,
                 stage_name=output_stage_name,

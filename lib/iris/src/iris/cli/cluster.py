@@ -19,7 +19,6 @@ from iris.cli.build import (
     build_image,
     find_marin_root,
     get_git_sha,
-    push_to_ghcr,
 )
 from iris.cli.main import require_controller_url
 from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
@@ -98,14 +97,12 @@ def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = Fal
     build_image(
         image_type=image_type,
         tag=local_tag,
-        push=False,
+        push=True,
         context=None,
         platform="linux/amd64",
         ghcr_org=org,
         verbose=verbose,
     )
-    click.echo()
-    push_to_ghcr(local_tag, ghcr_org=org, image_name=image_name, version=version, verbose=verbose)
     click.echo()
 
 
@@ -129,14 +126,12 @@ def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
     build_image(
         image_type="task",
         tag=local_tag,
-        push=False,
+        push=True,
         context=marin_root,
         platform="linux/amd64",
         ghcr_org=org,
         verbose=verbose,
     )
-    click.echo()
-    push_to_ghcr(local_tag, ghcr_org=org, image_name=image_name, version=version, verbose=verbose)
     click.echo()
 
 
@@ -242,7 +237,7 @@ def cluster_start(ctx, local: bool):
     click.echo("Starting controller...")
     try:
         if is_local:
-            from iris.cluster.local_cluster import LocalCluster
+            from iris.cluster.providers.local.cluster import LocalCluster
 
             cluster = LocalCluster(config)
             address = cluster.start()
@@ -260,8 +255,8 @@ def cluster_start(ctx, local: bool):
             cluster.wait()
         else:
             iris_config = IrisConfig(config)
-            platform = iris_config.platform()
-            address = platform.start_controller(config)
+            bundle = iris_config.provider_bundle()
+            address = bundle.controller.start_controller(config)
             click.echo(f"Controller started at {address}")
             click.echo("\nController is running with integrated autoscaler.")
             click.echo("Use 'iris --config=... cluster status' to check cluster state.")
@@ -300,10 +295,10 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
     _build_cluster_images(config, verbose=verbose)
 
     iris_config = IrisConfig(config)
-    platform = iris_config.platform()
+    bundle = iris_config.provider_bundle()
 
     try:
-        platform.stop_all(config)
+        bundle.controller.stop_all(config)
     except Exception:
         click.echo("No existing cluster to stop, continuing")
 
@@ -314,7 +309,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
             clear_remote_state(remote_state_dir)
 
     click.echo("Starting controller...")
-    address = platform.start_controller(config)
+    address = bundle.controller.start_controller(config)
     click.echo(f"Controller at {address}")
 
     stop_event = threading.Event()
@@ -323,7 +318,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
         signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
 
     try:
-        with platform.tunnel(address) as url:
+        with bundle.controller.tunnel(address) as url:
             click.echo(f"Tunnel ready: {url}")
 
             client = cluster_connect.ControllerServiceClientSync(url, timeout_ms=30000)
@@ -366,11 +361,11 @@ def cluster_stop(ctx, dry_run: bool, label_override: str | None):
 
     try:
         iris_config = IrisConfig(config)
-        platform = iris_config.platform()
+        bundle = iris_config.provider_bundle()
         try:
-            names = platform.stop_all(config, dry_run=dry_run, label_prefix=label_override)
+            names = bundle.controller.stop_all(config, dry_run=dry_run, label_prefix=label_override)
         finally:
-            platform.shutdown()
+            bundle.controller.shutdown()
     except Exception as e:
         click.echo(f"Failed to stop cluster: {e}", err=True)
         raise SystemExit(1) from e
@@ -573,6 +568,58 @@ def controller(ctx):
     pass
 
 
+@controller.command("serve")
+@click.option("--host", default="0.0.0.0", help="Bind host")
+@click.option("--port", default=10000, type=int, help="Bind port")
+@click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
+@click.option(
+    "--checkpoint-path",
+    default=None,
+    help="Restore from this specific checkpoint directory (e.g. gs://bucket/.../controller-state/1234567890)",
+)
+@click.option(
+    "--checkpoint-interval",
+    default=None,
+    type=float,
+    help="Periodic checkpoint interval in seconds (default: hourly)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Start in dry-run mode: compute scheduling but suppress all side effects",
+)
+@click.pass_context
+def controller_serve(ctx, host, port, scheduler_interval, checkpoint_path, checkpoint_interval, dry_run):
+    """Start a local controller process.
+
+    Loads the cluster config, restores from checkpoint, and runs the full
+    scheduling loop. Use --dry-run to suppress all side effects (no task
+    dispatch, no VM changes, no checkpoint writes) while still serving the
+    dashboard and RPC for inspection.
+
+    Example (dry-run with checkpoint restore)::
+
+        iris --config=cluster.yaml cluster controller serve --dry-run \\
+            --checkpoint-path gs://bucket/controller-state/1234567890
+    """
+    from iris.cluster.controller.main import run_controller_serve
+
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required for controller serve")
+
+    run_controller_serve(
+        config,
+        host=host,
+        port=port,
+        scheduler_interval=scheduler_interval,
+        checkpoint_path=checkpoint_path,
+        checkpoint_interval=checkpoint_interval,
+        dry_run=dry_run,
+    )
+
+
 @controller.command("checkpoint")
 @click.option("--stop", is_flag=True, default=False, help="Stop the controller after taking a checkpoint")
 @click.pass_context
@@ -585,7 +632,7 @@ def controller_checkpoint(ctx, stop: bool):
     controller_url = require_controller_url(ctx)
     client = cluster_connect.ControllerServiceClientSync(controller_url)
     try:
-        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
+        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest(), timeout_ms=60_000)
     except Exception as e:
         click.echo(f"Checkpoint failed: {e}", err=True)
         raise SystemExit(1) from e
@@ -604,9 +651,9 @@ def controller_checkpoint(ctx, stop: bool):
         from iris.cluster.config import IrisConfig
 
         iris_config = IrisConfig(config)
-        platform = iris_config.platform()
+        bundle = iris_config.provider_bundle()
         try:
-            platform.stop_controller(config)
+            bundle.controller.stop_controller(config)
             click.echo("Controller stopped.")
         except Exception as e:
             click.echo(f"Failed to stop controller: {e}", err=True)
@@ -614,8 +661,17 @@ def controller_checkpoint(ctx, stop: bool):
 
 
 @controller.command("restart")
+@click.option(
+    "--skip-checkpoint",
+    is_flag=True,
+    default=False,
+    help="Skip the pre-restart checkpoint (use if checkpoint is timing out).",
+)
+@click.option(
+    "--checkpoint-timeout", type=int, default=300, show_default=True, help="Checkpoint RPC timeout in seconds."
+)
 @click.pass_context
-def controller_restart(ctx):
+def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
     """Restart controller with state preservation (remote platforms only).
 
     Takes a checkpoint, builds fresh images, stops the controller, and starts
@@ -633,18 +689,47 @@ def controller_restart(ctx):
             "Stop and restart the 'iris cluster start --local' process instead."
         )
 
-    controller_url = require_controller_url(ctx)
+    iris_config = IrisConfig(config)
+    bundle = iris_config.provider_bundle()
+
+    # Try to discover existing controller for checkpoint + restart.
+    # If none exists, fall back to a fresh start (idempotent).
+    try:
+        controller_url = require_controller_url(ctx)
+    except (RuntimeError, click.ClickException):
+        click.echo("No existing controller found. Starting fresh...")
+        _pin_latest_images(config)
+        verbose = ctx.obj.get("verbose", False)
+        built = _build_cluster_images(config, verbose=verbose)
+        if built:
+            click.echo("Built image tags:")
+            for name, tag in built.items():
+                click.echo(f"  {name}: {tag}")
+        try:
+            address = bundle.controller.start_controller(config)
+        except Exception as e:
+            click.echo(f"Failed to start controller: {e}", err=True)
+            raise SystemExit(1) from e
+        click.echo(f"Controller started at {address}")
+        return
 
     # Checkpoint
-    client = cluster_connect.ControllerServiceClientSync(controller_url)
-    try:
-        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
-    except Exception as e:
-        click.echo(f"Checkpoint failed: {e}", err=True)
-        raise SystemExit(1) from e
-    finally:
-        client.close()
-    click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
+    if skip_checkpoint:
+        click.echo("Skipping pre-restart checkpoint.")
+    else:
+        click.echo(f"Taking checkpoint (timeout {checkpoint_timeout}s)...")
+        client = cluster_connect.ControllerServiceClientSync(controller_url)
+        try:
+            resp = client.begin_checkpoint(
+                cluster_pb2.Controller.BeginCheckpointRequest(),
+                timeout_ms=checkpoint_timeout * 1000,
+            )
+        except Exception as e:
+            click.echo(f"Checkpoint failed: {e}", err=True)
+            raise SystemExit(1) from e
+        finally:
+            client.close()
+        click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
 
     # Build fresh images so the new controller VM gets the latest code
     _pin_latest_images(config)
@@ -655,11 +740,8 @@ def controller_restart(ctx):
         for name, tag in built.items():
             click.echo(f"  {name}: {tag}")
 
-    # Restart controller in-place (re-runs bootstrap on existing VM)
-    iris_config = IrisConfig(config)
-    platform = iris_config.platform()
     try:
-        address = platform.restart_controller(config)
+        address = bundle.controller.restart_controller(config)
     except Exception as e:
         click.echo(f"Failed to restart controller: {e}", err=True)
         raise SystemExit(1) from e

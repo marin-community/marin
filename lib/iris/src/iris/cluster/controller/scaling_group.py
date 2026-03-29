@@ -3,9 +3,10 @@
 
 """ScalingGroup owns slices and manages scaling state for a single group.
 
-Each ScalingGroup uses a Platform to create/discover slices, storing SliceHandle
-references directly for internal tracking. It maintains scaling stats
-(per-slice idle tracking, backoff, cooldowns) and provides scaling policy helpers.
+Each ScalingGroup uses a WorkerInfraProvider to create/discover slices, storing
+SliceHandle references directly for internal tracking.  It maintains scaling
+stats (per-slice idle tracking, backoff, cooldowns) and provides scaling policy
+helpers.
 """
 
 from __future__ import annotations
@@ -18,7 +19,8 @@ from enum import Enum, StrEnum
 
 from collections.abc import Sequence
 
-from iris.cluster.platform.base import Labels, Platform, SliceHandle
+from iris.cluster.providers.protocols import WorkerInfraProvider
+from iris.cluster.providers.types import Labels, SliceHandle
 from iris.cluster.constraints import (
     AttributeValue,
     CONSTRAINT_REGISTRY,
@@ -126,7 +128,7 @@ def prepare_slice_config(
     parent_config: config_pb2.ScaleGroupConfig,
     label_prefix: str,
 ) -> config_pb2.SliceConfig:
-    """Build a SliceConfig for platform.create_slice() from a template.
+    """Build a SliceConfig for WorkerInfraProvider.create_slice() from a template.
 
     Copies the template and sets the name_prefix and managed/scale-group labels.
     Propagates num_vms from the parent ScaleGroupConfig when the template
@@ -211,7 +213,7 @@ class ScalingGroup:
     """Owns slices for a single scale group.
 
     Each ScalingGroup:
-    - Uses a Platform to create/discover slices
+    - Uses a WorkerInfraProvider to create/discover slices
     - Stores SliceHandle references directly for internal tracking
     - Maintains scaling stats (per-slice idle tracking, backoff, cooldowns)
     - Provides scaling policy helpers (can_scale_up, can_scale_down)
@@ -221,7 +223,7 @@ class ScalingGroup:
     def __init__(
         self,
         config: config_pb2.ScaleGroupConfig,
-        platform: Platform,
+        platform: WorkerInfraProvider,
         label_prefix: str = "iris",
         scale_up_cooldown: Duration = DEFAULT_SCALE_UP_COOLDOWN,
         backoff_initial: Duration = DEFAULT_BACKOFF_INITIAL,
@@ -337,8 +339,8 @@ class ScalingGroup:
             cur.execute("DELETE FROM slices WHERE scale_group = ?", (self.name,))
 
     @property
-    def platform(self) -> Platform:
-        """Platform instance for this scale group."""
+    def platform(self) -> WorkerInfraProvider:
+        """Worker infrastructure provider for this scale group."""
         return self._platform
 
     @property

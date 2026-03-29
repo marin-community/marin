@@ -6,6 +6,10 @@
 from dataclasses import dataclass, field
 from typing import Protocol
 
+# Header used by ActorProxy to route requests to the correct actor endpoint.
+# Shared constant between ProxyResolver (client-side) and ActorProxy (server-side).
+ACTOR_ENDPOINT_HEADER = "x-iris-actor-endpoint"
+
 
 @dataclass
 class ResolvedEndpoint:
@@ -72,3 +76,33 @@ class FixedResolver:
         urls = self._endpoints.get(name, [])
         endpoints = [ResolvedEndpoint(url=url, actor_id=f"fixed-{name}-{i}") for i, url in enumerate(urls)]
         return ResolveResult(name=name, endpoints=endpoints)
+
+
+class ProxyResolver:
+    """Resolver that routes actor calls through the controller's actor proxy.
+
+    Instead of resolving to the actor's direct address, returns the controller
+    URL so all RPCs go through the proxy. The proxy uses the
+    ``X-Iris-Actor-Endpoint`` header to resolve the actual actor endpoint.
+
+    The caller passes the full actor name as registered in the endpoint registry
+    (e.g. ``/user/job/coordinator/actor-0``).
+
+    Args:
+        controller_url: Controller URL (e.g., ``http://localhost:8080``)
+    """
+
+    def __init__(self, controller_url: str):
+        self._controller_url = controller_url.rstrip("/")
+
+    def resolve(self, name: str) -> ResolveResult:
+        return ResolveResult(
+            name=name,
+            endpoints=[
+                ResolvedEndpoint(
+                    url=self._controller_url,
+                    actor_id=f"proxy-{name}",
+                    metadata={ACTOR_ENDPOINT_HEADER: name},
+                )
+            ],
+        )

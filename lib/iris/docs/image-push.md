@@ -124,7 +124,7 @@ docker pull us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-wo
 
 ## Code
 
-- **Rewrite logic**: `lib/iris/src/iris/cluster/platform/bootstrap.py`
+- **Rewrite logic**: `lib/iris/src/iris/providers/bootstrap.py`
   - `zone_to_multi_region()`: maps GCP zone → continent (`us`, `europe`, `asia`)
   - `rewrite_ghcr_to_ar_remote()`: rewrites `ghcr.io/...` → `{continent}-docker.pkg.dev/.../ghcr-mirror/...`
 - **Autoscaler**: `_per_group_bootstrap_config()` rewrites the worker image per scale group

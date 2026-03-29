@@ -10,7 +10,7 @@ Key design principles:
 - Autoscaler does NOT track slices directly - that's ScalingGroup's job
 - Scale-up decisions come from Autoscaler, scale-down is delegated to ScalingGroup
 - ScalingGroup owns per-slice idle tracking and decides which slices to scale down
-- Bootstrap is handled internally by each Platform implementation, not by the autoscaler
+- Bootstrap is handled internally by each provider implementation, not by the autoscaler
 
 The run_once() flow splits into two phases:
 - refresh(): state-read phase — scale down idle slices from tracked state
@@ -28,11 +28,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
-from iris.cluster.platform.base import (
+from iris.cluster.providers.protocols import WorkerInfraProvider
+from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
     CommandResult,
-    Platform,
     QuotaExhaustedError,
     RemoteWorkerHandle,
     SliceHandle,
@@ -47,7 +47,7 @@ from iris.cluster.constraints import (
     soft_constraint_score,
     split_hard_soft,
 )
-from iris.cluster.controller.db import SCALING_GROUPS, SLICES, TRACKED_WORKERS, ControllerDB
+from iris.cluster.controller.db import ControllerDB, _decode_json_list, _decode_timestamp_ms
 from iris.cluster.types import WorkerStatusMap
 from iris.cluster.controller.scaling_group import (
     GroupAvailability,
@@ -764,7 +764,7 @@ class Autoscaler:
         self,
         scale_groups: dict[str, ScalingGroup],
         evaluation_interval: Duration,
-        platform: Platform,
+        platform: WorkerInfraProvider,
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
         db: ControllerDB | None = None,
@@ -775,7 +775,7 @@ class Autoscaler:
         Args:
             scale_groups: Map of scale group name to ScalingGroup instance
             evaluation_interval: How often to evaluate scaling decisions
-            platform: Platform instance for shutdown lifecycle
+            platform: WorkerInfraProvider instance for shutdown lifecycle
             threads: Optional thread container for testing
             base_worker_config: Base worker config merged with per-group overrides
                 and passed to platform.create_slice(). None disables bootstrap (test/local mode).
@@ -807,7 +807,7 @@ class Autoscaler:
         cls,
         scale_groups: dict[str, ScalingGroup],
         config: config_pb2.AutoscalerConfig,
-        platform: Platform,
+        platform: WorkerInfraProvider,
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
         db: ControllerDB | None = None,
@@ -817,7 +817,7 @@ class Autoscaler:
         Args:
             scale_groups: Map of scale group name to ScalingGroup instance
             config: Autoscaler configuration proto (with defaults already applied)
-            platform: Platform instance for shutdown lifecycle
+            platform: WorkerInfraProvider instance for shutdown lifecycle
             threads: Optional thread container for testing
             base_worker_config: Base worker config merged with per-group overrides
             db: Optional DB handle for write-through persistence.
@@ -1068,6 +1068,8 @@ class Autoscaler:
         """
         action = self._log_action("scale_up", group.name, reason=reason, status="pending")
 
+        slice_obj = None
+
         try:
             logger.info("Scaling up %s: %s", group.name, reason)
             wc = self._per_group_worker_config(group)
@@ -1111,12 +1113,10 @@ class Autoscaler:
                 wc.gpu_count = resources.device_count
             wc.preemptible = resources.preemptible
 
-        # Worker settings from scale group
+        # Worker attributes from scale group
         if group.config.HasField("worker"):
             for k, v in group.config.worker.attributes.items():
                 wc.worker_attributes[k] = v
-            for k, v in group.config.worker.env.items():
-                wc.default_task_env[k] = v
 
         if group.config.name:
             wc.worker_attributes["scale-group"] = group.config.name
@@ -1252,7 +1252,7 @@ class Autoscaler:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._workers.update(workers)
 
-    def restore_from_db(self, db: ControllerDB, platform: Platform) -> None:
+    def restore_from_db(self, db: ControllerDB, platform: WorkerInfraProvider) -> None:
         """Reconcile DB-checkpointed autoscaler state against live cloud.
 
         Reads scaling group and slice rows from proper DB tables,
@@ -1260,38 +1260,30 @@ class Autoscaler:
         tracked workers. Call at startup before loops begin.
         """
         with db.snapshot() as snapshot:
-            scaling_rows = snapshot.select(
-                SCALING_GROUPS,
-                columns=(
-                    SCALING_GROUPS.c.name,
-                    SCALING_GROUPS.c.consecutive_failures,
-                    SCALING_GROUPS.c.backoff_until_ms,
-                    SCALING_GROUPS.c.last_scale_up_ms,
-                    SCALING_GROUPS.c.last_scale_down_ms,
-                    SCALING_GROUPS.c.quota_exceeded_until_ms,
-                    SCALING_GROUPS.c.quota_reason,
-                ),
+            scaling_rows = snapshot.raw(
+                "SELECT name, consecutive_failures, backoff_until_ms, last_scale_up_ms, "
+                "last_scale_down_ms, quota_exceeded_until_ms, quota_reason "
+                "FROM scaling_groups",
+                decoders={
+                    "consecutive_failures": int,
+                    "backoff_until_ms": _decode_timestamp_ms,
+                    "last_scale_up_ms": _decode_timestamp_ms,
+                    "last_scale_down_ms": _decode_timestamp_ms,
+                    "quota_exceeded_until_ms": _decode_timestamp_ms,
+                },
             )
-            slice_rows = snapshot.select(
-                SLICES,
-                columns=(
-                    SLICES.c.slice_id,
-                    SLICES.c.scale_group,
-                    SLICES.c.lifecycle,
-                    SLICES.c.worker_ids,
-                    SLICES.c.created_at_ms,
-                    SLICES.c.last_active_ms,
-                    SLICES.c.error_message,
-                ),
+            slice_rows = snapshot.raw(
+                "SELECT slice_id, scale_group, lifecycle, worker_ids, "
+                "created_at_ms, last_active_ms, error_message "
+                "FROM slices",
+                decoders={
+                    "worker_ids": _decode_json_list,
+                    "created_at_ms": _decode_timestamp_ms,
+                    "last_active_ms": _decode_timestamp_ms,
+                },
             )
-            tracked_rows = snapshot.select(
-                TRACKED_WORKERS,
-                columns=(
-                    TRACKED_WORKERS.c.worker_id,
-                    TRACKED_WORKERS.c.slice_id,
-                    TRACKED_WORKERS.c.scale_group,
-                    TRACKED_WORKERS.c.internal_address,
-                ),
+            tracked_rows = snapshot.raw(
+                "SELECT worker_id, slice_id, scale_group, internal_address FROM tracked_workers",
             )
 
         # Build GroupSnapshot objects from DB rows

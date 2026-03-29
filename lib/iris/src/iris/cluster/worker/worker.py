@@ -55,7 +55,7 @@ class WorkerConfig:
     worker_id: str | None = None
     slice_id: str | None = None
     worker_attributes: dict[str, str] = field(default_factory=dict)
-    default_task_env: dict[str, str] = field(default_factory=dict)
+    task_env: dict[str, str] = field(default_factory=dict)
     default_task_image: str | None = None
     resolve_image: Callable[[str], str] = field(default_factory=lambda: lambda image: image)
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
@@ -94,7 +94,7 @@ def worker_config_from_proto(
         worker_id=proto.worker_id or None,
         slice_id=proto.slice_id or None,
         worker_attributes=dict(proto.worker_attributes),
-        default_task_env=dict(proto.default_task_env),
+        task_env=dict(proto.task_env),
         default_task_image=proto.default_task_image or None,
         resolve_image=resolve_image or (lambda image: image),
         poll_interval=(
@@ -472,7 +472,7 @@ class Worker:
             worker_metadata=self._worker_metadata,
             worker_id=self._worker_id,
             controller_address=self._config.controller_address,
-            default_task_env=self._config.default_task_env,
+            task_env=self._config.task_env,
             default_task_image=self._config.default_task_image,
             resolve_image=self._config.resolve_image,
             port_allocator=self._port_allocator,

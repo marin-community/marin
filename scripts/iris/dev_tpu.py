@@ -521,7 +521,7 @@ def allocate(
                 constraints=constraints or None,
             )
         except JobAlreadyExists as exc:
-            raise click.ClickException(f"Job already exists for session '{session_name}': {exc.job.job_id}") from exc
+            raise click.ClickException(f"Job already exists for session '{session_name}': {exc}") from exc
 
         workers = wait_for_workers(job, timeout=timeout, project=project)
         for worker in workers:

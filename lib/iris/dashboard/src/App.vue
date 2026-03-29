@@ -75,19 +75,21 @@ onMounted(async () => {
   window.addEventListener('iris-auth-required', onAuthRequired)
 
   let hasSession = false
+  let authOptional = false
   try {
     const resp = await fetch('/auth/config')
     if (resp.ok) {
       const config = await resp.json()
       authEnabled.value = config.auth_enabled ?? false
       hasSession = config.has_session ?? false
+      authOptional = config.optional ?? false
       providerKind.value = config.provider_kind === 'kubernetes' ? 'kubernetes' : 'worker'
     }
   } catch {
     // Auth config endpoint unavailable — assume no auth
   }
 
-  if (authEnabled.value && !hasSession && route.path !== '/login') {
+  if (authEnabled.value && !authOptional && !hasSession && route.path !== '/login') {
     router.push('/login')
   }
 })

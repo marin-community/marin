@@ -8,6 +8,7 @@ Docker mode manually wires up Controller + Workers with DockerRuntime, which is
 needed for tests that exercise container-specific behavior (OOM, JAX env vars).
 """
 
+import re
 import tempfile
 import time
 import uuid
@@ -16,8 +17,8 @@ from pathlib import Path
 from iris.client import IrisClient
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
-from iris.cluster.local_cluster import LocalCluster
-from iris.cluster.platform.base import find_free_port
+from iris.cluster.providers.local.cluster import LocalCluster
+from iris.cluster.providers.types import find_free_port
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.cluster.bundle import BundleStore
@@ -303,14 +304,10 @@ class E2ECluster:
         """Fetch container logs for a task."""
         job_id = self._to_job_id_str(job_or_id)
         task_id = JobName.from_wire(job_id).task(task_index).to_wire()
-        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
+        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
         assert self._controller_client is not None
-        response = self._controller_client.get_task_logs(request)
-        lines = []
-        for batch in response.task_logs:
-            for entry in batch.logs:
-                lines.append(f"{entry.source}: {entry.data}")
-        return lines
+        response = self._controller_client.fetch_logs(request)
+        return [f"{e.source}: {e.data}" for e in response.entries]
 
     def kill(self, job_or_id) -> None:
         job_id = self._to_job_id_str(job_or_id)

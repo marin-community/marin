@@ -35,7 +35,14 @@ from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, HostedActor, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorHandle,
+    HostedActor,
+    _reset_current_actor,
+    _set_current_actor,
+)
 from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.v2.types import (
     ActorConfig,
@@ -177,8 +184,8 @@ class IrisJobHandle:
         return str(self._job.job_id)
 
     def status(self) -> JobStatus:
-        iris_status = self._job.status()
-        return map_iris_job_state(iris_status.state)
+        iris_state = self._job.state_only()
+        return map_iris_job_state(iris_state)
 
     def wait(
         self, timeout: float | None = None, *, raise_on_failure: bool = True, stream_logs: bool = False
@@ -216,9 +223,15 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     actor_name = f"{ctx.job_id}/{name_prefix}-{job_info.task_index}"
     logger.info(f"Starting actor: {actor_name} (job_id={ctx.job_id})")
 
+    # Shutdown event: the actor sets it when ready to exit,
+    # unblocking the wait below.
+    shutdown_event = threading.Event()
+
     # Create handle BEFORE instance so actor can access it during __init__
     handle = IrisActorHandle(actor_name)
-    actor_ctx = ActorContext(handle=handle, index=job_info.task_index, group_name=name_prefix)
+    actor_ctx = ActorContext(
+        handle=handle, index=job_info.task_index, group_name=name_prefix, shutdown_event=shutdown_event
+    )
     token = _set_current_actor(actor_ctx)
     try:
         instance = actor_class(*args, **kwargs)
@@ -236,8 +249,10 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     ctx.registry.register(actor_name, address)
     logger.info(f"Actor {actor_name} ready and listening")
 
-    # Block forever — job termination kills the process
-    threading.Event().wait()
+    # Block until the actor signals shutdown via shutdown_event
+    shutdown_event.wait()
+    logger.info(f"Actor {actor_name} shutting down")
+    server.stop()
 
 
 class IrisActorHandle:
@@ -508,6 +523,7 @@ class FrayIrisClient:
         replicas = request.replicas or 1
         coscheduling = resolve_coscheduling(request.resources.device, replicas)
 
+        policy = cluster_pb2.EXISTING_JOB_POLICY_KEEP if adopt_existing else cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED
         try:
             job = self._iris.submit(
                 entrypoint=iris_entrypoint,
@@ -519,12 +535,10 @@ class FrayIrisClient:
                 replicas=replicas,
                 max_retries_failure=request.max_retries_failure,
                 max_retries_preemption=request.max_retries_preemption,
+                existing_job_policy=policy,
             )
         except IrisJobAlreadyExists as e:
-            if adopt_existing:
-                logger.info("Job %s already exists, adopting existing job", request.name)
-                return IrisJobHandle(e.job)
-            raise FrayJobAlreadyExists(request.name, handle=IrisJobHandle(e.job)) from e
+            raise FrayJobAlreadyExists(request.name) from e
         return IrisJobHandle(job)
 
     def host_actor(

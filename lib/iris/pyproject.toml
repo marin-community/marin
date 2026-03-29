@@ -25,6 +25,7 @@ dependencies = [
     "uvicorn[standard]>=0.23.0",
     "duckdb>=1.0.0",
     "pyarrow>=19.0.0",
+    "zstandard>=0.22.0",
 ]
 
 [project.optional-dependencies]

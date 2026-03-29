@@ -1646,10 +1646,13 @@ wheels = [
 [[package]]
 name = "dupekit"
 version = "0.1.0"
-source = { registry = "https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-41b51df" }
-sdist = { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-41b51df/dupekit-0.1.0.tar.gz" }
+source = { registry = "https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-40ac799" }
+sdist = { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0.tar.gz" }
 wheels = [
-    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-41b51df/dupekit-0.1.0-cp311-abi3-manylinux_2_34_x86_64.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0-cp311-abi3-manylinux_2_28_aarch64.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0-cp311-abi3-macosx_10_12_x86_64.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0-cp311-abi3-macosx_11_0_arm64.whl" },
 ]
 
 [[package]]
@@ -3585,6 +3588,7 @@ dependencies = [
     { name = "tabulate" },
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "zstandard" },
 ]
 
 [package.dev-dependencies]
@@ -3629,6 +3633,7 @@ requires-dist = [
     { name = "tabulate", specifier = ">=0.9.0" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
+    { name = "zstandard", specifier = ">=0.22.0" },
 ]
 
 [package.metadata.requires-dev]

@@ -40,27 +40,22 @@ from iris.rpc.auth import (
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
-    API_KEYS,
-    ATTEMPTS,
-    ENDPOINTS,
-    JOBS,
-    TASKS,
     TERMINAL_JOB_STATES,
-    TXN_ACTIONS,
-    WORKERS,
-    WORKER_RESOURCE_HISTORY,
-    WORKER_TASK_HISTORY,
+    ApiKey,
+    Attempt,
     ControllerDB,
     Endpoint,
     EndpointQuery,
     Job,
-    Order,
     Task,
     TaskJobSummary,
+    TransactionAction,
     UserStats,
     Worker,
     _tasks_with_attempts,
-    endpoint_query_predicate,
+    decode_one,
+    decode_rows,
+    endpoint_query_sql,
     running_tasks_by_worker,
     tasks_for_job_with_attempts,
 )
@@ -70,10 +65,10 @@ from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.log_store import LogStore, task_log_key
+from iris.cluster.log_store import LogStore, build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
-from iris.cluster.types import JobName, TaskAttempt, WorkerId
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, logging_pb2, vm_pb2
 from iris.rpc.proto_utils import job_state_name, task_state_name
 from iris.time_utils import Timestamp, Timer
@@ -246,26 +241,28 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 
 def _read_job(db: ControllerDB, job_id: JobName) -> Job | None:
     with db.read_snapshot() as q:
-        return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
+        return decode_one(Job, q.fetchall("SELECT * FROM jobs j WHERE j.job_id = ?", (job_id.to_wire(),)))
 
 
 def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> Task | None:
     task_wire = task_id.to_wire()
     with db.read_snapshot() as q:
-        task = q.one(TASKS, where=TASKS.c.task_id == task_wire)
+        task = decode_one(Task, q.fetchall("SELECT * FROM tasks t WHERE t.task_id = ?", (task_wire,)))
         if task is None:
             return None
-        attempts = q.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id == task_wire,
-            order_by=(ATTEMPTS.c.attempt_id.asc(),),
+        attempts = decode_rows(
+            Attempt,
+            q.fetchall(
+                "SELECT * FROM task_attempts a WHERE a.task_id = ? ORDER BY a.attempt_id ASC",
+                (task_wire,),
+            ),
         )
     return _tasks_with_attempts([task], attempts)[0]
 
 
 def _read_worker(db: ControllerDB, worker_id: WorkerId) -> Worker | None:
     with db.read_snapshot() as q:
-        return q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
+        return decode_one(Worker, q.fetchall("SELECT * FROM workers w WHERE w.worker_id = ?", (str(worker_id),)))
 
 
 @dataclass(frozen=True)
@@ -279,7 +276,7 @@ def _read_worker_detail(
     db: ControllerDB, worker_id: WorkerId, *, resource_history_limit: int = 200
 ) -> _WorkerDetail | None:
     with db.read_snapshot() as q:
-        worker = q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
+        worker = decode_one(Worker, q.fetchall("SELECT * FROM workers w WHERE w.worker_id = ?", (str(worker_id),)))
         if worker is None:
             return None
         running_rows = q.raw(
@@ -289,12 +286,11 @@ def _read_worker_detail(
             (str(worker_id), *ACTIVE_TASK_STATES),
             decoders={"task_id": JobName.from_wire},
         )
-        resource_rows = q.select(
-            WORKER_RESOURCE_HISTORY,
-            columns=(WORKER_RESOURCE_HISTORY.c.snapshot_proto,),
-            where=WORKER_RESOURCE_HISTORY.c.worker_id == str(worker_id),
-            order_by=(WORKER_RESOURCE_HISTORY.c.id.desc(),),
-            limit=max(resource_history_limit, 0),
+        resource_rows = q.raw(
+            "SELECT wrh.snapshot_proto FROM worker_resource_history wrh "
+            "WHERE wrh.worker_id = ? ORDER BY wrh.id DESC LIMIT ?",
+            (str(worker_id), max(resource_history_limit, 0)),
+            decoders={"snapshot_proto": lambda b: cluster_pb2.WorkerResourceSnapshot.FromString(b)},
         )
     resource_history = tuple(reversed([r.snapshot_proto for r in resource_rows]))
     return _WorkerDetail(
@@ -306,26 +302,38 @@ def _read_worker_detail(
 
 def _child_jobs(db: ControllerDB, job_id: JobName) -> list[Job]:
     with db.read_snapshot() as q:
-        return q.select(
-            JOBS,
-            where=JOBS.c.parent_job_id == job_id.to_wire(),
-            order_by=(Order(JOBS.c.submitted_at_ms), Order(JOBS.c.job_id)),
+        return decode_rows(
+            Job,
+            q.fetchall(
+                "SELECT * FROM jobs j WHERE j.parent_job_id = ? ORDER BY j.submitted_at_ms ASC, j.job_id ASC",
+                (job_id.to_wire(),),
+            ),
         )
 
 
 def _tasks_for_listing(db: ControllerDB, *, job_id: JobName | None = None) -> list[Task]:
     with db.read_snapshot() as q:
-        tasks = q.select(
-            TASKS,
-            where=(TASKS.c.job_id == job_id.to_wire()) if job_id else None,
-            order_by=((TASKS.c.job_id.asc(), TASKS.c.task_index.asc()) if job_id else (TASKS.c.task_id.asc(),)),
-        )
+        if job_id is not None:
+            tasks = decode_rows(
+                Task,
+                q.fetchall(
+                    "SELECT * FROM tasks t WHERE t.job_id = ? ORDER BY t.job_id ASC, t.task_index ASC",
+                    (job_id.to_wire(),),
+                ),
+            )
+        else:
+            tasks = decode_rows(Task, q.fetchall("SELECT * FROM tasks t ORDER BY t.task_id ASC"))
         if not tasks:
             return []
-        attempts = q.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id.in_([t.task_id.to_wire() for t in tasks]),
-            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
+        task_wires = [t.task_id.to_wire() for t in tasks]
+        placeholders = ",".join("?" for _ in task_wires)
+        attempts = decode_rows(
+            Attempt,
+            q.fetchall(
+                f"SELECT * FROM task_attempts a WHERE a.task_id IN ({placeholders}) "
+                "ORDER BY a.task_id ASC, a.attempt_id ASC",
+                tuple(task_wires),
+            ),
         )
     return _tasks_with_attempts(tasks, attempts)
 
@@ -435,7 +443,7 @@ def _jobs_paginated(
         total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
         rows = q.execute_sql(select_sql, tuple(select_params)).fetchall()
 
-    jobs = [db.decode_job(row) for row in rows]
+    jobs = decode_rows(Job, rows)
     return jobs, total
 
 
@@ -450,8 +458,8 @@ def _descendants_for_roots(db: ControllerDB, root_job_ids: list[str]) -> list[Jo
         WHERE j.root_job_id IN ({placeholders}) AND j.depth > 1
     """
     with db.read_snapshot() as q:
-        rows = q.execute_sql(sql, tuple(root_job_ids)).fetchall()
-    return [db.decode_job(row) for row in rows]
+        rows = q.fetchall(sql, tuple(root_job_ids))
+    return decode_rows(Job, rows)
 
 
 def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
@@ -494,31 +502,31 @@ def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = No
 
 def _worker_roster(db: ControllerDB) -> list[Worker]:
     with db.read_snapshot() as q:
-        return q.select(WORKERS)
+        return decode_rows(Worker, q.fetchall("SELECT * FROM workers w"))
 
 
 def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -> list[Endpoint]:
-    joins, where = endpoint_query_predicate(query)
+    sql, params = endpoint_query_sql(query)
     with db.read_snapshot() as q:
-        return q.select(
-            ENDPOINTS,
-            where=where,
-            joins=tuple(joins),
-            limit=query.limit,
-        )
+        return decode_rows(Endpoint, q.fetchall(sql, tuple(params)))
 
 
 def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[Job]:
     with db.read_snapshot() as q:
-        return q.select(JOBS, where=JOBS.c.job_id.like(f"{job_id.to_wire()}/%"))
+        return decode_rows(
+            Job,
+            q.fetchall("SELECT * FROM jobs j WHERE j.job_id LIKE ?", (f"{job_id.to_wire()}/%",)),
+        )
 
 
-def _transaction_actions(db: ControllerDB, limit: int = 100) -> list:
+def _transaction_actions(db: ControllerDB, limit: int = 100) -> list[TransactionAction]:
     with db.read_snapshot() as q:
-        actions = q.select(
-            TXN_ACTIONS,
-            order_by=(TXN_ACTIONS.c.created_at_ms.desc(),),
-            limit=limit,
+        actions = decode_rows(
+            TransactionAction,
+            q.fetchall(
+                "SELECT * FROM txn_actions ta ORDER BY ta.created_at_ms DESC LIMIT ?",
+                (limit,),
+            ),
         )
     return list(reversed(actions))
 
@@ -556,27 +564,32 @@ def _live_user_stats(db: ControllerDB) -> list[UserStats]:
 
 def _tasks_for_worker(db: ControllerDB, worker_id: WorkerId, limit: int = 50) -> list[Task]:
     with db.read_snapshot() as q:
-        history_rows = q.select(
-            WORKER_TASK_HISTORY,
-            columns=(WORKER_TASK_HISTORY.c.task_id,),
-            where=WORKER_TASK_HISTORY.c.worker_id == str(worker_id),
-            order_by=(WORKER_TASK_HISTORY.c.assigned_at_ms.desc(),),
-            limit=limit,
+        history_rows = q.raw(
+            "SELECT wth.task_id FROM worker_task_history wth "
+            "WHERE wth.worker_id = ? ORDER BY wth.assigned_at_ms DESC LIMIT ?",
+            (str(worker_id), limit),
+            decoders={"task_id": JobName.from_wire},
         )
     task_ids = [r.task_id for r in history_rows]
     if not task_ids:
         return []
     task_wires = [tid.to_wire() for tid in task_ids]
+    placeholders = ",".join("?" for _ in task_wires)
     with db.read_snapshot() as q:
-        tasks = q.select(
-            TASKS,
-            where=TASKS.c.task_id.in_(task_wires),
-            order_by=(TASKS.c.task_id.asc(),),
+        tasks = decode_rows(
+            Task,
+            q.fetchall(
+                f"SELECT * FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
+                tuple(task_wires),
+            ),
         )
-        attempts = q.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id.in_(task_wires),
-            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
+        attempts = decode_rows(
+            Attempt,
+            q.fetchall(
+                f"SELECT * FROM task_attempts a WHERE a.task_id IN ({placeholders}) "
+                "ORDER BY a.task_id ASC, a.attempt_id ASC",
+                tuple(task_wires),
+            ),
         )
     task_map = {t.task_id: t for t in _tasks_with_attempts(tasks, attempts)}
     return [task for tid in task_ids if (task := task_map.get(tid)) is not None]
@@ -829,23 +842,24 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.GetJobStatusRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.GetJobStatusResponse:
-        """Get status of a specific job including all task statuses."""
+        """Get job-level status with aggregated task counts.
+
+        Per-task detail (attempts, worker addresses) is NOT included — callers
+        that need it should use ListTasks instead.  This keeps GetJobStatus
+        cheap: one job row read + one GROUP BY query vs loading every task,
+        attempt, and worker address.
+        """
         job = _read_job(self._db, JobName.from_wire(request.job_id))
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        # Build task statuses with attempts, aggregate counts in single pass
-        tasks = tasks_for_job_with_attempts(self._db, job.job_id)
-        worker_addr_by_id = _worker_addresses_for_tasks(self._db, tasks)
+        # Aggregate task counts via a single GROUP BY query.
+        summaries = _task_summaries_for_jobs(self._db, {job.job_id})
+        summary = summaries.get(job.job_id)
 
-        task_statuses = []
-        total_failure_count = 0
-        total_preemption_count = 0
-        for task in tasks:
-            total_failure_count += task.failure_count
-            total_preemption_count += task.preemption_count
-
-            task_statuses.append(task_to_proto(task, worker_address=worker_addr_by_id.get(task.worker_id, "")))
+        task_state_counts = (
+            {_task_state_key(state): count for state, count in summary.task_state_counts.items()} if summary else {}
+        )
 
         # Get scheduling diagnostics for pending jobs from cache
         # (populated each scheduling cycle by the controller).
@@ -858,17 +872,18 @@ class ControllerServiceImpl:
                 scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
                 pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
-        # Build the JobStatus proto and set timestamps
         proto_job_status = cluster_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
             state=job.state,
             error=job.error or "",
             exit_code=job.exit_code or 0,
-            failure_count=total_failure_count,
-            preemption_count=total_preemption_count,
-            tasks=task_statuses,
+            failure_count=summary.failure_count if summary else 0,
+            preemption_count=summary.preemption_count if summary else 0,
             name=job.request.name if job.request else "",
             pending_reason=pending_reason,
+            task_state_counts=task_state_counts,
+            task_count=summary.task_count if summary else 0,
+            completed_count=summary.completed_count if summary else 0,
         )
         if job.request:
             proto_job_status.resources.CopyFrom(job.request.resources)
@@ -883,6 +898,30 @@ class ControllerServiceImpl:
             job=proto_job_status,
             request=redact_request_env_vars(job.request) if job.request else None,
         )
+
+    def get_job_state(
+        self,
+        request: cluster_pb2.Controller.GetJobStateRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetJobStateResponse:
+        """Lightweight batch job state query.
+
+        Returns only the state enum for each requested job, avoiding the cost
+        of loading tasks, attempts, and worker addresses.
+        """
+        wire_ids = list(request.job_ids)
+        if not wire_ids:
+            return cluster_pb2.Controller.GetJobStateResponse()
+
+        with self._db.read_snapshot() as q:
+            placeholders = ",".join("?" for _ in wire_ids)
+            rows = q.raw(
+                f"SELECT job_id, state FROM jobs WHERE job_id IN ({placeholders})",
+                tuple(wire_ids),
+            )
+
+        states = {row.job_id: row.state for row in rows}
+        return cluster_pb2.Controller.GetJobStateResponse(states=states)
 
     def terminate_job(
         self,
@@ -1333,92 +1372,50 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.GetTaskLogsRequest,
         ctx: RequestContext,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        """Get logs for a task or all tasks in a job from the in-memory log store.
+        """DEPRECATED: use FetchLogs with regex patterns instead. Scheduled for removal 2026-05-01.
 
-        Logs are forwarded from workers via heartbeat and accumulated in the
-        controller's log store.  No remote storage I/O occurs.
-
-        If request.id ends in a numeric index, treat as single task.
-        Otherwise treat as job ID and fetch logs from all tasks.
-
-        When attempt_id is specified (>= 0), fetches logs only from that specific attempt.
+        Forwards to fetch_logs internally, wrapping the response in the legacy format.
         """
         job_name = JobName.from_wire(request.id)
-        max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
-        requested_attempt_id = request.attempt_id
-        log_store = self._log_store
 
-        # Collect child job statuses when requested (for streaming UI).
-        child_job_statuses: list[cluster_pb2.JobStatus] = []
-        if not job_name.is_task and request.include_children:
-            jobs = _descendant_jobs(self._db, job_name)
-            for job in jobs:
-                child_status = cluster_pb2.JobStatus(
-                    job_id=job.job_id.to_wire(),
-                    state=job.state,
-                    exit_code=job.exit_code or 0,
-                    error=job.error or "",
-                )
-                if job.finished_at:
-                    child_status.finished_at.CopyFrom(job.finished_at.to_proto())
-                child_job_statuses.append(child_status)
-
-        # Build the log key or prefix for the query.
-        job_wire = job_name.to_wire()
-        cursor = request.cursor
-        substring_filter = request.substring
-
-        if job_name.is_task and requested_attempt_id >= 0:
-            # Exact key: single task + single attempt
-            log_result = log_store.get_logs(
-                task_log_key(TaskAttempt(task_id=job_name, attempt_id=requested_attempt_id)),
-                since_ms=request.since_ms,
-                cursor=cursor,
-                substring_filter=substring_filter,
-                max_lines=max_lines,
-                tail=request.tail,
-                min_level=request.min_level,
-            )
-            for entry in log_result.entries:
-                entry.attempt_id = requested_attempt_id
-        elif job_name.is_task:
-            # All attempts of a single task: prefix "task_wire:"
-            log_result = log_store.get_logs_by_prefix(
-                job_wire + ":",
-                cursor=cursor,
-                since_ms=request.since_ms,
-                substring_filter=substring_filter,
-                max_lines=max_lines,
-                tail=request.tail,
-                min_level=request.min_level,
-            )
+        # Build the regex source pattern from the legacy request fields
+        if job_name.is_task:
+            source = build_log_source(job_name, request.attempt_id)
+        elif request.include_children:
+            source = build_log_source(job_name)
         else:
-            # All tasks in a job: prefix "job_wire/"
-            # When include_children is False, use shallow=True to exclude
-            # descendant job logs (only match direct task keys).
-            log_result = log_store.get_logs_by_prefix(
-                job_wire + "/",
-                cursor=cursor,
-                since_ms=request.since_ms,
-                substring_filter=substring_filter,
-                max_lines=max_lines,
-                tail=request.tail,
-                min_level=request.min_level,
-                shallow=not request.include_children,
-            )
+            # Direct tasks only: match keys like /user/job/0:attempt but not
+            # /user/job/child-job/0:attempt. Use \d+ to restrict to numeric
+            # task indices, pushing the filter into DuckDB.
+            escaped_wire = re.escape(job_name.to_wire())
+            source = f"{escaped_wire}/\\d+:.*"
 
-        truncated = max_lines > 0 and len(log_result.entries) >= max_lines
+        max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
+
+        fetch_request = cluster_pb2.FetchLogsRequest(
+            source=source,
+            since_ms=request.since_ms,
+            cursor=request.cursor,
+            substring=request.substring,
+            max_lines=max_lines,
+            tail=request.tail,
+            min_level=request.min_level,
+        )
+
+        fetch_response = self.fetch_logs(fetch_request, ctx)
+        entries = fetch_response.entries
 
         batch = cluster_pb2.Controller.TaskLogBatch(
             task_id=request.id,
-            logs=log_result.entries,
+            logs=entries,
         )
+
+        truncated = max_lines > 0 and len(fetch_response.entries) >= max_lines
 
         return cluster_pb2.Controller.GetTaskLogsResponse(
             task_logs=[batch],
             truncated=truncated,
-            child_job_statuses=child_job_statuses,
-            cursor=log_result.cursor,
+            cursor=fetch_response.cursor,
         )
 
     # --- Profiling ---
@@ -1799,7 +1796,7 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Empty:
         identity = require_identity()
         with self._db.snapshot() as q:
-            key = q.one(API_KEYS, where=API_KEYS.c.key_id == request.key_id)
+            key = decode_one(ApiKey, q.fetchall("SELECT * FROM api_keys ak WHERE ak.key_id = ?", (request.key_id,)))
         if key is None:
             raise ConnectError(Code.NOT_FOUND, f"API key not found: {request.key_id}")
         if key.user_id != identity.user_id:
@@ -1870,6 +1867,18 @@ class ControllerServiceImpl:
 
         task_worker_id = task.worker_id
         if not task_worker_id:
+            if self._controller.has_direct_provider:
+                provider = self._controller.provider
+                timeout = request.timeout_seconds if request.timeout_seconds else 60
+                resp = provider.exec_in_container(
+                    task.task_id.to_wire(), task.current_attempt_id, list(request.command), timeout
+                )
+                return cluster_pb2.Controller.ExecInContainerResponse(
+                    exit_code=resp.exit_code,
+                    stdout=resp.stdout,
+                    stderr=resp.stderr,
+                    error=resp.error,
+                )
             raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
 
         worker = _read_worker(self._db, task_worker_id)
