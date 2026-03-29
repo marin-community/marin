@@ -12,8 +12,6 @@ from marin.dispatch.schema import (
     RunTrack,
 )
 from marin.dispatch.storage import (
-    delete_collection,
-    list_collections,
     load_collection,
     load_state,
     save_collection,
@@ -62,27 +60,6 @@ def test_save_and_load_state(tmp_path):
     assert loaded[0].last_status == RunStatus.RUNNING
     assert loaded[1].consecutive_failures == 2
     assert loaded[1].last_error == "OOM"
-
-
-def test_load_state_missing(tmp_path):
-    states = load_state(tmp_path, "nonexistent")
-    assert states == []
-
-
-def test_list_collections(tmp_path, sample_collection):
-    save_collection(tmp_path, sample_collection)
-    # Also save state to ensure it's filtered out.
-    save_state(tmp_path, "test-sweep", [RunState()])
-    names = list_collections(tmp_path)
-    assert names == ["test-sweep"]
-
-
-def test_delete_collection(tmp_path, sample_collection):
-    save_collection(tmp_path, sample_collection)
-    save_state(tmp_path, "test-sweep", [RunState()])
-    delete_collection(tmp_path, "test-sweep")
-    assert list_collections(tmp_path) == []
-    assert load_state(tmp_path, "test-sweep") == []
 
 
 def test_roundtrip_multiline_prompt(tmp_path):

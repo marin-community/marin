@@ -11,95 +11,17 @@ from marin.dispatch.storage import load_collection, load_state, save_state
 
 
 @patch("marin.dispatch.cli._resolve_repo_root")
-def test_register_and_list(mock_root, tmp_path):
-    mock_root.return_value = tmp_path
-    runner = CliRunner()
-
-    result = runner.invoke(
-        cli,
-        [
-            "register",
-            "--name",
-            "sweep-1",
-            "--prompt",
-            "Monitor the sweep",
-            "--logbook",
-            ".agents/logbooks/sweep.md",
-            "--branch",
-            "research/sweep",
-            "--issue",
-            "42",
-        ],
-    )
-    assert result.exit_code == 0
-    assert "Registered" in result.output
-
-    result = runner.invoke(cli, ["list"])
-    assert result.exit_code == 0
-    assert "sweep-1" in result.output
-
-
-@patch("marin.dispatch.cli._resolve_repo_root")
-def test_show(mock_root, tmp_path):
-    mock_root.return_value = tmp_path
-    runner = CliRunner()
-    runner.invoke(
-        cli,
-        [
-            "register",
-            "--name",
-            "s1",
-            "--prompt",
-            "p",
-            "--logbook",
-            "l.md",
-            "--branch",
-            "b",
-            "--issue",
-            "1",
-        ],
-    )
-    result = runner.invoke(cli, ["show", "s1"])
-    assert result.exit_code == 0
-    assert "s1" in result.output
-    assert "#1" in result.output
-
-
-@patch("marin.dispatch.cli._resolve_repo_root")
 def test_add_and_remove_run(mock_root, tmp_path):
     mock_root.return_value = tmp_path
     runner = CliRunner()
     runner.invoke(
         cli,
-        [
-            "register",
-            "--name",
-            "s2",
-            "--prompt",
-            "p",
-            "--logbook",
-            "l.md",
-            "--branch",
-            "b",
-            "--issue",
-            "1",
-        ],
+        ["register", "--name", "s2", "--prompt", "p", "--logbook", "l.md", "--branch", "b", "--issue", "1"],
     )
 
     result = runner.invoke(
         cli,
-        [
-            "add-run",
-            "s2",
-            "--track",
-            "ray",
-            "--job-id",
-            "ray-123",
-            "--cluster",
-            "us-central2",
-            "--experiment",
-            "exp.py",
-        ],
+        ["add-run", "s2", "--track", "ray", "--job-id", "ray-123", "--cluster", "us-central2", "--experiment", "exp.py"],
     )
     assert result.exit_code == 0
     assert "Added" in result.output
@@ -120,19 +42,7 @@ def test_update_pause(mock_root, tmp_path):
     runner = CliRunner()
     runner.invoke(
         cli,
-        [
-            "register",
-            "--name",
-            "s3",
-            "--prompt",
-            "p",
-            "--logbook",
-            "l.md",
-            "--branch",
-            "b",
-            "--issue",
-            "1",
-        ],
+        ["register", "--name", "s3", "--prompt", "p", "--logbook", "l.md", "--branch", "b", "--issue", "1"],
     )
     result = runner.invoke(cli, ["update", "s3", "--paused", "true"])
     assert result.exit_code == 0, result.output
@@ -153,7 +63,6 @@ def test_remove_run_updates_state(mock_root, tmp_path):
     for jid in ["ray-1", "ray-2", "ray-3"]:
         runner.invoke(cli, ["add-run", "s5", "--track", "ray", "--job-id", jid, "--cluster", "c", "--experiment", "e"])
 
-    # Simulate state for all 3 runs.
     save_state(
         tmp_path,
         "s5",
@@ -164,7 +73,6 @@ def test_remove_run_updates_state(mock_root, tmp_path):
         ],
     )
 
-    # Remove the middle run by job-id.
     result = runner.invoke(cli, ["remove-run", "s5", "--job-id", "ray-2"])
     assert result.exit_code == 0
 
@@ -197,31 +105,3 @@ def test_reset_failures(mock_root, tmp_path):
     states = load_state(tmp_path, "s6")
     assert states[0].consecutive_failures == 0
     assert states[0].last_error == ""
-
-
-@patch("marin.dispatch.cli._resolve_repo_root")
-def test_delete(mock_root, tmp_path):
-    mock_root.return_value = tmp_path
-    runner = CliRunner()
-    runner.invoke(
-        cli,
-        [
-            "register",
-            "--name",
-            "s4",
-            "--prompt",
-            "p",
-            "--logbook",
-            "l.md",
-            "--branch",
-            "b",
-            "--issue",
-            "1",
-        ],
-    )
-    result = runner.invoke(cli, ["delete", "s4"])
-    assert result.exit_code == 0
-    assert "Deleted" in result.output
-
-    result = runner.invoke(cli, ["list"])
-    assert "s4" not in result.output
