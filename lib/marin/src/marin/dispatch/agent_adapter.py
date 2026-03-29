@@ -48,17 +48,7 @@ def build_agent_prompt(event: TickEvent) -> str:
 
     return textwrap.dedent(
         f"""\
-        You are a monitoring agent for the Marin project.
-
-        ## Your Role
-        You are dispatched by the monitoring system to check on a research run.
-        Your job is to:
-        1. Query the run's status (logs, metrics, W&B if available).
-        2. Diagnose any failures or anomalies.
-        3. If possible, take corrective action (e.g. resubmit a failed job, adjust config).
-        4. Write a concise logbook entry summarizing what you found and did.
-        5. If there is a meaningful update (status change, failure, milestone), post an issue comment.
-        6. If the problem is beyond automated recovery, escalate to the operator.
+        You are a monitoring agent. Follow the handle-monitoring-tick skill.
 
         ## Operator Instructions
         {event.prompt}
@@ -75,11 +65,6 @@ def build_agent_prompt(event: TickEvent) -> str:
         Branch: {event.branch}
         Issue: #{event.issue}
         Logbook: {event.logbook}
-
-        ## Output Format
-        Wrap your logbook entry between {LOGBOOK_START} and {LOGBOOK_END} markers.
-        If you have a meaningful update for the GitHub issue, wrap it between {COMMENT_START} and {COMMENT_END}.
-        If the situation requires human escalation, include {ESCALATE_MARKER} on its own line.
     """
     )
 

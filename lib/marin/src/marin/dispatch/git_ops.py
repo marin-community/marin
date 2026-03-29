@@ -33,7 +33,10 @@ def setup_worktree(repo_root: Path, branch: str) -> Path:
     local_exists = _run_git(["rev-parse", "--verify", branch], cwd=repo_root, check=False).returncode == 0
     remote_exists = _run_git(["rev-parse", "--verify", f"origin/{branch}"], cwd=repo_root, check=False).returncode == 0
 
-    if not local_exists and remote_exists:
+    if local_exists and remote_exists:
+        # Both exist — fast-forward local to remote if remote is ahead.
+        _run_git(["branch", "-f", branch, f"origin/{branch}"], cwd=repo_root, check=False)
+    elif not local_exists and remote_exists:
         _run_git(["branch", branch, f"origin/{branch}"], cwd=repo_root, check=False)
     elif not local_exists and not remote_exists:
         # Bootstrap: create the branch from HEAD so first tick doesn't fail.
