@@ -12,6 +12,7 @@ from experiments.tootsie.exp2062_long_context_8b import (
     phase2_final_checkpoint,
     phase3_final_checkpoint,
 )
+from experiments.tootsie.exp600_tootsie import tootsie_8b_sensible_starling
 from marin.execution.executor import InputName, executor_main
 
 BASE_EVAL_RESOURCES = ResourceConfig.with_tpu("v6e-8")
@@ -24,31 +25,24 @@ FINEPDF_MANIFEST_PATH: str | None = None
 
 @dataclass(frozen=True)
 class CheckpointEvalSpec:
-    name: str
     checkpoint: InputName
     lengths: tuple[int, ...]
 
 
 CHECKPOINTS = (
     CheckpointEvalSpec(
-        name="starling_warmstart",
-        checkpoint=InputName.hardcoded(
-            f"checkpoints/tootsie-8b-sensible-starling/hf/step-{STARLING_WARMSTART_STEP}"
-        ),
+        checkpoint=tootsie_8b_sensible_starling.cd(f"hf/step-{STARLING_WARMSTART_STEP}"),
         lengths=(4096,),
     ),
     CheckpointEvalSpec(
-        name="giraffe_phase1_end",
         checkpoint=phase1_final_checkpoint,
         lengths=(4096,),
     ),
     CheckpointEvalSpec(
-        name="giraffe_phase2_end",
         checkpoint=phase2_final_checkpoint,
         lengths=(4096, 16384, 32768),
     ),
     CheckpointEvalSpec(
-        name="giraffe_phase3_end",
         checkpoint=phase3_final_checkpoint,
         lengths=(4096, 16384, 32768, 65536),
     ),
