@@ -14,6 +14,20 @@ from typing import Any
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
 _NON_WORD_RE = re.compile(r"[^a-z0-9]+")
+_FILLER_VOCAB = (
+    "amber",
+    "cedar",
+    "delta",
+    "elm",
+    "flint",
+    "grove",
+    "harbor",
+    "island",
+    "juniper",
+    "keystone",
+    "lumen",
+    "meadow",
+)
 
 
 class LongContextFamily(StrEnum):
@@ -278,13 +292,11 @@ def _open_manifest(manifest_path: str):
 
 def _build_filler(*, target_units: int, rng: random.Random) -> str:
     fragments: list[str] = []
-    while len(" ".join(fragments).split()) < target_units:
-        fragments.append(
-            "archive entry "
-            f"{rng.randrange(1000, 9999)} "
-            f"notes signal {rng.randrange(1000, 9999)} "
-            f"catalog marker {rng.randrange(1000, 9999)}."
-        )
+    num_units = 0
+    while num_units < target_units:
+        fragment_words = [rng.choice(_FILLER_VOCAB) for _ in range(min(16, target_units - num_units))]
+        fragments.append(" ".join(fragment_words))
+        num_units += len(fragment_words)
     return " ".join(fragments)
 
 

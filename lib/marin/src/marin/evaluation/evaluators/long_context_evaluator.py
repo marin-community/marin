@@ -122,38 +122,43 @@ class LongContextEvaluator(Evaluator):
         temperature = float(generation_params.get("temperature", 0.0))
         top_p = float(generation_params.get("top_p", 1.0))
         timeout = int(generation_params.get("timeout", 1800))
+        request_batch_size = int(generation_params.get("request_batch_size", 8))
 
         predictions: list[str] = []
-        for prompt in prompts:
+        for batch_start in range(0, len(prompts), request_batch_size):
+            prompt_batch = prompts[batch_start : batch_start + request_batch_size]
             if model.apply_chat_template:
-                response = requests.post(
-                    f"{env.server_url}/chat/completions",
-                    json={
-                        "model": env.model_id,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": temperature,
-                        "top_p": top_p,
-                        "max_tokens": max_gen_toks,
-                    },
-                    timeout=timeout,
-                )
-                response.raise_for_status()
-                payload = response.json()
-                predictions.append(payload["choices"][0]["message"]["content"])
-            else:
-                response = requests.post(
-                    f"{env.server_url}/completions",
-                    json={
-                        "model": env.model_id,
-                        "prompt": prompt,
-                        "temperature": temperature,
-                        "top_p": top_p,
-                        "max_tokens": max_gen_toks,
-                    },
-                    timeout=timeout,
-                )
-                response.raise_for_status()
-                payload = response.json()
-                predictions.append(payload["choices"][0]["text"])
+                for prompt in prompt_batch:
+                    response = requests.post(
+                        f"{env.server_url}/chat/completions",
+                        json={
+                            "model": env.model_id,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "temperature": temperature,
+                            "top_p": top_p,
+                            "max_tokens": max_gen_toks,
+                        },
+                        timeout=timeout,
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    predictions.append(payload["choices"][0]["message"]["content"])
+                continue
+
+            response = requests.post(
+                f"{env.server_url}/completions",
+                json={
+                    "model": env.model_id,
+                    "prompt": prompt_batch,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                    "max_tokens": max_gen_toks,
+                },
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            choices = sorted(payload["choices"], key=lambda choice: choice["index"])
+            predictions.extend(choice["text"] for choice in choices)
 
         return predictions
