@@ -149,9 +149,7 @@ def _validate_worker_configuration(config: RLJobConfig) -> None:
     rollout_device = run_config.rollout_resources.device
     assert isinstance(rollout_device, GpuConfig)
     if config.inference_config.tensor_parallel_size > rollout_device.count:
-        raise ValueError(
-            "rollout_resources must provide at least tensor_parallel_size GPUs for vLLM rollout inference"
-        )
+        raise ValueError("rollout_resources must provide at least tensor_parallel_size GPUs for vLLM rollout inference")
 
 
 def submit_rl_job(config: RLJobConfig) -> JobHandle:
