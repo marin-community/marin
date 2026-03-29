@@ -50,11 +50,6 @@ def _batch_spec() -> P:
     return P(("data", "expert"))
 
 
-def _router_logits(x_flat: Float[Array, "T D"], router: Float[Array, "D E"]) -> Float[Array, "T E"]:
-    # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-    return jnp.einsum("td,de->te", x_flat, router).astype(jnp.float32)
-
-
 @dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
@@ -356,7 +351,8 @@ class MoEMLP(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
-        router_logits = _router_logits(x_flat, reshard(self.router, P(None, None)))
+        # Keep the router path in fp32 before top-k, softmax, and QB statistics.
+        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
