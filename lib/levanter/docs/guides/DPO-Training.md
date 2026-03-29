@@ -1,8 +1,8 @@
 # DPO Training in Levanter
 
 Direct Preference Optimization (DPO) fine-tunes a language model to prefer
-chosen responses over rejected ones. Levanter supports DPO through a dedicated
-training script and preference data format.
+chosen responses over rejected ones. Levanter supports both standard DPO and
+LoRA-DPO through the same `train_dpo.py` entrypoint and preference data format.
 
 ## Data Format
 
@@ -56,8 +56,14 @@ trainer:
   mp: p=f32,c=bfloat16
 
 # DPO-specific fields
-reference_model_path: "meta-llama/Llama-3.1-8B-Instruct"
-reference_is_hf: true     # true if reference_model_path is a HuggingFace ID
+adapter:
+  type: none
+
+reference:
+  type: separate
+  model_path: "meta-llama/Llama-3.1-8B-Instruct"
+  is_hf: true
+
 beta: 0.1                 # Regularization strength
 
 initialize_from_hf: "meta-llama/Llama-3.1-8B-Instruct"  # Policy initialization
@@ -72,16 +78,30 @@ validation_split_fraction: 0.1  # Auto-split from training data; null to disable
 
 ### Key Fields
 
-- **`reference_model_path`** (required): The frozen reference model. Typically
-  the same pretrained model used to initialize the policy.
+- **`adapter`**: How the policy model is adapted before training.
+  Standard full-parameter DPO uses `adapter.type: none`.
+- **`reference`**: How the frozen reference log-probabilities are obtained.
+  Standard DPO uses `reference.type: separate` and points at a frozen model.
 - **`beta`**: Controls how much the policy can deviate from the reference.
   Smaller values (0.01) allow more deviation; larger values (0.5) keep the
   policy closer to the reference.
-- **`reference_is_hf`**: Set to `true` when `reference_model_path` is a
-  HuggingFace model ID. Set to `false` for a Levanter checkpoint path.
 - **`validation_split_fraction`**: Automatically holds out a fraction of the
   training data for validation. Set to `null` to use separately configured
   validation sets.
+
+For LoRA-DPO, flip only the adapter/reference blocks:
+
+```yaml
+adapter:
+  type: lora
+  r: 64
+  alpha: 64.0
+  dropout: 0.0
+  zero_init_b: true
+
+reference:
+  type: adapter_base
+```
 
 ## Running
 
@@ -91,11 +111,15 @@ python -m levanter.main.train_dpo --config_path my_dpo_config.yaml
 
 ## Architecture
 
-DPO training wraps two copies of the model in a `DpoModel`:
+`TrainerState.model` always stores only the policy model.
 
-- **Policy model** — trainable, updated by the optimizer.
-- **Reference model** — frozen, loaded fresh each run (not saved in
-  checkpoints).
+The reference path is configured separately:
+
+- **`reference.type: separate`** loads one frozen reference model before
+  training and closes over it in the loss function.
+- **`reference.type: adapter_base`** derives the reference view from the
+  current policy model, which is how LoRA-DPO reuses the base model without
+  adapters as the reference.
 
 The DPO loss encourages the policy to assign higher log-probability margins to
 chosen responses than the reference does:
@@ -104,9 +128,9 @@ chosen responses than the reference does:
 loss = softplus(-beta * ((log_pi_chosen - log_pi_rejected) - (log_ref_chosen - log_ref_rejected)))
 ```
 
-Only the policy model's parameters are saved in training checkpoints. The
-reference model is reloaded from `reference_model_path` on every
-start/resume.
+Only the policy model's parameters are saved in training checkpoints. When
+`reference.type: separate` is used, the frozen reference is reloaded from the
+configured path on every start/resume.
 
 ## Metrics
 

@@ -5,6 +5,7 @@ import dataclasses
 import tempfile
 from pathlib import Path
 
+import draccus
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -32,15 +33,26 @@ from levanter.data.text import (
     PreferencePairDataset,
     TextLmDatasetFormat,
 )
-from levanter.main.train_dpo import DpoModel, _build_dpo_dataset, _logp_sum, dpo_loss_from_logps
+from levanter.adaptation import LoraAdaptationConfig, NoAdaptationConfig
+from levanter.main.lora_dpo import LoraDpoConfig, _translate_legacy_lora_dpo_config
+from levanter.main.train_dpo import (
+    AdapterBaseReferenceConfig,
+    DpoModel,
+    SeparateReferenceConfig,
+    TrainDpoConfig,
+    _build_dpo_dataset,
+    _derive_training_keys,
+    _logp_sum,
+    _validate_dpo_config,
+    dpo_loss_from_logps,
+)
 from levanter.metrics import Metric
-from levanter.models.gpt2 import Gpt2Config
+from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig
 from levanter.optim.model_averaging import ModelAveraging
 from levanter.store.cache import SerialCacheWriter
-from levanter.trainer_state import TrainerState, trainables_only
-from levanter.utils.jax_utils import parameter_count
+from levanter.trainer_state import TrainerState, saveable_training_mask
 from levanter.utils.tree_utils import inference_mode
 
 
@@ -70,86 +82,152 @@ def _tiny_gpt2_config() -> Gpt2Config:
     )
 
 
-def _namedarray_leaves(tree):
-    return [
-        leaf
-        for leaf in jax.tree_util.tree_leaves(tree, is_leaf=lambda x: isinstance(x, hax.NamedArray))
-        if isinstance(leaf, hax.NamedArray)
-    ]
-
-
-def _bool_tree_like_for_test(tree, value: bool):
-    return jax.tree_util.tree_map(lambda _: value, tree, is_leaf=lambda x: isinstance(x, hax.NamedArray))
-
-
-def _build_policy_reference(config: Gpt2Config):
+def _build_policy_model(config: Gpt2Config):
     Vocab = hax.Axis("vocab", 32)
-    policy = config.build(Vocab, key=jrandom.PRNGKey(0))
-    reference = config.build(Vocab, key=jrandom.PRNGKey(1))
-    return Vocab, policy, reference
+    return config.build(Vocab, key=jrandom.PRNGKey(0))
 
 
-def test_dpo_trainable_filter_excludes_reference_params():
+def test_trainer_state_init_with_policy_model():
     config = _tiny_gpt2_config()
-    _, policy, reference = _build_policy_reference(config)
-    model = DpoModel(policy=policy, reference=reference)
-
-    trainable_filter = DpoModel(policy=True, reference=False)
-    trainable = trainables_only(model, trainable_filter)
-
-    assert parameter_count(trainable) == parameter_count(policy)
-
-
-def test_dpo_trainable_filter_has_no_namedarray_nones():
-    config = _tiny_gpt2_config()
-    _, policy, reference = _build_policy_reference(config)
-    model = DpoModel(policy=policy, reference=reference)
-
-    trainable_filter = DpoModel(policy=True, reference=False)
-    trainable = trainables_only(model, trainable_filter)
-
-    for leaf in _namedarray_leaves(trainable):
-        assert leaf.array is not None
-
-
-def test_dpo_trainable_filter_prefix_matches_explicit_tree():
-    config = _tiny_gpt2_config()
-    _, policy, reference = _build_policy_reference(config)
-    model = DpoModel(policy=policy, reference=reference)
-
-    explicit_filter = DpoModel(
-        policy=_bool_tree_like_for_test(policy, True),
-        reference=_bool_tree_like_for_test(reference, False),
-    )
-    prefix_filter = DpoModel(policy=True, reference=False)
-
-    explicit_trainable = trainables_only(model, explicit_filter)
-    prefix_trainable = trainables_only(model, prefix_filter)
-
-    assert parameter_count(prefix_trainable) == parameter_count(explicit_trainable)
-    assert parameter_count(prefix_trainable) == parameter_count(policy)
-
-    for leaf in _namedarray_leaves(prefix_trainable):
-        assert leaf.array is not None
-
-
-def test_trainer_state_init_with_dpo_model():
-    config = _tiny_gpt2_config()
-    _, policy, reference = _build_policy_reference(config)
-    model = DpoModel(policy=policy, reference=reference)
-
-    trainable_filter = DpoModel(policy=True, reference=False)
+    model = _build_policy_model(config)
 
     optimizer = AdamConfig(learning_rate=1e-3).build(num_train_steps=1)
     state = TrainerState.init(
         optimizer,
         model,
         key=jrandom.PRNGKey(0),
-        is_trainable=trainable_filter,
+        is_trainable=True,
+        mp=jmp.get_policy("f32"),
+    )
+
+    assert isinstance(state.model, Gpt2LMHeadModel)
+
+
+def test_separate_reference_state_marks_reference_as_non_saveable():
+    config = _tiny_gpt2_config()
+    policy_model = _build_policy_model(config)
+    reference_model = _build_policy_model(config)
+
+    optimizer = AdamConfig(learning_rate=1e-3).build(num_train_steps=1)
+    state = TrainerState.init(
+        optimizer,
+        DpoModel(policy=policy_model, reference=reference_model),
+        key=jrandom.PRNGKey(0),
+        is_trainable=DpoModel(policy=True, reference=False),
         mp=jmp.get_policy("f32"),
     )
 
     assert isinstance(state.model, DpoModel)
+    assert isinstance(state.model.reference, Gpt2LMHeadModel)
+    mask = saveable_training_mask(state, DpoModel(policy=True, reference=False))
+    assert mask.model.reference is False
+
+
+def test_adapter_base_reference_requires_non_none_adapter():
+    config = TrainDpoConfig(
+        model=_tiny_gpt2_config(),
+        reference=AdapterBaseReferenceConfig(),
+        adapter=NoAdaptationConfig(),
+    )
+
+    with pytest.raises(ValueError, match="requires a non-none adapter"):
+        _validate_dpo_config(config)
+
+
+def test_lora_adapter_base_reference_requires_zero_init_b():
+    config = TrainDpoConfig(
+        model=_tiny_gpt2_config(),
+        reference=AdapterBaseReferenceConfig(),
+        adapter=LoraAdaptationConfig(zero_init_b=False),
+    )
+
+    with pytest.raises(ValueError, match="requires zero_init_b=true"):
+        _validate_dpo_config(config)
+
+
+def test_training_keys_preserve_legacy_full_dpo_model_key_path():
+    seed = 123
+    legacy_data_key, _legacy_loader_key, legacy_model_key, legacy_training_key = jrandom.split(
+        jrandom.PRNGKey(seed), 4
+    )
+    legacy_policy_key, _legacy_reference_key = jrandom.split(legacy_model_key)
+
+    data_key, model_key, policy_key, _adapter_key, training_key = _derive_training_keys(seed)
+
+    assert np.array_equal(np.asarray(data_key), np.asarray(legacy_data_key))
+    assert np.array_equal(np.asarray(model_key), np.asarray(legacy_model_key))
+    assert np.array_equal(np.asarray(policy_key), np.asarray(legacy_policy_key))
+    assert np.array_equal(np.asarray(training_key), np.asarray(legacy_training_key))
+
+
+def test_canonical_dpo_config_parses_from_yaml(tmp_path: Path):
+    config_path = tmp_path / "canonical_dpo.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "model:",
+                "  type: gpt2",
+                "adapter:",
+                "  type: none",
+                "reference:",
+                "  type: separate",
+                "  model_path: meta-llama/Llama-3.1-8B-Instruct",
+                "  is_hf: true",
+            ]
+        )
+    )
+
+    config = draccus.parse(TrainDpoConfig, str(config_path), args=[])
+
+    assert isinstance(config.adapter, NoAdaptationConfig)
+    assert isinstance(config.reference, SeparateReferenceConfig)
+
+
+def test_canonical_lora_dpo_config_parses_from_yaml(tmp_path: Path):
+    config_path = tmp_path / "canonical_lora_dpo.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "model:",
+                "  type: gpt2",
+                "adapter:",
+                "  type: lora",
+                "  r: 8",
+                "  alpha: 8.0",
+                "  zero_init_b: true",
+                "reference:",
+                "  type: adapter_base",
+            ]
+        )
+    )
+
+    config = draccus.parse(TrainDpoConfig, str(config_path), args=[])
+
+    assert isinstance(config.adapter, LoraAdaptationConfig)
+    assert isinstance(config.reference, AdapterBaseReferenceConfig)
+
+
+def test_legacy_lora_dpo_config_translates_to_canonical(tmp_path: Path):
+    config_path = tmp_path / "legacy_lora_dpo.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "initialize_from_hf: meta-llama/Llama-3.1-8B-Instruct",
+                "lora:",
+                "  r: 8",
+                "  alpha: 8.0",
+                "  zero_init_b: true",
+                "hf_save_steps: 100",
+            ]
+        )
+    )
+
+    legacy_config = draccus.parse(LoraDpoConfig, str(config_path), args=[])
+
+    translated = _translate_legacy_lora_dpo_config(legacy_config)
+
+    assert isinstance(translated.adapter, LoraAdaptationConfig)
+    assert isinstance(translated.reference, AdapterBaseReferenceConfig)
 
 
 def test_preference_chat_processor_skips_invalid_rows(tokenizer_path: Path):
@@ -343,29 +421,27 @@ def test_partition_for_grad_overwrite_preserves_namedarrays():
     assert hax.all(updated == model).scalar()
 
 
-class _DummyModelAveraging(ModelAveraging[DpoModel]):
-    model: DpoModel
+class _DummyModelAveraging(ModelAveraging[Gpt2LMHeadModel]):
+    model: Gpt2LMHeadModel
 
     def update(self, model, step):
         return self
 
     @property
-    def model_params(self) -> DpoModel:
+    def model_params(self) -> Gpt2LMHeadModel:
         return self.model
 
 
 def test_eval_model_fills_missing_namedarrays_from_model():
     config = _tiny_gpt2_config()
-    _, policy, reference = _build_policy_reference(config)
-    model = DpoModel(policy=policy, reference=reference)
-    trainable_filter = DpoModel(policy=True, reference=False)
+    model = _build_policy_model(config)
 
     optimizer = AdamConfig(learning_rate=1e-3).build(num_train_steps=1)
     state = TrainerState.init(
         optimizer,
         model,
         key=jrandom.PRNGKey(0),
-        is_trainable=trainable_filter,
+        is_trainable=True,
         mp=jmp.get_policy("f32"),
     )
 
@@ -373,7 +449,7 @@ def test_eval_model_fills_missing_namedarrays_from_model():
     state = dataclasses.replace(state, model_averaging=_DummyModelAveraging(model=missing))
 
     eval_model = state.eval_model
-    weight = eval_model.policy.embeddings.token_embeddings.weight
+    weight = eval_model.embeddings.token_embeddings.weight
 
     assert is_jax_array_like(weight.array)
 

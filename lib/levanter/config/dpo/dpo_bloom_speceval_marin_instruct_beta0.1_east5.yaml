@@ -69,8 +69,13 @@ optimizer:
   warmup: 0.1
   max_grad_norm: 1.0
 
-reference_model_path: marin-community/marin-8b-instruct
-reference_is_hf: true
+adapter:
+  type: none
+
+reference:
+  type: separate
+  model_path: marin-community/marin-8b-instruct
+  is_hf: true
 beta: 0.1
 validation_split_fraction: null
 

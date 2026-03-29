@@ -3,7 +3,11 @@
 LoRA DPO combines Low-Rank Adaptation with Direct Preference Optimization.
 The key insight: with LoRA, the base model (without adapters) naturally serves
 as the reference model, eliminating the need for a second full model copy and
-saving ~50% of model parameter memory compared to standard DPO.
+saving roughly half the model-parameter memory compared to standard DPO.
+
+LoRA-DPO now runs through the canonical `levanter.main.train_dpo` entrypoint.
+The legacy `levanter.main.lora_dpo` module remains only as a compatibility
+wrapper for older config files.
 
 ## How It Works
 
@@ -26,8 +30,8 @@ Preference datasets must use the `preference_chat` format with `chosen` and
 
 ## Configuration
 
-LoRA DPO uses `LoraDpoConfig`. Unlike `TrainDpoConfig`, there is no
-`reference_model_path` — the reference is the base model, implicit.
+LoRA-DPO uses `TrainDpoConfig` with a LoRA adapter and an adapter-derived
+reference.
 
 ```yaml
 data:
@@ -45,6 +49,9 @@ data:
 
 train_seq_len: 4096
 
+model:
+  type: llama
+
 trainer:
   num_train_steps: 2000
   train_batch_size: 128
@@ -58,12 +65,16 @@ optimizer:
   lr_schedule: cosine
   max_grad_norm: 1.0
 
-lora:
+adapter:
+  type: lora
   r: 64             # Rank: 64 for medium datasets, 128-256 for large
   alpha: 64.0       # Alpha = rank is the safe default
   dropout: 0.0      # Increase to 0.05-0.1 if overfitting
   zero_init_b: true # CRITICAL for DPO — see B Matrix Initialization below
   target_modules: null  # null = all linear modules (recommended)
+
+reference:
+  type: adapter_base
 
 initialize_from_hf: meta-llama/Llama-3.1-8B
 beta: 0.1
@@ -74,13 +85,15 @@ validation_split_fraction: 0.1
 
 - **`initialize_from_hf`** (required): HuggingFace model to load and apply
   LoRA to. This serves as both the policy base and (implicitly) the reference.
-- **`lora.r`**: LoRA rank. See [Choosing Rank](#choosing-rank) below.
-- **`lora.alpha`**: Scaling factor. Use `alpha = r` as default.
-- **`lora.zero_init_b`**: Zero-initialize the LoRA B matrix. **Must be `true`
-  for DPO** — see [B Matrix Initialization](#b-matrix-initialization) below.
-  The script will override this to `true` and warn if not set.
-- **`lora.target_modules`**: Which linear layers to LoRA-ize. `null` means all
+- **`adapter.r`**: LoRA rank. See [Choosing Rank](#choosing-rank) below.
+- **`adapter.alpha`**: Scaling factor. Use `alpha = r` as default.
+- **`adapter.zero_init_b`**: Zero-initialize the LoRA B matrix. **Must be
+  `true` for DPO** — see [B Matrix Initialization](#b-matrix-initialization)
+  below. The config is rejected if this is `false`.
+- **`adapter.target_modules`**: Which linear layers to LoRA-ize. `null` means all
   linear modules (recommended). Can also be a list of module names or a regex.
+- **`reference.type: adapter_base`**: Uses the base model without adapters as
+  the frozen reference.
 - **`beta`**: DPO temperature. Same as standard DPO.
 - **`peft_save_path`**: Save PEFT-compatible adapter checkpoints.
 - **`merged_hf_save_path`**: Save fully-merged HuggingFace checkpoints.
@@ -103,7 +116,7 @@ hf_save_steps: 1000
 ## Running
 
 ```bash
-python -m levanter.main.lora_dpo --config_path config/lora_dpo_ultrafeedback_llama3_8b.yaml
+python -m levanter.main.train_dpo --config_path my_lora_dpo_config.yaml
 ```
 
 ## Choosing Rank
@@ -149,12 +162,11 @@ producing catastrophically wrong log-probability margins (e.g., -597 instead of
 near-zero) and a loss that starts at ~12 instead of ~0.69. Training never
 recovers.
 
-The `lora_dpo.py` script enforces this automatically: if `lora.zero_init_b` is
-not set to `true`, it will override it and log a warning. Always set it
-explicitly in your config:
+`train_dpo.py` requires this setting explicitly for LoRA-DPO and fails fast if
+it is disabled. Always set it in your config:
 
 ```yaml
-lora:
+adapter:
   zero_init_b: true
 ```
 
@@ -210,5 +222,5 @@ Same metrics as standard DPO, plus LoRA-specific logging:
 | Model copies | 2 (policy + reference) | 1 (LoRA + implicit reference) |
 | Memory | ~2x model size | ~1x model size + LoRA overhead |
 | Trainable params | All policy params | Only LoRA params |
-| Config field | `reference_model_path` | Not needed |
-| Script | `train_dpo.py` | `lora_dpo.py` |
+| Config field | `reference.type: separate` | `reference.type: adapter_base` |
+| Script | `train_dpo.py` | `train_dpo.py` |

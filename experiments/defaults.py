@@ -27,7 +27,7 @@ from levanter.data.text import (
     TextLmDatasetFormat,
 )
 from levanter.eval_harness import LmEvalHarnessConfig
-from levanter.main.train_dpo import TrainDpoConfig
+from levanter.main.train_dpo import SeparateReferenceConfig, TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
@@ -666,8 +666,10 @@ def default_dpo(
             min_lr_ratio=dpo_config.min_lr_ratio,
             max_grad_norm=dpo_config.max_grad_norm,
         ),
-        reference_model_path=reference_model_path,
-        reference_is_hf=dpo_config.reference_is_hf,
+        reference=SeparateReferenceConfig(
+            model_path=reference_model_path,
+            is_hf=dpo_config.reference_is_hf,
+        ),
         beta=dpo_config.beta,
         validation_split_fraction=dpo_config.validation_split_fraction,
         hf_save_steps=steps_per_export_hf,
