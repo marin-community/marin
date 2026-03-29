@@ -379,6 +379,34 @@ def test_vllm_async_engine_receives_engine_seed(monkeypatch):
     assert calls["seed"] == 1234
 
 
+def test_vllm_sync_engine_skips_tpu_patch_on_gpu(monkeypatch):
+    calls = {"patch_count": 0}
+
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            calls["llm_kwargs"] = kwargs
+
+    def _count_patch_calls():
+        calls["patch_count"] += 1
+
+    monkeypatch.setattr(vLLMInferenceContext, "_patch_tpu_inference_registry", staticmethod(_count_patch_calls))
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.LLM", _FakeLLM)
+
+    config = vLLMInferenceContextConfig(
+        model_name="test-model",
+        max_model_len=1024,
+        tensor_parallel_size=2,
+        gpu_memory_utilization=0.9,
+        sampling_params=VLLMSamplingConfig(),
+        device_kind="gpu",
+    )
+
+    vLLMInferenceContext._get_llm_engine(config)
+
+    assert calls["patch_count"] == 0
+    assert calls["llm_kwargs"]["tensor_parallel_size"] == 2
+
+
 def test_worker_extension_uses_public_sync_weights():
     calls = {}
 
