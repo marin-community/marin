@@ -26,13 +26,8 @@ logger = logging.getLogger(__name__)
 
 
 def bundle_id_for_zip(blob: bytes) -> str:
-    """Return canonical bundle id for zip bytes."""
+    """Return canonical content id (SHA-256 hex digest) for bytes."""
     return hashlib.sha256(blob).hexdigest()
-
-
-def blob_id_for_bytes(data: bytes) -> str:
-    """Return canonical blob id (SHA-256 hex digest) for arbitrary bytes."""
-    return hashlib.sha256(data).hexdigest()
 
 
 class BundleStore:
@@ -69,9 +64,6 @@ class BundleStore:
 
     def _bundle_fs_path(self, bundle_id: str) -> str:
         return f"{self._fs_path}/{bundle_id}.zip"
-
-    def _blob_fs_path(self, blob_id: str) -> str:
-        return f"{self._fs_path}/blobs/{blob_id}"
 
     def _exists_in_storage(self, bundle_id: str) -> bool:
         return self._fs.exists(self._bundle_fs_path(bundle_id))
@@ -124,16 +116,16 @@ class BundleStore:
             self._cache_put(bundle_id, blob)
             return blob
 
-    def _fetch_from_controller(self, bundle_id: str) -> None:
-        """Fetch a bundle from the controller HTTP endpoint and store it locally.
+    def _fetch_from_controller(self, content_id: str, url_path: str) -> None:
+        """Fetch content from the controller HTTP endpoint and store it locally.
 
         Retries up to 3 times with exponential backoff. Verifies the SHA-256
-        hash of the downloaded zip matches ``bundle_id``.
+        hash of the downloaded bytes matches ``content_id``.
         """
         if not self._controller_address:
-            raise RuntimeError(f"Bundle {bundle_id} is not cached and controller address is not configured")
+            raise FileNotFoundError(f"Content {content_id} not found and no controller configured")
 
-        url = f"{self._controller_address}/bundles/{bundle_id}.zip"
+        url = f"{self._controller_address}/{url_path}"
         for attempt in range(3):
             try:
                 with urlopen(url, timeout=120) as resp:
@@ -141,72 +133,27 @@ class BundleStore:
                 break
             except Exception as e:
                 if attempt == 2:
-                    raise RuntimeError(f"Failed to fetch bundle {bundle_id}: {e}") from e
+                    raise RuntimeError(f"Failed to fetch {content_id}: {e}") from e
                 time.sleep(0.25 * (2**attempt))
 
         actual = bundle_id_for_zip(blob)
-        if actual != bundle_id:
-            raise ValueError(f"Bundle hash mismatch while fetching {bundle_id}: got {actual}")
+        if actual != content_id:
+            raise ValueError(f"Hash mismatch while fetching {content_id}: got {actual}")
         self.write_zip(blob)
 
-    def write_blob(self, data: bytes) -> str:
-        """Store a blob by content hash, return blob_id."""
-        blob_id = blob_id_for_bytes(data)
-        with self._lock:
-            if blob_id in self._cache:
-                self._cache.move_to_end(blob_id)
-                return blob_id
+    def get_or_fetch(self, content_id: str, url_path: str) -> bytes:
+        """Get content by ID, fetching from controller if not in local cache/storage.
 
-            blob_path = self._blob_fs_path(blob_id)
-            if not self._fs.exists(blob_path):
-                self._fs.mkdirs(f"{self._fs_path}/blobs", exist_ok=True)
-                with self._fs.open(blob_path, "wb") as f:
-                    f.write(data)
-            self._cache_put(blob_id, data)
-        return blob_id
-
-    def get_blob(self, blob_id: str) -> bytes:
-        """Retrieve a blob by ID. Cache, then fsspec, then controller HTTP fallback."""
-        with self._lock:
-            if blob_id in self._cache:
-                self._cache.move_to_end(blob_id)
-                return self._cache[blob_id]
-
-            blob_path = self._blob_fs_path(blob_id)
-            if self._fs.exists(blob_path):
-                with self._fs.open(blob_path, "rb") as f:
-                    data = f.read()
-                self._cache_put(blob_id, data)
-                return data
-
-        # Outside lock: fetch from controller, which calls write_blob to populate cache/storage.
-        self._fetch_blob_from_controller(blob_id)
-        return self.get_blob(blob_id)
-
-    def _fetch_blob_from_controller(self, blob_id: str) -> None:
-        """Fetch a blob from the controller HTTP endpoint and store it locally.
-
-        Retries up to 3 times with exponential backoff. Verifies the SHA-256
-        hash of the downloaded data matches ``blob_id``.
+        Like ``get_zip`` but with automatic controller fallback. The ``url_path``
+        is the HTTP path suffix used to fetch from the controller (e.g.
+        ``bundles/{id}.zip`` or ``blobs/{id}``).
         """
-        if not self._controller_address:
-            raise RuntimeError(f"Blob {blob_id} is not cached and controller address is not configured")
-
-        url = f"{self._controller_address}/blobs/{blob_id}"
-        for attempt in range(3):
-            try:
-                with urlopen(url, timeout=120) as resp:
-                    data = resp.read()
-                break
-            except Exception as e:
-                if attempt == 2:
-                    raise RuntimeError(f"Failed to fetch blob {blob_id}: {e}") from e
-                time.sleep(0.25 * (2**attempt))
-
-        actual = blob_id_for_bytes(data)
-        if actual != blob_id:
-            raise ValueError(f"Blob hash mismatch while fetching {blob_id}: got {actual}")
-        self.write_blob(data)
+        try:
+            return self.get_zip(content_id)
+        except FileNotFoundError:
+            logger.info("Content %s not in local cache, fetching from controller", content_id)
+            self._fetch_from_controller(content_id, url_path)
+            return self.get_zip(content_id)
 
     def extract_bundle_to(self, bundle_id: str, dest: Path) -> None:
         """Extract a bundle zip into ``dest`` with zip-slip protection.
@@ -214,12 +161,7 @@ class BundleStore:
         If the bundle is not in the local cache/storage and a controller address is
         configured, it is fetched on demand before extraction.
         """
-        try:
-            blob = self.get_zip(bundle_id)
-        except FileNotFoundError:
-            logger.info("Bundle %s not in local cache, fetching from controller", bundle_id)
-            self._fetch_from_controller(bundle_id)
-            blob = self.get_zip(bundle_id)
+        blob = self.get_or_fetch(bundle_id, f"bundles/{bundle_id}.zip")
 
         dest.mkdir(parents=True, exist_ok=True)
         base = dest.resolve()

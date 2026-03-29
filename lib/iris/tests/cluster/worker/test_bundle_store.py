@@ -79,7 +79,7 @@ def test_extract_bundle_hash_verification_failure(monkeypatch, store, tmp_path):
         return _FakeResponse(bad_zip)
 
     monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
-    with pytest.raises(ValueError, match="Bundle hash mismatch"):
+    with pytest.raises(ValueError, match="Hash mismatch"):
         store.extract_bundle_to(wrong_id, tmp_path / "extract")
 
 
@@ -98,30 +98,29 @@ def test_lru_eviction_by_item_count(store):
     assert store.get_zip(bundles[2][0]) == bundles[2][1]
 
 
-def test_get_blob_fetches_on_demand(monkeypatch, store):
-    """get_blob should fetch from controller on cache miss."""
+def test_get_or_fetch_fetches_blob_on_demand(monkeypatch, store):
+    """get_or_fetch should fetch from controller on cache miss using the provided URL path."""
     data = b"large pickle data"
-    blob_id = hashlib.sha256(data).hexdigest()
+    content_id = hashlib.sha256(data).hexdigest()
 
     def fake_urlopen(url: str, timeout: int):
-        assert url == f"http://controller.internal/blobs/{blob_id}"
+        assert url == f"http://controller.internal/blobs/{content_id}"
         return _FakeResponse(data)
 
     monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
 
-    result = store.get_blob(blob_id)
+    result = store.get_or_fetch(content_id, f"blobs/{content_id}")
     assert result == data
 
 
-def test_get_blob_uses_cache_on_hit(store):
-    """get_blob should return cached data without hitting the network."""
+def test_get_or_fetch_uses_cache_on_hit(store):
+    """get_or_fetch should return cached data without hitting the network."""
     data = b"cached blob"
-    store.write_blob(data)
-    blob_id = hashlib.sha256(data).hexdigest()
-    assert store.get_blob(blob_id) == data
+    content_id = store.write_zip(data)
+    assert store.get_or_fetch(content_id, f"blobs/{content_id}") == data
 
 
-def test_get_blob_hash_verification_failure(monkeypatch, store):
+def test_get_or_fetch_hash_verification_failure(monkeypatch, store):
     bad_data = b"wrong content"
     wrong_id = "c" * 64
 
@@ -130,5 +129,5 @@ def test_get_blob_hash_verification_failure(monkeypatch, store):
         return _FakeResponse(bad_data)
 
     monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
-    with pytest.raises(ValueError, match="Blob hash mismatch"):
-        store.get_blob(wrong_id)
+    with pytest.raises(ValueError, match="Hash mismatch"):
+        store.get_or_fetch(wrong_id, f"blobs/{wrong_id}")
