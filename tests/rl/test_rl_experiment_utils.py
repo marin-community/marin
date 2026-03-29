@@ -5,6 +5,10 @@ import dataclasses
 from types import SimpleNamespace
 
 import pytest
+
+from fray.types import ResourceConfig
+from levanter.checkpoint import CheckpointDebugConfig
+from levanter.layers.attention import AttentionBackend
 from levanter.models.llama import LlamaConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, materialized_config
@@ -55,8 +59,12 @@ def _default_launcher_region(monkeypatch):
 
 def _test_config(
     *,
-    train_tpu_type: str,
-    inference_tpu_type: str,
+    train_resources: ResourceConfig | None = None,
+    rollout_resources: ResourceConfig | None = None,
+    train_attention_backend: AttentionBackend | None = None,
+    inflight_weight_updates: bool = False,
+    keep_last_temporary_checkpoints: int = 5,
+    checkpoint_debug: CheckpointDebugConfig | None = None,
 ) -> RLExperimentConfig:
     return RLExperimentConfig(
         model_config=ModelConfig(
@@ -76,8 +84,12 @@ def _test_config(
             vocab_tile_size=32064,
         ),
         experiment_name_suffix="test",
-        train_tpu_type=train_tpu_type,
-        inference_tpu_type=inference_tpu_type,
+        inflight_weight_updates=inflight_weight_updates,
+        train_resources=train_resources or ResourceConfig.with_tpu("v5p-8"),
+        rollout_resources=rollout_resources or ResourceConfig.with_tpu("v5p-8"),
+        train_attention_backend=train_attention_backend,
+        keep_last_temporary_checkpoints=keep_last_temporary_checkpoints,
+        checkpoint_debug=checkpoint_debug or CheckpointDebugConfig(),
     )
 
 
@@ -95,9 +107,7 @@ def _test_curriculum() -> CurriculumConfig:
 def test_executor_step_regions_follow_current_launcher_region(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-east5")
 
-    resources = executor_step_resources_for_rl_experiment(
-        _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8")
-    )
+    resources = executor_step_resources_for_rl_experiment(_test_config())
 
     assert resources.regions == ["us-east5"]
 
@@ -106,11 +116,13 @@ def test_non_v5p_executor_step_regions_follow_current_launcher_region(monkeypatc
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-eu-west4")
 
     resources = executor_step_resources_for_rl_experiment(
-        _test_config(train_tpu_type="v6e-4", inference_tpu_type="v6e-4")
+        _test_config(
+            train_resources=ResourceConfig.with_tpu("v6e-4"),
+            rollout_resources=ResourceConfig.with_tpu("v6e-4"),
+        )
     )
 
     assert resources.regions == ["europe-west4"]
-
 
 def test_launcher_region_raises_when_root_region_conflicts_with_requested_compute(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-eu-west4")
@@ -121,7 +133,28 @@ def test_launcher_region_raises_when_root_region_conflicts_with_requested_comput
     )
 
     with pytest.raises(ValueError, match="current launcher region"):
-        launcher_region_for_rl_experiment(_test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"))
+        launcher_region_for_rl_experiment(_test_config())
+
+
+def test_launcher_region_uses_gpu_rollout_region_when_it_matches_tpu_capacity(monkeypatch):
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    monkeypatch.setattr(
+        "marin.rl.placement.infer_tpu_variant_regions_from_iris",
+        lambda variants: ["us-east5"],
+    )
+
+    config = _test_config(
+        rollout_resources=ResourceConfig.with_gpu(
+            "H100",
+            count=4,
+            cpu=32,
+            ram="240g",
+            disk="128g",
+            regions=["us-east5"],
+        )
+    )
+
+    assert launcher_region_for_rl_experiment(config) == "us-east5"
 
 
 def test_make_rl_step_uses_model_checkpoint_path_as_dependency(monkeypatch):
@@ -134,7 +167,7 @@ def test_make_rl_step_uses_model_checkpoint_path_as_dependency(monkeypatch):
         build_config=lambda _ctx: _EmptyConfig(),
     )
     config = dataclasses.replace(
-        _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        _test_config(),
         model_config=ModelConfig(
             name=MODEL_NAME,
             type="llama",
@@ -168,12 +201,13 @@ def test_build_rl_job_config_resolves_runtime_output_paths(monkeypatch):
         def __init__(self, *args, **kwargs):
             self.default_hf_config = SimpleNamespace(vocab_size=32000)
 
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
     monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
     monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
 
     job_config = _build_rl_job_config(
         name="rl-test",
-        config=_test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        config=_test_config(),
         curriculum=_test_curriculum(),
         model_path="gs://marin-us-central1/models/test-model",
         output_path="gs://marin-us-central1/rl_testing/rl-test",
@@ -183,6 +217,8 @@ def test_build_rl_job_config_resolves_runtime_output_paths(monkeypatch):
     assert job_config.rollout_storage.path == "gs://marin-us-central1/rl_testing/rl-test/rollouts"
     assert job_config.inference_config.engine.load_format == "runai_streamer"
     assert job_config.inference_config.engine.canonical_model_name == MODEL_NAME
+    assert job_config.inference_config.engine.device_kind == "tpu"
+    assert job_config.model.attn_backend == AttentionBackend.SPLASH
 
 
 def test_build_rl_job_config_keeps_rollout_policy_out_of_vllm_fallback_sampling(monkeypatch):
@@ -194,7 +230,7 @@ def test_build_rl_job_config_keeps_rollout_policy_out_of_vllm_fallback_sampling(
     monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
 
     config = dataclasses.replace(
-        _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        _test_config(),
         n_generations_per_prompt=16,
         train_decoding_top_k=4096,
     )
@@ -216,12 +252,13 @@ def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_p
         def __init__(self, *args, **kwargs):
             self.default_hf_config = SimpleNamespace(vocab_size=32000)
 
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
     monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
     monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
 
     job_config = _build_rl_job_config(
         name="rl-test",
-        config=_test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        config=_test_config(),
         curriculum=_test_curriculum(),
         model_path=MODEL_NAME,
         output_path="gs://marin-us-central1/rl_testing/rl-test",
@@ -229,6 +266,177 @@ def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_p
 
     assert job_config.inference_config.engine.load_format == "dummy"
     assert job_config.inference_config.engine.canonical_model_name == MODEL_NAME
+    assert job_config.inference_config.engine.device_kind == "tpu"
+
+
+def test_build_rl_job_config_rejects_gpu_inflight_vllm(monkeypatch):
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+
+    with pytest.raises(ValueError, match="does not yet support inflight_weight_updates"):
+        _build_rl_job_config(
+            name="rl-test",
+            config=_test_config(
+                inflight_weight_updates=True,
+                rollout_resources=ResourceConfig.with_gpu(
+                    "H100",
+                    count=4,
+                    cpu=32,
+                    ram="240g",
+                    disk="128g",
+                    regions=["us-central1"],
+                ),
+            ),
+            curriculum=_test_curriculum(),
+            model_path=MODEL_NAME,
+            output_path="gs://marin-us-central1/rl_testing/rl-test",
+        )
+
+
+def test_build_rl_job_config_uses_default_attention_backend_for_gpu_training(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(
+            train_resources=ResourceConfig.with_gpu(
+                "H100",
+                count=4,
+                cpu=32,
+                ram="240g",
+                disk="128g",
+                regions=["us-central1"],
+            ),
+            rollout_resources=ResourceConfig.with_gpu(
+                "H100",
+                count=4,
+                cpu=32,
+                ram="240g",
+                disk="128g",
+                regions=["us-central1"],
+            ),
+        ),
+        curriculum=_test_curriculum(),
+        model_path=MODEL_NAME,
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+
+    assert job_config.model.attn_backend == AttentionBackend.DEFAULT
+
+
+def test_build_rl_job_config_preserves_explicit_train_attention_backend(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(
+            train_resources=ResourceConfig.with_gpu(
+                "H100",
+                count=4,
+                cpu=32,
+                ram="240g",
+                disk="128g",
+                regions=["us-central1"],
+            ),
+            rollout_resources=ResourceConfig.with_gpu(
+                "H100",
+                count=4,
+                cpu=32,
+                ram="240g",
+                disk="128g",
+                regions=["us-central1"],
+            ),
+            train_attention_backend=AttentionBackend.JAX_FLASH,
+        ),
+        curriculum=_test_curriculum(),
+        model_path=MODEL_NAME,
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+
+    assert job_config.model.attn_backend == AttentionBackend.JAX_FLASH
+
+
+def test_build_rl_job_config_propagates_resource_configs(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(
+            train_resources=ResourceConfig.with_tpu("v5p-8", ram="300g"),
+            rollout_resources=ResourceConfig.with_gpu(
+                "H100",
+                count=4,
+                cpu=32,
+                ram="240g",
+                disk="128g",
+            ),
+        ),
+        curriculum=_test_curriculum(),
+        model_path="gs://marin-us-central1/models/test-model",
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+
+    assert job_config.run_config.train_resources.device.kind == "tpu"
+    assert job_config.run_config.train_resources.ram == "300g"
+    assert job_config.run_config.train_resources.regions == ["us-central1"]
+    assert job_config.run_config.rollout_resources.device.kind == "gpu"
+    assert job_config.run_config.rollout_resources.ram == "240g"
+    assert job_config.run_config.rollout_resources.regions == ["us-central1"]
+    assert job_config.inference_config.engine.device_kind == "gpu"
+
+
+def test_build_rl_job_config_propagates_checkpoint_controls_and_instance_id(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(
+            train_resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central1"]),
+            rollout_resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central1"]),
+            keep_last_temporary_checkpoints=7,
+            checkpoint_debug=CheckpointDebugConfig(
+                enabled=True,
+                log_interval=15.0,
+                dump_stacks_after=45.0,
+            ),
+        ),
+        curriculum=_test_curriculum(),
+        model_path="gs://marin-us-central1/models/test-model",
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+        instance_id="rl-test-instance",
+    )
+
+    assert job_config.instance_id == "rl-test-instance"
+    assert job_config.run_config.train_resources.regions == ["us-central1"]
+    assert job_config.run_config.rollout_resources.regions == ["us-central1"]
+    assert job_config.curriculum.actor_name == "curriculum-rl-test-instance"
+    assert job_config.weight_transfer.coordinator_name == "wt-coord-rl-test-instance"
+    assert job_config.trainer.checkpointer.keep_last_temporary_checkpoints == 7
+    assert job_config.trainer.checkpointer.debug.enabled
+    assert job_config.trainer.checkpointer.debug.log_interval == 15.0
+    assert job_config.trainer.checkpointer.debug.dump_stacks_after == 45.0
 
 
 def test_run_rl_experiment_step_returns_a_path_ref(monkeypatch):
@@ -242,7 +450,7 @@ def test_run_rl_experiment_step_returns_a_path_ref(monkeypatch):
             calls["name"] = name
             return object()
 
-    runtime_config = _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8")
+    runtime_config = _test_config()
     step_config = RLStepConfig(
         name="exec-gcs-small-test",
         experiment_config=runtime_config,

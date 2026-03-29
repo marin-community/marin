@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 from fray.current_client import current_client
 from fray.iris_backend import FrayIrisClient
+from fray.types import ResourceConfig, TpuConfig
 from rigging.filesystem import data_config, marin_region
 
 logger = logging.getLogger(__name__)
@@ -70,33 +71,118 @@ def infer_tpu_variant_regions_from_iris(variants: Sequence[str]) -> list[str] | 
     return sorted(inferred_regions)
 
 
-def requested_tpu_variants(train_tpu_type: str, inference_tpu_type: str | None) -> list[str]:
+def _region_from_zone(zone: str) -> str:
+    if "-" not in zone:
+        raise ValueError(f"Invalid zone {zone!r}; expected a value like 'us-east5-d'.")
+    return zone.rsplit("-", 1)[0]
+
+
+def _region_key(region: str) -> str:
+    return region.lower()
+
+
+def _deduplicate_regions(regions: list[str]) -> list[str]:
+    deduplicated: list[str] = []
+    seen: set[str] = set()
+    for region in regions:
+        key = _region_key(region)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduplicated.append(region)
+    return deduplicated
+
+
+def _region_key_set(regions: list[str]) -> set[str]:
+    return {_region_key(region) for region in regions}
+
+
+def requested_tpu_variants(train_resources: ResourceConfig, rollout_resources: ResourceConfig) -> list[str]:
     """Return the deduplicated TPU variants requested by an RL run."""
     variants: list[str] = []
-    for variant in (train_tpu_type, inference_tpu_type or train_tpu_type):
-        normalized = variant.lower()
-        if normalized not in variants:
-            variants.append(normalized)
+    for resource in (train_resources, rollout_resources):
+        if not isinstance(resource.device, TpuConfig):
+            continue
+        for variant in (resource.device.variant, *(resource.device_alternatives or ())):
+            normalized = variant.lower()
+            if normalized not in variants:
+                variants.append(normalized)
     return variants
 
 
-def resolve_launcher_region(train_tpu_type: str, inference_tpu_type: str | None) -> str:
-    """Choose the concrete region for an RL run.
+def _normalized_resource_regions(resource: ResourceConfig) -> list[str] | None:
+    normalized_regions = _deduplicate_regions(list(resource.regions or ()))
 
-    The root Iris job must already be launched in the desired region. This
-    function validates that region against the requested TPU variants when
-    autoscaler information is available.
-    """
-    variants = requested_tpu_variants(train_tpu_type, inference_tpu_type)
+    if resource.zone is None:
+        return normalized_regions or None
+
+    zone_region = _region_from_zone(resource.zone)
+    if not normalized_regions:
+        return [zone_region]
+    if _region_key(zone_region) not in _region_key_set(normalized_regions):
+        raise ValueError(f"RL resource zone {resource.zone!r} conflicts with requested regions {normalized_regions}.")
+    return [zone_region]
+
+
+def _normalized_regions(resources: tuple[ResourceConfig, ResourceConfig]) -> list[str] | None:
+    requested_regions: list[list[str]] = []
+    for resource in resources:
+        normalized = _normalized_resource_regions(resource)
+        if normalized is None:
+            continue
+        requested_regions.append(normalized)
+
+    if not requested_regions:
+        return None
+
+    shared_regions = requested_regions[0]
+    for regions in requested_regions[1:]:
+        region_keys = _region_key_set(regions)
+        shared_regions = [region for region in shared_regions if _region_key(region) in region_keys]
+
+    if not shared_regions:
+        raise ValueError("RL trainer and rollout workers must share at least one compatible region")
+
+    return shared_regions
+
+
+def resolve_launcher_region(train_resources: ResourceConfig, rollout_resources: ResourceConfig) -> str:
+    """Choose the concrete region for an RL run."""
+    resources = (train_resources, rollout_resources)
+    variants = requested_tpu_variants(train_resources, rollout_resources)
     current_region = marin_region()
-    allowed_regions = infer_tpu_variant_regions_from_iris(variants)
+    allowed_regions = infer_tpu_variant_regions_from_iris(variants) if variants else None
+    requested_regions = _normalized_regions(resources)
 
     if current_region is not None:
-        current_region = current_region.lower()
+        current_region = _region_key(current_region)
+
+    if requested_regions is not None:
+        if allowed_regions is not None:
+            allowed_region_keys = _region_key_set(allowed_regions)
+            requested_regions = [region for region in requested_regions if _region_key(region) in allowed_region_keys]
+            if not requested_regions:
+                raise ValueError(
+                    f"RL run requests TPU variants {variants}, available in {allowed_regions}, "
+                    "but the configured resource regions are incompatible."
+                )
+            if current_region is not None:
+                if current_region not in _region_key_set(requested_regions):
+                    raise ValueError(
+                        f"RL run is pinned to regions {requested_regions}, but the current launcher region is "
+                        f"{current_region!r}. Relaunch the root Iris job with --region/--zone in a compatible region."
+                    )
+                return current_region
+            return requested_regions[0]
+
+        if current_region is not None and current_region in _region_key_set(requested_regions):
+            return current_region
+        return requested_regions[0]
 
     if allowed_regions is not None:
+        allowed_region_keys = _region_key_set(allowed_regions)
         if current_region is not None:
-            if current_region not in allowed_regions:
+            if current_region not in allowed_region_keys:
                 raise ValueError(
                     f"RL run requests TPU variants {variants}, which are available in {allowed_regions}, "
                     f"but the current launcher region is {current_region!r}. Relaunch the root Iris job "
@@ -106,6 +192,8 @@ def resolve_launcher_region(train_tpu_type: str, inference_tpu_type: str | None)
         return allowed_regions[0]
 
     if current_region is not None:
+        if not variants:
+            return current_region
         logger.warning(
             "Could not infer TPU-capable regions for %s from Iris autoscaler; defaulting to current launcher "
             "region %s.",
@@ -115,8 +203,9 @@ def resolve_launcher_region(train_tpu_type: str, inference_tpu_type: str | None)
         return current_region
 
     raise ValueError(
-        f"Could not determine a launcher region for requested TPU variants {variants}. "
-        "Launch the root Iris job with --region/--zone or set MARIN_PREFIX to a regional bucket."
+        "Could not determine a launcher region for the RL run. "
+        "Launch the root Iris job with --region/--zone, set MARIN_PREFIX to a regional bucket, "
+        "or set regions on the RL resource configs."
     )
 
 
@@ -130,4 +219,4 @@ def marin_prefix_for_region(region: str) -> str:
 
 def singleton_region_list(region: str) -> list[str]:
     """Wrap a concrete region in the list form expected by Iris resources."""
-    return [region.lower()]
+    return [region]
