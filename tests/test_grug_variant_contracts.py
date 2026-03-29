@@ -270,8 +270,14 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     _discover_grug_variants_with_model_and_train(),
 )
 def test_grug_variant_activation_metrics_on_watch_step(variant: str):
-    """Activation metrics appear in output when compute_watch=True and vanish when False."""
+    """Activation metrics appear in output when compute_watch=True and vanish when False.
+
+    Validates the full first-cut metric set from the spec: per-layer histograms for
+    attn_in, attn_out, mlp_out, block_out, attn_out_to_in_ratio, mlp_out_to_in_ratio,
+    plus scalar max_abs_attn_logit.
+    """
     from levanter.callbacks.watch import WatchConfig
+    from levanter.tracker.histogram import Histogram
 
     train_module = importlib.import_module(_variant_module_name(variant, "train"))
     model_module = importlib.import_module(_variant_module_name(variant, "model"))
@@ -312,13 +318,44 @@ def test_grug_variant_activation_metrics_on_watch_step(variant: str):
         # Watch enabled: watch_stats must contain activation metrics
         _, metrics_on, watch_on = eqx.filter_eval_shape(lambda: one_step(compute_watch=True))
         assert watch_on is not None
-        activation_keys = [k for k in watch_on if k.startswith("activations/")]
+        # Collect activation keys from watch_stats and (for MoE) from metrics
+        all_activation_sources: dict[str, object] = {}
+        if watch_on is not None:
+            all_activation_sources.update({k: v for k, v in watch_on.items() if k.startswith("activations/")})
+        all_activation_sources.update({k: v for k, v in metrics_on.items() if k.startswith("activations/")})
 
-        # For MoE, activation metrics may flow through metrics instead of watch_stats
-        if not activation_keys:
-            activation_keys = [k for k in metrics_on if k.startswith("activations/")]
+        activation_keys = list(all_activation_sources.keys())
 
-        assert (
-            len(activation_keys) >= num_layers
-        ), f"Expected at least {num_layers} activation keys (one per layer), got {activation_keys}"
-        assert any("activations/final/rms" in k for k in activation_keys)
+        # Spec-required per-layer metric names
+        required_per_layer = [
+            "attn_in",
+            "attn_out",
+            "mlp_out",
+            "block_out",
+            "attn_out_to_in_ratio",
+            "mlp_out_to_in_ratio",
+            "max_abs_attn_logit",
+        ]
+        for layer_idx in range(num_layers):
+            for metric_name in required_per_layer:
+                expected_key = f"activations/layer_{layer_idx}/{metric_name}"
+                assert (
+                    expected_key in activation_keys
+                ), f"Missing {expected_key} for variant={variant}; got {sorted(activation_keys)}"
+                value = all_activation_sources[expected_key]
+                # Histogram metrics should be Histogram instances; scalar should be a JAX array
+                if metric_name == "max_abs_attn_logit":
+                    assert not isinstance(value, Histogram), f"{expected_key} should be a scalar, not Histogram"
+                else:
+                    assert isinstance(value, Histogram), f"{expected_key} should be a Histogram, got {type(value)}"
+
+
+def test_histogram_nonzero_count():
+    """Histogram.nonzero_count property works and serializes correctly."""
+    from levanter.tracker.histogram import Histogram
+
+    arr = jnp.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    hist = Histogram.from_array(arr, num_bins=5)
+    nzc = hist.nonzero_count
+    assert nzc > 0
+    assert nzc <= 5

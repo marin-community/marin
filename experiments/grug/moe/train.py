@@ -526,6 +526,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             step=step,
                         )
 
+                    # Log activation metrics from the summarized_metrics dict.
+                    activation_metrics = {key: value for key, value in metrics.items() if key.startswith("activations/")}
+                    if activation_metrics:
+                        levanter.tracker.log(activation_metrics, step=step)
+
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 

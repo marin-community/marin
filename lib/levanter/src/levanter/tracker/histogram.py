@@ -59,6 +59,11 @@ class Histogram(equinox.Module):
         return self.sum / self.num
 
     @property
+    def nonzero_count(self) -> Scalar:
+        """Number of histogram buckets with at least one entry."""
+        return jnp.sum(self.bucket_counts > 0)
+
+    @property
     def variance(self) -> Scalar:
         """
         Calculate the variance of the histogram.

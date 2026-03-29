@@ -31,6 +31,7 @@ def _to_jsonable(value: Any):
             "sum_squares": jnp_to_python(value.sum_squares),
             "bucket_limits": jnp_to_python(value.bucket_limits),
             "bucket_counts": jnp_to_python(value.bucket_counts),
+            "nonzero_count": jnp_to_python(value.nonzero_count),
         }
     if isinstance(value, jax.Array):
         return jnp_to_python(value)
