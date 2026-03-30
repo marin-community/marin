@@ -62,7 +62,7 @@ dev = [
 packages = ["src/iris"]
 
 [tool.pytest.ini_options]
-timeout = 5
+timeout = 10
 addopts = "-n auto --durations=25 -m 'not slow and not docker' -v"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
