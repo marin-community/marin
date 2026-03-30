@@ -31,7 +31,16 @@ def _is_test_environment() -> bool:
     return "PYTEST_CURRENT_TEST" in os.environ or "CI" in os.environ
 
 
-if _is_test_environment():
+def _has_duckdb() -> bool:
+    try:
+        import duckdb
+
+        return True
+    except ImportError:
+        return False
+
+
+if _is_test_environment() or not _has_duckdb():
     from iris.cluster.log_store.mem_store import MemStore as LogStore
 else:
     from iris.cluster.log_store.duckdb_store import DuckDBLogStore as LogStore
