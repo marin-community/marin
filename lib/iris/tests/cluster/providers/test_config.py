@@ -10,8 +10,6 @@ YAML, ensuring that vm_type and platform configuration are preserved correctly.
 from pathlib import Path
 from typing import ClassVar
 
-import time
-
 import pytest
 import yaml
 
@@ -28,6 +26,7 @@ from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.constraints import WellKnownAttribute
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.time_utils import Duration, ExponentialBackoff
 
 
 class TestConfigRoundTrip:
@@ -1417,7 +1416,7 @@ def test_coreweave_worker_provider_rejected():
 SMOKE_GCP_CONFIG = Path(__file__).resolve().parents[3] / "examples" / "smoke-gcp.yaml"
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(15)
 def test_smoke_gcp_config_boots_locally():
     """Load smoke-gcp.yaml, convert to local mode, verify workers join."""
     config = load_config(SMOKE_GCP_CONFIG)
@@ -1428,16 +1427,14 @@ def test_smoke_gcp_config_boots_locally():
         # The smoke config has min_slices=1 for tpu_v5e_16 across 2 zones,
         # each with num_vms=4 → 8 workers total.  We only need one healthy
         # worker to confirm the config boots.
-        deadline = time.monotonic() + 45
-        while time.monotonic() < deadline:
+
+        def _has_healthy_worker() -> bool:
             workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
-            healthy = [w for w in workers if w.healthy]
-            if healthy:
-                break
-            time.sleep(0.5)
-        else:
-            raise AssertionError(
-                f"No healthy workers after 45s with smoke-gcp.yaml in local mode. "
-                f"Total workers: {len(workers)}, healthy: {len(healthy)}"
-            )
+            return any(w.healthy for w in workers)
+
+        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until_or_raise(
+            _has_healthy_worker,
+            timeout=Duration.from_seconds(15.0),
+            error_message="No healthy workers with smoke-gcp.yaml in local mode",
+        )
         client.close()

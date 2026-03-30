@@ -78,14 +78,18 @@ def pytest_addoption(parser):
 
 # Cloud mode needs much longer timeouts: GCE provisioning can take 20 minutes,
 # and individual tests need time for remote job execution.
+_LOCAL_E2E_TIMEOUT = 30  # local e2e tests boot clusters + run jobs
 _CLOUD_FIXTURE_TIMEOUT = 1200  # 20 min for cluster provisioning
 _CLOUD_TEST_TIMEOUT = 120  # 2 min per test
 
 
 def pytest_collection_modifyitems(config, items):
-    """Set appropriate timeouts for cloud mode tests."""
-    if config.getoption("--iris-controller-url") is None:
-        return
+    """Set appropriate timeouts for e2e tests.
+
+    Local mode: 30s default (cluster boot + job execution).
+    Cloud mode: 20 min for first smoke test (provisioning), 2 min for the rest.
+    """
+    is_cloud = config.getoption("--iris-controller-url") is not None
 
     import pytest
 
@@ -93,14 +97,17 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if item.get_closest_marker("timeout"):
             continue
-        if "smoke_cluster" in getattr(item, "fixturenames", ()):
-            if first_smoke_test:
-                item.add_marker(pytest.mark.timeout(_CLOUD_FIXTURE_TIMEOUT))
-                first_smoke_test = False
+        if is_cloud:
+            if "smoke_cluster" in getattr(item, "fixturenames", ()):
+                if first_smoke_test:
+                    item.add_marker(pytest.mark.timeout(_CLOUD_FIXTURE_TIMEOUT))
+                    first_smoke_test = False
+                else:
+                    item.add_marker(pytest.mark.timeout(_CLOUD_TEST_TIMEOUT))
             else:
                 item.add_marker(pytest.mark.timeout(_CLOUD_TEST_TIMEOUT))
         else:
-            item.add_marker(pytest.mark.timeout(_CLOUD_TEST_TIMEOUT))
+            item.add_marker(pytest.mark.timeout(_LOCAL_E2E_TIMEOUT))
 
 
 @dataclass
