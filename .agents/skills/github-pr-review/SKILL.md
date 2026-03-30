@@ -16,22 +16,22 @@ To do this, follow these steps precisely:
    - The pull request is closed
    - The pull request is a draft
    - The pull request does not need code review (e.g. automated PR, trivial change that is obviously correct)
-   - Claude has already commented on this PR (check `gh pr view <PR> --comments` for comments left by claude)
+   - Claude has already commented on this PR (check `gh pr view <PR> --comments` for comments left by claude) AND the review was NOT explicitly requested via comment (e.g. "claude review this"). When a maintainer explicitly requests a re-review, always proceed even if a prior review exists.
 
    If any condition is true, stop and do not proceed.
 
    Note: Still review Claude generated PR's.
 
-2. Launch a haiku agent to return a list of file paths (not their contents) for all relevant CLAUDE.md files including:
-   - The root CLAUDE.md file, if it exists
-   - Any CLAUDE.md files in directories containing files modified by the pull request
+2. Launch a haiku agent to return a list of file paths (not their contents) for all relevant CLAUDE.md and AGENTS.md files including:
+   - The root CLAUDE.md and AGENTS.md files, if they exist
+   - Any CLAUDE.md or AGENTS.md files in directories (and parent directories) containing files modified by the pull request
 
 3. Launch a sonnet agent to view the pull request and return a summary of the changes
 
 4. Launch 4 agents in parallel to independently review the changes. Each agent should return the list of issues, where each issue includes a description and the reason it was flagged (e.g. "CLAUDE.md adherence", "bug"). The agents should do the following:
 
-   Agents 1 + 2: CLAUDE.md compliance sonnet agents
-   Audit changes for CLAUDE.md compliance in parallel. Note: When evaluating CLAUDE.md compliance for a file, you should only consider CLAUDE.md files that share a file path with the file or parents.
+   Agents 1 + 2: CLAUDE.md/AGENTS.md compliance sonnet agents
+   Audit changes for CLAUDE.md and AGENTS.md compliance in parallel. Note: When evaluating compliance for a file, you should only consider CLAUDE.md and AGENTS.md files that share a file path with the file or parents.
 
    Agent 3: Opus bug agent (parallel subagent with agent 4)
    Scan for obvious bugs. Focus only on the diff itself without reading extra context. Flag only significant bugs; ignore nitpicks and likely false positives. Do not flag issues that you cannot validate without looking at context outside of the git diff.
@@ -42,7 +42,7 @@ To do this, follow these steps precisely:
    **CRITICAL: We only want HIGH SIGNAL issues.** Flag issues where:
    - The code will fail to compile or parse (syntax errors, type errors, missing imports, unresolved references)
    - The code will definitely produce wrong results regardless of inputs (clear logic errors)
-   - Clear, unambiguous CLAUDE.md violations where you can quote the exact rule being broken
+   - Clear, unambiguous CLAUDE.md or AGENTS.md violations where you can quote the exact rule being broken
 
    Do NOT flag:
    - Code style or quality concerns
