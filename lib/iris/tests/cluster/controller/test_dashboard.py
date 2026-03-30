@@ -17,7 +17,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
     Endpoint,
-    Job,
+    JobDetail,
     decode_rows,
     healthy_active_workers_with_attributes,
 )
@@ -119,7 +119,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     def _get_job_scheduling_diagnostics(job_wire_id):
         """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
         with state._db.snapshot() as q:
-            rows = decode_rows(Job, q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire_id,)))
+            rows = decode_rows(JobDetail, q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire_id,)))
         if not rows:
             return None
         job = rows[0]
