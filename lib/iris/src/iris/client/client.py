@@ -30,7 +30,6 @@ from connectrpc.errors import ConnectError
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.cluster.client import (
-    BundleCreator,
     ClusterClient,
     JobInfo,
     RemoteClusterClient,
@@ -508,12 +507,6 @@ class IrisClient:
         Returns:
             IrisClient wrapping RemoteClusterClient
         """
-        bundle_blob = None
-        if workspace is not None:
-            creator = BundleCreator(workspace)
-            bundle_blob = creator.create_bundle()
-            logger.info(f"Workspace bundle size: {len(bundle_blob) / 1024 / 1024:.1f} MB")
-
         interceptors = []
         if token_provider is not None:
             interceptors.append(AuthTokenInjector(token_provider))
@@ -521,7 +514,7 @@ class IrisClient:
         cluster = RemoteClusterClient(
             controller_address=controller_address,
             bundle_id=bundle_id,
-            bundle_blob=bundle_blob,
+            workspace=workspace,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
         )
