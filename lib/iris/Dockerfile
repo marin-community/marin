@@ -76,7 +76,7 @@ ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
 FROM deps AS controller
 
 # Controller-only deps: duckdb, pyarrow, zstandard.
-RUN uv sync --extra controller
+RUN uv sync --extra controller --inexact
 
 LABEL org.opencontainers.image.description="Iris controller image"
 
