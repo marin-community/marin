@@ -1681,6 +1681,10 @@ class ControllerTransitions:
                     "UPDATE task_attempts SET worker_id = NULL WHERE worker_id = ?",
                     (str(worker_id),),
                 )
+                cur.execute(
+                    "UPDATE tasks SET current_worker_id = NULL WHERE current_worker_id = ?",
+                    (str(worker_id),),
+                )
                 cur.execute("DELETE FROM dispatch_queue WHERE worker_id = ?", (str(worker_id),))
                 cur.execute("DELETE FROM workers WHERE worker_id = ?", (str(worker_id),))
             else:
@@ -1946,6 +1950,9 @@ class ControllerTransitions:
             row = cur.execute("SELECT * FROM workers WHERE worker_id = ?", (str(worker_id),)).fetchone()
             if row is None:
                 return None
+            cur.execute("UPDATE task_attempts SET worker_id = NULL WHERE worker_id = ?", (str(worker_id),))
+            cur.execute("UPDATE tasks SET current_worker_id = NULL WHERE current_worker_id = ?", (str(worker_id),))
+            cur.execute("DELETE FROM dispatch_queue WHERE worker_id = ?", (str(worker_id),))
             cur.execute("DELETE FROM workers WHERE worker_id = ?", (str(worker_id),))
             self._record_transaction(cur, "remove_worker", [("worker_removed", str(worker_id), {})])
         self._db.remove_worker_from_attr_cache(worker_id)
@@ -2047,6 +2054,9 @@ class ControllerTransitions:
                 break
             worker_id = row["worker_id"]
             with self._db.transaction() as cur:
+                cur.execute("UPDATE task_attempts SET worker_id = NULL WHERE worker_id = ?", (worker_id,))
+                cur.execute("UPDATE tasks SET current_worker_id = NULL WHERE current_worker_id = ?", (worker_id,))
+                cur.execute("DELETE FROM dispatch_queue WHERE worker_id = ?", (worker_id,))
                 cur.execute("DELETE FROM workers WHERE worker_id = ?", (worker_id,))
                 self._record_transaction(cur, "prune_old_data", [("worker_pruned", str(worker_id), {})])
             workers_deleted += 1
