@@ -103,3 +103,18 @@ class RemoteExecWorkerBase:
 
     def reboot(self) -> None:
         self._remote_exec.run("sudo reboot", timeout=Duration.from_seconds(10))
+
+    def restart_worker(self, container_name: str = "iris-worker") -> None:
+        """Restart the worker container, preserving running task containers.
+
+        Uses `docker restart` which sends SIGTERM, waits the grace period,
+        then starts a fresh container from the same image. The new worker
+        process discovers and adopts existing task containers via Docker labels.
+        """
+        logger.info("Restarting worker container %s on %s", container_name, self._vm_id)
+        result = self._remote_exec.run(
+            f"docker restart {container_name}",
+            timeout=Duration.from_seconds(60),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to restart worker container on {self._vm_id}: {result.stderr}")

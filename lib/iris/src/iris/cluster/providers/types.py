@@ -226,6 +226,17 @@ class RemoteWorkerHandle(Protocol):
         """Reboot the worker."""
         ...
 
+    def restart_worker(self, container_name: str = "iris-worker") -> None:
+        """Restart the Iris worker process, preserving running task containers.
+
+        Uses `docker restart` on the worker container. The new worker process
+        discovers and adopts existing task containers via Docker labels.
+
+        Args:
+            container_name: Name of the worker's Docker container.
+        """
+        ...
+
 
 class StandaloneWorkerHandle(RemoteWorkerHandle, Protocol):
     """Handle to a standalone worker (e.g., controller). Can be terminated and labeled.

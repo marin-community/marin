@@ -4,6 +4,7 @@
 """Unified worker managing all components and lifecycle."""
 
 import logging
+import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -274,7 +275,10 @@ class Worker:
                 to_remove.append(container.container_id)
                 continue
 
-            # Only adopt containers from this worker
+            # Only adopt containers from this worker. Containers with no worker_id
+            # label (pre-adoption-era or unset) are adopted by any worker — this is
+            # intentional for backward compatibility with containers created before
+            # the worker_id label was added.
             if self._worker_id and container.worker_id and container.worker_id != self._worker_id:
                 to_remove.append(container.container_id)
                 continue
@@ -323,8 +327,6 @@ class Worker:
 
         # Clean up non-adoptable containers
         if to_remove:
-            import subprocess
-
             subprocess.run(
                 ["docker", "rm", "-f", *to_remove],
                 capture_output=True,
@@ -357,8 +359,7 @@ class Worker:
             logger.info("Preserving %d running containers for adoption by new worker", len(self._tasks))
             # Detach task threads from the parent so _threads.stop() won't
             # cascade into _task_threads and trigger on_stop container kills.
-            with self._threads._lock:
-                self._threads._children = [c for c in self._threads._children if c is not self._task_threads]
+            self._threads.detach_child(self._task_threads)
 
         if self._server:
             self._server.should_exit = True

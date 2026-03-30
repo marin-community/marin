@@ -185,17 +185,20 @@ class TaskAttempt:
     def __init__(
         self,
         config: TaskAttemptConfig,
-        bundle_store: BundleStore,
-        container_runtime: ContainerRuntime,
-        worker_metadata: WorkerMetadata,
+        bundle_store: BundleStore | None,
+        container_runtime: ContainerRuntime | None,
+        worker_metadata: WorkerMetadata | None,
         worker_id: str | None,
         controller_address: str | None,
-        task_env: dict[str, str],
+        task_env: dict[str, str] | None,
         default_task_image: str | None,
-        resolve_image: Callable[[str], str],
+        resolve_image: Callable[[str], str] | None,
         port_allocator: PortAllocator,
         log_store: LogStore,
         poll_interval_seconds: float = 5.0,
+        *,
+        container_handle: ContainerHandle | None = None,
+        initial_status: TaskState | None = None,
     ):
         """Initialize a TaskAttempt.
 
@@ -203,29 +206,35 @@ class TaskAttempt:
         that submit_task() can return quickly on the heartbeat thread. Expensive
         setup (port allocation, working directory creation) is deferred to run().
 
+        For adopted tasks (container already running from a previous worker),
+        pass container_handle and initial_status=TASK_STATE_RUNNING. The
+        bundle_store, container_runtime, worker_metadata, task_env, and
+        resolve_image params can be None since the run pipeline is skipped.
+
         Args:
             config: Immutable configuration for this attempt
-            bundle_store: Bundle store for resolving task bundles
-            container_runtime: Runtime for creating and managing containers
-            worker_metadata: Worker's hardware/environment metadata
+            bundle_store: Bundle store for resolving task bundles (None for adopted tasks)
+            container_runtime: Runtime for creating containers (None for adopted tasks)
+            worker_metadata: Worker's hardware/environment metadata (None for adopted tasks)
             worker_id: Worker identifier for env injection
             controller_address: Controller address for env injection
-            task_env: Worker-level default env vars injected into task containers
+            task_env: Worker-level default env vars (None for adopted tasks)
             default_task_image: Fully-qualified task container image from cluster config
-            resolve_image: Resolves image tags for the current platform
-                (e.g. GHCR→AR rewriting on GCP). Zone is pre-bound by the worker.
+            resolve_image: Resolves image tags for the current platform (None for adopted tasks)
             port_allocator: Port allocator for releasing ports on cleanup
-            log_store: Shared LogStore for appending and querying task logs.
+            log_store: Shared LogStore for appending and querying task logs
             poll_interval_seconds: How often to poll container status
+            container_handle: Pre-existing container handle for adopted tasks
+            initial_status: Starting status (default PENDING, use RUNNING for adopted tasks)
         """
         self._bundle_store = bundle_store
         self._runtime = container_runtime
-        self._worker_metadata = worker_metadata
+        self._worker_metadata = worker_metadata or cluster_pb2.WorkerMetadata()
         self._worker_id = worker_id
         self._controller_address = controller_address
-        self._task_env = task_env
+        self._task_env = task_env or {}
         self._default_task_image = default_task_image
-        self._resolve_image_fn = resolve_image
+        self._resolve_image_fn = resolve_image or (lambda x: x)
         self._port_allocator = port_allocator
         self._poll_interval_seconds = poll_interval_seconds
         self._log_store = log_store
@@ -241,7 +250,7 @@ class TaskAttempt:
         self.workdir: Path | None = None
         self._cache_dir: Path = config.cache_dir
         # Task state
-        self.status: TaskState = cluster_pb2.TASK_STATE_PENDING
+        self.status: TaskState = initial_status or cluster_pb2.TASK_STATE_PENDING
         self.exit_code: int | None = None
         self.error: str | None = None
         self.started_at: Timestamp | None = None
@@ -260,9 +269,10 @@ class TaskAttempt:
         self.build_finished: Timestamp | None = None
         self.build_from_cache: bool = False
         self.image_tag: str = ""
+        self._building_start_monotonic: float = 0.0
 
         # Internals
-        self._container_handle: ContainerHandle | None = None
+        self._container_handle: ContainerHandle | None = container_handle
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
@@ -280,16 +290,14 @@ class TaskAttempt:
         """Create a TaskAttempt that adopts an already-running container.
 
         Used after worker restart to resume monitoring a container started by
-        the previous worker process. Skips the full lifecycle (bundle download,
-        image resolve, container create, build) and enters monitoring directly.
+        the previous worker process. Calls the normal __init__ with None for
+        run-pipeline-only dependencies (bundle_store, runtime, etc.) and
+        injects the existing container handle.
         """
         task_id = JobName.from_wire(discovered.task_id)
         attempt_id = discovered.attempt_id
         identity = TaskAttemptIdentity(task_id=task_id, attempt_id=attempt_id)
 
-        # Build a minimal RunTaskRequest with just the identity fields.
-        # The controller already has the full request; we only need enough
-        # to satisfy to_proto() and monitoring.
         request = cluster_pb2.Worker.RunTaskRequest(
             task_id=discovered.task_id,
             attempt_id=attempt_id,
@@ -301,56 +309,25 @@ class TaskAttempt:
             cache_dir=Path(discovered.workdir_host_path).parent.parent if discovered.workdir_host_path else Path("/tmp"),
         )
 
-        instance = cls.__new__(cls)
-        instance._bundle_store = None  # type: ignore[assignment]
-        instance._runtime = None  # type: ignore[assignment]
-        instance._worker_metadata = cluster_pb2.WorkerMetadata()
-        instance._worker_id = discovered.worker_id
-        instance._controller_address = None
-        instance._task_env = {}
-        instance._default_task_image = None
-        instance._resolve_image_fn = lambda x: x
-        instance._port_allocator = port_allocator
-        instance._poll_interval_seconds = poll_interval_seconds
-        instance._log_store = log_store
-        log_key = task_log_key(identity)
-        instance._log_key = log_key
-
-        instance.task_attempt = identity
-        instance.task_id = task_id
-        instance.num_tasks = 1
-        instance.attempt_id = attempt_id
-        instance.request = request
-        instance.ports = {}
-        instance.workdir = Path(discovered.workdir_host_path) if discovered.workdir_host_path else None
-
-        instance._cache_dir = config.cache_dir
-        instance.status = cluster_pb2.TASK_STATE_RUNNING
-        instance.exit_code = None
-        instance.error = None
-        instance.started_at = Timestamp.now()  # approximate; real started_at is in Docker
-        instance.finished_at = None
+        instance = cls(
+            config=config,
+            bundle_store=None,
+            container_runtime=None,
+            worker_metadata=None,
+            worker_id=discovered.worker_id,
+            controller_address=None,
+            task_env=None,
+            default_task_image=None,
+            resolve_image=None,
+            port_allocator=port_allocator,
+            log_store=log_store,
+            poll_interval_seconds=poll_interval_seconds,
+            container_handle=container_handle,
+            initial_status=cluster_pb2.TASK_STATE_RUNNING,
+        )
+        instance.started_at = Timestamp.now()
         instance.status_message = "adopted"
-
-        instance.current_memory_mb = 0
-        instance.peak_memory_mb = 0
-        instance.current_cpu_percent = 0
-        instance.process_count = 0
-        instance.disk_mb = 0
-
-        instance.build_started = None
-        instance.build_finished = None
-        instance.build_from_cache = False
-        instance.image_tag = ""
-
-        instance._container_handle = container_handle
-        instance._building_start_monotonic = 0.0
-        instance.thread = None
-        instance.cleanup_done = False
-        instance.should_stop = False
-        # Start log cursor at "now" — pre-restart logs were already sent
-        instance._heartbeat_cursor = log_store.cursor(log_key)
-
+        instance.workdir = Path(discovered.workdir_host_path) if discovered.workdir_host_path else None
         return instance
 
     def resume_monitoring(self) -> None:
@@ -606,7 +583,11 @@ class TaskAttempt:
         4. Build phase: run setup_commands (uv sync) - BUILDING state
         5. Run phase: start main command - RUNNING state
         6. Monitor until completion
+
+        Not valid for adopted tasks — use resume_monitoring() instead.
         """
+        if self._bundle_store is None or self._runtime is None:
+            raise RuntimeError("Cannot run() an adopted TaskAttempt — use resume_monitoring()")
         logger.info(
             "TaskAttempt starting: task_id=%s attempt=%s num_tasks=%s",
             self.task_id,
