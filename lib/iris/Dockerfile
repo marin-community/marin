@@ -75,6 +75,9 @@ ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
 # ── Stage: controller ────────────────────────────────────────────────
 FROM deps AS controller
 
+# Controller-only deps: duckdb, pyarrow, zstandard.
+RUN uv sync --extra controller --inexact
+
 LABEL org.opencontainers.image.description="Iris controller image"
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
