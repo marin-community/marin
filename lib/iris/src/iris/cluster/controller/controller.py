@@ -171,6 +171,7 @@ def compute_demand_entries(
             continue
         jobs[task.job_id] = job_requirements_from_job(job)
         if job.request.HasField("reservation"):
+            assert job.has_reservation, f"has_reservation=False but request_proto has reservation for {job.job_id}"
             has_reservation.add(task.job_id)
             has_direct_reservation.add(task.job_id)
         elif _find_reservation_ancestor(queries, task.job_id) is not None:
