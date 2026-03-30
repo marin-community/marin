@@ -1083,7 +1083,7 @@ class Controller:
             self._provider_scheduling_events = list(result.scheduling_events) if result.scheduling_events else []
             self._provider_capacity = result.capacity
             if tx_result.tasks_to_kill:
-                self.kill_tasks_on_workers(tx_result.tasks_to_kill)
+                self.kill_tasks_on_workers(tx_result.tasks_to_kill, tx_result.task_kill_workers)
 
     def _run_profile_loop(self, stop_event: threading.Event) -> None:
         """Periodically capture CPU and memory profiles for all running tasks.
@@ -1488,7 +1488,7 @@ class Controller:
             reason=f"Scheduling timeout exceeded ({timeout})",
         )
         if result.tasks_to_kill:
-            self.kill_tasks_on_workers(result.tasks_to_kill)
+            self.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
 
     def create_scheduling_context(self, workers: list[WorkerRow]) -> SchedulingContext:
         """Create a scheduling context for the given workers."""
@@ -1498,7 +1498,11 @@ class Controller:
             building_counts=building_counts,
         )
 
-    def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None:
+    def kill_tasks_on_workers(
+        self,
+        task_ids: set[JobName],
+        task_kill_workers: dict[JobName, WorkerId] | None = None,
+    ) -> None:
         """Buffer kill requests for delivery via next heartbeat.
 
         Called after state has marked tasks as killed. For each task that had
@@ -1510,7 +1514,10 @@ class Controller:
             logger.info("[DRY-RUN] Would kill %d tasks on workers: %s", len(task_ids), list(task_ids)[:5])
             return
         any_buffered = False
-        mapping = _task_worker_mapping(self._db, task_ids)
+        mapping = dict(task_kill_workers or {})
+        unresolved = task_ids - set(mapping.keys())
+        if unresolved:
+            mapping.update(_task_worker_mapping(self._db, unresolved))
         workers = _workers_by_id(self._db, set(mapping.values()))
         for task_id, worker_id in mapping.items():
             worker = workers.get(worker_id)
@@ -1600,10 +1607,12 @@ class Controller:
 
             # Batch all successful heartbeats in one transaction.
             all_tasks_to_kill: set[JobName] = set()
+            all_task_kill_workers: dict[JobName, WorkerId] = {}
             if success_reqs:
                 batch_results = self._transitions.apply_heartbeats_batch(success_reqs)
                 for result in batch_results:
                     all_tasks_to_kill.update(result.tasks_to_kill)
+                    all_task_kill_workers.update(result.task_kill_workers)
 
             # Handle failures individually (rare, need per-worker side effects).
             for batch, error in failure_entries:
@@ -1643,7 +1652,7 @@ class Controller:
                     failed_workers.append(batch.worker_id)
 
             if all_tasks_to_kill:
-                self.kill_tasks_on_workers(all_tasks_to_kill)
+                self.kill_tasks_on_workers(all_tasks_to_kill, all_task_kill_workers)
 
         elapsed = round_timer.elapsed_ms()
         level = logging.WARNING if elapsed > _SLOW_HEARTBEAT_MS else logging.DEBUG

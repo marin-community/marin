@@ -276,6 +276,26 @@ def test_cancel_job_releases_committed_worker_resources(harness):
     assert len(worker_running_tasks(harness.state, w2)) == 0
 
 
+def test_cancel_job_preserves_kill_worker_mapping_after_clearing_tasks(harness):
+    """cancel_job returns worker routing for kill RPCs before current_worker_id is cleared."""
+    w1 = harness.add_worker("w1")
+    w2 = harness.add_worker("w2")
+    tasks = harness.submit("j1", replicas=2)
+
+    harness.dispatch(tasks[0], w1)
+    harness.dispatch(tasks[1], w2)
+
+    result = harness.state.cancel_job(JobName.root("test-user", "j1"), reason="User cancelled")
+
+    assert result.tasks_to_kill == {tasks[0].task_id, tasks[1].task_id}
+    assert result.task_kill_workers == {
+        tasks[0].task_id: w1,
+        tasks[1].task_id: w2,
+    }
+    assert harness.query_task(tasks[0].task_id).current_worker_id is None
+    assert harness.query_task(tasks[1].task_id).current_worker_id is None
+
+
 def test_cancel_job_removes_endpoints_for_job_tree(state):
 
     parent_worker = register_worker(state, "w1", "host1:8080", make_worker_metadata())

@@ -639,7 +639,11 @@ class ControllerProtocol(Protocol):
 
     def wake(self) -> None: ...
 
-    def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None: ...
+    def kill_tasks_on_workers(
+        self,
+        task_ids: set[JobName],
+        task_kill_workers: dict[JobName, WorkerId] | None = None,
+    ) -> None: ...
 
     def create_scheduling_context(self, workers: list[WorkerRow]) -> SchedulingContext: ...
 
@@ -962,7 +966,7 @@ class ControllerServiceImpl:
         # transaction, so there is no need to recurse manually.
         result = self._transitions.cancel_job(job_id, reason="Terminated by user")
         if result.tasks_to_kill:
-            self._controller.kill_tasks_on_workers(result.tasks_to_kill)
+            self._controller.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
         return cluster_pb2.Empty()
 
     def _job_to_proto(
