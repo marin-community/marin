@@ -36,8 +36,7 @@ jobs:
               - '.github/workflows/dupekit-wheels.yaml'
 
   # Linux wheels (x86_64 + aarch64) cross-compiled via zig on ubuntu.
-  # Mac arm64 wheel built natively on macos-14.
-  # Mac x86_64 wheel built natively on macos-latest.
+  # macOS wheels (x86_64 + arm64) built natively on macos-14.
   build:
     needs: changes
     if: needs.changes.outputs.should_run == 'true'
@@ -45,8 +44,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            targets: linux
           - os: macos-14
-          - os: macos-latest
+            targets: macos
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +54,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
 
       - name: Build wheels
-        run: python scripts/rust_package.py --skip-publish
+        run: python scripts/rust_package.py --skip-publish --targets ${{ matrix.targets }}
 
       - uses: actions/upload-artifact@v4
         with:

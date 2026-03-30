@@ -14,6 +14,8 @@ Usage:
     python scripts/rust_package.py              # full flow: build + publish + update pyproject
     python scripts/rust_package.py --skip-build  # reuse existing dist/, publish + update
     python scripts/rust_package.py --skip-publish # build only, don't upload or update pyproject
+    python scripts/rust_package.py --targets linux  # build Linux wheels only
+    python scripts/rust_package.py --targets macos  # build macOS wheels only (requires macOS host)
 
 Prerequisites:
     maturin (installed automatically via uv tool if missing)
@@ -166,12 +168,14 @@ def _host_rust_target() -> str:
     return ""
 
 
-def build_wheels() -> None:
-    """Build all platform wheels + sdist into dist/.
+def build_wheels(targets: str) -> None:
+    """Build platform wheels + sdist into dist/.
 
-    Linux wheels (x86_64 + aarch64) are always cross-compiled via zig.
-    macOS wheels are built natively when running on macOS (both x86_64 and arm64,
-    since Rust can cross-compile between macOS architectures).
+    Args:
+        targets: Which platforms to build for — "all" (default), "linux", or "macos".
+            "all" builds Linux via zig and macOS natively (macOS host required for macOS wheels).
+            "linux" builds only Linux wheels via zig cross-compilation (works from any host).
+            "macos" builds only macOS wheels natively (requires macOS host).
     """
     maturin = _ensure_maturin()
     _check_tool("gh", "https://cli.github.com/")
@@ -181,39 +185,44 @@ def build_wheels() -> None:
     DIST_DIR.mkdir()
 
     system = platform.system()
+    build_linux = targets in ("all", "linux")
+    build_macos = targets in ("all", "macos")
 
-    # Build Linux wheels via zig cross-compilation (works from any host OS)
-    zig_bin = _ensure_zig()
+    if build_linux:
+        zig_bin = _ensure_zig()
 
-    linux_triples = [t for t, _ in LINUX_TARGETS]
-    print(f"Installing Rust targets: {', '.join(linux_triples)}")
-    subprocess.run(["rustup", "target", "add", *linux_triples], check=True)
+        linux_triples = [t for t, _ in LINUX_TARGETS]
+        print(f"Installing Rust targets: {', '.join(linux_triples)}")
+        subprocess.run(["rustup", "target", "add", *linux_triples], check=True)
 
-    # Put zig's directory on PATH so maturin can find it
-    zig_dir = str(Path(zig_bin).parent)
-    env = {**os.environ, "PATH": f"{zig_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+        # Put zig's directory on PATH so maturin can find it
+        zig_dir = str(Path(zig_bin).parent)
+        env = {**os.environ, "PATH": f"{zig_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
 
-    for target, manylinux in LINUX_TARGETS:
-        print(f"\n--- Building wheel for {target} (zig) ---")
-        cmd = [
-            maturin,
-            "build",
-            "--release",
-            "--out",
-            str(DIST_DIR),
-            "--manifest-path",
-            str(MANIFEST_PATH),
-            "--target",
-            target,
-            "--manylinux",
-            manylinux,
-            "--zig",
-        ]
-        subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=env)
+        for target, manylinux in LINUX_TARGETS:
+            print(f"\n--- Building wheel for {target} (zig) ---")
+            cmd = [
+                maturin,
+                "build",
+                "--release",
+                "--out",
+                str(DIST_DIR),
+                "--manifest-path",
+                str(MANIFEST_PATH),
+                "--target",
+                target,
+                "--manylinux",
+                manylinux,
+                "--zig",
+            ]
+            subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=env)
 
-    # Build macOS wheels natively (both architectures — Rust cross-compiles between macOS arches)
-    if system == "Darwin":
-        mac_triples = [t for t in MAC_TARGETS]
+    if build_macos:
+        if system != "Darwin":
+            print("ERROR: macOS wheels require a macOS host (zig can't cross-compile to macOS)", file=sys.stderr)
+            sys.exit(1)
+
+        mac_triples = list(MAC_TARGETS)
         print(f"Installing Rust targets: {', '.join(mac_triples)}")
         subprocess.run(["rustup", "target", "add", *mac_triples], check=True)
 
@@ -231,8 +240,6 @@ def build_wheels() -> None:
                 target,
             ]
             subprocess.run(cmd, check=True, cwd=REPO_ROOT)
-    else:
-        print("\nSkipping macOS wheels (not running on macOS)")
 
     print("\n--- Building sdist ---")
     subprocess.run(
@@ -345,6 +352,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--skip-build", action="store_true", help="Reuse existing dist/")
     parser.add_argument("--skip-publish", action="store_true", help="Build only, don't upload or update pyproject")
+    parser.add_argument(
+        "--targets",
+        choices=["all", "linux", "macos"],
+        default="all",
+        help="Which platforms to build: all (default), linux, or macos",
+    )
     args = parser.parse_args()
 
     version = _read_cargo_version()
@@ -357,7 +370,7 @@ def main() -> None:
     print(f"release tag: {tag}")
 
     if not args.skip_build:
-        build_wheels()
+        build_wheels(args.targets)
 
     if not args.skip_publish:
         publish_release(tag, title)
