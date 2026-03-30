@@ -28,6 +28,8 @@ from iris.time_utils import Duration
 from tests.cluster.worker.conftest import create_mock_container_handle, create_run_task_request
 from iris.test_util import wait_for_condition
 
+pytestmark = pytest.mark.timeout(10)
+
 # ============================================================================
 # PortAllocator Tests
 # ============================================================================
@@ -346,7 +348,7 @@ def test_heartbeat_kill_is_non_blocking(mock_worker, mock_runtime):
     mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
 
     def slow_stop(force=False):
-        time.sleep(2.0)
+        time.sleep(0.5)
 
     mock_handle.stop_hook = slow_stop
     mock_runtime.create_container = Mock(return_value=mock_handle)
@@ -373,7 +375,7 @@ def test_heartbeat_kill_is_non_blocking(mock_worker, mock_runtime):
 
     # should_stop is set synchronously by the heartbeat before the async stop() runs
     assert task.should_stop is True
-    # The task is not yet KILLED because slow_stop takes 2s — confirms kill is non-blocking
+    # The task is not yet KILLED because slow_stop is async — confirms kill is non-blocking
     assert task.status != cluster_pb2.TASK_STATE_KILLED
 
     # The response should still include the task's current state
@@ -389,7 +391,7 @@ def test_heartbeat_reconciliation_kill_is_non_blocking(mock_worker, mock_runtime
     mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
 
     def slow_stop(force=False):
-        time.sleep(2.0)
+        time.sleep(0.5)
 
     mock_handle.stop_hook = slow_stop
     mock_runtime.create_container = Mock(return_value=mock_handle)
@@ -409,7 +411,7 @@ def test_heartbeat_reconciliation_kill_is_non_blocking(mock_worker, mock_runtime
 
     # should_stop is set synchronously by the heartbeat before the async stop() runs
     assert task.should_stop is True
-    # The task is not yet KILLED because slow_stop takes 2s — confirms kill is non-blocking
+    # The task is not yet KILLED because slow_stop is async — confirms kill is non-blocking
     assert task.status != cluster_pb2.TASK_STATE_KILLED
 
     task.thread.join(timeout=15.0)

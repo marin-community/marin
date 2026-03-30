@@ -20,6 +20,8 @@ from starlette.testclient import TestClient
 from tests.cluster.worker.conftest import create_run_task_request
 from iris.test_util import wait_for_condition
 
+pytestmark = pytest.mark.timeout(10)
+
 # ============================================================================
 # Fixtures
 # ============================================================================
