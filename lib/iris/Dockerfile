@@ -52,15 +52,13 @@ FROM base AS deps
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Workspace config + lockfile come first: they change rarely and gate the
-# expensive dep-resolution step. uv uses the workspace pyproject.toml to
-# resolve rigging from lib/rigging rather than the unrelated PyPI package.
-COPY pyproject.toml uv.lock ./
+# Rigging is a workspace-local dep not on PyPI with a compatible API.
+# Copy it alongside iris and create a minimal workspace so uv resolves it
+# from source instead of downloading the unrelated "rigging" package from PyPI.
 COPY lib/rigging/ ./lib/rigging/
-
-# Iris project config: changes occasionally, separate from source for caching.
 COPY lib/iris/pyproject.toml lib/iris/hatch_build.py ./lib/iris/
-RUN uv sync --package iris --no-install-project
+RUN printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nrigging = { workspace = true }\n' > pyproject.toml \
+    && uv sync --package iris --no-install-project
 
 # Iris source: install the project itself.
 COPY lib/iris/src/ ./lib/iris/src/
