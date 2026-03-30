@@ -120,7 +120,7 @@ def _decode_row(model_cls: type[T], row: sqlite3.Row) -> T:
         return model_cls(
             **{name: decoder(row[col]) for name, col, decoder in zip(names, columns, decoders, strict=True)}
         )
-    except IndexError:
+    except (IndexError, KeyError):
         pass
     # Row is missing a column -- fall back to the slow path that handles defaults.
     row_keys = set(row.keys())
@@ -151,7 +151,7 @@ def decode_rows(model_cls: type[T], rows: Iterable[sqlite3.Row]) -> list[T]:
     for row in rows:
         try:
             result.append(cls(**{name: decoder(row[col]) for name, col, decoder in zipped}))
-        except IndexError:
+        except (IndexError, KeyError):
             result.append(_decode_row(cls, row))
     return result
 

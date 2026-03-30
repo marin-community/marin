@@ -313,16 +313,6 @@ def _read_worker_detail(
     )
 
 
-def _child_job_ids(db: ControllerDB, job_id: JobName) -> list[JobName]:
-    with db.read_snapshot() as q:
-        rows = q.raw(
-            "SELECT job_id FROM jobs WHERE parent_job_id = ? ORDER BY submitted_at_ms ASC, job_id ASC",
-            (job_id.to_wire(),),
-            decoders={"job_id": JobName.from_wire},
-        )
-    return [row.job_id for row in rows]
-
-
 def _tasks_for_listing(db: ControllerDB, *, job_id: JobName | None = None) -> list[Task]:
     with db.read_snapshot() as q:
         if job_id is not None:

@@ -496,15 +496,15 @@ def _find_reservation_ancestor(queries: ControllerDB, job_id: JobName) -> JobNam
     Uses the denormalized has_reservation column to avoid decoding request_proto.
     """
     current = job_id.parent
-    while current is not None:
-        with queries.read_snapshot() as q:
+    with queries.read_snapshot() as q:
+        while current is not None:
             row = q.execute_sql(
                 "SELECT has_reservation FROM jobs WHERE job_id = ?",
                 (current.to_wire(),),
             ).fetchone()
-        if row is not None and row[0]:
-            return current
-        current = current.parent
+            if row is not None and row[0]:
+                return current
+            current = current.parent
     return None
 
 
@@ -1682,9 +1682,8 @@ class Controller:
                 backup = backup_databases(self._db)
             try:
                 path, result = upload_checkpoint(self._db, backup, self._config.remote_state_dir)
-            except BaseException:
+            finally:
                 backup.cleanup()
-                raise
             logger.info(
                 "Checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
                 path,

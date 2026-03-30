@@ -124,10 +124,10 @@ class DatabaseBackup:
 def backup_databases(db: ControllerDB) -> DatabaseBackup:
     """Create local SQLite backup copies of the main and auth databases.
 
-    This is the only step that requires holding a write lock against
-    the main DB -- it uses the SQLite backup API for a consistent snapshot.
-    The returned ``DatabaseBackup`` contains paths to temporary files that
-    must be cleaned up by the caller (or via ``DatabaseBackup.cleanup``).
+    Should be called while holding the write lock against the main DB -- it
+    uses the SQLite backup API for a consistent snapshot.  The returned
+    ``DatabaseBackup`` owns the temporary files and must be cleaned up by the
+    caller (via ``DatabaseBackup.cleanup``).
     """
     created_at = Timestamp.now()
     tmp_dir = db.db_path.parent
@@ -136,7 +136,6 @@ def backup_databases(db: ControllerDB) -> DatabaseBackup:
     fd, tmp_name = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
     os.close(fd)
     main_tmp = Path(tmp_name)
-    db.backup_to(main_tmp)
 
     auth_tmp: Path | None = None
     auth_path = db.auth_db_path
@@ -144,13 +143,20 @@ def backup_databases(db: ControllerDB) -> DatabaseBackup:
         fd2, tmp_name2 = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
         os.close(fd2)
         auth_tmp = Path(tmp_name2)
-        _backup_sqlite_file(auth_path, auth_tmp)
 
-    return DatabaseBackup(
-        main_path=main_tmp,
-        auth_path=auth_tmp,
-        created_at=created_at,
-    )
+    # Construct the backup object up front so cleanup is always available.
+    backup = DatabaseBackup(main_path=main_tmp, auth_path=auth_tmp, created_at=created_at)
+    ok = False
+    try:
+        db.backup_to(main_tmp)
+        if auth_tmp is not None:
+            _backup_sqlite_file(auth_path, auth_tmp)
+        ok = True
+    finally:
+        if not ok:
+            backup.cleanup()
+
+    return backup
 
 
 def upload_checkpoint(
@@ -166,7 +172,8 @@ def upload_checkpoint(
     prefix = remote_state_dir.rstrip("/") + "/controller-state"
     checkpoint_dir = f"{prefix}/{backup.created_at.epoch_ms()}"
 
-    # Compress and upload main DB
+    # Compress and upload main DB.  Backup files are owned by the caller
+    # (via DatabaseBackup.cleanup); we only clean up the intermediate .zst.
     main_remote = f"{checkpoint_dir}/{ControllerDB.DB_FILENAME}.zst"
     tmp_zst = backup.main_path.with_suffix(".sqlite3.zst")
     try:
@@ -174,7 +181,6 @@ def upload_checkpoint(
         _fsspec_copy(str(tmp_zst), main_remote)
         logger.info("checkpoint main DB uploaded to %s", main_remote)
     finally:
-        backup.main_path.unlink(missing_ok=True)
         tmp_zst.unlink(missing_ok=True)
 
     # Compress and upload auth DB
@@ -186,9 +192,11 @@ def upload_checkpoint(
             _fsspec_copy(str(tmp_zst2), auth_remote)
             logger.info("checkpoint auth DB uploaded to %s", auth_remote)
         finally:
-            backup.auth_path.unlink(missing_ok=True)
             tmp_zst2.unlink(missing_ok=True)
 
+    # Row counts are read from the live DB (not the backup) for convenience.
+    # They may diverge slightly from the backup contents if writes occurred
+    # between backup and upload, but this is acceptable for checkpoint metadata.
     with db.read_snapshot() as snapshot:
         job_count = snapshot.fetchone("SELECT COUNT(*) FROM jobs")[0]  # type: ignore[index]
         task_count = snapshot.fetchone("SELECT COUNT(*) FROM tasks")[0]  # type: ignore[index]
@@ -224,9 +232,8 @@ def write_checkpoint(
     backup = backup_databases(db)
     try:
         return upload_checkpoint(db, backup, remote_state_dir)
-    except BaseException:
+    finally:
         backup.cleanup()
-        raise
 
 
 def _reconstruct_uri(remote_state_dir: str, fs_path: str) -> str:
