@@ -1,9 +1,9 @@
 # Unified Iris Dockerfile — controller, worker, and task images.
 #
-# Build targets:
-#   docker buildx build --target controller -t iris-controller:latest .
-#   docker buildx build --target worker     -t iris-worker:latest .
-#   docker buildx build --target task -f lib/iris/Dockerfile -t iris-task:latest <marin-root>
+# Build context must be the marin repo root for all targets:
+#   docker buildx build --target controller -f lib/iris/Dockerfile -t iris-controller:latest .
+#   docker buildx build --target worker     -f lib/iris/Dockerfile -t iris-worker:latest .
+#   docker buildx build --target task       -f lib/iris/Dockerfile -t iris-task:latest .
 #
 # The controller and worker share all layers up to and including Python
 # dependencies. The worker adds only the Docker CLI on top.
@@ -52,19 +52,25 @@ FROM base AS deps
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Dependency lock: changes less often than source
-COPY pyproject.toml hatch_build.py ./
-RUN uv sync --no-install-project
+# Workspace config + lockfile come first: they change rarely and gate the
+# expensive dep-resolution step. uv uses the workspace pyproject.toml to
+# resolve rigging from lib/rigging rather than the unrelated PyPI package.
+COPY pyproject.toml uv.lock ./
+COPY lib/rigging/ ./lib/rigging/
 
-# Source + project install
-COPY src/ ./src/
-RUN uv sync
+# Iris project config: changes occasionally, separate from source for caching.
+COPY lib/iris/pyproject.toml lib/iris/hatch_build.py ./lib/iris/
+RUN uv sync --package iris --no-install-project
+
+# Iris source: install the project itself.
+COPY lib/iris/src/ ./lib/iris/src/
+RUN uv sync --package iris
 
 # Profiling tools — installed after uv sync so they aren't pruned by the exact sync.
 RUN uv pip install py-spy memray
 
 # Dashboard assets (pre-built by `iris build dashboard` before docker build)
-COPY dashboard/dist /app/dashboard/dist
+COPY lib/iris/dashboard/dist ./lib/iris/dashboard/dist
 
 RUN mkdir -p /var/cache/iris
 
