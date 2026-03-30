@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -11,6 +12,9 @@ from fray.cluster import ResourceConfig
 
 import experiments.domain_phase_mix.determinism_analysis as determinism_analysis
 import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3 as qsplit240_seedpanel
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3_mmlu_sl_verb_rerun as qsplit240_seedpanel_slverb_rerun,
+)
 from experiments.domain_phase_mix.determinism_analysis import (
     CollectManifestResultsConfig,
     CONTROL_RUNS_CSV,
@@ -66,10 +70,29 @@ from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_s
     TRAINER_SEEDS,
     build_run_specs as build_qsplit240_seedpanel_run_specs,
 )
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_mmlu_sl_verb_rerun import (
+    build_run_specs as build_qsplit240_mmlu_sl_verb_rerun_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3_mmlu_sl_verb_rerun import (
+    build_run_specs as build_qsplit240_seedpanel_mmlu_sl_verb_rerun_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_olmix_loglinear_mmlu_sl_verb_rerun import (
+    build_run_specs as build_olmix_loglinear_mmlu_sl_verb_rerun_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_olmix_sl_verb_choice_logprob_norm_mmlu_sl_verb_rerun import (
+    build_run_specs as build_fitted_olmix_sl_verb_mmlu_sl_verb_rerun_specs,
+)
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_fixed_subset_study import (
     EXPERIMENT_BUDGET as REGMIX300M_6B_BUDGET,
     MODEL_FAMILY as REGMIX300M_6B_MODEL_FAMILY,
     build_run_specs as build_regmix300m_6b_run_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_mmlu_sl_verb_rerun import (
+    build_run_specs as build_run_00097_mmlu_sl_verb_rerun_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_fixed_subset_mmlu_sl_verb_rerun import (
+    _eval_model_name as fixed_subset_run_00097_mmlu_sl_verb_eval_model_name,
+    build_run_specs as build_run_00097_fixed_subset_mmlu_sl_verb_rerun_specs,
 )
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     create_two_phase_dolma3_dolmino_top_level_experiment,
@@ -82,6 +105,75 @@ from experiments.domain_phase_mix.two_phase_starcoder_determinism_wsd import (
     resolve_wsd_schedule,
 )
 from experiments.domain_phase_mix.proxy_sweep import regmix_300m_muonh_base, regmix_300m_proxy
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear import (
+    OLMIX_LOGLINEAR_PHASE_WEIGHTS,
+    OLMIX_LOGLINEAR_RUN_NAME,
+    OLMIX_LOGLINEAR_SOURCE_EXPERIMENT,
+)
+from experiments.domain_phase_mix.two_phase_many_power_ridge_single import (
+    POWER_RIDGE_SINGLE_OBJECTIVE_METRIC,
+    POWER_RIDGE_SINGLE_RUN_NAME,
+    POWER_RIDGE_SINGLE_SOURCE_EXPERIMENT,
+    create_power_ridge_single_weight_config,
+    power_ridge_single_summary,
+)
+from experiments.domain_phase_mix.two_phase_many_dsre_predicted_baselines import (
+    DSRE_CEQ_PREDICTED_QUALITY_COLLAPSED_RUN_NAME,
+    DSRE_CEQ_PREDICTED_RUN_NAME,
+    DSRE_PREDICTED_BASELINES_SOURCE_EXPERIMENT,
+    create_dsre_ceq_predicted_quality_collapsed_weight_config,
+    create_dsre_ceq_predicted_weight_config,
+    dsre_ceq_predicted_quality_collapsed_summary,
+    dsre_ceq_predicted_summary,
+)
+from experiments.domain_phase_mix.two_phase_many_dsre_predicted_topic_collapsed import (
+    DSRE_CEQ_PREDICTED_TOPIC_COLLAPSED_RUN_NAME,
+    DSRE_CEQ_PREDICTED_TOPIC_COLLAPSED_SOURCE_EXPERIMENT,
+    create_dsre_ceq_predicted_topic_collapsed_weight_config,
+    dsre_ceq_predicted_topic_collapsed_summary,
+)
+from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level_topic_collapsed import (
+    build_top_level_domains_with_collapsed_cc_topics,
+)
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_uncheatable import (
+    OBJECTIVE_METRIC as OLMIX_UNCHEATABLE_OBJECTIVE_METRIC,
+    fit_olmix_uncheatable_from_frame,
+)
+from experiments.domain_phase_mix.two_phase_many_thresholdtotal_overfit import (
+    THRESHOLDTOTAL_OVERFIT_OBJECTIVE_METRIC,
+    THRESHOLDTOTAL_OVERFIT_RUN_NAME,
+    THRESHOLDTOTAL_OVERFIT_SOURCE_EXPERIMENT,
+    create_thresholdtotal_overfit_weight_config,
+    thresholdtotal_overfit_summary,
+)
+from experiments.domain_phase_mix.two_phase_many_ccglobalpremium_baselines import (
+    CCGLOBALPREMIUM_RETAINEDTOTAL_RUN_NAME,
+    CCGLOBALPREMIUM_SOURCE_EXPERIMENT,
+    CCGLOBALPREMIUM_THRESHOLD_RUN_NAME,
+    ccglobalpremium_retainedtotal_summary,
+    ccglobalpremium_threshold_summary,
+    create_ccglobalpremium_retainedtotal_weight_config,
+    create_ccglobalpremium_threshold_weight_config,
+)
+from experiments.domain_phase_mix.two_phase_many_ccpairtotal_baseline import (
+    CCPAIRTOTAL_RETAINEDTOTAL_RUN_NAME,
+    CCPAIRTOTAL_RETAINEDTOTAL_SOURCE_EXPERIMENT,
+    ccpairtotal_retainedtotal_summary,
+    create_ccpairtotal_retainedtotal_weight_config,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_tuned_baseline import (
+    GENERICFAMILY_TUNED_RUN_NAME,
+    GENERICFAMILY_TUNED_SOURCE_EXPERIMENT,
+    create_genericfamily_tuned_weight_config,
+    genericfamily_tuned_summary,
+)
+from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import TOP_LEVEL_DOMAIN_TOKEN_COUNTS
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_sl_verb import (
+    NEGATED_OBJECTIVE_METRIC,
+    OBJECTIVE_METRIC as OLMIX_SL_VERB_OBJECTIVE_METRIC,
+    aggregate_candidate_mean_frame,
+    fit_olmix_sl_verb_from_frame,
+)
 from experiments.domain_phase_mix.two_phase_many_observed_runs import (
     CORE_BASELINE_RUN_NAMES,
     ORIGINAL_QSPLIT240_SOURCE_EXPERIMENT,
@@ -108,10 +200,11 @@ def test_build_run_specs_has_expected_seed_and_control_cohorts():
 
 
 def test_default_train_uses_trainer_seed_and_preserves_data_seed(monkeypatch):
-    monkeypatch.setattr("experiments.defaults._prepare_data_config", lambda tokenized, use_default_validation: object())
-    monkeypatch.setattr("experiments.defaults._get_vocab_size", lambda _: 32_000)
+    monkeypatch.setattr(
+        "experiments.defaults._prepare_data_config",
+        lambda tokenized, use_default_validation: SimpleNamespace(tokenizer="unit-test-tokenizer"),
+    )
     monkeypatch.setattr("experiments.defaults._validate_train_length", lambda train_seq_len, model_config: 2048)
-    monkeypatch.setattr("experiments.defaults.compute_num_parameters", lambda model_config, vocab_size: 123)
 
     train_config = SimpleTrainConfig(
         resources=ResourceConfig.with_cpu(cpu=1, ram="4g"),
@@ -249,6 +342,55 @@ def test_run_00097_300m_6b_fixed_subset_study_builds_expected_manifest_and_weigh
     assert all(spec.phase_weights == RUN_00097_PHASE_WEIGHTS for spec in run_specs)
 
 
+def test_run_00097_mmlu_sl_verb_rerun_builds_expected_manifest():
+    run_specs = build_run_00097_mmlu_sl_verb_rerun_specs()
+
+    assert len(run_specs) == 10
+    assert [spec.run_id for spec in run_specs] == list(range(10))
+    assert {spec.cohort for spec in run_specs} == {"seed_sweep"}
+    assert [spec.run_name for spec in run_specs] == [f"trainer_seed_{seed}" for seed in range(10_000, 10_010)]
+    assert [spec.trainer_seed for spec in run_specs] == list(range(10_000, 10_010))
+    assert all(spec.data_seed is None for spec in run_specs)
+    assert all(spec.source_run_name == SOURCE_RUN_NAME for spec in run_specs)
+    assert all(
+        spec.source_experiment == "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_seed_study" for spec in run_specs
+    )
+    assert all(spec.checkpoint_root is None for spec in run_specs)
+    assert all(spec.phase_weights == RUN_00097_PHASE_WEIGHTS for spec in run_specs)
+
+
+def test_run_00097_fixed_subset_mmlu_sl_verb_rerun_builds_expected_manifest():
+    run_specs = build_run_00097_fixed_subset_mmlu_sl_verb_rerun_specs()
+
+    assert len(run_specs) == 10
+    assert [spec.run_id for spec in run_specs] == list(range(10))
+    assert {spec.cohort for spec in run_specs} == {"seed_sweep"}
+    assert [spec.run_name for spec in run_specs] == [f"trainer_seed_{seed}" for seed in range(10_000, 10_010)]
+    assert [spec.trainer_seed for spec in run_specs] == list(range(10_000, 10_010))
+    assert all(spec.data_seed is None for spec in run_specs)
+    assert all(spec.simulated_epoch_subset_seed == SIMULATED_EPOCH_SUBSET_SEED for spec in run_specs)
+    assert all(spec.source_run_name == SOURCE_RUN_NAME for spec in run_specs)
+    assert all(
+        spec.source_experiment == "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_fixed_subset_study"
+        for spec in run_specs
+    )
+    assert all(spec.checkpoint_root is None for spec in run_specs)
+    assert all(spec.phase_weights == RUN_00097_PHASE_WEIGHTS for spec in run_specs)
+
+
+def test_run_00097_fixed_subset_mmlu_sl_verb_rerun_namespaces_eval_model_names():
+    eval_model_name = fixed_subset_run_00097_mmlu_sl_verb_eval_model_name(
+        name_prefix="pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_fixed_subset_study_mmlu_sl_verb_rerun",
+        run_name="trainer_seed_10000",
+    )
+
+    assert eval_model_name.startswith(
+        "pinlin_calvin_xu__data_mixture__ngd3dm2_run00097_fixed_subset_study_mmlu_sl_verb_rerun__"
+    )
+    assert eval_model_name.endswith("trainer_seed_10000")
+    assert eval_model_name != "trainer_seed_10000"
+
+
 def test_load_original_qsplit240_runs_returns_expected_candidate_set():
     observed_runs = load_original_qsplit240_runs()
 
@@ -296,6 +438,391 @@ def test_qsplit240_seedpanel_builds_expected_manifest():
     candidate_counts = pd.Series([spec.candidate_run_name for spec in run_specs]).value_counts()
     assert candidate_counts.nunique() == 1
     assert int(candidate_counts.iloc[0]) == 3
+
+
+def test_qsplit240_mmlu_sl_verb_rerun_builds_expected_manifest():
+    run_specs = build_qsplit240_mmlu_sl_verb_rerun_specs()
+
+    assert len(run_specs) == 240
+    assert [spec.run_id for spec in run_specs] == list(range(240))
+    assert {spec.cohort for spec in run_specs} == {"original_swarm_mmlu_sl_verb_rerun"}
+    assert run_specs[0].run_name == "baseline_proportional"
+    assert run_specs[1].run_name == "baseline_unimax"
+    assert run_specs[2].run_name == "run_00002"
+    assert run_specs[-1].run_name == "run_00239"
+    assert run_specs[0].source_experiment != ORIGINAL_QSPLIT240_SOURCE_EXPERIMENT
+    assert {spec.source_experiment for spec in run_specs[2:]} == {ORIGINAL_QSPLIT240_SOURCE_EXPERIMENT}
+    assert all(spec.checkpoint_root is None for spec in run_specs)
+    assert all(abs(sum(spec.phase_weights["phase_0"].values()) - 1.0) < 1e-12 for spec in run_specs)
+    assert all(abs(sum(spec.phase_weights["phase_1"].values()) - 1.0) < 1e-12 for spec in run_specs)
+
+
+def test_qsplit240_seedpanel_mmlu_sl_verb_rerun_builds_expected_manifest():
+    run_specs = build_qsplit240_seedpanel_mmlu_sl_verb_rerun_specs()
+
+    assert len(run_specs) == 720
+    assert [spec.run_id for spec in run_specs] == list(range(720))
+    assert {spec.cohort for spec in run_specs} == {"replicated_swarm"}
+    assert {spec.trainer_seed for spec in run_specs} == set(TRAINER_SEEDS)
+    assert all(spec.data_seed is None for spec in run_specs)
+    assert all(spec.simulated_epoch_subset_seed == SIMULATED_EPOCH_SUBSET_SEED for spec in run_specs)
+    assert len({spec.run_name for spec in run_specs}) == len(run_specs)
+    assert all(spec.source_experiment == QSPLIT240_SEEDPANEL_NAME for spec in run_specs)
+    assert all(spec.checkpoint_root is None for spec in run_specs)
+    assert run_specs[0].run_name == "seed10000_baseline_proportional"
+    assert run_specs[1].run_name == "seed10001_baseline_proportional"
+    assert run_specs[3].run_name == "seed10000_baseline_unimax"
+    assert run_specs[-1].run_name == "seed10002_run_00239"
+    assert run_specs[0].candidate_run_name == "baseline_proportional"
+    assert run_specs[-1].candidate_run_name == "run_00239"
+    assert all(abs(sum(spec.phase_weights["phase_0"].values()) - 1.0) < 1e-12 for spec in run_specs)
+    assert all(abs(sum(spec.phase_weights["phase_1"].values()) - 1.0) < 1e-12 for spec in run_specs)
+
+
+def test_olmix_loglinear_mmlu_sl_verb_rerun_builds_expected_manifest():
+    run_specs = build_olmix_loglinear_mmlu_sl_verb_rerun_specs()
+
+    assert len(run_specs) == 1
+    assert run_specs[0].run_id == 240
+    assert run_specs[0].run_name == OLMIX_LOGLINEAR_RUN_NAME
+    assert run_specs[0].cohort == "original_swarm_mmlu_sl_verb_rerun"
+    assert run_specs[0].source_experiment == OLMIX_LOGLINEAR_SOURCE_EXPERIMENT
+    assert run_specs[0].checkpoint_root is None
+    assert run_specs[0].phase_weights == OLMIX_LOGLINEAR_PHASE_WEIGHTS
+
+
+def test_fitted_olmix_sl_verb_mmlu_sl_verb_rerun_builds_expected_manifest():
+    run_specs = build_fitted_olmix_sl_verb_mmlu_sl_verb_rerun_specs(
+        phase_weights={
+            "phase_0": {"a": 0.25, "b": 0.75},
+            "phase_1": {"a": 0.6, "b": 0.4},
+        }
+    )
+
+    assert len(run_specs) == 1
+    assert run_specs[0].run_id == 243
+    assert run_specs[0].run_name == "baseline_olmix_loglinear_sl_verb_choice_logprob_norm"
+    assert run_specs[0].cohort == "fitted_olmix_sl_verb_mmlu_sl_verb_rerun"
+    assert run_specs[0].source_experiment == "pinlin_calvin_xu/data_mixture/ngd3dm2_olmix_sl_verb_choice_logprob_norm"
+    assert run_specs[0].checkpoint_root is None
+    assert run_specs[0].phase_weights == {
+        "phase_0": {"a": 0.25, "b": 0.75},
+        "phase_1": {"a": 0.6, "b": 0.4},
+    }
+
+
+def test_power_ridge_single_weight_config_uses_constant_mix_realization():
+    weight_config = create_power_ridge_single_weight_config()
+    summary = power_ridge_single_summary()
+
+    assert weight_config.run_id == 245
+    assert set(weight_config.phase_weights) == {"phase_0", "phase_1"}
+    assert weight_config.phase_weights["phase_0"] == weight_config.phase_weights["phase_1"]
+    assert abs(sum(weight_config.phase_weights["phase_0"].values()) - 1.0) < 1e-12
+    assert POWER_RIDGE_SINGLE_OBJECTIVE_METRIC == "eval/uncheatable_eval/bpb"
+    assert POWER_RIDGE_SINGLE_SOURCE_EXPERIMENT.endswith("power_ridge_uncheatable_bpb")
+    assert POWER_RIDGE_SINGLE_RUN_NAME == "baseline_power_ridge_single_constant_mix"
+    assert float(summary["predicted_optimum_value"]) < float(summary["best_observed_value"])
+
+
+def test_dsre_ceq_predicted_weight_configs_build_expected_variants():
+    full = create_dsre_ceq_predicted_weight_config()
+    collapsed = create_dsre_ceq_predicted_quality_collapsed_weight_config()
+    full_summary = dsre_ceq_predicted_summary()
+    collapsed_summary = dsre_ceq_predicted_quality_collapsed_summary()
+
+    assert full.run_id == 246
+    assert collapsed.run_id == 247
+    assert set(full.phase_weights) == {"phase_0", "phase_1"}
+    assert set(collapsed.phase_weights) == {"phase_0", "phase_1"}
+    assert set(full.phase_weights["phase_0"]) == set(collapsed.phase_weights["phase_0"])
+    assert set(full.phase_weights["phase_1"]) == set(collapsed.phase_weights["phase_1"])
+
+    for phase_name in ("phase_0", "phase_1"):
+        assert sum(full.phase_weights[phase_name].values()) == pytest.approx(1.0)
+        assert sum(collapsed.phase_weights[phase_name].values()) == pytest.approx(1.0)
+
+        full_food_total = (
+            full.phase_weights[phase_name]["dolma3_cc/food_and_dining_high"]
+            + full.phase_weights[phase_name]["dolma3_cc/food_and_dining_low"]
+        )
+        collapsed_food_total = (
+            collapsed.phase_weights[phase_name]["dolma3_cc/food_and_dining_high"]
+            + collapsed.phase_weights[phase_name]["dolma3_cc/food_and_dining_low"]
+        )
+        food_high_ratio = TOP_LEVEL_DOMAIN_TOKEN_COUNTS["dolma3_cc/food_and_dining_high"] / (
+            TOP_LEVEL_DOMAIN_TOKEN_COUNTS["dolma3_cc/food_and_dining_high"]
+            + TOP_LEVEL_DOMAIN_TOKEN_COUNTS["dolma3_cc/food_and_dining_low"]
+        )
+        assert collapsed_food_total == pytest.approx(full_food_total)
+        assert collapsed.phase_weights[phase_name]["dolma3_cc/food_and_dining_high"] == pytest.approx(
+            full_food_total * food_high_ratio
+        )
+
+    assert full_summary["run_name"] == DSRE_CEQ_PREDICTED_RUN_NAME
+    assert collapsed_summary["run_name"] == DSRE_CEQ_PREDICTED_QUALITY_COLLAPSED_RUN_NAME
+    assert full_summary["predicted_bpb"] > 0
+    assert collapsed_summary["derived_from_run_name"] == DSRE_CEQ_PREDICTED_RUN_NAME
+    assert full_summary["nearest_observed_tv_distance"] >= 0
+    assert collapsed_summary["nearest_observed_tv_distance"] >= 0
+    assert DSRE_PREDICTED_BASELINES_SOURCE_EXPERIMENT.startswith("pinlin_calvin_xu/data_mixture/")
+
+
+def test_build_top_level_domains_with_collapsed_cc_topics_has_expected_shape():
+    domains = build_top_level_domains_with_collapsed_cc_topics()
+
+    assert len(domains) == 26
+    domain_names = {domain.name for domain in domains}
+    assert "dolma3_cc/art_and_design" in domain_names
+    art_and_design = next(domain for domain in domains if domain.name == "dolma3_cc/art_and_design")
+    assert {component.name for component in art_and_design.components} == {
+        "dolma3_cc/art_and_design_high",
+        "dolma3_cc/art_and_design_low",
+    }
+
+
+def test_dsre_ceq_predicted_topic_collapsed_matches_realized_flat_quality_collapsed():
+    topic_collapsed = create_dsre_ceq_predicted_topic_collapsed_weight_config()
+    collapsed = create_dsre_ceq_predicted_quality_collapsed_weight_config()
+    summary = dsre_ceq_predicted_topic_collapsed_summary()
+
+    assert topic_collapsed.run_id == 250
+    assert set(topic_collapsed.phase_weights) == {"phase_0", "phase_1"}
+    assert len(topic_collapsed.phase_weights["phase_0"]) == 26
+    assert topic_collapsed.phase_weights["phase_0"]["dolma3_cc/food_and_dining"] == pytest.approx(
+        collapsed.phase_weights["phase_0"]["dolma3_cc/food_and_dining_high"]
+        + collapsed.phase_weights["phase_0"]["dolma3_cc/food_and_dining_low"]
+    )
+    assert summary["equivalent_flat_run_name"] == "baseline_dsre_ceq_predicted_quality_collapsed"
+    assert summary["equivalent_flat_tv_distance"] == pytest.approx(0.0, abs=1e-12)
+    assert summary["n_collapsed_domains"] == 26
+    assert summary["nearest_observed_tv_distance"] >= 0.0
+    assert DSRE_CEQ_PREDICTED_TOPIC_COLLAPSED_RUN_NAME == "baseline_dsre_ceq_predicted_topic_collapsed"
+    assert DSRE_CEQ_PREDICTED_TOPIC_COLLAPSED_SOURCE_EXPERIMENT.endswith("topic_collapsed")
+
+
+def test_fit_olmix_sl_verb_from_frame_returns_normalized_schedule():
+    rng = np.random.default_rng(0)
+    rows: list[dict[str, float | str]] = []
+    phase_names = ["phase_0", "phase_1"]
+    domain_names = ["a", "b", "c"]
+    coeffs = np.array([-0.9, 0.4, 0.8, 0.7, -0.6, 0.5], dtype=float)
+    for run_id in range(36):
+        phase0 = rng.dirichlet(np.ones(3))
+        phase1 = rng.dirichlet(np.ones(3))
+        flat = np.concatenate([phase0, phase1])
+        negated_metric = 0.2 + np.exp(float(flat @ coeffs))
+        row: dict[str, float | str] = {
+            "run_id": run_id,
+            "run_name": f"run_{run_id:05d}",
+            OLMIX_SL_VERB_OBJECTIVE_METRIC: -negated_metric,
+        }
+        for phase_name, phase_weights in zip(phase_names, [phase0, phase1], strict=True):
+            for domain_name, weight in zip(domain_names, phase_weights, strict=True):
+                row[f"{phase_name}_{domain_name}"] = float(weight)
+        rows.append(row)
+
+    fit = fit_olmix_sl_verb_from_frame(
+        pd.DataFrame(rows),
+        natural_proportions=np.asarray([0.5, 0.3, 0.2], dtype=float),
+        phase_fractions=np.asarray([0.8, 0.2], dtype=float),
+        source_results_path="gs://unit-test/results.csv",
+    )
+
+    assert fit.objective_metric == OLMIX_SL_VERB_OBJECTIVE_METRIC
+    assert fit.negated_objective_metric == NEGATED_OBJECTIVE_METRIC
+    assert fit.source_results_path == "gs://unit-test/results.csv"
+    assert np.isfinite(fit.fit_huber_loss)
+    assert np.isfinite(fit.predicted_choice_logprob_norm)
+    assert set(fit.phase_weights) == {"phase_0", "phase_1"}
+    assert set(fit.phase_weights["phase_0"]) == {"a", "b", "c"}
+    assert set(fit.phase_weights["phase_1"]) == {"a", "b", "c"}
+    assert sum(fit.phase_weights["phase_0"].values()) == pytest.approx(1.0)
+    assert sum(fit.phase_weights["phase_1"].values()) == pytest.approx(1.0)
+    assert fit.predicted_choice_logprob_norm <= 0.0
+
+
+def test_fit_olmix_uncheatable_from_frame_returns_normalized_schedule():
+    rng = np.random.default_rng(0)
+    rows: list[dict[str, float | str]] = []
+    phase_names = ["phase_0", "phase_1"]
+    domain_names = ["a", "b", "c"]
+    coeffs = np.array([0.3, -0.5, 0.2, 0.6, -0.4, 0.1], dtype=float)
+    for run_id in range(36):
+        phase0 = rng.dirichlet(np.ones(3))
+        phase1 = rng.dirichlet(np.ones(3))
+        flat = np.concatenate([phase0, phase1])
+        metric = 0.2 + np.exp(float(flat @ coeffs))
+        row: dict[str, float | str] = {
+            "run_id": run_id,
+            "run_name": f"run_{run_id:05d}",
+            OLMIX_UNCHEATABLE_OBJECTIVE_METRIC: metric,
+        }
+        for phase_name, phase_weights in zip(phase_names, [phase0, phase1], strict=True):
+            for domain_name, weight in zip(domain_names, phase_weights, strict=True):
+                row[f"{phase_name}_{domain_name}"] = float(weight)
+        rows.append(row)
+
+    fit = fit_olmix_uncheatable_from_frame(
+        pd.DataFrame(rows),
+        natural_proportions=np.asarray([0.5, 0.3, 0.2], dtype=float),
+        phase_fractions=np.asarray([0.8, 0.2], dtype=float),
+        source_results_path="/tmp/unit-test-two-phase-many.csv",
+    )
+
+    assert fit.objective_metric == OLMIX_UNCHEATABLE_OBJECTIVE_METRIC
+    assert fit.source_results_path == "/tmp/unit-test-two-phase-many.csv"
+    assert np.isfinite(fit.fit_huber_loss)
+    assert np.isfinite(fit.predicted_objective)
+    assert set(fit.phase_weights) == {"phase_0", "phase_1"}
+    assert set(fit.phase_weights["phase_0"]) == {"a", "b", "c"}
+    assert set(fit.phase_weights["phase_1"]) == {"a", "b", "c"}
+    assert sum(fit.phase_weights["phase_0"].values()) == pytest.approx(1.0)
+    assert sum(fit.phase_weights["phase_1"].values()) == pytest.approx(1.0)
+    assert fit.predicted_objective > 0.0
+    assert fit.nearest_observed_tv_distance >= 0.0
+
+
+def test_thresholdtotal_overfit_weight_config_and_summary():
+    weight_config = create_thresholdtotal_overfit_weight_config()
+    summary = thresholdtotal_overfit_summary()
+
+    assert weight_config.run_id == 249
+    assert set(weight_config.phase_weights) == {"phase_0", "phase_1"}
+    assert sum(weight_config.phase_weights["phase_0"].values()) == pytest.approx(1.0)
+    assert sum(weight_config.phase_weights["phase_1"].values()) == pytest.approx(1.0)
+    assert THRESHOLDTOTAL_OVERFIT_OBJECTIVE_METRIC == "eval/uncheatable_eval/bpb"
+    assert THRESHOLDTOTAL_OVERFIT_SOURCE_EXPERIMENT.endswith("thresholdtotal_overfit_uncheatable_bpb")
+    assert THRESHOLDTOTAL_OVERFIT_RUN_NAME == "baseline_thresholdtotal_overfit_uncheatable_bpb"
+    assert float(summary["predicted_optimum_value"]) < float(summary["observed_best_value"])
+    assert float(summary["nearest_observed_tv_distance"]) >= 0.0
+    assert summary["model"] == "ThresholdTotal-Overfit"
+    assert len(summary["phase0_top_domains"]) == 10
+    assert len(summary["phase1_top_domains"]) == 10
+
+
+def test_ccglobalpremium_weight_configs_and_summaries():
+    threshold_config = create_ccglobalpremium_threshold_weight_config()
+    retained_config = create_ccglobalpremium_retainedtotal_weight_config()
+    threshold_summary = ccglobalpremium_threshold_summary()
+    retained_summary = ccglobalpremium_retainedtotal_summary()
+
+    for config in (threshold_config, retained_config):
+        for phase_name, domain_weights in config.phase_weights.items():
+            assert abs(sum(domain_weights.values()) - 1.0) < 1e-9, phase_name
+
+    threshold_phase0 = pd.Series(threshold_config.phase_weights["phase_0"]).sort_index()
+    retained_phase0 = pd.Series(retained_config.phase_weights["phase_0"]).sort_index()
+    threshold_phase1 = pd.Series(threshold_config.phase_weights["phase_1"]).sort_index()
+    retained_phase1 = pd.Series(retained_config.phase_weights["phase_1"]).sort_index()
+
+    assert threshold_summary["predicted_optimum_value"] < threshold_summary["observed_best_value"]
+    assert retained_summary["predicted_optimum_value"] < retained_summary["observed_best_value"]
+    assert threshold_summary["nearest_observed_tv_distance"] > 0.3
+    assert retained_summary["nearest_observed_tv_distance"] > 0.3
+    assert (
+        0.5 * (np.abs(threshold_phase0 - retained_phase0).sum() + np.abs(threshold_phase1 - retained_phase1).sum()) > 0.2
+    )
+    assert CCGLOBALPREMIUM_SOURCE_EXPERIMENT.endswith("ccglobalpremium_uncheatable_bpb")
+    assert CCGLOBALPREMIUM_THRESHOLD_RUN_NAME == "baseline_ccglobalpremium_threshold_uncheatable_bpb"
+    assert CCGLOBALPREMIUM_RETAINEDTOTAL_RUN_NAME == "baseline_ccglobalpremium_retainedtotal_uncheatable_bpb"
+
+
+def test_ccpairtotal_retainedtotal_weight_config_and_summary():
+    weight_config = create_ccpairtotal_retainedtotal_weight_config()
+    summary = ccpairtotal_retainedtotal_summary()
+
+    assert summary["run_name"] == CCPAIRTOTAL_RETAINEDTOTAL_RUN_NAME
+    assert summary["optimizer_success"] is True
+    assert summary["predicted_optimum_value"] == pytest.approx(1.0125046862932436)
+    assert summary["nearest_observed_tv_distance"] == pytest.approx(0.45411673092136945)
+    assert summary["phase0_support_below_1e4"] == 6
+    assert summary["phase1_support_below_1e4"] == 7
+    assert summary["phase0_max_weight"] == pytest.approx(0.2468947868933573)
+    assert summary["phase1_max_weight"] == pytest.approx(0.17616211468794302)
+    assert summary["phase_weights"] == weight_config.phase_weights
+    assert CCPAIRTOTAL_RETAINEDTOTAL_SOURCE_EXPERIMENT.endswith("ccpairtotal_retainedtotal_uncheatable_bpb")
+    assert CCPAIRTOTAL_RETAINEDTOTAL_RUN_NAME == "baseline_ccpairtotal_retainedtotal_uncheatable_bpb"
+
+
+def test_genericfamily_tuned_weight_config_and_summary():
+    weight_config = create_genericfamily_tuned_weight_config()
+    summary = genericfamily_tuned_summary()
+
+    assert summary["run_name"] == GENERICFAMILY_TUNED_RUN_NAME
+    assert summary["predicted_optimum_value"] == pytest.approx(1.0436372226731572)
+    assert summary["anchor_coefficients"]["validated_global"] == pytest.approx(0.9175270003197237)
+    assert summary["anchor_coefficients"]["validated_pair"] == pytest.approx(0.0015381110202398686)
+    assert summary["phase0_support_below_1e4"] == 0
+    assert summary["phase1_support_below_1e4"] == 0
+    assert summary["phase0_max_weight"] == pytest.approx(0.15201949193595957)
+    assert summary["phase1_max_weight"] == pytest.approx(0.19824977200209287)
+    assert summary["phase_weights"] == weight_config.phase_weights
+    assert GENERICFAMILY_TUNED_SOURCE_EXPERIMENT.endswith("genericfamily_tuned_uncheatable_bpb")
+    assert GENERICFAMILY_TUNED_RUN_NAME == "baseline_genericfamily_retainedtotal_tuned_uncheatable_bpb"
+
+
+def test_aggregate_candidate_mean_frame_collapses_replicates():
+    frame = pd.DataFrame(
+        [
+            {
+                "candidate_run_id": 1,
+                "candidate_run_name": "run_a",
+                "candidate_source_experiment": "source",
+                "trainer_seed": 10000,
+                OLMIX_SL_VERB_OBJECTIVE_METRIC: -1.4,
+                "phase_0_a": 0.25,
+                "phase_0_b": 0.75,
+                "phase_1_a": 0.6,
+                "phase_1_b": 0.4,
+            },
+            {
+                "candidate_run_id": 1,
+                "candidate_run_name": "run_a",
+                "candidate_source_experiment": "source",
+                "trainer_seed": 10001,
+                OLMIX_SL_VERB_OBJECTIVE_METRIC: -1.2,
+                "phase_0_a": 0.25,
+                "phase_0_b": 0.75,
+                "phase_1_a": 0.6,
+                "phase_1_b": 0.4,
+            },
+            {
+                "candidate_run_id": 2,
+                "candidate_run_name": "run_b",
+                "candidate_source_experiment": "source",
+                "trainer_seed": 10000,
+                OLMIX_SL_VERB_OBJECTIVE_METRIC: -1.1,
+                "phase_0_a": 0.1,
+                "phase_0_b": 0.9,
+                "phase_1_a": 0.2,
+                "phase_1_b": 0.8,
+            },
+            {
+                "candidate_run_id": 2,
+                "candidate_run_name": "run_b",
+                "candidate_source_experiment": "source",
+                "trainer_seed": 10001,
+                OLMIX_SL_VERB_OBJECTIVE_METRIC: -0.9,
+                "phase_0_a": 0.1,
+                "phase_0_b": 0.9,
+                "phase_1_a": 0.2,
+                "phase_1_b": 0.8,
+            },
+        ]
+    )
+
+    aggregated = aggregate_candidate_mean_frame(frame)
+
+    assert list(aggregated["candidate_run_name"]) == ["run_a", "run_b"]
+    assert aggregated.loc[aggregated["candidate_run_name"] == "run_a", OLMIX_SL_VERB_OBJECTIVE_METRIC].iloc[
+        0
+    ] == pytest.approx(-1.3)
+    assert aggregated.loc[aggregated["candidate_run_name"] == "run_b", OLMIX_SL_VERB_OBJECTIVE_METRIC].iloc[
+        0
+    ] == pytest.approx(-1.0)
+    assert aggregated.loc[aggregated["candidate_run_name"] == "run_a", "phase_0_a"].iloc[0] == pytest.approx(0.25)
+    assert aggregated.loc[aggregated["candidate_run_name"] == "run_b", "phase_1_b"].iloc[0] == pytest.approx(0.8)
 
 
 def test_collect_manifest_results_falls_back_to_name_lookup_when_tags_are_missing(tmp_path, monkeypatch):
@@ -590,6 +1117,58 @@ def test_qsplit240_seedpanel_main_wires_max_concurrent(monkeypatch):
     assert len(captured["steps"]) == 9
     assert "replicated swarm" in captured["description"]
     assert qsplit240_seedpanel.DEFAULT_MAX_CONCURRENT == 256
+
+
+def test_qsplit240_seedpanel_mmlu_sl_verb_rerun_main_wires_max_concurrent(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(
+        qsplit240_seedpanel_slverb_rerun,
+        "resolve_checkpoint_roots",
+        lambda run_specs: [
+            replace(spec, checkpoint_root=f"gs://unit-test/checkpoints/{spec.run_name}") for spec in run_specs
+        ],
+    )
+    monkeypatch.setattr(
+        qsplit240_seedpanel_slverb_rerun,
+        "evaluate_levanter_lm_evaluation_harness",
+        lambda **kwargs: SimpleNamespace(name=kwargs["model_name"]),
+    )
+    monkeypatch.setattr(
+        qsplit240_seedpanel_slverb_rerun,
+        "output_path_of",
+        lambda step, filename: f"gs://unit-test/{step.name}/{filename}",
+    )
+    monkeypatch.setattr(
+        qsplit240_seedpanel_slverb_rerun,
+        "create_run_manifest_step",
+        lambda **_: SimpleNamespace(name="run_manifest"),
+    )
+
+    def fake_executor_main(config=None, *, steps, description):
+        captured["config"] = config
+        captured["steps"] = steps
+        captured["description"] = description
+
+    monkeypatch.setattr(qsplit240_seedpanel_slverb_rerun, "executor_main", fake_executor_main)
+    monkeypatch.setattr(
+        qsplit240_seedpanel_slverb_rerun,
+        "build_run_specs",
+        lambda: build_qsplit240_seedpanel_mmlu_sl_verb_rerun_specs()[:6],
+    )
+    monkeypatch.setattr(
+        qsplit240_seedpanel_slverb_rerun.sys,
+        "argv",
+        ["launcher", "--max-concurrent", "19"],
+    )
+
+    qsplit240_seedpanel_slverb_rerun.main()
+
+    assert captured["config"].max_concurrent == 19
+    assert len(captured["steps"]) == 8
+    assert "fixed-subset seedpanel" in captured["description"]
+    assert qsplit240_seedpanel_slverb_rerun.DEFAULT_MAX_CONCURRENT == 24
 
 
 def test_collect_manifest_results_prefers_exact_truncated_display_name_when_suffixes_collide(tmp_path, monkeypatch):

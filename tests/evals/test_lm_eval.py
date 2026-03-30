@@ -9,7 +9,12 @@ from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.run import evaluate
 
-from experiments.evals.task_configs import EvalTaskConfig
+from experiments.evals.task_configs import (
+    MMLU_SL_VERB_5_SHOT,
+    MMLU_SL_VERB_DOC_TO_CHOICE,
+    EvalTaskConfig,
+    convert_to_levanter_task_config,
+)
 
 
 @pytest.fixture
@@ -29,6 +34,22 @@ def model_config():
         generation_params={"max_tokens": 16},
     )
     return config
+
+
+def test_convert_to_levanter_task_config_preserves_doc_to_choice_override():
+    [task] = convert_to_levanter_task_config([MMLU_SL_VERB_5_SHOT])
+
+    assert task.task == "mmlu"
+    assert task.task_alias == "mmlu_sl_verb_5shot"
+    assert task.num_fewshot == 5
+    assert task.doc_to_choice == MMLU_SL_VERB_DOC_TO_CHOICE
+
+
+def test_convert_to_levanter_task_config_rejects_unsupported_task_kwargs():
+    with pytest.raises(ValueError, match="Unsupported Levanter task kwargs"):
+        convert_to_levanter_task_config(
+            [EvalTaskConfig("mmlu", 5, task_alias="bad_task", task_kwargs={"unsupported_key": "value"})]
+        )
 
 
 @pytest.mark.tpu_ci

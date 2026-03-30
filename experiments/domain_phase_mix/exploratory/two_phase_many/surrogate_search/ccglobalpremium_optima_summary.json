@@ -1,0 +1,248 @@
+[
+  {
+    "model": "CCGlobalPremium-Threshold",
+    "objective_metric": "eval/uncheatable_eval/bpb",
+    "predicted_optimum_value": 1.0113544482657808,
+    "observed_best_run_name": "run_00125",
+    "observed_best_value": 1.0571987628936768,
+    "gap_below_observed_best": -0.045844314627895955,
+    "phase0_max_weight": 0.09922796639318493,
+    "phase1_max_weight": 0.2841707252602779,
+    "phase0_entropy": 2.7547961214699406,
+    "phase1_entropy": 2.1417005665655937,
+    "nearest_observed_run_name": "run_00125",
+    "nearest_observed_value": 1.0571987628936768,
+    "nearest_observed_tv_distance": 0.5689174205353125,
+    "top_phase0_domains": [
+      {
+        "domain": "dolmino_synth_qa",
+        "weight": 0.09922796639318493,
+        "epochs": 0.9524896201519971
+      },
+      {
+        "domain": "dolmino_olmocr_pdfs_hq",
+        "weight": 0.09810686740149246,
+        "epochs": 2.411021914546737
+      },
+      {
+        "domain": "dolma3_cc/science_math_and_technology_high",
+        "weight": 0.09729348790898042,
+        "epochs": 2.025694249737627
+      },
+      {
+        "domain": "dolma3_cc/literature_high",
+        "weight": 0.09613318906990032,
+        "epochs": 1.882971132297351
+      },
+      {
+        "domain": "dolmino_common_crawl_hq",
+        "weight": 0.08692384172894702,
+        "epochs": 0.3338281694559364
+      },
+      {
+        "domain": "dolma3_cc/finance_and_business_high",
+        "weight": 0.07187222193212607,
+        "epochs": 0.6685811524106408
+      },
+      {
+        "domain": "dolma3_cc/crime_and_law_high",
+        "weight": 0.07049646590375111,
+        "epochs": 2.321283204379634
+      },
+      {
+        "domain": "dolma3_cc/finance_and_business_low",
+        "weight": 0.04817909694470066,
+        "epochs": 0.9405814757730524
+      },
+      {
+        "domain": "dolma3_cc/entertainment_high",
+        "weight": 0.04595373611455283,
+        "epochs": 0.5491868720740277
+      },
+      {
+        "domain": "dolma3_cc/history_and_geography_high",
+        "weight": 0.044669041229556825,
+        "epochs": 1.6729260246959385
+      }
+    ],
+    "top_phase1_domains": [
+      {
+        "domain": "dolma3_stack_edu",
+        "weight": 0.2841707252602779,
+        "epochs": 2.6813125836222054
+      },
+      {
+        "domain": "dolmino_stack_edu_fim",
+        "weight": 0.28325191499075714,
+        "epochs": 2.6763957800447167
+      },
+      {
+        "domain": "dolma3_arxiv",
+        "weight": 0.061772658987547135,
+        "epochs": 2.7674013055057087
+      },
+      {
+        "domain": "dolma3_cc/literature_low",
+        "weight": 0.054558882659801564,
+        "epochs": 1.0019957848431142
+      },
+      {
+        "domain": "dolma3_cc/science_math_and_technology_low",
+        "weight": 0.0538450107139183,
+        "epochs": 0.6139718904126577
+      },
+      {
+        "domain": "dolmino_synth_code",
+        "weight": 0.05078728226601465,
+        "epochs": 3.4064168754822792
+      },
+      {
+        "domain": "dolmino_synth_math",
+        "weight": 0.04681885107967381,
+        "epochs": 2.714259334653582
+      },
+      {
+        "domain": "dolma3_cc/industrial_high",
+        "weight": 0.04222691246656883,
+        "epochs": 0.6540584789254689
+      },
+      {
+        "domain": "dolma3_cc/crime_and_law_low",
+        "weight": 0.032124285269160155,
+        "epochs": 0.5886928188306428
+      },
+      {
+        "domain": "dolma3_finemath_3plus",
+        "weight": 0.02024648575838699,
+        "epochs": 0.7532691359439033
+      }
+    ],
+    "optimizer_success": true,
+    "optimizer_message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
+    "cv_rmse": 0.009737655556182143,
+    "cv_regret_at_1": 0.0
+  },
+  {
+    "model": "CCGlobalPremium-RetainedTotal",
+    "objective_metric": "eval/uncheatable_eval/bpb",
+    "predicted_optimum_value": 0.9999503420549347,
+    "observed_best_run_name": "run_00125",
+    "observed_best_value": 1.0571987628936768,
+    "gap_below_observed_best": -0.05724842083874204,
+    "phase0_max_weight": 0.15229442196820794,
+    "phase1_max_weight": 0.21447302076283434,
+    "phase0_entropy": 2.4305745616061945,
+    "phase1_entropy": 2.696654492958752,
+    "nearest_observed_run_name": "run_00125",
+    "nearest_observed_value": 1.0571987628936768,
+    "nearest_observed_tv_distance": 0.5296886478731514,
+    "top_phase0_domains": [
+      {
+        "domain": "dolmino_common_crawl_hq",
+        "weight": 0.15229442196820794,
+        "epochs": 0.5848817435213085
+      },
+      {
+        "domain": "dolmino_synth_qa",
+        "weight": 0.1368469072029798,
+        "epochs": 1.3135939735402462
+      },
+      {
+        "domain": "dolma3_cc/finance_and_business_high",
+        "weight": 0.10135772814310431,
+        "epochs": 0.9428658926342521
+      },
+      {
+        "domain": "dolma3_stack_edu",
+        "weight": 0.09706301364935217,
+        "epochs": 3.6633791839596106
+      },
+      {
+        "domain": "dolmino_stack_edu_fim",
+        "weight": 0.09173530679491772,
+        "epochs": 3.467160855664992
+      },
+      {
+        "domain": "dolma3_cc/literature_high",
+        "weight": 0.08140959565362955,
+        "epochs": 1.594578521641707
+      },
+      {
+        "domain": "dolma3_cc/science_math_and_technology_high",
+        "weight": 0.08095266297694115,
+        "epochs": 1.6854709129839054
+      },
+      {
+        "domain": "dolma3_cc/finance_and_business_low",
+        "weight": 0.070596604809116,
+        "epochs": 1.3782296254357047
+      },
+      {
+        "domain": "dolmino_olmocr_pdfs_hq",
+        "weight": 0.06702326145380018,
+        "epochs": 1.6471278354877892
+      },
+      {
+        "domain": "dolma3_cc/entertainment_high",
+        "weight": 0.05479531599066442,
+        "epochs": 0.6548513948508097
+      }
+    ],
+    "top_phase1_domains": [
+      {
+        "domain": "dolma3_stack_edu",
+        "weight": 0.21447302076283434,
+        "epochs": 2.0236750597449342
+      },
+      {
+        "domain": "dolmino_stack_edu_fim",
+        "weight": 0.21178264730529453,
+        "epochs": 2.001095680334888
+      },
+      {
+        "domain": "dolma3_cc/science_math_and_technology_low",
+        "weight": 0.053906830949298726,
+        "epochs": 0.6146768004178564
+      },
+      {
+        "domain": "dolma3_arxiv",
+        "weight": 0.04599196681508922,
+        "epochs": 2.06042982596089
+      },
+      {
+        "domain": "dolma3_cc/literature_low",
+        "weight": 0.04551128898868879,
+        "epochs": 0.8358330945630268
+      },
+      {
+        "domain": "dolmino_synth_code",
+        "weight": 0.04493981620108209,
+        "epochs": 3.01421421777627
+      },
+      {
+        "domain": "dolma3_cc/crime_and_law_high",
+        "weight": 0.040865386623176,
+        "epochs": 0.3364003230260195
+      },
+      {
+        "domain": "dolmino_olmocr_pdfs_hq",
+        "weight": 0.03608841754864192,
+        "epochs": 0.2217224132104055
+      },
+      {
+        "domain": "dolma3_cc/science_math_and_technology_high",
+        "weight": 0.03324017252624457,
+        "epochs": 0.17301884173813528
+      },
+      {
+        "domain": "dolmino_synth_math",
+        "weight": 0.029884545517155945,
+        "epochs": 1.7325159580226397
+      }
+    ],
+    "optimizer_success": true,
+    "optimizer_message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
+    "cv_rmse": 0.008893399372349885,
+    "cv_regret_at_1": 0.0
+  }
+]

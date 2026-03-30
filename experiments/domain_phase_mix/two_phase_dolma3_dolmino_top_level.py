@@ -38,7 +38,7 @@ from experiments.domain_phase_mix.weight_sampler import (
     SamplingStrategy,
     compute_unimax_weights,
 )
-from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_PRO_5_SHOT
+from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_PRO_5_SHOT, MMLU_SL_VERB_5_SHOT
 from experiments.marin_models import marin_tokenizer
 from experiments.pretraining_datasets.dolma3_dolmino_pool import tokenize_dolmino_pool_subset
 from experiments.pretraining_datasets.dolma3_pool import tokenize_dolma3_pool_subset
@@ -56,7 +56,7 @@ REALIZED_EXPERIMENT_BUDGET = NUM_TRAIN_STEPS * TOKENS_PER_STEP
 PHASE_BOUNDARIES = [0.8]
 PHASE_NAMES = ("phase_0", "phase_1")
 DOMAIN_NAMES = tuple(all_top_level_domain_names())
-EVAL_TASKS = (MMLU_5_SHOT, MMLU_PRO_5_SHOT)
+EVAL_TASKS = (MMLU_5_SHOT, MMLU_SL_VERB_5_SHOT, MMLU_PRO_5_SHOT)
 EVAL_DATASETS_CACHE_PATH: str | None = None
 INITIAL_BASELINE_RUNS = 3
 MIN_RECOMMENDED_SWARM_RUNS = 6 * len(DOMAIN_NAMES)

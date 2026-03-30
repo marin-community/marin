@@ -7,6 +7,12 @@ from levanter.eval_harness import TaskConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
+_LEVANTER_TASK_KWARG_ALIASES = {
+    "doc_to_target": "doct_to_target",
+}
+_SUPPORTED_LEVANTER_TASK_KWARGS = frozenset(TaskConfig.__dataclass_fields__) - {"task", "task_alias", "num_fewshot"}
+MMLU_SL_VERB_DOC_TO_CHOICE = "{{['A. ' + choices[0], 'B. ' + choices[1], " "'C. ' + choices[2], 'D. ' + choices[3]]}}"
+
 # tasks to run (corresponding to lm_eval_harness tasks)
 # subset from from page 43 of the DCLM paper: https://arxiv.org/pdf/2406.11794
 # TODO: add more once supported in lm-eval-harness and/or tested on our end
@@ -30,6 +36,12 @@ CORE_TASKS = (
 
 MMLU_0_SHOT = EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")
 MMLU_5_SHOT = EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")
+MMLU_SL_VERB_5_SHOT = EvalTaskConfig(
+    "mmlu",
+    5,
+    task_alias="mmlu_sl_verb_5shot",
+    task_kwargs={"doc_to_choice": MMLU_SL_VERB_DOC_TO_CHOICE},
+)
 MMLU_PRO_5_SHOT = EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="mmlu_pro_5shot")
 
 OPEN_LM_LEADERBOARD_MCQ = (
@@ -546,9 +558,31 @@ def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[Tas
             task=task.name,
             num_fewshot=task.num_fewshot,
             task_alias=task.task_alias,
+            **_convert_task_kwargs_for_levanter(task),
         )
         for task in tasks
     ]
+
+
+def _convert_task_kwargs_for_levanter(task: EvalTaskConfig) -> dict[str, object]:
+    if not task.task_kwargs:
+        return {}
+
+    converted_kwargs: dict[str, object] = {}
+    unsupported_keys: list[str] = []
+    for key, value in task.task_kwargs.items():
+        mapped_key = _LEVANTER_TASK_KWARG_ALIASES.get(key, key)
+        if mapped_key not in _SUPPORTED_LEVANTER_TASK_KWARGS:
+            unsupported_keys.append(key)
+            continue
+        converted_kwargs[mapped_key] = value
+
+    if unsupported_keys:
+        raise ValueError(
+            f"Unsupported Levanter task kwargs for {task.task_alias or task.name}: {sorted(unsupported_keys)}"
+        )
+
+    return converted_kwargs
 
 
 def convert_to_task_metrics(tasks: Sequence[EvalTaskConfig], metric: str) -> list[str]:

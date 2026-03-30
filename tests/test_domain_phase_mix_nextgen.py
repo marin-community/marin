@@ -73,6 +73,7 @@ from experiments.domain_phase_mix.two_phase_many_olmix_loglinear import (
     OLMIX_LOGLINEAR_RUN_NAME,
     create_olmix_loglinear_import_source,
 )
+from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_PRO_5_SHOT, MMLU_SL_VERB_5_SHOT
 from experiments.domain_phase_mix.nextgen.validation import (
     CollectValidationConfig,
     PENDING_CANDIDATES_JSON,
@@ -370,6 +371,12 @@ def test_top_level_experiment_uses_linear_80_20_wsd():
     assert len(experiment.initial_fixed_weight_configs) == 3
     assert experiment.initial_fixed_weight_configs[2].run_name == OLMIX_LOGLINEAR_RUN_NAME
     assert OLMIX_LOGLINEAR_PREDICTED_BPB < 2.2
+
+
+def test_top_level_experiment_includes_sl_verb_mmlu_in_default_eval_tasks():
+    experiment = create_two_phase_dolma3_dolmino_top_level_experiment()
+
+    assert experiment.eval_harness_tasks == (MMLU_5_SHOT, MMLU_SL_VERB_5_SHOT, MMLU_PRO_5_SHOT)
 
 
 def test_top_level_experiment_allows_budget_and_model_override():

@@ -1,11 +1,20 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+import haliax as hax
+from haliax.partitioning import ResourceAxis
 from transformers import AutoTokenizer
 
 from levanter.data.packing import PromptCompletion
-from levanter.eval_harness import LmEvalHarnessConfig, TaskConfig, _iterate_tokenized_requests
-from test_utils import skip_if_module_missing
+from levanter.eval_harness import (
+    LmEvalHarnessConfig,
+    TaskConfig,
+    _LmEvalHarnessWorker,
+    _iterate_tokenized_requests,
+    _make_dummy_batch,
+)
+from test_utils import skip_if_module_missing, use_test_mesh
 
 
 @skip_if_module_missing("lm_eval")
@@ -183,3 +192,33 @@ def test_task_config():
     q = config.to_task_dict()
 
     assert len(q) == 3
+
+
+@pytest.mark.parametrize("method_name", ["_send_payload", "_receive_payload"])
+def test_payload_broadcast_uses_worker_axis_resources(monkeypatch, method_name):
+    worker = object.__new__(_LmEvalHarnessWorker)
+    worker.axis_resources = {"batch": ResourceAxis.DATA}
+
+    EvalBatch = hax.Axis("batch", 2)
+    EvalPos = hax.Axis("pos", 8)
+
+    with use_test_mesh():
+        assert hax.partitioning.current_thread_local_mapping() is None
+        payload = _make_dummy_batch(EvalBatch, EvalPos)
+        worker._dummy_batch = payload
+
+        captured = {}
+
+        def fake_broadcast_shard(payload_arg, sharding_arg):
+            captured["payload"] = payload_arg
+            captured["sharding"] = sharding_arg
+            return payload_arg
+
+        monkeypatch.setattr("levanter.eval_harness.broadcast_shard", fake_broadcast_shard)
+
+        method = getattr(worker, method_name)
+        result = method(payload) if method_name == "_send_payload" else method()
+
+    assert result is payload
+    assert captured["payload"] is payload
+    assert captured["sharding"] is not None

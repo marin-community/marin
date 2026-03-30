@@ -1,10 +1,11 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
 import pandas as pd
 
 from experiments.domain_phase_mix.exploratory.general_scaling_models import DatasetSpec
+from experiments.domain_phase_mix.exploratory.two_phase_many.dataset_metadata import build_two_phase_many_loop_config
 from experiments.domain_phase_mix.nextgen.contracts import LoopConfig, LoopState, RunRecord
 from experiments.domain_phase_mix.nextgen.design import plan_new_runs
 from experiments.domain_phase_mix.nextgen.model_registry import _build_dataset_spec
@@ -313,8 +314,9 @@ def test_nextgen_design_policy_can_plan_static_doptimal_runs():
 def test_nextgen_model_registry_uses_starcoder_epoch_metadata():
     df = pd.read_csv("experiments/domain_phase_mix/exploratory/two_phase_starcoder_combined.csv")
     df = df[df["status"] == "completed"].head(8).reset_index(drop=True)
+    loop = LoopConfig(name="loop", objective_metric=DEFAULT_STARCODER_OBJECTIVE, model_names=())
 
-    spec = _build_dataset_spec(df, DEFAULT_STARCODER_OBJECTIVE)
+    spec = _build_dataset_spec(df, DEFAULT_STARCODER_OBJECTIVE, loop)
 
     assert spec.domain_names == list(DOMAIN_NAMES)
     assert spec.small_domains == [1]
@@ -334,6 +336,34 @@ def test_build_dataset_spec_from_frame_ignores_epoch_columns():
     assert spec.domain_names == list(DOMAIN_NAMES)
     assert spec.phase_names == ["phase_0", "phase_1"]
     assert spec.small_domains == [1]
+
+
+def test_build_dataset_spec_from_frame_uses_real_epoch_metadata_for_two_phase_many():
+    df = pd.read_csv(
+        "experiments/domain_phase_mix/exploratory/two_phase_many/"
+        "qsplit240_fixed_subset_seedpanel_n3_mmlu_sl_verb_candidate_summary.csv"
+    ).head(4)
+    loop = build_two_phase_many_loop_config(
+        objective_metric="choice_logprob_norm_mean",
+        name="two_phase_many_test",
+    )
+
+    spec = build_dataset_spec_from_frame(
+        df,
+        objective_metric="choice_logprob_norm_mean",
+        name="two_phase_many_candidate_summary",
+        loop=loop,
+    )
+
+    assert spec.phase_names == ["phase_0", "phase_1"]
+    assert spec.small_domains == list(range(len(spec.domain_names)))
+    assert spec.epoch_multipliers.shape == (2, len(spec.domain_names))
+    assert not np.allclose(spec.epoch_multipliers, 1.0)
+
+    wikipedia_idx = spec.domain_names.index("dolma3_wikipedia")
+    expected_phase_0 = loop.phase_fractions[0] * loop.target_budget / loop.domain_token_counts["dolma3_wikipedia"]
+    expected_phase_1 = loop.phase_fractions[1] * loop.target_budget / loop.domain_token_counts["dolma3_wikipedia"]
+    np.testing.assert_allclose(spec.epoch_multipliers[:, wikipedia_idx], [expected_phase_0, expected_phase_1])
 
 
 def test_run_records_to_dataframe_roundtrip_supports_starcoder_metadata():
