@@ -471,6 +471,16 @@ class JobDetail:
         return self.request.HasField("coscheduling")
 
     @property
+    def resources(self) -> cluster_pb2.ResourceSpecProto | None:
+        if not self.request.HasField("resources"):
+            return None
+        return self.request.resources
+
+    @property
+    def constraints(self) -> list[cluster_pb2.Constraint]:
+        return list(self.request.constraints)
+
+    @property
     def scheduling_deadline(self) -> Deadline | None:
         if self.scheduling_deadline_epoch_ms is None:
             return None
