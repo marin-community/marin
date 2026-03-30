@@ -1249,6 +1249,10 @@ class Autoscaler:
         self.refresh(worker_status_map, timestamp)
         return self.update(demand_entries, timestamp)
 
+    def get_tracked_worker(self, worker_id: str) -> TrackedWorker | None:
+        """Look up a tracked worker by ID."""
+        return self._workers.get(worker_id)
+
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._workers.update(workers)

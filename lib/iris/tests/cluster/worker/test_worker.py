@@ -12,14 +12,17 @@ from unittest.mock import Mock
 import pytest
 from connectrpc.request import RequestContext
 
+from iris.cluster.log_store import LogStore
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import (
     ContainerErrorKind,
     ContainerInfraError,
     ContainerPhase,
     ContainerStatus,
+    DiscoveredContainer,
 )
 from iris.cluster.types import Entrypoint, JobName
+from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
@@ -671,3 +674,310 @@ class TestWorkerServiceIntegration:
 
         assert response.healthy
         assert response.uptime.milliseconds >= 0
+
+
+# ============================================================================
+# Container Adoption Tests
+# ============================================================================
+
+
+def _make_discovered_container(
+    task_id: str = JobName.root("test-user", "test-job").task(0).to_wire(),
+    attempt_id: int = 0,
+    worker_id: str = "",
+    phase: str = "run",
+    running: bool = True,
+    workdir_host_path: str = "/tmp/workdirs/test",
+) -> DiscoveredContainer:
+    return DiscoveredContainer(
+        container_id="abc123def456",
+        task_id=task_id,
+        attempt_id=attempt_id,
+        job_id=JobName.root("test-user", "test-job").to_wire(),
+        worker_id=worker_id,
+        phase=phase,
+        running=running,
+        exit_code=None if running else 0,
+        started_at="2025-01-01T00:00:00Z",
+        workdir_host_path=workdir_host_path,
+    )
+
+
+def test_adopt_creates_task_in_running_state(mock_worker, mock_runtime):
+    """Adoption creates a TaskAttempt in RUNNING state."""
+    container = _make_discovered_container()
+    mock_runtime.discover_containers = Mock(return_value=[container])
+
+    adopted = mock_worker.adopt_running_containers()
+
+    assert adopted == 1
+    task = mock_worker.get_task(container.task_id, container.attempt_id)
+    assert task is not None
+    assert task.status == cluster_pb2.TASK_STATE_RUNNING
+
+
+def test_adopt_skips_build_phase_containers(mock_worker, mock_runtime):
+    """Build-phase containers should be cleaned up, not adopted."""
+    container = _make_discovered_container(phase="build")
+    mock_runtime.discover_containers = Mock(return_value=[container])
+
+    adopted = mock_worker.adopt_running_containers()
+
+    assert adopted == 0
+
+
+def test_adopt_skips_exited_containers(mock_worker, mock_runtime):
+    """Exited containers should be cleaned up, not adopted."""
+    container = _make_discovered_container(running=False)
+    mock_runtime.discover_containers = Mock(return_value=[container])
+
+    adopted = mock_worker.adopt_running_containers()
+
+    assert adopted == 0
+
+
+def test_adopt_skips_wrong_worker_id(mock_worker, mock_runtime, tmp_path):
+    """Containers from a different worker should be cleaned up."""
+    # Set the mock_worker's worker_id
+    mock_worker._worker_id = "worker-1"
+    container = _make_discovered_container(worker_id="worker-2")
+    mock_runtime.discover_containers = Mock(return_value=[container])
+
+    adopted = mock_worker.adopt_running_containers()
+
+    assert adopted == 0
+
+
+def test_adopt_accepts_matching_worker_id(mock_worker, mock_runtime):
+    """Containers from the same worker should be adopted."""
+    mock_worker._worker_id = "worker-1"
+    container = _make_discovered_container(worker_id="worker-1")
+    mock_runtime.discover_containers = Mock(return_value=[container])
+
+    adopted = mock_worker.adopt_running_containers()
+
+    assert adopted == 1
+
+
+def test_heartbeat_after_adoption_reports_running(mock_worker, mock_runtime):
+    """After adoption, heartbeat reconciliation should report the task as RUNNING."""
+    container = _make_discovered_container()
+    mock_runtime.discover_containers = Mock(return_value=[container])
+    mock_worker.adopt_running_containers()
+
+    heartbeat_req = cluster_pb2.HeartbeatRequest(
+        expected_tasks=[
+            cluster_pb2.Controller.WorkerTaskStatus(
+                task_id=container.task_id,
+                attempt_id=container.attempt_id,
+            )
+        ],
+    )
+    response = mock_worker.handle_heartbeat(heartbeat_req)
+
+    assert len(response.tasks) == 1
+    task_status = response.tasks[0]
+    assert task_status.task_id == container.task_id
+    assert task_status.state == cluster_pb2.TASK_STATE_RUNNING
+
+
+def test_heartbeat_without_adoption_reports_worker_failed(mock_worker, mock_runtime):
+    """Without adoption, expected tasks should report WORKER_FAILED."""
+    mock_runtime.discover_containers = Mock(return_value=[])
+
+    heartbeat_req = cluster_pb2.HeartbeatRequest(
+        expected_tasks=[
+            cluster_pb2.Controller.WorkerTaskStatus(
+                task_id=JobName.root("test-user", "test-job").task(0).to_wire(),
+                attempt_id=0,
+            )
+        ],
+    )
+    response = mock_worker.handle_heartbeat(heartbeat_req)
+
+    assert len(response.tasks) == 1
+    assert response.tasks[0].state == cluster_pb2.TASK_STATE_WORKER_FAILED
+
+
+def test_stop_preserve_containers_does_not_kill_tasks(mock_worker, mock_runtime):
+    """stop(preserve_containers=True) should not kill running tasks."""
+    container = _make_discovered_container()
+    # Use a handle that stays RUNNING indefinitely so the monitor thread
+    # doesn't exit before we call stop().
+    always_running = [ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000
+    mock_runtime.discover_containers = Mock(return_value=[container])
+    mock_runtime.adopt_container = Mock(
+        side_effect=lambda cid: create_mock_container_handle(status_sequence=always_running)
+    )
+    mock_worker.adopt_running_containers()
+
+    # Give the monitoring thread time to start
+    time.sleep(0.2)
+
+    task = mock_worker.get_task(container.task_id, container.attempt_id)
+    assert task is not None
+    assert task.status == cluster_pb2.TASK_STATE_RUNNING
+
+    mock_worker.stop(preserve_containers=True)
+    # The task should still be in RUNNING state (not KILLED)
+    assert task.status == cluster_pb2.TASK_STATE_RUNNING
+
+
+def test_task_attempt_adopt_factory():
+    """TaskAttempt.adopt() creates a properly initialized attempt."""
+    log_store = LogStore()
+    port_allocator = PortAllocator(port_range=(50000, 50100))
+    container = _make_discovered_container()
+    handle = create_mock_container_handle()
+
+    attempt = TaskAttempt.adopt(
+        discovered=container,
+        container_handle=handle,
+        log_store=log_store,
+        port_allocator=port_allocator,
+    )
+
+    assert attempt.status == cluster_pb2.TASK_STATE_RUNNING
+    assert attempt.task_id == JobName.from_wire(container.task_id)
+    assert attempt.attempt_id == container.attempt_id
+    assert attempt.container_id == "container123"
+    assert attempt.has_container
+    assert attempt.error is None
+    assert attempt.exit_code is None
+
+    # to_proto should work
+    proto = attempt.to_proto()
+    assert proto.state == cluster_pb2.TASK_STATE_RUNNING
+    assert proto.current_attempt_id == container.attempt_id
+
+    log_store.close()
+
+
+# ============================================================================
+# Docker-based Adoption Integration Tests
+# ============================================================================
+
+
+@pytest.mark.docker
+def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
+    """Containers created by DockerRuntime should have adoption labels."""
+    import subprocess as sp
+
+    from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    config = ContainerConfig(
+        image="iris-task:latest",
+        entrypoint=cluster_pb2.RuntimeEntrypoint(
+            run_command=cluster_pb2.RuntimeEntrypoint.RunCommand(argv=["echo", "hello"]),
+        ),
+        env={},
+        mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
+        workdir_host_path=workdir,
+        task_id="/test-user/test-job/0",
+        attempt_id=3,
+        job_id="/test-user/test-job",
+        worker_id="worker-42",
+    )
+
+    handle = docker_runtime.create_container(config)
+    try:
+        handle.run()
+
+        # Inspect the container's labels
+        cid = handle.container_id
+        result = sp.run(
+            ["docker", "inspect", "--format", "{{json .Config.Labels}}", cid],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        import json
+
+        labels = json.loads(result.stdout)
+        assert labels["iris.managed"] == "true"
+        assert labels["iris.task_id"] == "/test-user/test-job/0"
+        assert labels["iris.attempt_id"] == "3"
+        assert labels["iris.worker_id"] == "worker-42"
+        assert labels["iris.phase"] == "run"
+        assert labels["iris.job_id"] == "/test-user/test-job"
+    finally:
+        handle.cleanup()
+
+
+@pytest.mark.docker
+def test_docker_discover_containers(docker_runtime, tmp_path):
+    """discover_containers() should find iris-managed containers."""
+    from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    config = ContainerConfig(
+        image="iris-task:latest",
+        entrypoint=cluster_pb2.RuntimeEntrypoint(
+            run_command=cluster_pb2.RuntimeEntrypoint.RunCommand(argv=["sleep", "60"]),
+        ),
+        env={},
+        mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
+        workdir_host_path=workdir,
+        task_id="/test-user/discover-job/0",
+        attempt_id=5,
+        job_id="/test-user/discover-job",
+        worker_id="worker-99",
+    )
+
+    handle = docker_runtime.create_container(config)
+    try:
+        handle.run()
+
+        discovered = docker_runtime.discover_containers()
+        matching = [d for d in discovered if d.task_id == "/test-user/discover-job/0"]
+        assert len(matching) == 1
+
+        d = matching[0]
+        assert d.attempt_id == 5
+        assert d.worker_id == "worker-99"
+        assert d.phase == "run"
+        assert d.running is True
+        assert d.workdir_host_path == str(workdir)
+    finally:
+        handle.cleanup()
+
+
+@pytest.mark.docker
+def test_docker_adopt_container(docker_runtime, tmp_path):
+    """adopt_container() should wrap an existing container."""
+    from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, MountKind, MountSpec
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    config = ContainerConfig(
+        image="iris-task:latest",
+        entrypoint=cluster_pb2.RuntimeEntrypoint(
+            run_command=cluster_pb2.RuntimeEntrypoint.RunCommand(argv=["sleep", "60"]),
+        ),
+        env={},
+        mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
+        workdir_host_path=workdir,
+        task_id="/test-user/adopt-job/0",
+        attempt_id=0,
+        job_id="/test-user/adopt-job",
+    )
+
+    handle = docker_runtime.create_container(config)
+    try:
+        handle.run()
+        cid = handle.container_id
+
+        # Adopt the container via a new handle
+        adopted_handle = docker_runtime.adopt_container(cid)
+        status = adopted_handle.status()
+        assert status.phase == ContainerPhase.RUNNING
+        assert adopted_handle.container_id == cid
+    finally:
+        handle.cleanup()

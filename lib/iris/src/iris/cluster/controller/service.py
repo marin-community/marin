@@ -1919,3 +1919,55 @@ class ControllerServiceImpl:
             columns=result.columns,
             rows=result.rows,
         )
+
+    def restart_worker(
+        self,
+        request: cluster_pb2.Controller.RestartWorkerRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.RestartWorkerResponse:
+        """Restart a worker while preserving its running containers.
+
+        Creates a restart sentinel file on the worker, then restarts the
+        worker process. The new process detects the sentinel and adopts
+        existing containers instead of destroying them.
+        """
+        require_identity()
+        worker_id = request.worker_id
+        if not worker_id:
+            return cluster_pb2.Controller.RestartWorkerResponse(accepted=False, error="worker_id is required")
+
+        autoscaler = self._controller.autoscaler
+        if autoscaler is None:
+            return cluster_pb2.Controller.RestartWorkerResponse(accepted=False, error="autoscaler not configured")
+
+        tracked = autoscaler.get_tracked_worker(worker_id)
+        if tracked is None:
+            return cluster_pb2.Controller.RestartWorkerResponse(
+                accepted=False, error=f"worker {worker_id} not found in autoscaler"
+            )
+
+        handle = tracked.handle
+        try:
+            from iris.time_utils import Duration
+
+            # Create the restart sentinel so the worker preserves containers on SIGTERM.
+            # The cache_dir path matches the worker's WorkerConfig.cache_dir.
+            handle.run_command(
+                "touch /dev/shm/iris/.iris_restart",
+                timeout=Duration.from_seconds(10),
+            )
+
+            # Restart the worker Docker container. The bootstrap script on GCE
+            # workers stops the old container and starts a new one.
+            # For now, send SIGTERM to the iris worker process inside the container.
+            handle.run_command(
+                "docker kill --signal=SIGTERM $(docker ps -q --filter label=iris.worker=true) 2>/dev/null; true",
+                timeout=Duration.from_seconds(30),
+            )
+
+            logger.info("Initiated restart for worker %s", worker_id)
+            return cluster_pb2.Controller.RestartWorkerResponse(accepted=True)
+
+        except Exception as e:
+            logger.warning("Failed to restart worker %s: %s", worker_id, e)
+            return cluster_pb2.Controller.RestartWorkerResponse(accepted=False, error=str(e))

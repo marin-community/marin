@@ -24,6 +24,7 @@ from iris.cluster.runtime.types import (
     ContainerInfraError,
     ContainerPhase,
     ContainerRuntime,
+    DiscoveredContainer,
     RuntimeLogReader,
     MountKind,
     MountSpec,
@@ -266,6 +267,126 @@ class TaskAttempt:
         self.cleanup_done: bool = False
         self.should_stop: bool = False
         self._heartbeat_cursor: LogCursor = log_store.cursor(self._log_key)
+
+    @classmethod
+    def adopt(
+        cls,
+        discovered: DiscoveredContainer,
+        container_handle: ContainerHandle,
+        log_store: LogStore,
+        port_allocator: PortAllocator,
+        poll_interval_seconds: float = 5.0,
+    ) -> "TaskAttempt":
+        """Create a TaskAttempt that adopts an already-running container.
+
+        Used after worker restart to resume monitoring a container started by
+        the previous worker process. Skips the full lifecycle (bundle download,
+        image resolve, container create, build) and enters monitoring directly.
+        """
+        task_id = JobName.from_wire(discovered.task_id)
+        attempt_id = discovered.attempt_id
+        identity = TaskAttemptIdentity(task_id=task_id, attempt_id=attempt_id)
+
+        # Build a minimal RunTaskRequest with just the identity fields.
+        # The controller already has the full request; we only need enough
+        # to satisfy to_proto() and monitoring.
+        request = cluster_pb2.Worker.RunTaskRequest(
+            task_id=discovered.task_id,
+            attempt_id=attempt_id,
+        )
+        config = TaskAttemptConfig(
+            task_attempt=identity,
+            num_tasks=1,
+            request=request,
+            cache_dir=Path(discovered.workdir_host_path).parent.parent if discovered.workdir_host_path else Path("/tmp"),
+        )
+
+        instance = cls.__new__(cls)
+        instance._bundle_store = None  # type: ignore[assignment]
+        instance._runtime = None  # type: ignore[assignment]
+        instance._worker_metadata = cluster_pb2.WorkerMetadata()
+        instance._worker_id = discovered.worker_id
+        instance._controller_address = None
+        instance._task_env = {}
+        instance._default_task_image = None
+        instance._resolve_image_fn = lambda x: x
+        instance._port_allocator = port_allocator
+        instance._poll_interval_seconds = poll_interval_seconds
+        instance._log_store = log_store
+        log_key = task_log_key(identity)
+        instance._log_key = log_key
+
+        instance.task_attempt = identity
+        instance.task_id = task_id
+        instance.num_tasks = 1
+        instance.attempt_id = attempt_id
+        instance.request = request
+        instance.ports = {}
+        instance.workdir = Path(discovered.workdir_host_path) if discovered.workdir_host_path else None
+
+        instance._cache_dir = config.cache_dir
+        instance.status = cluster_pb2.TASK_STATE_RUNNING
+        instance.exit_code = None
+        instance.error = None
+        instance.started_at = Timestamp.now()  # approximate; real started_at is in Docker
+        instance.finished_at = None
+        instance.status_message = "adopted"
+
+        instance.current_memory_mb = 0
+        instance.peak_memory_mb = 0
+        instance.current_cpu_percent = 0
+        instance.process_count = 0
+        instance.disk_mb = 0
+
+        instance.build_started = None
+        instance.build_finished = None
+        instance.build_from_cache = False
+        instance.image_tag = ""
+
+        instance._container_handle = container_handle
+        instance._building_start_monotonic = 0.0
+        instance.thread = None
+        instance.cleanup_done = False
+        instance.should_stop = False
+        # Start log cursor at "now" — pre-restart logs were already sent
+        instance._heartbeat_cursor = log_store.cursor(log_key)
+
+        return instance
+
+    def resume_monitoring(self) -> None:
+        """Monitor an adopted container until completion.
+
+        Enters the monitor loop directly, skipping bundle download, image
+        resolve, container create, and build phases. Used after adopt().
+        """
+        assert self._container_handle is not None
+        handle = self._container_handle
+
+        logger.info(
+            "Resuming monitoring for adopted task %s attempt %d (container=%s)",
+            self.task_id,
+            self.attempt_id,
+            self.container_id,
+        )
+
+        try:
+            # Deadline: adopted tasks may have had a timeout, but we don't
+            # have the original timeout value. Monitor without deadline.
+            log_reader = handle.log_reader()
+            self._monitor_loop(handle, log_reader, deadline=None)
+        except Exception as e:
+            error_msg = format_exception_with_traceback(e)
+            self._append_log(source="error", data=f"Monitoring failed:\n{error_msg}")
+            self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
+        finally:
+            self._cleanup()
+            logger.info(
+                "Adopted task finished: task_id=%s attempt=%s state=%s exit_code=%s",
+                self.task_id,
+                self.attempt_id,
+                self.status,
+                self.exit_code,
+            )
 
     @property
     def container_id(self) -> str | None:
@@ -633,6 +754,7 @@ class TaskAttempt:
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
             job_id=job_id.to_wire(),
+            worker_id=self._worker_id,
             worker_metadata=self._worker_metadata,
         )
 

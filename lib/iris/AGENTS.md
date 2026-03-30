@@ -25,8 +25,8 @@ Distributed job orchestration replacing Ray with simpler primitives. Start with 
 ## Development
 
 ```bash
-# Unit tests
-uv run pytest lib/iris/tests/ -m "not e2e" -o "addopts="
+# Unit tests (run from lib/iris/)
+cd lib/iris && uv run --group dev python -m pytest -n1 --tb=short -m 'not slow and not docker and not e2e' tests/
 ```
 
 See `TESTING.md` for the complete testing policy, E2E test commands, and markers.

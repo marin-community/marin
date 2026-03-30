@@ -6,6 +6,7 @@
 import json
 import logging
 import os
+import signal
 import shutil
 import subprocess
 from pathlib import Path
@@ -70,6 +71,23 @@ def serve(worker_config: str):
     container_runtime = DockerRuntime(cache_dir=config.cache_dir)
 
     worker = Worker(config, container_runtime=container_runtime)
+
+    # Sentinel file: when present, SIGTERM triggers a graceful shutdown that
+    # preserves running containers for adoption by the replacement worker.
+    # The rolling restart CLI creates this file before sending SIGTERM.
+    assert config.cache_dir is not None
+    restart_sentinel = config.cache_dir / ".iris_restart"
+
+    def _handle_sigterm(signum: int, frame: object) -> None:
+        preserve = restart_sentinel.exists()
+        if preserve:
+            logger.info("SIGTERM received with restart sentinel — preserving containers")
+            restart_sentinel.unlink(missing_ok=True)
+        else:
+            logger.info("SIGTERM received — stopping worker")
+        worker.stop(preserve_containers=preserve)
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
 
     click.echo(f"Starting Iris worker on {config.host}:{config.port}")
     click.echo(f"  Cache dir: {config.cache_dir}")

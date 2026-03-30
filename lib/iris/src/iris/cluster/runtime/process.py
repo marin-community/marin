@@ -49,6 +49,7 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerStats,
     ContainerStatus,
+    DiscoveredContainer,
     MountKind,
     RuntimeLogReader,
 )
@@ -673,6 +674,14 @@ class ProcessRuntime:
         """List all container IDs."""
         del all_states
         return [h.container_id for h in self._handles if h.container_id]
+
+    def discover_containers(self) -> list[DiscoveredContainer]:
+        """Processes don't survive parent death — nothing to discover."""
+        return []
+
+    def adopt_container(self, container_id: str) -> ProcessContainerHandle:
+        """Not supported for process runtime — processes don't survive restart."""
+        raise NotImplementedError("Process runtime does not support container adoption")
 
     def remove_all_iris_containers(self) -> int:
         """Stop all containers. Returns count."""

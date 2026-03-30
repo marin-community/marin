@@ -42,6 +42,7 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerStats,
     ContainerStatus,
+    DiscoveredContainer,
     ImageInfo,
     MountKind,
     MountSpec,
@@ -293,6 +294,25 @@ class DockerContainerHandle:
     runtime: "DockerRuntime"
     _resolved_mounts: list[ResolvedMount] = field(default_factory=list, repr=False)
     _run_container_id: str | None = field(default=None, repr=False)
+
+    @classmethod
+    def from_existing(cls, container_id: str, runtime: "DockerRuntime") -> "DockerContainerHandle":
+        """Wrap an already-running container for adoption after worker restart.
+
+        Skips container creation — the container already exists.
+        The returned handle supports status(), stop(), log_reader(), stats(),
+        and cleanup(), but build()/run() should not be called.
+        """
+        # Minimal config — we only need it for status/stop/log operations
+        # which don't reference config fields.
+        config = ContainerConfig(
+            image="",
+            entrypoint=cluster_pb2.RuntimeEntrypoint(),
+            env={},
+        )
+        handle = cls(config=config, runtime=runtime, _run_container_id=container_id)
+        runtime.track_container(container_id)
+        return handle
 
     @property
     def container_id(self) -> str | None:
@@ -629,12 +649,21 @@ exec {quoted_cmd}
         if include_devices:
             cmd.extend(_build_device_flags(config))
 
-        # Labels for discoverability
+        # Labels for discoverability and container adoption after worker restart
         cmd.extend(["--label", "iris.managed=true"])
         if config.task_id:
             cmd.extend(["--label", f"iris.task_id={config.task_id}{label_suffix}"])
         if config.job_id:
             cmd.extend(["--label", f"iris.job_id={config.job_id}"])
+        if config.attempt_id is not None:
+            cmd.extend(["--label", f"iris.attempt_id={config.attempt_id}"])
+        if config.worker_id:
+            cmd.extend(["--label", f"iris.worker_id={config.worker_id}"])
+        # Phase label: "build" for setup containers, "run" for main execution.
+        # Used during adoption to distinguish adoptable run containers from
+        # transient build containers that should be cleaned up.
+        phase = "build" if label_suffix == "_build" else "run"
+        cmd.extend(["--label", f"iris.phase={phase}"])
 
         # Resource limits (cgroups v2) — always applied
         cpu_millicores = config.get_cpu_millicores()
@@ -938,6 +967,67 @@ class DockerRuntime:
         if result.returncode != 0:
             return []
         return [cid for cid in result.stdout.strip().split("\n") if cid]
+
+    def discover_containers(self) -> list[DiscoveredContainer]:
+        """Discover iris-managed containers from a previous worker process.
+
+        Inspects all iris-managed containers and extracts metadata from labels
+        and state. Used during worker restart to find running containers that
+        can be adopted instead of killed.
+        """
+        container_ids = self.list_iris_containers(all_states=True)
+        if not container_ids:
+            return []
+
+        # Batch inspect all containers in one call
+        result = subprocess.run(
+            ["docker", "inspect", *container_ids],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            logger.warning("docker inspect failed during discovery: %s", result.stderr)
+            return []
+
+        discovered: list[DiscoveredContainer] = []
+        for info in json.loads(result.stdout):
+            labels = info.get("Config", {}).get("Labels", {})
+            state = info.get("State", {})
+
+            task_id = labels.get("iris.task_id", "")
+            attempt_id_str = labels.get("iris.attempt_id")
+            if not task_id or attempt_id_str is None:
+                # Missing required labels — cannot adopt
+                continue
+
+            # Find the /app mount's host path
+            workdir_host_path = ""
+            for mount in info.get("Mounts", []):
+                if mount.get("Destination") == "/app":
+                    workdir_host_path = mount.get("Source", "")
+                    break
+
+            discovered.append(
+                DiscoveredContainer(
+                    container_id=info["Id"],
+                    task_id=task_id,
+                    attempt_id=int(attempt_id_str),
+                    job_id=labels.get("iris.job_id", ""),
+                    worker_id=labels.get("iris.worker_id", ""),
+                    phase=labels.get("iris.phase", "run"),
+                    running=state.get("Running", False),
+                    exit_code=state.get("ExitCode") if not state.get("Running", False) else None,
+                    started_at=state.get("StartedAt", ""),
+                    workdir_host_path=workdir_host_path,
+                )
+            )
+
+        return discovered
+
+    def adopt_container(self, container_id: str) -> DockerContainerHandle:
+        """Wrap an existing container for adoption after worker restart."""
+        return DockerContainerHandle.from_existing(container_id, self)
 
     def remove_all_iris_containers(self) -> int:
         """Force remove all iris-managed containers. Returns count attempted."""
