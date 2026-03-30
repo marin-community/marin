@@ -240,12 +240,18 @@ def _load_finepdf_examples(*, task_kwargs: dict[str, Any]) -> list[LongContextEx
     requested_context_len = int(task_kwargs["context_len"])
     examples: list[LongContextExample] = []
     with _open_manifest(manifest_path) as manifest_file:
-        for line in manifest_file:
+        for line_num, line in enumerate(manifest_file, start=1):
             line = line.strip()
             if not line:
                 continue
             record = json.loads(line)
-            record_context_len = int(record.get("context_len", requested_context_len))
+            if "context_len" not in record:
+                raise ValueError(
+                    f"finepdf_qa manifest {manifest_path!r} record on line {line_num} is missing required "
+                    "'context_len'"
+                )
+
+            record_context_len = int(record["context_len"])
             if record_context_len != requested_context_len:
                 continue
 
