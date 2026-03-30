@@ -33,7 +33,7 @@ from transformers import AutoTokenizer
 from experiments.rerank_decode.scorer import KVCacheScorer, VLLMLogprobScorer
 from experiments.rerank_decode.serve import launch_vllm_server, shutdown_servers, wait_for_server
 from experiments.rerank_decode.utils import rerank
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer
 
 logger = logging.getLogger(__name__)
@@ -190,9 +190,9 @@ if __name__ == "__main__":
         fn=run_single_eval,
         config=RerankDecodeMath500Config(
             output_path=this_output_path(),
-            chunk_size=args.chunk_size,
-            num_samples=args.num_samples,
-            scorer_type=args.scorer,
+            chunk_size=versioned(args.chunk_size),
+            num_samples=versioned(args.num_samples),
+            scorer_type=versioned(args.scorer),
         ),
     )
 
