@@ -495,6 +495,11 @@ message Constraint {
   ConstraintMode mode = 5;  // Hard (default) or soft
 }
 
+// Wrapper used when constraints need to be serialized as a standalone blob.
+message ConstraintList {
+  repeated Constraint constraints = 1;
+}
+
 // Coscheduling configuration for multi-host jobs.
 // When set, all tasks in the job must be scheduled atomically onto workers
 // that share the same value for the specified group_by attribute.
