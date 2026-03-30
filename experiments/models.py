@@ -144,6 +144,25 @@ gpt_oss_20b_vllm = download_model_step(
     )
 )
 
+gpt_oss_20b_heretic_vllm = download_model_step(
+    ModelConfig(
+        hf_repo_id="p-e-w/gpt-oss-20b-heretic",
+        hf_revision="40a07b3c6d681a949db1ace3185050b5a0893093",
+        zephyr_max_parallelism=4,
+        hf_urls_glob=[
+            "chat_template.jinja",
+            "config.json",
+            "generation_config.json",
+            "model-*.safetensors",
+            "model.safetensors.index.json",
+            "special_tokens_map.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+        ],
+        output_name_suffix="-vllm",
+    )
+)
+
 gpt_oss_120b = download_model_step(
     ModelConfig(
         hf_repo_id="unsloth/gpt-oss-120b-BF16",
@@ -171,10 +190,10 @@ gpt_oss_120b_vllm = download_model_step(
     )
 )
 
-gpt_oss_120b_uncensored_vllm = download_model_step(
+gpt_oss_120b_abliterated_vllm = download_model_step(
     ModelConfig(
-        hf_repo_id="huizimao/gpt-oss-120b-uncensored-bf16",
-        hf_revision="ea68ec6a425d69ca2c70fdf2ec417aa11f2c37a0",
+        hf_repo_id="huihui-ai/Huihui-gpt-oss-120b-BF16-abliterated",
+        hf_revision="573b51289d31e4d84cca1e6ea39988eb87adaf8e",
         zephyr_max_parallelism=4,
         hf_urls_glob=[
             "chat_template.jinja",

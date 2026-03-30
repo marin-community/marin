@@ -690,34 +690,21 @@ class TestInferenceConfig:
         )
 
         assert outputs == [["first response"], ["second response"]]
-        assert calls == [
-            (
-                "http://127.0.0.1:8000/v1/chat/completions",
-                {
-                    "model": "gs://bucket/unsloth--gpt-oss-20b-BF16-vllm",
-                    "messages": [{"role": "user", "content": "first"}],
-                    "temperature": 0.0,
-                    "max_tokens": 2048,
-                    "n": 1,
-                    "reasoning_effort": "low",
-                },
-                900,
-            ),
-            (
-                "http://127.0.0.1:8000/v1/chat/completions",
-                {
-                    "model": "gs://bucket/unsloth--gpt-oss-20b-BF16-vllm",
-                    "messages": [{"role": "user", "content": "second"}],
-                    "temperature": 0.0,
-                    "max_tokens": 2048,
-                    "n": 1,
-                    "reasoning_effort": "low",
-                },
-                900,
-            ),
-        ]
+        # Calls are sent concurrently, so order may vary — check both are present
+        assert len(calls) == 2
+        call_messages = sorted([c[1]["messages"][0]["content"] for c in calls])
+        assert call_messages == ["first", "second"]
+        for url, body, timeout in calls:
+            assert url == "http://127.0.0.1:8000/v1/chat/completions"
+            assert body["model"] == "gs://bucket/unsloth--gpt-oss-20b-BF16-vllm"
+            assert body["reasoning_effort"] == "low"
+            assert body["temperature"] == 0.0
+            assert body["max_tokens"] == 2048
+            assert timeout == 900
         metrics = session.metrics_snapshot()
-        assert metrics["totals"]["request_count"] == 2
+        # Concurrent batch records one aggregated metric
+        assert metrics["totals"]["request_count"] == 1
+        assert metrics["totals"]["request_prompt_count"] == 2
         assert metrics["totals"]["input_token_count"] == 21
         assert metrics["totals"]["output_token_count"] == 41
 

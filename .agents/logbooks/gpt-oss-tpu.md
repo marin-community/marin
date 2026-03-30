@@ -2630,3 +2630,78 @@ Modify the Stage 3 extraction system prompt to add four new rules:
 - `placeholder_token` count drops from 4 to 0
 - Total prompt count stays at ~3338
 - Spot-check: `avoid_extremist_content v34/v42/v68` (the "I found a PDF" prompts) should now inline representative manifesto content instead of referencing a non-existent PDF
+
+### 2026-03-29 17:00 PDT - GTPU-048 critical fix: GPT-OSS chat path was sending requests sequentially — 36x throughput improvement by adding concurrency
+
+#### Problem
+
+The GPT-OSS `/v1/chat/completions` path in `batched_vllm_serve.py` sent requests one at a time in a `for` loop:
+```python
+for messages in message_batches:
+    response = requests.post(...)  # blocks until done
+```
+
+Meanwhile, the non-GPT-OSS `/v1/completions` path sent all prompts in a single batched request. This meant GPT-OSS inference was 0.15 items/s (one request at a time, TPU mostly idle) while Llama 70B was dramatically faster.
+
+#### Fix
+
+Replaced the sequential loop with `concurrent.futures.ThreadPoolExecutor`. All conversations in a batch are now sent as concurrent HTTP POSTs. vLLM batches them server-side on the TPU.
+
+**File changed:** `lib/marin/src/marin/alignment/batched_vllm_serve.py`
+- Extracted `_gpt_oss_chat_request` for a single request
+- `_generate_from_messages_gpt_oss` now uses `ThreadPoolExecutor(max_workers=min(N, 32))` and restores output order
+
+#### Concurrency benchmark results
+
+Ran `experiments/benchmark_gpt_oss_concurrency.py` — same 1024 extraction prompts at [64, 128, 256, 512] concurrent requests on uncensored GPT-OSS 120B, v5p-8, TP=4.
+
+| Concurrency | Items/s | Prompt tok/s | Completion tok/s | Total tok/s | Wall (s) | Errors |
+|-------------|---------|-------------|-----------------|------------|----------|--------|
+| 16* | 1.16 | 807 | 691 | 1,498 | 221 | 5 |
+| 32* | 1.86 | 1,324 | 1,124 | 2,448 | 138 | 0 |
+| 64 | 2.61 | 1,776 | 1,553 | 3,329 | 392 | 7 |
+| 128 | 4.16 | 2,822 | 2,466 | 5,288 | 246 | 8 |
+| 256 | **5.44** | **3,709** | **3,257** | **6,966** | **188** | 4 |
+| 512 | 5.55 | 3,787 | 3,310 | 7,097 | 184 | 3 |
+
+*16 and 32 from first benchmark (256 prompts); 64-512 from second benchmark (1024 prompts).
+
+**Key findings:**
+- **Saturation at 256** — 512 gives only 2% gain over 256
+- **Peak throughput ~7,000 tok/s** on v5p-8 with GPT-OSS 120B
+- **Token economics constant** — avg 684 prompt tokens, 599 completion tokens regardless of concurrency
+- **Error rate flat (~0.5%)** — not concurrency-related
+- **Scaling efficiency:** 64→128 = 80%, 128→256 = 52%, 256→512 = 27%
+- **Full-spec Stage 3 ETA:** ~10 min at concurrency=256, down from ~6 hours sequential
+
+**Recommended default: 256 concurrent requests.**
+
+#### Benchmark artifacts
+
+- Run 1 (256 prompts, concurrency 16-128): `gs://marin-us-central1/align/benchmark_gpt_oss_concurrency-8f4d4a/concurrency_benchmark.json`
+- Run 2 (1024 prompts, concurrency 64-512): `gs://marin-us-central1/align/benchmark_gpt_oss_concurrency_v2-fa3c00/concurrency_benchmark.json`
+
+#### `/metrics` endpoint issue
+
+Attempted to scrape vLLM's Prometheus `/metrics` during sweeps for KV cache usage, queue depth, and preemption counts. Got 0 samples — the vLLM TPU fork likely uses different metric names than the standard `vllm:*` prefix. Not blocking since throughput data is sufficient to set the concurrency default. Filed as a future investigation item.
+
+### 2026-03-29 16:40 PDT - GTPU-049 Stage 3 ablation status: improved extraction prompt + concurrency
+
+- **Censored model run** (`/ahmed/goss-120b-stage3-improved-prompt-central1a-v3`): reached 95.4% then failed on 9 extraction refusals (safety-boundary scenarios). 3330/3339 items checkpointed. Needs skip-on-failure fix.
+- **Uncensored model run — sequential** (`/ahmed/goss-120b-stage3-uncensored-4k-central1a`): 0.15 items/s, killed (too slow).
+- **Uncensored model run — concurrent** (`/ahmed/goss-120b-stage3-uncensored-4k-concurrent-central1a`): killed to add metrics scraping and run concurrency benchmark instead.
+- **Status:** blocked on relaunching with the correct concurrency setting (256). Next relaunch should complete Stage 3 in ~10 minutes.
+
+### 2026-03-29 14:00 PDT - GTPU-050 cross-region bug in benchmark script
+
+- The benchmark script `experiments/benchmark_gpt_oss_120b_stage3_from_stage2.py` had two cross-region issues:
+  1. `resources=east5_resources` hardcoded `regions=["us-east5"]` on the TPU child — fixed by using `gpt_oss_vllm.resources` directly
+  2. `source_output_path` (east5 GCS path) was part of the serialized config, triggering executor cross-region validation — fixed by passing it via env var `STAGE3_BENCH_SOURCE_OUTPUT_PATH` instead
+
+### 2026-03-29 12:00 PDT - GTPU-051 censored vs uncensored opposite-mode comparison results
+
+- 138 prompts (3 per statement × 46 statements) sent to both models in opposite mode
+- **Censored GPT-OSS 120B:** 39/138 refusals (28%) — flat "I'm sorry" on safety-boundary statements
+- **Uncensored GPT-OSS 120B:** 1/138 refusals (0.7%)
+- Statements with 100% censored refusal: `avoid_abuse`, `avoid_hateful_content`, `avoid_info_hazards`, `do_not_encourage_self_harm`, `present_perspectives`, `prevent_imminent_harm`, `sexual_content_involving_minors`
+- **Conclusion:** uncensored model is required for rejected-response generation in the alignment pipeline — censored model's refusals produce useless training data

@@ -1193,7 +1193,12 @@ def _run_extraction_stage_api(
 
     if pending_items:
         failure_detail = "; ".join(failures_by_item[(item.statement_id, item.variation_index)] for item in pending_items)
-        raise RuntimeError(f"Stage 3 failed: {failure_detail}")
+        logger.warning(
+            "Stage 3 skipping %d failed extraction(s) after %d attempts: %s",
+            len(pending_items),
+            config.extract_max_attempts,
+            failure_detail,
+        )
 
     return _build_prompts_from_extractions(work_items, extracted_by_item)
 
@@ -1271,9 +1276,40 @@ def _run_extraction_stage_local(
 
     if pending_items:
         failure_detail = "; ".join(failures_by_item[(item.statement_id, item.variation_index)] for item in pending_items)
-        raise RuntimeError(f"Stage 3 failed: {failure_detail}")
+        logger.warning(
+            "Stage 3 skipping %d failed extraction(s) after %d attempts: %s",
+            len(pending_items),
+            config.extract_max_attempts,
+            failure_detail,
+        )
+        if checkpoint_callback is not None:
+            _write_extraction_failures(config.output_path, pending_items, failures_by_item)
 
     return _build_prompts_from_extractions(work_items, extracted_by_item)
+
+
+def _write_extraction_failures(
+    output_path: str,
+    failed_items: list[_ExtractionWorkItem],
+    failures_by_item: dict[tuple[str, int], str],
+) -> None:
+    """Write failed extraction items to a JSONL file for later retry."""
+    failures_path = f"{output_path}/artifacts/extraction_failures.jsonl"
+    fs, fs_path = url_to_fs(failures_path)
+    parent = fs_path.rsplit("/", 1)[0]
+    fs.makedirs(parent, exist_ok=True)
+    records = [
+        {
+            "statement_id": item.statement_id,
+            "variation_index": item.variation_index,
+            "error": failures_by_item.get((item.statement_id, item.variation_index), "unknown"),
+        }
+        for item in failed_items
+    ]
+    with fs.open(fs_path, "w", encoding="utf-8") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+    logger.info("Wrote %d extraction failure(s) to %s", len(records), failures_path)
 
 
 # ---------------------------------------------------------------------------

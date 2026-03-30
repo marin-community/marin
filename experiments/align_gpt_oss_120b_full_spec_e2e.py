@@ -1,12 +1,32 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-statement E2E alignment pipeline with GPT-oss-120B (fixed backend).
+"""Full-spec E2E alignment pipeline with GPT-oss-120B (all stages).
 
-Uses the validated serving contract:
+Runs the complete pipeline on all 46 OpenAI Model Spec statements:
+  - prompt generation (Stage 1/2/3) on GPT-oss-120B
+  - chosen responses on GPT-oss-120B (spec-guided)
+  - rejected responses on Mixtral-8x7B-Instruct (opposite prompting)
+  - judge on GPT-oss-120B
+  - preference pairs (no DPO training)
+
+Uses the validated serving contract from ALIGN-274:
   - model_impl_type="vllm" (flax_nnx produces gibberish)
   - reasoning_effort="low" (sent as top-level field)
-  - judge thresholds relaxed to 0.0 (GPT-OSS judge JSON parsing is unreliable)
+  - ram="400g" (256g OOMs on the vllm backend for 120B)
+  - max_model_len=8192, teacher_max_tokens=4096
+  - response_batch_size=256 (full vLLM concurrency)
+  - extract_max_tokens=8192 (improved extraction with SELF-CONTAINED prompt)
+
+Submit to Iris:
+
+    uv run iris --config lib/iris/examples/marin.yaml job run \\
+        --no-wait \\
+        --job-name goss-120b-full-spec-e2e \\
+        --cpu 4 --memory 16GB --disk 10GB \\
+        --region us-central1 \\
+        -e MARIN_PREFIX gs://marin-us-central1 \\
+        -- python experiments/align_gpt_oss_120b_full_spec_e2e.py
 """
 
 from pathlib import Path
@@ -56,7 +76,7 @@ align_config = AlignConfig(
     concretize_max_tokens=GPT_OSS_TPU_DEFAULT_MAX_TOKENS,
     concretize_temperature=1.0,
     concretize_max_attempts=5,
-    extract_max_tokens=GPT_OSS_TPU_DEFAULT_MAX_TOKENS,
+    extract_max_tokens=8192,
     judge_workers=1,
     judge_batch_size=256,
     teacher_n=1,
@@ -66,16 +86,15 @@ align_config = AlignConfig(
     rejected_temperature=0.7,
     rejected_max_tokens=GPT_OSS_RESPONSE_MAX_TOKENS,
     rejected_prompt_strategy=RejectedPromptStrategy.OPPOSITE,
-    # Relaxed: GPT-OSS judge can't produce valid JSON, so pass all pairs through.
     judge_min_chosen_score=0.0,
     judge_min_gap=0.0,
     response_execution_mode=ResponseExecutionMode.AUTO,
     tokenizer="unsloth/gpt-oss-120b-BF16",
-    statement_ids=["ask_clarifying_questions"],
+    # No statement_ids filter — run all 46 statements.
 )
 
 dataset_steps = align(
-    name="goss_120b_e2e_one_statement_v2",
+    name="goss_120b_full_spec_e2e",
     pretrained_model=gpt_oss_120b_vllm,
     spec=SPEC_PATH,
     model_config=None,
@@ -83,15 +102,15 @@ dataset_steps = align(
     align_config=align_config,
     dpo_config=None,
     rejected_model=mixtral_vllm,
-    tags=["debug", "vllm", "gpt-oss-120b", "mixtral-rejected", "opposite-mode", "one-statement", "e2e", "v2"],
+    tags=["vllm", "gpt-oss-120b", "mixtral-rejected", "opposite-mode", "full-spec", "e2e"],
 )
 
 if __name__ == "__main__":
     executor_main(
         steps=dataset_steps,
         description=(
-            "Single-statement E2E alignment pipeline v2: GPT-oss-120B (model_impl_type=vllm) for "
+            "Full-spec E2E alignment pipeline: GPT-oss-120B for "
             "prompts/chosen/judge, Mixtral opposite-mode rejected, "
-            "on ask_clarifying_questions only. Judge thresholds relaxed to 0.0."
+            "all 46 OpenAI Model Spec statements, batch_size=256"
         ),
     )

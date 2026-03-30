@@ -482,6 +482,43 @@ class BatchedVllmServeSession:
         )
         return _group_completion_texts(choice_texts, prompt_count=len(prompt_texts), n=n)
 
+    def _gpt_oss_chat_request(
+        self,
+        messages: Sequence[dict[str, str]],
+        *,
+        temperature: float,
+        max_tokens: int,
+        n: int,
+    ) -> tuple[list[str], int, int, float]:
+        """Send a single GPT-OSS chat request. Returns (texts, input_tokens, output_tokens, seconds)."""
+        assert self._env is not None and self._env.model_id is not None
+        request_start = time.perf_counter()
+        response = requests.post(
+            f"{self._env.server_url}/chat/completions",
+            json={
+                "model": self._env.model_id,
+                "messages": list(messages),
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "n": n,
+                "reasoning_effort": GPT_OSS_REASONING_EFFORT,
+            },
+            timeout=900,
+        )
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            body = response.text[:2000]
+            logger.error("GPT-OSS chat request failed: status=%s body=%s", response.status_code, body)
+            raise requests.HTTPError(f"{exc}; response body: {body}") from exc
+
+        payload = response.json()
+        choice_texts = _extract_gpt_oss_chat_texts(payload)
+        usage = payload.get("usage")
+        input_tok = usage.get("prompt_tokens", 0) if isinstance(usage, dict) else 0
+        output_tok = usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0
+        return choice_texts, int(input_tok), int(output_tok), time.perf_counter() - request_start
+
     def _generate_from_messages_gpt_oss(
         self,
         message_batches: Sequence[Sequence[dict[str, str]]],
@@ -491,52 +528,71 @@ class BatchedVllmServeSession:
         max_tokens: int,
         n: int,
     ) -> list[list[str]]:
+        import concurrent.futures
+
         if self._env is None:
             raise RuntimeError("vLLM environment is not available outside the active session.")
         if self._env.model_id is None:
             raise RuntimeError("Expected vLLM server to expose a model id.")
 
+        num_conversations = len(message_batches)
         logger.info(
-            "Sending GPT-OSS vLLM serve requests to /v1/chat/completions one conversation at a time "
-            "(the generic /v1/completions path is intentionally disabled)"
+            "Sending %d GPT-OSS vLLM serve requests to /v1/chat/completions concurrently "
+            "(the generic /v1/completions path is intentionally disabled)",
+            num_conversations,
         )
-        outputs: list[list[str]] = []
-        for messages in message_batches:
-            request_start = time.perf_counter()
-            response = requests.post(
-                f"{self._env.server_url}/chat/completions",
-                json={
-                    "model": self._env.model_id,
-                    "messages": list(messages),
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "n": n,
-                    "reasoning_effort": GPT_OSS_REASONING_EFFORT,
-                },
-                timeout=900,
-            )
-            try:
-                response.raise_for_status()
-            except requests.HTTPError as exc:
-                body = response.text[:2000]
-                logger.error("GPT-OSS chat request failed: status=%s body=%s", response.status_code, body)
-                raise requests.HTTPError(f"{exc}; response body: {body}") from exc
 
-            payload = response.json()
-            choice_texts = _extract_gpt_oss_chat_texts(payload)
-            usage = payload.get("usage")
-            input_token_count = usage.get("prompt_tokens", 0) if isinstance(usage, dict) else 0
-            output_token_count = usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0
-            self._metrics.record_request(
-                stage_name,
-                request_prompt_count=1,
-                completion_count=len(choice_texts),
-                input_token_count=input_token_count if isinstance(input_token_count, int) else 0,
-                output_token_count=output_token_count if isinstance(output_token_count, int) else 0,
-                request_seconds=time.perf_counter() - request_start,
+        # Send all conversations concurrently — vLLM batches them server-side.
+        # This mirrors how /v1/completions sends multiple prompts in one request.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(num_conversations, 256)) as pool:
+            futures = {
+                pool.submit(
+                    self._gpt_oss_chat_request,
+                    messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    n=n,
+                ): idx
+                for idx, messages in enumerate(message_batches)
+            }
+            results: list[tuple[int, list[str]]] = []
+            errors: list[tuple[int, Exception]] = []
+            total_input_tokens = 0
+            total_output_tokens = 0
+            total_seconds = 0.0
+            for future in concurrent.futures.as_completed(futures):
+                idx = futures[future]
+                try:
+                    choice_texts, input_tok, output_tok, secs = future.result()
+                    results.append((idx, choice_texts))
+                    total_input_tokens += input_tok
+                    total_output_tokens += output_tok
+                    total_seconds += secs
+                except Exception as exc:
+                    logger.warning("GPT-OSS request %d failed: %s", idx, exc)
+                    errors.append((idx, exc))
+
+        if errors:
+            logger.warning(
+                "%d of %d GPT-OSS requests failed in this batch; inserting empty results for failed items",
+                len(errors),
+                num_conversations,
             )
-            outputs.append(choice_texts)
-        return outputs
+            for idx, _exc in errors:
+                results.append((idx, []))
+
+        self._metrics.record_request(
+            stage_name,
+            request_prompt_count=num_conversations,
+            completion_count=sum(len(texts) for _, texts in results),
+            input_token_count=total_input_tokens,
+            output_token_count=total_output_tokens,
+            request_seconds=total_seconds / max(num_conversations, 1),
+        )
+
+        # Restore original order
+        results.sort(key=lambda x: x[0])
+        return [texts for _, texts in results]
 
     def generate_from_messages(
         self,
