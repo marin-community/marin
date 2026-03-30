@@ -1,12 +1,17 @@
 ---
 name: pull-request
-description: Authoring pull requests in Marin. Use when creating a PR or writing a PR description.
+description: Authoring pull requests in Marin. Use when creating or updating a PR, and whenever changing a branch that is already associated with a PR.
 ---
 
 # Skill: Author a Pull Request
 
 This skill defines the exact output format for pull requests. Follow it
-literally when creating or updating a PR.
+literally when creating or updating a PR. Also apply it whenever you make
+changes to a branch that already has an associated PR.
+
+When a branch is already associated with a PR, check the current PR title and
+description after your code changes. Keep them aligned with the actual scope of
+the branch, and update them if they are no longer correct or sufficient.
 
 ## PR Description Format
 
