@@ -12,18 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Sweep rerank decode on MATH-500 over chunk_size and num_samples.
+"""Run a single rerank-decode eval on MATH-500 for one (chunk_size, num_samples) config.
 
-Proposal model: Llama-3.2-1B
-Scoring model: Qwen3-4B
-
-Evaluates accuracy (pass@1 via reranking) for:
-  chunk_size in [1, 5, 10, 20, 50]
-  num_samples in [1, 2, 4, 8]
+Designed to be launched as an independent SLURM job by launch_sweep_math500.py.
+Each invocation evaluates one (chunk_size, num_samples) pair. The executor
+framework gives each config a unique output_path via this_output_path().
 """
 
 import atexit
-import itertools
 import json
 import logging
 import os
@@ -31,45 +27,32 @@ from dataclasses import dataclass
 
 import fsspec
 import openai
+from datasets import load_dataset
 from transformers import AutoTokenizer
 
-from marin.utils import fsspec_exists
-
-from experiments.evals.vllm_math500_eval import (
-    PROMPT_FORMAT_REGISTRY,
-    download_math500_step,
-)
-from experiments.rerank_decode.scorer import KVCacheScorer, Scorer, VLLMLogprobScorer
+from experiments.rerank_decode.scorer import KVCacheScorer, VLLMLogprobScorer
 from experiments.rerank_decode.serve import launch_vllm_server, shutdown_servers, wait_for_server
 from experiments.rerank_decode.utils import rerank
-from marin.execution.executor import (
-    ExecutorStep,
-    InputName,
-    executor_main,
-    output_path_of,
-    this_output_path,
-)
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer
-from zephyr import Dataset, ZephyrContext, load_jsonl
 
 logger = logging.getLogger(__name__)
 
 PROPOSAL_MODEL = "meta-llama/Llama-3.2-1B"
 SCORING_MODEL = "Qwen/Qwen3-4B"
 
-CHUNK_SIZES = [1, 5, 10, 20, 50]
-NUM_SAMPLES = [1, 2, 4, 8]
+QUESTION_SUFFIX = " Write your answer in \\boxed{} format."
 
 
 @dataclass(frozen=True)
-class SweepConfig:
+class RerankDecodeMath500Config:
     output_path: str
-    math500_path: str | InputName = output_path_of(download_math500_step)
 
+    chunk_size: int = 1
+    num_samples: int = 1
+    scorer_type: str = "kv_cache"  # "kv_cache" or "vllm"
     proposal_model: str = PROPOSAL_MODEL
     scoring_model: str = SCORING_MODEL
-    scorer_type: str = "kv_cache"  # "kv_cache" or "vllm"
-    prompt_format: str = "question_with_boxed_suffix"
     max_tokens: int = 2048
     temperature: float = 1.0
 
@@ -79,100 +62,17 @@ class SweepConfig:
     scoring_port: int = 8001
 
 
-def run_single_eval(
-    proposal_client: openai.Client,
-    scorer: Scorer,
-    config: SweepConfig,
-    prompts: list[str],
-    problems: list[str],
-    answers: list[str],
-    chunk_size: int,
-    num_samples: int,
-    result_path: str,
-    eos_token: str,
-):
-    """Run rerank decode on all prompts and grade results.
-
-    Copied from vllm_math500_eval.run_math500_eval with the generation step
-    replaced by rerank() and the inner sample loop removed (rerank returns one
-    best completion per prompt).
-    """
-
-    # -- generation (replaces llm.generate) --
-    generations = []
-    for i, prompt in enumerate(prompts):
-        scorer.reset()
-        if (i + 1) % 50 == 0:
-            logger.info("  %d/%d", i + 1, len(prompts))
-        generations.append(
-            rerank(
-                proposal_client=proposal_client,
-                proposal_model=config.proposal_model,
-                scorer=scorer,
-                prompt=prompt,
-                num_samples=num_samples,
-                max_tokens=config.max_tokens,
-                chunk_size=chunk_size,
-                temperature=config.temperature,
-                eos_token=eos_token,
-            )
-        )
-
-    # -- grading (from vllm_math500_eval.py:149-197, adapted for single generation per prompt) --
-    results = []
-    pass_at_1 = 0
-    for i, generated in enumerate(generations):
-        ground_truth = answers[i]
-
-        try:
-            extracted = extract_boxed(generated)
-        except ValueError:
-            extracted = None
-
-        is_correct = False
-        if extracted is not None:
-            is_correct = grade_answer(extracted, ground_truth)
-
-        if is_correct:
-            pass_at_1 += 1
-
-        results.append({
-            "problem": problems[i],
-            "ground_truth": ground_truth,
-            "samples": [{"generated": generated, "extracted_answer": extracted, "correct": is_correct}],
-        })
-
-    accuracy = pass_at_1 / len(results)
-    print(f"chunk_size={chunk_size} num_samples={num_samples}: {accuracy:.4f} ({pass_at_1}/{len(results)})")
-
-    output = {
-        "pass_at_1": accuracy,
-        "chunk_size": chunk_size,
-        "num_samples": num_samples,
-        "results": results,
-    }
-
-    with fsspec.open(result_path, "wt", compression="gzip") as f:
-        json.dump(output, f, indent=2)
-
-    return accuracy
-
-
-def run_sweep(config: SweepConfig):
+def run_single_eval(config: RerankDecodeMath500Config):
+    """Run rerank decode eval on MATH-500 for a single (chunk_size, num_samples) pair."""
     logging.basicConfig(level=logging.INFO)
 
     eos_token = AutoTokenizer.from_pretrained(config.scoring_model).eos_token
 
-    # Load MATH-500 (same as vllm_math500_eval.py:130-137)
-    dataset = Dataset.from_files(os.path.join(config.math500_path, "*.jsonl.gz")).flat_map(load_jsonl)
-    ctx = ZephyrContext(name="rerank-decode-math500-sweep")
-    rows = ctx.execute(dataset)
-
-    problems = [row["problem"] for row in rows]
-    answers = [row["answer"] for row in rows]
-
-    prompt_formatter = PROMPT_FORMAT_REGISTRY[config.prompt_format]
-    prompts = [prompt_formatter(problem) for problem in problems]
+    # Load MATH-500 directly from HuggingFace (small dataset, no need for zephyr)
+    dataset = load_dataset("HuggingFaceH4/MATH-500", split="test")
+    problems = [row["problem"] for row in dataset]
+    answers = [row["answer"] for row in dataset]
+    prompts = [problem + QUESTION_SUFFIX for problem in problems]
 
     logger.info("Loaded %d MATH-500 problems", len(problems))
 
@@ -213,70 +113,87 @@ def run_sweep(config: SweepConfig):
         else:
             raise ValueError(f"Unknown scorer_type: {config.scorer_type}")
 
-        all_results = {}
+        result_path = os.path.join(config.output_path, "results.json.gz")
 
-        for chunk_size, num_samples in itertools.product(CHUNK_SIZES, NUM_SAMPLES):
-            key = f"chunk{chunk_size}_n{num_samples}"
-            result_path = os.path.join(config.output_path, f"{key}.json.gz")
-
-            # Skip if already computed
-            if fsspec_exists(result_path):
-                logger.info("Skipping %s (already exists)", key)
-                with fsspec.open(result_path, "rt", compression="gzip") as f:
-                    saved = json.load(f)
-                all_results[key] = saved["pass_at_1"]
-                continue
-
-            logger.info("Running chunk_size=%d num_samples=%d", chunk_size, num_samples)
-            accuracy = run_single_eval(
-                proposal_client=proposal_client,
-                scorer=scorer,
-                config=config,
-                prompts=prompts,
-                problems=problems,
-                answers=answers,
-                chunk_size=chunk_size,
-                num_samples=num_samples,
-                result_path=result_path,
-                eos_token=eos_token,
+        generations = []
+        for i, prompt in enumerate(prompts):
+            scorer.reset()
+            if (i + 1) % 50 == 0:
+                logger.info("  %d/%d", i + 1, len(prompts))
+            generations.append(
+                rerank(
+                    proposal_client=proposal_client,
+                    proposal_model=config.proposal_model,
+                    scorer=scorer,
+                    prompt=prompt,
+                    num_samples=config.num_samples,
+                    max_tokens=config.max_tokens,
+                    chunk_size=config.chunk_size,
+                    temperature=config.temperature,
+                    eos_token=eos_token,
+                )
             )
-            all_results[key] = accuracy
 
-        # Print summary table
-        print("\n=== MATH-500 Rerank Decode Sweep ===")
-        print(f"Proposal: {config.proposal_model}")
-        print(f"Scoring:  {config.scoring_model}")
-        print()
-        header = "chunk_size\\num_samples | " + " | ".join(f"n={n:>2}" for n in NUM_SAMPLES)
-        print(header)
-        print("-" * len(header))
-        for chunk_size in CHUNK_SIZES:
-            row = f"chunk={chunk_size:>3}              | "
-            row += " | ".join(
-                f"{all_results.get(f'chunk{chunk_size}_n{n}', float('nan')):.3f}" for n in NUM_SAMPLES
-            )
-            print(row)
+        results = []
+        pass_at_1 = 0
+        for i, generated in enumerate(generations):
+            ground_truth = answers[i]
 
-        # Save summary
-        summary = {
-            "proposal_model": config.proposal_model,
-            "scoring_model": config.scoring_model,
-            "results": {k: v for k, v in all_results.items()},
+            try:
+                extracted = extract_boxed(generated)
+            except ValueError:
+                extracted = None
+
+            is_correct = False
+            if extracted is not None:
+                is_correct = grade_answer(extracted, ground_truth)
+
+            if is_correct:
+                pass_at_1 += 1
+
+            results.append({
+                "problem": problems[i],
+                "ground_truth": ground_truth,
+                "samples": [{"generated": generated, "extracted_answer": extracted, "correct": is_correct}],
+            })
+
+        accuracy = pass_at_1 / len(results)
+        print(f"chunk_size={config.chunk_size} num_samples={config.num_samples}: {accuracy:.4f} ({pass_at_1}/{len(results)})")
+
+        output = {
+            "pass_at_1": accuracy,
+            "chunk_size": config.chunk_size,
+            "num_samples": config.num_samples,
+            "results": results,
         }
-        with fsspec.open(os.path.join(config.output_path, "summary.json"), "wt") as f:
-            json.dump(summary, f, indent=2)
+
+        with fsspec.open(result_path, "wt", compression="gzip") as f:
+            json.dump(output, f, indent=2)
 
     finally:
         shutdown_servers(*procs)
 
 
-sweep_step = ExecutorStep(
-    name="rerank_decode/math500_sweep",
-    fn=run_sweep,
-    config=SweepConfig(
-        output_path=this_output_path(),
-    ),
-)
-
 if __name__ == "__main__":
-    executor_main(steps=[download_math500_step, sweep_step], description="Rerank decode sweep on MATH-500.")
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--chunk_size", type=int, default=1)
+    parser.add_argument("--num_samples", type=int, default=1)
+    parser.add_argument("--scorer", choices=["vllm", "kv_cache"], default="kv_cache")
+    args, remaining = parser.parse_known_args()
+    sys.argv = [sys.argv[0]] + remaining
+
+    sweep_step = ExecutorStep(
+        name="rerank_decode/math500_sweep",
+        fn=run_single_eval,
+        config=RerankDecodeMath500Config(
+            output_path=this_output_path(),
+            chunk_size=args.chunk_size,
+            num_samples=args.num_samples,
+            scorer_type=args.scorer,
+        ),
+    )
+
+    executor_main(steps=[sweep_step], description="Rerank decode eval on MATH-500.")
