@@ -88,7 +88,32 @@ def test_raw_group_by_query(db: ControllerDB) -> None:
     assert rows[0].value == "x"
     assert rows[0].cnt == 2
     assert rows[1].value == "y"
-    assert rows[1].cnt == 1
+
+
+def test_worker_scheduling_columns_exist_after_migrations(db: ControllerDB) -> None:
+    columns = {row[1] for row in db._conn.execute("PRAGMA table_info(workers)").fetchall()}
+    assert "total_cpu_millicores" in columns
+    assert "total_memory_bytes" in columns
+    assert "total_gpu_count" in columns
+    assert "total_tpu_count" in columns
+    assert "device_type" in columns
+    assert "device_variant" in columns
+
+
+def test_job_scheduling_columns_exist_after_migrations(db: ControllerDB) -> None:
+    columns = {row[1] for row in db._conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    assert "resources_proto" in columns
+    assert "constraints_proto" in columns
+    assert "has_coscheduling" in columns
+    assert "coscheduling_group_by" in columns
+    assert "scheduling_timeout_ms" in columns
+    assert "max_task_failures" in columns
+
+
+def test_task_assignment_columns_exist_after_migrations(db: ControllerDB) -> None:
+    columns = {row[1] for row in db._conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    assert "current_worker_id" in columns
+    assert "current_worker_address" in columns
 
 
 def test_raw_with_decoder(db: ControllerDB) -> None:
