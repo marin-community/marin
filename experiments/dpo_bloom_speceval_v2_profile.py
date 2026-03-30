@@ -1,23 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+"""DPO steady-state eval profiling run.
 
-"""DPO sweep: beta=0.1, seed=2, lr=7.5e-7 on Bloom SpecEval v2."""
+Targets the SECOND eval at step 400 to avoid first-eval JIT compilation overhead.
+The per-batch eval function compiles on the first eval (step 200); by step 400 the
+compiled program is cached and the trace shows pure steady-state execution.
 
-from experiments.dpo_bloom_speceval_v2 import tokenized_preferences, tokenized_train, tokenized_eval
+Profiler captures steps 398-403 (2 training + eval at 400 + 3 post-eval).
+Named scopes in the DPO loss function break down policy vs reference forward passes.
+"""
+
+from levanter.callbacks.profiler import ProfilerConfig
+
+from experiments.dpo_bloom_speceval_v2 import tokenized_eval, tokenized_preferences, tokenized_train
 from experiments.defaults import default_dpo
 from experiments.llama import llama_8b
 from experiments.marin_models import marin_tokenizer
@@ -29,8 +25,8 @@ dpo_config = SimpleDPOConfig(
     resources=ResourceConfig.with_tpu("v5p-32", ram="256g"),
     per_device_eval_parallelism=DPO_EVAL_PARALLELISM["v5p-32"],
     train_batch_size=128,
-    num_train_steps=850,
-    learning_rate=7.5e-7,
+    num_train_steps=450,
+    learning_rate=5e-7,
     lr_schedule="cosine",
     warmup=0.1,
     wandb_project="dpo",
@@ -44,16 +40,21 @@ dpo_config = SimpleDPOConfig(
     validation_split_fraction=None,
     steps_per_eval=200,
     steps_per_checkpoint=1000,
-    steps_per_hf_export=200,
-    seed=2,
+    steps_per_hf_export=1000,
+    seed=0,
+    profiler=ProfilerConfig(
+        enabled=True,
+        start_step=398,
+        num_steps=6,
+    ),
 )
 
 training_step = default_dpo(
-    name="dpo/new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-7_seed2",
+    name="dpo/profile_bloom_speceval_v2_eval_steady_state",
     tokenized=tokenized_preferences,
     model_config=llama_8b,
     dpo_config=dpo_config,
-    tags=["dpo", "bloom", "speceval-v2", "llama3", "marin-instruct", "beta0.1", "lr7.5e-7", "sweep"],
+    tags=["dpo", "bloom", "speceval-v2", "profiling", "eval-bottleneck", "steady-state"],
 )
 
 if __name__ == "__main__":

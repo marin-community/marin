@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,12 +21,13 @@ from experiments.dpo_bloom_speceval_v2 import tokenized_preferences, tokenized_t
 from experiments.defaults import default_dpo
 from experiments.llama import llama_8b
 from experiments.marin_models import marin_tokenizer
-from experiments.simple_dpo_config import SimpleDPOConfig
+from experiments.simple_dpo_config import DPO_EVAL_PARALLELISM, SimpleDPOConfig
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 
 dpo_config = SimpleDPOConfig(
-    resources=ResourceConfig.with_tpu("v5p-32"),
+    resources=ResourceConfig.with_tpu("v5p-32", ram="256g"),
+    per_device_eval_parallelism=DPO_EVAL_PARALLELISM["v5p-32"],
     train_batch_size=128,
     num_train_steps=850,
     learning_rate=5e-7,
@@ -45,7 +49,7 @@ dpo_config = SimpleDPOConfig(
 )
 
 training_step = default_dpo(
-    name="dpo/bloom_speceval_v2_marin_instruct_beta0.01_seed2",
+    name="dpo/new_dpo_bloom_speceval_v2_marin_instruct_beta0.01_seed2",
     tokenized=tokenized_preferences,
     model_config=llama_8b,
     dpo_config=dpo_config,

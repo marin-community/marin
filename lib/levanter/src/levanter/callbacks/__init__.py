@@ -48,39 +48,43 @@ def eval_loss_loop(
     pbar = tqdm(dataset, desc=desc, position=1, leave=False, total=max_batches)
 
     iter_ = iter(pbar)
-    while True:
-        time_in = time.time()
-        batch = next(iter_, None)
-        if batch is None:
-            break
-        load_time = time.time() - time_in
-        total_load_time += load_time
+    with jax.named_scope(desc):
+        while True:
+            time_in = time.time()
+            batch = next(iter_, None)
+            if batch is None:
+                break
+            load_time = time.time() - time_in
+            total_load_time += load_time
 
-        # loss_fn returns (loss, wrapped_metrics) where wrapped_metrics is Dict[str, Metric]
-        loss, wrapped_metrics = loss_fn(model, batch)
+            # loss_fn returns (loss, wrapped_metrics) where wrapped_metrics is Dict[str, Metric]
+            loss, wrapped_metrics = loss_fn(model, batch)
 
-        # Use fold() to accumulate Metric objects
-        for key, metric in wrapped_metrics.items():
-            if key not in accumulated_metrics:
-                accumulated_metrics[key] = metric
-            else:
-                accumulated_metrics[key] = fold_metric(accumulated_metrics[key], metric)
+            # Use fold() to accumulate Metric objects
+            for key, metric in wrapped_metrics.items():
+                if key not in accumulated_metrics:
+                    accumulated_metrics[key] = metric
+                else:
+                    accumulated_metrics[key] = fold_metric(accumulated_metrics[key], metric)
 
-        total_loss += loss.item()
-        n += 1
-        loss_time = time.time() - time_in - load_time
-        total_loss_time += loss_time
+            total_loss += loss.item()
+            n += 1
+            loss_time = time.time() - time_in - load_time
+            total_loss_time += loss_time
 
-        pbar.set_postfix(loss=total_loss / n)
+            pbar.set_postfix(loss=total_loss / n)
 
-        if max_batches is not None and n >= max_batches:
-            break
+            if max_batches is not None and n >= max_batches:
+                break
 
     if n > 0:
         total_loss /= n
 
     # Unwrap metrics before returning
     plain_metrics = unwrap_metrics(accumulated_metrics)
+    plain_metrics["timing/load_time"] = total_load_time
+    plain_metrics["timing/loss_time"] = total_loss_time
+    plain_metrics["timing/num_batches"] = float(n)
     return total_loss, plain_metrics
 
 

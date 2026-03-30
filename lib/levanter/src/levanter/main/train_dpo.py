@@ -412,11 +412,15 @@ def main(config: TrainDpoConfig):
             key_chosen = None
             key_rejected = None
 
-        logp_pi_chosen = _logp_sum(policy_model, example.chosen, key=key_chosen)
-        logp_pi_rejected = _logp_sum(policy_model, example.rejected, key=key_rejected)
+        with jax.named_scope("policy_chosen"):
+            logp_pi_chosen = _logp_sum(policy_model, example.chosen, key=key_chosen)
+        with jax.named_scope("policy_rejected"):
+            logp_pi_rejected = _logp_sum(policy_model, example.rejected, key=key_rejected)
 
-        logp_ref_chosen = jax.lax.stop_gradient(_logp_sum(reference_model, example.chosen, key=key_chosen))
-        logp_ref_rejected = jax.lax.stop_gradient(_logp_sum(reference_model, example.rejected, key=key_rejected))
+        with jax.named_scope("reference_chosen"):
+            logp_ref_chosen = jax.lax.stop_gradient(_logp_sum(reference_model, example.chosen, key=key_chosen))
+        with jax.named_scope("reference_rejected"):
+            logp_ref_rejected = jax.lax.stop_gradient(_logp_sum(reference_model, example.rejected, key=key_rejected))
 
         delta_pi = logp_pi_chosen - logp_pi_rejected
         delta_ref = logp_ref_chosen - logp_ref_rejected

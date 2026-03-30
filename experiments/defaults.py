@@ -78,6 +78,10 @@ logger = logging.getLogger(__name__)
 
 HF_BUCKET_URI_PREFIX = "hf://buckets/"
 HF_BUCKET_PATH_PREFIX = "buckets/"
+_WANDB_NAME_MAX_LENGTH = 64
+_WANDB_NAME_MIN_PREFIX_LENGTH = 24
+_WANDB_NAME_AGGRESSIVE_TRUNCATION_CHARS = 16
+_WANDB_SUFFIX_MARKERS = ("_seed", "-seed", "_step", "-step")
 
 
 def _is_hf_bucket_path(path: str) -> bool:
@@ -98,21 +102,75 @@ DEFAULT_NEW_RUN_DATA_SHUFFLE = BlockShuffleConfig(
 """Hierarchical block-shuffle default for newly constructed training runs."""
 
 
+def _preferred_wandb_suffix_start(name: str) -> int | None:
+    """Return the preferred suffix start for a truncated W&B run name.
+
+    We prefer underscore-delimited semantic tails like ``lr7.5e-7_seed2`` or
+    ``foo_step400``. This avoids splitting on the ``-`` inside scientific
+    notation, which would corrupt names like ``lr7.5e-7``.
+    """
+    for marker in _WANDB_SUFFIX_MARKERS:
+        marker_start = name.rfind(marker)
+        if marker_start == -1:
+            continue
+
+        prior_slash = name.rfind("/", 0, marker_start)
+        prior_underscore = name.rfind("_", 0, marker_start)
+        if prior_underscore > prior_slash:
+            return prior_underscore
+        return marker_start
+
+    last_underscore = name.rfind("_")
+    if last_underscore == -1:
+        return None
+
+    prior_slash = name.rfind("/", 0, last_underscore)
+    second_last_underscore = name.rfind("_", 0, last_underscore)
+    if second_last_underscore > prior_slash:
+        return second_last_underscore
+
+    return last_underscore
+
+
 def _truncate_wandb_name(name: str) -> str:
-    """Truncate a run name to fit WANDB's 64-character limit, preserving the trailing suffix."""
-    if len(name) <= 64:
+    """Truncate a run name to fit W&B's 64-character limit without mangling semantic suffixes."""
+    if len(name) <= _WANDB_NAME_MAX_LENGTH:
         return name
+
     old_name = name
-    if "-" not in name:
-        name = name[:64]
+    suffix_start = _preferred_wandb_suffix_start(name)
+
+    if suffix_start is None:
+        name = name[:_WANDB_NAME_MAX_LENGTH]
+        preserved_suffix = ""
     else:
-        prefix, suffix = name.rsplit("-", 1)
-        if len(suffix) >= 64:
-            suffix = suffix[:64]
-            name = suffix
+        suffix = name[suffix_start:]
+        preserved_suffix = suffix
+        if len(suffix) >= _WANDB_NAME_MAX_LENGTH:
+            name = name[:_WANDB_NAME_MAX_LENGTH]
+            preserved_suffix = ""
         else:
-            name = prefix[: 63 - len(suffix)] + "-" + suffix
+            prefix_budget = _WANDB_NAME_MAX_LENGTH - len(suffix)
+            prefix = name[:prefix_budget]
+
+            # Prefer trimming at a token boundary so the retained prefix stays readable.
+            boundary = max(prefix.rfind("_"), prefix.rfind("/"))
+            if boundary >= _WANDB_NAME_MIN_PREFIX_LENGTH:
+                prefix = prefix[:boundary]
+
+            name = prefix + suffix
+
     logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
+
+    removed_chars = len(old_name) - len(name)
+    retained_prefix_len = len(name) - len(preserved_suffix)
+    if removed_chars >= _WANDB_NAME_AGGRESSIVE_TRUNCATION_CHARS or retained_prefix_len < _WANDB_NAME_MIN_PREFIX_LENGTH:
+        logger.warning(
+            "W&B run name %r required aggressive truncation to %r. Consider shortening the explicit name.",
+            old_name,
+            name,
+        )
+
     return name
 
 
@@ -648,6 +706,8 @@ def default_dpo(
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                 }
             ),
+            per_device_eval_parallelism=dpo_config.per_device_eval_parallelism,
+            profiler=dpo_config.profiler,
             allow_partial_checkpoint=dpo_config.allow_partial_checkpoint,
             allow_nondivisible_batch_size=True,
             quantization=QuantizationConfig(int8=dpo_config.int8) if dpo_config.int8 else None,

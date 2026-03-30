@@ -1,10 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
+from levanter.callbacks.profiler import ProfilerConfig
 from levanter.schedule import IntSchedule
+
+# DPO runs two models (policy + reference) but eval doesn't need gradients/optimizer,
+# so we can fit more examples per device during eval than training.
+# Keyed by TPU variant string from ResourceConfig.
+DPO_EVAL_PARALLELISM: dict[str, int] = {
+    "v5p-8": 16,
+    "v5p-16": 16,
+    "v5p-32": 32,
+    "v5p-64": 32,
+    "v5p-128": 32,
+    "v5p-256": 64,
+}
 
 
 @dataclass(frozen=True)
@@ -44,8 +57,12 @@ class SimpleDPOConfig:
     steps_per_hf_export: int = 500
     hf_save_dtype: str | None = None
 
+    per_device_eval_parallelism: int = -1
+
     seed: int = 0
     initialize_from_hf: bool | None = None
+
+    profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
 
     allow_partial_checkpoint: bool = False
     int8: bool = False
