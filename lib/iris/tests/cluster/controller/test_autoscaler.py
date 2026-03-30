@@ -36,6 +36,7 @@ from tests.cluster.providers.conftest import (
 from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.types import WorkerStatus
 from iris.rpc import config_pb2, vm_pb2
+from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 
 from .conftest import (
@@ -681,7 +682,7 @@ class TestAutoscalerQuotaHandling:
             scale_group_config, platform, scale_up_cooldown=Duration.from_ms(0), quota_timeout=Duration.from_ms(60_000)
         )
         config = config_pb2.AutoscalerConfig()
-        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
+        config.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.001)))
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -708,7 +709,7 @@ class TestAutoscalerQuotaHandling:
         )
         group_fallback = ScalingGroup(config_fallback, platform_fallback, scale_up_cooldown=Duration.from_ms(0))
         config = config_pb2.AutoscalerConfig()
-        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
+        config.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.001)))
         autoscaler = make_autoscaler({"primary": group_primary, "fallback": group_fallback}, config=config)
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -756,7 +757,7 @@ class TestAutoscalerQuotaHandling:
             backoff_initial=backoff,
         )
         config = config_pb2.AutoscalerConfig()
-        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
+        config.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.001)))
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")

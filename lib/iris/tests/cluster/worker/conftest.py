@@ -15,6 +15,7 @@ from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import cluster_pb2
+from iris.time_proto import duration_to_proto
 from rigging.timing import Duration
 
 
@@ -189,5 +190,5 @@ def create_run_task_request(
         resources=resources,
         ports=ports or [],
     )
-    request.timeout.CopyFrom(Duration.from_seconds(300).to_proto())
+    request.timeout.CopyFrom(duration_to_proto(Duration.from_seconds(300)))
     return request

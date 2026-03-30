@@ -23,6 +23,7 @@ from iris.cluster.controller.transitions import Assignment, ControllerTransition
 from iris.cluster.types import JobName, WorkerId
 from iris.cluster.controller.pending_diagnostics import PendingHint, build_job_pending_hints
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
+from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 
 from tests.cluster.conftest import eq_constraint, in_constraint
@@ -265,7 +266,7 @@ def test_scheduler_detects_timed_out_tasks(state):
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    request.scheduling_timeout.CopyFrom(Duration.from_seconds(1).to_proto())
+    request.scheduling_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(1)))
     tasks = submit_job(state, "j1", request)
 
     # Manually set deadline epoch to past timestamp in DB.

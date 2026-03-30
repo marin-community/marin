@@ -26,6 +26,7 @@ from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.constraints import WellKnownAttribute
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, ExponentialBackoff
 
 
@@ -467,13 +468,12 @@ class TestSshConfigMerging:
 
     def test_uses_cluster_default_ssh_config(self):
         """get_ssh_config returns cluster defaults when no group override."""
-        from rigging.timing import Duration
 
         ssh_config_proto = config_pb2.SshConfig(
             user="ubuntu",
             key_file="~/.ssh/cluster_key",
         )
-        ssh_config_proto.connect_timeout.CopyFrom(Duration.from_seconds(60).to_proto())
+        ssh_config_proto.connect_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(60)))
 
         config = config_pb2.IrisClusterConfig()
         config.defaults.ssh.CopyFrom(ssh_config_proto)
@@ -508,12 +508,11 @@ class TestSshConfigMerging:
 
     def test_partial_per_group_overrides_merge_with_defaults(self):
         """Per-group overrides merge with cluster defaults for unset fields."""
-        from rigging.timing import Duration
 
         config = config_pb2.IrisClusterConfig()
         config.defaults.ssh.user = "ubuntu"
         config.defaults.ssh.key_file = "~/.ssh/cluster_key"
-        config.defaults.ssh.connect_timeout.CopyFrom(Duration.from_seconds(30).to_proto())
+        config.defaults.ssh.connect_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(30)))
 
         manual_config = config_pb2.ScaleGroupConfig(
             name="manual_group",
