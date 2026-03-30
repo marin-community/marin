@@ -12,7 +12,7 @@ from typing import Protocol
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import logging_pb2
 
-PROCESS_LOG_KEY = "/system/process"
+CONTROLLER_LOG_KEY = "/system/controller"
 
 # Characters that indicate a regex pattern (vs. a literal key).
 REGEX_META_RE = re.compile(r"[.*+?\[\](){}^$|\\]")

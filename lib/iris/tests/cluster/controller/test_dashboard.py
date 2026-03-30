@@ -15,6 +15,7 @@ from starlette.testclient import TestClient
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.db import (
     healthy_active_workers_with_attributes,
 )
@@ -164,7 +165,7 @@ def service(state, scheduler, tmp_path):
 
 @pytest.fixture
 def client(service):
-    dashboard = ControllerDashboard(service)
+    dashboard = ControllerDashboard(service, log_service=LogServiceImpl(service._log_store))
     return TestClient(dashboard.app)
 
 
@@ -548,7 +549,9 @@ def mock_autoscaler():
 @pytest.fixture
 def client_with_autoscaler(service_with_autoscaler):
     """Dashboard test client with autoscaler enabled."""
-    dashboard = ControllerDashboard(service_with_autoscaler)
+    dashboard = ControllerDashboard(
+        service_with_autoscaler, log_service=LogServiceImpl(service_with_autoscaler._log_store)
+    )
     return TestClient(dashboard.app)
 
 
@@ -948,7 +951,9 @@ def test_auth_config_returns_enabled_when_verifier_set(service):
     from iris.rpc.auth import StaticTokenVerifier
 
     verifier = StaticTokenVerifier({"test-token": "test-user"})
-    dashboard = ControllerDashboard(service, auth_verifier=verifier, auth_provider="gcp")
+    dashboard = ControllerDashboard(
+        service, log_service=LogServiceImpl(service._log_store), auth_verifier=verifier, auth_provider="gcp"
+    )
     authed_client = TestClient(dashboard.app)
 
     resp = authed_client.get("/auth/config")
@@ -977,7 +982,7 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
     )
-    dashboard = ControllerDashboard(svc)
+    dashboard = ControllerDashboard(svc, log_service=LogServiceImpl(svc._log_store))
     k8s_client = TestClient(dashboard.app)
 
     resp = k8s_client.get("/auth/config")

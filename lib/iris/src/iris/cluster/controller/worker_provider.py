@@ -17,9 +17,8 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
-from iris.cluster.types import JobName, TaskAttempt, WorkerId
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.cluster.types import JobName, WorkerId
+from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from rigging.timing import Duration
 
@@ -85,7 +84,6 @@ def _apply_request_from_response(
                 error=entry.error or None,
                 exit_code=entry.exit_code if entry.HasField("exit_code") else None,
                 resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
-                log_entries=list(entry.log_entries),
                 container_id=entry.container_id or None,
             )
         )
@@ -161,50 +159,6 @@ class WorkerProvider:
             raise ProviderError(f"worker {batch.worker_id} reported unhealthy: {health_error}")
 
         return _apply_request_from_response(batch.worker_id, response)
-
-    def fetch_live_logs(
-        self,
-        worker_id: WorkerId,
-        address: str | None,
-        task_id: str,
-        attempt_id: int,
-        cursor: int,
-        max_lines: int,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        if not address:
-            raise ProviderError(f"Worker {worker_id} has no address")
-        stub = self.stub_factory.get_stub(address)
-        resp = stub.fetch_logs(
-            cluster_pb2.FetchLogsRequest(
-                source=task_log_key(TaskAttempt(task_id=JobName.from_wire(task_id), attempt_id=attempt_id)),
-                cursor=cursor,
-                max_lines=max_lines,
-            ),
-            timeout_ms=10000,
-        )
-        return list(resp.entries), resp.cursor
-
-    def fetch_process_logs(
-        self,
-        worker_id: WorkerId,
-        address: str | None,
-        request: cluster_pb2.FetchLogsRequest,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        if not address:
-            raise ProviderError(f"Worker {worker_id} has no address")
-        stub = self.stub_factory.get_stub(address)
-        # Forward the full request but override source to the worker's process log key.
-        forwarded = cluster_pb2.FetchLogsRequest(
-            source=PROCESS_LOG_KEY,
-            cursor=request.cursor,
-            max_lines=request.max_lines,
-            since_ms=request.since_ms,
-            substring=request.substring,
-            tail=request.tail,
-            min_level=request.min_level,
-        )
-        resp = stub.fetch_logs(forwarded, timeout_ms=10000)
-        return list(resp.entries), resp.cursor
 
     def get_process_status(
         self,

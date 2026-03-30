@@ -94,7 +94,8 @@ from iris.cluster.controller.transitions import (
     ReservationClaim,
     SchedulingEvent,
 )
-from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
+from iris.cluster.log_store import CONTROLLER_LOG_KEY, LogStore, LogStoreHandler
+from iris.log_server.server import LogServiceImpl
 from iris.cluster.types import (
     JobName,
     WorkerStatus,
@@ -1016,7 +1017,13 @@ class Controller:
         )
         self._scheduler = Scheduler()
 
+        # Inject LogStore into K8s provider so it can push logs directly
+        if isinstance(provider, K8sTaskProvider):
+            provider.log_store = self._log_store
+
         self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
+
+        self._log_service = LogServiceImpl(self._log_store)
 
         self._service = ControllerServiceImpl(
             self._transitions,
@@ -1028,6 +1035,7 @@ class Controller:
         )
         self._dashboard = ControllerDashboard(
             self._service,
+            log_service=self._log_service,
             host=config.host,
             port=config.port,
             auth_verifier=config.auth_verifier,
@@ -1035,8 +1043,9 @@ class Controller:
             auth_optional=config.auth.optional if config.auth else False,
         )
 
-        # Ingest process logs into the LogStore so they are available via FetchLogs.
-        self._log_store_handler = LogStoreHandler(self._log_store, key=PROCESS_LOG_KEY)
+        # Ingest controller process logs into the LogStore via LogStoreHandler.
+        # This writes directly to the co-hosted LogStore (no RPC round-trip).
+        self._log_store_handler = LogStoreHandler(self._log_store, key=CONTROLLER_LOG_KEY)
         self._log_store_handler.setLevel(logging.DEBUG)
         self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_store_handler)

@@ -232,51 +232,6 @@ def test_sync_empty_batch(provider):
 
 
 # ---------------------------------------------------------------------------
-# fetch_live_logs
-# ---------------------------------------------------------------------------
-
-
-def test_fetch_live_logs_returns_entries_with_cursor(provider, k8s):
-    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
-    k8s.set_logs(pod_name, "line 1\nline 2\n")
-
-    entries, next_cursor = provider.fetch_live_logs("/job/0", 0, cursor=0, max_lines=10)
-
-    assert len(entries) == 2
-    assert entries[0].data == "line 1"
-    assert next_cursor > 0
-
-
-def test_fetch_live_logs_respects_max_lines(provider, k8s):
-    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
-    k8s.set_logs(pod_name, "\n".join(f"line {i}" for i in range(10)) + "\n")
-
-    entries, _ = provider.fetch_live_logs("/job/0", 0, cursor=0, max_lines=3)
-    assert len(entries) == 3
-
-
-def test_fetch_live_logs_falls_back_to_previous_when_empty(provider, k8s):
-    """When stream_logs returns nothing, fall back to kubectl.logs(previous=True)."""
-    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
-    k8s.set_logs(pod_name, "line a\nline b\nline c\n")
-
-    entries, _next_cursor = provider.fetch_live_logs("/job/0", 0, cursor=0, max_lines=10)
-    assert len(entries) >= 1
-    assert any(e.data == "line a" for e in entries)
-
-
-def test_fetch_live_logs_fallback_replays_all_with_nonzero_cursor(provider, k8s):
-    """When stream_logs returns nothing (all consumed), fall back to logs(previous=True)."""
-    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
-    k8s.set_logs(pod_name, "line a\nline b\nline c\n")
-
-    # First call consumes all content; second triggers fallback
-    _, cursor = provider.fetch_live_logs("/job/0", 0, cursor=0, max_lines=100)
-    entries, _ = provider.fetch_live_logs("/job/0", 0, cursor=cursor, max_lines=100)
-    assert [e.data for e in entries] == ["line a", "line b", "line c"]
-
-
-# ---------------------------------------------------------------------------
 # Incremental log polling
 # ---------------------------------------------------------------------------
 

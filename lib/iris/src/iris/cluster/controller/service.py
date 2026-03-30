@@ -86,7 +86,7 @@ from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.log_store import LogStore, build_log_source
+from iris.cluster.log_store import CONTROLLER_LOG_KEY, LogStore, build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, WorkerId, get_gpu_count, get_tpu_count
@@ -1624,27 +1624,9 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.FetchLogsResponse:
         """Fetch logs by source key with filtering and pagination.
 
-        Source routing:
-        - /system/process, /job/...: served from the controller's own LogStore
-        - /system/worker/<worker_id>: proxied to the worker's FetchLogs(/system/process)
+        All logs (controller, worker, task) are served from the central LogStore
+        which receives pushes from the co-hosted LogService.
         """
-        worker_id = _parse_worker_target(request.source)
-        if worker_id is not None:
-            if self._controller.has_direct_provider:
-                raise ConnectError(Code.UNIMPLEMENTED, "Direct provider: use task log source instead")
-            worker = self._transitions.get_worker(WorkerId(worker_id))
-            if not worker:
-                raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
-            if not worker.healthy:
-                raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
-            try:
-                entries, next_cursor = self._controller.provider.fetch_process_logs(
-                    WorkerId(worker_id), worker.address, request
-                )
-            except ProviderError as exc:
-                raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
-            return cluster_pb2.FetchLogsResponse(entries=entries, cursor=next_cursor)
-
         max_lines = request.max_lines if request.max_lines > 0 else 1000
         result = self._log_store.get_logs(
             request.source,
@@ -1691,18 +1673,17 @@ class ControllerServiceImpl:
             status_message=worker_status_message(worker),
         )
 
-        # Fetch worker daemon logs via the provider if worker is healthy
+        # Fetch worker daemon logs from the central LogStore
         worker_log_entries: list[logging_pb2.LogEntry] = []
-        if worker.healthy:
-            try:
-                entries, _ = self._controller.provider.fetch_process_logs(
-                    worker.worker_id,
-                    worker.address,
-                    cluster_pb2.FetchLogsRequest(source="/system/process", max_lines=200, tail=True),
-                )
-                worker_log_entries = entries
-            except Exception:
-                logger.debug("Failed to fetch worker logs for %s", request.id, exc_info=True)
+        try:
+            result = self._log_store.get_logs(
+                f"/system/worker/{worker.worker_id}",
+                max_lines=200,
+                tail=True,
+            )
+            worker_log_entries = list(result.entries)
+        except Exception:
+            logger.debug("Failed to fetch worker logs for %s", request.id, exc_info=True)
 
         # Collect recent task history for this worker
         tasks = _tasks_for_worker(self._db, worker.worker_id, limit=50)
@@ -1742,13 +1723,13 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.GetProcessStatusResponse:
         """Return process info and recent logs.
 
-        Target routing (same convention as ProfileTask/FetchLogs):
+        Target routing (same convention as ProfileTask):
         - empty or /system/process: the controller process itself
-        - /system/worker/<worker_id>: proxy to a specific worker
+        - /system/worker/<worker_id>: proxy to a specific worker (process info only)
         """
         target = request.target
         if not target or target == "/system/process":
-            return get_process_status(request, self._log_store, self._timer)
+            return get_process_status(request, self._log_store, self._timer, log_key=CONTROLLER_LOG_KEY)
 
         # Parse /system/worker/<worker_id>
         worker_id = _parse_worker_target(target)

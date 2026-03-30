@@ -826,43 +826,6 @@ class K8sTaskProvider:
         scheduling_events = self._fetch_scheduling_events(managed_pods)
         return DirectProviderSyncResult(updates=updates, scheduling_events=scheduling_events, capacity=capacity)
 
-    def fetch_live_logs(
-        self,
-        task_id: str,
-        attempt_id: int,
-        cursor: int,
-        max_lines: int,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        """Fetch live logs from a task pod.
-
-        Cursor semantics: cursor is epoch-microseconds encoding the last seen
-        timestamp. 0 means "from the beginning".
-        """
-        since_time = datetime.fromtimestamp(cursor / 1_000_000, tz=UTC) if cursor > 0 else None
-        pod_name = _pod_name(JobName.from_wire(task_id), attempt_id)
-        result = self.kubectl.stream_logs(pod_name, container="task", since_time=since_time)
-        entries = [_kubectl_log_line_to_log_entry(kll, attempt_id) for kll in result.lines]
-
-        if not entries:
-            # Pod may have terminated; try fetching the complete logs.
-            raw = self.kubectl.logs(pod_name, container="task", previous=True, tail=-1)
-            if raw:
-                lines = raw.splitlines()
-                sliced = lines[:max_lines] if max_lines > 0 else lines
-                now_ts = Timestamp.now()
-                fallback_entries: list[logging_pb2.LogEntry] = []
-                for line in sliced:
-                    entry = logging_pb2.LogEntry(source="stdout", data=line, attempt_id=attempt_id)
-                    entry.timestamp.CopyFrom(timestamp_to_proto(now_ts))
-                    fallback_entries.append(entry)
-                return fallback_entries, now_ts.epoch_ms() * 1_000
-
-        if max_lines > 0:
-            entries = entries[:max_lines]
-
-        next_cursor = int(result.last_timestamp.timestamp() * 1_000_000) if result.last_timestamp else cursor
-        return entries, next_cursor
-
     def profile_task(
         self,
         task_id: str,
@@ -1306,6 +1269,11 @@ class K8sTaskProvider:
 
             if phase in ("Succeeded", "Failed"):
                 self._untrack_pod(entry.task_id, entry.attempt_id)
+
+            # Push logs directly to the LogStore (K8s provider is co-hosted with controller)
+            if log_entries and self.log_store is not None:
+                log_key = task_log_key(TaskAttempt(task_id=entry.task_id, attempt_id=entry.attempt_id))
+                self.log_store.append(log_key, log_entries)
 
             updates.append(
                 TaskUpdate(

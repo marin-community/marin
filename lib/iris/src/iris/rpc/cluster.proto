@@ -142,9 +142,10 @@ message ProfileTaskResponse {
   string error = 2;             // Non-empty if profiling failed
 }
 
-// Unified log fetching request, shared by controller and worker services.
+// Unified log fetching request. All logs are served from the central LogStore.
 // The source key identifies the log stream and supports regex patterns:
-//   /system/process                - exact: local process logs (controller or worker)
+//   /system/controller             - exact: controller process logs
+//   /system/worker/<worker_id>     - exact: worker process logs
 //   /user/job/.*                   - pattern: all task logs under a job
 //   /user/job/0:.*                 - pattern: all attempts of a single task
 //   /user/job/0:3                  - exact: specific task attempt
@@ -763,8 +764,8 @@ message Controller {
     iris.time.Timestamp finished_at = 6;
     // field 7 was log_directory, removed
     ResourceUsage resource_usage = 8;
-    // Delta log entries since last heartbeat (capped per heartbeat)
-    repeated iris.logging.LogEntry log_entries = 9;
+    // field 9 was log_entries, moved to push-based LogService
+    reserved 9;
     string container_id = 10;         // Platform container identifier (Docker container ID, K8s pod name)
   }
 
@@ -1273,7 +1274,6 @@ service WorkerService {
   rpc GetTaskStatus(Worker.GetTaskStatusRequest) returns (TaskStatus);
   rpc ListTasks(Worker.ListTasksRequest) returns (Worker.ListTasksResponse);
   rpc HealthCheck(Empty) returns (Worker.HealthResponse);
-  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
 

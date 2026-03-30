@@ -54,7 +54,7 @@ const taskLogState = props.taskId
 
 const processLogState = !props.taskId
   ? useRpc<FetchLogsResponse>('FetchLogs', () => ({
-      source: props.workerId ? `/worker/${props.workerId}` : '/system/process',
+      source: props.workerId ? `/system/worker/${props.workerId}` : '/system/controller',
       maxLines: tailLines.value || undefined,
       tail: true,
     }))

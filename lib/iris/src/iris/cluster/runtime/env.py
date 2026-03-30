@@ -77,6 +77,8 @@ def build_common_iris_env(
     if controller_address:
         env["IRIS_CONTROLLER_ADDRESS"] = controller_address
         env["IRIS_CONTROLLER_URL"] = controller_address
+        # LogService is co-hosted on the controller for now
+        env["IRIS_LOGGING_SERVER"] = controller_address
 
     # Standard paths and binaries
     env["IRIS_BIND_HOST"] = "0.0.0.0"

@@ -15,7 +15,7 @@ import humanfriendly
 from iris.cli.main import require_controller_url, rpc_client
 from iris.rpc import cluster_pb2
 
-_CONTROLLER_TARGET = "/system/process"
+_CONTROLLER_LOG_TARGET = "/system/controller"
 
 
 def _print_status(resp: cluster_pb2.GetProcessStatusResponse, label: str) -> None:
@@ -81,7 +81,7 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
     from datetime import datetime, timezone
 
     url = require_controller_url(ctx)
-    source = target or _CONTROLLER_TARGET
+    source = target or _CONTROLLER_LOG_TARGET
 
     with rpc_client(url) as client:
         cursor = 0
@@ -139,7 +139,7 @@ def profile(
     /system/worker/<id> for a worker, /alice/job/0 for a task container.
     """
     url = require_controller_url(ctx)
-    rpc_target = target or _CONTROLLER_TARGET
+    rpc_target = target or _CONTROLLER_LOG_TARGET
     label = target or "Controller"
 
     if profiler == "threads":

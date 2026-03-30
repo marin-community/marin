@@ -10,6 +10,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from iris.cluster.bundle import BundleStore
+from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.auth import (
     JwtTokenManager,
     _get_or_create_signing_key,
@@ -73,13 +74,15 @@ def verifier():
 
 @pytest.fixture
 def authed_client(service, verifier):
-    dashboard = ControllerDashboard(service, auth_verifier=verifier, auth_provider="gcp")
+    dashboard = ControllerDashboard(
+        service, log_service=LogServiceImpl(service._log_store), auth_verifier=verifier, auth_provider="gcp"
+    )
     return TestClient(dashboard.app)
 
 
 @pytest.fixture
 def noauth_client(service):
-    dashboard = ControllerDashboard(service)
+    dashboard = ControllerDashboard(service, log_service=LogServiceImpl(service._log_store))
     return TestClient(dashboard.app)
 
 
@@ -331,7 +334,13 @@ def test_revoke_login_keys(db: ControllerDB):
 @pytest.fixture
 def optional_auth_client(service, verifier):
     """Dashboard with auth configured but optional — tokens verified if present, anonymous fallback."""
-    dashboard = ControllerDashboard(service, auth_verifier=verifier, auth_provider="static", auth_optional=True)
+    dashboard = ControllerDashboard(
+        service,
+        log_service=LogServiceImpl(service._log_store),
+        auth_verifier=verifier,
+        auth_provider="static",
+        auth_optional=True,
+    )
     return TestClient(dashboard.app)
 
 
@@ -458,6 +467,7 @@ def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optio
 
     dashboard = ControllerDashboard(
         service,
+        log_service=LogServiceImpl(service._log_store),
         auth_verifier=verifier,
         auth_provider="static",
         auth_optional=optional,

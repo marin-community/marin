@@ -1357,9 +1357,12 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
 # =============================================================================
 
 
-def test_log_entries_accumulated_in_log_store(state):
-    """Log entries from heartbeat are stored in the controller's log store."""
+def test_log_store_direct_push(state):
+    """Log entries pushed directly to the LogStore are queryable."""
     from iris.rpc import logging_pb2
+
+    from iris.cluster.log_store import task_log_key
+    from iris.cluster.types import TaskAttempt
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -1367,38 +1370,25 @@ def test_log_entries_accumulated_in_log_store(state):
     task = tasks[0]
     dispatch_task(state, task, worker_id)
 
-    snapshot = state.begin_heartbeat(worker_id)
-    assert snapshot is not None
+    attempt_id = _query_task(state, task.task_id).current_attempt_id
+    log_key = task_log_key(TaskAttempt(task_id=task.task_id, attempt_id=attempt_id))
 
+    # Simulate push-based log delivery (worker pushes to LogStore via LogService)
     log_entry = logging_pb2.LogEntry(source="stdout", data="hello world")
     log_entry.timestamp.epoch_ms = 1000
+    state._log_store.append(log_key, [log_entry])
 
-    response = cluster_pb2.HeartbeatResponse(
-        worker_healthy=True,
-        tasks=[
-            cluster_pb2.Controller.WorkerTaskStatus(
-                task_id=task.task_id.to_wire(),
-                attempt_id=_query_task(state, task.task_id).current_attempt_id,
-                state=cluster_pb2.TASK_STATE_RUNNING,
-                log_entries=[log_entry],
-            )
-        ],
-    )
-    state.complete_heartbeat(snapshot, response)
-
-    from iris.cluster.log_store import task_log_key
-    from iris.cluster.types import TaskAttempt
-
-    log_result = state._log_store.get_logs(
-        task_log_key(TaskAttempt(task_id=task.task_id, attempt_id=_query_task(state, task.task_id).current_attempt_id))
-    )
+    log_result = state._log_store.get_logs(log_key)
     assert len(log_result.entries) == 1
     assert log_result.entries[0].data == "hello world"
 
 
-def test_log_entries_accumulated_across_heartbeats(state):
-    """Multiple heartbeats accumulate logs in the store."""
+def test_log_store_accumulates_pushes(state):
+    """Multiple pushes accumulate logs in the store."""
     from iris.rpc import logging_pb2
+
+    from iris.cluster.log_store import task_log_key
+    from iris.cluster.types import TaskAttempt
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -1406,30 +1396,15 @@ def test_log_entries_accumulated_across_heartbeats(state):
     task = tasks[0]
     dispatch_task(state, task, worker_id)
 
+    attempt_id = _query_task(state, task.task_id).current_attempt_id
+    log_key = task_log_key(TaskAttempt(task_id=task.task_id, attempt_id=attempt_id))
+
     for i in range(3):
-        snapshot = state.begin_heartbeat(worker_id)
-        assert snapshot is not None
         entry = logging_pb2.LogEntry(source="stdout", data=f"line {i}")
         entry.timestamp.epoch_ms = 1000 + i
-        response = cluster_pb2.HeartbeatResponse(
-            worker_healthy=True,
-            tasks=[
-                cluster_pb2.Controller.WorkerTaskStatus(
-                    task_id=task.task_id.to_wire(),
-                    attempt_id=_query_task(state, task.task_id).current_attempt_id,
-                    state=cluster_pb2.TASK_STATE_RUNNING,
-                    log_entries=[entry],
-                )
-            ],
-        )
-        state.complete_heartbeat(snapshot, response)
+        state._log_store.append(log_key, [entry])
 
-    from iris.cluster.log_store import task_log_key
-    from iris.cluster.types import TaskAttempt
-
-    log_result = state._log_store.get_logs(
-        task_log_key(TaskAttempt(task_id=task.task_id, attempt_id=_query_task(state, task.task_id).current_attempt_id))
-    )
+    log_result = state._log_store.get_logs(log_key)
     assert len(log_result.entries) == 3
     assert [e.data for e in log_result.entries] == ["line 0", "line 1", "line 2"]
 

@@ -36,7 +36,8 @@ from iris.cluster.types import (
 )
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.log_store import LogCursor, LogStore, task_log_key
+from iris.cluster.log_store._types import task_log_key
+from iris.log_server.client import LogPusher
 from iris.logging import str_to_log_level
 from rigging.log_setup import parse_log_level
 from iris.rpc import cluster_pb2, logging_pb2
@@ -194,7 +195,7 @@ class TaskAttempt:
         default_task_image: str | None,
         resolve_image: Callable[[str], str] | None,
         port_allocator: PortAllocator,
-        log_store: LogStore,
+        log_pusher: LogPusher | None,
         poll_interval_seconds: float = 5.0,
         *,
         container_handle: ContainerHandle | None = None,
@@ -222,7 +223,7 @@ class TaskAttempt:
             default_task_image: Fully-qualified task container image from cluster config
             resolve_image: Resolves image tags for the current platform (None for adopted tasks)
             port_allocator: Port allocator for releasing ports on cleanup
-            log_store: Shared LogStore for appending and querying task logs
+            log_pusher: Pushes log entries to the central LogService.
             poll_interval_seconds: How often to poll container status
             container_handle: Pre-existing container handle for adopted tasks
             initial_status: Starting status (default PENDING, use RUNNING for adopted tasks)
@@ -237,7 +238,7 @@ class TaskAttempt:
         self._resolve_image_fn = resolve_image or (lambda x: x)
         self._port_allocator = port_allocator
         self._poll_interval_seconds = poll_interval_seconds
-        self._log_store = log_store
+        self._log_pusher = log_pusher
         self._log_key = task_log_key(config.task_attempt)
 
         # Task identity (from config)
@@ -276,7 +277,6 @@ class TaskAttempt:
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
-        self._heartbeat_cursor: LogCursor = log_store.cursor(self._log_key)
 
     @classmethod
     def adopt(
@@ -379,32 +379,6 @@ class TaskAttempt:
         if self._container_handle:
             return self._container_handle.container_id
         return None
-
-    def recent_logs(self, max_entries: int = 0) -> list[logging_pb2.LogEntry]:
-        """Return recent logs for this task attempt."""
-        return self._log_store.get_logs(self._log_key, tail=True, max_lines=max_entries or 1000).entries
-
-    def drain_heartbeat_logs(self, max_entries: int = 5000, final: bool = False) -> list[logging_pb2.LogEntry]:
-        """Return log entries appended since the last call, for delta forwarding.
-
-        Args:
-            max_entries: Maximum number of entries to return per call.
-            final: When True (terminal heartbeat), reads all pending entries and
-                truncates locally to *max_entries* with a marker.  When False
-                (normal heartbeat), uses the bounded cursor so undelivered rows
-                remain available for subsequent heartbeats.
-        """
-        if final:
-            entries = self._heartbeat_cursor.read(max_entries=0)
-            if len(entries) > max_entries:
-                marker = logging_pb2.LogEntry(
-                    source="iris",
-                    data=f"<logs truncated — {len(entries) - max_entries} earlier entries exceeded heartbeat log quota>",
-                )
-                marker.timestamp.epoch_ms = entries[-max_entries].timestamp.epoch_ms
-                entries = [marker, *entries[-max_entries:]]
-            return entries
-        return self._heartbeat_cursor.read(max_entries=max_entries)
 
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""
@@ -883,12 +857,17 @@ class TaskAttempt:
             time.sleep(self._poll_interval_seconds)
 
     def _append_log(self, *, source: str, data: str) -> None:
-        """Append a single log entry to the log store, parsing the level prefix if present."""
+        """Append a single log entry, pushing to the central LogService."""
+        if not self._log_pusher:
+            return
         level_name = parse_log_level(data)
         level = str_to_log_level(level_name) if level_name else 0
         entry = logging_pb2.LogEntry(source=source, data=data, level=level)
         entry.timestamp.epoch_ms = Timestamp.now().epoch_ms()
-        self._log_store.append(self._log_key, [entry])
+        try:
+            self._log_pusher.push(self._log_key, [entry])
+        except Exception:
+            logger.debug("Failed to push log for task %s", self.task_id, exc_info=True)
 
     def _stream_logs(self, reader: RuntimeLogReader) -> None:
         """Fetch new logs from container and append to log store."""

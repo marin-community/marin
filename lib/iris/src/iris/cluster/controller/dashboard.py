@@ -40,9 +40,11 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from iris.cluster.controller.actor_proxy import PROXY_ROUTE, ActorProxy
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, on_shutdown, static_files_mount
+from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
+from iris.rpc.logging_connect import LogServiceWSGIApplication
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +230,7 @@ class ControllerDashboard:
     def __init__(
         self,
         service: ControllerServiceImpl,
+        log_service: LogServiceImpl,
         host: str = "0.0.0.0",
         port: int = 8080,
         auth_verifier: TokenVerifier | None = None,
@@ -235,6 +238,7 @@ class ControllerDashboard:
         auth_optional: bool = False,
     ):
         self._service = service
+        self._log_service = log_service
         self._host = host
         self._port = port
         self._auth_verifier = auth_verifier
@@ -261,6 +265,9 @@ class ControllerDashboard:
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
+        log_wsgi_app = LogServiceWSGIApplication(service=self._log_service, interceptors=interceptors)
+        log_app = WSGIMiddleware(log_wsgi_app)
+
         self._actor_proxy = ActorProxy(self._service._db)
 
         @requires_auth
@@ -279,6 +286,7 @@ class ControllerDashboard:
             Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
             Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
+            Mount(log_wsgi_app.path, app=log_app),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
         ]

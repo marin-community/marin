@@ -13,7 +13,7 @@ import resource
 import sys
 import threading
 
-from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore
+from iris.cluster.log_store import LogStore
 from iris.cluster.runtime.process import _read_proc_cpu_percent
 from iris.rpc import cluster_pb2
 from rigging.timing import Timer
@@ -94,19 +94,21 @@ def get_process_status(
     request: cluster_pb2.GetProcessStatusRequest,
     log_store: LogStore | None,
     timer: Timer,
+    log_key: str = "",
 ) -> cluster_pb2.GetProcessStatusResponse:
     """Build a GetProcessStatusResponse with local process info and recent logs.
 
     This is the shared implementation used by both controller and worker services.
+    The caller must provide the log_key for the process (e.g. /system/controller).
     """
     process_info = collect_process_info(timer)
 
     # Fetch recent process logs
     log_entries = []
-    if log_store:
+    if log_store and log_key:
         max_lines = request.max_log_lines if request.max_log_lines > 0 else 200
         result = log_store.get_logs(
-            PROCESS_LOG_KEY,
+            log_key,
             substring_filter=request.log_substring or "",
             max_lines=max_lines,
             tail=True,
