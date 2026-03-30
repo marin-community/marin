@@ -57,7 +57,6 @@ from iris.cluster.controller.db import (
     decode_rows,
     endpoint_query_sql,
     running_tasks_by_worker,
-    tasks_for_job_with_attempts,
 )
 from iris.cluster.controller.pending_diagnostics import PendingHint, build_job_pending_hints
 from iris.cluster.controller.query import execute_raw_query
@@ -265,6 +264,20 @@ def _read_worker(db: ControllerDB, worker_id: WorkerId) -> Worker | None:
         return decode_one(Worker, q.fetchall("SELECT * FROM workers w WHERE w.worker_id = ?", (str(worker_id),)))
 
 
+def _job_state(db: ControllerDB, job_id: JobName) -> int | None:
+    """Fetch only the state column for a job, avoiding proto decode."""
+    with db.read_snapshot() as q:
+        row = q.fetchone("SELECT state FROM jobs WHERE job_id = ?", (job_id.to_wire(),))
+        return int(row[0]) if row else None
+
+
+def _worker_address(db: ControllerDB, worker_id: WorkerId) -> str | None:
+    """Fetch only the address column for a worker, avoiding proto decode."""
+    with db.read_snapshot() as q:
+        row = q.fetchone("SELECT address FROM workers WHERE worker_id = ?", (str(worker_id),))
+        return str(row[0]) if row else None
+
+
 @dataclass(frozen=True)
 class _WorkerDetail:
     worker: Worker
@@ -300,15 +313,14 @@ def _read_worker_detail(
     )
 
 
-def _child_jobs(db: ControllerDB, job_id: JobName) -> list[Job]:
+def _child_job_ids(db: ControllerDB, job_id: JobName) -> list[JobName]:
     with db.read_snapshot() as q:
-        return decode_rows(
-            Job,
-            q.fetchall(
-                "SELECT * FROM jobs j WHERE j.parent_job_id = ? ORDER BY j.submitted_at_ms ASC, j.job_id ASC",
-                (job_id.to_wire(),),
-            ),
+        rows = q.raw(
+            "SELECT job_id FROM jobs WHERE parent_job_id = ? ORDER BY submitted_at_ms ASC, job_id ASC",
+            (job_id.to_wire(),),
+            decoders={"job_id": JobName.from_wire},
         )
+    return [row.job_id for row in rows]
 
 
 def _tasks_for_listing(db: ControllerDB, *, job_id: JobName | None = None) -> list[Task]:
@@ -440,8 +452,14 @@ def _jobs_paginated(
         select_params.extend([limit, offset])
 
     with db.read_snapshot() as q:
-        total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
         rows = q.execute_sql(select_sql, tuple(select_params)).fetchall()
+        # Skip the COUNT query when we can infer the total from the result set:
+        # if this is the first page and we got fewer rows than the limit,
+        # we know we have all the results.
+        if offset == 0 and limit > 0 and len(rows) < limit:
+            total = len(rows)
+        else:
+            total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
 
     jobs = decode_rows(Job, rows)
     return jobs, total
@@ -752,12 +770,12 @@ class ControllerServiceImpl:
 
         # Reject submissions if the parent job has already terminated
         if job_id.parent:
-            parent_job = _read_job(self._db, job_id.parent)
-            if parent_job and parent_job.is_finished():
+            parent_state = _job_state(self._db, job_id.parent)
+            if parent_state is not None and parent_state in TERMINAL_JOB_STATES:
                 raise ConnectError(
                     Code.FAILED_PRECONDITION,
                     f"Cannot submit job: parent job {job_id.parent} has terminated "
-                    f"(state={cluster_pb2.JobState.Name(parent_job.state)})",
+                    f"(state={cluster_pb2.JobState.Name(parent_state)})",
                 )
 
         existing_job = _read_job(self._db, job_id)
@@ -833,7 +851,8 @@ class ControllerServiceImpl:
         self._transitions.submit_job(job_id, request, Timestamp.now())
         self._controller.wake()
 
-        num_tasks = len(tasks_for_job_with_attempts(self._db, job_id))
+        with self._db.read_snapshot() as q:
+            num_tasks = q.execute_sql("SELECT COUNT(*) FROM tasks WHERE job_id = ?", (job_id.to_wire(),)).fetchone()[0]
         logger.info(f"Job {job_id} submitted with {num_tasks} task(s)")
         return cluster_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
 
@@ -934,33 +953,17 @@ class ControllerServiceImpl:
         terminated before the parent. All tasks within each job are killed.
         """
         job_id = JobName.from_wire(request.job_id)
-        job = _read_job(self._db, job_id)
-        if not job:
+        state = _job_state(self._db, job_id)
+        if state is None:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
         self._authorize_job_owner(job_id)
-        self._terminate_job_tree(job_id)
-        return cluster_pb2.Empty()
-
-    def _terminate_job_tree(self, job_id: JobName) -> None:
-        """Recursively terminate a job and all its descendants (depth-first)."""
-        job = _read_job(self._db, job_id)
-        if not job:
-            return
-
-        # First, terminate all children recursively
-        children = _child_jobs(self._db, job_id)
-        for child in children:
-            self._terminate_job_tree(child.job_id)
-
-        if job.is_finished():
-            return
-
+        # cancel_job uses a recursive CTE to walk the full subtree in a single
+        # transaction, so there is no need to recurse manually.
         result = self._transitions.cancel_job(job_id, reason="Terminated by user")
-
-        # Send kill RPCs to workers for any tasks that were killed
         if result.tasks_to_kill:
             self._controller.kill_tasks_on_workers(result.tasks_to_kill)
+        return cluster_pb2.Empty()
 
     def _job_to_proto(
         self,
@@ -1023,7 +1026,6 @@ class ControllerServiceImpl:
         """List jobs with SQL-level filtering, sorting, and pagination."""
         name_filter = request.name_filter.lower() if request.name_filter else ""
         state_filter = request.state_filter.lower() if request.state_filter else ""
-        autoscaler_pending_hints = self._get_autoscaler_pending_hints()
 
         sort_field = request.sort_field or cluster_pb2.Controller.JOB_SORT_FIELD_DATE
         sort_dir = request.sort_direction
@@ -1061,6 +1063,8 @@ class ControllerServiceImpl:
         descendants = _descendants_for_roots(self._db, [j.job_id.to_wire() for j in jobs])
         all_db_jobs = jobs + descendants
         task_summaries = _task_summaries_for_jobs(self._db, {j.job_id for j in all_db_jobs})
+        has_pending = any(j.state == cluster_pb2.JOB_STATE_PENDING for j in all_db_jobs)
+        autoscaler_pending_hints = self._get_autoscaler_pending_hints() if has_pending else {}
         all_jobs = self._jobs_to_protos(all_db_jobs, task_summaries, autoscaler_pending_hints)
         has_more = limit > 0 and offset + limit < total_count
         return cluster_pb2.Controller.ListJobsResponse(
@@ -1085,12 +1089,9 @@ class ControllerServiceImpl:
         task = _read_task_with_attempts(self._db, task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
-        # Look up worker address
         worker_address = ""
         if task.worker_id:
-            worker = _read_worker(self._db, task.worker_id)
-            if worker:
-                worker_address = worker.address
+            worker_address = _worker_address(self._db, task.worker_id) or ""
 
         return cluster_pb2.Controller.GetTaskStatusResponse(
             task=task_to_proto(task, worker_address=worker_address),
@@ -1204,8 +1205,7 @@ class ControllerServiceImpl:
         task_id = JobName.from_wire(request.task_id)
         job_id, _task_index = task_id.require_task()
 
-        job = _read_job(self._db, job_id)
-        if not job:
+        if _job_state(self._db, job_id) is None:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.task_id} not found")
 
         task = _read_task_with_attempts(self._db, task_id)

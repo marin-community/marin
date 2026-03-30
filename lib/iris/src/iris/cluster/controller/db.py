@@ -97,13 +97,34 @@ def db_field(
 
 def db_row_model(cls: type[T]) -> type[T]:
     cls = dataclass(frozen=True)(cls)
-    cls.__db_fields__ = tuple(f for f in fields(cls) if "db_column" in f.metadata)
+    db_fields = tuple(f for f in fields(cls) if "db_column" in f.metadata)
+    cls.__db_fields__ = db_fields
+    # Pre-computed parallel tuples for fast row decoding (avoids per-row metadata lookups).
+    cls.__db_names__ = tuple(f.name for f in db_fields)
+    cls.__db_columns__ = tuple(f.metadata["db_column"] for f in db_fields)
+    cls.__db_decoders__ = tuple(f.metadata.get("db_decoder", _identity) for f in db_fields)
     return cls
 
 
 def _decode_row(model_cls: type[T], row: sqlite3.Row) -> T:
-    values: dict[str, Any] = {}
+    """Decode a sqlite3.Row into a model instance.
+
+    The fast path uses pre-computed tuples and assumes all columns are present.
+    Falls back to per-field handling when the row is missing optional columns
+    (migration compatibility).
+    """
+    names = model_cls.__db_names__
+    columns = model_cls.__db_columns__
+    decoders = model_cls.__db_decoders__
+    try:
+        return model_cls(
+            **{name: decoder(row[col]) for name, col, decoder in zip(names, columns, decoders, strict=True)}
+        )
+    except IndexError:
+        pass
+    # Row is missing a column -- fall back to the slow path that handles defaults.
     row_keys = set(row.keys())
+    values: dict[str, Any] = {}
     for item in model_cls.__db_fields__:
         column = item.metadata["db_column"]
         if column not in row_keys:
@@ -121,7 +142,18 @@ def _decode_row(model_cls: type[T], row: sqlite3.Row) -> T:
 
 def decode_rows(model_cls: type[T], rows: Iterable[sqlite3.Row]) -> list[T]:
     """Decode sqlite3.Row objects into model instances."""
-    return [_decode_row(model_cls, row) for row in rows]
+    names = model_cls.__db_names__
+    columns = model_cls.__db_columns__
+    decoders = model_cls.__db_decoders__
+    cls = model_cls
+    zipped = tuple(zip(names, columns, decoders, strict=True))
+    result = []
+    for row in rows:
+        try:
+            result.append(cls(**{name: decoder(row[col]) for name, col, decoder in zipped}))
+        except IndexError:
+            result.append(_decode_row(cls, row))
+    return result
 
 
 def decode_one(model_cls: type[T], rows: Iterable[sqlite3.Row]) -> T | None:
@@ -898,7 +930,7 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
     if not worker_ids:
         return {}
     placeholders = ",".join("?" for _ in worker_ids)
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         rows = q.raw(
             f"SELECT a.worker_id, t.task_id FROM tasks t "
             f"JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
