@@ -10,7 +10,7 @@ from collections.abc import Iterator
 
 import requests
 import zstandard
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_exists
 from requests.adapters import HTTPAdapter

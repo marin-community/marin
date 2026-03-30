@@ -22,7 +22,7 @@ from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
 from iris.rpc import config_pb2
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -255,7 +255,7 @@ def serve(
 ):
     """Start the Iris controller service."""
     from iris.cluster.config import load_config
-    from iris.logging import configure_logging
+    from rigging.log_setup import configure_logging
 
     configure_logging(level=getattr(logging, log_level))
 

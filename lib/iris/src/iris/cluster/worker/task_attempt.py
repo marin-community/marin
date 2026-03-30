@@ -36,11 +36,13 @@ from iris.cluster.types import (
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.log_store import LogCursor, LogStore, task_log_key
-from iris.logging import parse_log_level, str_to_log_level
+from iris.logging import str_to_log_level
+from rigging.log_setup import parse_log_level
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
-from iris.time_utils import Deadline, Duration, Timestamp
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -437,13 +439,13 @@ class TaskAttempt:
 
         # Set timestamp fields using proto Timestamp messages
         if self.started_at is not None:
-            proto.started_at.CopyFrom(self.started_at.to_proto())
+            proto.started_at.CopyFrom(timestamp_to_proto(self.started_at))
         if self.finished_at is not None:
-            proto.finished_at.CopyFrom(self.finished_at.to_proto())
+            proto.finished_at.CopyFrom(timestamp_to_proto(self.finished_at))
         if self.build_started is not None:
-            proto.build_metrics.build_started.CopyFrom(self.build_started.to_proto())
+            proto.build_metrics.build_started.CopyFrom(timestamp_to_proto(self.build_started))
         if self.build_finished is not None:
-            proto.build_metrics.build_finished.CopyFrom(self.build_finished.to_proto())
+            proto.build_metrics.build_finished.CopyFrom(timestamp_to_proto(self.build_finished))
         return proto
 
     def _check_cancelled(self) -> None:

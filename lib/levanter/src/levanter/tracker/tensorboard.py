@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import jax
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 import numpy as np
 
 from levanter.tracker import Tracker, TrackerConfig

@@ -42,7 +42,8 @@ from iris.cluster.types import (
     get_tpu_count,
 )
 from iris.rpc import cluster_pb2, logging_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_proto import duration_from_proto
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -708,7 +709,7 @@ class ControllerTransitions:
             if request.HasField("scheduling_timeout") and request.scheduling_timeout.milliseconds > 0:
                 deadline_epoch_ms = (
                     Timestamp.from_ms(effective_submission_ms)
-                    .add(Duration.from_proto(request.scheduling_timeout))
+                    .add(duration_from_proto(request.scheduling_timeout))
                     .epoch_ms()
                 )
 

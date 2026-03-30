@@ -30,7 +30,7 @@ from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sServic
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 
 # ---------------------------------------------------------------------------
 # Constraint builders

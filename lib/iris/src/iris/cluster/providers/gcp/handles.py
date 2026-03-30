@@ -29,7 +29,7 @@ from iris.cluster.types import get_tpu_topology
 from iris.cluster.providers._worker_base import RemoteExecWorkerBase
 from iris.cluster.providers.remote_exec import GceRemoteExec, GcloudRemoteExec
 from iris.rpc import config_pb2
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 

@@ -64,7 +64,7 @@ has it into the local marin prefix, respecting the per-path transfer budget.
 
 - `budget_gb` (default 10) caps how much data (in GB) a single step may copy
   cross-region.  The budget is enforced via the `mirror_budget` context manager
-  from `iris.marin_fs`.
+  from `rigging.filesystem`.
 - Paths that already exist in the local prefix are not re-copied.
 - `mirrored()` can wrap plain strings or `VersionedValue` / `InputName`
   references.

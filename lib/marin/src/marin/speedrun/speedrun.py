@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from fray.cluster import ResourceConfig
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of

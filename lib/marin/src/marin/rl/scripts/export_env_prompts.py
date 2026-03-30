@@ -25,7 +25,7 @@ import jax.random as jrandom
 from levanter.inference.openai import ChatCompletionRequest, ChatMessage
 from transformers import AutoTokenizer
 
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 from marin.rl.environments import EnvConfig, load_environment_from_spec
 
 configure_logging(level=logging.INFO)

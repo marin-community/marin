@@ -81,11 +81,11 @@ from iris.cluster.types import (
     WorkerStatusMap,
     WorkerId,
 )
-from iris.logging import slow_log
+from rigging.log_setup import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2
 from iris.rpc.auth import TokenVerifier
-from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp
+from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp
 
 logger = logging.getLogger(__name__)
 

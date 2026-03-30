@@ -12,7 +12,7 @@ from iris.cluster.controller.db import (
     get_task_profiles,
     insert_task_profile,
 )
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 
 
 @pytest.fixture

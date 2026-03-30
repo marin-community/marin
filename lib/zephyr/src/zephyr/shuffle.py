@@ -30,8 +30,8 @@ import pyarrow.compute as pc
 import pyarrow.dataset as pad
 import pyarrow.parquet as pq
 from iris.env_resources import TaskResources as _TaskResources
-from iris.marin_fs import open_url, url_to_fs
-from iris.time_utils import log_time
+from rigging.filesystem import open_url, url_to_fs
+from rigging.timing import log_time
 
 from zephyr.plan import deterministic_hash
 from zephyr.writers import ensure_parent_dir

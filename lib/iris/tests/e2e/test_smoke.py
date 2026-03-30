@@ -34,11 +34,11 @@ from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2, config_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff
 
 from .conftest import (
     DEFAULT_CONFIG,
-    IRIS_ROOT,
+    MARIN_ROOT,
     ClusterCapabilities,
     IrisTestCluster,
     _NoOpPage,
@@ -141,7 +141,7 @@ def smoke_cluster(request):
     controller_url = request.config.getoption("--iris-controller-url")
 
     if controller_url:
-        client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(controller_url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
         tc = IrisTestCluster(
             url=controller_url,
@@ -161,7 +161,7 @@ def smoke_cluster(request):
 
     config = _make_smoke_config()
     with connect_cluster(config) as url:
-        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(SMOKE_WORKER_COUNT, timeout=60)
@@ -676,7 +676,7 @@ def test_checkpoint_restore():
     url = cluster.start()
     try:
         # Phase 1: complete a job, write checkpoint, restart controller.
-        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(1, timeout=30)
@@ -695,7 +695,7 @@ def test_checkpoint_restore():
         # Phase 2: verify restored state and submit new work.
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(
-            url=url, client=IrisClient.remote(url, workspace=IRIS_ROOT), controller_client=controller_client
+            url=url, client=IrisClient.remote(url, workspace=MARIN_ROOT), controller_client=controller_client
         )
 
         resp = controller_client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=saved_job_id))

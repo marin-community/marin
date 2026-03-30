@@ -17,7 +17,7 @@ import datasets
 import fsspec
 import requests
 import transformers
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 from huggingface_hub.utils import HfHubHTTPError
 
 logger = logging.getLogger(__name__)

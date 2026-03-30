@@ -38,11 +38,12 @@ from iris.cluster.types import (
 )
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 from .chronos import VirtualClock
 
-IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris
+MARIN_ROOT = Path(__file__).resolve().parents[4]  # repo root
+IRIS_ROOT = MARIN_ROOT / "lib" / "iris"
 DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
@@ -347,7 +348,7 @@ def cluster():
     _add_coscheduling_group(config)
     config = make_local_config(config)
     with connect_cluster(config) as url:
-        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         yield IrisTestCluster(url=url, client=client, controller_client=controller_client)
         controller_client.close()
@@ -380,7 +381,7 @@ def multi_worker_cluster():
     num_workers = 4
     config = _make_multi_worker_config(num_workers)
     with connect_cluster(config) as url:
-        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(num_workers, timeout=60)

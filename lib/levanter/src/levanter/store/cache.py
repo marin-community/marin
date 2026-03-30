@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Sequence, TypeVar, Union
 
 import deepdiff
 import jax
-from iris.marin_fs import open_url, url_to_fs
+from rigging.filesystem import open_url, url_to_fs
 import numpy as np
 import pyarrow as pa
 import tensorstore as ts

@@ -19,7 +19,7 @@ from typing import Any, TypeVar
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.types import JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import cluster_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from rigging.timing import Deadline, Duration, Timestamp
 
 T = TypeVar("T")
 RowDecoder = Callable[[sqlite3.Row], Any]

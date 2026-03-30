@@ -26,7 +26,7 @@ from iris.rpc.auth import (
     VerifiedIdentity,
     hash_token,
 )
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 

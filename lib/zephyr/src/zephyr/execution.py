@@ -32,12 +32,12 @@ from typing import Any, Protocol
 
 import cloudpickle
 import pyarrow as pa
-from iris.marin_fs import open_url, url_to_fs
+from rigging.filesystem import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from fray.v2.client import JobHandle
 from fray.v2.types import Entrypoint, JobRequest
-from iris.marin_fs import marin_temp_bucket
-from iris.time_utils import ExponentialBackoff
+from rigging.filesystem import marin_temp_bucket
+from rigging.timing import ExponentialBackoff
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (
