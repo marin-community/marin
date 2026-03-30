@@ -35,7 +35,7 @@ from experiments.models import ModelConfig as HFModelConfig, download_model_step
 from levanter.data.text import TextLmDatasetFormat, ChatLmDatasetFormat
 from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs
 
-from zephyr import Dataset, Backend
+from zephyr import Dataset, ZephyrContext
 import json
 import fsspec
 
@@ -70,7 +70,7 @@ def process_deepseek_r1(cfg: ProcessDataConfig):
         .flat_map(processing_func)
         .write_jsonl(os.path.join(cfg.output_path, "data-{shard:05d}-of-{total:05d}.jsonl.gz"))
     )
-    list(Backend.execute(pipeline))
+    list(ZephyrContext(name="math-reasoning-data").execute(pipeline))
 
 
 def process_tony_correct(cfg: ProcessDataConfig):
@@ -92,7 +92,7 @@ def process_tony_correct(cfg: ProcessDataConfig):
         .flat_map(processing_func)
         .write_jsonl(os.path.join(cfg.output_path, "data-{shard:05d}-of-{total:05d}.jsonl.gz"))
     )
-    list(Backend.execute(pipeline))
+    list(ZephyrContext(name="math-reasoning-data").execute(pipeline))
 
 
 def process_tony_incorrect(cfg: ProcessDataConfig):
@@ -114,7 +114,7 @@ def process_tony_incorrect(cfg: ProcessDataConfig):
         .flat_map(processing_func)
         .write_jsonl(os.path.join(cfg.output_path, "data-{shard:05d}-of-{total:05d}.jsonl.gz"))
     )
-    list(Backend.execute(pipeline))
+    list(ZephyrContext(name="math-reasoning-data").execute(pipeline))
 
 
 def process_tony_subquestions(cfg: ProcessDataConfig):
@@ -142,7 +142,7 @@ def process_tony_subquestions(cfg: ProcessDataConfig):
         .flat_map(processing_func)
         .write_jsonl(os.path.join(cfg.output_path, "data-{shard:05d}-of-{total:05d}.jsonl.gz"))
     )
-    list(Backend.execute(pipeline))
+    list(ZephyrContext(name="math-reasoning-data").execute(pipeline))
 
 
 def get_tokenized_data_steps(tokenizer: str = llama3_tokenizer) -> dict[str, TokenizerStep]:

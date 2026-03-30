@@ -50,7 +50,7 @@ from marin.execution.executor import (
     this_output_path,
 )
 from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer
-from zephyr import Backend, Dataset, load_jsonl
+from zephyr import Dataset, ZephyrContext, load_jsonl
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,8 @@ def run_sweep(config: SweepConfig):
 
     # Load MATH-500 (same as vllm_math500_eval.py:130-137)
     dataset = Dataset.from_files(os.path.join(config.math500_path, "*.jsonl.gz")).flat_map(load_jsonl)
-    rows = Backend.execute(dataset)
+    ctx = ZephyrContext(name="rerank-decode-math500-sweep")
+    rows = ctx.execute(dataset)
 
     problems = [row["problem"] for row in rows]
     answers = [row["answer"] for row in rows]

@@ -33,7 +33,7 @@ from marin.execution.executor import (
 )
 
 
-from zephyr import Backend, Dataset, load_jsonl
+from zephyr import Dataset, ZephyrContext, load_jsonl
 from datasets import load_dataset
 
 from experiments.models import qwen2_5_7b, olmo_2_base_32b, olmo_2_base_8b
@@ -55,7 +55,7 @@ def download_math500(config: DownloadMath500Config):
         .write_jsonl(f"{config.output_path}/math500-{{shard:05d}}.jsonl.gz")
     )
     
-    Backend.execute(pipeline)
+    ZephyrContext(name="download-math500").execute(pipeline)
 
 
 download_math500_step = ExecutorStep(
@@ -128,7 +128,7 @@ def run_math500_eval(config: Math500EvalConfig):
     from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer
 
     dataset = Dataset.from_files(os.path.join(config.math500_path, "*.jsonl.gz")).flat_map(load_jsonl)
-    rows = Backend.execute(dataset)
+    rows = ZephyrContext(name="math500-eval").execute(dataset)
 
     problems = [row["problem"] for row in rows]
     answers = [row["answer"] for row in rows]
@@ -285,7 +285,7 @@ def dumb_run_math500_eval(config: Math500EvalConfig):
     # from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer
 
     dataset = Dataset.from_files(os.path.join(config.math500_path, "*.jsonl.gz")).flat_map(load_jsonl)
-    rows = Backend.execute(dataset)
+    rows = ZephyrContext(name="math500-eval").execute(dataset)
 
     print("HELLO WHAT'S UP!")
 
