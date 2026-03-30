@@ -3,6 +3,8 @@
 
 import json
 
+import pytest
+
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
 from marin.evaluation.benchmarks.long_context import (
@@ -74,6 +76,33 @@ def test_finepdf_task_loads_manifest_and_honors_limit(tmp_path):
     assert len(task.examples) == 1
     assert task.examples[0].example_id == "doc-1"
     assert task.metric_names == ("exact_match", "token_f1")
+
+
+def test_finepdf_task_requires_explicit_context_len(tmp_path):
+    manifest_path = tmp_path / "finepdf_manifest_missing_context_len.jsonl"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "id": "doc-1",
+                "context": "Alpha section. The answer is orion.",
+                "question": "What is the answer?",
+                "answer": "orion",
+            }
+        )
+    )
+
+    config = EvalTaskConfig(
+        name="finepdf_extractive_qa_4k",
+        num_fewshot=0,
+        task_kwargs={
+            "family": "finepdf_qa",
+            "context_len": 4096,
+            "manifest_path": str(manifest_path),
+        },
+    )
+
+    with pytest.raises(ValueError, match="missing required 'context_len'"):
+        build_long_context_task(config)
 
 
 def test_evaluate_and_write_long_context_results(tmp_path):

@@ -31,19 +31,19 @@ class CheckpointEvalSpec:
 
 CHECKPOINTS = (
     CheckpointEvalSpec(
-        checkpoint=tootsie_8b_sensible_starling.cd(f"hf/step-{STARLING_WARMSTART_STEP}"),
+        checkpoint=tootsie_8b_sensible_starling.cd(f"hf/step-{STARLING_WARMSTART_STEP}").nonblocking(),
         lengths=(4096,),
     ),
     CheckpointEvalSpec(
-        checkpoint=phase1_final_checkpoint,
+        checkpoint=phase1_final_checkpoint.nonblocking(),
         lengths=(4096,),
     ),
     CheckpointEvalSpec(
-        checkpoint=phase2_final_checkpoint,
+        checkpoint=phase2_final_checkpoint.nonblocking(),
         lengths=(4096, 16384, 32768),
     ),
     CheckpointEvalSpec(
-        checkpoint=phase3_final_checkpoint,
+        checkpoint=phase3_final_checkpoint.nonblocking(),
         lengths=(4096, 16384, 32768, 65536),
     ),
 )
