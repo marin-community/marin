@@ -276,6 +276,7 @@ class ControllerDashboard:
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
+            Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
             Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
             Mount(rpc_wsgi_app.path, app=rpc_app),
@@ -391,6 +392,15 @@ class ControllerDashboard:
             return Response(f"Bundle not found: {bundle_id}", status_code=404)
         return Response(data, media_type="application/zip")
 
+    @public
+    def _blob_download(self, request: Request) -> Response:
+        blob_id = request.path_params["blob_id"]
+        try:
+            data = self._service.blob_data(blob_id)
+        except FileNotFoundError:
+            return Response(f"Blob not found: {blob_id}", status_code=404)
+        return Response(data, media_type="application/octet-stream")
+
 
 class ProxyControllerDashboard:
     """Dashboard that proxies RPC calls to a remote Iris controller.
@@ -426,6 +436,7 @@ class ProxyControllerDashboard:
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/bundles/{bundle_id:str}.zip", self._proxy_bundle),
+            Route("/blobs/{blob_id:str}", self._proxy_blob),
             Route("/health", self._health),
             Route("/iris.cluster.ControllerService/{method}", self._proxy_rpc, methods=["POST"]),
             static_files_mount(),
@@ -476,3 +487,10 @@ class ProxyControllerDashboard:
         if upstream_resp.status_code != 200:
             return Response(upstream_resp.text, status_code=upstream_resp.status_code)
         return Response(upstream_resp.content, media_type="application/zip")
+
+    async def _proxy_blob(self, request: Request) -> Response:
+        blob_id = request.path_params["blob_id"]
+        upstream_resp = await self._client.get(f"/blobs/{blob_id}")
+        if upstream_resp.status_code != 200:
+            return Response(upstream_resp.text, status_code=upstream_resp.status_code)
+        return Response(upstream_resp.content, media_type="application/octet-stream")
