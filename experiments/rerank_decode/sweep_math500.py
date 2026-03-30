@@ -39,8 +39,8 @@ from experiments.evals.vllm_math500_eval import (
     PROMPT_FORMAT_REGISTRY,
     download_math500_step,
 )
-from experiments.rerank_decode.scorer import VLLMLogprobScorer
-from experiments.rerank_decode.serve import launch_vllm_servers, shutdown_servers
+from experiments.rerank_decode.scorer import KVCacheScorer, Scorer, VLLMLogprobScorer
+from experiments.rerank_decode.serve import launch_vllm_server, shutdown_servers, wait_for_server
 from experiments.rerank_decode.utils import rerank
 from marin.execution.executor import (
     ExecutorStep,
@@ -67,20 +67,21 @@ class SweepConfig:
     math500_path: str | InputName = output_path_of(download_math500_step)
 
     proposal_model: str = PROPOSAL_MODEL
-    scoring_model: str = SCORING_MODEL # TODO: add eos_token
+    scoring_model: str = SCORING_MODEL
+    scorer_type: str = "kv_cache"  # "kv_cache" or "vllm"
     prompt_format: str = "question_with_boxed_suffix"
     max_tokens: int = 2048
     temperature: float = 1.0
 
-    proposal_gpus: tuple[int, ...] = (0,)
-    scoring_gpus: tuple[int, ...] = (1,)
+    proposal_gpus: tuple[int, ...] = (1,)
+    scoring_gpus: tuple[int, ...] = (0,)
     proposal_port: int = 8000
     scoring_port: int = 8001
 
 
 def run_single_eval(
     proposal_client: openai.Client,
-    scorer: VLLMLogprobScorer,
+    scorer: Scorer,
     config: SweepConfig,
     prompts: list[str],
     problems: list[str],
@@ -88,6 +89,7 @@ def run_single_eval(
     chunk_size: int,
     num_samples: int,
     result_path: str,
+    eos_token: str,
 ):
     """Run rerank decode on all prompts and grade results.
 
@@ -95,8 +97,6 @@ def run_single_eval(
     replaced by rerank() and the inner sample loop removed (rerank returns one
     best completion per prompt).
     """
-
-    eos_token = AutoTokenizer.from_pretrained(config.scoring_model).eos_token
 
     # -- generation (replaces llm.generate) --
     generations = []
@@ -161,6 +161,8 @@ def run_single_eval(
 def run_sweep(config: SweepConfig):
     logging.basicConfig(level=logging.INFO)
 
+    eos_token = AutoTokenizer.from_pretrained(config.scoring_model).eos_token
+
     # Load MATH-500 (same as vllm_math500_eval.py:130-137)
     dataset = Dataset.from_files(os.path.join(config.math500_path, "*.jsonl.gz")).flat_map(load_jsonl)
     ctx = ZephyrContext(name="rerank-decode-math500-sweep")
@@ -174,28 +176,45 @@ def run_sweep(config: SweepConfig):
 
     logger.info("Loaded %d MATH-500 problems", len(problems))
 
-    # Launch servers once for all sweep configs
-    proc_a, proc_b = launch_vllm_servers(
-        proposal_model=config.proposal_model,
-        scoring_model=config.scoring_model,
-        proposal_gpus=list(config.proposal_gpus),
-        scoring_gpus=list(config.scoring_gpus),
-        proposal_port=config.proposal_port,
-        scoring_port=config.scoring_port,
+    # Launch proposal server
+    procs = []
+    proposal_proc = launch_vllm_server(
+        model=config.proposal_model,
+        port=config.proposal_port,
+        gpu_ids=list(config.proposal_gpus),
     )
-    atexit.register(shutdown_servers, proc_a, proc_b)
+    procs.append(proposal_proc)
 
-    proposal_client = openai.Client(
-        base_url=f"http://localhost:{config.proposal_port}/v1", api_key="none"
-    )
-    scoring_client = openai.Client(
-        base_url=f"http://localhost:{config.scoring_port}/v1", api_key="none"
-    )
-    scorer = VLLMLogprobScorer(client=scoring_client, model=config.scoring_model)
+    # Launch scoring server only for vllm scorer
+    if config.scorer_type == "vllm":
+        scoring_proc = launch_vllm_server(
+            model=config.scoring_model,
+            port=config.scoring_port,
+            gpu_ids=list(config.scoring_gpus),
+        )
+        procs.append(scoring_proc)
 
-    all_results = {}
+    atexit.register(shutdown_servers, *procs)
 
     try:
+        wait_for_server(config.proposal_port)
+        proposal_client = openai.Client(
+            base_url=f"http://localhost:{config.proposal_port}/v1", api_key="none"
+        )
+
+        if config.scorer_type == "vllm":
+            wait_for_server(config.scoring_port)
+            scoring_client = openai.Client(
+                base_url=f"http://localhost:{config.scoring_port}/v1", api_key="none"
+            )
+            scorer = VLLMLogprobScorer(client=scoring_client, model=config.scoring_model)
+        elif config.scorer_type == "kv_cache":
+            scorer = KVCacheScorer(model_name=config.scoring_model)
+        else:
+            raise ValueError(f"Unknown scorer_type: {config.scorer_type}")
+
+        all_results = {}
+
         for chunk_size, num_samples in itertools.product(CHUNK_SIZES, NUM_SAMPLES):
             key = f"chunk{chunk_size}_n{num_samples}"
             result_path = os.path.join(config.output_path, f"{key}.json.gz")
@@ -219,6 +238,7 @@ def run_sweep(config: SweepConfig):
                 chunk_size=chunk_size,
                 num_samples=num_samples,
                 result_path=result_path,
+                eos_token=eos_token,
             )
             all_results[key] = accuracy
 
@@ -247,7 +267,7 @@ def run_sweep(config: SweepConfig):
             json.dump(summary, f, indent=2)
 
     finally:
-        shutdown_servers(proc_a, proc_b)
+        shutdown_servers(*procs)
 
 
 sweep_step = ExecutorStep(
