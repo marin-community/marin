@@ -22,7 +22,7 @@ from iris.cluster.controller.transitions import (
 )
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 
 @pytest.fixture

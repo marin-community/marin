@@ -15,7 +15,7 @@ from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 
 @pytest.fixture

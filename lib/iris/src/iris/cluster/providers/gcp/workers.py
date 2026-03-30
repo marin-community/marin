@@ -47,7 +47,7 @@ from iris.cluster.service_mode import ServiceMode
 from iris.cluster.worker.env_probe import construct_worker_id
 from iris.cluster.providers.remote_exec import GceRemoteExec
 from iris.rpc import config_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

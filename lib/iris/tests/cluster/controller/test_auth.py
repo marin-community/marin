@@ -25,7 +25,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.log_store import LogStore
 from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token, resolve_auth
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 
 _TEST_TOKEN = "valid-test-token"
 _TEST_USER = "test-user"

@@ -36,7 +36,7 @@ from tests.cluster.providers.conftest import (
 from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.types import WorkerStatus
 from iris.rpc import config_pb2, vm_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 from .conftest import (
     make_autoscaler,

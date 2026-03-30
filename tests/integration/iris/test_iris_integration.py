@@ -21,7 +21,7 @@ from iris.cluster.types import (
     gpu_device,
 )
 from iris.rpc import cluster_pb2, logging_pb2
-from iris.time_utils import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff
 
 from .jobs import (
     busy_loop,

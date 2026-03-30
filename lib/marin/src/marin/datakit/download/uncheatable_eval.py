@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_mkdirs

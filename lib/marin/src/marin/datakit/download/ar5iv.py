@@ -18,11 +18,11 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import draccus
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from marin.execution.step_spec import StepSpec
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

@@ -38,7 +38,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 from .chronos import VirtualClock
 

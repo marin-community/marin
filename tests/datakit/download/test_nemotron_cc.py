@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 import zstandard as zstd
-from iris.marin_fs import open_url as _real_open_url
+from rigging.filesystem import open_url as _real_open_url
 from marin.datakit.download.nemotron_v1 import download_nemotron_cc
 
 _OPEN_URL_TARGET = "marin.datakit.download.nemotron_v1.open_url"

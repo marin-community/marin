@@ -12,7 +12,7 @@ from functools import cached_property
 from typing import Any
 from urllib.parse import urlparse
 
-from iris.marin_fs import marin_prefix
+from rigging.filesystem import marin_prefix
 
 
 def _is_relative_path(url_or_path: str) -> bool:

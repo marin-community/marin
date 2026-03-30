@@ -23,7 +23,7 @@ from iris.cluster.providers.types import (
     WorkerStatus,
 )
 from iris.cluster.worker.worker import Worker
-from iris.time_utils import Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

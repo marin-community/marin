@@ -25,7 +25,7 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import CoschedulingConfig
 from iris.rpc import cluster_pb2
 from iris.test_util import SentinelFile
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 from .helpers import TestJobs
 

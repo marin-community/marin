@@ -41,7 +41,7 @@ from typing import Any
 
 import fsspec
 
-from iris.distributed_lock import create_lock, default_worker_id
+from rigging.distributed_lock import create_lock, default_worker_id
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ def region_from_prefix(prefix: str) -> str | None:
         return _BUCKET_TO_REGION[bucket]
     # Fall back to stripping the "marin-" prefix.
     if bucket.startswith("marin-"):
-        return bucket[len("marin-") :]
+        return bucket[len("marin-"):]
     return None
 
 
@@ -211,7 +211,7 @@ def split_gcs_path(gs_uri: str) -> tuple[str, pathlib.Path]:
     if not gs_uri.startswith("gs://"):
         raise ValueError(f"Invalid GCS URI `{gs_uri}`; expected URI of form `gs://BUCKET/path/to/resource`")
 
-    parts = gs_uri[len("gs://") :].split("/", 1)
+    parts = gs_uri[len("gs://"):].split("/", 1)
     if len(parts) == 1:
         return parts[0], pathlib.Path(".")
     return parts[0], pathlib.Path(parts[1])
@@ -857,7 +857,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
             for entry in entries:
                 rel_name = entry["name"]
                 if rel_name.startswith(stripped):
-                    rel_name = rel_name[len(stripped) :]
+                    rel_name = rel_name[len(stripped):]
                 if rel_name not in seen:
                     seen[rel_name] = {**entry, "name": rel_name}
 

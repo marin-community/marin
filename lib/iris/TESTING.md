@@ -103,7 +103,7 @@ being tested.
 
 ## Timing and Polling
 
-Avoid bare `time.sleep()` in polling loops. Use `iris.time_utils.Deadline`,
+Avoid bare `time.sleep()` in polling loops. Use `rigging.timing.Deadline`,
 `ExponentialBackoff.wait_until()`, or `wait_for_condition` from test utilities.
 
 A single short sleep to let a background thread start is acceptable when

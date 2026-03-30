@@ -53,7 +53,7 @@ Always run `build:check` after editing `.vue` or `.ts` files to catch type error
 - After changing `.proto` files, regenerate from the repo root with `uv run python lib/iris/scripts/generate_protos.py`.
 - Prefer shallow, functional code that returns control quickly; avoid callback-heavy or inheritance-driven designs.
 - Dashboards must be a thin UI over the RPC API, not a second implementation path.
-- Use `iris.time_utils` for all time-related operations (`Timestamp`, `Duration`, `Deadline`, `Timer`, `ExponentialBackoff`) instead of raw `datetime` or `time`.
+- Use `rigging.timing` for all time-related operations (`Timestamp`, `Duration`, `Deadline`, `Timer`, `ExponentialBackoff`) instead of raw `datetime` or `time`.
 - Use `concurrent.futures.ThreadPoolExecutor` (not asyncio) for concurrent platform operations, with hard timeouts.
 - Avoid `TYPE_CHECKING`. Use real imports. If you hit a cycle, prefer refactoring or use a `Protocol` at the boundary.
 - Prefer spiral plans: each stage should be independently testable (proto → server stub → client wiring → end-to-end test).

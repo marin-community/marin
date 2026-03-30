@@ -432,7 +432,3 @@ def create_lock(lock_path: str, worker_id: str | None = None) -> DistributedLeas
         return LocalFileLease(lock_path, worker_id)
     else:
         return FsspecLease(lock_path, worker_id)
-
-
-# Backward-compatible alias — call sites should migrate to create_lock().
-DistributedLock = create_lock

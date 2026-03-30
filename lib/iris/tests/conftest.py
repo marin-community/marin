@@ -17,7 +17,7 @@ import pytest
 from iris.cluster.config import load_config, make_local_config
 from iris.rpc import config_pb2
 from iris.test_util import SentinelFile
-from iris.time_utils import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff
 
 IRIS_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"

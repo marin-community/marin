@@ -32,7 +32,7 @@ from iris.cluster.providers.types import (
 )
 from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 
 # =============================================================================
 # Fixture infrastructure

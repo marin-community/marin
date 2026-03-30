@@ -27,7 +27,7 @@ from iris.cluster.controller.transitions import Assignment, ControllerTransition
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 
 from .conftest import (
     make_test_entrypoint,

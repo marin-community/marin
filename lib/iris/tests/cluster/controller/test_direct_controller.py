@@ -11,7 +11,7 @@ from iris.cluster.controller.transitions import (
 )
 from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2, logging_pb2
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 
 from .conftest import (
     make_direct_job_request,

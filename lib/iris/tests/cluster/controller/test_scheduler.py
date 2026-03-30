@@ -23,7 +23,7 @@ from iris.cluster.controller.transitions import Assignment, ControllerTransition
 from iris.cluster.types import JobName, WorkerId
 from iris.cluster.controller.pending_diagnostics import PendingHint, build_job_pending_hints
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 from tests.cluster.conftest import eq_constraint, in_constraint
 from .conftest import (

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import fsspec
-from iris.marin_fs import open_url, url_to_fs
+from rigging.filesystem import open_url, url_to_fs
 import msgspec
 import numpy as np
 import pyarrow as pa

@@ -488,7 +488,7 @@ class _RayActorHostBase:
         args: tuple,
         kwargs: dict,
     ):
-        from iris.logging import configure_logging  # lazy: avoid PyPI iris conflict on workers
+        from rigging.log_setup import configure_logging
 
         configure_logging(level=logging.INFO)
 

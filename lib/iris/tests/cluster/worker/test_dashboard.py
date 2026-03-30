@@ -15,7 +15,7 @@ from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration
+from rigging.timing import Duration
 from starlette.testclient import TestClient
 from tests.cluster.worker.conftest import create_run_task_request
 from iris.test_util import wait_for_condition
