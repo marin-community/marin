@@ -41,7 +41,7 @@ from iris.cluster.service_mode import ServiceMode
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

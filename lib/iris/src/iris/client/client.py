@@ -52,7 +52,8 @@ from iris.cluster.types import (
     adjust_tpu_replicas,
 )
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_proto import timestamp_from_proto
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +172,7 @@ class Task:
         )
         return [
             TaskLogEntry(
-                timestamp=Timestamp.from_proto(e.timestamp),
+                timestamp=timestamp_from_proto(e.timestamp),
                 task_id=self.task_id,
                 source=e.source,
                 data=e.data,
@@ -816,7 +817,7 @@ class IrisClient:
 
         result = [
             TaskLogEntry(
-                timestamp=Timestamp.from_proto(e.timestamp),
+                timestamp=timestamp_from_proto(e.timestamp),
                 task_id=_task_id_from_key(e.key),
                 source=e.source,
                 data=e.data,

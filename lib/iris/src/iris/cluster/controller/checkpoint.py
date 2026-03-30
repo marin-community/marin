@@ -34,7 +34,7 @@ import fsspec.core
 import zstandard
 
 from iris.cluster.controller.db import ControllerDB
-from iris.time_utils import Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

@@ -6,7 +6,7 @@ import os.path
 from dataclasses import dataclass
 from typing import Any
 
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 
 
 @dataclass

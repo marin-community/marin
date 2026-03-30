@@ -13,7 +13,7 @@ from os import PathLike
 from pathlib import Path
 from typing import Any, TypeVar
 
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 
 from fray.v1.queue.base import Lease, Queue
 

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from fray.v2.types import ResourceConfig
-from iris.marin_fs import MARIN_CROSS_REGION_OVERRIDE_ENV
+from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV
 
 from marin.execution.artifact import Artifact, PathMetadata
 from marin.execution.executor import _dag_tpu_regions, Executor, ExecutorStep, resolve_executor_step

@@ -44,7 +44,8 @@ from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 from iris.rpc.auth import hash_token
-from iris.time_utils import Duration, Timestamp
+from iris.time_proto import duration_from_proto
+from rigging.timing import Duration, Timestamp
 
 
 def create_local_autoscaler(
@@ -115,7 +116,7 @@ def create_local_autoscaler(
         gcp_service=gcp_service,
     )
 
-    scale_up_delay = Duration.from_proto(config.defaults.autoscaler.scale_up_delay)
+    scale_up_delay = duration_from_proto(config.defaults.autoscaler.scale_up_delay)
 
     scale_groups: dict[str, ScalingGroup] = {}
     for name, sg_config in config.scale_groups.items():

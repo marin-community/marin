@@ -29,7 +29,7 @@ from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
 from marin.utils import fsspec_glob
 
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 import threading
 

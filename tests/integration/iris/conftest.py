@@ -17,7 +17,8 @@ from .cluster import IrisIntegrationCluster
 
 logger = logging.getLogger(__name__)
 
-IRIS_ROOT = Path(__file__).resolve().parents[3] / "lib" / "iris"
+MARIN_ROOT = Path(__file__).resolve().parents[3]
+IRIS_ROOT = MARIN_ROOT / "lib" / "iris"
 DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 # Module-scoped fixtures (integration_cluster) may need extra time for worker
@@ -49,7 +50,7 @@ def integration_cluster(request):
     url = request.config.getoption("--controller-url")
     if not url:
         pytest.skip("--controller-url not provided")
-    client = IrisClient.remote(url, workspace=IRIS_ROOT)
+    client = IrisClient.remote(url, workspace=MARIN_ROOT)
     controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
     tc = IrisIntegrationCluster(
         url=url,

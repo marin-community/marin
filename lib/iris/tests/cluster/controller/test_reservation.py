@@ -47,7 +47,7 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 from tests.cluster.controller.conftest import (
     FakeProvider,
     hydrate_worker_attributes as _with_attrs,

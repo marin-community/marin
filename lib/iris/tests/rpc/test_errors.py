@@ -13,7 +13,7 @@ from iris.rpc.errors import (
     extract_error_details,
     poll_with_retries,
 )
-from iris.time_utils import Deadline, ExponentialBackoff
+from rigging.timing import Deadline, ExponentialBackoff
 
 
 def test_connect_error_with_traceback_populates_timestamp() -> None:

@@ -28,7 +28,7 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 
 import levanter.utils.fsspec_utils as fsspec_utils
-from iris.marin_fs import open_url, url_to_fs
+from rigging.filesystem import open_url, url_to_fs
 
 from fray.v2.client import JobHandle, JobStatus
 from fray.v2.local_backend import LocalJobHandle

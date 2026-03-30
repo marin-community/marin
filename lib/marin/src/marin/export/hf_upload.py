@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import fsspec
 import humanfriendly
 from fsspec.implementations.local import LocalFileSystem
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from huggingface_hub import create_commit, upload_folder
 from tqdm_loggable.auto import tqdm
 

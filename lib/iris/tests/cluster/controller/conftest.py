@@ -58,7 +58,8 @@ from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, logging_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_proto import duration_to_proto
+from rigging.timing import Duration, Timestamp
 from tests.cluster.providers.conftest import make_mock_platform
 
 
@@ -387,7 +388,7 @@ def make_job_request(
         replicas=replicas,
     )
     if scheduling_timeout_seconds > 0:
-        request.scheduling_timeout.CopyFrom(Duration.from_seconds(scheduling_timeout_seconds).to_proto())
+        request.scheduling_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(scheduling_timeout_seconds)))
     return request
 
 

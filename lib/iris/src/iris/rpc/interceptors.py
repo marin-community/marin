@@ -7,7 +7,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from iris.rpc.errors import connect_error_sanitized, connect_error_with_traceback
-from iris.time_utils import Timer
+from rigging.timing import Timer
 
 logger = logging.getLogger(__name__)
 

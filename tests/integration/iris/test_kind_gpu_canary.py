@@ -38,7 +38,7 @@ from iris.cluster.providers.k8s.service import CloudK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider, _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, TaskAttempt
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 # ---------------------------------------------------------------------------
 # Inlined helpers from lib/iris/tests/cluster/ to avoid cross-package imports

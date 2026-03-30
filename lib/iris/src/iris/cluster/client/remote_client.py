@@ -21,7 +21,8 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
-from iris.time_utils import Deadline, Duration, ExponentialBackoff
+from iris.time_proto import duration_to_proto
+from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -116,9 +117,9 @@ class RemoteClusterClient:
             request.bundle_blob = self._bundle_blob or b""
 
         if scheduling_timeout is not None:
-            request.scheduling_timeout.CopyFrom(scheduling_timeout.to_proto())
+            request.scheduling_timeout.CopyFrom(duration_to_proto(scheduling_timeout))
         if timeout is not None:
-            request.timeout.CopyFrom(timeout.to_proto())
+            request.timeout.CopyFrom(duration_to_proto(timeout))
         if coscheduling is not None:
             request.coscheduling.CopyFrom(coscheduling)
         if reservation is not None:

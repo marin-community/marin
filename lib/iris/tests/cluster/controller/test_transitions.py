@@ -40,7 +40,7 @@ from iris.cluster.controller.transitions import (
 from iris.cluster.log_store import LogStore
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 from .conftest import (
     building_counts as _building_counts,
