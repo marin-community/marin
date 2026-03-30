@@ -29,6 +29,8 @@ from iris.cluster.constraints import (
 from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
 from iris.cluster.controller.checkpoint import (
     CheckpointResult,
+    backup_databases,
+    upload_checkpoint,
     write_checkpoint,
 )
 from iris.cluster.controller.db import (
@@ -169,6 +171,7 @@ def compute_demand_entries(
             continue
         jobs[task.job_id] = job_requirements_from_job(job)
         if job.request.HasField("reservation"):
+            assert job.has_reservation, f"has_reservation=False but request_proto has reservation for {job.job_id}"
             has_reservation.add(task.job_id)
             has_direct_reservation.add(task.job_id)
         elif _find_reservation_ancestor(queries, task.job_id) is not None:
@@ -255,7 +258,7 @@ def compute_demand_entries(
 
 def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClaim]:
     """Read reservation claims from the canonical DB table."""
-    with db.snapshot() as snapshot:
+    with db.read_snapshot() as snapshot:
         rows = snapshot.raw(
             "SELECT rc.worker_id, rc.job_id, rc.entry_idx FROM reservation_claims rc",
             decoders={"worker_id": WorkerId},
@@ -274,7 +277,7 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
         return {}
     wires = [job_id.to_wire() for job_id in job_ids]
     placeholders = ",".join("?" for _ in wires)
-    with queries.snapshot() as snapshot:
+    with queries.read_snapshot() as snapshot:
         jobs = decode_rows(
             Job, snapshot.fetchall(f"SELECT * FROM jobs j WHERE j.job_id IN ({placeholders})", tuple(wires))
         )
@@ -288,7 +291,7 @@ def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> l
     request_proto for all active jobs.
     """
     placeholders = ",".join("?" for _ in states)
-    with queries.snapshot() as snapshot:
+    with queries.read_snapshot() as snapshot:
         rows = snapshot._fetchall(
             f"SELECT * FROM jobs WHERE state IN ({placeholders}) AND has_reservation = 1",
             list(states),
@@ -298,7 +301,7 @@ def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> l
 
 def _schedulable_tasks(queries: ControllerDB) -> list[Task]:
     # Only PENDING tasks can pass can_be_scheduled(); no need to fetch ASSIGNED/BUILDING/RUNNING.
-    with queries.snapshot() as snapshot:
+    with queries.read_snapshot() as snapshot:
         tasks = decode_rows(
             Task,
             snapshot.fetchall(
@@ -316,7 +319,7 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
         return {}
     task_wires = [task_id.to_wire() for task_id in task_ids]
     placeholders = ",".join("?" for _ in task_wires)
-    with queries.snapshot() as snapshot:
+    with queries.read_snapshot() as snapshot:
         tasks = decode_rows(
             Task,
             snapshot.fetchall(
@@ -350,7 +353,7 @@ def _building_counts(queries: ControllerDB, workers: list[Worker]) -> dict[Worke
         "AND j.is_reservation_holder = 0 "
         "GROUP BY a.worker_id"
     )
-    with queries.snapshot() as q:
+    with queries.read_snapshot() as q:
         rows = q.raw(
             sql,
             (*worker_ids, cluster_pb2.TASK_STATE_BUILDING, cluster_pb2.TASK_STATE_ASSIGNED),
@@ -364,7 +367,7 @@ def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[Wor
         return {}
     wires = [str(wid) for wid in worker_ids]
     placeholders = ",".join("?" for _ in wires)
-    with queries.snapshot() as snapshot:
+    with queries.read_snapshot() as snapshot:
         workers = decode_rows(
             Worker, snapshot.fetchall(f"SELECT * FROM workers w WHERE w.worker_id IN ({placeholders})", tuple(wires))
         )
@@ -376,7 +379,7 @@ def _task_worker_mapping(queries: ControllerDB, task_ids: set[JobName]) -> dict[
         return {}
     task_wires = [task_id.to_wire() for task_id in task_ids]
     placeholders = ",".join("?" for _ in task_wires)
-    with queries.snapshot() as snapshot:
+    with queries.read_snapshot() as snapshot:
         rows = snapshot.raw(
             f"SELECT t.task_id, a.worker_id FROM tasks t "
             f"JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
@@ -491,13 +494,18 @@ def _find_reservation_ancestor(queries: ControllerDB, job_id: JobName) -> JobNam
     """Walk up the job hierarchy to find the nearest ancestor with a reservation.
 
     Returns the ancestor's JobName, or None if no ancestor has a reservation.
+    Uses the denormalized has_reservation column to avoid decoding request_proto.
     """
     current = job_id.parent
-    while current is not None:
-        ancestor = _jobs_by_id(queries, {current}).get(current)
-        if ancestor is not None and ancestor.request.HasField("reservation"):
-            return current
-        current = current.parent
+    with queries.read_snapshot() as q:
+        while current is not None:
+            row = q.execute_sql(
+                "SELECT has_reservation FROM jobs WHERE job_id = ?",
+                (current.to_wire(),),
+            ).fetchone()
+            if row is not None and row[0]:
+                return current
+            current = current.parent
     return None
 
 
@@ -1178,7 +1186,7 @@ class Controller:
         if claims is None:
             claims = _read_reservation_claims(self._db)
             persisted = True
-        with self._db.snapshot() as snapshot:
+        with self._db.read_snapshot() as snapshot:
             active_worker_ids = {
                 WorkerId(str(row[0]))
                 for row in snapshot.fetchall("SELECT w.worker_id FROM workers w WHERE w.active = 1")
@@ -1606,7 +1614,7 @@ class Controller:
         self._heartbeat_iteration += 1
         if _HEALTH_SUMMARY_INTERVAL.should_run():
             workers = healthy_active_workers_with_attributes(self._db)
-            with self._db.snapshot() as snap:
+            with self._db.read_snapshot() as snap:
                 active = snap.fetchone(
                     "SELECT COUNT(*) FROM jobs j WHERE j.state = ?", (cluster_pb2.JOB_STATE_RUNNING,)
                 )[
@@ -1647,13 +1655,17 @@ class Controller:
     def _build_worker_status_map(self) -> WorkerStatusMap:
         """Build a map of worker_id to worker status for autoscaler idle tracking."""
         result: WorkerStatusMap = {}
-        with self._db.snapshot() as snapshot:
-            workers = decode_rows(Worker, snapshot.fetchall("SELECT * FROM workers w WHERE w.active = 1"))
-        running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in workers})
-        for worker in workers:
-            result[worker.worker_id] = WorkerStatus(
-                worker_id=worker.worker_id,
-                running_task_ids=frozenset(tid.to_wire() for tid in running_by_worker.get(worker.worker_id, set())),
+        with self._db.read_snapshot() as snapshot:
+            rows = snapshot.raw(
+                "SELECT worker_id FROM workers WHERE active = 1",
+                decoders={"worker_id": WorkerId},
+            )
+        worker_ids = {row.worker_id for row in rows}
+        running_by_worker = running_tasks_by_worker(self._db, worker_ids)
+        for wid in worker_ids:
+            result[wid] = WorkerStatus(
+                worker_id=wid,
+                running_task_ids=frozenset(tid.to_wire() for tid in running_by_worker.get(wid, set())),
             )
         return result
 
@@ -1664,9 +1676,15 @@ class Controller:
             return ("dry-run", CheckpointResult(created_at=Timestamp.now(), job_count=0, task_count=0, worker_count=0))
         self._checkpoint_in_progress = True
         try:
-            # Wait for any in-flight heartbeat round to complete.
+            # Hold the heartbeat lock only for the SQLite backup (consistent
+            # snapshot). Compression and GCS upload run outside the lock so
+            # heartbeat processing is not blocked for 5-30s.
             with self._heartbeat_lock:
-                path, result = write_checkpoint(self._db, self._config.remote_state_dir)
+                backup = backup_databases(self._db)
+            try:
+                path, result = upload_checkpoint(self._db, backup, self._config.remote_state_dir)
+            finally:
+                backup.cleanup()
             logger.info(
                 "Checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
                 path,

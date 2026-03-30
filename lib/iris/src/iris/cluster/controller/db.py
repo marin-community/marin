@@ -97,31 +97,79 @@ def db_field(
 
 def db_row_model(cls: type[T]) -> type[T]:
     cls = dataclass(frozen=True)(cls)
-    cls.__db_fields__ = tuple(f for f in fields(cls) if "db_column" in f.metadata)
+    db_fields = tuple(f for f in fields(cls) if "db_column" in f.metadata)
+    cls.__db_fields__ = db_fields
+    # Pre-computed parallel tuples for fast row decoding (avoids per-row metadata lookups).
+    cls.__db_names__ = tuple(f.name for f in db_fields)
+    cls.__db_columns__ = tuple(f.metadata["db_column"] for f in db_fields)
+    cls.__db_decoders__ = tuple(f.metadata.get("db_decoder", _identity) for f in db_fields)
+    # Pre-computed defaults for fields that have them (keyed by column name).
+    defaults: dict[str, tuple[str, Any | Callable[[], Any], bool]] = {}
+    for f in db_fields:
+        col = f.metadata["db_column"]
+        if f.default is not MISSING:
+            defaults[col] = (f.name, f.default, False)
+        elif f.default_factory is not MISSING:
+            defaults[col] = (f.name, f.default_factory, True)
+    cls.__db_defaults__ = defaults
+    cls.__db_required_columns__ = tuple(
+        f.metadata["db_column"] for f in db_fields if f.metadata["db_column"] not in defaults
+    )
     return cls
 
 
 def _decode_row(model_cls: type[T], row: sqlite3.Row) -> T:
-    values: dict[str, Any] = {}
+    """Decode a sqlite3.Row into a model instance, filling defaults for missing optional columns."""
     row_keys = set(row.keys())
-    for item in model_cls.__db_fields__:
-        column = item.metadata["db_column"]
-        if column not in row_keys:
-            if item.default is not MISSING:
-                values[item.name] = item.default
-                continue
-            if item.default_factory is not MISSING:
-                values[item.name] = item.default_factory()
-                continue
-            raise KeyError(f"Missing required column {column!r} for {model_cls.__name__}.{item.name}")
-        decoder = item.metadata.get("db_decoder", _identity)
-        values[item.name] = decoder(row[column])
+
+    # Check required columns up front.
+    for col in model_cls.__db_required_columns__:
+        if col not in row_keys:
+            raise KeyError(f"Missing required column {col!r} for {model_cls.__name__}")
+
+    names = model_cls.__db_names__
+    columns = model_cls.__db_columns__
+    decoders = model_cls.__db_decoders__
+    defaults = model_cls.__db_defaults__
+    values: dict[str, Any] = {}
+    for name, col, decoder in zip(names, columns, decoders, strict=True):
+        if col in row_keys:
+            values[name] = decoder(row[col])
+        else:
+            field_name, default_val, is_factory = defaults[col]
+            values[field_name] = default_val() if is_factory else default_val
     return model_cls(**values)
 
 
 def decode_rows(model_cls: type[T], rows: Iterable[sqlite3.Row]) -> list[T]:
     """Decode sqlite3.Row objects into model instances."""
-    return [_decode_row(model_cls, row) for row in rows]
+    names = model_cls.__db_names__
+    columns = model_cls.__db_columns__
+    decoders = model_cls.__db_decoders__
+    cls = model_cls
+    zipped = tuple(zip(names, columns, decoders, strict=True))
+
+    result = []
+    # Detect on first row whether all columns are present and pick a strategy.
+    it = iter(rows)
+    first = next(it, None)
+    if first is None:
+        return result
+
+    first_keys = set(first.keys())
+    all_present = all(col in first_keys for col in columns)
+
+    if all_present:
+        # All columns present — tight loop, no per-row key checks.
+        result.append(cls(**{name: decoder(first[col]) for name, col, decoder in zipped}))
+        for row in it:
+            result.append(cls(**{name: decoder(row[col]) for name, col, decoder in zipped}))
+    else:
+        # Some columns missing — use default-filling path for every row.
+        result.append(_decode_row(cls, first))
+        for row in it:
+            result.append(_decode_row(cls, row))
+    return result
 
 
 def decode_one(model_cls: type[T], rows: Iterable[sqlite3.Row]) -> T | None:
@@ -898,7 +946,7 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
     if not worker_ids:
         return {}
     placeholders = ",".join("?" for _ in worker_ids)
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         rows = q.raw(
             f"SELECT a.worker_id, t.task_id FROM tasks t "
             f"JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
