@@ -264,6 +264,11 @@ class DirectProviderSyncResult:
     capacity: ClusterCapacity | None = None
 
 
+def _has_reservation_flag(request: cluster_pb2.Controller.LaunchJobRequest) -> int:
+    """Return 1 if the request carries reservation entries, else 0."""
+    return 1 if request.HasField("reservation") and request.reservation.entries else 0
+
+
 def _decommit_worker_resources(
     cur: TransactionCursor,
     worker_id: str,
@@ -713,7 +718,7 @@ class ControllerTransitions:
 
             state = cluster_pb2.JOB_STATE_PENDING if validation_error is None else cluster_pb2.JOB_STATE_FAILED
             finished_ms = None if validation_error is None else effective_submission_ms
-            has_reservation = 1 if request.HasField("reservation") and request.reservation.entries else 0
+            has_reservation = _has_reservation_flag(request)
             cur.execute(
                 "INSERT INTO jobs("
                 "job_id, user_id, parent_job_id, root_job_id, depth, request_proto, state, submitted_at_ms, "
