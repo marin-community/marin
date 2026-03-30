@@ -19,6 +19,7 @@ from marin.rl.environments.inference_ctx import (
     vLLMInferenceContext,
     vLLMInferenceContextConfig,
 )
+from marin.rl.environments.inference_ctx.base import InferenceRequestKind
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
 from marin.rl.environments.inference_ctx.vllm import InferenceMode
 from openai.types.chat import ChatCompletionMessage
@@ -405,6 +406,68 @@ def test_vllm_sync_engine_skips_tpu_patch_on_gpu(monkeypatch):
 
     assert calls["patch_count"] == 0
     assert calls["llm_kwargs"]["tensor_parallel_size"] == 2
+
+
+def test_vllm_batch_completions_uses_request_generation_count(monkeypatch):
+    calls = {}
+
+    class _FakeSamplingParams:
+        def __init__(self, **kwargs):
+            calls["sampling_kwargs"] = kwargs
+            self.max_tokens = kwargs["max_tokens"]
+
+    class _FakeTokensPrompt:
+        def __init__(self, *, prompt_token_ids):
+            self.prompt_token_ids = prompt_token_ids
+
+    class _FakeLLMEngine:
+        def generate(self, prompts, sampling_params):
+            calls["prompts"] = prompts
+            calls["sampling_params"] = sampling_params
+            return []
+
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_llm_engine",
+        staticmethod(lambda _config: _FakeLLMEngine()),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_renderer",
+        staticmethod(
+            lambda _model_name, _tokenizer: SimpleNamespace(build_generation_prompt=lambda _messages: [1, 2, 3])
+        ),
+    )
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.SamplingParams", _FakeSamplingParams)
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.TokensPrompt", _FakeTokensPrompt)
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="test-model",
+            max_model_len=1024,
+            tensor_parallel_size=2,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(n=8, max_tokens=256),
+            device_kind="gpu",
+        )
+    )
+
+    ctx.batch_completions(
+        prompts=["hello"],
+        request_kind=InferenceRequestKind.TRAIN,
+        temperature=1.0,
+        n=4,
+        max_tokens=64,
+    )
+
+    assert calls["sampling_kwargs"]["n"] == 4
+    assert calls["sampling_kwargs"]["max_tokens"] == 64
+    assert len(calls["prompts"]) == 1
+    assert calls["prompts"][0].prompt_token_ids == [1, 2, 3]
 
 
 def test_worker_extension_uses_public_sync_weights():
