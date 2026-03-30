@@ -19,6 +19,8 @@ from tests.cluster.controller.conftest import (
     submit_job,
 )
 
+pytestmark = pytest.mark.timeout(15)
+
 
 @pytest.fixture
 def dry_run_controller(tmp_path):

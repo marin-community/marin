@@ -28,6 +28,8 @@ from iris.time_utils import Duration
 from tests.cluster.worker.conftest import create_mock_container_handle, create_run_task_request
 from iris.test_util import wait_for_condition
 
+pytestmark = pytest.mark.timeout(10)
+
 # ============================================================================
 # PortAllocator Tests
 # ============================================================================

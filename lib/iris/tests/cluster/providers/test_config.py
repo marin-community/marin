@@ -1417,7 +1417,7 @@ def test_coreweave_worker_provider_rejected():
 SMOKE_GCP_CONFIG = Path(__file__).resolve().parents[3] / "examples" / "smoke-gcp.yaml"
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(15)
 def test_smoke_gcp_config_boots_locally():
     """Load smoke-gcp.yaml, convert to local mode, verify workers join."""
     config = load_config(SMOKE_GCP_CONFIG)
