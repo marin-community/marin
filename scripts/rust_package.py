@@ -74,8 +74,8 @@ def _zig_platform_key() -> str:
         raise ValueError(f"Unsupported platform: {system}")
     arch = arch_map[machine]
     os_name = os_map[system]
-    # Zig release artifacts use os-arch ordering (e.g. linux-x86_64, macos-aarch64)
-    return f"{os_name}-{arch}"
+    # Zig >= 0.13 release artifacts use arch-os ordering (e.g. x86_64-linux, aarch64-macos)
+    return f"{arch}-{os_name}"
 
 
 def _ensure_zig() -> str:
