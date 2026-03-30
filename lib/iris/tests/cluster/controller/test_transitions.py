@@ -20,9 +20,9 @@ from iris.cluster.controller.db import (
     ControllerDB,
     Endpoint,
     EndpointQuery,
-    Job,
-    Task,
-    Worker,
+    JobDetail,
+    TaskDetail,
+    WorkerDetail,
     decode_rows,
     endpoint_query_sql,
 )
@@ -123,7 +123,7 @@ def test_db_snapshot_select_returns_typed_rows(state) -> None:
 
     job_wire = JobName.root("test-user", "typed-rows").to_wire()
     with state._db.snapshot() as q:
-        jobs = decode_rows(Job, q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire,)))
+        jobs = decode_rows(JobDetail, q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire,)))
         task_count = q.fetchone("SELECT COUNT(*) FROM tasks WHERE job_id = ?", (job_wire,))[0]
 
     assert len(jobs) == 1
@@ -380,7 +380,7 @@ def test_failed_worker_is_pruned_from_state(state):
 
     # list_all_workers only returns w2
     with state._db.snapshot() as q:
-        all_workers = decode_rows(Worker, q.fetchall("SELECT * FROM workers"))
+        all_workers = decode_rows(WorkerDetail, q.fetchall("SELECT * FROM workers"))
     assert len(all_workers) == 1
     assert all_workers[0].worker_id == w2
 
@@ -393,7 +393,7 @@ def test_failed_worker_is_pruned_from_state(state):
     assert _query_worker(state, w1_again) is not None
     assert _query_worker(state, w1_again).healthy is True
     with state._db.snapshot() as q:
-        assert len(decode_rows(Worker, q.fetchall("SELECT * FROM workers"))) == 2
+        assert len(decode_rows(WorkerDetail, q.fetchall("SELECT * FROM workers"))) == 2
 
 
 def test_dispatch_failure_marks_worker_failed_and_requeues_task(state):
@@ -816,7 +816,7 @@ def test_hierarchical_job_tracking(state):
     # get_children only returns direct children
     parent_wire = JobName.root("test-user", "parent").to_wire()
     with state._db.snapshot() as q:
-        children = decode_rows(Job, q.fetchall("SELECT * FROM jobs WHERE parent_job_id = ?", (parent_wire,)))
+        children = decode_rows(JobDetail, q.fetchall("SELECT * FROM jobs WHERE parent_job_id = ?", (parent_wire,)))
     assert len(children) == 2
     assert {c.job_id for c in children} == {
         JobName.from_string("/test-user/parent/child1"),
@@ -826,7 +826,10 @@ def test_hierarchical_job_tracking(state):
     # No children for leaf nodes
     grandchild_wire = JobName.from_string("/test-user/parent/child1/grandchild").to_wire()
     with state._db.snapshot() as q:
-        leaf_children = decode_rows(Job, q.fetchall("SELECT * FROM jobs WHERE parent_job_id = ?", (grandchild_wire,)))
+        leaf_children = decode_rows(
+            JobDetail,
+            q.fetchall("SELECT * FROM jobs WHERE parent_job_id = ?", (grandchild_wire,)),
+        )
     assert leaf_children == []
 
 
@@ -3124,10 +3127,9 @@ def test_prune_old_logs_and_txn_actions(state):
     remaining_txn_actions = state._db.fetchone("SELECT COUNT(*) as c FROM txn_actions")["c"]
 
     assert remaining_logs == 1  # only the recent log
-    # The prune itself records a new transaction with actions for the deletions
-    # it performed (logs_pruned + txn_actions_pruned). The old backdated actions
-    # are gone; only the 2 new prune-generated action rows remain.
-    assert remaining_txn_actions == 2
+    # Incremental prune deletes old txn_actions in batches; no new aggregate
+    # action rows are recorded for log/txn_action cleanup.
+    assert remaining_txn_actions == 0
 
 
 def test_prune_noop_when_nothing_old(state):
@@ -3238,14 +3240,14 @@ def _submit_job_direct(
 
 def _task_state_direct(state: ControllerTransitions, task_id: JobName) -> int:
     with state._db.snapshot() as q:
-        tasks = decode_rows(Task, q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (task_id.to_wire(),)))
+        tasks = decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (task_id.to_wire(),)))
     assert len(tasks) == 1
     return tasks[0].state
 
 
 def _task_row_direct(state: ControllerTransitions, task_id: JobName):
     with state._db.snapshot() as q:
-        tasks = decode_rows(Task, q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (task_id.to_wire(),)))
+        tasks = decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (task_id.to_wire(),)))
     assert len(tasks) == 1
     return tasks[0]
 
