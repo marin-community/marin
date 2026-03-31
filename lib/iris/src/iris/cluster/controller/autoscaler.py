@@ -47,7 +47,8 @@ from iris.cluster.constraints import (
     soft_constraint_score,
     split_hard_soft,
 )
-from iris.cluster.controller.db import ControllerDB, _decode_json_list, _decode_timestamp_ms
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import _decode_json_list, _decode_timestamp_ms
 from iris.cluster.types import WorkerStatusMap
 from iris.cluster.controller.scaling_group import (
     GroupAvailability,

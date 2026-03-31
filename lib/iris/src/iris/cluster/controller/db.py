@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import queue
 import sqlite3
@@ -14,109 +13,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace as dc_replace
 from pathlib import Path
 from threading import Lock, RLock
-from typing import Any, TypeVar
+from typing import Any
 
 from iris.cluster.constraints import AttributeValue
+from iris.cluster.controller.schema import _decode_timestamp_ms, _decode_worker_id
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
-RowDecoder = Callable[[sqlite3.Row], Any]
-
-
-class ProtoCache:
-    """Thread-safe bounded cache for deserialized protobuf blobs.
-
-    Keyed by raw proto bytes — no explicit invalidation needed for immutable
-    columns (job protos). Changed bytes (worker heartbeat) naturally miss.
-    """
-
-    def __init__(self, max_size: int = 8192):
-        self._cache: dict[bytes, Any] = {}
-        self._lock = Lock()
-        self._max_size = max_size
-
-    def get_or_decode(self, blob: bytes, decoder: Callable[[bytes], Any]) -> Any:
-        with self._lock:
-            result = self._cache.get(blob)
-            if result is not None:
-                return result
-        decoded = decoder(blob)
-        with self._lock:
-            if len(self._cache) >= self._max_size:
-                to_evict = self._max_size // 4
-                for k in list(self._cache.keys())[:to_evict]:
-                    del self._cache[k]
-            self._cache[blob] = decoded
-        return decoded
-
-    def clear(self) -> None:
-        with self._lock:
-            self._cache.clear()
-
-
-# Module-level singleton — used automatically by decode_rows/_decode_row for
-# fields marked with cached=True. Keyed by raw bytes so immutable blobs
-# (job protos) get permanent cache hits and changed blobs naturally miss.
-_proto_cache = ProtoCache()
-
-
-def _identity(value: Any) -> Any:
-    return value
-
-
-def _nullable(decoder: RowDecoder) -> RowDecoder:
-    def inner(value: Any) -> Any:
-        if value is None:
-            return None
-        return decoder(value)
-
-    return inner
-
-
-def _decode_worker_id(value: Any) -> WorkerId:
-    return WorkerId(str(value))
-
-
-def _decode_timestamp_ms(value: Any) -> Timestamp:
-    return Timestamp.from_ms(int(value))
-
-
-def _decode_bool_int(value: Any) -> bool:
-    return bool(int(value))
-
-
-def _decode_int(value: Any) -> int:
-    return int(value)
-
-
-def _decode_str(value: Any) -> str:
-    return str(value)
-
-
-def _decode_json_dict(value: Any) -> dict[str, Any]:
-    if not value:
-        return {}
-    return json.loads(str(value))
-
-
-def _decode_json_list(value: Any) -> list[str]:
-    if not value:
-        return []
-    return json.loads(str(value))
-
-
-def _proto_decoder(proto_factory: Callable[[], T]) -> Callable[[Any], T]:
-    def decode(value: Any) -> T:
-        proto = proto_factory()
-        proto.ParseFromString(value)
-        return proto
-
-    return decode
-
 
 class Row:
     """Lightweight result row with attribute access for raw query results."""
@@ -333,14 +238,6 @@ def attempt_is_terminal(state: int) -> bool:
 def attempt_is_worker_failure(state: int) -> bool:
     """Check if an attempt is a worker failure."""
     return state == cluster_pb2.TASK_STATE_WORKER_FAILED
-
-
-def _constraint_list_decoder(blob: bytes | None) -> list[cluster_pb2.Constraint]:
-    if blob is None:
-        return []
-    cl = cluster_pb2.ConstraintList()
-    cl.ParseFromString(blob)
-    return list(cl.constraints)
 
 
 @dataclass(frozen=True)

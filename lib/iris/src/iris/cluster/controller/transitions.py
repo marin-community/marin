@@ -24,8 +24,6 @@ from iris.cluster.controller.db import (
     TERMINAL_TASK_STATES,
     ControllerDB,
     TransactionCursor,
-    _proto_cache,
-    _proto_decoder,
     task_can_be_scheduled,
     task_is_finished,
 )
@@ -36,6 +34,8 @@ from iris.cluster.controller.schema import (
     EndpointRow,
     JobDetailRow,
     WorkerDetailRow,
+    _proto_cache,
+    _proto_decoder,
 )
 from iris.cluster.log_store import LogStore, task_log_key
 from iris.cluster.types import (
