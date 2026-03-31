@@ -35,6 +35,7 @@ class Dataset:
     pdf: bool = False
     hf_repo: str = ""
     hf_subset: str = ""
+    token_fraction: float = 1.0  # fraction of total_tokens to attribute to this row
     transform_tldr: str = ""
     license: str = ""  # manual override; API-fetched license used if empty
 
@@ -116,7 +117,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="medium_high_quality",
         license=NVIDIA_LICENSE,
     ),
-    "nemotron_cc_v2_1/mhq_synthetic": Dataset(
+    "nemotron_cc_v2_1/medium_high_quality_synthetic": Dataset(
         "nemotron_cc_v2_1/medium_high_quality_synthetic",
         "web",
         True,
@@ -151,7 +152,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="high_quality_translated",
         license=NVIDIA_LICENSE,
     ),
-    "nemotron_cc_v2_1/hq_translated_synthetic": Dataset(
+    "nemotron_cc_v2_1/high_quality_translated_synthetic": Dataset(
         "nemotron_cc_v2_1/high_quality_translated_synthetic",
         "multilingual",
         True,
@@ -160,7 +161,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="high_quality_translated_synthetic",
         license=NVIDIA_LICENSE,
     ),
-    "nemotron_cc_v2_1/mhq_translated": Dataset(
+    "nemotron_cc_v2_1/medium_high_quality_translated": Dataset(
         "nemotron_cc_v2_1/medium_high_quality_translated",
         "multilingual",
         True,
@@ -170,10 +171,10 @@ DATASETS: dict[str, Dataset] = {
         license=NVIDIA_LICENSE,
     ),
     # Nemotron CC code & math
-    "nemotron_cc_code_v1": Dataset(
+    "nemotron_cc_code_v1/all": Dataset(
         "nemotron_cc_code_v1/all", "code", False, hf_repo="nvidia/Nemotron-CC-Code-v1", license=NVIDIA_LICENSE
     ),
-    "nemotron_cc_math/3": Dataset(
+    "nemotron_cc_math_v1/3": Dataset(
         "nemotron_cc_math_v1/3",
         "math",
         False,
@@ -181,7 +182,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="3",
         license=NVIDIA_LICENSE,
     ),
-    "nemotron_cc_math/4plus_mind": Dataset(
+    "nemotron_cc_math_v1/4plus_mind": Dataset(
         "nemotron_cc_math_v1/4plus_mind",
         "math",
         False,
@@ -190,7 +191,7 @@ DATASETS: dict[str, Dataset] = {
         license=NVIDIA_LICENSE,
     ),
     # Nemotron synthetic code v2
-    "code_v2/synthetic_qa": Dataset(
+    "nemotron_code_v2/synthetic_qa": Dataset(
         "nemotron_pretraining_code_v2/synthetic_question_answering",
         "code",
         True,
@@ -198,7 +199,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="synthetic_question_answering",
         license=NVIDIA_LICENSE,
     ),
-    "code_v2/student_teacher": Dataset(
+    "nemotron_code_v2/student_teacher": Dataset(
         "nemotron_pretraining_code_v2/synthetic_student_teacher",
         "code",
         True,
@@ -206,7 +207,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="synthetic_student_teacher",
         license=NVIDIA_LICENSE,
     ),
-    "code_v2/code_review": Dataset(
+    "nemotron_code_v2/code_review": Dataset(
         "nemotron_pretraining_code_v2/synthetic_code_review",
         "code",
         True,
@@ -214,7 +215,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="synthetic_code_review",
         license=NVIDIA_LICENSE,
     ),
-    "code_v2/rewriting": Dataset(
+    "nemotron_code_v2/rewriting": Dataset(
         "nemotron_pretraining_code_v2/synthetic_rewriting",
         "code",
         True,
@@ -222,7 +223,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="synthetic_rewriting",
         license=NVIDIA_LICENSE,
     ),
-    "code_v2/transpilation": Dataset(
+    "nemotron_code_v2/transpilation": Dataset(
         "nemotron_pretraining_code_v2/synthetic_transpilation",
         "code",
         True,
@@ -231,7 +232,7 @@ DATASETS: dict[str, Dataset] = {
         license=NVIDIA_LICENSE,
     ),
     # Nemotron specialized synthetic
-    "specialized/rqa": Dataset(
+    "nemotron_specialized/rqa": Dataset(
         "nemotron_pretraining_specialized_v1/rqa",
         "specialized",
         True,
@@ -239,7 +240,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="rqa",
         license=NVIDIA_LICENSE,
     ),
-    "specialized/infinibyte": Dataset(
+    "nemotron_specialized/infinibyte_reasoning": Dataset(
         "nemotron_pretraining_specialized_v1/infinibyte_reasoning",
         "specialized",
         True,
@@ -247,7 +248,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="infinibyte_reasoning",
         license=NVIDIA_LICENSE,
     ),
-    "specialized/wiki_rewrite": Dataset(
+    "nemotron_specialized/wiki_rewrite": Dataset(
         "nemotron_pretraining_specialized_v1/wiki_rewrite",
         "specialized",
         True,
@@ -255,7 +256,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="wiki_rewrite",
         license=NVIDIA_LICENSE,
     ),
-    "specialized/scientific_coding": Dataset(
+    "nemotron_specialized/scientific_coding": Dataset(
         "nemotron_pretraining_specialized_v1/scientific_coding",
         "code",
         True,
@@ -263,7 +264,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="scientific_coding",
         license=NVIDIA_LICENSE,
     ),
-    "specialized/math_textbooks": Dataset(
+    "nemotron_specialized/math_textbooks": Dataset(
         "nemotron_pretraining_specialized_v1/math_textbooks",
         "math",
         True,
@@ -271,7 +272,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="math_textbooks",
         license=NVIDIA_LICENSE,
     ),
-    "specialized/stem_sft": Dataset(
+    "nemotron_specialized/stem_sft": Dataset(
         "nemotron_pretraining_specialized_v1/stem_sft",
         "specialized",
         True,
@@ -279,7 +280,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="stem_sft",
         license=NVIDIA_LICENSE,
     ),
-    "specialized_v1.1/code_concepts": Dataset(
+    "nemotron_specialized_v1_1/code_concepts": Dataset(
         "nemotron_pretraining_specialized_v1_1/code_concepts",
         "code",
         True,
@@ -287,7 +288,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="code_concepts",
         license=NVIDIA_LICENSE,
     ),
-    "specialized_v1.1/algorithmic": Dataset(
+    "nemotron_specialized_v1_1/unconditional_algorithmic": Dataset(
         "nemotron_pretraining_specialized_v1_1/unconditional_algorithmic",
         "code",
         True,
@@ -295,7 +296,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="unconditional_algorithmic",
         license=NVIDIA_LICENSE,
     ),
-    "specialized_v1.1/formal_logic": Dataset(
+    "nemotron_specialized_v1_1/formal_logic": Dataset(
         "nemotron_pretraining_specialized_v1_1/formal_logic",
         "math",
         True,
@@ -303,7 +304,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="formal_logic",
         license=NVIDIA_LICENSE,
     ),
-    "specialized_v1.1/economics": Dataset(
+    "nemotron_specialized_v1_1/economics": Dataset(
         "nemotron_pretraining_specialized_v1_1/economics",
         "specialized",
         True,
@@ -311,7 +312,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="economics",
         license=NVIDIA_LICENSE,
     ),
-    "specialized_v1.1/multiple_choice": Dataset(
+    "nemotron_specialized_v1_1/multiple_choice": Dataset(
         "nemotron_pretraining_specialized_v1_1/multiple_choice",
         "specialized",
         True,
@@ -320,7 +321,7 @@ DATASETS: dict[str, Dataset] = {
         license=NVIDIA_LICENSE,
     ),
     # SFT
-    "sft/code": Dataset(
+    "nemotron_sft/code": Dataset(
         "nemotron_pretraining_sft_v1/sft_code",
         "code",
         True,
@@ -328,7 +329,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="sft_code",
         license=NVIDIA_LICENSE,
     ),
-    "sft/general": Dataset(
+    "nemotron_sft/general": Dataset(
         "nemotron_pretraining_sft_v1/sft_general",
         "specialized",
         True,
@@ -336,7 +337,7 @@ DATASETS: dict[str, Dataset] = {
         hf_subset="sft_general",
         license=NVIDIA_LICENSE,
     ),
-    "sft/math": Dataset(
+    "nemotron_sft/math": Dataset(
         "nemotron_pretraining_sft_v1/sft_math",
         "math",
         True,
@@ -353,14 +354,87 @@ DATASETS: dict[str, Dataset] = {
     "finepdfs": Dataset(
         "finepdfs_eng_Latn", "web", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="eng_Latn"
     ),
-    "finetranslations": Dataset(
+    "finepdfs/spa_Latn": Dataset(
+        "finepdfs_spa_Latn", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="spa_Latn"
+    ),
+    "finepdfs/deu_Latn": Dataset(
+        "finepdfs_deu_Latn", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="deu_Latn"
+    ),
+    "finepdfs/fra_Latn": Dataset(
+        "finepdfs_fra_Latn", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="fra_Latn"
+    ),
+    "finepdfs/rus_Cyrl": Dataset(
+        "finepdfs_rus_Cyrl", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="rus_Cyrl"
+    ),
+    "finepdfs/jpn_Jpan": Dataset(
+        "finepdfs_jpn_Jpan", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="jpn_Jpan"
+    ),
+    "finepdfs/ita_Latn": Dataset(
+        "finepdfs_ita_Latn", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="ita_Latn"
+    ),
+    "finepdfs/por_Latn": Dataset(
+        "finepdfs_por_Latn", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="por_Latn"
+    ),
+    "finepdfs/pol_Latn": Dataset(
+        "finepdfs_pol_Latn", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="pol_Latn"
+    ),
+    "finepdfs/nld_Latn": Dataset(
+        "finepdfs_nld_Latn", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="nld_Latn"
+    ),
+    "finepdfs/hun_Latn": Dataset(
+        "finepdfs_hun_Latn", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="hun_Latn"
+    ),
+    "finepdfs/cmn_Hani": Dataset(
+        "finepdfs_cmn_Hani", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="cmn_Hani"
+    ),
+    "finepdfs/ces_Latn": Dataset(
+        "finepdfs_ces_Latn", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="ces_Latn"
+    ),
+    "finepdfs/arb_Arab": Dataset(
+        "finepdfs_arb_Arab", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="arb_Arab"
+    ),
+    "finepdfs/ukr_Cyrl": Dataset(
+        "finepdfs_ukr_Cyrl", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="ukr_Cyrl"
+    ),
+    "finepdfs/swe_Latn": Dataset(
+        "finepdfs_swe_Latn", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="swe_Latn"
+    ),
+    "finepdfs/ron_Latn": Dataset(
+        "finepdfs_ron_Latn", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="ron_Latn"
+    ),
+    "finepdfs/ind_Latn": Dataset(
+        "finepdfs_ind_Latn", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="ind_Latn"
+    ),
+    "finepdfs/tha_Thai": Dataset(
+        "finepdfs_tha_Thai", "multilingual", False, pdf=True, hf_repo="HuggingFaceFW/finepdfs", hf_subset="tha_Thai"
+    ),
+    # FineTranslations concatenates original multilingual text + machine-translated English.
+    # Split into two halves for accounting: multilingual original + web-quality English MT.
+    "finetranslations/multilingual": Dataset(
         "finetranslations_parallel",
         "multilingual",
-        True,
-        machine_translated=True,
+        False,
+        token_fraction=0.5,
         hf_repo="HuggingFaceFW/finetranslations",
+        transform_tldr="50% of tokens: original multilingual text",
+    ),
+    "finetranslations/web": Dataset(
+        "finetranslations_parallel",
+        "web",
+        False,
+        machine_translated=True,
+        token_fraction=0.5,
+        hf_repo="HuggingFaceFW/finetranslations",
+        transform_tldr="50% of tokens: machine-translated English",
     ),
     "numinamath": Dataset("numinamath_1_5", "math", False, hf_repo="AI-MO/NuminaMath-1.5"),
+    "institutional_books": Dataset(
+        "institutional_books",
+        "web",
+        False,
+        hf_repo="institutional/institutional-books-1.0",
+        transform_tldr="Pages concatenated from text_by_page_gen into full books",
+    ),
     # Common Pile — licenses from arXiv:2506.05209
     "cp/peS2o": Dataset("common_pile/peS2o", "web", False, hf_repo="common-pile/peS2o", license="CC BY (per-paper)"),
     "cp/pubmed": Dataset(
@@ -566,6 +640,7 @@ def count_tokens():
             if tokens == 0:
                 tokens = stats_data.get("num_rows", 0)
 
+            tokens = int(tokens * ds.token_fraction)
             results.append((name, ds, tokens, "OK"))
             total_tokens += tokens
             logger.info(f"{name}: {tokens/1e9:.2f}B tokens")

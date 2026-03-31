@@ -46,11 +46,12 @@ from experiments.common_pile.tokenize_common_pile import (
 )
 from experiments.defaults import default_download, default_tokenize
 from experiments.finetranslations.prepare_finetranslations import finetranslations_prepared
-from experiments.long_context_datasets import finepdfs_by_language
+from experiments.long_context_datasets import finepdfs_by_language, institutional_books_raw
+from experiments.long_context_datasets.finepdfs import finepdfs_extra_by_language
 from experiments.pretraining_datasets.nemotron_v2 import NEMOTRON_V2_DATASETS, downloads
 from experiments.reshard_parquet import ReshardConfig, reshard_parquet
 from fray.cluster import ResourceConfig
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from zephyr import Dataset, ZephyrContext, load_parquet
@@ -265,6 +266,21 @@ finepdfs_resharded = ExecutorStep(
 )
 finepdfs = _tokenize_step("finepdfs_eng_Latn", [finepdfs_resharded / "**/*.jsonl.gz"], worker_ram="80g")
 
+# Same null-text + large-shard treatment for non-English languages
+finepdfs_extra = {}
+for _lang, _path in finepdfs_extra_by_language.items():
+    _resharded = ExecutorStep(
+        name=f"resharded/finepdfs_{_lang}",
+        fn=reshard_parquet,
+        config=ReshardConfig(
+            input_path=_path,
+            output_path=this_output_path(),
+            input_glob="",
+            filter_null_text=True,
+        ),
+    )
+    finepdfs_extra[_lang] = _tokenize_step(f"finepdfs_{_lang}", [_resharded / "**/*.jsonl.gz"], worker_ram="80g")
+
 # ============================================================================
 # FineTranslations
 # ============================================================================
@@ -321,6 +337,55 @@ numinamath = default_tokenize(
     name="numinamath_1_5",
     dataset=numinamath_prepared / "**/*.jsonl.gz",
     tokenizer=TOKENIZER,
+)
+
+# ============================================================================
+# Institutional Books 1.0
+# ============================================================================
+
+
+@dataclasses.dataclass(frozen=True)
+class PrepareInstitutionalBooksConfig:
+    input_path: str
+    output_path: str
+
+
+def prepare_institutional_books(config: PrepareInstitutionalBooksConfig):
+    """Concat text_by_page_gen (list of page strings) into a single text field per book."""
+
+    def concat_pages(record: dict) -> dict | None:
+        pages = record.get("text_by_page_gen")
+        if not pages:
+            return None
+        text = "\n\n".join(p for p in pages if p)
+        if not text.strip():
+            return None
+        return {"text": text}
+
+    pipeline = (
+        Dataset.from_files(f"{config.input_path}/data/**/*.parquet")
+        .flat_map(load_parquet)
+        .map(concat_pages)
+        .filter(lambda r: r is not None)
+        .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
+    )
+    # Books are large; need enough RAM for parquet decompression
+    ctx = ZephyrContext(name="prepare-institutional-books", resources=ResourceConfig(cpu=2, ram="20g"))
+    ctx.execute(pipeline)
+
+
+institutional_books_prepared = ExecutorStep(
+    name="documents/institutional_books",
+    fn=prepare_institutional_books,
+    config=PrepareInstitutionalBooksConfig(
+        input_path=institutional_books_raw,
+        output_path=this_output_path(),
+    ),
+)
+
+# Some books are very large (hundreds of pages); 40g workers needed for the tail shards
+institutional_books = _tokenize_step(
+    "institutional_books", [institutional_books_prepared / "**/*.jsonl.gz"], worker_ram="40g"
 )
 
 # ============================================================================
@@ -431,10 +496,13 @@ ALL_COMPONENTS: dict[str, ExecutorStep] = {
     "nemotron_sft/math": nemotron_sft_math,
     # FinePDFs
     "finepdfs": finepdfs,
+    **{f"finepdfs/{lang}": step for lang, step in finepdfs_extra.items()},
     # FineTranslations
     "finetranslations": finetranslations,
     # NuminaMath
     "numinamath": numinamath,
+    # Institutional Books
+    "institutional_books": institutional_books,
     # Common Pile NL (raw)
     "cp/peS2o": cp_peS2o,
     "cp/pubmed": cp_pubmed,
@@ -474,6 +542,7 @@ if __name__ == "__main__":
             stackv2_code_filtered,
             finetranslations_prepared,
             numinamath_prepared,
+            institutional_books_prepared,
             bhl_full_books,
             *ALL_COMPONENTS.values(),
         ]

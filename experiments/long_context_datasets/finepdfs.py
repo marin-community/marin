@@ -31,6 +31,41 @@ finepdfs_token_counts = {
     "eng_Latn": 7.45e11,
 }
 
+# --- finepdfs non-English languages (top 18 by token count) ---
+
+FINEPDFS_EXTRA_LANGS = [
+    "spa_Latn",
+    "deu_Latn",
+    "fra_Latn",
+    "rus_Cyrl",
+    "jpn_Jpan",
+    "ita_Latn",
+    "por_Latn",
+    "pol_Latn",
+    "nld_Latn",
+    "hun_Latn",
+    "cmn_Hani",
+    "ces_Latn",
+    "arb_Arab",
+    "ukr_Cyrl",
+    "swe_Latn",
+    "ron_Latn",
+    "ind_Latn",
+    "tha_Thai",
+]
+
+finepdfs_extra_raw = {
+    lang: default_download(
+        name=f"finepdfs_{lang}",
+        hf_dataset_id=FINEPDFS_HF_ID,
+        revision=FINEPDFS_REVISION,
+        hf_urls_glob=[f"data/{lang}/*/*.parquet"],
+    )
+    for lang in FINEPDFS_EXTRA_LANGS
+}
+
+finepdfs_extra_by_language = {lang: dl / f"data/{lang}/train/*.parquet" for lang, dl in finepdfs_extra_raw.items()}
+
 # --- finepdfs-edu (higher quality educational PDFs) ---
 
 finepdfs_edu_eng_raw = default_download(
