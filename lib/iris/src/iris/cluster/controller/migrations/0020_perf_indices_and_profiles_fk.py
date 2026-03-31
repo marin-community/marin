@@ -1,12 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Performance indices, task_profiles FK cascade, and incremental auto_vacuum.
+"""Performance indices and task_profiles cap trigger.
 
 1. Partial index on tasks.current_worker_id (skip NULLs).
-2. Recreate task_profiles with ON DELETE CASCADE FK to tasks(task_id),
-   dropping orphan rows that reference deleted tasks.
-3. Set PRAGMA auto_vacuum = INCREMENTAL (takes effect on next VACUUM).
+2. Composite index on task_profiles for efficient per-task lookups.
+3. Trigger to cap profiles per (task_id, profile_kind) at 10 rows.
+4. Set PRAGMA auto_vacuum = INCREMENTAL (takes effect on next VACUUM).
+
+Orphan task_profiles (referencing deleted tasks) are cleaned up incrementally
+by prune_old_data rather than in a blocking migration.
 """
 
 import sqlite3
@@ -22,39 +25,18 @@ def migrate(conn: sqlite3.Connection) -> None:
         """
     )
 
-    # --- 2. Recreate task_profiles with FK cascade ---
+    # --- 2. Index for task_profiles lookups ---
     conn.execute(
         """
-        CREATE TABLE task_profiles_new (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
-            profile_data BLOB NOT NULL,
-            captured_at_ms INTEGER NOT NULL,
-            profile_kind TEXT NOT NULL DEFAULT 'cpu'
-        )
-        """
-    )
-    # Only copy rows whose task_id still exists in tasks — skip orphans.
-    conn.execute(
-        """
-        INSERT INTO task_profiles_new (id, task_id, profile_data, captured_at_ms, profile_kind)
-        SELECT p.id, p.task_id, p.profile_data, p.captured_at_ms, p.profile_kind
-        FROM task_profiles p
-        WHERE EXISTS (SELECT 1 FROM tasks t WHERE t.task_id = p.task_id)
-        """
-    )
-    conn.execute("DROP TABLE task_profiles")
-    conn.execute("ALTER TABLE task_profiles_new RENAME TO task_profiles")
-
-    conn.execute(
-        """
-        CREATE INDEX idx_task_profiles_task_kind
+        CREATE INDEX IF NOT EXISTS idx_task_profiles_task_kind
         ON task_profiles(task_id, profile_kind, id DESC)
         """
     )
+
+    # --- 3. Cap trigger ---
     conn.execute(
         """
-        CREATE TRIGGER trg_task_profiles_cap
+        CREATE TRIGGER IF NOT EXISTS trg_task_profiles_cap
         AFTER INSERT ON task_profiles
         BEGIN
           DELETE FROM task_profiles
@@ -71,5 +53,5 @@ def migrate(conn: sqlite3.Connection) -> None:
         """
     )
 
-    # --- 3. Incremental auto_vacuum ---
+    # --- 4. Incremental auto_vacuum ---
     conn.execute("PRAGMA auto_vacuum = INCREMENTAL")

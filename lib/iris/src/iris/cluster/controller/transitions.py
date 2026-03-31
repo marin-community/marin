@@ -2101,15 +2101,30 @@ class ControllerTransitions:
             txn_actions_deleted += batch
             time.sleep(pause_between_s)
 
-        # 5. Task profiles: batch of 1000 per transaction (no CASCADE)
+        # 5. Task profiles: batch of 1000 per transaction
         profiles_deleted = 0
         profile_cutoff_ms = now_ms - profile_retention.to_ms()
+        # 5a. Delete stale profiles by age.
         while not _stopped():
             with self._db.transaction() as cur:
                 c = cur.execute(
                     "DELETE FROM task_profiles WHERE rowid IN "
                     "(SELECT rowid FROM task_profiles WHERE captured_at_ms < ? LIMIT 1000)",
                     (profile_cutoff_ms,),
+                )
+                batch = c.rowcount
+            if batch == 0:
+                break
+            profiles_deleted += batch
+            time.sleep(pause_between_s)
+        # 5b. Delete orphan profiles whose task no longer exists.
+        while not _stopped():
+            with self._db.transaction() as cur:
+                c = cur.execute(
+                    "DELETE FROM task_profiles WHERE rowid IN "
+                    "(SELECT p.rowid FROM task_profiles p"
+                    " LEFT JOIN tasks t ON p.task_id = t.task_id"
+                    " WHERE t.task_id IS NULL LIMIT 1000)",
                 )
                 batch = c.rowcount
             if batch == 0:
