@@ -1316,28 +1316,64 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
     # Create workers (child jobs)
     num_shards = config.plan.num_shards
     actual_workers = min(config.max_workers, num_shards) if num_shards > 0 else 0
-    worker_group = None
-
-    if actual_workers > 0:
-        # Worker name includes attempt ID so that if a stale coordinator
-        # process from a previous attempt is still running, its shutdown
-        # targets the old name and cannot kill this attempt's workers.
-        worker_name = f"zephyr-{config.name}-p{config.pipeline_id}-workers-a{attempt_id}"
-        logger.info("Starting %d workers (max=%d, shards=%d)", actual_workers, config.max_workers, num_shards)
-        worker_group = client.create_actor_group(
-            ZephyrWorker,
-            coordinator,
-            name=worker_name,
-            count=actual_workers,
-            resources=config.worker_resources,
-            actor_config=ActorConfig(max_task_retries=10),
-        )
-        worker_group.wait_ready(count=1, timeout=3600.0)
-
-        # Let the coordinator poll worker job health in its maintenance loop
-        coordinator.set_worker_group.remote(worker_group).result()
+    worker_group: Any = None
 
     try:
+        if actual_workers > 0:
+            # Worker name includes attempt ID so that if a stale coordinator
+            # process from a previous attempt is still running, its shutdown
+            # targets the old name and cannot kill this attempt's workers.
+            worker_name = f"zephyr-{config.name}-p{config.pipeline_id}-workers-a{attempt_id}"
+            logger.info("Starting %d workers (max=%d, shards=%d)", actual_workers, config.max_workers, num_shards)
+            worker_group = client.create_actor_group(
+                ZephyrWorker,
+                coordinator,
+                name=worker_name,
+                count=actual_workers,
+                resources=config.worker_resources,
+                actor_config=ActorConfig(max_task_retries=10),
+            )
+            worker_submit_time = datetime.now(timezone.utc)
+            # Temporary: align the initial worker startup wait with the broader
+            # no-workers budget. We have seen large queues delay the first pod
+            # well past 1 hour, and timing out here leaves a pending worker job
+            # that can start crash-looping against a shutting-down coordinator.
+            try:
+                worker_group.wait_ready(count=1, timeout=config.no_workers_timeout)
+            except TimeoutError as e:
+                worker_job_id = worker_group._job_id
+                ready_count = worker_group.ready_count
+                worker_job_state = "unknown"
+                pending_reason = ""
+                status_message = ""
+                with suppress(Exception):
+                    worker_job_status = client.status(worker_job_id)
+                    worker_job_state = str(worker_job_status.state)
+                    pending_reason = worker_job_status.pending_reason
+                    status_message = worker_job_status.status_message
+                logger.error(
+                    "Initial worker startup timed out: worker_name=%s worker_job=%s submitted_at=%s "
+                    "ready=%d/%d timeout=%.1fs job_state=%s pending_reason=%r status_message=%r",
+                    worker_name,
+                    worker_job_id,
+                    worker_submit_time.isoformat(),
+                    ready_count,
+                    actual_workers,
+                    config.no_workers_timeout,
+                    worker_job_state,
+                    pending_reason,
+                    status_message,
+                )
+                raise TimeoutError(
+                    f"Initial worker startup timed out for {worker_name} after {config.no_workers_timeout}s "
+                    f"(worker_job={worker_job_id}, submitted_at={worker_submit_time.isoformat()}, "
+                    f"ready={ready_count}/{actual_workers}, job_state={worker_job_state}, "
+                    f"pending_reason={pending_reason!r}, status_message={status_message!r})"
+                ) from e
+
+            # Let the coordinator poll worker job health in its maintenance loop
+            coordinator.set_worker_group.remote(worker_group).result()
+
         results = coordinator.run_pipeline.remote(config.plan, config.execution_id).result()
 
         ensure_parent_dir(result_path)
