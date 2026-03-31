@@ -98,8 +98,8 @@ class AvailabilityState:
     until: Timestamp | None = None
 
 
-DEFAULT_SCALE_UP_RATE_LIMIT = 5  # per minute
-DEFAULT_SCALE_DOWN_RATE_LIMIT = 5  # per minute
+DEFAULT_SCALE_UP_RATE_LIMIT = 32  # per minute
+DEFAULT_SCALE_DOWN_RATE_LIMIT = 32  # per minute
 DEFAULT_SCALE_UP_COOLDOWN = Duration.from_minutes(1)
 DEFAULT_BACKOFF_INITIAL = Duration.from_minutes(5)
 DEFAULT_BACKOFF_MAX = Duration.from_minutes(15)
