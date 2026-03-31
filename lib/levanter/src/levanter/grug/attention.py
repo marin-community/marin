@@ -134,6 +134,16 @@ def apply_rotary_embedding(
     return _apply(q), _apply(k)
 
 
+def _sharding_of(x: jax.Array):
+    """Extract sharding from a JAX array or tracer, returning None if unavailable."""
+    try:
+        return x.sharding
+    except Exception:
+        pass
+    aval = getattr(x, "aval", None)
+    return getattr(aval, "sharding", None) if aval is not None else None
+
+
 def reference_attention(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
@@ -150,8 +160,10 @@ def reference_attention(
         if num_q_heads % num_kv_heads != 0:
             raise ValueError(f"num_heads ({num_q_heads}) must be divisible by num_kv_heads ({num_kv_heads})")
         repeat = num_q_heads // num_kv_heads
-        k = jnp.repeat(k, repeat, axis=2)
-        v = jnp.repeat(v, repeat, axis=2)
+        # Pass out_sharding matching q so repeat works under explicit sharding.
+        q_sharding = _sharding_of(q)
+        k = jnp.repeat(k, repeat, axis=2, out_sharding=q_sharding)
+        v = jnp.repeat(v, repeat, axis=2, out_sharding=q_sharding)
 
     scale = 1.0 / math.sqrt(head_dim)
     scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)

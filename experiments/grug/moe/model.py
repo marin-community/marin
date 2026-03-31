@@ -28,7 +28,7 @@ except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
-from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
+from levanter.grug.attention import AttentionMask, RotaryConfig, _sharding_of, apply_rotary_embedding, attention
 from levanter.grug.grug_moe import MoeActivation, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
@@ -147,6 +147,11 @@ class CausalSelfAttention(eqx.Module):
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
+        # For GQA, repeat v to match num_heads so XSA projection shapes align.
+        num_q_heads = q.shape[2]
+        num_kv_heads = v.shape[2]
+        if num_q_heads != num_kv_heads:
+            v = jnp.repeat(v, num_q_heads // num_kv_heads, axis=2, out_sharding=_sharding_of(q))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
         dot = jnp.sum(attn_out * v, axis=-1, keepdims=True)

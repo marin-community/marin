@@ -263,3 +263,43 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
+
+
+def test_grug_moe_gqa_lowers():
+    """Regression test for GQA (num_heads != num_kv_heads) shape mismatch in XSA."""
+    variant = "moe"
+    train_module = importlib.import_module(_variant_module_name(variant, "train"))
+    model_module = importlib.import_module(_variant_module_name(variant, "model"))
+    model_config_cls = model_module.GrugModelConfig
+    make_train_step = train_module._make_train_step
+    initial_state = train_module.initial_state
+    mesh_fn = getattr(model_module, "debug_mesh_and_token_pspec", None)
+    if mesh_fn is None:
+        raise AssertionError(f"{_variant_module_name(variant, 'model')} must define debug_mesh_and_token_pspec")
+
+    cfg = model_config_cls(vocab_size=1024, num_kv_heads=2)
+
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+    train_step = make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+    mesh, token_pspec = mesh_fn(num_devices=4)
+    batch = GrugLmExample(
+        tokens=jnp.zeros((8, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((8, 4), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    def one_step():
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        state = initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+        return train_step(state, sharded_batch, compute_watch=False)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out_state_shape, out_metrics_shape, _ = eqx.filter_eval_shape(one_step)
+
+    assert out_state_shape.step.shape == ()
+    assert "train/loss" in out_metrics_shape
