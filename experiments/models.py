@@ -101,27 +101,11 @@ llama_3_3_70b_instruct = download_model_step(
     )
 )
 
-mixtral_8x7b = download_model_step(
-    ModelConfig(
-        hf_repo_id="mistralai/Mixtral-8x7B-v0.1",
-        hf_revision="fc7ac94",
-        zephyr_max_parallelism=2,
-    )
-)
-
 mixtral_8x7b_instruct = download_model_step(
     ModelConfig(
         hf_repo_id="mistralai/Mixtral-8x7B-Instruct-v0.1",
         hf_revision="eba9230",
         zephyr_max_parallelism=2,
-    )
-)
-
-gpt_oss_20b = download_model_step(
-    ModelConfig(
-        hf_repo_id="unsloth/gpt-oss-20b-BF16",
-        hf_revision="cc89b3e7fd423253264883a80a4fa5abc619649f",
-        zephyr_max_parallelism=4,
     )
 )
 
@@ -163,37 +147,10 @@ gpt_oss_20b_heretic_vllm = download_model_step(
     )
 )
 
-gpt_oss_120b = download_model_step(
-    ModelConfig(
-        hf_repo_id="unsloth/gpt-oss-120b-BF16",
-        hf_revision="e7523373bc44b42296b43202e265a1eebf2ee16f",
-        zephyr_max_parallelism=2,
-    )
-)
-
 gpt_oss_120b_vllm = download_model_step(
     ModelConfig(
         hf_repo_id="unsloth/gpt-oss-120b-BF16",
         hf_revision="e7523373bc44b42296b43202e265a1eebf2ee16f",
-        zephyr_max_parallelism=4,
-        hf_urls_glob=[
-            "chat_template.jinja",
-            "config.json",
-            "generation_config.json",
-            "model-*.safetensors",
-            "model.safetensors.index.json",
-            "special_tokens_map.json",
-            "tokenizer.json",
-            "tokenizer_config.json",
-        ],
-        output_name_suffix="-vllm",
-    )
-)
-
-gpt_oss_120b_abliterated_vllm = download_model_step(
-    ModelConfig(
-        hf_repo_id="huihui-ai/Huihui-gpt-oss-120b-BF16-abliterated",
-        hf_revision="573b51289d31e4d84cca1e6ea39988eb87adaf8e",
         zephyr_max_parallelism=4,
         hf_urls_glob=[
             "chat_template.jinja",

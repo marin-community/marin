@@ -39,7 +39,6 @@ class LMEvaluationHarnessEvaluator(Evaluator):
         "merges.txt",
         "vocab.json",
         "config.json",
-        "chat_template.jinja",
     )
 
     @classmethod

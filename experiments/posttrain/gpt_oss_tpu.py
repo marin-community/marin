@@ -58,8 +58,8 @@ def gpt_oss_tpu_vllm_config(
     cpu: int,
     disk: str,
     ram: str,
-    # GPT-OSS must use model_impl_type="vllm". The flax_nnx backend produces
-    # incoherent token soup (see .agents/logbooks/gpt-oss-tpu.md GTPU-001 to GTPU-004).
+    # GPT-OSS must use model_impl_type="vllm". The flax_nnx backend is not the
+    # supported path for these posttrain experiments.
     model_impl_type: str = GPT_OSS_TPU_DEFAULT_MODEL_IMPL_TYPE,
     prefer_jax_for_bootstrap: bool = GPT_OSS_TPU_DEFAULT_PREFER_JAX_FOR_BOOTSTRAP,
 ) -> VLLMConfig:
