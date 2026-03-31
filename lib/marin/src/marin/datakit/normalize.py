@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import dupekit
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 from marin.execution.step_spec import StepSpec
 from fray.v2 import ResourceConfig
 from zephyr import Dataset, ZephyrContext
