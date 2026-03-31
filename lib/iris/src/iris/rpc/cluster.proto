@@ -998,6 +998,17 @@ message Controller {
     repeated NodePoolStatus node_pools = 8;
   }
 
+  // --- Worker Restart ---
+
+  message RestartWorkerRequest {
+    string worker_id = 1;
+  }
+
+  message RestartWorkerResponse {
+    bool accepted = 1;
+    string error = 2;
+  }
+
 }
 
 // ============================================================================
@@ -1160,6 +1171,9 @@ service ControllerService {
 
   // Generic query API
   rpc ExecuteRawQuery(RawQueryRequest) returns (RawQueryResponse);
+
+  // Worker lifecycle
+  rpc RestartWorker(Controller.RestartWorkerRequest) returns (Controller.RestartWorkerResponse);
 }
 
 service WorkerService {
