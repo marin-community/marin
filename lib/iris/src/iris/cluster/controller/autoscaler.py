@@ -1253,6 +1253,36 @@ class Autoscaler:
         """Look up a tracked worker by ID."""
         return self._workers.get(worker_id)
 
+    def restart_worker(self, worker_id: str) -> None:
+        """Restart a worker with a fresh bootstrap script using the latest image.
+
+        Builds a per-group WorkerConfig (with the latest image tag from the
+        controller's config), generates the bootstrap script, and runs it on
+        the worker via SSH. The bootstrap pulls the new image, stops the old
+        container, and starts a new one. The new worker adopts running task
+        containers via Docker labels.
+        """
+        tracked = self._workers.get(worker_id)
+        if tracked is None:
+            raise ValueError(f"Worker {worker_id} not found in autoscaler")
+
+        group = self._groups.get(tracked.scale_group)
+        if group is None:
+            raise ValueError(f"Scale group {tracked.scale_group} not found for worker {worker_id}")
+
+        worker_config = self._per_group_worker_config(group)
+        if worker_config is None:
+            raise ValueError("No base worker config — cannot build bootstrap script")
+
+        # Set the worker_id on the config so the new worker registers with the same ID
+        worker_config.worker_id = worker_id
+        worker_config.slice_id = tracked.slice_id
+
+        from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
+
+        script = build_worker_bootstrap_script(worker_config)
+        tracked.handle.restart_worker(script)
+
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._workers.update(workers)

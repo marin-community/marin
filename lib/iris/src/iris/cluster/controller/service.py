@@ -1940,14 +1940,8 @@ class ControllerServiceImpl:
         if autoscaler is None:
             return cluster_pb2.Controller.RestartWorkerResponse(accepted=False, error="autoscaler not configured")
 
-        tracked = autoscaler.get_tracked_worker(worker_id)
-        if tracked is None:
-            return cluster_pb2.Controller.RestartWorkerResponse(
-                accepted=False, error=f"worker {worker_id} not found in autoscaler"
-            )
-
         try:
-            tracked.handle.restart_worker()
+            autoscaler.restart_worker(worker_id)
             logger.info("Initiated restart for worker %s", worker_id)
             return cluster_pb2.Controller.RestartWorkerResponse(accepted=True)
         except Exception as e:

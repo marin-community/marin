@@ -112,7 +112,7 @@ class _LocalWorkerHandle:
     def reboot(self) -> None:
         logger.info("Reboot requested for local VM %s (no-op)", self._vm_id)
 
-    def restart_worker(self, container_name: str = "iris-worker") -> None:
+    def restart_worker(self, bootstrap_script: str) -> None:
         logger.info("Worker restart requested for local VM %s (no-op)", self._vm_id)
 
 
