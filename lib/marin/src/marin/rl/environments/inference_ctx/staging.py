@@ -12,7 +12,7 @@ import os
 import tempfile
 from urllib.parse import urlparse
 
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 
 from .vllm import vLLMInferenceContextConfig
 

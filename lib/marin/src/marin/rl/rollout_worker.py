@@ -275,7 +275,7 @@ class ScheduledEvalJob:
     eval_type: Literal["eval", "micro_eval"]
     rng: Any
     step: int
-    tracker_step: int
+    weight_step: int
     lesson_id: str | None = None
 
 
@@ -286,7 +286,7 @@ class CompletedLessonEval:
     lesson_id: str
     eval_type: Literal["eval", "micro_eval"]
     step: int
-    tracker_step: int
+    weight_step: int
     batch: RolloutBatch
     stats: RolloutBatchStats
     metrics: dict[str, Any]
@@ -766,17 +766,23 @@ class RolloutWorker:
         finally:
             logger.info("Background weight sync loop exiting")
 
-    def _log_prompt_example(self, lesson_id: str, batch: RolloutBatch, step: int, eval_type: str = "eval") -> None:
-        """Log representative samples from an evaluation batch.
+    def _build_prompt_example_metrics(
+        self,
+        lesson_id: str,
+        batch: RolloutBatch,
+        step: int,
+        eval_type: str = "eval",
+    ) -> dict[str, Any]:
+        """Build representative sample-table metrics from an evaluation batch.
 
         Args:
             lesson_id: ID of the evaluated lesson
             batch: The rollout batch containing samples
-            step: Current training step
-            mode: Either "eval" or "micro_eval"
+            step: Semantic training/weight step to include in the table rows
+            eval_type: Either "eval" or "micro_eval"
         """
         if not batch or not batch.groups:
-            return
+            return {}
 
         sample_groups = min(1000, len(batch.groups))
         selected_group_indices = random.sample(range(len(batch.groups)), k=sample_groups)
@@ -794,16 +800,15 @@ class RolloutWorker:
             )
 
         if not rows:
-            return
+            return {}
 
         table = wandb.Table(columns=["prompt", "response", "reward", "step"])
         for row in rows:
             table.add_data(row["prompt"], row["response"], row["reward"], row["step"])
 
         prefix = f"inference.{eval_type}/{lesson_id}"
-        metrics = {f"{prefix}/sample_table": table}
-        self.tracker.log(metrics, step=step)
-        logger.info(f"Logged {len(rows)} eval samples for lesson {lesson_id} at step {step}")
+        logger.info("Prepared %d eval samples for lesson %s at step %d", len(rows), lesson_id, step)
+        return {f"{prefix}/sample_table": table}
 
     def _build_eval_metrics(
         self,
@@ -836,7 +841,7 @@ class RolloutWorker:
         eval_type: Literal["eval", "micro_eval"],
         rng,
         step: int,
-        tracker_step: int,
+        weight_step: int,
     ) -> CompletedLessonEval:
         """Compute one lesson eval without mutating trackers or curriculum state."""
         N_EVAL_GENERATIONS = 1
@@ -866,7 +871,7 @@ class RolloutWorker:
             lesson_id=lesson_id,
             eval_type=eval_type,
             step=step,
-            tracker_step=tracker_step,
+            weight_step=weight_step,
             batch=batch,
             stats=stats,
             metrics=metrics,
@@ -874,12 +879,28 @@ class RolloutWorker:
 
     def _consume_lesson_eval(self, result: CompletedLessonEval) -> None:
         """Apply tracker and curriculum side effects for a completed lesson eval."""
-        self._log_prompt_example(result.lesson_id, result.batch, result.step, eval_type=result.eval_type)
-        self.tracker.log(result.metrics, step=result.tracker_step)
-        logger.info("Eval metrics for lesson %s at step %d: %s", result.lesson_id, result.tracker_step, result.metrics)
+        tracker_step = self._next_tracker_step()
+        log_metrics = self._build_prompt_example_metrics(
+            result.lesson_id,
+            result.batch,
+            result.step,
+            eval_type=result.eval_type,
+        )
+        log_metrics.update(result.metrics)
+        log_metrics["inference.weight_step"] = result.weight_step
+        if result.eval_type == "eval":
+            log_metrics["inference.train_step"] = result.step
+        self.tracker.log(log_metrics, step=tracker_step)
+        logger.info(
+            "Eval metrics for lesson %s at tracker_step=%d weight_step=%d: %s",
+            result.lesson_id,
+            tracker_step,
+            result.weight_step,
+            result.metrics,
+        )
         if result.eval_type == "eval":
             self._curriculum_actor.update_lesson_stats.remote(
-                result.stats.rollout_stats, mode="eval", current_step=result.tracker_step
+                result.stats.rollout_stats, mode="eval", current_step=result.step
             ).result()
 
     def _run_eval_job(self, job: ScheduledEvalJob) -> list[CompletedLessonEval]:
@@ -892,7 +913,7 @@ class RolloutWorker:
                     eval_type=job.eval_type,
                     rng=job.rng,
                     step=job.step,
-                    tracker_step=job.tracker_step,
+                    weight_step=job.weight_step,
                 )
             ]
 
@@ -911,7 +932,7 @@ class RolloutWorker:
                     eval_type=job.eval_type,
                     rng=job.rng,
                     step=job.step,
-                    tracker_step=job.tracker_step,
+                    weight_step=job.weight_step,
                 )
             )
         return results
@@ -983,6 +1004,37 @@ class RolloutWorker:
         ).result()
         self._last_transfer_counters = current_counters
         return _rollout_transfer_metrics_for_logging(current_metrics, cumulative_counters)
+
+    def _next_tracker_step(self) -> int:
+        return self._runtime.run_state.next_rollout_tracker_step.remote(self.config.worker_index).result()
+
+    def _log_rollout_metrics(
+        self,
+        *,
+        rollout_metrics: Mapping[str, Any],
+        env_metrics: Mapping[str, Any] | None,
+        throughput_metrics: Mapping[str, Any],
+        rollout_step: int,
+    ) -> None:
+        log_metrics = dict(rollout_metrics)
+        log_metrics.update(self._resume_safe_transfer_metrics())
+        log_metrics.update(self._policy_ctx.get_metrics())
+        log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
+        if hasattr(self._rollout_writer, "get_metrics"):
+            log_metrics.update(self._rollout_writer.get_metrics())
+        log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
+        log_metrics.update(throughput_metrics)
+        log_metrics["inference.weight_step"] = self._current_weight_step
+        if self._current_train_step >= 0:
+            log_metrics["inference.train_step"] = self._current_train_step
+        tracker_step = self._next_tracker_step()
+        logger.info(
+            "Logging metrics at rollout_step=%d tracker_step=%d weight_step=%d",
+            rollout_step,
+            tracker_step,
+            self._current_weight_step,
+        )
+        self.tracker.log(log_metrics, step=tracker_step)
 
     def _shutdown_eval_executor(self) -> None:
         if self._eval_executor is None:
@@ -1125,7 +1177,7 @@ class RolloutWorker:
                         eval_type="micro_eval",
                         rng=micro_eval_rng,
                         step=self._current_weight_step,
-                        tracker_step=self._current_weight_step,
+                        weight_step=self._current_weight_step,
                     )
                     self._enqueue_eval_job(micro_eval_job)
 
@@ -1144,7 +1196,7 @@ class RolloutWorker:
                         eval_type="eval",
                         rng=eval_rng,
                         step=self._current_train_step,
-                        tracker_step=self._current_weight_step,
+                        weight_step=self._current_weight_step,
                     )
                     self._enqueue_eval_job(eval_job)
                     self._last_eval_train_step = self._current_train_step
@@ -1217,18 +1269,12 @@ class RolloutWorker:
 
                 if self.config.log_freq > 0 and step % self.config.log_freq == 0:
                     self._poll_eval_jobs()
-                    log_metrics = eval_metrics
-                    log_metrics.update(self._resume_safe_transfer_metrics())
-                    log_metrics.update(self._policy_ctx.get_metrics())
-                    log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
-                    # Add storage metrics if available
-                    if hasattr(self._rollout_writer, "get_metrics"):
-                        log_metrics.update(self._rollout_writer.get_metrics())
-                    log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
-                    # Add throughput metrics (already prefixed with "inference.throughput/")
-                    log_metrics.update(throughput_metrics)
-                    logger.info(f"Logging metrics at step {step} (weight_step={self._current_weight_step})...")
-                    self.tracker.log(log_metrics, step=self._current_weight_step)
+                    self._log_rollout_metrics(
+                        rollout_metrics=eval_metrics,
+                        env_metrics=env_metrics,
+                        throughput_metrics=throughput_metrics,
+                        rollout_step=step,
+                    )
 
             logger.info(f"Inference worker completed after generating {step} rollouts")
             if use_jax_rng:

@@ -16,6 +16,7 @@ from marin.rl.environments.inference_ctx.vllm import VLLMSamplingConfig, vLLMInf
 from marin.rl.run_state import RolloutTransferCounters
 from marin.rl.rollout_worker import (
     CompletedLessonEval,
+    RolloutBatchStats,
     RolloutTracker,
     RolloutTrackerConfig,
     RolloutTransferCounterSnapshot,
@@ -119,6 +120,130 @@ def test_resume_safe_transfer_metrics_logs_attempt_and_cumulative_values_after_c
         "fetch_mib_per_second": 8.0,
         "decode_mib_per_second": 4.0,
     }
+
+
+def test_log_rollout_metrics_uses_shared_tracker_step_and_logs_weight_train_steps():
+    recorded_worker_indices: list[int] = []
+    recorded_logs: list[tuple[dict[str, float | int], int | None]] = []
+
+    class _FakeRemoteResult:
+        def result(self) -> int:
+            return 42
+
+    class _FakeRemoteMethod:
+        def remote(self, worker_index: int) -> _FakeRemoteResult:
+            recorded_worker_indices.append(worker_index)
+            return _FakeRemoteResult()
+
+    class _FakeTracker:
+        def log(self, metrics: dict[str, float | int], step=None):
+            recorded_logs.append((metrics, step))
+
+    worker = object.__new__(RolloutWorker)
+    worker.config = SimpleNamespace(worker_index=1)
+    worker._runtime = SimpleNamespace(run_state=SimpleNamespace(next_rollout_tracker_step=_FakeRemoteMethod()))
+    worker._resume_safe_transfer_metrics = lambda: {"successful_receives": 10}
+    worker._policy_ctx = SimpleNamespace(get_metrics=lambda: {"cache_hits": 3})
+    worker._rollout_writer = SimpleNamespace(get_metrics=lambda: {"queued_batches": 2})
+    worker._current_weight_step = -1
+    worker._current_train_step = 248
+    worker.tracker = _FakeTracker()
+
+    worker._log_rollout_metrics(
+        rollout_metrics={"rollout/math/pass_at_1": 0.5},
+        env_metrics={"episodes": 7},
+        throughput_metrics={"inference.throughput/batch_time_seconds": 2.0},
+        rollout_step=30,
+    )
+
+    assert recorded_worker_indices == [1]
+    assert recorded_logs == [
+        (
+            {
+                "inference.rollout/math/pass_at_1": 0.5,
+                "inference.successful_receives": 10,
+                "inference.cache_hits": 3,
+                "inference.env.episodes": 7,
+                "inference.queued_batches": 2,
+                "inference.throughput/batch_time_seconds": 2.0,
+                "inference.weight_step": -1,
+                "inference.train_step": 248,
+            },
+            42,
+        )
+    ]
+
+
+def test_consume_lesson_eval_logs_with_shared_tracker_step_and_context_metrics():
+    recorded_worker_indices: list[int] = []
+    recorded_logs: list[tuple[dict[str, object], int | None]] = []
+    recorded_curriculum_updates: list[tuple[list[object], str, int]] = []
+
+    class _FakeRemoteResult:
+        def result(self):
+            return 17
+
+    class _FakeTrackerStepMethod:
+        def remote(self, worker_index: int) -> _FakeRemoteResult:
+            recorded_worker_indices.append(worker_index)
+            return _FakeRemoteResult()
+
+    class _FakeCurriculumResult:
+        def result(self):
+            return None
+
+    class _FakeCurriculumMethod:
+        def remote(self, rollout_stats: list[object], mode: str, current_step: int) -> _FakeCurriculumResult:
+            recorded_curriculum_updates.append((rollout_stats, mode, current_step))
+            return _FakeCurriculumResult()
+
+    class _FakeTracker:
+        def log(self, metrics: dict[str, object], step=None):
+            recorded_logs.append((metrics, step))
+
+    worker = object.__new__(RolloutWorker)
+    worker.config = SimpleNamespace(worker_index=0)
+    worker._runtime = SimpleNamespace(run_state=SimpleNamespace(next_rollout_tracker_step=_FakeTrackerStepMethod()))
+    worker._curriculum_actor = SimpleNamespace(update_lesson_stats=_FakeCurriculumMethod())
+    worker._build_prompt_example_metrics = lambda lesson_id, batch, step, eval_type="eval": {
+        f"inference.{eval_type}/{lesson_id}/sample_table": "table"
+    }
+    worker.tracker = _FakeTracker()
+
+    rollout_stats = [SimpleNamespace()]
+    result = CompletedLessonEval(
+        lesson_id="lesson-a",
+        eval_type="eval",
+        step=12,
+        weight_step=-1,
+        batch=SimpleNamespace(groups=[]),
+        stats=RolloutBatchStats(
+            total_count=1,
+            success_count=1,
+            rollout_stats=rollout_stats,
+            avg_reward=1.0,
+            pass_at_one=1.0,
+            pass_at_k=1.0,
+            avg_at_k=1.0,
+        ),
+        metrics={"inference.eval/lesson-a/avg_reward": 1.0},
+    )
+
+    worker._consume_lesson_eval(result)
+
+    assert recorded_worker_indices == [0]
+    assert recorded_logs == [
+        (
+            {
+                "inference.eval/lesson-a/sample_table": "table",
+                "inference.eval/lesson-a/avg_reward": 1.0,
+                "inference.weight_step": -1,
+                "inference.train_step": 12,
+            },
+            17,
+        )
+    ]
+    assert recorded_curriculum_updates == [(rollout_stats, "eval", 12)]
 
 
 def test_stage_vllm_metadata_locally_copies_hf_metadata(tmp_path, monkeypatch):
@@ -295,8 +420,8 @@ def test_should_run_micro_eval_rejects_nonpositive_frequency():
 
 
 def test_coalesce_eval_job_prefers_full_eval_and_newer_steps():
-    existing = ScheduledEvalJob(eval_type="micro_eval", lesson_id="lesson-a", rng=1, step=10, tracker_step=10)
-    replacement = ScheduledEvalJob(eval_type="eval", rng=2, step=12, tracker_step=12)
+    existing = ScheduledEvalJob(eval_type="micro_eval", lesson_id="lesson-a", rng=1, step=10, weight_step=10)
+    replacement = ScheduledEvalJob(eval_type="eval", rng=2, step=12, weight_step=12)
 
     assert _coalesce_eval_job(existing, replacement) == replacement
 
@@ -326,9 +451,9 @@ def test_async_eval_job_submission_coalesces_pending_work():
     worker._run_eval_job = fake_run_eval_job
     worker._consume_eval_results = fake_consume_eval_results
 
-    first_job = ScheduledEvalJob(eval_type="micro_eval", lesson_id="lesson-a", rng=1, step=1, tracker_step=1)
-    second_job = ScheduledEvalJob(eval_type="micro_eval", lesson_id="lesson-b", rng=2, step=2, tracker_step=2)
-    third_job = ScheduledEvalJob(eval_type="eval", rng=3, step=3, tracker_step=3)
+    first_job = ScheduledEvalJob(eval_type="micro_eval", lesson_id="lesson-a", rng=1, step=1, weight_step=1)
+    second_job = ScheduledEvalJob(eval_type="micro_eval", lesson_id="lesson-b", rng=2, step=2, weight_step=2)
+    third_job = ScheduledEvalJob(eval_type="eval", rng=3, step=3, weight_step=3)
 
     try:
         worker._enqueue_eval_job(first_job)

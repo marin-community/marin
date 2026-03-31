@@ -8148,6 +8148,42 @@ Plan for later:
    same W&B id, and verifies that the resumed run stays monotonic and does not
    transiently appear crashed.
 
+Chosen implementation direction:
+
+- Keep the stable per-worker W&B ids and names exactly as they are. The run
+  identity is already correct.
+- Stop treating `current_weight_step` as the W&B x-axis. It is a useful RL
+  metric, but it is not a safe tracker step because it can stall, repeat, or be
+  `-1` at resume boundaries.
+- Add a separate resume-safe rollout tracker step in shared `RLRunState`,
+  scoped per logical rollout worker.
+- Allocate that tracker step only at actual `tracker.log(...)` time on the main
+  rollout thread, not when an eval job is scheduled. This avoids consuming
+  tracker steps for dropped/coalesced eval jobs and keeps async eval logging
+  monotonic.
+- Log `inference.weight_step` and `inference.train_step` as ordinary metrics so
+  we preserve semantic alignment information without using them as the W&B
+  step.
+
+Why this shape is preferred:
+
+- A local rollout-loop counter would reset on retry and recreate the same
+  monotonicity problem under the resumed W&B run id.
+- A shared `RLRunState` counter already exists for resume-safe rollout-side
+  metrics and is the natural place to persist the logical W&B step too.
+- Allocating the step at emit time keeps the W&B axis tied to actual visible
+  log events, not to speculative or later-coalesced async work.
+
+Implementation landed locally:
+
+- `RLRunState` now owns a resume-safe per-worker rollout tracker step.
+- rollout periodic metrics now log with that shared monotonic tracker step
+  instead of `current_weight_step`
+- async eval logs allocate the tracker step only when results are consumed on
+  the main thread
+- rollout logs now surface `inference.weight_step` and `inference.train_step`
+  as ordinary metrics instead of overloading the W&B step for that purpose
+
 ## 2026-03-30 16:50 PDT - checkpoint thread closed as a primary blocker
 
 This main logbook now treats the checkpoint robustness investigation as a

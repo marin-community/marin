@@ -3,8 +3,8 @@
 
 import logging
 
-from iris.marin_fs import REGION_TO_DATA_BUCKET, marin_region
 from marin.execution.executor import infer_tpu_variant_regions_from_iris
+from rigging.filesystem import REGION_TO_DATA_BUCKET, marin_region
 
 logger = logging.getLogger(__name__)
 
