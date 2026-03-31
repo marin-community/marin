@@ -21,6 +21,8 @@ from iris.cluster.types import JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import cluster_pb2
 from rigging.timing import Deadline, Duration, Timestamp
 
+logger = logging.getLogger(__name__)
+
 T = TypeVar("T")
 RowDecoder = Callable[[sqlite3.Row], Any]
 
@@ -920,22 +922,36 @@ class ControllerDB:
     AUTH_DB_FILENAME = "auth.sqlite3"
 
     def __init__(self, db_dir: Path):
+        import time
+
         self._db_dir = db_dir
         self._db_dir.mkdir(parents=True, exist_ok=True)
         self._db_path = self._db_dir / self.DB_FILENAME
         self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
         self._lock = RLock()
+
+        t0 = time.monotonic()
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._configure(self._conn)
         self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
+        logger.info("DB opened in %.2fs (path=%s)", time.monotonic() - t0, self._db_path)
+
+        t0 = time.monotonic()
         self.apply_migrations()
+        logger.info("Migrations applied in %.2fs", time.monotonic() - t0)
+
         # Populate sqlite_stat1 so the query planner picks good join orders.
         # Without this, queries like running_tasks_by_worker scan thousands of
         # rows instead of using the narrower index path.
+        t0 = time.monotonic()
         self._conn.execute("ANALYZE")
+        logger.info("ANALYZE completed in %.2fs", time.monotonic() - t0)
+
+        t0 = time.monotonic()
         self._read_pool: queue.Queue[sqlite3.Connection] = queue.Queue()
         self._init_read_pool()
+        logger.info("Read pool initialized in %.2fs", time.monotonic() - t0)
         # Lazily populated cache of worker attributes, keyed by worker_id.
         # Eliminates the per-cycle attribute SQL query from the scheduling hot path.
         self._attr_cache: dict[WorkerId, dict[str, AttributeValue]] | None = None
@@ -1115,12 +1131,21 @@ class ControllerDB:
         # re-run after conversion to .py.
         applied_stems = {Path(name).stem for name in applied}
 
+        import time
+
+        pending = []
         for path in sorted(migrations_dir.glob("*.py")):
             if path.name.startswith("__"):
                 continue
             if path.stem in applied_stems:
                 continue
+            pending.append(path)
 
+        if pending:
+            logger.info("Applying %d pending migration(s): %s", len(pending), [p.name for p in pending])
+
+        for path in pending:
+            t0 = time.monotonic()
             spec = importlib.util.spec_from_file_location(path.stem, path)
             assert spec is not None and spec.loader is not None
             module = importlib.util.module_from_spec(spec)
@@ -1129,6 +1154,7 @@ class ControllerDB:
             # Commit any implicit transaction left open by migrate() (e.g.
             # row-by-row UPDATEs in 0008) so the next BEGIN IMMEDIATE succeeds.
             self._conn.commit()
+            logger.info("Migration %s applied in %.2fs", path.name, time.monotonic() - t0)
 
             with self.transaction() as cur:
                 cur.execute(
