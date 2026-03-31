@@ -17,7 +17,11 @@ import pytest
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.db import ControllerDB, TaskDetail, WorkerDetail, decode_one, decode_rows
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import (
+    TASK_DETAIL_PROJECTION,
+    WORKER_DETAIL_PROJECTION,
+)
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -256,12 +260,11 @@ class ServiceTestHarness:
 
     def _query_tasks(self, job_id: JobName):
         with self.db.snapshot() as q:
-            return decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (job_id.to_wire(),)))
+            return TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (job_id.to_wire(),)))
 
     def _query_task(self, task_id: JobName):
         with self.db.snapshot() as q:
-            return decode_one(
-                TaskDetail,
+            return TASK_DETAIL_PROJECTION.decode_one(
                 q.fetchall("SELECT * FROM tasks WHERE task_id = ? LIMIT 1", (task_id.to_wire(),)),
             )
 
@@ -316,7 +319,7 @@ class ServiceTestHarness:
         """Read current worker_id and attempt_id from the task_attempts table.
 
         SELECT * FROM tasks doesn't join with task_attempts, so
-        TaskDetail.worker_id is always None when read via _query_task. We read
+        TaskDetailRow.current_worker_id may be None when read via _query_task. We read
         the attempt row directly instead.
         """
         with self.db.snapshot() as q:
@@ -337,7 +340,7 @@ class ServiceTestHarness:
         # If still PENDING, assign to an available worker.
         if task.state == cluster_pb2.TASK_STATE_PENDING:
             with self.db.snapshot() as q:
-                workers = decode_rows(WorkerDetail, q.fetchall("SELECT * FROM workers"))
+                workers = WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers"))
             if not workers:
                 raise ValueError("No GCP workers registered -- call register_gcp_worker first")
             self.state.queue_assignments([Assignment(task_id=task_id, worker_id=WorkerId(workers[0].worker_id))])
