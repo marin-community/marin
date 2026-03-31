@@ -322,7 +322,7 @@ def _schedulable_tasks(queries: ControllerDB) -> list[TaskRow]:
             snapshot.fetchall(
                 f"SELECT {TASK_ROW_COLUMNS} FROM tasks t WHERE t.state = ? "
                 "ORDER BY t.priority_neg_depth ASC, t.priority_root_submitted_ms ASC, "
-                "t.submitted_at_ms ASC, t.task_id ASC",
+                "t.submitted_at_ms ASC, t.priority_insertion ASC",
                 (cluster_pb2.TASK_STATE_PENDING,),
             ),
         )
@@ -700,6 +700,9 @@ class ControllerConfig:
     txn_action_retention: Duration = field(default_factory=lambda: Duration.from_seconds(3 * 86400))
     """Delete txn_actions older than this (default: 3 days)."""
 
+    profile_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
+    """Delete task_profiles older than this (default: 24 hours)."""
+
     profile_concurrency: int = 8
     """Maximum parallel profile RPCs to workers."""
 
@@ -1008,6 +1011,7 @@ class Controller:
                         worker_retention=self._config.worker_retention,
                         log_retention=self._config.log_retention,
                         txn_action_retention=self._config.txn_action_retention,
+                        profile_retention=self._config.profile_retention,
                         stop_event=stop_event,
                     )
                 except Exception:
