@@ -21,7 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
-from iris.time_utils import Deadline, Duration, Timestamp
+from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 

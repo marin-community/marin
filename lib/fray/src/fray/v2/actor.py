@@ -24,7 +24,12 @@ class ActorHandle(Protocol):
 
 @dataclass(frozen=True)
 class ActorContext:
-    """Context available to actors during execution."""
+    """Context available to actors during execution.
+
+    ``shutdown_event`` is set by the actor when it is ready to exit.
+    Backends create the event and block on it (Iris) or use it to trigger
+    ``exit_actor()`` (Ray).
+    """
 
     handle: ActorHandle
     """Handle to self, can be passed to other actors for callbacks."""
@@ -34,6 +39,9 @@ class ActorContext:
 
     group_name: str
     """The name of the actor group this actor belongs to."""
+
+    shutdown_event: threading.Event | None = None
+    """Set by the actor when ready to exit; backends wait on it."""
 
 
 class HostedActor:
@@ -51,15 +59,14 @@ class HostedActor:
 
 _current_actor_ctx: ContextVar[ActorContext | None] = ContextVar("actor_context", default=None)
 
-# Module-level (not ContextVar) so child threads spawned by the actor can call
-# request_shutdown(). _host_actor runs one actor per process, so global scope is correct.
-_actor_shutdown_event: threading.Event | None = None
-
 
 def current_actor() -> ActorContext:
     """Get the current actor's context. Must be called from within an actor.
 
     Returns the actor's handle (for passing to other actors), index, and group name.
+    Call from ``__init__`` (where the ContextVar is set) and stash anything
+    you need on ``self`` — child threads in Python <3.12 do NOT inherit
+    ContextVars.
 
     Raises:
         RuntimeError: If called outside of an actor context.
@@ -78,27 +85,6 @@ def _set_current_actor(ctx: ActorContext):
 def _reset_current_actor(token):
     """Reset the current actor context. Used by backends after actor creation."""
     _current_actor_ctx.reset(token)
-
-
-def request_shutdown() -> None:
-    """Signal that the hosting actor process should exit.
-
-    Call from within an actor (e.g. after receiving SHUTDOWN from a coordinator)
-    to unblock _host_actor and trigger a clean server teardown.  No-op when
-    running under a backend that doesn't use _host_actor (Ray, LocalClient).
-    """
-    if _actor_shutdown_event is not None:
-        _actor_shutdown_event.set()
-
-
-def _set_shutdown_event(event: threading.Event) -> None:
-    global _actor_shutdown_event
-    _actor_shutdown_event = event
-
-
-def _clear_shutdown_event() -> None:
-    global _actor_shutdown_event
-    _actor_shutdown_event = None
 
 
 class ActorFuture(Protocol):

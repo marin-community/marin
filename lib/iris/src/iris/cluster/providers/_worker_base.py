@@ -24,7 +24,7 @@ from iris.cluster.providers.remote_exec import (
     wait_for_connection,
 )
 from iris.cluster.providers.types import CommandResult
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
 

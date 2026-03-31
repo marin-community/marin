@@ -8,7 +8,7 @@ from functools import partial
 from typing import Any, List, Optional
 
 import jax
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 import jax.numpy as jnp
 import numpy as np
 from jax.experimental import multihost_utils

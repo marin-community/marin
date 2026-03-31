@@ -10,8 +10,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Any
+from urllib.parse import urlparse
 
-from iris.marin_fs import marin_prefix
+from rigging.filesystem import marin_prefix
+
+
+def _is_relative_path(url_or_path: str) -> bool:
+    """Return True if the path is relative (not a URL and doesn't start with /)."""
+    if urlparse(url_or_path).scheme:
+        return False
+    return not url_or_path.startswith("/")
 
 
 @dataclass(frozen=True)
@@ -86,11 +94,17 @@ class StepSpec:
 
     @cached_property
     def output_path(self) -> str:
-        """Output path of the step"""
-        if self.override_output_path is not None:
-            return self.override_output_path
+        """Output path of the step.
 
+        If ``override_output_path`` is set and relative (no URL scheme, doesn't
+        start with ``/``), it is automatically prefixed with ``output_path_prefix``
+        or ``marin_prefix()``.
+        """
         prefix = self.output_path_prefix or marin_prefix()
+        if self.override_output_path is not None:
+            if _is_relative_path(self.override_output_path):
+                return f"{prefix}/{self.override_output_path}"
+            return self.override_output_path
         return f"{prefix}/{self.name_with_hash}"
 
     def as_executor_step(self) -> ExecutorStep:  # noqa: F821

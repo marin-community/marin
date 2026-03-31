@@ -21,7 +21,7 @@ from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
 from iris.cluster.types import JobName, TaskAttempt, WorkerId
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
 

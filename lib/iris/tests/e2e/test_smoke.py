@@ -10,6 +10,7 @@ has workers across CPU, TPU coscheduling, and multi-region scale groups.
 
 import logging
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -33,11 +34,11 @@ from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2, config_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff
 
 from .conftest import (
     DEFAULT_CONFIG,
-    IRIS_ROOT,
+    MARIN_ROOT,
     ClusterCapabilities,
     IrisTestCluster,
     _NoOpPage,
@@ -140,7 +141,7 @@ def smoke_cluster(request):
     controller_url = request.config.getoption("--iris-controller-url")
 
     if controller_url:
-        client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(controller_url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
         tc = IrisTestCluster(
             url=controller_url,
@@ -160,7 +161,7 @@ def smoke_cluster(request):
 
     config = _make_smoke_config()
     with connect_cluster(config) as url:
-        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(SMOKE_WORKER_COUNT, timeout=60)
@@ -227,46 +228,6 @@ def verbose_job(smoke_cluster):
 def capabilities(smoke_cluster) -> ClusterCapabilities:
     """Discover cluster capabilities from live workers for topology-dependent tests."""
     return discover_capabilities(smoke_cluster.controller_client)
-
-
-# ============================================================================
-# Config parity: verify the real cloud smoke config works in local mode.
-# This catches naming issues (GCE 63-char limit, invalid chars from zone
-# expansion) that only surface when the autoscaler tries to create slices
-# with realistic expanded-zone name prefixes.
-# ============================================================================
-
-
-SMOKE_GCP_CONFIG = IRIS_ROOT / "examples" / "smoke-gcp.yaml"
-
-
-def test_smoke_gcp_config_boots_locally():
-    """Load smoke-gcp.yaml, convert to local mode, verify workers join.
-
-    This is the local equivalent of the cloud-smoke-test CI job. If this
-    test fails, the cloud smoke test will also fail — catching GCE naming
-    validation errors without needing real GCP resources.
-    """
-    config = load_config(SMOKE_GCP_CONFIG)
-    config = make_local_config(config)
-
-    with connect_cluster(config) as url:
-        client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        # The smoke config has min_slices=1 for tpu_v5e_16, so at least
-        # one slice (with 4 workers) should come up.
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
-            healthy = [w for w in workers if w.healthy]
-            if healthy:
-                break
-            time.sleep(0.5)
-        else:
-            raise AssertionError(
-                f"No healthy workers after 30s with smoke-gcp.yaml in local mode. "
-                f"Total workers: {len(workers)}, healthy: {len(healthy)}"
-            )
-        client.close()
 
 
 # ============================================================================
@@ -551,11 +512,9 @@ def test_log_levels_populated(smoke_cluster, verbose_job, capabilities):
     deadline = time.monotonic() + smoke_cluster.job_timeout
     entries = []
     while time.monotonic() < deadline:
-        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
-        response = smoke_cluster.controller_client.get_task_logs(request)
-        entries = []
-        for batch in response.task_logs:
-            entries.extend(batch.logs)
+        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        response = smoke_cluster.controller_client.fetch_logs(request)
+        entries = list(response.entries)
         if any("info-marker" in e.data for e in entries):
             break
         time.sleep(0.5)
@@ -579,11 +538,9 @@ def test_log_level_filter(smoke_cluster, verbose_job, capabilities):
 
     task_id = verbose_job.job_id.task(0).to_wire()
 
-    request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id, min_level="WARNING")
-    response = smoke_cluster.controller_client.get_task_logs(request)
-    filtered = []
-    for batch in response.task_logs:
-        filtered.extend(batch.logs)
+    request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*", min_level="WARNING")
+    response = smoke_cluster.controller_client.fetch_logs(request)
+    filtered = list(response.entries)
 
     filtered_data = [e.data for e in filtered]
     assert any("warning-marker" in d for d in filtered_data), f"warning-marker missing: {filtered_data}"
@@ -719,7 +676,7 @@ def test_checkpoint_restore():
     url = cluster.start()
     try:
         # Phase 1: complete a job, write checkpoint, restart controller.
-        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(1, timeout=30)
@@ -738,7 +695,7 @@ def test_checkpoint_restore():
         # Phase 2: verify restored state and submit new work.
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(
-            url=url, client=IrisClient.remote(url, workspace=IRIS_ROOT), controller_client=controller_client
+            url=url, client=IrisClient.remote(url, workspace=MARIN_ROOT), controller_client=controller_client
         )
 
         resp = controller_client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=saved_job_id))

@@ -25,8 +25,8 @@ Auth model:
 
 import logging
 import os
-from http.cookies import SimpleCookie
 from collections.abc import Callable
+from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
 import httpx
@@ -37,8 +37,9 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from iris.cluster.controller.actor_proxy import PROXY_ROUTE, ActorProxy
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.dashboard_common import html_shell, static_files_mount
+from iris.cluster.dashboard_common import html_shell, on_shutdown, static_files_mount
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
@@ -260,6 +261,12 @@ class ControllerDashboard:
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
+        self._actor_proxy = ActorProxy(self._service._db)
+
+        @requires_auth
+        async def _proxy_actor_rpc(request: Request) -> Response:
+            return await self._actor_proxy.handle(request)
+
         routes = [
             Route("/", self._dashboard),
             Route("/auth/session_bootstrap", self._session_bootstrap),
@@ -269,11 +276,17 @@ class ControllerDashboard:
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
+            Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
+            Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
         ]
-        app: Starlette | _RouteAuthMiddleware = Starlette(routes=routes)
+
+        app: Starlette | _RouteAuthMiddleware = Starlette(
+            routes=routes,
+            lifespan=on_shutdown(self._actor_proxy.close),
+        )
         if self._auth_verifier is not None and self._auth_provider is not None:
             app = _RouteAuthMiddleware(app, self._auth_verifier, optional=self._auth_optional)
         return app
@@ -379,6 +392,15 @@ class ControllerDashboard:
             return Response(f"Bundle not found: {bundle_id}", status_code=404)
         return Response(data, media_type="application/zip")
 
+    @public
+    def _blob_download(self, request: Request) -> Response:
+        blob_id = request.path_params["blob_id"]
+        try:
+            data = self._service.blob_data(blob_id)
+        except FileNotFoundError:
+            return Response(f"Blob not found: {blob_id}", status_code=404)
+        return Response(data, media_type="application/octet-stream")
+
 
 class ProxyControllerDashboard:
     """Dashboard that proxies RPC calls to a remote Iris controller.
@@ -414,11 +436,13 @@ class ProxyControllerDashboard:
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/bundles/{bundle_id:str}.zip", self._proxy_bundle),
+            Route("/blobs/{blob_id:str}", self._proxy_blob),
             Route("/health", self._health),
             Route("/iris.cluster.ControllerService/{method}", self._proxy_rpc, methods=["POST"]),
             static_files_mount(),
         ]
-        return Starlette(routes=routes, on_shutdown=[self._client.aclose])
+
+        return Starlette(routes=routes, lifespan=on_shutdown(self._client.aclose))
 
     def _proxy_html(self, dashboard_type: str) -> HTMLResponse:
         html = html_shell("Iris Controller (Proxy)", dashboard_type)
@@ -463,3 +487,10 @@ class ProxyControllerDashboard:
         if upstream_resp.status_code != 200:
             return Response(upstream_resp.text, status_code=upstream_resp.status_code)
         return Response(upstream_resp.content, media_type="application/zip")
+
+    async def _proxy_blob(self, request: Request) -> Response:
+        blob_id = request.path_params["blob_id"]
+        upstream_resp = await self._client.get(f"/blobs/{blob_id}")
+        if upstream_resp.status_code != 200:
+            return Response(upstream_resp.text, status_code=upstream_resp.status_code)
+        return Response(upstream_resp.content, media_type="application/octet-stream")

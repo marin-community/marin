@@ -68,7 +68,7 @@ from haliax.state_dict import (
 )
 
 from levanter.callbacks import StepInfo
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, upload_to_hub
+from levanter.compat.hf_checkpoints import GenerationConfigDict, HFCheckpointConverter, RepoRef, upload_to_hub
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.jax_utils import join_key, key_iterator, leaf_key_paths
 from levanter.utils.logging import silence_transformer_nag
@@ -460,6 +460,7 @@ def save_merged_hf_checkpoint_callback(
     base_path,
     converter: HFCheckpointConverter,
     upload_to_hf: Optional[Union[str, RepoRef]] = None,
+    generation_config: Optional[GenerationConfigDict] = None,
     **hf_upload_kwargs,
 ):
     """
@@ -495,7 +496,14 @@ def save_merged_hf_checkpoint_callback(
 
         model = step.eval_model
 
-        save_merged_hf_model(model, converter, path, upload_to_hf=upload_to_hf, **my_upload_kwargs)
+        save_merged_hf_model(
+            model,
+            converter,
+            path,
+            upload_to_hf=upload_to_hf,
+            generation_config=generation_config,
+            **my_upload_kwargs,
+        )
 
         logger.info("Saved merged checkpoint.")
 
@@ -507,6 +515,7 @@ def save_merged_hf_model(
     converter: HFCheckpointConverter,
     path: str,
     upload_to_hf: Optional[Union[str, RepoRef]] = None,
+    generation_config: Optional[GenerationConfigDict] = None,
     **upload_kwargs,
 ):
     """
@@ -520,6 +529,7 @@ def save_merged_hf_model(
         merged_model,
         path,
         upload_to_hf=upload_to_hf,  # type: ignore
+        generation_config=generation_config,
         **upload_kwargs,
     )
 

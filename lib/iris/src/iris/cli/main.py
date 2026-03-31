@@ -12,7 +12,7 @@ import sys
 import click
 
 from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 from iris.rpc import config_pb2
 from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
 
@@ -337,11 +337,13 @@ def key_revoke(ctx, key_id: str):
 from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
 from iris.cli.job import job  # noqa: E402
+from iris.cli.actor import actor as actor_cmd  # noqa: E402
 from iris.cli.process_status import register_process_status_commands  # noqa: E402
 from iris.cli.query import query_cmd  # noqa: E402
 from iris.cli.rpc import register_rpc_commands  # noqa: E402
 from iris.cli.task import task  # noqa: E402
 
+iris.add_command(actor_cmd)
 iris.add_command(cluster)
 iris.add_command(build)
 iris.add_command(job)

@@ -47,7 +47,7 @@ from iris.cluster.service_mode import ServiceMode
 from iris.cluster.worker.env_probe import construct_worker_id
 from iris.cluster.providers.remote_exec import GceRemoteExec
 from iris.rpc import config_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -640,24 +640,37 @@ def _fetch_bootstrap_logs(project_id: str, handle: GcpSliceHandle) -> None:
         )
 
 
+def _probe_worker_health(address: str, port: int) -> bool:
+    """Probe the worker's HTTP health endpoint. Returns True if healthy."""
+    try:
+        resp = urllib.request.urlopen(f"http://{address}:{port}/health", timeout=5)
+        return resp.status == 200
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
+        return False
+
+
 def _run_vm_slice_bootstrap(
     gcp_service: GcpService,
     handle: GcpVmSliceHandle,
     worker_config: config_pb2.WorkerConfig,
     poll_interval: float = 5.0,
     cloud_ready_timeout: float = 600.0,
+    bootstrap_timeout: float = 300.0,
 ) -> None:
-    """Monitor GCE startup-script bootstrap via serial port output.
+    """Monitor GCE startup-script bootstrap via health probe and serial port.
 
-    The bootstrap script was baked into VM metadata at creation time, so the
-    VM self-bootstraps on first boot. This method polls serial port output
-    for [iris-init] log lines until the script emits ``Bootstrap complete``
-    or the timeout expires.
+    Phase 1: Wait for the VM to reach cloud READY with an internal IP.
+    Phase 2: Poll the worker's /health endpoint (primary signal) and serial
+    port output (secondary signal / diagnostics) until bootstrap completes.
+
+    Each phase has its own independent timeout to prevent a slow phase 1
+    from starving phase 2.
     """
-    deadline = Deadline.from_now(Duration.from_seconds(cloud_ready_timeout))
+    cloud_deadline = Deadline.from_now(Duration.from_seconds(cloud_ready_timeout))
     poll_duration = Duration.from_seconds(poll_interval)
 
-    while not deadline.expired():
+    # Phase 1: wait for cloud READY with an internal IP
+    while not cloud_deadline.expired():
         cloud_status = handle._describe_cloud()
         if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
             raise InfraError(f"VM slice {handle.slice_id} entered {cloud_status.state} while waiting for cloud READY")
@@ -668,32 +681,45 @@ def _run_vm_slice_bootstrap(
     else:
         raise InfraError(f"VM slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s")
 
-    serial_offset = 0
-    bootstrap_complete = False
-    bootstrap_failed = False
+    worker_address = cloud_status.workers[0].internal_address
+    worker_port = worker_config.port
 
-    while not deadline.expired():
+    # Phase 2: poll health endpoint + serial port with a fresh deadline
+    bootstrap_deadline = Deadline.from_now(Duration.from_seconds(bootstrap_timeout))
+    serial_offset = 0
+
+    while not bootstrap_deadline.expired():
+        # Primary signal: HTTP health probe
+        if _probe_worker_health(worker_address, worker_port):
+            logger.info("Worker health probe succeeded for VM slice %s", handle.slice_id)
+            break
+
+        # Secondary signal: serial port for diagnostics and error detection
         output = gcp_service.vm_get_serial_port_output(handle._vm_name, handle._zone, start=serial_offset)
         if output:
+            serial_offset += len(output)
+            bootstrap_complete = False
+            bootstrap_errored = False
             for line in output.splitlines():
                 if "[iris-init]" in line:
                     logger.info("[%s serial] %s", handle.slice_id, line.strip())
                 if "Bootstrap complete" in line:
                     bootstrap_complete = True
                 if "[iris-init] ERROR" in line:
-                    bootstrap_failed = True
+                    bootstrap_errored = True
 
-            serial_offset += len(output)
-
-        if bootstrap_complete:
-            break
-        if bootstrap_failed:
-            raise InfraError(f"Startup-script bootstrap failed for VM slice {handle.slice_id} (see serial output above)")
+            if bootstrap_complete:
+                logger.info("Serial port reports bootstrap complete for VM slice %s", handle.slice_id)
+                break
+            if bootstrap_errored:
+                raise InfraError(
+                    f"Startup-script bootstrap failed for VM slice {handle.slice_id} (see serial output above)"
+                )
 
         time.sleep(poll_duration.to_seconds())
     else:
-        raise InfraError(f"VM slice {handle.slice_id} startup-script did not complete within {cloud_ready_timeout}s")
+        raise InfraError(f"VM slice {handle.slice_id} bootstrap did not complete within {bootstrap_timeout}s")
 
-    logger.info("Bootstrap completed for VM slice %s (via startup-script)", handle.slice_id)
+    logger.info("Bootstrap completed for VM slice %s", handle.slice_id)
     with handle._bootstrap_lock:
         handle._bootstrap_state = CloudSliceState.READY

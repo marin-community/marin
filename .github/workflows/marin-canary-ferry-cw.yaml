@@ -17,6 +17,8 @@ on:
 permissions:
   contents: read   # actions/checkout
   packages: write  # docker login ghcr.io for iris cluster start
+  issues: write    # claude triage files issues
+  id-token: write  # claude-code-action OIDC
 
 jobs:
   canary-ferry-cw:
@@ -28,7 +30,7 @@ jobs:
     env:
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: gpu
-      CANARY_BATCH_SIZE: "32"
+      CANARY_BATCH_SIZE: "16"
       CANARY_TARGET_TOKENS: "6553600"
       CANARY_MIN_STEPS: "40"
       CANARY_MAX_LOSS: "8.0"
@@ -63,6 +65,9 @@ jobs:
           mkdir -p ~/.kube
           echo "${{ secrets.CW_KUBECONFIG }}" > ~/.kube/coreweave-iris
           chmod 600 ~/.kube/coreweave-iris
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -179,6 +184,30 @@ jobs:
           kubectl --kubeconfig ~/.kube/coreweave-iris -n ${{ env.IRIS_NAMESPACE }} \
             get events --sort-by='.lastTimestamp' --field-selector type!=Normal || true
 
+      - name: Claude triage
+        id: claude_triage
+        if: failure() && github.event_name == 'schedule'
+        uses: anthropics/claude-code-action@v1
+        timeout-minutes: 30
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          prompt: |
+            Read .agents/skills/canary-triage/SKILL.md and follow it.
+          claude_args: |
+            --model opus
+            --max-turns 50
+            --allowedTools "Bash(kubectl:*),Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*)"
+        env:
+          CANARY_LANE: gpu
+          CANARY_JOB_ID: ${{ steps.submit.outputs.job_id }}
+          CANARY_RUN_ID: ${{ env.RUN_ID }}
+          IRIS_CONFIG: ${{ env.IRIS_CONFIG }}
+          IRIS_NAMESPACE: ${{ env.IRIS_NAMESPACE }}
+          WANDB_ENTITY: ${{ env.WANDB_ENTITY }}
+          WANDB_PROJECT: ${{ env.WANDB_PROJECT }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
       # `cluster stop` only deletes Pods; NodePools survive and rely on the
       # CW autoscaler to scale down. Delete them explicitly to avoid lingering
       # H100 costs.
@@ -192,3 +221,17 @@ jobs:
           else
             echo "Keeping node pool alive (keep_nodepool=true)"
           fi
+
+      - name: Notify Slack on failure
+        if: failure() && github.event_name == 'schedule'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          FALLBACK_TEXT: ":red_circle: *GPU Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          if [ -f slack_message.md ]; then
+            TEXT=$(cat slack_message.md)
+          else
+            TEXT="$FALLBACK_TEXT"
+          fi
+          PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
+          curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"

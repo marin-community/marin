@@ -13,12 +13,13 @@ import tempfile
 import time
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 from urllib.parse import urlparse
 
 import requests
-from iris.marin_fs import marin_prefix
+from rigging.filesystem import marin_prefix
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 
@@ -287,6 +288,47 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     if gpu_memory_utilization is not None:
         args.extend(["--gpu-memory-utilization", str(gpu_memory_utilization)])
     return args
+
+
+def _poll_until_ready(
+    server_url: str,
+    *,
+    timeout_seconds: int,
+    poll_interval_seconds: float = 5,
+    check_alive: Callable[[], None] | None = None,
+) -> None:
+    """Block until ``GET {server_url}/models`` returns 200.
+
+    Args:
+        server_url: The vLLM ``/v1`` base URL (e.g. ``http://127.0.0.1:8000/v1``).
+        timeout_seconds: Maximum seconds to wait before raising ``TimeoutError``.
+        poll_interval_seconds: Seconds between consecutive polls.
+        check_alive: Optional callable invoked each iteration *before* the HTTP
+            probe. Should raise if the underlying server process / container is
+            no longer alive (the exception propagates directly to the caller).
+    """
+    models_url = f"{server_url}/models"
+    start_time = time.time()
+
+    while True:
+        if check_alive is not None:
+            check_alive()
+
+        try:
+            response = requests.get(models_url, timeout=5)
+            if response.status_code == 200:
+                return
+        except (requests.ConnectionError, requests.Timeout):
+            pass  # Server not ready yet.
+
+        elapsed = time.time() - start_time
+        if elapsed > timeout_seconds:
+            raise TimeoutError(
+                f"vLLM server at {models_url} did not become ready within {timeout_seconds}s "
+                f"(elapsed {elapsed:.1f}s)."
+            )
+
+        time.sleep(poll_interval_seconds)
 
 
 def _get_first_model_id(server_url: str) -> str:
@@ -632,7 +674,7 @@ def _start_vllm_docker_server(
             )
         logger.info(f"No docker_image specified; defaulting to {docker_image} for {resource_type}.")
 
-    env: dict[str, str] = _vllm_jax_env()
+    env: dict[str, str] = _build_vllm_env_dict()
     explain_cache_misses = os.environ.get("JAX_EXPLAIN_CACHE_MISSES")
     if explain_cache_misses is not None:
         env["JAX_EXPLAIN_CACHE_MISSES"] = explain_cache_misses
@@ -693,105 +735,90 @@ def _start_vllm_docker_server(
         docker_run_cmd=_redact_docker_run_command(cmd),
     )
 
-    server_models_url = f"{handle.server_url}/models"
-    start_time = time.time()
+    def _check_docker_alive() -> None:
+        if not _docker_container_running(resolved_name):
+            logs = _docker_logs_tail(resolved_name)
+            inspect = _docker_inspect(resolved_name)
+            raise RuntimeError(
+                "vLLM Docker sidecar exited before becoming ready.\n"
+                f"Container: {resolved_name}\n"
+                f"Image: {docker_image}\n"
+                f"Command: {_redact_docker_run_command(cmd)}\n"
+                f"--- docker logs (tail) ---\n{logs}\n"
+                f"--- docker inspect ---\n{inspect[:8000]}"
+            )
 
     try:
-        while True:
-            running = _docker_container_running(resolved_name)
-            if not running:
-                logs = _docker_logs_tail(resolved_name)
-                inspect = _docker_inspect(resolved_name)
-                raise RuntimeError(
-                    "vLLM Docker sidecar exited before becoming ready.\n"
-                    f"Container: {resolved_name}\n"
-                    f"Image: {docker_image}\n"
-                    f"Command: {_redact_docker_run_command(cmd)}\n"
-                    f"--- docker logs (tail) ---\n{logs}\n"
-                    f"--- docker inspect ---\n{inspect[:8000]}"
-                )
-
-            try:
-                response = requests.get(server_models_url, timeout=5)
-                if response.status_code == 200:
-                    return handle
-            except requests.ConnectionError:
-                # Server not ready yet.
-                pass
-            except requests.Timeout:
-                # Server not ready yet.
-                pass
-
-            elapsed_time = time.time() - start_time
-            if elapsed_time > timeout_seconds:
-                logs = _docker_logs_tail(resolved_name)
-                subprocess.run(["docker", "rm", "-f", resolved_name], check=False, capture_output=True, text=True)
-                raise TimeoutError(
-                    "Failed to start vLLM Docker sidecar within timeout period.\n"
-                    f"Container: {resolved_name}\n"
-                    f"Image: {docker_image}\n"
-                    f"Endpoint: {server_models_url}\n"
-                    f"Elapsed seconds: {elapsed_time:.1f}\n"
-                    f"--- docker logs (tail) ---\n{logs}"
-                )
-
-            time.sleep(poll_interval_seconds)
+        _poll_until_ready(
+            handle.server_url,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+            check_alive=_check_docker_alive,
+        )
     except Exception:
         subprocess.run(["docker", "rm", "-f", resolved_name], check=False, capture_output=True, text=True)
         raise
 
-
-def _vllm_jax_env() -> dict[str, str | Any]:
-    env: dict[str, str | Any] = {
-        "TOKENIZERS_PARALLELISM": "false",
-        # See `_vllm_env`.
-        "MODEL_IMPL_TYPE": os.environ.get("MODEL_IMPL_TYPE", "vllm"),
-        "JAX_ENABLE_COMPILATION_CACHE": os.environ.get("JAX_ENABLE_COMPILATION_CACHE", "1"),
-        "JAX_COMPILATION_CACHE_DIR": os.environ.get(
-            "JAX_COMPILATION_CACHE_DIR",
-            _default_jax_compilation_cache_dir(),
-        ),
-        "VLLM_XLA_CACHE_PATH": os.environ.get(
-            "VLLM_XLA_CACHE_PATH",
-            os.environ.get("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir()),
-        ),
-        "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": os.environ.get("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1"),
-        "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": os.environ.get("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2"),
-    }
-
-    # Pass through vLLM knobs when callers set them in the environment.
-    for key in (
-        "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
-        "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
-        "VLLM_TPU_SKIP_PRECOMPILE",
-    ):
-        value = os.environ.get(key)
-        if value is not None:
-            env[key] = value
-
-    return env
+    return handle
 
 
 def _default_jax_compilation_cache_dir() -> str:
     return f"{marin_prefix()}/compilation-cache"
 
 
-def _vllm_env() -> dict[str, str]:
-    env = dict(os.environ)
+# Canonical vLLM environment defaults shared by Docker and native backends.
+# Each (key, default) pair is resolved from the current environment at call time.
+_VLLM_ENV_DEFAULTS: tuple[tuple[str, str], ...] = (
     # tpu_inference defaults MODEL_IMPL_TYPE=auto, which selects flax_nnx for many
     # architectures. flax_nnx currently fails without an auto mesh context, so
     # default to the vllm implementation unless the user overrides it.
-    env.setdefault("MODEL_IMPL_TYPE", "vllm")
-    # Reduce TPU runtime logging noise by default (match training defaults).
-    env.setdefault("TPU_MIN_LOG_LEVEL", "3")
-    env.setdefault("TPU_STDERR_LOG_LEVEL", "3")
-    env.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
-    env.setdefault("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir())
-    # vllm-tpu uses XLA compilation caches; this env var is the one it keys off.
-    env.setdefault("VLLM_XLA_CACHE_PATH", env["JAX_COMPILATION_CACHE_DIR"])
-    # Cache aggressively for iterative bring-up workflows.
-    env.setdefault("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1")
-    env.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2")
+    ("MODEL_IMPL_TYPE", "vllm"),
+    ("TPU_MIN_LOG_LEVEL", "3"),
+    ("TPU_STDERR_LOG_LEVEL", "3"),
+    ("JAX_ENABLE_COMPILATION_CACHE", "1"),
+)
+
+# Keys that are passed through to the container when set in the host environment.
+_VLLM_PASSTHROUGH_KEYS: tuple[str, ...] = (
+    "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
+    "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
+    "VLLM_TPU_SKIP_PRECOMPILE",
+)
+
+
+def _build_vllm_env_dict() -> dict[str, str]:
+    """Build the canonical vLLM environment dict (fresh, not inheriting os.environ).
+
+    Used by the Docker backend which passes an explicit env dict.
+    """
+    cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir())
+    env: dict[str, str] = {
+        "TOKENIZERS_PARALLELISM": "false",
+        "JAX_COMPILATION_CACHE_DIR": cache_dir,
+        # vllm-tpu uses XLA compilation caches; this env var is the one it keys off.
+        "VLLM_XLA_CACHE_PATH": os.environ.get("VLLM_XLA_CACHE_PATH", cache_dir),
+        # Cache aggressively for iterative bring-up workflows.
+        "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": os.environ.get("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1"),
+        "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": os.environ.get("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2"),
+    }
+    for key, default in _VLLM_ENV_DEFAULTS:
+        env[key] = os.environ.get(key, default)
+    for key in _VLLM_PASSTHROUGH_KEYS:
+        value = os.environ.get(key)
+        if value is not None:
+            env[key] = value
+    return env
+
+
+def _vllm_env() -> dict[str, str]:
+    """Build the vLLM environment for the native (subprocess) backend.
+
+    Starts from ``os.environ`` and applies the canonical defaults.
+    """
+    env = dict(os.environ)
+    canonical = _build_vllm_env_dict()
+    for key, value in canonical.items():
+        env.setdefault(key, value)
     return env
 
 
@@ -834,9 +861,8 @@ def _start_vllm_native_server(
     process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True, env=native_env)
 
     server_url: str = f"http://{host}:{resolved_port}/v1"
-    start_time: float = time.time()
 
-    while True:
+    def _check_process_alive() -> None:
         if process.poll() is not None:
             stdout_f.close()
             stderr_f.close()
@@ -849,29 +875,18 @@ def _start_vllm_native_server(
                 f"{logs}"
             )
 
-        try:
-            response = requests.get(f"{server_url}/models", timeout=5)
-            if response.status_code == 200:
-                break
-        except requests.ConnectionError:
-            # Server not ready yet.
-            pass
-        except requests.Timeout:
-            # Server not ready yet.
-            pass
-
-        elapsed_time = time.time() - start_time
-        if elapsed_time > timeout_seconds:
-            process.kill()
-            stdout_f.close()
-            stderr_f.close()
-            logs = _native_logs_tail(log_dir)
-            raise TimeoutError("Failed to start vLLM server within timeout period.\n" f"Logs: {log_dir}\n" f"{logs}")
-
-        time.sleep(5)
-
-    stdout_f.close()
-    stderr_f.close()
+    try:
+        _poll_until_ready(
+            server_url,
+            timeout_seconds=timeout_seconds,
+            check_alive=_check_process_alive,
+        )
+    except Exception:
+        process.kill()
+        raise
+    finally:
+        stdout_f.close()
+        stderr_f.close()
     return VllmServerHandle(
         server_url=server_url,
         port=resolved_port,

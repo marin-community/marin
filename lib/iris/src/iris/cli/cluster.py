@@ -24,7 +24,8 @@ from iris.cli.main import require_controller_url
 from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
-from iris.time_utils import Timestamp
+from iris.time_proto import timestamp_from_proto
+from rigging.timing import Timestamp
 
 # =============================================================================
 # Helpers
@@ -286,7 +287,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
 
     # Set ephemeral state dir via marin_temp_bucket, which resolves
     # region-appropriate storage from MARIN_PREFIX.
-    from iris.marin_fs import marin_temp_bucket
+    from rigging.filesystem import marin_temp_bucket
 
     config.storage.remote_state_dir = marin_temp_bucket(ttl_days=7, prefix=f"iris/state/{label_prefix}")
 
@@ -508,7 +509,7 @@ def vm_status(ctx, scale_group):
         click.echo(f"    Initializing: {counts.get('initializing', 0)}")
         click.echo(f"    Failed: {counts.get('failed', 0)}")
         click.echo(f"  Demand: {group.current_demand} (peak: {group.peak_demand})")
-        backoff_ms = Timestamp.from_proto(group.backoff_until).epoch_ms()
+        backoff_ms = timestamp_from_proto(group.backoff_until).epoch_ms()
         if backoff_ms > 0:
             click.echo(f"  Backoff until: {_format_timestamp(backoff_ms)}")
             click.echo(f"  Consecutive failures: {group.consecutive_failures}")
@@ -523,7 +524,7 @@ def vm_status(ctx, scale_group):
                     click.echo(f"      {vi.vm_id}: {vm_state_name(vi.state)} ({vi.address})")
                     if vi.init_error:
                         click.echo(f"        Error: {vi.init_error}")
-    last_eval_ms = Timestamp.from_proto(as_status.last_evaluation).epoch_ms()
+    last_eval_ms = timestamp_from_proto(as_status.last_evaluation).epoch_ms()
     click.echo(f"\nLast evaluation: {_format_timestamp(last_eval_ms)}")
 
 
@@ -566,6 +567,58 @@ def vm_logs(ctx, vm_id):
 def controller(ctx):
     """Controller management commands."""
     pass
+
+
+@controller.command("serve")
+@click.option("--host", default="0.0.0.0", help="Bind host")
+@click.option("--port", default=10000, type=int, help="Bind port")
+@click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
+@click.option(
+    "--checkpoint-path",
+    default=None,
+    help="Restore from this specific checkpoint directory (e.g. gs://bucket/.../controller-state/1234567890)",
+)
+@click.option(
+    "--checkpoint-interval",
+    default=None,
+    type=float,
+    help="Periodic checkpoint interval in seconds (default: hourly)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Start in dry-run mode: compute scheduling but suppress all side effects",
+)
+@click.pass_context
+def controller_serve(ctx, host, port, scheduler_interval, checkpoint_path, checkpoint_interval, dry_run):
+    """Start a local controller process.
+
+    Loads the cluster config, restores from checkpoint, and runs the full
+    scheduling loop. Use --dry-run to suppress all side effects (no task
+    dispatch, no VM changes, no checkpoint writes) while still serving the
+    dashboard and RPC for inspection.
+
+    Example (dry-run with checkpoint restore)::
+
+        iris --config=cluster.yaml cluster controller serve --dry-run \\
+            --checkpoint-path gs://bucket/controller-state/1234567890
+    """
+    from iris.cluster.controller.main import run_controller_serve
+
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required for controller serve")
+
+    run_controller_serve(
+        config,
+        host=host,
+        port=port,
+        scheduler_interval=scheduler_interval,
+        checkpoint_path=checkpoint_path,
+        checkpoint_interval=checkpoint_interval,
+        dry_run=dry_run,
+    )
 
 
 @controller.command("checkpoint")

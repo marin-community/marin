@@ -7,6 +7,7 @@ Tests verify dashboard functionality through the Connect RPC endpoints.
 The dashboard serves a web UI that fetches data via RPC calls.
 """
 
+import re
 from unittest.mock import Mock
 
 import pytest
@@ -15,8 +16,9 @@ from starlette.testclient import TestClient
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
-    JOBS,
     Endpoint,
+    JobDetail,
+    decode_rows,
     healthy_active_workers_with_attributes,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
@@ -25,7 +27,8 @@ from iris.cluster.controller.transitions import Assignment, ControllerTransition
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import Timestamp
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Timestamp
 
 from .conftest import (
     make_test_entrypoint,
@@ -117,7 +120,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     def _get_job_scheduling_diagnostics(job_wire_id):
         """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
         with state._db.snapshot() as q:
-            rows = q.select(JOBS, where=JOBS.c.job_id == job_wire_id)
+            rows = decode_rows(JobDetail, q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire_id,)))
         if not rows:
             return None
         job = rows[0]
@@ -522,14 +525,14 @@ def mock_autoscaler():
                 current_demand=3,
                 availability_status="requesting",
                 availability_reason="scale-up in progress",
-                blocked_until=Timestamp.from_ms(0).to_proto(),
+                blocked_until=timestamp_to_proto(Timestamp.from_ms(0)),
             ),
         ],
         current_demand={"test-group": 3},
-        last_evaluation=Timestamp.from_ms(1000).to_proto(),
+        last_evaluation=timestamp_to_proto(Timestamp.from_ms(1000)),
         recent_actions=[
             vm_pb2.AutoscalerAction(
-                timestamp=Timestamp.from_ms(1000).to_proto(),
+                timestamp=timestamp_to_proto(Timestamp.from_ms(1000)),
                 action_type="scale_up",
                 scale_group="test-group",
                 slice_id="slice-1",
@@ -788,18 +791,17 @@ def test_health_endpoint_returns_ok(client):
 # =============================================================================
 
 
-def test_get_task_logs_for_missing_task_returns_empty_batch(client):
-    """GetTaskLogs returns a single batch with no logs for a nonexistent task."""
+def test_fetch_logs_for_missing_task_returns_empty_entries(client):
+    """FetchLogs returns empty entries for a nonexistent task."""
+    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
-        "/iris.cluster.ControllerService/GetTaskLogs",
-        json={"id": JobName.root("test-user", "nonexistent").task(0).to_wire()},
+        "/iris.cluster.ControllerService/FetchLogs",
+        json={"source": re.escape(task_id) + ":.*"},
         headers={"Content-Type": "application/json"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    batches = data.get("taskLogs", [])
-    assert len(batches) == 1
-    assert batches[0].get("logs", []) == []
+    assert data.get("entries", []) == []
 
 
 # =============================================================================

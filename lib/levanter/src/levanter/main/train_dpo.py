@@ -25,6 +25,7 @@ from levanter.adaptation import (
     LoraAdaptationConfig,
     NoAdaptationConfig,
 )
+from levanter.compat.hf_checkpoints import build_generation_config
 from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import (
@@ -262,6 +263,7 @@ class TrainDpoConfig:
     hf_upload: bool | str = False
     hf_save_steps: int | None = 10000
     hf_save_dtype: Optional[str] = None
+    hf_generation_eos_token_ids: Optional[list[int]] = None
 
     peft_save_path: Optional[str] = None
     peft_hf_upload: bool | str = False
@@ -383,6 +385,7 @@ def main(config: TrainDpoConfig):
     _validate_dpo_config(config)
 
     tokenizer = config.data.the_tokenizer
+    generation_config = build_generation_config(tokenizer, config.hf_generation_eos_token_ids)
     model_context = prepare_model_init_context(
         config.model,
         tokenizer=tokenizer,
@@ -598,6 +601,7 @@ def main(config: TrainDpoConfig):
             hf_upload=config.hf_upload,
             hf_save_steps=config.hf_save_steps,
             hf_save_dtype=config.hf_save_dtype,
+            generation_config=generation_config,
             peft_save_path=config.peft_save_path,
             peft_hf_upload=config.peft_hf_upload,
             merged_hf_save_path=config.merged_hf_save_path,

@@ -12,7 +12,6 @@ import pytest
 
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.db import (
-    WORKER_ATTRIBUTES,
     _decode_attribute_rows,
 )
 from iris.cluster.controller.scheduler import (
@@ -24,7 +23,8 @@ from iris.cluster.controller.transitions import Assignment, ControllerTransition
 from iris.cluster.types import JobName, WorkerId
 from iris.cluster.controller.pending_diagnostics import PendingHint, build_job_pending_hints
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_proto import duration_to_proto
+from rigging.timing import Duration, Timestamp
 
 from tests.cluster.conftest import eq_constraint, in_constraint
 from .conftest import (
@@ -55,17 +55,10 @@ def _job_requirements_from_job(job) -> JobRequirements:
 
 def _worker_attr(state: ControllerTransitions, worker_id: WorkerId, key: str):
     with state._db.snapshot() as q:
-        rows = q.select(
-            WORKER_ATTRIBUTES,
-            columns=(
-                WORKER_ATTRIBUTES.c.worker_id,
-                WORKER_ATTRIBUTES.c.key,
-                WORKER_ATTRIBUTES.c.value_type,
-                WORKER_ATTRIBUTES.c.str_value,
-                WORKER_ATTRIBUTES.c.int_value,
-                WORKER_ATTRIBUTES.c.float_value,
-            ),
-            where=(WORKER_ATTRIBUTES.c.worker_id == str(worker_id)) & (WORKER_ATTRIBUTES.c.key == key),
+        rows = q.raw(
+            "SELECT worker_id, key, value_type, str_value, int_value, float_value"
+            " FROM worker_attributes WHERE worker_id = ? AND key = ?",
+            (str(worker_id), key),
         )
     if not rows:
         return None
@@ -273,7 +266,7 @@ def test_scheduler_detects_timed_out_tasks(state):
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    request.scheduling_timeout.CopyFrom(Duration.from_seconds(1).to_proto())
+    request.scheduling_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(1)))
     tasks = submit_job(state, "j1", request)
 
     # Manually set deadline epoch to past timestamp in DB.

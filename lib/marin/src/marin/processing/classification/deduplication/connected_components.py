@@ -6,7 +6,7 @@ from collections.abc import Iterator, Sequence
 from typing import Any, TypedDict
 
 import dupekit
-from zephyr import Dataset, ZephyrContext, write_vortex_file, ShardInfo
+from zephyr import Dataset, ZephyrContext, counters, write_vortex_file, ShardInfo
 
 logger = logging.getLogger(__name__)
 
@@ -92,17 +92,20 @@ def connected_components(
             if hub is None:
                 hub = record
             elif norm < hub["id_norm"]:
-                # New minimum found: link old hub ↔ new hub, then adopt new hub.
-                # Items already linked to old hub remain connected via transitivity.
                 yield _make_link(record, hub)
                 yield _make_link(hub, record)
+                counters.increment("cc/links", 2)
                 hub = record
             else:
                 yield _make_link(hub, record)
                 yield _make_link(record, hub)
+                counters.increment("cc/links", 2)
 
         if hub is None:
             return
+
+        counters.increment("cc/buckets")
+        counters.increment("cc/bucket_nodes", num_unique)
 
         if preserve_singletons and num_unique == 1:
             yield _make_link(hub, hub)
@@ -149,8 +152,10 @@ def connected_components(
             def counting_iter():
                 nonlocal num_changes
                 for node in nodes:
+                    counters.increment("cc/iteration_nodes")
                     if node["changed"]:
                         num_changes += 1
+                        counters.increment("cc/changes")
                     yield node
 
             path = f"{output_dir}/it_{iteration}/part-{shard_info.shard_idx:05d}-of-{shard_info.total_shards:05d}.vortex"
@@ -202,6 +207,7 @@ def _build_adjacency(node_id: str, links: Iterator[dict]) -> CCNode:
     adj: set[str] = {first["dest_id_norm"]}
     for link in links:
         adj.add(link["dest_id_norm"])
+    counters.increment("cc/nodes")
     return CCNode(
         record_id=first["source_record_id"],
         id_norm=first["source_id_norm"],

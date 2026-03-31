@@ -18,6 +18,7 @@ from levanter.lora import (
     LoraLinear,
     lora_trainable_params_filter,
     loraize,
+    save_merged_hf_model,
     unwrap_lora_modules,
 )
 from levanter.main.train_dpo import _logp_sum, dpo_loss_from_logps
@@ -191,6 +192,31 @@ def test_lora_dpo_gradient_only_flows_to_lora_params():
 
     has_nonzero = any(jnp.any(jnp.asarray(g.array if isinstance(g, hax.NamedArray) else g) != 0) for g in array_grads)
     assert has_nonzero, "At least one gradient should be nonzero (from LoRA params)"
+
+
+class _CapturingConverter:
+    def __init__(self):
+        self.calls = []
+
+    def save_pretrained(self, model, path, **kwargs):
+        self.calls.append((model, path, kwargs))
+
+
+def test_save_merged_hf_model_passes_generation_config():
+    key = jrandom.PRNGKey(5)
+    model_key, lora_key = jrandom.split(key)
+
+    model = _make_gpt2_model(model_key)
+    loraized = loraize(model, LoraConfig(r=4), key=lora_key)
+    converter = _CapturingConverter()
+    generation_config = {"eos_token_id": [2, 50]}
+
+    save_merged_hf_model(loraized, converter, "/tmp/export", generation_config=generation_config)
+
+    assert len(converter.calls) == 1
+    _, saved_path, saved_kwargs = converter.calls[0]
+    assert saved_path == "/tmp/export"
+    assert saved_kwargs["generation_config"] == generation_config
 
 
 def test_unwrap_lora_modules_with_stacked():

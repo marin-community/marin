@@ -56,6 +56,9 @@ class SimpleDPOConfig:
     steps_per_checkpoint: int = 1000
     steps_per_hf_export: int = 500
     hf_save_dtype: str | None = None
+    hf_generation_eos_token_ids: list[int] | None = None
+    """EOS token IDs to write to generation_config.json. None means no generation config.
+    For chat models, include the turn-boundary token (e.g. [128001, 128009])."""
 
     per_device_eval_parallelism: int = -1
 

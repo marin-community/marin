@@ -10,7 +10,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from iris.marin_fs import filesystem as marin_filesystem
+from rigging.filesystem import filesystem as marin_filesystem
 
 CURRENT_FILE = Path(__file__).resolve()
 

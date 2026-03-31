@@ -27,9 +27,7 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
 
-from iris.cluster.controller.db import (
-    Worker,
-)
+from iris.cluster.controller.db import WorkerDetail
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
     RESERVATION_HOLDER_JOB_NAME,
@@ -49,7 +47,7 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 from tests.cluster.controller.conftest import (
     FakeProvider,
     hydrate_worker_attributes as _with_attrs,
@@ -114,14 +112,14 @@ def _make_worker(
     metadata: cluster_pb2.WorkerMetadata | None = None,
     attributes: dict[str, AttributeValue] | None = None,
     healthy: bool = True,
-) -> Worker:
+) -> WorkerDetail:
     meta = metadata or _cpu_metadata()
     # Workers always have device attributes from config (Stage 3).
     # Merge explicit attributes on top of the device-derived defaults.
     default_attrs = _default_attributes_for_device(meta.device)
     if attributes:
         default_attrs.update(attributes)
-    return Worker(
+    return WorkerDetail(
         worker_id=WorkerId(worker_id),
         address=f"{worker_id}:8080",
         metadata=meta,
@@ -719,7 +717,7 @@ def test_taint_constraint_preserves_existing_constraints():
 
 
 def _build_context_with_workers(
-    workers: list[Worker],
+    workers: list[WorkerDetail],
     pending_tasks: list[JobName],
     jobs: dict[JobName, JobRequirements],
 ) -> SchedulingContext:

@@ -21,7 +21,7 @@ from iris.cluster.providers.k8s.types import ExecResult, KubectlError, KubectlLo
 from iris.cluster.providers.k8s.types import parse_k8s_cpu as _parse_k8s_cpu
 from iris.cluster.providers.k8s.types import parse_k8s_memory as _parse_k8s_memory
 from iris.cluster.providers.types import find_free_port
-from iris.time_utils import Deadline, ExponentialBackoff
+from rigging.timing import Deadline, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 

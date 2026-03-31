@@ -101,6 +101,34 @@ adapter:
 
 reference:
   type: adapter_base
+
+### Generation Stop Tokens
+
+Chat models typically use a turn-boundary token (e.g. `<|eot_id|>`, ID 128009)
+to end assistant responses, while the tokenizer's `eos_token` remains the
+pre-training document boundary (e.g. `<|end_of_text|>`, ID 128001). Inference
+tools like vLLM use `eos_token_id` from `config.json` to decide when to stop,
+so they will miss the chat stop token unless told otherwise.
+
+Set `hf_generation_eos_token_ids` to write a `generation_config.json` alongside
+each HF checkpoint with the correct stop tokens:
+
+```yaml
+hf_generation_eos_token_ids: [128001, 128009]  # <|end_of_text|> + <|eot_id|>
+```
+
+The tokenizer's `eos_token_id` is auto-added if not in the list. This field
+defaults to `null` (no `generation_config.json` written), preserving backward
+compatibility with pretraining checkpoints.
+
+To determine the right stop token for your model's chat template:
+
+```python
+tokens = tokenizer.apply_chat_template(
+    [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+    tokenize=True,
+)
+# The last token is the chat stop token (e.g. 128009 for Llama 3)
 ```
 
 ## Running
@@ -111,15 +139,14 @@ python -m levanter.main.train_dpo --config_path my_dpo_config.yaml
 
 ## Architecture
 
-`TrainerState.model` always stores only the policy model.
+The runtime model shape depends on the configured reference path:
 
-The reference path is configured separately:
-
-- **`reference.type: separate`** loads one frozen reference model before
-  training and closes over it in the loss function.
-- **`reference.type: adapter_base`** derives the reference view from the
-  current policy model, which is how LoRA-DPO reuses the base model without
-  adapters as the reference.
+- **`reference.type: separate`** keeps `DpoModel(policy, reference)` in
+  trainer state so the frozen reference is passed into the train step as an
+  explicit input. Only the policy side is trainable/saveable.
+- **`reference.type: adapter_base`** keeps only the adapted policy model in
+  trainer state and derives the reference view from the adapter-free base
+  model inside the step.
 
 The DPO loss encourages the policy to assign higher log-probability margins to
 chosen responses than the reference does:
@@ -128,9 +155,9 @@ chosen responses than the reference does:
 loss = softplus(-beta * ((log_pi_chosen - log_pi_rejected) - (log_ref_chosen - log_ref_rejected)))
 ```
 
-Only the policy model's parameters are saved in training checkpoints. When
-`reference.type: separate` is used, the frozen reference is reloaded from the
-configured path on every start/resume.
+Only the policy parameters are saved in training checkpoints. When
+`reference.type: separate` is used, the frozen reference weights are reloaded
+from the configured path on every start/resume.
 
 ## Metrics
 

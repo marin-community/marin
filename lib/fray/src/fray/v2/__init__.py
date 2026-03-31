@@ -10,7 +10,6 @@ from fray.v2.actor import (
     ActorHandle,
     ActorMethod,
     current_actor,
-    request_shutdown,
 )
 from fray.v2.client import Client, JobAlreadyExists, JobFailed, JobHandle, current_client, set_current_client, wait_all
 from fray.v2.local_backend import LocalActorHandle, LocalActorMethod, LocalClient, LocalJobHandle
@@ -69,7 +68,6 @@ __all__ = [
     "current_actor",
     "current_client",
     "get_tpu_topology",
-    "request_shutdown",
     "set_current_client",
     "wait_all",
 ]

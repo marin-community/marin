@@ -10,7 +10,12 @@ import draccus
 import jax.numpy as jnp
 from haliax.partitioning import named_jit
 
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, save_hf_checkpoint_callback
+from levanter.compat.hf_checkpoints import (
+    GenerationConfigDict,
+    HFCheckpointConverter,
+    RepoRef,
+    save_hf_checkpoint_callback,
+)
 from levanter.lora import (
     LoraConfig,
     lora_trainable_params_filter,
@@ -32,6 +37,7 @@ class AdaptationExportConfig:
     hf_upload: bool | str | RepoRef = False
     hf_save_steps: int | None = None
     hf_save_dtype: str | None = None
+    generation_config: GenerationConfigDict | None = None
 
     peft_save_path: str | None = None
     peft_hf_upload: bool | str | RepoRef = False
@@ -127,6 +133,7 @@ class NoAdaptationConfig(AdaptationConfig):
                 converter,
                 upload_to_hf=export.hf_upload,
                 save_dtype=save_dtype,
+                generation_config=export.generation_config,
             ),
             every=export.hf_save_steps,
         )
@@ -192,6 +199,7 @@ class LoraAdaptationConfig(LoraConfig, AdaptationConfig):
                     full_save_path,
                     converter,
                     export.merged_hf_upload,
+                    generation_config=export.generation_config,
                 ),
                 every=export.hf_save_steps,
             )

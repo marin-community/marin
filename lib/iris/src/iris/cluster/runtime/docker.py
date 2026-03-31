@@ -48,7 +48,7 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 

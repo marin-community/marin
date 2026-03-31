@@ -38,7 +38,7 @@ from iris.cluster.providers.k8s.service import CloudK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider, _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, TaskAttempt
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 # ---------------------------------------------------------------------------
 # Inlined helpers from lib/iris/tests/cluster/ to avoid cross-package imports
@@ -102,10 +102,13 @@ HAS_DOCKER = (
     ).returncode
     == 0
 )
+# Kind cluster creation fails on many CI runners (cgroup/networking issues)
+# even when the binaries exist. Require explicit opt-in via env var.
+KIND_ENABLED = os.environ.get("IRIS_KIND_TESTS", "") == "1"
 
 skip_no_kind = pytest.mark.skipif(
-    not (HAS_KIND and HAS_KUBECTL and HAS_DOCKER),
-    reason="kind, kubectl, and a running Docker daemon are required",
+    not (KIND_ENABLED and HAS_KIND and HAS_KUBECTL and HAS_DOCKER),
+    reason="Set IRIS_KIND_TESTS=1 with kind, kubectl, and a running Docker daemon",
 )
 
 

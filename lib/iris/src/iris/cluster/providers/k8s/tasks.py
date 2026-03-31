@@ -26,9 +26,11 @@ from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
 from iris.cluster.types import JobName, get_gpu_count
-from iris.logging import parse_log_level, str_to_log_level
+from iris.logging import str_to_log_level
+from rigging.log_setup import parse_log_level
 from iris.rpc import cluster_pb2, logging_pb2
-from iris.time_utils import Timestamp
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -471,7 +473,7 @@ def _kubectl_log_line_to_log_entry(kll: KubectlLogLine, attempt_id: int) -> logg
     level_name = parse_log_level(kll.data)
     level = str_to_log_level(level_name) if level_name else 0
     entry = logging_pb2.LogEntry(source=kll.stream, data=kll.data, attempt_id=attempt_id, level=level)
-    entry.timestamp.CopyFrom(Timestamp.from_seconds(kll.timestamp.timestamp()).to_proto())
+    entry.timestamp.CopyFrom(timestamp_to_proto(Timestamp.from_seconds(kll.timestamp.timestamp())))
     return entry
 
 
@@ -661,7 +663,7 @@ class K8sTaskProvider:
                 fallback_entries: list[logging_pb2.LogEntry] = []
                 for line in sliced:
                     entry = logging_pb2.LogEntry(source="stdout", data=line, attempt_id=attempt_id)
-                    entry.timestamp.CopyFrom(now_ts.to_proto())
+                    entry.timestamp.CopyFrom(timestamp_to_proto(now_ts))
                     fallback_entries.append(entry)
                 return fallback_entries, len(lines)
 
@@ -692,6 +694,26 @@ class K8sTaskProvider:
                 return cluster_pb2.ProfileTaskResponse(error="Unknown profile type")
         except Exception as e:
             return cluster_pb2.ProfileTaskResponse(error=str(e))
+
+    def exec_in_container(
+        self,
+        task_id: str,
+        attempt_id: int,
+        command: list[str],
+        timeout_seconds: int = 60,
+    ) -> cluster_pb2.Worker.ExecInContainerResponse:
+        """Execute a command in a running task pod via kubectl exec."""
+        pod_name = _pod_name(JobName.from_wire(task_id), attempt_id)
+        effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
+        try:
+            result = self.kubectl.exec(pod_name, command, container="task", timeout=effective_timeout)
+            return cluster_pb2.Worker.ExecInContainerResponse(
+                exit_code=result.returncode,
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+        except Exception as e:
+            return cluster_pb2.Worker.ExecInContainerResponse(error=str(e))
 
     def close(self) -> None:
         """No persistent resources to release."""
@@ -773,7 +795,7 @@ class K8sTaskProvider:
                     message=message,
                     node_name=node_name,
                 )
-                ps.last_transition.CopyFrom(last_ts.to_proto())
+                ps.last_transition.CopyFrom(timestamp_to_proto(last_ts))
                 pod_statuses.append(ps)
         except Exception as e:
             logger.warning("Failed to query pod statuses: %s", e)

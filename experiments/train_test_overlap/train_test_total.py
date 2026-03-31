@@ -37,7 +37,7 @@ from marin.processing.classification.decon import DeconConfig, DeconMode, NGramC
 from experiments.midtraining_datasets import finemath_3_plus
 from experiments.pretraining_datasets.simple import downloads
 from experiments.pretraining_datasets.dolmino import downloads as dolmino_downloads
-from experiments.pretraining_datasets.nemotron import downloads as nemotron_downloads
+from experiments.pretraining_datasets.nemotron import nemotron_cc_download
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -81,7 +81,7 @@ DATASET_CONFIGS = [
     DatasetConfig(name="starcoder", path=downloads["starcoderdata"], text_field="content"),
     DatasetConfig(name="proofpile", path=downloads["proofpile_2"]),
     DatasetConfig(name="dolmino", path=dolmino_downloads["dolmino"]),
-    DatasetConfig(name="nemotron_cc", path=nemotron_downloads["nemotron_cc"]),
+    DatasetConfig(name="nemotron_cc", path=nemotron_cc_download()),
 ]
 
 
