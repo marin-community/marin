@@ -780,6 +780,18 @@ class Controller:
             log_dir=config.local_state_dir / "logs",
             remote_log_dir=f"{config.remote_state_dir.rstrip('/')}/logs",
         )
+
+        # Wire log store into the K8s provider so its LogCollector can write logs directly.
+        if isinstance(self._provider, K8sTaskProvider):
+            self._provider.log_store = self._log_store
+            from iris.cluster.providers.k8s.tasks import LogCollector
+
+            self._provider._log_collector = LogCollector(
+                self._provider.kubectl,
+                self._log_store,
+                concurrency=self._provider.poll_concurrency,
+            )
+
         self._transitions = ControllerTransitions(
             db=self._db,
             log_store=self._log_store,

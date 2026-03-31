@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from iris.cluster.controller.transitions import DirectProviderBatch
+from iris.cluster.log_store.mem_store import MemStore
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.providers.k8s.fake import InMemoryK8sService
 from iris.cluster.providers.k8s.tasks import (
@@ -26,13 +27,21 @@ def k8s() -> InMemoryK8sService:
 
 
 @pytest.fixture
-def provider(k8s):
-    return K8sTaskProvider(
+def log_store() -> MemStore:
+    return MemStore()
+
+
+@pytest.fixture
+def provider(k8s, log_store):
+    p = K8sTaskProvider(
         kubectl=k8s,
         namespace="iris",
         default_image="myrepo/iris:latest",
         cache_dir="/cache",
+        log_store=log_store,
     )
+    yield p
+    p.close()
 
 
 def pod_config(
