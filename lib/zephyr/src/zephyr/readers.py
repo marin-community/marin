@@ -17,11 +17,12 @@ from dataclasses import dataclass
 from typing import Literal
 
 import fsspec
-from iris.marin_fs import open_url, url_to_fs
+from rigging.filesystem import open_url, url_to_fs
 import msgspec
 import numpy as np
 import pyarrow as pa
 
+from zephyr import counters
 from zephyr.expr import Expr
 
 logger = logging.getLogger(__name__)
@@ -136,17 +137,21 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
                 line = line.strip()
                 if line:
                     try:
-                        yield decoder.decode(line)
+                        record = decoder.decode(line)
                     except Exception as e:
                         error_msg = str(e).lower()
                         if "truncated" in error_msg or "corrupt" in error_msg:
                             logger.warning(
                                 "Skipping rest of %s: truncated/corrupt data at line %d (%s)",
-                                spec.path, line_num, e,
+                                spec.path,
+                                line_num,
+                                e,
                             )
                             return
                         logger.error(f"Error decoding line {line_num} in {spec.path}: {e}")
                         raise RuntimeError(f"Error decoding line {line_num} in {spec.path}: {e}") from e
+                    counters.increment("zephyr/records_in")
+                    yield record
     except RuntimeError:
         raise  # Re-raise wrapped error
     except Exception as e:
@@ -219,6 +224,7 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
                     if is_interior:
                         # Entirely within range: push filter down, yield all
                         table = rg_fragment.to_table(columns=columns, filter=pa_filter)
+                        counters.increment("zephyr/records_in", len(table))
                         yield from table.to_pylist()
                     else:
                         # Boundary row group: slice first, then filter
@@ -228,8 +234,11 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
                         sliced = table.slice(local_start, local_end - local_start)
 
                         if pa_filter is not None:
-                            yield from sliced.filter(pa_filter).to_pylist()
+                            filtered = sliced.filter(pa_filter)
+                            counters.increment("zephyr/records_in", len(filtered))
+                            yield from filtered.to_pylist()
                         else:
+                            counters.increment("zephyr/records_in", len(sliced))
                             yield from sliced.to_pylist()
 
                 cumulative_rows = rg_end
@@ -237,9 +246,11 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
                     return
     elif pa_filter is not None:
         table = dataset.to_table(columns=columns, filter=pa_filter)
+        counters.increment("zephyr/records_in", len(table))
         yield from table.to_pylist()
     else:
         for batch in dataset.to_batches(columns=columns):
+            counters.increment("zephyr/records_in", len(batch))
             yield from batch.to_pylist()
 
 
@@ -290,9 +301,11 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
         indices = np.arange(spec.row_start, spec.row_end, dtype=np.uint64)
         indices = pa.array(indices)
         table = dataset.take(indices, columns=columns, filter=pa_filter)
+        counters.increment("zephyr/records_in", len(table))
         yield from table.to_pylist()
     else:
         table = dataset.to_table(columns=columns, filter=pa_filter)
+        counters.increment("zephyr/records_in", len(table))
         yield from table.to_pylist()
 
 
@@ -385,6 +398,7 @@ def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterato
             for member_name in zf.namelist():
                 if not member_name.endswith("/") and fnmatch.fnmatch(member_name, pattern):
                     with zf.open(member_name, "r") as member_file:
+                        counters.increment("zephyr/records_in")
                         yield {
                             "filename": member_name,
                             "content": member_file.read(),

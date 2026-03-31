@@ -138,6 +138,7 @@ def _build_step_from_env() -> ExecutorStep:
                 tags=wandb_tags,
                 group=wandb_group,
                 name=None,
+                replicate_path=this_output_path(),
             ),
             optimizer=versioned(CANARY_OPTIMIZER),
             grug_trainer=versioned(CANARY_TRAINER),

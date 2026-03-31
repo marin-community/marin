@@ -33,7 +33,7 @@ import traceback
 from collections.abc import Sequence
 from typing import ClassVar
 from fray.v1.cluster import ResourceConfig
-from iris.marin_fs import filesystem as marin_filesystem
+from rigging.filesystem import filesystem as marin_filesystem
 
 from marin.evaluation.evaluation_config import WANDB_PROJECT, EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray

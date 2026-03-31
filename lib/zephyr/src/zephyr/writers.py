@@ -19,9 +19,10 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import pyarrow as pa
 
-from iris.marin_fs import open_url, url_to_fs
+from rigging.filesystem import open_url, url_to_fs
 import msgspec
 import logging
+from zephyr import counters
 
 logger = logging.getLogger(__name__)
 
@@ -110,16 +111,19 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
                     for record in records:
                         f.write(encoder.encode(record) + b"\n")
                         count += 1
+                        counters.increment("zephyr/records_out")
         elif output_path.endswith(".gz"):
             with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE, compression="gzip") as f:
                 for record in records:
                     f.write(encoder.encode(record) + b"\n")
                     count += 1
+                    counters.increment("zephyr/records_out")
         else:
             with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
                 for record in records:
                     f.write(encoder.encode(record) + b"\n")
                     count += 1
+                    counters.increment("zephyr/records_out")
 
     return {"path": output_path, "count": count}
 
@@ -207,6 +211,7 @@ def write_parquet_file(
                     writer = pq.ParquetWriter(temp_path, table.schema)
                 writer.write_table(table)
                 count += len(table)
+                counters.increment("zephyr/records_out", len(table))
         finally:
             if writer is not None:
                 writer.close()
@@ -259,9 +264,11 @@ def write_vortex_file(
     def _array_batches():
         nonlocal count
         count += len(first_table)
+        counters.increment("zephyr/records_out", len(first_table))
         yield vortex.Array.from_arrow(first_table)
         for table in table_iter:
             count += len(table)
+            counters.increment("zephyr/records_out", len(table))
             yield vortex.Array.from_arrow(table)
 
     array_iter = vortex.ArrayIterator.from_iter(dtype, _array_batches())
@@ -463,9 +470,11 @@ def write_levanter_cache(
             if write_exemplar:
                 threaded.submit([exemplar])
                 count += 1
+                counters.increment("zephyr/records_out")
             for batch in batchify(record_iter, n=_LEVANTER_BATCH_SIZE):
                 threaded.submit(batch)
                 count += len(batch)
+                counters.increment("zephyr/records_out", len(batch))
                 logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
 
     logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
@@ -490,5 +499,6 @@ def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
             for record in records:
                 f.write(record)
                 count += 1
+                counters.increment("zephyr/records_out")
 
     return {"path": output_path, "count": count}

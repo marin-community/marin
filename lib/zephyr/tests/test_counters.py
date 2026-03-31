@@ -3,10 +3,8 @@
 
 """Tests for Zephyr user-defined counters: worker API and heartbeat plumbing."""
 
-import threading
-
 from zephyr import counters
-from zephyr.execution import _worker_ctx_var
+from zephyr.execution import CounterSnapshot, _worker_ctx_var
 
 
 class FakeWorker:
@@ -14,18 +12,17 @@ class FakeWorker:
 
     def __init__(self):
         self._counters: dict[str, int] = {}
-        self._counters_lock = threading.Lock()
+        self._generation: int = 0
 
     def get_shared(self, name: str):
         raise NotImplementedError
 
     def increment_counter(self, name: str, value: int = 1) -> None:
-        with self._counters_lock:
-            self._counters[name] = self._counters.get(name, 0) + value
+        self._counters[name] = self._counters.get(name, 0) + value
 
-    def get_counter_snapshot(self) -> dict[str, int]:
-        with self._counters_lock:
-            return dict(self._counters)
+    def get_counter_snapshot(self) -> CounterSnapshot:
+        self._generation += 1
+        return CounterSnapshot(counters=dict(self._counters), generation=self._generation)
 
 
 def test_counters_increment_and_snapshot():

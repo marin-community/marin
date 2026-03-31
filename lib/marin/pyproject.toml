@@ -19,6 +19,7 @@ dependencies = [
     "flask",
     "floret",
     "fray",
+    "rigging",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",

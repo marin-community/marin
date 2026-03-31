@@ -1,11 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Click-based CLI for the Iris controller daemon."""
+"""CLI for the Iris controller daemon.
+
+The core logic lives in ``run_controller_serve`` so it can be called from both
+the standalone ``python -m iris.cluster.controller.main serve`` entrypoint
+(used by Dockerfile / GCP bootstrap / k8s) and the ``iris cluster controller
+serve`` subcommand in the main CLI.
+"""
 
 import logging
 import os
 import signal
+import tempfile
 import threading
 from pathlib import Path
 
@@ -14,9 +21,8 @@ import click
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
-from iris.logging import configure_logging
 from iris.rpc import config_pb2
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -25,79 +31,46 @@ LOCAL_STATE_DIR_DEFAULT = Path("/var/cache/iris/controller")
 HOURLY_CHECKPOINT_SECONDS = 3600.0
 
 
-@click.group()
-def cli():
-    """Iris Controller - Cluster control plane."""
-    pass
+def run_controller_serve(
+    cluster_config: config_pb2.IrisClusterConfig,
+    *,
+    host: str = "0.0.0.0",
+    port: int = 10000,
+    scheduler_interval: float = 0.5,
+    checkpoint_path: str | None = None,
+    checkpoint_interval: float | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Start the Iris controller, block until SIGTERM/SIGINT.
 
-
-@cli.command()
-@click.option("--host", default="0.0.0.0", help="Bind host")
-@click.option("--port", default=10000, type=int, help="Bind port")
-@click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
-@click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config (required)")
-@click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]), help="Log level")
-@click.option(
-    "--checkpoint-path",
-    default=None,
-    help="Restore from this specific checkpoint directory (e.g. gs://bucket/.../controller-state/1234567890)",
-)
-@click.option(
-    "--checkpoint-interval",
-    default=None,
-    type=float,
-    help="Periodic checkpoint interval in seconds (default: no periodic checkpointing)",
-)
-def serve(
-    host: str,
-    port: int,
-    scheduler_interval: float,
-    config_file: str | None,
-    log_level: str,
-    checkpoint_path: str | None,
-    checkpoint_interval: float | None,
-):
-    """Start the Iris controller service.
-
-    When --config is provided, the controller runs an integrated autoscaler
-    that provisions/terminates VM slices based on pending task demand.
+    This is the shared implementation used by both the standalone daemon
+    entrypoint and the ``iris cluster controller serve`` CLI command.
     """
+    from iris.cluster.config import create_autoscaler, make_provider
     from iris.cluster.controller.autoscaler import Autoscaler
     from iris.cluster.controller.checkpoint import download_checkpoint_to_local
     from iris.cluster.controller.db import ControllerDB
-    from iris.cluster.providers.k8s.tasks import K8sTaskProvider
-    from iris.cluster.config import load_config, create_autoscaler, make_provider
     from iris.cluster.providers.factory import create_provider_bundle
-
-    configure_logging(level=getattr(logging, log_level))
+    from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 
     logger.info("Initializing Iris controller (git_hash=%s)", os.environ.get("IRIS_GIT_HASH", "unknown"))
 
-    if not config_file:
-        raise click.ClickException("--config is required. Provide a cluster config YAML with storage.remote_state_dir.")
-
-    # --- Load cluster config ---
-    logger.info("Loading cluster config from %s", config_file)
-    try:
-        cluster_config = load_config(Path(config_file))
-        logger.info("Cluster config loaded: %d scale groups defined", len(cluster_config.scale_groups))
-    except Exception as e:
-        logger.exception("Failed to load cluster config from %s", config_file)
-        raise click.ClickException(f"Failed to load cluster config: {e}") from e
-
     remote_state_dir = cluster_config.storage.remote_state_dir
     if not remote_state_dir:
-        raise click.ClickException(
+        raise ValueError(
             "storage.remote_state_dir is required in the cluster config. "
             "Example: storage: { remote_state_dir: 'gs://my-bucket/iris/state' }"
         )
     logger.info("Using remote_state_dir from config: %s", remote_state_dir)
 
-    local_state_dir = (
-        Path(cluster_config.storage.local_state_dir)
-        if cluster_config.storage.local_state_dir
-        else LOCAL_STATE_DIR_DEFAULT
-    )
+    if dry_run:
+        _dry_run_tmpdir = tempfile.mkdtemp(prefix="iris-dry-run-")
+        local_state_dir = Path(_dry_run_tmpdir)
+        logger.info("Dry-run mode: using temporary local state dir %s", local_state_dir)
+    elif cluster_config.storage.local_state_dir:
+        local_state_dir = Path(cluster_config.storage.local_state_dir)
+    else:
+        local_state_dir = LOCAL_STATE_DIR_DEFAULT
 
     heartbeat_failure_threshold = cluster_config.controller.heartbeat_failure_threshold or HEARTBEAT_FAILURE_THRESHOLD
 
@@ -116,7 +89,7 @@ def serve(
             )
         restored = download_checkpoint_to_local(remote_state_dir, db_dir, checkpoint_dir=checkpoint_path)
         if checkpoint_path and not restored:
-            raise click.ClickException(f"Checkpoint not found: {checkpoint_path}")
+            raise ValueError(f"Checkpoint not found: {checkpoint_path}")
 
     db = ControllerDB(db_dir=db_dir)
 
@@ -125,44 +98,43 @@ def serve(
     logger.info("Provider created: %s", type(provider).__name__)
 
     # --- Create autoscaler (only for WorkerProvider; KubernetesProvider manages its own pods) ---
+    # In dry-run mode the autoscaler is fully gated anyway, and creating the
+    # provider bundle requires platform credentials (GCP SSH keys etc.) that
+    # are unavailable on a local dev machine.
     autoscaler: Autoscaler | None = None
     base_worker_config = None
-    if not isinstance(provider, K8sTaskProvider):
-        try:
-            bundle = create_provider_bundle(
-                platform_config=cluster_config.platform,
-                ssh_config=cluster_config.defaults.ssh,
-            )
-            workers = bundle.workers
-            logger.info("Provider bundle created")
+    if dry_run:
+        logger.info("Dry-run mode: skipping autoscaler and provider bundle creation")
+    elif not isinstance(provider, K8sTaskProvider):
+        bundle = create_provider_bundle(
+            platform_config=cluster_config.platform,
+            ssh_config=cluster_config.defaults.ssh,
+        )
+        workers = bundle.workers
+        logger.info("Provider bundle created")
 
-            if cluster_config.defaults.worker.docker_image:
-                base_worker_config = config_pb2.WorkerConfig()
-                base_worker_config.CopyFrom(cluster_config.defaults.worker)
-                if not base_worker_config.controller_address:
-                    base_worker_config.controller_address = bundle.controller.discover_controller(
-                        cluster_config.controller
-                    )
-                base_worker_config.platform.CopyFrom(cluster_config.platform)
+        if cluster_config.defaults.worker.docker_image:
+            base_worker_config = config_pb2.WorkerConfig()
+            base_worker_config.CopyFrom(cluster_config.defaults.worker)
+            if not base_worker_config.controller_address:
+                base_worker_config.controller_address = bundle.controller.discover_controller(cluster_config.controller)
+            base_worker_config.platform.CopyFrom(cluster_config.platform)
 
-            autoscaler = create_autoscaler(
-                platform=workers,
-                autoscaler_config=cluster_config.defaults.autoscaler,
-                scale_groups=cluster_config.scale_groups,
-                label_prefix=cluster_config.platform.label_prefix or "iris",
-                base_worker_config=base_worker_config,
-                db=db,
-            )
-            logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
+        autoscaler = create_autoscaler(
+            platform=workers,
+            autoscaler_config=cluster_config.defaults.autoscaler,
+            scale_groups=cluster_config.scale_groups,
+            label_prefix=cluster_config.platform.label_prefix or "iris",
+            base_worker_config=base_worker_config,
+            db=db,
+        )
+        logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
 
-            # Restore autoscaler state (tracked slices/workers/backoff) from the DB
-            # so restarted controllers don't lose cloud resource tracking and
-            # scale up duplicates.
-            autoscaler.restore_from_db(db, workers)
-            logger.info("Autoscaler state restored from DB")
-        except Exception as e:
-            logger.exception("Failed to create autoscaler from config")
-            raise click.ClickException(f"Failed to create autoscaler: {e}") from e
+        # Restore autoscaler state (tracked slices/workers/backoff) from the DB
+        # so restarted controllers don't lose cloud resource tracking and
+        # scale up duplicates.
+        autoscaler.restore_from_db(db, workers)
+        logger.info("Autoscaler state restored from DB")
 
     # Workers need the resolved remote_state_dir to upload task artifacts (profiles).
     if base_worker_config is not None:
@@ -190,44 +162,41 @@ def serve(
         auth_verifier=auth.verifier,
         auth_provider=auth.provider,
         auth=auth,
+        dry_run=dry_run,
     )
 
-    try:
-        controller = Controller(
-            config=config,
-            provider=provider,
-            autoscaler=autoscaler,
-            db=db,
-        )
-        logger.info("Controller instance created")
-    except Exception as e:
-        logger.exception("Failed to create controller")
-        raise click.ClickException(f"Failed to create controller: {e}") from e
+    controller = Controller(
+        config=config,
+        provider=provider,
+        autoscaler=autoscaler,
+        db=db,
+    )
+    logger.info("Controller instance created")
 
-    try:
-        controller.start()
-        logger.info("Controller started successfully on %s:%d", host, port)
-    except Exception as e:
-        logger.exception("Failed to start controller")
-        raise click.ClickException(f"Failed to start controller: {e}") from e
-
+    controller.start()
+    logger.info("Controller started successfully on %s:%d", host, port)
     logger.info("Controller is ready to accept connections")
 
     stop_event = threading.Event()
 
     def handle_shutdown(_signum, _frame):
-        logger.info("Shutdown signal received, writing final checkpoint...")
-        try:
-            path, result = controller.begin_checkpoint()
-            logger.info(
-                "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
-                path,
-                result.job_count,
-                result.task_count,
-                result.worker_count,
-            )
-        except Exception:
-            logger.exception("Final checkpoint on shutdown failed")
+        # Second signal force-exits immediately.
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+        logger.info("Shutdown signal received")
+        if not config.dry_run:
+            try:
+                path, result = controller.begin_checkpoint()
+                logger.info(
+                    "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
+                    path,
+                    result.job_count,
+                    result.task_count,
+                    result.worker_count,
+                )
+            except Exception:
+                logger.exception("Final checkpoint on shutdown failed")
         logger.info("Stopping controller...")
         controller.stop()
         logger.info("Controller stopped")
@@ -237,6 +206,71 @@ def serve(
     signal.signal(signal.SIGINT, handle_shutdown)
 
     stop_event.wait()
+
+
+# ---------------------------------------------------------------------------
+# Standalone CLI — used by Dockerfile, GCP bootstrap, and k8s entrypoints
+# (python -m iris.cluster.controller.main serve)
+# ---------------------------------------------------------------------------
+
+
+@click.group()
+def cli():
+    """Iris Controller - Cluster control plane."""
+    pass
+
+
+@cli.command()
+@click.option("--host", default="0.0.0.0", help="Bind host")
+@click.option("--port", default=10000, type=int, help="Bind port")
+@click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
+@click.option("--config", "config_file", type=click.Path(exists=True), required=True, help="Cluster config YAML")
+@click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]), help="Log level")
+@click.option(
+    "--checkpoint-path",
+    default=None,
+    help="Restore from this specific checkpoint directory (e.g. gs://bucket/.../controller-state/1234567890)",
+)
+@click.option(
+    "--checkpoint-interval",
+    default=None,
+    type=float,
+    help="Periodic checkpoint interval in seconds (default: no periodic checkpointing)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Start in dry-run mode: compute scheduling but suppress all side effects",
+)
+def serve(
+    host: str,
+    port: int,
+    scheduler_interval: float,
+    config_file: str,
+    log_level: str,
+    checkpoint_path: str | None,
+    checkpoint_interval: float | None,
+    dry_run: bool,
+):
+    """Start the Iris controller service."""
+    from iris.cluster.config import load_config
+    from rigging.log_setup import configure_logging
+
+    configure_logging(level=getattr(logging, log_level))
+
+    cluster_config = load_config(Path(config_file))
+    logger.info("Cluster config loaded from %s: %d scale groups", config_file, len(cluster_config.scale_groups))
+
+    run_controller_serve(
+        cluster_config,
+        host=host,
+        port=port,
+        scheduler_interval=scheduler_interval,
+        checkpoint_path=checkpoint_path,
+        checkpoint_interval=checkpoint_interval,
+        dry_run=dry_run,
+    )
 
 
 if __name__ == "__main__":

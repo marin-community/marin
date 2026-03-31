@@ -11,7 +11,7 @@ transparently (raw byte forwarding, no deserialization).
 Route pattern::
 
     POST /iris.actor.ActorService/{method}
-    X-Iris-Actor-Endpoint: namespace/actor-name
+    X-Iris-Actor-Endpoint: /user/job/actor-name
 """
 
 import logging
@@ -20,7 +20,7 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from iris.cluster.controller.db import ControllerDB, EndpointQuery, endpoint_query_predicate
+from iris.cluster.controller.db import ControllerDB, Endpoint, EndpointQuery, decode_rows, endpoint_query_sql
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,8 @@ class ActorProxy:
                 status_code=404,
             )
 
-        upstream_url = f"http://{address}/iris.actor.ActorService/{method}"
+        base = address if "://" in address else f"http://{address}"
+        upstream_url = f"{base}/iris.actor.ActorService/{method}"
         body = await request.body()
         forward_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP_HEADERS}
 
@@ -98,11 +99,9 @@ class ActorProxy:
     def _resolve_endpoint(self, name: str) -> str | None:
         """Resolve an endpoint name to an address via the controller DB."""
         query = EndpointQuery(exact_name=name)
-        joins, where = endpoint_query_predicate(query)
-        from iris.cluster.controller.service import ENDPOINTS
-
+        sql, params = endpoint_query_sql(query)
         with self._db.read_snapshot() as q:
-            endpoints = q.select(ENDPOINTS, where=where, joins=joins)
+            endpoints = decode_rows(Endpoint, q.fetchall(sql, tuple(params)))
         if not endpoints:
             return None
         return endpoints[0].address

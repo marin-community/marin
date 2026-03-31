@@ -33,7 +33,7 @@ from iris.actor.resolver import Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
 from iris.rpc.errors import call_with_retry
-from iris.time_utils import ExponentialBackoff
+from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,7 @@ class ActorClient:
             len(result.endpoints),
         )
         endpoint = result.first()
-        logger.info("First endpoint: %s", endpoint)
+        logger.info("First endpoint: url=%s, actor_id=%s", endpoint.url, endpoint.actor_id)
         self._rpc_headers = dict(endpoint.metadata)
         self._rpc_client = ActorServiceClientSync(
             address=endpoint.url,

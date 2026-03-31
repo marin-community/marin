@@ -47,7 +47,7 @@ from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from levanter.utils.mesh import MeshConfig
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -518,6 +518,7 @@ def default_train(
             )
         ),
         hf_save_steps=steps_per_export_hf,
+        hf_generation_eos_token_ids=train_config.hf_generation_eos_token_ids,
         data_seed=train_config.data_seed,
         eval_harness_steps=train_config.steps_per_task_eval or 10000,
         eval_harness=harness_config,
@@ -608,6 +609,7 @@ def default_sft(
         beta2=sft_config.beta2,
         pad_tokenizer_to_match_model=sft_config.pad_tokenizer_to_match_model,
         per_device_parallelism=sft_config.per_device_parallelism,
+        hf_generation_eos_token_ids=sft_config.hf_generation_eos_token_ids,
     )
 
     if sft_config.reinit_tokens:
@@ -726,6 +728,7 @@ def default_dpo(
         validation_split_fraction=dpo_config.validation_split_fraction,
         hf_save_steps=steps_per_export_hf,
         hf_save_dtype=dpo_config.hf_save_dtype,
+        hf_generation_eos_token_ids=dpo_config.hf_generation_eos_token_ids,
         data_seed=dpo_config.seed,
     )
 

@@ -20,14 +20,8 @@ from marin.execution.executor import (
 )
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate, ConsolidateConfig
-from marin.processing.classification.dataset_utils import DatasetConfig
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
 from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
-from marin.processing.classification.fasttext.train_fasttext import (
-    TrainFasttextClassifierConfig,
-    train,
-)
-from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.processing.tokenize import lm_data_config
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from marin.schemas.web.convert import ResiliparseConfig
@@ -35,7 +29,7 @@ from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
 from marin.utils import fsspec_glob
 
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 import threading
 
@@ -152,64 +146,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # Bridge to ExecutorStep for downstream ExecutorStep consumers
     transform_hq_data_step = transform_hq_data_spec.as_executor_step()
     transform_lq_data_step = transform_lq_data_spec.as_executor_step()
-
-    # ############################################################
-    # Train quality classifier
-
-    train_quality_step = ExecutorStep(
-        name=os.path.join(prefix, "quality-classifier"),
-        fn=train,
-        config=TrainFasttextClassifierConfig(
-            datasets=[
-                DatasetConfig(
-                    input_doc_path=transform_hq_data_step,
-                    label="hq",
-                    sampling_rate=1.0,
-                ),
-                DatasetConfig(
-                    input_doc_path=transform_lq_data_step,
-                    label="lq",
-                    sampling_rate=1.0,
-                ),
-            ],
-            output_path=this_output_path(),
-            fasttext_args={
-                "lr": 0.001,
-                "minCount": 1,
-                "epoch": 25,
-                "wordNgrams": 2,
-                "dim": 50,
-                "thread": 1,
-            },
-        ),
-    )
-
-    ############################################################
-    # Run inference with quality classifier
-
-    inference_hq_step = ExecutorStep(
-        name=os.path.join(prefix, "hq-inference"),
-        fn=run_inference,
-        config=InferenceConfig(
-            input_path=transform_hq_data_step,
-            output_path=this_output_path(),
-            model_name=train_quality_step,
-            model_type="fasttext",
-            attribute_name="quickstart-fasttext-quality-hq",
-        ),
-    )
-
-    inference_lq_step = ExecutorStep(
-        name=os.path.join(prefix, "lq-inference"),
-        fn=run_inference,
-        config=InferenceConfig(
-            input_path=transform_lq_data_step,
-            output_path=this_output_path(),
-            model_name=train_quality_step,
-            model_type="fasttext",
-            attribute_name="quickstart-fasttext-quality-lq",
-        ),
-    )
 
     ############################################################
     # Deduplicate (StepSpec — depends on transform StepSpecs)
@@ -351,9 +287,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     return [
         transform_hq_data_step,
         transform_lq_data_step,
-        train_quality_step,
-        inference_hq_step,
-        inference_lq_step,
         dedup_exact_paragraph_step,
         dedup_fuzzy_document_step,
         validate_exact_dedup_step,

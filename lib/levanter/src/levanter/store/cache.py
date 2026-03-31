@@ -4,6 +4,7 @@
 import asyncio
 import copy
 import dataclasses
+import gc
 import logging as pylogging
 import operator
 import os
@@ -15,7 +16,7 @@ from typing import Any, Dict, List, Optional, Sequence, TypeVar, Union
 
 import deepdiff
 import jax
-from iris.marin_fs import open_url, url_to_fs
+from rigging.filesystem import open_url, url_to_fs
 import numpy as np
 import pyarrow as pa
 import tensorstore as ts
@@ -34,7 +35,7 @@ from ..data._preprocessor import BatchProcessor, BatchResult, dict_from_record_b
 from ..data.sharded_datasource import ShardedDataSource
 from ..utils.fsspec_utils import exists as fsspec_exists
 from ..utils.fsspec_utils import remove as fsspec_remove
-from .jagged_array import JaggedArrayStore
+from .jagged_array import JaggedArrayStore, _no_cache_read_context
 from .tree_store import TreeStore
 
 T = TypeVar("T")
@@ -574,19 +575,22 @@ async def _extend_cache_with_other_cache(
 ) -> int:
     try:
         logger.info(f"Copying data from {source_path} to {dest_path}.")
-        dest = TreeStore.open(exemplar, dest_path, mode="a", cache_metadata=False)
-        source = TreeStore.open(exemplar, source_path, mode="r", cache_metadata=True)
+        with _no_cache_read_context():
+            dest = TreeStore.open(exemplar, dest_path, mode="a", cache_metadata=False)
+            source = TreeStore.open(exemplar, source_path, mode="r", cache_metadata=True)
 
-        source_num_rows = await source.async_len()
+            source_num_rows = await source.async_len()
 
-        async def _copy_one_array(dest_array: JaggedArrayStore, source_array: JaggedArrayStore, data_offset: int):
-            data_size = source_array.data_size
-            data = source_array.data
-            MAX_ELEMS = 1024 * 1024 * 1024
-            await _copy_in_batches(dest_array.data, data_offset, data, data_size, MAX_ELEMS)
+            async def _copy_one_array(dest_array: JaggedArrayStore, source_array: JaggedArrayStore, data_offset: int):
+                data_size = source_array.data_size
+                data = source_array.data
+                MAX_ELEMS = 64 * 1024 * 1024
+                await _copy_in_batches(dest_array.data, data_offset, data, data_size, MAX_ELEMS)
 
-        futures = jax.tree.map(_copy_one_array, dest.tree, source.tree, data_offset_tree)
-        await asyncio.gather(*jax.tree.leaves(futures))
+            futures = jax.tree.map(_copy_one_array, dest.tree, source.tree, data_offset_tree)
+            await asyncio.gather(*jax.tree.leaves(futures))
+            del dest, source
+        gc.collect()
         logger.info(f"Finished copying data from {source_path} to {dest_path}.")
         return source_num_rows
     except Exception as e:  # noqa: BLE001
@@ -595,23 +599,21 @@ async def _extend_cache_with_other_cache(
 
 
 async def _copy_in_batches(dest_array, dest_offset, src_array, src_len, elems_per_batch):
-    last_future: ts.Future | None = None
     start = 0
     out_start = dest_offset
     while start < src_len:
-        if last_future is not None:
-            await last_future
-        async with ts.Transaction() as txn:
-            num_to_copy = min(elems_per_batch, src_len - start)
-            end = start + num_to_copy
-            out_end = out_start + num_to_copy
+        num_to_copy = min(elems_per_batch, src_len - start)
+        end = start + num_to_copy
+        out_end = out_start + num_to_copy
 
-            last_future = dest_array.with_transaction(txn)[out_start:out_end].write(src_array[start:end])
-            start += num_to_copy
-            out_start += num_to_copy
+        # Materialize into numpy to avoid holding TensorStore internal references
+        # across iterations. Direct ts-to-ts copy leaks ~14 MiB/shard (#4196).
+        chunk = await src_array[start:end].read()
+        await dest_array[out_start:out_end].write(chunk)
+        del chunk
 
-    if last_future is not None:
-        await last_future
+        start += num_to_copy
+        out_start += num_to_copy
 
 
 async def _consolidate_metadata(dest_path: str, exemplar: dict, shard_infos: list[dict]) -> None:

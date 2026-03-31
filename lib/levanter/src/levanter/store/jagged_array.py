@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import contextlib
 import os
 import threading
 from dataclasses import dataclass
@@ -53,6 +54,20 @@ def _read_context() -> ts.Context:
             # TensorStore only shares cache_pool entries across stores that share a Context.
             _READ_CONTEXT = ts.Context({"cache_pool": _READ_CACHE_SETTINGS})
     return _READ_CONTEXT
+
+
+@contextlib.contextmanager
+def _no_cache_read_context():
+    """Use a disposable, zero-byte-cache read context for the duration of the block."""
+    global _READ_CONTEXT
+    with _READ_CONTEXT_LOCK:
+        prev = _READ_CONTEXT
+        _READ_CONTEXT = ts.Context({"cache_pool": {"total_bytes_limit": 0}})
+    try:
+        yield
+    finally:
+        with _READ_CONTEXT_LOCK:
+            _READ_CONTEXT = prev
 
 
 @dataclass

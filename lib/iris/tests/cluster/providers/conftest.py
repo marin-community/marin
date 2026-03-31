@@ -22,7 +22,7 @@ from iris.cluster.providers.types import (
     WorkerStatus as CloudWorkerStatus,
 )
 from iris.rpc import config_pb2, vm_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 
 def _cloud_worker_state_from_iris(state: vm_pb2.VmState) -> CloudWorkerState:

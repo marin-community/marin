@@ -16,7 +16,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 
 from .conftest import (
     make_job_request,
@@ -358,6 +358,19 @@ def test_get_job_status_redacts_sensitive_env_vars(service):
     assert env["DB_PASSWORD"] == REDACTED_VALUE
     assert env["SAFE_VAR"] == "visible"
     assert env["NUM_WORKERS"] == "4"
+
+
+def test_get_job_status_omits_per_task_detail(service):
+    """GetJobStatus never populates per-task detail (callers use ListTasks)."""
+    service.launch_job(make_job_request("task-test"), None)
+    job_id = JobName.root("test-user", "task-test")
+
+    request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
+    response = service.get_job_status(request, None)
+
+    assert response.job.state == cluster_pb2.JOB_STATE_PENDING
+    assert len(response.job.tasks) == 0
+    assert response.job.task_count == 1
 
 
 # =============================================================================

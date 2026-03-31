@@ -16,7 +16,7 @@ import threading
 from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore
 from iris.cluster.runtime.process import _read_proc_cpu_percent
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timer
+from rigging.timing import Timer
 
 # Persistent CPU sampling state so delta-based measurement works across requests.
 _prev_cpu_total: float = 0.0

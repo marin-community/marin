@@ -556,7 +556,7 @@ No `cluster` fixture needed.
 ```python
 from iris.tests.cluster.platform.fakes import FakePlatform, FakePlatformConfig, FailureMode
 from iris.rpc import config_pb2, vm_pb2
-from iris.time_utils import now_ms
+from rigging.timing import now_ms
 
 
 def test_quota_exceeded_retry():

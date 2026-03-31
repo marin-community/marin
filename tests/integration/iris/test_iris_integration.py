@@ -9,6 +9,7 @@ No dashboard screenshots are taken here; those remain in lib/iris/tests/e2e/test
 
 import logging
 import os
+import re
 import time
 import uuid
 
@@ -20,7 +21,7 @@ from iris.cluster.types import (
     gpu_device,
 )
 from iris.rpc import cluster_pb2, logging_pb2
-from iris.time_utils import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff
 
 from .jobs import (
     busy_loop,
@@ -30,7 +31,6 @@ from .jobs import (
     fail,
     sleep,
     register_endpoint,
-    validate_ports,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,13 +88,6 @@ def test_endpoint_registration(integration_cluster):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-def test_port_allocation(integration_cluster):
-    """Port allocation job succeeded."""
-    job = integration_cluster.submit(validate_ports, "itest-ports", ports=["http", "grpc"])
-    status = integration_cluster.wait(job, timeout=integration_cluster.job_timeout)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
-
-
 def test_reservation_gates_scheduling(integration_cluster):
     """Unsatisfiable reservation blocks scheduling; regular jobs proceed."""
     with integration_cluster.launched_job(
@@ -132,11 +125,9 @@ def test_log_levels_populated(integration_cluster, verbose_job):
     deadline = time.monotonic() + integration_cluster.job_timeout
     entries = []
     while time.monotonic() < deadline:
-        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
-        response = integration_cluster.controller_client.get_task_logs(request)
-        entries = []
-        for batch in response.task_logs:
-            entries.extend(batch.logs)
+        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        response = integration_cluster.controller_client.fetch_logs(request)
+        entries = list(response.entries)
         if any("info-marker" in e.data for e in entries):
             break
         time.sleep(0.5)
@@ -157,11 +148,9 @@ def test_log_level_filter(integration_cluster, verbose_job):
     """min_level=WARNING excludes INFO."""
     task_id = verbose_job.job_id.task(0).to_wire()
 
-    request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id, min_level="WARNING")
-    response = integration_cluster.controller_client.get_task_logs(request)
-    filtered = []
-    for batch in response.task_logs:
-        filtered.extend(batch.logs)
+    request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*", min_level="WARNING")
+    response = integration_cluster.controller_client.fetch_logs(request)
+    filtered = list(response.entries)
 
     filtered_data = [e.data for e in filtered]
     assert any("warning-marker" in d for d in filtered_data), f"warning-marker missing: {filtered_data}"

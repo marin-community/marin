@@ -15,7 +15,7 @@ from iris.cluster.controller.controller import (
     ControllerConfig,
 )
 from iris.cluster.controller.db import ControllerDB
-from iris.time_utils import Duration
+from rigging.timing import Duration
 from tests.cluster.controller.conftest import FakeProvider
 
 

@@ -69,9 +69,18 @@ jobs:
         run: |
           uv run pytest tests/integration/iris/ \
             --controller-url "$IRIS_CONTROLLER_URL" \
-            -v --tb=short --timeout=600 \
+            -v -s --log-cli-level=INFO --tb=short --timeout=600 \
             -o "addopts=" \
             -x
+        env:
+          WANDB_MODE: disabled
+          WANDB_API_KEY: ""
+          JAX_TRACEBACK_FILTERING: off
+
+      - name: Run full integration pipeline
+        run: |
+          timeout 600 uv run tests/integration/iris/run_iris_full_integration.py \
+            --controller-url "$IRIS_CONTROLLER_URL"
         env:
           WANDB_MODE: disabled
           WANDB_API_KEY: ""

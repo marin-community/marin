@@ -85,24 +85,24 @@ class ProxyResolver:
     URL so all RPCs go through the proxy. The proxy uses the
     ``X-Iris-Actor-Endpoint`` header to resolve the actual actor endpoint.
 
+    The caller passes the full actor name as registered in the endpoint registry
+    (e.g. ``/user/job/coordinator/actor-0``).
+
     Args:
         controller_url: Controller URL (e.g., ``http://localhost:8080``)
-        namespace: Namespace prefix for endpoint resolution
     """
 
-    def __init__(self, controller_url: str, namespace: str):
+    def __init__(self, controller_url: str):
         self._controller_url = controller_url.rstrip("/")
-        self._namespace = namespace
 
     def resolve(self, name: str) -> ResolveResult:
-        endpoint_name = f"{self._namespace}/{name}"
         return ResolveResult(
             name=name,
             endpoints=[
                 ResolvedEndpoint(
                     url=self._controller_url,
-                    actor_id=f"proxy-{endpoint_name}",
-                    metadata={ACTOR_ENDPOINT_HEADER: endpoint_name},
+                    actor_id=f"proxy-{name}",
+                    metadata={ACTOR_ENDPOINT_HEADER: name},
                 )
             ],
         )

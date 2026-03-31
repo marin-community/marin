@@ -15,6 +15,7 @@ dependencies = [
     "haliax",
     "levanter",
     "marin",
+    "rigging",
     "zephyr",
     # top level deps. try to keep these small.
     "joblib",
@@ -42,6 +43,7 @@ members = [
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
+    "lib/rigging",
     "lib/zephyr",
 ]
 
@@ -51,6 +53,7 @@ fray = { workspace = true }
 haliax = { workspace = true }
 levanter = { workspace = true }
 marin = { workspace = true }
+rigging = { workspace = true }
 zephyr = { workspace = true }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
