@@ -572,10 +572,6 @@ def controller(ctx):
 @controller.command("serve")
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=10000, type=int, help="Bind port")
-@click.option("--scheduler-min-interval", default=1.0, type=float, help="Minimum scheduler loop interval (seconds)")
-@click.option(
-    "--scheduler-max-interval", default=10.0, type=float, help="Maximum scheduler loop interval when idle (seconds)"
-)
 @click.option(
     "--checkpoint-path",
     default=None,
@@ -594,9 +590,7 @@ def controller(ctx):
     help="Start in dry-run mode: compute scheduling but suppress all side effects",
 )
 @click.pass_context
-def controller_serve(
-    ctx, host, port, scheduler_min_interval, scheduler_max_interval, checkpoint_path, checkpoint_interval, dry_run
-):
+def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_run):
     """Start a local controller process.
 
     Loads the cluster config, restores from checkpoint, and runs the full
@@ -619,8 +613,6 @@ def controller_serve(
         config,
         host=host,
         port=port,
-        scheduler_min_interval=scheduler_min_interval,
-        scheduler_max_interval=scheduler_max_interval,
         checkpoint_path=checkpoint_path,
         checkpoint_interval=checkpoint_interval,
         dry_run=dry_run,
