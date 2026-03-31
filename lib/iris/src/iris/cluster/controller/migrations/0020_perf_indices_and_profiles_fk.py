@@ -6,7 +6,6 @@
 1. Partial index on tasks.current_worker_id (skip NULLs).
 2. Composite index on task_profiles for efficient per-task lookups.
 3. Trigger to cap profiles per (task_id, profile_kind) at 10 rows.
-4. Set PRAGMA auto_vacuum = INCREMENTAL (takes effect on next VACUUM).
 
 Orphan task_profiles (referencing deleted tasks) are cleaned up incrementally
 by prune_old_data rather than in a blocking migration.
@@ -52,6 +51,3 @@ def migrate(conn: sqlite3.Connection) -> None:
         END
         """
     )
-
-    # --- 4. Incremental auto_vacuum ---
-    conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
