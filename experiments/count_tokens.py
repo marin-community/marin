@@ -40,6 +40,15 @@ class Dataset:
     license: str = ""  # manual override; API-fetched license used if empty
 
 
+def _is_matching_output_dir(entry: str, basename: str) -> bool:
+    entry_basename = entry.split("/")[-1]
+    return entry_basename.startswith(f"{basename}-") or entry_basename.startswith(f"{basename}_")
+
+
+def _matching_output_dirs(entries: list[str], basename: str) -> list[str]:
+    return [entry for entry in entries if _is_matching_output_dir(entry, basename)]
+
+
 NVIDIA_LICENSE = "NVIDIA Data Agreement for Model Training"
 
 DATASETS: dict[str, Dataset] = {
@@ -617,19 +626,17 @@ def count_tokens():
                 continue
 
             stats_data = None
-            for entry in entries:
-                entry_basename = entry.split("/")[-1]
-                if entry_basename.startswith(basename + "-") or entry_basename.startswith(basename + "_"):
-                    stats_path = f"{entry}/train/.stats.json"
-                    try:
-                        with fs.open(stats_path, "r") as f:
-                            stats_data = json.load(f)
-                        break
-                    except FileNotFoundError:
-                        continue
-                    except Exception as e:
-                        logger.warning(f"{name}: error reading {stats_path}: {e}")
-                        continue
+            for entry in _matching_output_dirs(entries, basename):
+                stats_path = f"{entry}/train/.stats.json"
+                try:
+                    with fs.open(stats_path, "r") as f:
+                        stats_data = json.load(f)
+                    break
+                except FileNotFoundError:
+                    continue
+                except Exception as e:
+                    logger.warning(f"{name}: error reading {stats_path}: {e}")
+                    continue
 
             if stats_data is None:
                 results.append((name, ds, None, "NO STATS"))
