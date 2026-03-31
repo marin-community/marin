@@ -531,13 +531,16 @@ def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -
 
 
 def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetail]:
+    # PK range scan: '0' (ASCII 48) is the next char after '/' (ASCII 47),
+    # so this matches all job_ids starting with "<job_id>/" without LIKE.
     prefix = job_id.to_wire() + "/"
+    upper = job_id.to_wire() + chr(ord("/") + 1)
     with db.read_snapshot() as q:
         return decode_rows(
             JobDetail,
             q.fetchall(
                 "SELECT * FROM jobs j WHERE j.job_id >= ? AND j.job_id < ?",
-                (prefix, prefix[:-1] + "0"),
+                (prefix, upper),
             ),
         )
 
