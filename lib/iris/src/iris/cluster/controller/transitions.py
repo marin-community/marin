@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
+from iris.cluster.controller.budget import UserBudgetDefaults
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
@@ -465,6 +466,28 @@ def _compute_max_promotions(capacity: ClusterCapacity | None, active_count: int)
     return max(target - active_count, 0)
 
 
+def _resolve_task_failure_state(
+    prior_state: int,
+    preemption_count: int,
+    max_preemptions: int,
+    terminal_state: int,
+) -> tuple[int, int]:
+    """Determine new task state after a worker failure or preemption.
+
+    Assigned tasks always retry. Executing tasks retry if preemption budget remains,
+    otherwise go to the given terminal state.
+
+    Returns (new_task_state, updated_preemption_count).
+    """
+    if prior_state == cluster_pb2.TASK_STATE_ASSIGNED:
+        return cluster_pb2.TASK_STATE_PENDING, preemption_count
+    if prior_state in EXECUTING_TASK_STATES:
+        preemption_count += 1
+        if preemption_count <= max_preemptions:
+            return cluster_pb2.TASK_STATE_PENDING, preemption_count
+    return terminal_state, preemption_count
+
+
 # =============================================================================
 # Batch helpers for apply_heartbeats_batch
 # =============================================================================
@@ -565,10 +588,12 @@ class ControllerTransitions:
         db: ControllerDB,
         log_store: LogStore,
         heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD,
+        user_budget_defaults: UserBudgetDefaults | None = None,
     ):
         self._db = db
         self._log_store = log_store
         self._heartbeat_failure_threshold = heartbeat_failure_threshold
+        self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
 
     def _record_transaction(
         self,
@@ -620,7 +645,8 @@ class ControllerTransitions:
             new_state = cluster_pb2.JOB_STATE_KILLED
         elif (
             total > 0
-            and counts.get(cluster_pb2.TASK_STATE_WORKER_FAILED, 0) > 0
+            and (counts.get(cluster_pb2.TASK_STATE_WORKER_FAILED, 0) + counts.get(cluster_pb2.TASK_STATE_PREEMPTED, 0))
+            > 0
             and all(s in TERMINAL_TASK_STATES for s in counts)
         ):
             new_state = cluster_pb2.JOB_STATE_WORKER_FAILED
@@ -728,6 +754,28 @@ class ControllerTransitions:
                 "INSERT OR IGNORE INTO users(user_id, created_at_ms) VALUES (?, ?)",
                 (job_id.user, effective_submission_ms),
             )
+            # Create default user budget row alongside user creation.
+            budget_defaults = self._user_budget_defaults
+            cur.execute(
+                "INSERT OR IGNORE INTO user_budgets(user_id, budget_limit, max_band, updated_at_ms) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    job_id.user,
+                    budget_defaults.budget_limit,
+                    budget_defaults.max_band,
+                    effective_submission_ms,
+                ),
+            )
+
+            # Resolve priority band: inherit from parent, or default to INTERACTIVE.
+            band_sort_key = cluster_pb2.PRIORITY_BAND_INTERACTIVE
+            if parent_job_id is not None:
+                parent_band_row = cur.execute(
+                    "SELECT priority_band FROM tasks WHERE job_id = ? LIMIT 1",
+                    (parent_job_id,),
+                ).fetchone()
+                if parent_band_row is not None:
+                    band_sort_key = parent_band_row["priority_band"]
 
             replicas = int(request.replicas)
             validation_error: str | None = None
@@ -798,8 +846,8 @@ class ControllerTransitions:
                         "task_id, job_id, task_index, state, error, exit_code, submitted_at_ms, started_at_ms, "
                         "finished_at_ms, max_retries_failure, max_retries_preemption, failure_count, preemption_count, "
                         "resource_usage_proto, current_attempt_id, priority_neg_depth, priority_root_submitted_ms, "
-                        "priority_insertion"
-                        ") VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, ?, 0, 0, NULL, -1, ?, ?, ?)",
+                        "priority_insertion, priority_band"
+                        ") VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, ?, 0, 0, NULL, -1, ?, ?, ?, ?)",
                         (
                             task_id,
                             job_id.to_wire(),
@@ -811,6 +859,7 @@ class ControllerTransitions:
                             -job_id.depth,
                             root_submitted_ms,
                             insertion_base + idx,
+                            band_sort_key,
                         ),
                     )
                 if request.HasField("reservation") and request.reservation.entries:
@@ -873,8 +922,8 @@ class ControllerTransitions:
                             "finished_at_ms, max_retries_failure, max_retries_preemption, "
                             "failure_count, preemption_count, "
                             "resource_usage_proto, current_attempt_id, priority_neg_depth, priority_root_submitted_ms, "
-                            "priority_insertion"
-                            ") VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, ?, 0, 0, NULL, -1, ?, ?, ?)",
+                            "priority_insertion, priority_band"
+                            ") VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, ?, 0, 0, NULL, -1, ?, ?, ?, ?)",
                             (
                                 holder_id.task(idx).to_wire(),
                                 holder_id.to_wire(),
@@ -886,6 +935,7 @@ class ControllerTransitions:
                                 -holder_id.depth,
                                 root_submitted_ms,
                                 holder_base + idx,
+                                band_sort_key,
                             ),
                         )
 
@@ -1618,22 +1668,19 @@ class ControllerTransitions:
                 for task_row in task_rows:
                     tid = str(task_row["task_id"])
                     prior_state = int(task_row["state"])
-                    preemption_count = int(task_row["preemption_count"])
-                    max_preemptions = int(task_row["max_retries_preemption"])
                     is_reservation_holder = bool(int(task_row["is_reservation_holder"]))
-                    new_task_state = cluster_pb2.TASK_STATE_WORKER_FAILED
-                    finished_ms: int | None = now_ms
                     if is_reservation_holder:
                         new_task_state = cluster_pb2.TASK_STATE_PENDING
-                        finished_ms = None
-                    elif prior_state == cluster_pb2.TASK_STATE_ASSIGNED:
-                        new_task_state = cluster_pb2.TASK_STATE_PENDING
-                        finished_ms = None
-                    elif prior_state in EXECUTING_TASK_STATES:
-                        preemption_count += 1
-                        if preemption_count <= max_preemptions:
-                            new_task_state = cluster_pb2.TASK_STATE_PENDING
-                            finished_ms = None
+                        finished_ms: int | None = None
+                        preemption_count = int(task_row["preemption_count"])
+                    else:
+                        new_task_state, preemption_count = _resolve_task_failure_state(
+                            prior_state,
+                            int(task_row["preemption_count"]),
+                            int(task_row["max_retries_preemption"]),
+                            cluster_pb2.TASK_STATE_WORKER_FAILED,
+                        )
+                        finished_ms = None if new_task_state == cluster_pb2.TASK_STATE_PENDING else now_ms
                     if is_reservation_holder:
                         cur.execute(
                             "DELETE FROM task_attempts WHERE task_id = ? AND attempt_id = ?",
@@ -1759,6 +1806,90 @@ class ControllerTransitions:
                 cur, "mark_task_unschedulable", [("task_unschedulable", task_id.to_wire(), {"reason": reason})]
             )
         return TxResult()
+
+    def preempt_task(self, task_id: JobName, reason: str) -> TxResult:
+        """Preempt a running task, consuming from preemption retry budget.
+
+        Marks the task as PREEMPTED (or retries as PENDING if budget remains),
+        decommits its resources from the worker, and cascades to children if needed.
+        """
+        tasks_to_kill: set[JobName] = set()
+        task_kill_workers: dict[JobName, WorkerId] = {}
+        with self._db.transaction() as cur:
+            row = cur.execute(
+                "SELECT t.task_id, t.job_id, t.state, t.current_attempt_id, "
+                "t.preemption_count, t.max_retries_preemption, j.request_proto "
+                "FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
+                "WHERE t.task_id = ?",
+                (task_id.to_wire(),),
+            ).fetchone()
+            if row is None:
+                return TxResult()
+
+            prior_state = int(row["state"])
+            if prior_state not in ACTIVE_TASK_STATES:
+                return TxResult()
+
+            now_ms = Timestamp.now().epoch_ms()
+            new_state, preemption_count = _resolve_task_failure_state(
+                prior_state,
+                int(row["preemption_count"]),
+                int(row["max_retries_preemption"]),
+                cluster_pb2.TASK_STATE_PREEMPTED,
+            )
+            finished_ms = None if new_state == cluster_pb2.TASK_STATE_PENDING else now_ms
+
+            # Update attempt
+            cur.execute(
+                "UPDATE task_attempts SET state = ?, finished_at_ms = COALESCE(finished_at_ms, ?), error = ? "
+                "WHERE task_id = ? AND attempt_id = ?",
+                (
+                    cluster_pb2.TASK_STATE_PREEMPTED,
+                    now_ms,
+                    reason,
+                    task_id.to_wire(),
+                    int(row["current_attempt_id"]),
+                ),
+            )
+
+            # Update task
+            cur.execute(
+                "UPDATE tasks SET state = ?, error = ?, finished_at_ms = ?, preemption_count = ? WHERE task_id = ?",
+                (new_state, reason, finished_ms, preemption_count, task_id.to_wire()),
+            )
+
+            # Decommit worker resources
+            attempt_row = cur.execute(
+                "SELECT worker_id FROM task_attempts WHERE task_id = ? AND attempt_id = ?",
+                (task_id.to_wire(), int(row["current_attempt_id"])),
+            ).fetchone()
+            if attempt_row and attempt_row["worker_id"]:
+                job_req = cluster_pb2.Controller.LaunchJobRequest()
+                job_req.ParseFromString(row["request_proto"])
+                _decommit_worker_resources(cur, str(attempt_row["worker_id"]), job_req.resources)
+
+            cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id.to_wire(),))
+
+            # Recompute job state and cascade if terminal
+            job_id = JobName.from_wire(str(row["job_id"]))
+            new_job_state = self._recompute_job_state(cur, job_id)
+            if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
+                cascade_kills, cascade_workers = _cascade_terminal_job(cur, job_id, now_ms, reason)
+                tasks_to_kill.update(cascade_kills)
+                task_kill_workers.update(cascade_workers)
+            elif new_state == cluster_pb2.TASK_STATE_PENDING:
+                policy = _resolve_preemption_policy(cur, job_id)
+                if policy == cluster_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
+                    child_kills, child_workers = _cascade_children(cur, job_id, now_ms, reason)
+                    tasks_to_kill.update(child_kills)
+                    task_kill_workers.update(child_workers)
+
+            if new_state == cluster_pb2.TASK_STATE_PREEMPTED:
+                tasks_to_kill.add(task_id)
+
+            self._record_transaction(cur, "preempt_task", [("task_preempted", task_id.to_wire(), {"reason": reason})])
+
+        return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
     def drain_dispatch(self, worker_id: WorkerId) -> DispatchBatch | None:
         """Drain buffered dispatches and snapshot worker running tasks."""
