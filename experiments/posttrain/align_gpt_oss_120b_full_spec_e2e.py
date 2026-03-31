@@ -27,12 +27,12 @@ Submit to Iris:
         --cpu 4 --memory 16GB --disk 10GB \\
         --region us-central1 \\
         -e MARIN_PREFIX gs://marin-us-central1 \\
-        -- python experiments/align_gpt_oss_120b_full_spec_e2e.py
+        -- python experiments/posttrain/align_gpt_oss_120b_full_spec_e2e.py
 """
 
 from pathlib import Path
 
-from experiments.gpt_oss_tpu import (
+from gpt_oss_tpu import (
     GPT_OSS_TPU_DEFAULT_MAX_TOKENS,
     RejectedModelPreset,
     gpt_oss_120b_tpu_vllm_config,
@@ -46,7 +46,7 @@ from marin.alignment.align import AlignConfig, ResponseExecutionMode, align
 from marin.alignment.generate_responses import RejectedPromptStrategy
 from marin.execution.executor import executor_main
 
-SPEC_PATH = str(Path(__file__).parent / "posttrain" / "specs" / "openai_model_spec.jsonl")
+SPEC_PATH = str(Path(__file__).parent / "specs" / "openai_model_spec.jsonl")
 
 GPT_OSS_RESPONSE_MAX_TOKENS = 4096
 REJECTED_MODEL_PRESET = RejectedModelPreset.MIXTRAL

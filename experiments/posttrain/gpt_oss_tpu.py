@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared TPU bootstrap config for GPT-OSS local-vLLM experiments."""
+"""Shared TPU bootstrap config for GPT-OSS posttrain local-vLLM experiments."""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -20,9 +20,6 @@ GPT_OSS_TPU_MAX_MODEL_LEN = 4096
 GPT_OSS_TPU_DEFAULT_MAX_TOKENS = 2048
 GPT_OSS_TPU_DEFAULT_MODEL_IMPL_TYPE = "vllm"
 GPT_OSS_TPU_DEFAULT_PREFER_JAX_FOR_BOOTSTRAP = False
-GPT_OSS_20B_TPU_DEFAULT_MAX_TOKENS = GPT_OSS_TPU_DEFAULT_MAX_TOKENS
-GPT_OSS_20B_TPU_DEFAULT_MODEL_IMPL_TYPE = GPT_OSS_TPU_DEFAULT_MODEL_IMPL_TYPE
-GPT_OSS_20B_TPU_DEFAULT_PREFER_JAX_FOR_BOOTSTRAP = GPT_OSS_TPU_DEFAULT_PREFER_JAX_FOR_BOOTSTRAP
 REJECTED_MODEL_MAX_MODEL_LEN = 8192
 
 
@@ -34,7 +31,7 @@ class GptOssTpuDefaults:
 
 
 GPT_OSS_20B_TPU_DEFAULTS = GptOssTpuDefaults(cpu=16, disk="60g", ram="128g")
-GPT_OSS_120B_TPU_DEFAULTS = GptOssTpuDefaults(cpu=32, disk="80g", ram="256g")
+GPT_OSS_120B_TPU_DEFAULTS = GptOssTpuDefaults(cpu=32, disk="80g", ram="400g")
 
 
 class RejectedModelPreset(StrEnum):
