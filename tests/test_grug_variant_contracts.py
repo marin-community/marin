@@ -266,18 +266,6 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
         assert key in summary
 
 
-def test_align_kv_heads_repeats_grouped_query_heads():
-    kv = jnp.arange(2 * 3 * 2 * 4, dtype=jnp.float32).reshape(2, 3, 2, 4)
-
-    aligned = align_kv_heads(kv, num_q_heads=4)
-
-    assert aligned.shape == (2, 3, 4, 4)
-    assert jnp.array_equal(aligned[:, :, 0], kv[:, :, 0])
-    assert jnp.array_equal(aligned[:, :, 1], kv[:, :, 0])
-    assert jnp.array_equal(aligned[:, :, 2], kv[:, :, 1])
-    assert jnp.array_equal(aligned[:, :, 3], kv[:, :, 1])
-
-
 def test_grug_moe_attention_supports_grouped_query_xsa():
     model_module = importlib.import_module("experiments.grug.moe.model")
 

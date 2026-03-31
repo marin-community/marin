@@ -31,6 +31,7 @@ from levanter.layers.attention import (
     AttentionWithSink,
     dot_product_attention,
 )
+from levanter.grug.attention import align_kv_heads
 from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
 
 
@@ -203,6 +204,18 @@ def test_attention_with_headwise_gating_module():
 
     expected = np.full((2, 1), 0.5)
     assert_trees_all_close(out.array, expected)
+
+
+def test_align_kv_heads_repeats_grouped_query_heads():
+    kv = jnp.arange(2 * 3 * 2 * 4, dtype=jnp.float32).reshape(2, 3, 2, 4)
+
+    aligned = align_kv_heads(kv, num_q_heads=4)
+
+    assert aligned.shape == (2, 3, 4, 4)
+    assert jnp.array_equal(aligned[:, :, 0], kv[:, :, 0])
+    assert jnp.array_equal(aligned[:, :, 1], kv[:, :, 0])
+    assert jnp.array_equal(aligned[:, :, 2], kv[:, :, 1])
+    assert jnp.array_equal(aligned[:, :, 3], kv[:, :, 1])
 
 
 def test_te_bin_and_group_axes_by_function():
