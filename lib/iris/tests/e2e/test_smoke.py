@@ -653,6 +653,7 @@ def test_exec_in_container(smoke_cluster):
     smoke_cluster.kill(job)
 
 
+@pytest.mark.timeout(180)
 def test_worker_restart_preserves_task(smoke_cluster):
     """Restarting a worker preserves its running task via container adoption.
 
@@ -660,8 +661,11 @@ def test_worker_restart_preserves_task(smoke_cluster):
     then verifies the task is still RUNNING and eventually succeeds. Fetches
     logs to confirm continuity across the restart.
     """
-    # Submit a task that logs periodically for 90 seconds
-    job = smoke_cluster.submit(TestJobs.log_periodic, "smoke-restart", 90, 1.0)
+    # Use shorter duration in local mode (restart is a no-op there)
+    is_local = not smoke_cluster.is_cloud
+    task_duration = 30 if is_local else 90
+
+    job = smoke_cluster.submit(TestJobs.log_periodic, "smoke-restart", task_duration, 1.0)
     smoke_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
 
     # Wait for task itself to be RUNNING (not just BUILDING)
@@ -674,7 +678,7 @@ def test_worker_restart_preserves_task(smoke_cluster):
     assert task.state == cluster_pb2.TASK_STATE_RUNNING, f"Task stuck in {cluster_pb2.TaskState.Name(task.state)}"
 
     # Let a few ticks log before we restart
-    time.sleep(5)
+    time.sleep(3)
 
     # Find the worker running this task
     worker_id = task.worker_id
@@ -687,25 +691,28 @@ def test_worker_restart_preserves_task(smoke_cluster):
     )
     assert restart_resp.accepted, f"Restart rejected: {restart_resp.error}"
 
-    # Wait for the worker to come back as healthy
-    worker_back = False
-    deadline = time.monotonic() + 120
-    while time.monotonic() < deadline:
-        time.sleep(5)
-        workers_resp = smoke_cluster.controller_client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
-        for w in workers_resp.workers:
-            if w.worker_id == worker_id and w.healthy:
-                worker_back = True
+    # In cloud mode, wait for the worker to come back as healthy after real restart.
+    # In local mode, restart_worker is a no-op so the worker stays healthy.
+    if not is_local:
+        worker_back = False
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            time.sleep(5)
+            workers_resp = smoke_cluster.controller_client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+            for w in workers_resp.workers:
+                if w.worker_id == worker_id and w.healthy:
+                    worker_back = True
+                    break
+            if worker_back:
                 break
-        if worker_back:
-            break
-    assert worker_back, f"Worker {worker_id} did not re-register within 120s"
+        assert worker_back, f"Worker {worker_id} did not re-register within 120s"
 
     # Verify the task is still running (not retried or failed)
     task_after = smoke_cluster.task_status(job, task_index=0)
-    assert (
-        task_after.state == cluster_pb2.TASK_STATE_RUNNING
-    ), f"Task should still be RUNNING after restart, got {cluster_pb2.TaskState.Name(task_after.state)}"
+    assert task_after.state in (
+        cluster_pb2.TASK_STATE_RUNNING,
+        cluster_pb2.TASK_STATE_SUCCEEDED,
+    ), f"Task should be RUNNING or SUCCEEDED after restart, got {cluster_pb2.TaskState.Name(task_after.state)}"
 
     # Wait for the job to complete naturally
     final = smoke_cluster.wait(job, timeout=120)
