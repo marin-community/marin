@@ -20,6 +20,7 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerStatus,
     DiscoveredContainer,
+    ExecutionStage,
 )
 from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.task_attempt import TaskAttempt
@@ -685,7 +686,7 @@ def _make_discovered_container(
     task_id: str = JobName.root("test-user", "test-job").task(0).to_wire(),
     attempt_id: int = 0,
     worker_id: str = "",
-    phase: str = "run",
+    phase: ExecutionStage = ExecutionStage.RUN,
     running: bool = True,
     workdir_host_path: str = "/tmp/workdirs/test",
 ) -> DiscoveredContainer:
@@ -718,7 +719,7 @@ def test_adopt_creates_task_in_running_state(mock_worker, mock_runtime):
 
 def test_adopt_skips_build_phase_containers(mock_worker, mock_runtime):
     """Build-phase containers should be cleaned up, not adopted."""
-    container = _make_discovered_container(phase="build")
+    container = _make_discovered_container(phase=ExecutionStage.BUILD)
     mock_runtime.discover_containers = Mock(return_value=[container])
 
     adopted = mock_worker.adopt_running_containers()

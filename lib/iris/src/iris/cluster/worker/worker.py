@@ -4,7 +4,6 @@
 """Unified worker managing all components and lifecycle."""
 
 import logging
-import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -16,7 +15,7 @@ import uvicorn
 from iris.chaos import chaos
 from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.cluster.runtime.types import ContainerRuntime
+from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
 from iris.cluster.types import JobName, TaskAttempt as TaskAttemptId
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.dashboard import WorkerDashboard
@@ -270,8 +269,7 @@ class Worker:
         to_remove: list[str] = []
 
         for container in discovered:
-            # Only adopt run-phase containers that are still running
-            if container.phase != "run" or not container.running:
+            if container.phase != ExecutionStage.RUN or not container.running:
                 to_remove.append(container.container_id)
                 continue
 
@@ -327,12 +325,8 @@ class Worker:
 
         # Clean up non-adoptable containers
         if to_remove:
-            subprocess.run(
-                ["docker", "rm", "-f", *to_remove],
-                capture_output=True,
-                check=False,
-            )
-            logger.info("Cleaned up %d non-adoptable containers", len(to_remove))
+            removed = self._runtime.remove_containers(to_remove)
+            logger.info("Cleaned up %d non-adoptable containers", removed)
 
         if adopted > 0:
             logger.info("Adopted %d running containers from previous worker process", adopted)

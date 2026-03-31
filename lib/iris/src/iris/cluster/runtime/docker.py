@@ -43,6 +43,7 @@ from iris.cluster.runtime.types import (
     ContainerStats,
     ContainerStatus,
     DiscoveredContainer,
+    ExecutionStage,
     ImageInfo,
     MountKind,
     MountSpec,
@@ -659,10 +660,9 @@ exec {quoted_cmd}
             cmd.extend(["--label", f"iris.attempt_id={config.attempt_id}"])
         if config.worker_id:
             cmd.extend(["--label", f"iris.worker_id={config.worker_id}"])
-        # Phase label: "build" for setup containers, "run" for main execution.
-        # Used during adoption to distinguish adoptable run containers from
-        # transient build containers that should be cleaned up.
-        phase = "build" if label_suffix == "_build" else "run"
+        # Phase label: used during adoption to distinguish adoptable run
+        # containers from transient build containers that should be cleaned up.
+        phase = ExecutionStage.BUILD if label_suffix == "_build" else ExecutionStage.RUN
         cmd.extend(["--label", f"iris.phase={phase}"])
 
         # Resource limits (cgroups v2) — always applied
@@ -1015,7 +1015,7 @@ class DockerRuntime:
                     attempt_id=int(attempt_id_str),
                     job_id=labels.get("iris.job_id", ""),
                     worker_id=labels.get("iris.worker_id", ""),
-                    phase=labels.get("iris.phase", "run"),
+                    phase=ExecutionStage(labels.get("iris.phase", "run")),
                     running=state.get("Running", False),
                     exit_code=state.get("ExitCode") if not state.get("Running", False) else None,
                     started_at=state.get("StartedAt", ""),
@@ -1029,18 +1029,20 @@ class DockerRuntime:
         """Wrap an existing container for adoption after worker restart."""
         return DockerContainerHandle.from_existing(container_id, self)
 
-    def remove_all_iris_containers(self) -> int:
-        """Force remove all iris-managed containers. Returns count attempted."""
-        container_ids = self.list_iris_containers(all_states=True)
+    def remove_containers(self, container_ids: list[str]) -> int:
+        """Force remove specific containers by ID. Returns count removed."""
         if not container_ids:
             return 0
-
         subprocess.run(
             ["docker", "rm", "-f", *container_ids],
             capture_output=True,
             check=False,
         )
         return len(container_ids)
+
+    def remove_all_iris_containers(self) -> int:
+        """Force remove all iris-managed containers. Returns count attempted."""
+        return self.remove_containers(self.list_iris_containers(all_states=True))
 
     def cleanup(self) -> None:
         """Clean up all containers managed by this runtime."""

@@ -25,7 +25,7 @@ from iris.cluster.config import IrisConfig, clear_remote_state, make_local_confi
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
-from rigging.timing import Timestamp
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 # =============================================================================
 # Helpers
@@ -797,22 +797,17 @@ def worker_restart(ctx, worker_id: str | None, timeout: int):
             continue
 
         # Poll until the worker re-registers as healthy
-        import time
-
-        deadline = time.monotonic() + timeout
-        reregistered = False
-        while time.monotonic() < deadline:
-            time.sleep(5)
+        def _worker_healthy(target_id: str = wid) -> bool:
             try:
-                status = client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
-                for w in status.workers:
-                    if w.worker_id == wid and w.healthy:
-                        reregistered = True
-                        break
+                resp = client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+                return any(w.worker_id == target_id and w.healthy for w in resp.workers)
             except Exception:
-                pass
-            if reregistered:
-                break
+                return False
+
+        reregistered = ExponentialBackoff(initial=5.0, maximum=5.0, jitter=0.0).wait_until(
+            _worker_healthy,
+            timeout=Duration.from_seconds(timeout),
+        )
 
         if reregistered:
             click.echo(f"  Worker {wid} restarted successfully")

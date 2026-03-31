@@ -55,6 +55,13 @@ class ContainerPhase(StrEnum):
     STOPPED = "stopped"
 
 
+class ExecutionStage(StrEnum):
+    """Which pipeline stage a container belongs to (for adoption filtering)."""
+
+    BUILD = "build"
+    RUN = "run"
+
+
 class MountKind(StrEnum):
     WORKDIR = "workdir"  # task working directory (/app); tmpfs on Docker, emptyDir on K8s
     TMPFS = "tmpfs"  # volatile fast storage; tmpfs on Docker, emptyDir on K8s
@@ -270,7 +277,7 @@ class DiscoveredContainer:
     attempt_id: int
     job_id: str
     worker_id: str
-    phase: str  # "build" or "run"
+    phase: ExecutionStage
     running: bool
     exit_code: int | None
     started_at: str  # ISO 8601 timestamp from Docker
@@ -326,6 +333,10 @@ class ContainerRuntime(Protocol):
 
     def remove_all_iris_containers(self) -> int:
         """Force remove all iris-managed containers/sandboxes. Returns count removed."""
+        ...
+
+    def remove_containers(self, container_ids: list[str]) -> int:
+        """Force remove specific containers by ID. Returns count removed."""
         ...
 
     def discover_containers(self) -> list[DiscoveredContainer]:
