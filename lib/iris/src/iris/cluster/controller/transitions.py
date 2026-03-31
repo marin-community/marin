@@ -2149,6 +2149,7 @@ class ControllerTransitions:
                 result.profiles_deleted,
             )
             self._db.optimize()
+
         return result
 
     # =========================================================================

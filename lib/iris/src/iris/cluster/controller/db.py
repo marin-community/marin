@@ -1208,7 +1208,13 @@ class ControllerDB:
         destination to DELETE mode so the result is a single
         self-contained file (no -wal/-shm sidecars) that survives
         compression and remote upload without corruption.
+
+        The backup is also VACUUMed with auto_vacuum=INCREMENTAL so that
+        controllers restoring from this checkpoint start in incremental
+        mode without needing a full VACUUM at boot.
         """
+        import time
+
         destination.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             dest = sqlite3.connect(str(destination))
@@ -1218,6 +1224,19 @@ class ControllerDB:
                 dest.commit()
             finally:
                 dest.close()
+
+        # VACUUM INTO a compacted copy with incremental auto_vacuum enabled.
+        # Runs outside the lock since it operates on the already-written backup.
+        t0 = time.monotonic()
+        vacuumed = destination.with_suffix(".vacuumed.sqlite3")
+        conn = sqlite3.connect(str(destination))
+        try:
+            conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
+            conn.execute(f"VACUUM INTO '{vacuumed}'")
+        finally:
+            conn.close()
+        vacuumed.rename(destination)
+        logger.info("Checkpoint vacuumed in %.1fs", time.monotonic() - t0)
 
     def replace_from(self, source_dir: str | Path) -> None:
         """Replace current DB files from ``source_dir`` and reopen connection.
