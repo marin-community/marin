@@ -6,7 +6,7 @@ from typing import TypeVar, overload, Any
 from dataclasses import asdict, dataclass, is_dataclass
 from marin.execution.step_spec import StepSpec
 
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from pydantic import BaseModel
 
 T = TypeVar("T")

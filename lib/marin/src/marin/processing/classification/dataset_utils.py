@@ -23,7 +23,7 @@ from typing import TypedDict
 
 import numpy as np
 import pandas as pd
-from iris.marin_fs import open_url, url_to_fs
+from rigging.filesystem import open_url, url_to_fs
 
 logger = logging.getLogger(__name__)
 
@@ -74,37 +74,35 @@ def make_json_serializable(row: dict) -> dict:
 
 
 def read_dataset_streaming(input_filename: str, columns: list[str] | None = None):
-    """Read in a dataset as a streaming iterator using datasets library
+    """Read in a dataset as a streaming iterator.
+
+    Uses fsspec + json directly instead of HuggingFace datasets to avoid
+    the datasets CompressionFilesystem injecting aiohttp kwargs
+    (requote_redirect_url) into botocore's create_client, which breaks
+    on S3-compatible backends.
 
     Args:
-        input_filename: str
-            The path to the input file. Currently supports .jsonl.gz, .jsonl.zst, and .parquet
+        input_filename: Path to the input file (.jsonl.gz, .jsonl.zst, .jsonl, or .parquet).
 
     Returns:
-        Iterator: An iterator over the dataset rows
+        Iterator over dataset rows as dicts.
     """
-    import datasets
-
-    # Disable caching for streaming
-    datasets.disable_caching()
-    datasets.logging.set_verbosity_warning()
-
-    # Determine file type and load with streaming
     if input_filename.endswith((".jsonl.gz", ".jsonl.zst", ".jsonl")):
-        # Load as JSON lines with streaming
-        dataset = datasets.load_dataset("json", data_files=input_filename, streaming=True, split="train")
+        with open_url(input_filename, "rb", compression="infer") as f:
+            for line in f:
+                row = json.loads(line)
+                if columns:
+                    row = {k: row[k] for k in columns if k in row}
+                yield row
     elif input_filename.endswith(".parquet"):
-        # Load parquet with streaming
-        dataset = datasets.load_dataset("parquet", data_files=input_filename, streaming=True, split="train")
+        import pyarrow.parquet as pq
+
+        with open_url(input_filename, "rb") as f:
+            table = pq.read_table(f, columns=columns)
+        for row in table.to_pylist():
+            yield row
     else:
         raise ValueError(f"Unsupported filetype: {input_filename}")
-
-    # Filter columns if specified
-    if columns:
-        dataset = dataset.select_columns(columns)
-
-    # Yield rows from the streaming dataset
-    yield from dataset
 
 
 def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = False):

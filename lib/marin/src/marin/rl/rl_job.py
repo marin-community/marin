@@ -34,7 +34,7 @@ from marin.training.training import _add_run_env_variables
 from marin.utilities.json_encoder import CustomJsonEncoder
 from marin.utils import remove_tpu_lockfile_on_exit
 from transformers import AutoTokenizer, PreTrainedTokenizer
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

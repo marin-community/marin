@@ -15,6 +15,7 @@ dependencies = [
     "haliax",
     "levanter",
     "marin",
+    "rigging",
     "zephyr",
     # top level deps. try to keep these small.
     "watchdog",
@@ -23,7 +24,7 @@ dependencies = [
 
 [tool.uv]
 fork-strategy = "fewest"
-find-links = ["https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-41b51df"]
+find-links = ["https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-40ac799"]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
@@ -40,6 +41,7 @@ members = [
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
+    "lib/rigging",
     "lib/zephyr",
 ]
 
@@ -49,6 +51,7 @@ fray = { workspace = true }
 haliax = { workspace = true }
 levanter = { workspace = true }
 marin = { workspace = true }
+rigging = { workspace = true }
 zephyr = { workspace = true }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
@@ -210,6 +213,7 @@ log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "tpu_ci: mark tests that require a TPU",
+    "integration: mark tests as integration tests that require cluster infrastructure",
 ]
 testpaths = ["tests", "experiments"]
 

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import haliax as hax
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 import jax
 import jax.random as jrandom
 import jmp
@@ -40,7 +40,7 @@ from marin.rl.types import RolloutGroup
 from marin.training.training import _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 from transformers import AutoTokenizer
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

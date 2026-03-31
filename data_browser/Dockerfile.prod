@@ -30,4 +30,4 @@ COPY conf ./conf
 
 ENV DEV=false
 
-ENTRYPOINT ["python", "-m", "gunicorn", "--bind", "0.0.0.0:80", "--workers", "1", "wsgi:application"]
+ENTRYPOINT ["python", "-m", "gunicorn", "--bind", "0.0.0.0:80", "--workers", "2", "--threads", "4", "wsgi:application"]

@@ -28,7 +28,7 @@ from enum import StrEnum
 
 from experiments.defaults import default_dpo, default_tokenize
 from fray.v2.types import ResourceConfig
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat
 
 from marin.alignment.generate_prompts import PromptGenConfig, generate_prompts_from_spec

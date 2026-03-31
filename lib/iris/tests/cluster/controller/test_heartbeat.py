@@ -7,7 +7,7 @@ import time
 
 import pytest
 from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.db import TASKS, WORKERS, ControllerDB
+from iris.cluster.controller.db import ControllerDB, TaskDetail, WorkerDetail, decode_one, decode_rows
 from iris.cluster.log_store import LogStore
 from tests.cluster.controller.conftest import FakeProvider
 from iris.cluster.controller.transitions import (
@@ -22,7 +22,7 @@ from iris.cluster.controller.transitions import (
 )
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 
 @pytest.fixture
@@ -75,7 +75,7 @@ def test_worker_heartbeat_expired_check(state, worker_metadata):
     )
 
     with state._db.snapshot() as q:
-        workers = q.select(WORKERS)
+        workers = decode_rows(WorkerDetail, q.fetchall("SELECT * FROM workers"))
     worker = workers[0]
 
     # Short timeout should not expire immediately
@@ -99,7 +99,10 @@ def test_complete_heartbeat_success(state, worker_metadata):
     assert result.action == HeartbeatAction.OK
 
     with state._db.snapshot() as q:
-        worker = q.one(WORKERS, where=WORKERS.c.worker_id == "worker1")
+        worker = decode_one(
+            WorkerDetail,
+            q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", ("worker1",)),
+        )
     assert worker is not None
     assert worker.healthy
 
@@ -113,7 +116,10 @@ def test_fail_heartbeat_below_threshold(state, worker_metadata):
     assert action == HeartbeatAction.TRANSIENT_FAILURE
 
     with state._db.snapshot() as q:
-        worker = q.one(WORKERS, where=WORKERS.c.worker_id == "worker1")
+        worker = decode_one(
+            WorkerDetail,
+            q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", ("worker1",)),
+        )
     assert worker is not None
     assert worker.consecutive_failures == 1
 
@@ -134,7 +140,7 @@ def test_fail_heartbeat_at_threshold(tmp_path, worker_metadata):
     assert action == HeartbeatAction.WORKER_FAILED
 
     with state._db.snapshot() as q:
-        assert not q.exists(WORKERS, where=WORKERS.c.worker_id == "worker1")
+        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is None
 
 
 def test_complete_heartbeat_unhealthy_worker_increments_failures(state, worker_metadata):
@@ -150,7 +156,7 @@ def test_complete_heartbeat_unhealthy_worker_increments_failures(state, worker_m
 
     assert result.action == HeartbeatAction.TRANSIENT_FAILURE
     with state._db.snapshot() as q:
-        assert q.exists(WORKERS, where=WORKERS.c.worker_id == "worker1")
+        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is not None
 
 
 def test_unhealthy_worker_cascades_to_tasks(tmp_path):
@@ -212,7 +218,10 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
     assert result.action == HeartbeatAction.WORKER_FAILED
 
     with state._db.snapshot() as q:
-        task = q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
+        task = decode_one(
+            TaskDetail,
+            q.fetchall("SELECT * FROM tasks WHERE task_id = ? LIMIT 1", (task_id.to_wire(),)),
+        )
     assert task is not None
     assert task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
 
@@ -243,14 +252,14 @@ def test_reap_stale_workers_removes_old_heartbeat(tmp_path, worker_metadata):
     )
 
     with db.snapshot() as q:
-        assert q.exists(WORKERS, where=WORKERS.c.worker_id == "stale-worker")
-        assert q.exists(WORKERS, where=WORKERS.c.worker_id == "fresh-worker")
+        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("stale-worker",)) is not None
+        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("fresh-worker",)) is not None
 
     controller._reap_stale_workers()
 
     with db.snapshot() as q:
-        assert not q.exists(WORKERS, where=WORKERS.c.worker_id == "stale-worker")
-        assert q.exists(WORKERS, where=WORKERS.c.worker_id == "fresh-worker")
+        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("stale-worker",)) is None
+        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("fresh-worker",)) is not None
 
     log_store.close()
     db.close()
@@ -273,7 +282,7 @@ def test_reap_stale_workers_no_op_when_all_fresh(tmp_path, worker_metadata):
     controller._reap_stale_workers()
 
     with db.snapshot() as q:
-        assert q.exists(WORKERS, where=WORKERS.c.worker_id == "worker1")
+        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("worker1",)) is not None
 
     log_store.close()
     db.close()

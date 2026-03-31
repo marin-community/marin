@@ -22,7 +22,7 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import requests
-from iris.marin_fs import marin_prefix
+from rigging.filesystem import marin_prefix
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 
@@ -367,8 +367,16 @@ def _poll_until_ready(
     poll_interval_seconds: float = 5,
     check_alive: Callable[[], None] | None = None,
 ) -> None:
-    """Block until ``GET {server_url}/models`` returns 200."""
+    """Block until ``GET {server_url}/models`` returns 200.
 
+    Args:
+        server_url: The vLLM ``/v1`` base URL (e.g. ``http://127.0.0.1:8000/v1``).
+        timeout_seconds: Maximum seconds to wait before raising ``TimeoutError``.
+        poll_interval_seconds: Seconds between consecutive polls.
+        check_alive: Optional callable invoked each iteration *before* the HTTP
+            probe. Should raise if the underlying server process / container is
+            no longer alive (the exception propagates directly to the caller).
+    """
     models_url = f"{server_url}/models"
     start_time = time.time()
 
@@ -381,7 +389,7 @@ def _poll_until_ready(
             if response.status_code == 200:
                 return
         except (requests.ConnectionError, requests.Timeout):
-            pass
+            pass  # Server not ready yet.
 
         elapsed = time.time() - start_time
         if elapsed > timeout_seconds:
@@ -587,10 +595,7 @@ def _detect_tpu_environment() -> bool:
 
 def _detect_nvidia_gpu_environment() -> bool:
     for key in ("NVIDIA_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
-        value = os.environ.get(key)
-        if not value:
-            continue
-        if value:
+        if os.environ.get(key):
             return True
     return bool(glob.glob("/dev/nvidia[0-9]*"))
 
@@ -832,17 +837,19 @@ def _start_vllm_docker_server(
             poll_interval_seconds=poll_interval_seconds,
             check_alive=_check_docker_alive,
         )
-        return handle
     except Exception:
         subprocess.run(["docker", "rm", "-f", resolved_name], check=False, capture_output=True, text=True)
         raise
+
+    return handle
 
 
 def _default_jax_compilation_cache_dir() -> str:
     return f"{marin_prefix()}/compilation-cache"
 
 
-# Keys with canonical defaults applied to both Docker and native vLLM startups.
+# Canonical vLLM environment defaults shared by Docker and native backends.
+# Each (key, default) pair is resolved from the current environment at call time.
 _VLLM_ENV_DEFAULTS: tuple[tuple[str, str], ...] = (
     # tpu_inference defaults MODEL_IMPL_TYPE=auto, which selects flax_nnx for many
     # architectures. flax_nnx currently fails without an auto mesh context, so
@@ -863,8 +870,11 @@ _VLLM_PASSTHROUGH_KEYS: tuple[str, ...] = (
 
 
 def _build_vllm_env_dict(*, env_overrides: dict[str, str] | None = None) -> dict[str, str]:
-    """Build the canonical vLLM environment dict."""
+    """Build the canonical vLLM environment dict (fresh, not inheriting os.environ).
 
+    Used by the Docker backend which passes an explicit env dict. Optional
+    ``env_overrides`` are applied last.
+    """
     cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir())
     env: dict[str, str] = {
         "TOKENIZERS_PARALLELISM": "false",
@@ -887,7 +897,11 @@ def _build_vllm_env_dict(*, env_overrides: dict[str, str] | None = None) -> dict
 
 
 def _vllm_env(*, env_overrides: dict[str, str] | None = None) -> dict[str, str]:
-    """Build the vLLM environment for the native subprocess backend."""
+    """Build the vLLM environment for the native (subprocess) backend.
+
+    Starts from ``os.environ`` and applies the canonical defaults, then
+    overlays any explicit ``env_overrides``.
+    """
 
     env = dict(os.environ)
     canonical = _build_vllm_env_dict()
@@ -995,7 +1009,6 @@ def _start_vllm_native_server(
     finally:
         stdout_f.close()
         stderr_f.close()
-
     return VllmServerHandle(
         server_url=server_url,
         port=resolved_port,

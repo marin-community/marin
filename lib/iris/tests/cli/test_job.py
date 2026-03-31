@@ -77,7 +77,6 @@ def test_validate_region_zone_no_constraints_skips():
 
 
 def test_executor_heuristic_small_cpu_job_gets_non_preemptible():
-    """Small CPU-only jobs (default CLI args) are auto-tagged non-preemptible."""
     resources = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB")
     resources_proto = resources.to_proto()
     replicas = 1
@@ -90,7 +89,6 @@ def test_executor_heuristic_small_cpu_job_gets_non_preemptible():
 
 
 def test_executor_heuristic_skipped_for_gpu_job():
-    """GPU jobs are not affected by the executor heuristic."""
     resources = build_resources(tpu=None, gpu="H100", cpu=0.5, memory="1GB", disk="5GB")
     resources_proto = resources.to_proto()
     replicas = 1
@@ -101,7 +99,6 @@ def test_executor_heuristic_skipped_for_gpu_job():
 
 
 def test_executor_heuristic_skipped_for_large_cpu_job():
-    """Jobs requesting many CPUs bypass the executor heuristic."""
     resources = build_resources(tpu=None, gpu=None, cpu=4.0, memory="16GB", disk="5GB")
     resources_proto = resources.to_proto()
     replicas = 1
@@ -112,7 +109,6 @@ def test_executor_heuristic_skipped_for_large_cpu_job():
 
 
 def test_executor_heuristic_skipped_when_user_sets_preemptible():
-    """User-provided preemptible constraint takes precedence over heuristic."""
     resources = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB")
     resources_proto = resources.to_proto()
     replicas = 1
@@ -123,7 +119,6 @@ def test_executor_heuristic_skipped_when_user_sets_preemptible():
 
 
 def test_executor_heuristic_with_region_constraint():
-    """Heuristic fires even when region constraints are present."""
     resources = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB")
     resources_proto = resources.to_proto()
     replicas = 1

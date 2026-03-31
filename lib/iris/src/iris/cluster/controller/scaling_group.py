@@ -3,9 +3,10 @@
 
 """ScalingGroup owns slices and manages scaling state for a single group.
 
-Each ScalingGroup uses a Platform to create/discover slices, storing SliceHandle
-references directly for internal tracking. It maintains scaling stats
-(per-slice idle tracking, backoff, cooldowns) and provides scaling policy helpers.
+Each ScalingGroup uses a WorkerInfraProvider to create/discover slices, storing
+SliceHandle references directly for internal tracking.  It maintains scaling
+stats (per-slice idle tracking, backoff, cooldowns) and provides scaling policy
+helpers.
 """
 
 from __future__ import annotations
@@ -18,7 +19,8 @@ from enum import Enum, StrEnum
 
 from collections.abc import Sequence
 
-from iris.cluster.platform.base import Labels, Platform, SliceHandle
+from iris.cluster.providers.protocols import WorkerInfraProvider
+from iris.cluster.providers.types import Labels, SliceHandle
 from iris.cluster.constraints import (
     AttributeValue,
     CONSTRAINT_REGISTRY,
@@ -36,7 +38,8 @@ from iris.cluster.types import (
     get_tpu_count,
 )
 from iris.rpc import cluster_pb2, config_pb2, time_pb2, vm_pb2
-from iris.time_utils import Deadline, Duration, Timestamp, TokenBucket
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Deadline, Duration, Timestamp, TokenBucket
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +129,7 @@ def prepare_slice_config(
     parent_config: config_pb2.ScaleGroupConfig,
     label_prefix: str,
 ) -> config_pb2.SliceConfig:
-    """Build a SliceConfig for platform.create_slice() from a template.
+    """Build a SliceConfig for WorkerInfraProvider.create_slice() from a template.
 
     Copies the template and sets the name_prefix and managed/scale-group labels.
     Propagates num_vms from the parent ScaleGroupConfig when the template
@@ -202,7 +205,7 @@ def slice_state_to_proto(state: SliceState, idle_threshold: Duration | None = No
             for worker_id in state.worker_ids
         ],
         error_message=state.error_message,
-        last_active=state.last_active.to_proto(),
+        last_active=timestamp_to_proto(state.last_active),
         idle=is_idle,
     )
 
@@ -211,7 +214,7 @@ class ScalingGroup:
     """Owns slices for a single scale group.
 
     Each ScalingGroup:
-    - Uses a Platform to create/discover slices
+    - Uses a WorkerInfraProvider to create/discover slices
     - Stores SliceHandle references directly for internal tracking
     - Maintains scaling stats (per-slice idle tracking, backoff, cooldowns)
     - Provides scaling policy helpers (can_scale_up, can_scale_down)
@@ -221,7 +224,7 @@ class ScalingGroup:
     def __init__(
         self,
         config: config_pb2.ScaleGroupConfig,
-        platform: Platform,
+        platform: WorkerInfraProvider,
         label_prefix: str = "iris",
         scale_up_cooldown: Duration = DEFAULT_SCALE_UP_COOLDOWN,
         backoff_initial: Duration = DEFAULT_BACKOFF_INITIAL,
@@ -337,8 +340,8 @@ class ScalingGroup:
             cur.execute("DELETE FROM slices WHERE scale_group = ?", (self.name,))
 
     @property
-    def platform(self) -> Platform:
-        """Platform instance for this scale group."""
+    def platform(self) -> WorkerInfraProvider:
+        """Worker infrastructure provider for this scale group."""
         return self._platform
 
     @property
@@ -1135,14 +1138,14 @@ class ScalingGroup:
             config=self._config,
             current_demand=self._current_demand,
             peak_demand=self._peak_demand,
-            backoff_until=backoff_ts.to_proto(),
+            backoff_until=timestamp_to_proto(backoff_ts),
             consecutive_failures=self._consecutive_failures,
-            last_scale_up=self._last_scale_up.to_proto(),
-            last_scale_down=self._last_scale_down.to_proto(),
+            last_scale_up=timestamp_to_proto(self._last_scale_up),
+            last_scale_down=timestamp_to_proto(self._last_scale_down),
             availability_status=availability.status.value,
             availability_reason=availability.reason,
-            blocked_until=blocked_until.to_proto(),
-            scale_up_cooldown_until=cooldown_until.to_proto(),
+            blocked_until=timestamp_to_proto(blocked_until),
+            scale_up_cooldown_until=timestamp_to_proto(cooldown_until),
             slices=[slice_state_to_proto(state, idle_threshold=self._idle_threshold) for state in snapshot],
             idle_threshold_ms=self._idle_threshold.to_ms(),
         )

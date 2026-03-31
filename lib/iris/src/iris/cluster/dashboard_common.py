@@ -9,15 +9,33 @@ the frontend hasn't been built yet (e.g. in tests or local dev).
 """
 
 import logging
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
 from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
+
+
+def on_shutdown(
+    *callbacks: Callable[[], Awaitable[None]],
+) -> Callable[[Starlette], AbstractAsyncContextManager[None]]:
+    """Build a Starlette ``lifespan`` that runs *callbacks* on shutdown."""
+
+    @asynccontextmanager
+    async def _lifespan(_app: Starlette) -> AsyncGenerator[None, None]:
+        yield
+        for cb in callbacks:
+            await cb()
+
+    return _lifespan
+
 
 # Vue dashboard build output. The path from this file (cluster/dashboard_common.py)
 # up to lib/iris/ is four parent directories, then down into dashboard/dist.

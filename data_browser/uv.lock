@@ -310,6 +310,7 @@ name = "data-browser"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cachetools" },
     { name = "draccus" },
     { name = "flask" },
     { name = "flask-limiter" },
@@ -330,6 +331,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cachetools", specifier = ">=5.0.0" },
     { name = "draccus", specifier = ">=0.9.3" },
     { name = "flask", specifier = ">=3.1.1" },
     { name = "flask-limiter", specifier = ">=3.10.1" },

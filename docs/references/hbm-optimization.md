@@ -67,9 +67,11 @@ A common pattern is:
 import jax
 import optax
 
+from levanter.utils.jax_utils import move_tree_to_memory_kind
+
 s_dev = params_sharding
-s_host = s_dev.with_memory_kind("pinned_host")
-opt_state = jax.device_put(opt_state, s_host)
+s_host = params_sharding.with_memory_kind("pinned_host")
+opt_state = move_tree_to_memory_kind(opt_state, memory_kind="pinned_host")
 
 @jax.jit(donate_argnums=(0,), out_shardings=(s_dev, s_host))
 def train_step(params, opt_state, batch):

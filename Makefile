@@ -1,4 +1,4 @@
-.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit rust-dev rust-user rust-status
+.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit rust-dev rust-user rust-status rust-package
 .DEFAULT: help
 
 
@@ -52,7 +52,7 @@ test:
 	RAY_ADDRESS= PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v
 
 # Define regions and tags for the Docker images
-CLUSTER_REPOS = us-central2 us-central1 europe-west4 us-west4 asia-northeast1 us-east5 us-east1
+CLUSTER_REPOS = us-central2 us-central1 europe-west4 us-west4 us-east5 us-east1
 TAG_DATE = $(shell date -u +"%Y%m%d")
 TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(TAG_DATE)
 
@@ -243,6 +243,9 @@ rust-dev:
 rust-user:
 	@python3 scripts/rust_mode.py user
 	uv sync
+
+rust-package:
+	@python3 scripts/rust_package.py
 
 rust-status:
 	@python3 scripts/rust_mode.py status

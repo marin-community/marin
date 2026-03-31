@@ -14,28 +14,6 @@ matching skill exists** by scanning the skill descriptions in your system
 prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
 favor of ad-hoc commands.
 
-Key skills and their triggers:
-
-| Trigger | Skill |
-|---|---|
-| Creating or reviewing a PR | `pull-request` |
-| Fixing / investigating a GitHub issue | `fix-issue` |
-| Filing a new issue | `file-issue` |
-| Writing a design doc or spec | `design-doc` |
-| Debugging subtle code problems | `debugger` |
-| Multi-step plans needing sub-agents | `multi-stage` |
-| Adding a HF dataset | `add-dataset` |
-| Profiling JAX training | `agent-profiling` |
-| Running / monitoring ferries | `ferries` |
-| Babysitting any Ray/Iris job | `babysit-job` |
-| Babysitting Zephyr jobs | `babysit-zephyr` |
-| Debugging Zephyr pipelines | `debug-zephyr` |
-| Debugging Iris controller | `debug-iris-controller` |
-| TPU bad-node recovery | `debug-tpu` |
-
-For the full list, see `.agents/skills/`. Each skill has a `SKILL.md` with
-detailed workflow steps — read it after invoking for procedural guidance.
-
 ## Development
 
 ```bash

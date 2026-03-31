@@ -20,7 +20,7 @@ from iris.cluster.controller.auth import (
     list_api_keys,
 )
 from iris.rpc.auth import VerifiedIdentity, hash_token
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import ControllerTransitions

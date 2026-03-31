@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from fray.v1.cluster import ResourceConfig
 from fray.v1.cluster.ray.deps import build_runtime_env_for_packages
 
-from iris.marin_fs import open_url, url_to_fs
+from rigging.filesystem import open_url, url_to_fs
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray

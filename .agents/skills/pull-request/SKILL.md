@@ -1,12 +1,17 @@
 ---
 name: pull-request
-description: Authoring pull requests in Marin. Use when creating a PR or writing a PR description.
+description: Authoring pull requests in Marin. Use when creating or updating a PR, and whenever changing a branch that is already associated with a PR.
 ---
 
 # Skill: Author a Pull Request
 
 This skill defines the exact output format for pull requests. Follow it
-literally when creating or updating a PR.
+literally when creating or updating a PR. Also apply it whenever you make
+changes to a branch that already has an associated PR.
+
+When a branch is already associated with a PR, check the current PR title and
+description after your code changes. Keep them aligned with the actual scope of
+the branch, and update them if they are no longer correct or sufficient.
 
 ## PR Description Format
 
@@ -15,7 +20,7 @@ plain text — no markdown.
 
 **Title:** Short imperative sentence. Optional scope tag in brackets.
 
-**Body:** 1-3 sentences stating what changed and why. End with issue link.
+**Body:** 1-3 sentences stating what changed and why. End with issue link if one exists.
 
 **Hard rules — violations will be rejected:**
 
@@ -42,12 +47,14 @@ Fixes #1234
 
 ## Issue Linking
 
-Every PR references a GitHub issue:
+If the work originated from a GitHub issue, reference it:
 
 - `Fixes #NNNN` — auto-closes the issue on merge.
 - `Part of #NNNN` — for partial work.
 
-If no issue exists, create one with `gh issue create` before opening the PR.
+Do not create an issue solely to satisfy this rule. When there is no
+pre-existing issue (e.g., user-directed work in a conversation), omit the
+issue link.
 
 ## Pre-Push Checklist
 
@@ -89,7 +96,7 @@ gh pr create \
 
 - Add the `agent-generated` label.
 - Never credit yourself in commits or PR descriptions.
-- Include `Fixes #NNNN` when addressing an issue.
+- Include `Fixes #NNNN` when addressing a pre-existing issue.
 
 ## See Also
 

@@ -1,23 +1,22 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink } from 'vue-router'
 import { controllerRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName, stateDisplayName, statusColors } from '@/types/status'
+import { stateToName, stateDisplayName } from '@/types/status'
 import type {
   JobStatus, TaskStatus, LaunchJobRequest,
   GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
   ResourceUsage,
 } from '@/types/rpc'
 import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatDeviceConfig } from '@/utils/formatting'
+import { flattenJobTree, getLeafJobName, getParentJobName, jobsWithChildren } from '@/utils/jobTree'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
-
-const router = useRouter()
 
 const props = defineProps<{
   jobId: string
@@ -30,7 +29,8 @@ const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed
 const job = ref<JobStatus | null>(null)
 const jobRequest = ref<LaunchJobRequest | null>(null)
 const tasks = ref<TaskStatus[]>([])
-const childJobs = ref<JobStatus[]>([])
+const descendantJobs = ref<JobStatus[]>([])
+const expandedChildJobs = ref<Set<string>>(new Set())
 const loading = ref(true)
 const error = ref<string | null>(null)
 const profilingTaskId = ref<string | null>(null)
@@ -40,8 +40,15 @@ const stateFilter = ref('')
 
 type SortColumn = 'task' | 'state' | 'mem' | 'cpu' | 'duration'
 type SortDir = 'asc' | 'desc'
+type ChildJobsView = 'direct' | 'all'
+
 const sortColumn = ref<SortColumn | null>(null)
 const sortDir = ref<SortDir>('asc')
+const childJobsView = ref<ChildJobsView>('direct')
+
+type ChildSortColumn = 'name' | 'state' | 'duration'
+const childSortColumn = ref<ChildSortColumn | null>(null)
+const childSortDir = ref<SortDir>('asc')
 
 function toggleSort(col: SortColumn) {
   if (sortColumn.value === col) {
@@ -50,6 +57,16 @@ function toggleSort(col: SortColumn) {
   } else {
     sortColumn.value = col
     sortDir.value = 'asc'
+  }
+}
+
+function toggleChildSort(col: ChildSortColumn) {
+  if (childSortColumn.value === col) {
+    if (childSortDir.value === 'asc') childSortDir.value = 'desc'
+    else { childSortColumn.value = null; childSortDir.value = 'asc' }
+  } else {
+    childSortColumn.value = col
+    childSortDir.value = 'asc'
   }
 }
 
@@ -63,13 +80,17 @@ async function copyJobName() {
 
 // -- Fetch --
 
+let fetchGeneration = 0
+
 async function fetchData() {
+  const gen = ++fetchGeneration
   error.value = null
   try {
     const [jobResp, tasksResp] = await Promise.all([
       controllerRpcCall<GetJobStatusResponse>('GetJobStatus', { jobId: props.jobId }),
       controllerRpcCall<ListTasksResponse>('ListTasks', { jobId: props.jobId }),
     ])
+    if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
     if (!jobResp.job) {
       error.value = 'Job not found'
       return
@@ -85,20 +106,19 @@ async function fetchData() {
         nameFilter: jobName,
         limit: 500,
       })
-      // Filter to direct children only: name starts with "jobName/" and has no further "/"
+      if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
       const prefix = jobName + '/'
-      childJobs.value = (childResp.jobs ?? []).filter(j => {
-        if (!j.name.startsWith(prefix)) return false
-        const suffix = j.name.slice(prefix.length)
-        return suffix.length > 0 && !suffix.includes('/')
-      })
+      descendantJobs.value = (childResp.jobs ?? []).filter(j => j.name.startsWith(prefix))
     } else {
-      childJobs.value = []
+      descendantJobs.value = []
     }
   } catch (e) {
+    if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
-    loading.value = false
+    if (gen === fetchGeneration) {
+      loading.value = false
+    }
   }
 }
 
@@ -111,10 +131,24 @@ const isTerminal = computed(() => {
   return TERMINAL_STATES.has(stateToName(job.value.state))
 })
 
-const { stop: stopRefresh } = useAutoRefresh(fetchData, 10_000)
+const { stop: stopRefresh, start: startRefresh } = useAutoRefresh(fetchData, 10_000)
 
 watch(isTerminal, (terminal) => {
   if (terminal) stopRefresh()
+})
+
+// Re-fetch when navigating between jobs (Vue Router reuses the component).
+watch(() => props.jobId, () => {
+  loading.value = true
+  job.value = null
+  jobRequest.value = null
+  tasks.value = []
+  descendantJobs.value = []
+  expandedChildJobs.value = new Set()
+  childJobsView.value = 'direct'
+  error.value = null
+  fetchData()
+  startRefresh()
 })
 
 // -- Formatting helpers --
@@ -153,20 +187,52 @@ function taskIndex(taskId: string): string {
 
 // -- Child job helpers --
 
-function childJobLeafName(name: string): string {
-  const lastSlash = name.lastIndexOf('/')
-  return lastSlash >= 0 ? name.slice(lastSlash + 1) : name
+const visibleChildJobs = computed(() => {
+  if (childJobsView.value === 'all') return descendantJobs.value
+  const parentName = job.value?.name
+  if (!parentName) return []
+  return descendantJobs.value.filter(child => getParentJobName(child.name) === parentName)
+})
+
+function childJobDurationMs(j: JobStatus): number {
+  const started = timestampMs(j.startedAt)
+  if (!started) return 0
+  const ended = timestampMs(j.finishedAt) || Date.now()
+  return ended - started
 }
 
-function childJobDuration(j: JobStatus): string {
-  const started = timestampMs(j.startedAt)
-  if (started) {
-    const ended = timestampMs(j.finishedAt) || Date.now()
-    return formatDuration(started, ended)
+const childJobComparator = computed<((a: JobStatus, b: JobStatus) => number) | undefined>(() => {
+  const col = childSortColumn.value
+  if (!col) return undefined
+  const dir = childSortDir.value === 'asc' ? 1 : -1
+  return (a: JobStatus, b: JobStatus) => {
+    let cmp = 0
+    switch (col) {
+      case 'name':
+        cmp = getLeafJobName(a.name).localeCompare(getLeafJobName(b.name))
+        break
+      case 'state':
+        cmp = (STATE_SORT_ORDER[stateToName(a.state)] ?? 99) - (STATE_SORT_ORDER[stateToName(b.state)] ?? 99)
+        break
+      case 'duration':
+        cmp = childJobDurationMs(a) - childJobDurationMs(b)
+        break
+    }
+    return cmp * dir
   }
-  const submitted = timestampMs(j.submittedAt)
-  if (submitted) return 'queued ' + formatRelativeTime(submitted)
-  return '-'
+})
+
+const flattenedChildJobs = computed(() => flattenJobTree(visibleChildJobs.value, expandedChildJobs.value, childJobComparator.value))
+const expandableChildJobs = computed(() => jobsWithChildren(visibleChildJobs.value))
+
+function toggleExpandedChildJob(jobName: string) {
+  const next = new Set(expandedChildJobs.value)
+  if (next.has(jobName)) {
+    next.delete(jobName)
+  } else {
+    next.add(jobName)
+  }
+  expandedChildJobs.value = next
 }
 
 const SEGMENT_COLORS: Record<string, string> = {
@@ -491,61 +557,102 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
       </div>
 
       <!-- Child Jobs -->
-      <div v-if="childJobs.length > 0" class="mb-6">
-        <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary mb-3">
-          Child Jobs
-        </h3>
+      <div v-if="flattenedChildJobs.length > 0" class="mb-6">
+        <div class="mb-3 flex items-center justify-between gap-3">
+          <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary">
+            Child Jobs
+          </h3>
+          <div class="inline-flex rounded-md border border-surface-border bg-surface p-0.5">
+            <button
+              class="px-2.5 py-1 text-xs rounded transition-colors"
+              :class="childJobsView === 'direct'
+                ? 'bg-accent text-white'
+                : 'text-text-secondary hover:bg-surface-raised hover:text-text'"
+              @click="childJobsView = 'direct'"
+            >
+              Direct only
+            </button>
+            <button
+              class="px-2.5 py-1 text-xs rounded transition-colors"
+              :class="childJobsView === 'all'
+                ? 'bg-accent text-white'
+                : 'text-text-secondary hover:bg-surface-raised hover:text-text'"
+              @click="childJobsView = 'all'"
+            >
+              All descendants
+            </button>
+          </div>
+        </div>
         <table class="w-full border-collapse">
           <thead>
             <tr class="border-b border-surface-border">
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Name</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">State</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Duration</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleChildSort('name')">
+                Name <span v-if="childSortColumn === 'name'" class="ml-0.5">{{ childSortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleChildSort('state')">
+                State <span v-if="childSortColumn === 'state'" class="ml-0.5">{{ childSortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleChildSort('duration')">
+                Duration <span v-if="childSortColumn === 'duration'" class="ml-0.5">{{ childSortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Tasks</th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Diagnostic</th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="child in childJobs"
-              :key="child.jobId"
-              class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+              v-for="node in flattenedChildJobs"
+              :key="node.job.jobId"
+              class="group/row border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
             >
-              <td class="px-3 py-2 text-[13px]">
-                <RouterLink
-                  :to="'/job/' + encodeURIComponent(child.jobId)"
-                  class="text-accent hover:underline font-mono"
-                >
-                  {{ childJobLeafName(child.name) }}
-                </RouterLink>
+              <td
+                class="px-3 py-2 text-[13px]"
+                :style="{ paddingLeft: (node.depth * 20 + 12) + 'px' }"
+              >
+                <span class="inline-flex items-center gap-1">
+                  <button
+                    v-if="expandableChildJobs.has(node.job.name)"
+                    class="text-text-muted hover:text-text select-none w-4 text-center text-xs"
+                    @click.stop="toggleExpandedChildJob(node.job.name)"
+                  >
+                    {{ expandedChildJobs.has(node.job.name) ? '▼' : '▶' }}
+                  </button>
+                  <span v-else class="w-4" />
+                  <RouterLink
+                    :to="'/job/' + encodeURIComponent(node.job.jobId)"
+                    class="text-accent hover:underline font-mono"
+                  >
+                    {{ getLeafJobName(node.job.name) }}
+                  </RouterLink>
+                </span>
               </td>
               <td class="px-3 py-2 text-[13px]">
-                <StatusBadge :status="child.state" size="sm" />
+                <StatusBadge :status="node.job.state" size="sm" />
               </td>
               <td class="px-3 py-2 text-[13px] text-text-secondary font-mono">
-                {{ childJobDuration(child) }}
+                {{ jobDuration(node.job) }}
               </td>
               <td class="px-3 py-2 text-[13px]">
-                <div v-if="(child.taskCount ?? 0) === 0" class="text-xs text-text-muted">
+                <div v-if="(node.job.taskCount ?? 0) === 0" class="text-xs text-text-muted">
                   no tasks
                 </div>
                 <div v-else class="flex items-center gap-1.5">
                   <div class="flex h-2 w-28 rounded-full overflow-hidden bg-surface-sunken">
                     <div
-                      v-for="(seg, i) in progressSegments(child)"
+                      v-for="(seg, i) in progressSegments(node.job)"
                       :key="i"
                       :class="seg.colorClass"
-                      :style="{ width: (seg.count / (child.taskCount ?? 1) * 100).toFixed(1) + '%' }"
+                      :style="{ width: (seg.count / (node.job.taskCount ?? 1) * 100).toFixed(1) + '%' }"
                       :title="seg.label + ': ' + seg.count"
                     />
                   </div>
                   <span class="text-xs text-text-secondary whitespace-nowrap">
-                    {{ progressSummary(child) }}
+                    {{ progressSummary(node.job) }}
                   </span>
                 </div>
               </td>
-              <td class="px-3 py-2 text-xs text-text-muted max-w-xs truncate" :title="child.pendingReason ?? ''">
-                {{ child.pendingReason || '—' }}
+              <td class="px-3 py-2 text-xs text-text-muted max-w-xs truncate" :title="node.job.pendingReason ?? ''">
+                {{ node.job.pendingReason || '—' }}
               </td>
             </tr>
           </tbody>

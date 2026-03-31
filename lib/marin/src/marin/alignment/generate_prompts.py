@@ -23,7 +23,7 @@ from typing import Any
 
 import requests
 
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 from levanter.data.utils import batched
 from zephyr import load_jsonl, write_jsonl_file
 

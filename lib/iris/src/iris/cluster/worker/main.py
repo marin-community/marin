@@ -13,11 +13,11 @@ from pathlib import Path
 import click
 from google.protobuf.json_format import ParseDict
 
-from iris.cluster.platform.factory import create_platform
+from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.worker.env_probe import detect_gcp_zone
 from iris.cluster.worker.worker import Worker, worker_config_from_proto
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 from iris.rpc import config_pb2
 
 
@@ -54,11 +54,11 @@ def serve(worker_config: str):
     with open(worker_config) as f:
         wc_proto = ParseDict(json.load(f), config_pb2.WorkerConfig())
 
-    platform = create_platform(platform_config=wc_proto.platform, ssh_config=config_pb2.SshConfig())
+    bundle = create_provider_bundle(platform_config=wc_proto.platform, ssh_config=config_pb2.SshConfig())
     zone = detect_gcp_zone()
 
     def resolve_image(image: str) -> str:
-        return platform.resolve_image(image, zone=zone)
+        return bundle.controller.resolve_image(image, zone=zone)
 
     if wc_proto.default_task_image:
         resolved = resolve_image(wc_proto.default_task_image)

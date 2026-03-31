@@ -28,7 +28,7 @@ controller:
   image: ghcr.io/marin-community/iris-controller:latest
   gcp:
     zone: us-central1-a
-    machine_type: e2-standard-4
+    machine_type: e2-highmem-4
     boot_disk_size_gb: 100
     port: 10000
 
@@ -42,7 +42,7 @@ scale_groups:
     priority: 1000
     resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, preemptible: false }
     min_slices: 0
-    max_slices: 1
+    max_slices: 4
     slice_template:
       gcp:
         mode: GCP_SLICE_MODE_VM
@@ -57,7 +57,7 @@ scale_groups:
     num_vms: 1
     priority: 10
     resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-4, device_count: 4, preemptible: true }
-    min_slices: 1
+    min_slices: 3
     max_slices: 1024
     slice_template:
       gcp:
@@ -107,7 +107,7 @@ scale_groups:
     num_vms: 32
     priority: 60
     resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-128, device_count: 4, preemptible: true }
-    min_slices: 0
+    min_slices: 1
     max_slices: 32
     slice_template:
       gcp:
@@ -182,7 +182,7 @@ scale_groups:
     num_vms: 32
     priority: 60
     resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-128, device_count: 4, preemptible: true }
-    min_slices: 0
+    min_slices: 1
     max_slices: 32
     slice_template:
       gcp:
@@ -208,7 +208,7 @@ scale_groups:
     num_vms: 1
     priority: 20
     resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-8, device_count: 4, preemptible: true }
-    min_slices: 0
+    min_slices: 8
     max_slices: 2048
     slice_template:
       gcp:
@@ -303,7 +303,7 @@ scale_groups:
     num_vms: 1
     priority: 20
     resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-8, device_count: 4, preemptible: true }
-    min_slices: 0
+    min_slices: 2
     max_slices: 2048
     slice_template:
       gcp:

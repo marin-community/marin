@@ -25,7 +25,7 @@ def _make_ctx(method_name: str):
 
 def test_interceptor_passes_through_response():
     interceptor = RequestTimingInterceptor()
-    ctx = _make_ctx("GetTaskLogs")
+    ctx = _make_ctx("FetchLogs")
     result = interceptor.intercept_unary_sync(lambda req, ctx: "ok", "request", ctx)
     assert result == "ok"
 

@@ -18,7 +18,7 @@ from iris.cluster.runtime.profile import is_system_target, parse_profile_target,
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
-from iris.time_utils import Timer
+from rigging.timing import Timer
 
 logger = logging.getLogger(__name__)
 

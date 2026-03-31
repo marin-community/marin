@@ -36,11 +36,13 @@ from iris.cluster.types import (
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.log_store import LogCursor, LogStore, task_log_key
-from iris.logging import parse_log_level, str_to_log_level
+from iris.logging import str_to_log_level
+from rigging.log_setup import parse_log_level
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
-from iris.time_utils import Deadline, Duration, Timestamp
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +189,7 @@ class TaskAttempt:
         worker_metadata: WorkerMetadata,
         worker_id: str | None,
         controller_address: str | None,
-        default_task_env: dict[str, str],
+        task_env: dict[str, str],
         default_task_image: str | None,
         resolve_image: Callable[[str], str],
         port_allocator: PortAllocator,
@@ -207,7 +209,7 @@ class TaskAttempt:
             worker_metadata: Worker's hardware/environment metadata
             worker_id: Worker identifier for env injection
             controller_address: Controller address for env injection
-            default_task_env: Worker-level default env vars injected into task containers
+            task_env: Worker-level default env vars injected into task containers
             default_task_image: Fully-qualified task container image from cluster config
             resolve_image: Resolves image tags for the current platform
                 (e.g. GHCR→AR rewriting on GCP). Zone is pre-bound by the worker.
@@ -220,7 +222,7 @@ class TaskAttempt:
         self._worker_metadata = worker_metadata
         self._worker_id = worker_id
         self._controller_address = controller_address
-        self._default_task_env = default_task_env
+        self._task_env = task_env
         self._default_task_image = default_task_image
         self._resolve_image_fn = resolve_image
         self._port_allocator = port_allocator
@@ -437,14 +439,13 @@ class TaskAttempt:
 
         # Set timestamp fields using proto Timestamp messages
         if self.started_at is not None:
-            proto.started_at.CopyFrom(self.started_at.to_proto())
+            proto.started_at.CopyFrom(timestamp_to_proto(self.started_at))
         if self.finished_at is not None:
-            proto.finished_at.CopyFrom(self.finished_at.to_proto())
+            proto.finished_at.CopyFrom(timestamp_to_proto(self.finished_at))
         if self.build_started is not None:
-            proto.build_metrics.build_started.CopyFrom(self.build_started.to_proto())
+            proto.build_metrics.build_started.CopyFrom(timestamp_to_proto(self.build_started))
         if self.build_finished is not None:
-            proto.build_metrics.build_finished.CopyFrom(self.build_finished.to_proto())
-
+            proto.build_metrics.build_finished.CopyFrom(timestamp_to_proto(self.build_finished))
         return proto
 
     def _check_cancelled(self) -> None:
@@ -550,10 +551,13 @@ class TaskAttempt:
         # to BundleStore.extract_bundle_to if long downloads become a problem.)
 
         assert self.workdir is not None
+        workdir_files = dict(self.request.entrypoint.workdir_files)
+        for name, blob_id in self.request.entrypoint.workdir_file_refs.items():
+            workdir_files[name] = self._bundle_store.get_or_fetch(blob_id, f"blobs/{blob_id}")
         self._runtime.stage_bundle(
             bundle_id=self.request.bundle_id,
             workdir=self.workdir,
-            workdir_files=dict(self.request.entrypoint.workdir_files),
+            workdir_files=workdir_files,
             bundle_store=self._bundle_store,
         )
 
@@ -596,7 +600,7 @@ class TaskAttempt:
         if region_attr and region_attr.string_value:
             env["IRIS_WORKER_REGION"] = region_attr.string_value
 
-        env.update(self._default_task_env)
+        env.update(self._task_env)
         env.update(dict(self.request.environment.env_vars))
 
         # Get RuntimeEntrypoint proto directly

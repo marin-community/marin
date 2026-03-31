@@ -12,6 +12,7 @@ This module provides Python types for the Iris cluster API:
 Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.proto.
 """
 
+import hashlib
 import os
 import sys
 from collections.abc import Callable, Sequence
@@ -165,8 +166,14 @@ class JobName:
         return other._parts[: len(self._parts)] == self._parts
 
     def to_safe_token(self) -> str:
-        """Return a filesystem/tag-safe token derived from this name."""
-        return "job__" + "__".join(self._parts)
+        """Return a filesystem/tag-safe token derived from this name.
+
+        Uses ``<user>-<sha256-hex>`` so the token stays short even for deeply
+        nested job hierarchies (avoids ``ENAMETOOLONG`` on workdir creation).
+        The full canonical name is hashed to preserve uniqueness.
+        """
+        digest = hashlib.sha256(str(self).encode()).hexdigest()
+        return f"{self.user}-{digest}"
 
     def require_task(self) -> tuple["JobName", int]:
         """Return (parent_job, task_index) for task names.

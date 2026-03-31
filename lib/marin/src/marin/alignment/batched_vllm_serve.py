@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 import requests
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 
 from marin.alignment.inference_config import VLLMConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig

@@ -17,20 +17,18 @@ makes the control flow easy to follow and debug.
 
 from __future__ import annotations
 
-import contextlib
+import contextvars
 import dataclasses
 import json
 import logging
 import os
 import time
 import uuid
-from collections.abc import Generator, Iterable
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
-from threading import Event, Thread
 
 import levanter.utils.fsspec_utils as fsspec_utils
-from iris.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError
-from iris.marin_fs import open_url, url_to_fs
+from rigging.filesystem import open_url, url_to_fs
 
 from fray.v2.client import JobHandle, JobStatus
 from fray.v2.local_backend import LocalJobHandle
@@ -39,14 +37,16 @@ from marin.execution.executor_step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_SUCCESS,
+    StepAlreadyDone,
     StatusFile,
+    step_lock,
 )
 from marin.execution.remote import RemoteCallable
 from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 # Re-export for backward compatibility
-from marin.execution.executor_step_status import PreviousTaskFailedError, should_run, worker_id
+from marin.execution.executor_step_status import PreviousTaskFailedError, worker_id
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +114,15 @@ class StepRunner:
         if max_workers < 1:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
 
+        # Capture the fray client on the calling thread so worker threads can
+        # inherit it explicitly.  This is more robust than contextvars.copy_context()
+        # alone because it survives process/thread-pool boundary edge cases.
+        from fray.v2.client import _current_client_var
+
+        caller_fray_client = _current_client_var.get()
+        if caller_fray_client is not None:
+            logger.info("StepRunner: captured fray client %s for worker threads", type(caller_fray_client).__name__)
+
         local_pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="marin-step-runner")
 
         # Keyed by output_path (guaranteed unique)
@@ -174,7 +183,13 @@ class StepRunner:
 
         def _do_launch(step: StepSpec) -> None:
             path = step.output_path
-            handle = self._launch_step(step, force_run_failed=force_run_failed, dry_run=dry_run, local_pool=local_pool)
+            handle = self._launch_step(
+                step,
+                force_run_failed=force_run_failed,
+                dry_run=dry_run,
+                local_pool=local_pool,
+                fray_client=caller_fray_client,
+            )
             if handle is not None:
                 running[path] = handle
             else:
@@ -201,7 +216,11 @@ class StepRunner:
                 if not running and waiting:
                     missing = []
                     for s in waiting:
-                        unmet = [_display_name(d) for d in s.deps if d not in completed and d not in failed]
+                        unmet = [
+                            _display_name(d)
+                            for d in s.deps
+                            if d.output_path not in completed and d.output_path not in failed
+                        ]
                         missing.append(f"  {s.name_with_hash}: needs {unmet}")
                     raise RuntimeError(
                         f"Iterable exhausted with {len(waiting)} step(s) with unsatisfied dependencies:\n"
@@ -215,7 +234,13 @@ class StepRunner:
             raise RuntimeError(f"{len(failures)} step(s) failed") from failures[0]
 
     def _launch_step(
-        self, step: StepSpec, *, force_run_failed: bool, dry_run: bool, local_pool: ThreadPoolExecutor
+        self,
+        step: StepSpec,
+        *,
+        force_run_failed: bool,
+        dry_run: bool,
+        local_pool: ThreadPoolExecutor,
+        fray_client: object | None = None,
     ) -> JobHandle | None:
         """Launch a single step. Returns None if skipped."""
         output_path = step.output_path
@@ -240,13 +265,27 @@ class StepRunner:
         if step.fn is None:
             raise ValueError(f"Step {step_name} has no callable fn")
 
+        # Explicitly propagate the fray client into worker threads.
+        # We use set_current_client() inside the worker rather than relying
+        # solely on contextvars.copy_context(), because the latter can
+        # silently lose state across certain thread-pool reuse patterns.
+        captured_client = fray_client
+
         def worker_fn():
-            run_step(step)
+            if captured_client is not None:
+                from fray.v2.client import set_current_client
+
+                with set_current_client(captured_client):
+                    run_step(step)
+            else:
+                run_step(step)
 
         worker_fn.__qualname__ = step_name
         worker_fn.__name__ = step_name
 
-        future = local_pool.submit(worker_fn)
+        # Also copy the full context for any other context vars (not just fray).
+        ctx = contextvars.copy_context()
+        future = local_pool.submit(ctx.run, worker_fn)
         return LocalJobHandle(f"local-{step_name}", future)
 
 
@@ -264,48 +303,6 @@ def check_cache(output_path: str) -> bool:
     return False
 
 
-@contextlib.contextmanager
-def step_lock(output_path: str, step_label: str, *, force_run_failed: bool = True) -> Generator[StatusFile, None, None]:
-    """Context manager that acquires a distributed lock with heartbeat refresh.
-
-    Acquires the lock, starts a daemon heartbeat thread, yields the
-    ``StatusFile``, then tears down the heartbeat and releases the lock.
-
-    Raises ``StepAlreadyDone`` if another worker completed the step
-    while we waited for the lock.
-    """
-    from marin.execution.executor_step_status import StepAlreadyDone
-
-    status_file = StatusFile(output_path, worker_id())
-    if not should_run(status_file, step_label, force_run_failed=force_run_failed):
-        raise StepAlreadyDone(output_path)
-
-    # Start heartbeat — LeaseLostError is fatal and signals the main thread.
-    stop_event = Event()
-    lease_lost_event = Event()
-
-    def _heartbeat():
-        while not stop_event.wait(HEARTBEAT_INTERVAL):
-            try:
-                status_file.refresh_lock()
-            except LeaseLostError:
-                logger.error("Lease lost for %s — step must terminate", output_path, exc_info=True)
-                lease_lost_event.set()
-                return
-
-    heartbeat_thread = Thread(target=_heartbeat, daemon=True)
-    heartbeat_thread.start()
-
-    try:
-        yield status_file
-    finally:
-        stop_event.set()
-        heartbeat_thread.join(timeout=5)
-        if lease_lost_event.is_set():
-            raise LeaseLostError(f"Lease was lost during execution of {output_path}")
-        status_file.release_lock()
-
-
 def run_step(step: StepSpec) -> None:
     """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
 
@@ -321,8 +318,6 @@ def run_step(step: StepSpec) -> None:
         return
 
     # 2. Acquire distributed lock with heartbeat (blocks until lock obtained or step done)
-    from marin.execution.executor_step_status import StepAlreadyDone
-
     try:
         with step_lock(output_path, step_label) as status_file:
             # 3. Run the function

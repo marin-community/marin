@@ -58,30 +58,8 @@ When using W&B:
   - iteration is quick,
   - you are tuning kernels or benchmarks,
   - full pipeline apparatus is unnecessary.
-- See `docs/dev-guide/dev_tpu.md` for operational details and troubleshooting.
-
-### Dev TPU script (explicit)
-For fast iteration, use:
-- `scripts/ray/dev_tpu.py`
-
-Typical patterns:
-
-```bash
-# Allocate (or reconnect to) a dev TPU
-RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
-  --config infra/<cluster-config>.yaml \
-  --tpu-name <name> allocate
-
-# Execute a quick benchmark command on the dev TPU
-RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
-  --config infra/<cluster-config>.yaml \
-  --tpu-name <name> execute -- \
-  .venv/bin/python lib/levanter/scripts/bench/bench_moe_hillclimb.py ...
-```
-
-Notes:
-- Prefer one long-lived `execute` shell/script for sweeps to avoid repeated sync overhead.
-- Pass environment variables through `execute` when needed (for example TPU VMEM flags).
+- Use `.agents/skills/dev-tpu/SKILL.md` for the standard Iris-backed workflow.
+- Use `.agents/skills/dev-tpu-ray/SKILL.md` only when you specifically need the legacy Ray-backed workflow.
 
 Rule of thumb:
 - Start with dev TPU for fast hillclimbing.

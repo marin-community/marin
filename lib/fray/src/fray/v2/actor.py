@@ -10,6 +10,7 @@ holds a set of actor handles with lifecycle tied to underlying jobs.
 
 from __future__ import annotations
 
+import threading
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -23,7 +24,12 @@ class ActorHandle(Protocol):
 
 @dataclass(frozen=True)
 class ActorContext:
-    """Context available to actors during execution."""
+    """Context available to actors during execution.
+
+    ``shutdown_event`` is set by the actor when it is ready to exit.
+    Backends create the event and block on it (Iris) or use it to trigger
+    ``exit_actor()`` (Ray).
+    """
 
     handle: ActorHandle
     """Handle to self, can be passed to other actors for callbacks."""
@@ -33,6 +39,9 @@ class ActorContext:
 
     group_name: str
     """The name of the actor group this actor belongs to."""
+
+    shutdown_event: threading.Event | None = None
+    """Set by the actor when ready to exit; backends wait on it."""
 
 
 class HostedActor:
@@ -55,6 +64,9 @@ def current_actor() -> ActorContext:
     """Get the current actor's context. Must be called from within an actor.
 
     Returns the actor's handle (for passing to other actors), index, and group name.
+    Call from ``__init__`` (where the ContextVar is set) and stash anything
+    you need on ``self`` — child threads in Python <3.12 do NOT inherit
+    ContextVars.
 
     Raises:
         RuntimeError: If called outside of an actor context.

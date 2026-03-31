@@ -4,11 +4,9 @@
 import warnings
 
 import jax
-from jax._src import pjit
 import jax.numpy as jnp
+import numpy as np
 import pytest
-from jax.sharding import Mesh, NamedSharding
-from jax.sharding import PartitionSpec as P
 
 from levanter.kernels.pallas import autotune_cache_utils
 from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
@@ -977,80 +975,133 @@ def test_pallas_autotune_skipped_when_tuned_match_exists(monkeypatch: pytest.Mon
     assert seen_block_sizes == [inferred]
 
 
-def test_autotune_benchmark_wraps_in_shard_map_for_global_named_sharding():
-    mesh = Mesh(jax.devices(), ("data",))
-    x = jax.device_put(jnp.ones((4, 8), dtype=jnp.float32), NamedSharding(mesh, P("data", None)))
-    y = jax.device_put(jnp.zeros((4,), dtype=jnp.int32), NamedSharding(mesh, P("data")))
-    w = jax.device_put(jnp.ones((8, 16), dtype=jnp.float32), NamedSharding(mesh, P(None, None)))
-
-    fn = lambda x_value, labels_value, w_value: x_value[:, 0] + labels_value.astype(x_value.dtype) + w_value[0, 0]
-
-    assert not fused_api._value_uses_manual_sharding(x)
-    assert not fused_api._value_uses_manual_sharding(y)
-    assert not fused_api._value_uses_manual_sharding(w)
-
-    wrapped = fused_api._maybe_wrap_loss_in_shard_map_for_benchmark(fn, x=x, labels=y, w=w)
-
-    assert wrapped is not fn
-    out = wrapped(x, y, w)
-    assert out.shape == (4,)
-    assert jnp.array_equal(out, fn(x, y, w))
-
-
-def test_autotune_benchmark_skips_nested_shard_map_for_manual_sharding():
-    mesh = Mesh(jax.devices(), ("data",))
-    x = jax.device_put(jnp.ones((4, 8), dtype=jnp.float32), NamedSharding(mesh, P("data", None)))
-    y = jax.device_put(jnp.zeros((4,), dtype=jnp.int32), NamedSharding(mesh, P("data")))
-    w = jax.device_put(jnp.ones((8, 16), dtype=jnp.float32), NamedSharding(mesh, P(None, None)))
-
-    fn = lambda x_value, labels_value, w_value: x_value[:, 0] + labels_value.astype(x_value.dtype) + w_value[0, 0]
-    seen_wrapped_identity: list[bool] = []
-
-    @jax.shard_map(
-        mesh=mesh,
-        in_specs=(P("data", None), P("data"), P(None, None)),
-        out_specs=P("data"),
-        check_vma=False,
+def test_benchmark_candidate_handles_real_shard_map_tracers():
+    partition_spec = jax.sharding.PartitionSpec
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices()[:1]),
+        ("data",),
+        axis_types=(jax.sharding.AxisType.Explicit,),
     )
-    def _capture(local_x, local_y, local_w):
-        assert fused_api._value_uses_manual_sharding(local_x)
-        assert fused_api._value_uses_manual_sharding(local_y)
-        assert fused_api._value_uses_manual_sharding(local_w)
-        wrapped = fused_api._maybe_wrap_loss_in_shard_map_for_benchmark(fn, x=local_x, labels=local_y, w=local_w)
-        seen_wrapped_identity.append(wrapped is fn)
-        return wrapped(local_x, local_y, local_w)
+    x = jax.device_put(
+        jnp.ones((4, 8), dtype=jnp.float32),
+        jax.sharding.NamedSharding(mesh, partition_spec("data", None)),
+    )
+    y = jax.device_put(
+        jnp.zeros((4,), dtype=jnp.int32),
+        jax.sharding.NamedSharding(mesh, partition_spec("data")),
+    )
+    w = jax.device_put(
+        jnp.ones((8, 16), dtype=jnp.float32),
+        jax.sharding.NamedSharding(mesh, partition_spec(None, None)),
+    )
+    candidate = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
 
-    out = _capture(x, y, w)
+    def fake_impl(x_raw, labels_raw, w_raw, **kwargs):
+        del labels_raw, w_raw, kwargs
+        batch = x_raw.shape[0]
+        return jnp.zeros((batch,), dtype=jnp.float32), jnp.zeros((batch,), dtype=jnp.float32)
+
+    def benchmark_from_shard_map(x_shard, y_shard, w_shard):
+        return fused_api._benchmark_block_sizes_candidate(
+            fn=fake_impl,
+            candidate=candidate,
+            x=x_shard,
+            labels=y_shard,
+            w=w_shard,
+            dtype=jnp.float32,
+            logit_soft_cap=None,
+            precision=None,
+            return_argmax=False,
+        )
+
+    mapped = jax.shard_map(
+        benchmark_from_shard_map,
+        mesh=mesh,
+        in_specs=(partition_spec("data", None), partition_spec("data"), partition_spec(None, None)),
+        out_specs=partition_spec(),
+        check_vma=True,
+    )
+
+    score = mapped(x, y, w)
+    assert float(score) >= 0.0
+
+
+def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pytest.MonkeyPatch):
+    partition_spec = jax.sharding.PartitionSpec
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices()[:1]),
+        ("data",),
+        axis_types=(jax.sharding.AxisType.Explicit,),
+    )
+    x = jax.device_put(
+        jnp.ones((4, 8), dtype=jnp.float32),
+        jax.sharding.NamedSharding(mesh, partition_spec("data", None)),
+    )
+    y = jax.device_put(
+        jnp.zeros((4,), dtype=jnp.int32),
+        jax.sharding.NamedSharding(mesh, partition_spec("data")),
+    )
+    w = jax.device_put(
+        jnp.ones((8, 16), dtype=jnp.float32),
+        jax.sharding.NamedSharding(mesh, partition_spec(None, None)),
+    )
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    seen_block_sizes: list[fused_api.BlockSizes | None] = []
+    benchmarked_candidates: list[fused_api.BlockSizes] = []
+    faster = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
+    slower = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=512)
+
+    def fake_impl(x_raw, labels_raw, w_raw, *, block_sizes, **kwargs):
+        del labels_raw, w_raw, kwargs
+        seen_block_sizes.append(block_sizes)
+        batch = x_raw.shape[0]
+        zeros = jnp.zeros((batch,), dtype=jnp.float32)
+        return zeros, zeros
+
+    monkeypatch.setattr(
+        fused_api,
+        "infer_block_sizes_with_tuned_match",
+        lambda *args, **kwargs: (inferred, False),
+    )
+    monkeypatch.setattr(
+        fused_api,
+        "_candidate_block_sizes",
+        lambda impl_name, inferred_block_sizes, **kwargs: [inferred_block_sizes, slower, faster],
+    )
+
+    def fake_benchmark(**kwargs):
+        candidate = kwargs["candidate"]
+        benchmarked_candidates.append(candidate)
+        return 1.0 if candidate == faster else 2.0
+
+    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", fake_benchmark)
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
+    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
+
+    def run_from_shard_map(x_shard, y_shard, w_shard):
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_shard,
+            y_shard,
+            w_shard,
+            reduction=None,
+            dtype=jnp.float32,
+            implementation="pallas_tpu",
+        )
+
+    mapped = jax.shard_map(
+        run_from_shard_map,
+        mesh=mesh,
+        in_specs=(partition_spec("data", None), partition_spec("data"), partition_spec(None, None)),
+        out_specs=partition_spec("data"),
+        check_vma=True,
+    )
+
+    out = mapped(x, y, w)
     out.block_until_ready()
 
-    assert seen_wrapped_identity == [True]
-    assert out.shape == (4,)
-
-
-def test_shape_dtype_struct_for_benchmark_drops_manual_sharding_from_shard_map_tracer():
-    mesh = Mesh(jax.devices(), ("data",))
-    sharding = NamedSharding(mesh, P("data", None))
-    x = jax.device_put(jnp.ones((4, 8), dtype=jnp.float32), sharding)
-
-    seen_manual: list[bool] = []
-    seen_structs: list[jax.ShapeDtypeStruct] = []
-
-    @jax.shard_map(mesh=mesh, in_specs=P("data", None), out_specs=P("data", None), check_vma=False)
-    def _capture(local_x):
-        seen_manual.append(fused_api._value_uses_manual_sharding(local_x))
-        with pytest.raises(AssertionError):
-            pjit.pjit_check_aval_sharding([local_x.aval.sharding], [local_x.aval], ["x"], "arg", False)
-        seen_structs.append(fused_api._shape_dtype_struct_for_benchmark(local_x))
-        return local_x
-
-    _capture(x).block_until_ready()
-
-    assert seen_manual == [True]
-    assert len(seen_structs) == 1
-    struct = seen_structs[0]
-    assert struct.shape == (4, 8)
-    assert struct.dtype == jnp.float32
-    assert getattr(struct, "sharding", None) is None
+    assert benchmarked_candidates == [inferred, slower, faster]
+    assert seen_block_sizes[-1] == faster
+    assert faster in seen_block_sizes
 
 
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
