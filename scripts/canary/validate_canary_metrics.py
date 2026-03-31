@@ -19,7 +19,7 @@ import os
 import sys
 from collections.abc import Callable
 
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 
 from marin.execution.executor import Executor
 

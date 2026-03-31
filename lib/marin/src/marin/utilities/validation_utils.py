@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from pydantic import BaseModel
 
 

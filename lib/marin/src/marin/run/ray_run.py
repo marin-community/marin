@@ -32,7 +32,7 @@ from fray.v1.cluster.ray.deps import build_runtime_env_for_packages, accelerator
 from iris.cluster.client.bundle import create_workspace_dir
 
 RAY_RUN_EXCLUDE = re.compile(r"^docs(/|$)|\.pack$|^lib/levanter/docs(/|$)")
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

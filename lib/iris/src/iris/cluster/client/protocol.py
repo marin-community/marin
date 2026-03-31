@@ -7,7 +7,7 @@ from typing import Protocol
 
 from iris.cluster.types import Entrypoint, JobName, TaskAttempt
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 
 class ClusterClient(Protocol):

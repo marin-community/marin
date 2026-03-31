@@ -41,7 +41,7 @@ from typing import Any
 
 import fsspec
 
-from iris.distributed_lock import create_lock, default_worker_id
+from rigging.distributed_lock import create_lock, default_worker_id
 
 logger = logging.getLogger(__name__)
 

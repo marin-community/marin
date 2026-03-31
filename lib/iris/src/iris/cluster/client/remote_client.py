@@ -6,6 +6,7 @@
 import logging
 import time
 import uuid
+from pathlib import Path
 
 from collections.abc import Iterable
 
@@ -13,13 +14,15 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
 
+from iris.cluster.client.bundle import BundleCreator
 from iris.cluster.log_store._types import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
-from iris.time_utils import Deadline, Duration, ExponentialBackoff
+from iris.time_proto import duration_to_proto
+from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +42,7 @@ class RemoteClusterClient:
         self,
         controller_address: str,
         bundle_id: str | None = None,
-        bundle_blob: bytes | None = None,
+        workspace: Path | None = None,
         timeout_ms: int = 30000,
         interceptors: Iterable[InterceptorSync] = (),
     ):
@@ -48,13 +51,14 @@ class RemoteClusterClient:
         Args:
             controller_address: Controller URL (e.g., "http://localhost:8080")
             bundle_id: Workspace bundle identifier for job inheritance
-            bundle_blob: Workspace bundle as bytes (for initial job submission)
+            workspace: Path to workspace directory. Bundle is created lazily on first job submission.
             timeout_ms: RPC timeout in milliseconds
             interceptors: Client-side interceptors (e.g. AuthTokenInjector for token auth)
         """
         self._address = controller_address
         self._bundle_id = bundle_id
-        self._bundle_blob = bundle_blob
+        self._workspace = workspace.resolve() if workspace is not None else None
+        self._bundle_blob: bytes | None = None
         self._timeout_ms = timeout_ms
         self._client = ControllerServiceClientSync(
             address=controller_address,
@@ -106,12 +110,16 @@ class RemoteClusterClient:
         if self._bundle_id:
             request.bundle_id = self._bundle_id
         else:
+            if self._bundle_blob is None and self._workspace is not None:
+                creator = BundleCreator(self._workspace)
+                self._bundle_blob = creator.create_bundle()
+                logger.info(f"Workspace bundle size: {len(self._bundle_blob) / 1024 / 1024:.1f} MB")
             request.bundle_blob = self._bundle_blob or b""
 
         if scheduling_timeout is not None:
-            request.scheduling_timeout.CopyFrom(scheduling_timeout.to_proto())
+            request.scheduling_timeout.CopyFrom(duration_to_proto(scheduling_timeout))
         if timeout is not None:
-            request.timeout.CopyFrom(timeout.to_proto())
+            request.timeout.CopyFrom(duration_to_proto(timeout))
         if coscheduling is not None:
             request.coscheduling.CopyFrom(coscheduling)
         if reservation is not None:

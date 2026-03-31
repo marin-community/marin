@@ -63,8 +63,8 @@ class MemoryProfileSpec:
 
     @property
     def output_is_file(self) -> bool:
-        """Flamegraph writes to a file; table/stats write to stdout."""
-        return self.reporter == "flamegraph"
+        """Flamegraph and stats write to a file; table writes to stdout."""
+        return self.reporter in ("flamegraph", "stats")
 
 
 def resolve_cpu_spec(cpu_config: cluster_pb2.CpuProfile, duration_seconds: int, pid: str) -> CpuProfileSpec:
@@ -121,7 +121,7 @@ def build_memray_attach_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_path
 def build_memray_transform_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_path: str, output_path: str) -> list[str]:
     """Build the memray transform command.
 
-    For flamegraph, writes to output_path. For table/stats, output goes to stdout.
+    For flamegraph/stats, writes to output_path. For table, output goes to stdout.
     """
     if spec.reporter == "flamegraph":
         cmd = [memray_bin, "flamegraph"]
@@ -132,7 +132,7 @@ def build_memray_transform_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_p
     elif spec.reporter == "table":
         return [memray_bin, "table", trace_path]
     elif spec.reporter == "stats":
-        return [memray_bin, "stats", "--json", trace_path]
+        return [memray_bin, "stats", "--json", "--force", "-o", output_path, trace_path]
     else:
         raise RuntimeError(f"Unknown memray reporter: {spec.reporter}")
 

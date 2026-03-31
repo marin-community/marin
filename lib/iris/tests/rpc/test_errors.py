@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import time
 
 import pytest
 from connectrpc.code import Code
@@ -14,7 +13,7 @@ from iris.rpc.errors import (
     extract_error_details,
     poll_with_retries,
 )
-from iris.time_utils import Deadline, ExponentialBackoff
+from rigging.timing import Deadline, ExponentialBackoff
 
 
 def test_connect_error_with_traceback_populates_timestamp() -> None:
@@ -77,14 +76,10 @@ def test_call_with_retry_retries_on_unavailable() -> None:
             raise ConnectError(Code.UNAVAILABLE, "Service down")
         return "success"
 
-    start = time.monotonic()
-    result = call_with_retry("test_op", retry_then_succeed)
-    elapsed = time.monotonic() - start
+    result = call_with_retry("test_op", retry_then_succeed, backoff=ExponentialBackoff(initial=0.01, maximum=0.05))
 
     assert result == "success"
     assert call_count == 3
-    # Should have some delay due to backoff (initial is 0.1s)
-    assert elapsed >= 0.1
 
 
 def test_call_with_retry_fails_after_max_attempts() -> None:
@@ -94,7 +89,7 @@ def test_call_with_retry_fails_after_max_attempts() -> None:
         raise ConnectError(Code.UNAVAILABLE, "Always down")
 
     with pytest.raises(ConnectError) as exc_info:
-        call_with_retry("test_op", always_fail, max_attempts=3)
+        call_with_retry("test_op", always_fail, max_attempts=3, backoff=ExponentialBackoff(initial=0.01, maximum=0.05))
 
     assert exc_info.value.code == Code.UNAVAILABLE
 

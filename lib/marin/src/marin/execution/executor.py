@@ -101,11 +101,11 @@ from fray.v2.iris_backend import FrayIrisClient
 from fray.v2.types import TpuConfig
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import WellKnownAttribute
-from iris.marin_fs import collect_gcs_paths
-from iris.marin_fs import get_bucket_location, open_url
-from iris.marin_fs import marin_prefix
-from iris.marin_fs import region_from_prefix
-from iris.marin_fs import split_gcs_path
+from rigging.filesystem import collect_gcs_paths
+from rigging.filesystem import get_bucket_location, open_url
+from rigging.filesystem import marin_prefix
+from rigging.filesystem import region_from_prefix
+from rigging.filesystem import split_gcs_path
 from iris.rpc import config_pb2
 
 from marin.execution.step_spec import StepSpec
@@ -116,7 +116,7 @@ from marin.execution.executor_step_status import (
     StatusFile,
 )
 from marin.utilities.json_encoder import CustomJsonEncoder
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -693,7 +693,7 @@ def resolve_executor_step(
 
     def resolved_fn(output_path):
         if captured_budget is not None:
-            from iris.marin_fs import mirror_budget
+            from rigging.filesystem import mirror_budget
 
             with mirror_budget(captured_budget):
                 return captured_fn(captured_config)

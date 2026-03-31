@@ -30,7 +30,7 @@ import tarfile
 from collections.abc import Iterable
 
 import requests
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_size
 from tqdm_loggable.auto import tqdm

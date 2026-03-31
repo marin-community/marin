@@ -32,9 +32,9 @@ from iris.cluster.controller.db import (
     TERMINAL_TASK_STATES,
     Attempt,
     ControllerDB,
-    Job,
-    Task,
-    Worker,
+    JobDetail,
+    TaskDetail,
+    WorkerDetail,
     _decode_attribute_rows,
     _tasks_with_attempts,
     decode_one,
@@ -58,7 +58,8 @@ from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, logging_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_proto import duration_to_proto
+from rigging.timing import Duration, Timestamp
 from tests.cluster.providers.conftest import make_mock_platform
 
 
@@ -191,7 +192,7 @@ def submit_direct_job(state: ControllerTransitions, name: str, replicas: int = 1
     req = make_direct_job_request(name, replicas)
     state.submit_job(jid, req, Timestamp.now())
     with state._db.snapshot() as q:
-        tasks = decode_rows(Task, q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
+        tasks = decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
     return [t.task_id for t in tasks]
 
 
@@ -202,7 +203,10 @@ def submit_direct_job(state: ControllerTransitions, name: str, replicas: int = 1
 
 def query_task(state: ControllerTransitions, task_id: JobName):
     with state._db.snapshot() as q:
-        return decode_one(Task, q.fetchall("SELECT * FROM tasks WHERE task_id = ? LIMIT 1", (task_id.to_wire(),)))
+        return decode_one(
+            TaskDetail,
+            q.fetchall("SELECT * FROM tasks WHERE task_id = ? LIMIT 1", (task_id.to_wire(),)),
+        )
 
 
 def query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: int):
@@ -217,19 +221,22 @@ def query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: in
     return rows[0] if rows else None
 
 
-def query_job(state: ControllerTransitions, job_id: JobName) -> Job | None:
+def query_job(state: ControllerTransitions, job_id: JobName) -> JobDetail | None:
     with state._db.snapshot() as q:
-        return decode_one(Job, q.fetchall("SELECT * FROM jobs WHERE job_id = ? LIMIT 1", (job_id.to_wire(),)))
+        return decode_one(JobDetail, q.fetchall("SELECT * FROM jobs WHERE job_id = ? LIMIT 1", (job_id.to_wire(),)))
 
 
-def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> Worker | None:
+def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerDetail | None:
     with state._db.snapshot() as q:
-        return decode_one(Worker, q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", (str(worker_id),)))
+        return decode_one(
+            WorkerDetail,
+            q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", (str(worker_id),)),
+        )
 
 
-def query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list[Task]:
+def query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list[TaskDetail]:
     with state._db.snapshot() as q:
-        return decode_rows(Task, q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (job_id.to_wire(),)))
+        return decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (job_id.to_wire(),)))
 
 
 def schedulable_tasks(state: ControllerTransitions):
@@ -237,7 +244,7 @@ def schedulable_tasks(state: ControllerTransitions):
     terminal_placeholders = ",".join("?" for _ in TERMINAL_TASK_STATES)
     with state._db.snapshot() as q:
         tasks = decode_rows(
-            Task,
+            TaskDetail,
             q.fetchall(
                 f"SELECT * FROM tasks WHERE state IS NOT NULL AND state NOT IN ({terminal_placeholders})"
                 " ORDER BY priority_neg_depth ASC, priority_root_submitted_ms ASC, submitted_at_ms ASC, task_id ASC",
@@ -329,10 +336,11 @@ def submit_job(
 # =============================================================================
 
 
-def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> list[Task]:
+def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> list[TaskDetail]:
     with state._db.snapshot() as q:
         tasks = decode_rows(
-            Task, q.fetchall("SELECT * FROM tasks WHERE job_id = ? ORDER BY task_index ASC", (job_id.to_wire(),))
+            TaskDetail,
+            q.fetchall("SELECT * FROM tasks WHERE job_id = ? ORDER BY task_index ASC", (job_id.to_wire(),)),
         )
         if not tasks:
             return []
@@ -348,10 +356,10 @@ def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> 
     return _tasks_with_attempts(tasks, attempts)
 
 
-def query_task_with_attempts(state: ControllerTransitions, task_id: JobName) -> Task | None:
+def query_task_with_attempts(state: ControllerTransitions, task_id: JobName) -> TaskDetail | None:
     wire = task_id.to_wire()
     with state._db.snapshot() as q:
-        tasks = decode_rows(Task, q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (wire,)))
+        tasks = decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (wire,)))
         attempts = decode_rows(
             Attempt,
             q.fetchall("SELECT * FROM task_attempts WHERE task_id = ? ORDER BY attempt_id ASC", (wire,)),
@@ -380,7 +388,7 @@ def make_job_request(
         replicas=replicas,
     )
     if scheduling_timeout_seconds > 0:
-        request.scheduling_timeout.CopyFrom(Duration.from_seconds(scheduling_timeout_seconds).to_proto())
+        request.scheduling_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(scheduling_timeout_seconds)))
     return request
 
 
@@ -442,7 +450,7 @@ def worker_running_tasks(state: ControllerTransitions, worker_id: WorkerId) -> f
     return frozenset(row.task_id for row in rows)
 
 
-def hydrate_worker_attributes(state: ControllerTransitions, workers: list[Worker]) -> list[Worker]:
+def hydrate_worker_attributes(state: ControllerTransitions, workers: list[WorkerDetail]) -> list[WorkerDetail]:
     if not workers:
         return workers
     worker_ids = [str(w.worker_id) for w in workers]
@@ -457,13 +465,13 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list[Worker
     return [_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
 
 
-def healthy_active_workers(state: ControllerTransitions) -> list[Worker]:
+def healthy_active_workers(state: ControllerTransitions) -> list[WorkerDetail]:
     with state._db.snapshot() as q:
-        workers = decode_rows(Worker, q.fetchall("SELECT * FROM workers WHERE healthy = 1 AND active = 1"))
+        workers = decode_rows(WorkerDetail, q.fetchall("SELECT * FROM workers WHERE healthy = 1 AND active = 1"))
     return hydrate_worker_attributes(state, workers)
 
 
-def dispatch_task(state: ControllerTransitions, task: Task, worker_id: WorkerId) -> None:
+def dispatch_task(state: ControllerTransitions, task: TaskDetail, worker_id: WorkerId) -> None:
     state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
     state.apply_task_updates(
         HeartbeatApplyRequest(
@@ -560,20 +568,20 @@ class ControllerTestHarness:
         )
         return register_worker(self.state, worker_id, address or f"{worker_id}:8080", meta, healthy=healthy)
 
-    def submit(self, name: str = "test-job", *, cpu: int = 1, replicas: int = 1, **kwargs) -> list[Task]:
+    def submit(self, name: str = "test-job", *, cpu: int = 1, replicas: int = 1, **kwargs) -> list[TaskDetail]:
         req = make_job_request(name=name, cpu=cpu, replicas=replicas, **kwargs)
         return submit_job(self.state, name, req)
 
-    def dispatch(self, task: Task, worker_id: WorkerId) -> None:
+    def dispatch(self, task: TaskDetail, worker_id: WorkerId) -> None:
         dispatch_task(self.state, task, worker_id)
 
     def transition(self, task_id: JobName, new_state: int, **kwargs) -> None:
         transition_task(self.state, task_id, new_state, **kwargs)
 
-    def query_task(self, task_id: JobName) -> Task:
+    def query_task(self, task_id: JobName) -> TaskDetail:
         return query_task(self.state, task_id)
 
-    def query_job(self, job_id: JobName) -> Job:
+    def query_job(self, job_id: JobName) -> JobDetail:
         return query_job(self.state, job_id)
 
 

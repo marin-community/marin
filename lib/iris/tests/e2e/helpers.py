@@ -28,6 +28,22 @@ class TestJobs:
         return 1
 
     @staticmethod
+    def log_periodic(duration: float, interval: float = 1.0):
+        """Log a message every `interval` seconds for `duration` seconds."""
+        import logging
+        import time
+
+        logger = logging.getLogger("iris.test.log_periodic")
+        start = time.monotonic()
+        tick = 0
+        while time.monotonic() - start < duration:
+            tick += 1
+            logger.info("tick %d (elapsed=%.1fs)", tick, time.monotonic() - start)
+            time.sleep(interval)
+        logger.info("done after %d ticks", tick)
+        return tick
+
+    @staticmethod
     def block(s):
         """Block until sentinel is signalled."""
         s.wait()
@@ -135,7 +151,7 @@ class TestJobs:
     @staticmethod
     def wait_for_sentinel(s):
         """Wait on a sentinel with a short timeout, used for concurrency tests."""
-        from iris.time_utils import Duration
+        from rigging.timing import Duration
 
         s.wait(timeout=Duration.from_seconds(2))
         return "done"

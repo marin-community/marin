@@ -32,7 +32,8 @@ from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
 from iris.cluster.providers.remote_exec import DirectSshRemoteExec
 from iris.cluster.worker.env_probe import construct_worker_id
 from iris.rpc import config_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_proto import duration_from_proto
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -381,7 +382,7 @@ class ManualWorkerProvider:
             if self._ssh_config.key_file:
                 key_file = self._ssh_config.key_file
             if self._ssh_config.HasField("connect_timeout"):
-                connect_timeout = Duration.from_proto(self._ssh_config.connect_timeout)
+                connect_timeout = duration_from_proto(self._ssh_config.connect_timeout)
 
         if manual_config is not None:
             ssh_user = getattr(manual_config, "ssh_user", "")

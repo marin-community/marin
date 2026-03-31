@@ -27,7 +27,7 @@ from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
-from iris.marin_fs import check_gcs_paths_same_region, marin_temp_bucket
+from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
 
 logger = logging.getLogger(__name__)
 

@@ -12,7 +12,7 @@ import sys
 import click
 
 from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 from iris.rpc import config_pb2
 from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
 

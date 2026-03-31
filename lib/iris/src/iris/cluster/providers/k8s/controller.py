@@ -25,7 +25,7 @@ from iris.cluster.providers.k8s.constants import CW_INTERRUPTABLE_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.types import InfraError, Labels
 from iris.rpc import config_pb2
-from iris.time_utils import Deadline
+from rigging.timing import Deadline
 
 logger = logging.getLogger(__name__)
 

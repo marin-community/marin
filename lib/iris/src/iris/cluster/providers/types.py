@@ -21,7 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
-from iris.time_utils import Deadline, Duration, Timestamp
+from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +224,18 @@ class RemoteWorkerHandle(Protocol):
 
     def reboot(self) -> None:
         """Reboot the worker."""
+        ...
+
+    def restart_worker(self, bootstrap_script: str) -> None:
+        """Restart the Iris worker process with a fresh bootstrap script.
+
+        Runs the bootstrap script which pulls the latest image, stops the
+        old container, and starts a new one. The new worker process discovers
+        and adopts existing task containers via Docker labels.
+
+        Args:
+            bootstrap_script: Full bootstrap script to execute on the worker VM.
+        """
         ...
 
 

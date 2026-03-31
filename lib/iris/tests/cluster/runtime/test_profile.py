@@ -7,6 +7,7 @@ Focuses on format-to-flag mapping, default handling, and CLI structure —
 not on pass-through of constructor arguments.
 """
 
+import json
 import os
 
 import pytest
@@ -64,7 +65,7 @@ def test_resolve_cpu_spec_preserves_nonzero_rate_hz():
     [
         (cluster_pb2.MemoryProfile.FLAMEGRAPH, "flamegraph", "html", True),
         (cluster_pb2.MemoryProfile.TABLE, "table", "txt", False),
-        (cluster_pb2.MemoryProfile.STATS, "stats", "json", False),
+        (cluster_pb2.MemoryProfile.STATS, "stats", "json", True),
     ],
 )
 def test_resolve_memory_spec_maps_format(proto_format, expected_reporter, expected_ext, expected_is_file):
@@ -130,13 +131,15 @@ def test_memray_transform_table_does_not_write_to_file():
     assert "--output" not in cmd
 
 
-def test_memray_transform_stats_includes_json_flag():
+def test_memray_transform_stats_includes_json_flag_and_output():
     cfg = cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.STATS)
     spec = resolve_memory_spec(cfg, duration_seconds=5, pid="1")
-    cmd = build_memray_transform_cmd(spec, memray_bin="memray", trace_path="/tmp/t.bin", output_path="")
+    cmd = build_memray_transform_cmd(spec, memray_bin="memray", trace_path="/tmp/t.bin", output_path="/tmp/o.json")
 
     assert "stats" in cmd
     assert "--json" in cmd
+    assert "-o" in cmd
+    assert "/tmp/o.json" in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -167,12 +170,23 @@ def _allocate_during(duration_seconds: int) -> list:
     [
         cluster_pb2.MemoryProfile.FLAMEGRAPH,
         cluster_pb2.MemoryProfile.TABLE,
+        cluster_pb2.MemoryProfile.STATS,
     ],
 )
 def test_run_memray_profile_returns_nonempty_output(proto_format):
-    """In-process memray Tracker produces non-empty output for flamegraph/table."""
+    """In-process memray Tracker produces non-empty output for flamegraph/table/stats."""
     _allocate_during(1)
     cfg = cluster_pb2.MemoryProfile(format=proto_format, leaks=False)
     pid = str(os.getpid())
     result = _run_memray_profile(pid, duration_seconds=1, memory_config=cfg)
     assert len(result) > 0
+
+
+def test_run_memray_profile_stats_returns_valid_json():
+    """Stats reporter returns parseable JSON, not a file-path string."""
+    _allocate_during(1)
+    cfg = cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.STATS, leaks=False)
+    pid = str(os.getpid())
+    result = _run_memray_profile(pid, duration_seconds=1, memory_config=cfg)
+    data = json.loads(result)
+    assert "total_num_allocations" in data
