@@ -1508,6 +1508,52 @@ class Autoscaler:
         """All scale groups."""
         return self._groups
 
+    def notify_worker_registered(self, worker_id: str, address: str) -> None:
+        """Called by controller when a worker completes the Register RPC.
+
+        Synchronizes the autoscaler's worker registry with the controller DB
+        so that operations like notify_worker_failed can find the worker's
+        slice immediately, without waiting for the next refresh() poll.
+
+        Two cases:
+        1. Worker exists in _workers as a _RestoredWorkerHandle (checkpoint
+           restore) — update its stale address.
+        2. Worker is NOT in _workers (bootstrap race) — probe non-ready
+           slices. If one is READY and contains this worker, eagerly register
+           the whole slice.
+        """
+        tracked = self._workers.get(worker_id)
+        if tracked is not None:
+            if isinstance(tracked.handle, _RestoredWorkerHandle):
+                tracked.handle._internal_address = address
+                logger.debug("Updated restored worker %s address to %s", worker_id, address)
+            return
+
+        # Worker not yet tracked — check non-ready slices for eager registration.
+        for group in self._groups.values():
+            for slice_id, handle in group.non_ready_slice_handles():
+                try:
+                    status = handle.describe()
+                except Exception:
+                    continue
+                if status.state == CloudSliceState.READY:
+                    worker_ids = [w.worker_id for w in status.workers]
+                    if worker_id in worker_ids:
+                        group.mark_slice_ready(slice_id, worker_ids)
+                        self._register_slice_workers(status.workers, slice_id, group.name)
+                        self._log_action(
+                            "slice_ready",
+                            group.name,
+                            slice_id,
+                            reason=f"eager registration via worker {worker_id}",
+                        )
+                        logger.info(
+                            "Eagerly registered slice %s via worker %s registration",
+                            slice_id,
+                            worker_id,
+                        )
+                        return
+
     def notify_worker_failed(self, worker_id: str) -> list[str]:
         """Called by controller when a worker fails. Terminates the containing slice.
 

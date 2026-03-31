@@ -634,6 +634,10 @@ class AutoscalerProtocol(Protocol):
         """Get initialization log for a VM."""
         ...
 
+    def notify_worker_registered(self, worker_id: str, address: str) -> None:
+        """Notify autoscaler that a worker completed RPC registration."""
+        ...
+
 
 class ControllerProtocol(Protocol):
     """Protocol for controller operations used by ControllerServiceImpl."""
@@ -1155,6 +1159,11 @@ class ControllerServiceImpl:
             metadata=request.metadata,
             ts=Timestamp.now(),
         )
+
+        autoscaler = self._controller.autoscaler
+        if autoscaler is not None:
+            autoscaler.notify_worker_registered(str(worker_id), request.address)
+
         self._controller.wake()
 
         logger.info("Worker registered: %s at %s", worker_id, request.address)

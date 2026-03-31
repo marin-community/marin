@@ -553,6 +553,92 @@ class TestAutoscalerWorkerFailure:
         assert siblings == []
 
 
+class TestAutoscalerWorkerRegistration:
+    """Tests for notify_worker_registered synchronization."""
+
+    def test_updates_restored_worker_address(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """notify_worker_registered updates stale address on _RestoredWorkerHandle."""
+        from iris.cluster.controller.autoscaler import TrackedWorker, _RestoredWorkerHandle
+
+        platform = make_mock_platform()
+        group = ScalingGroup(scale_group_config, platform)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        # Simulate a restored worker with stale address
+        restored_handle = _RestoredWorkerHandle(worker_id="w-1", internal_address="10.0.0.1")
+        autoscaler._workers["w-1"] = TrackedWorker(
+            worker_id="w-1",
+            slice_id="slice-old",
+            scale_group="test-group",
+            handle=restored_handle,
+        )
+
+        autoscaler.notify_worker_registered("w-1", "10.0.0.99")
+
+        assert autoscaler._workers["w-1"].handle.internal_address == "10.0.0.99"
+
+    def test_eagerly_registers_ready_slice_on_worker_registration(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """Worker registration eagerly discovers its READY slice before refresh() polls."""
+        mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        autoscaler = make_autoscaler({"test-group": group})
+
+        # Slice is discovered but NOT marked ready yet (simulates bootstrap race).
+        assert "slice-001-vm-0" not in autoscaler._workers
+
+        # Worker registers via RPC — autoscaler should eagerly discover the slice.
+        autoscaler.notify_worker_registered("slice-001-vm-0", "10.0.0.1")
+
+        assert "slice-001-vm-0" in autoscaler._workers
+        assert autoscaler._workers["slice-001-vm-0"].slice_id == "slice-001"
+
+    def test_notify_worker_registered_enables_failure_cascade(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """After notify_worker_registered, notify_worker_failed can find the slice."""
+        mock_handle = make_mock_slice_handle("slice-001", vm_states=[vm_pb2.VM_STATE_READY, vm_pb2.VM_STATE_READY])
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        autoscaler = make_autoscaler({"test-group": group})
+
+        # Without notify_worker_registered, failure cascade would fail silently.
+        autoscaler.notify_worker_registered("slice-001-vm-0", "10.0.0.1")
+
+        siblings = autoscaler.notify_worker_failed("slice-001-vm-0")
+        assert "slice-001-vm-1" in siblings
+        assert group.slice_count() == 0
+
+    def test_notify_worker_registered_noop_for_already_tracked_worker(
+        self, scale_group_config: config_pb2.ScaleGroupConfig
+    ):
+        """notify_worker_registered is a no-op for workers already tracked with real handles."""
+        mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        autoscaler = make_autoscaler({"test-group": group})
+
+        # Use refresh() to register slice workers (simulates normal lifecycle)
+        autoscaler.refresh({})
+
+        original_handle = autoscaler._workers["slice-001-vm-0"].handle
+        autoscaler.notify_worker_registered("slice-001-vm-0", "10.0.0.99")
+
+        # Handle should be unchanged (not replaced or modified)
+        assert autoscaler._workers["slice-001-vm-0"].handle is original_handle
+
+    def test_notify_worker_registered_unknown_worker_is_noop(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """notify_worker_registered does nothing for workers not in any slice."""
+        platform = make_mock_platform()
+        group = ScalingGroup(scale_group_config, platform)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        autoscaler.notify_worker_registered("unknown-worker", "10.0.0.1")
+
+        assert "unknown-worker" not in autoscaler._workers
+
+
 class TestAutoscalerIdleVerification:
     """Tests for idle verification during scale-down."""
 
