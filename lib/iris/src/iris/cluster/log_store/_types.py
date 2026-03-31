@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import logging_pb2
@@ -41,6 +42,12 @@ def build_log_source(target: JobName, attempt_id: int = -1) -> str:
             return f"{wire}:{attempt_id}"
         return f"{wire}:.*"
     return f"{wire}/.*"
+
+
+class LogStoreProtocol(Protocol):
+    """Minimal interface for log storage used by background collectors."""
+
+    def append_batch(self, items: list[tuple[str, list]]) -> None: ...
 
 
 @dataclass

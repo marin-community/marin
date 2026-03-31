@@ -24,7 +24,7 @@ from pathlib import Path
 
 from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
-from iris.cluster.log_store._types import TaskAttempt, task_log_key
+from iris.cluster.log_store._types import LogStoreProtocol, TaskAttempt, task_log_key
 from iris.cluster.providers.k8s.constants import CW_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import KubectlError, KubectlLogLine, parse_k8s_quantity
@@ -607,11 +607,12 @@ class LogCollector:
     log store without blocking the scheduling path.
     """
 
-    def __init__(self, kubectl: K8sService, log_store: object, concurrency: int = 8):
+    def __init__(self, kubectl: K8sService, log_store: LogStoreProtocol, concurrency: int = 8):
         self._kubectl = kubectl
         self._log_store = log_store
         self._pods: dict[str, _LogPod] = {}
         self._lock = threading.Lock()
+        self._pod_locks: dict[str, threading.Lock] = {}
         self._stop = threading.Event()
         self._executor = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="log-collect")
         self._thread = threading.Thread(target=self._run, daemon=True, name="log-collector")
@@ -623,38 +624,46 @@ class LogCollector:
         with self._lock:
             if key not in self._pods:
                 self._pods[key] = _LogPod(pod_name=pod_name, task_id=task_id, attempt_id=attempt_id)
+                self._pod_locks[key] = threading.Lock()
 
     def untrack(self, task_id: JobName, attempt_id: int) -> None:
-        """Stop collecting logs for a pod. Does one final full fetch."""
+        """Stop collecting logs for a pod. Does one final incremental fetch."""
         key = f"{task_id.to_wire()}:{attempt_id}"
         with self._lock:
             pod = self._pods.pop(key, None)
-        if pod is not None:
-            self._fetch_and_store(pod, final=True)
+            pod_lock = self._pod_locks.pop(key, None)
+        if pod is not None and pod_lock is not None:
+            with pod_lock:
+                self._fetch_and_store(pod)
 
     def _run(self) -> None:
         while not self._stop.is_set():
             with self._lock:
-                snapshot = list(self._pods.values())
-            if snapshot:
-                futures = [self._executor.submit(self._fetch_and_store, pod) for pod in snapshot]
-                for f in concurrent.futures.as_completed(futures):
-                    try:
-                        f.result()
-                    except Exception:
-                        pass
+                snapshot = list(self._pods.items())
+            for key, pod in snapshot:
+                with self._lock:
+                    pod_lock = self._pod_locks.get(key)
+                if pod_lock is not None:
+                    self._executor.submit(self._guarded_fetch, pod, pod_lock)
             self._stop.wait(timeout=2.0)
 
-    def _fetch_and_store(self, pod: _LogPod, final: bool = False) -> None:
+    def _guarded_fetch(self, pod: _LogPod, pod_lock: threading.Lock) -> None:
+        if not pod_lock.acquire(blocking=False):
+            return
         try:
-            offset = 0 if final else pod.byte_offset
-            result = self._kubectl.stream_logs(pod.pod_name, container="task", byte_offset=offset)
+            self._fetch_and_store(pod)
+        finally:
+            pod_lock.release()
+
+    def _fetch_and_store(self, pod: _LogPod) -> None:
+        """Fetch logs from current byte_offset and advance. Must be called under pod lock."""
+        try:
+            result = self._kubectl.stream_logs(pod.pod_name, container="task", byte_offset=pod.byte_offset)
             if result.lines:
                 entries = [_kubectl_log_line_to_log_entry(kll, pod.attempt_id) for kll in result.lines]
                 key = task_log_key(TaskAttempt(task_id=pod.task_id, attempt_id=pod.attempt_id))
                 self._log_store.append_batch([(key, entries)])
-            if not final:
-                pod.byte_offset = result.byte_offset
+            pod.byte_offset = result.byte_offset
         except Exception as e:
             logger.debug("LogCollector: failed for pod %s: %s", pod.pod_name, e)
 
@@ -760,16 +769,36 @@ class K8sTaskProvider:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
-    log_store: object | None = None
+    log_store: LogStoreProtocol | None = None
     poll_concurrency: int = 8
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _log_collector: LogCollector | None = field(default=None, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
 
-    def __post_init__(self) -> None:
-        self._resource_collector = ResourceCollector(self.kubectl, concurrency=self.poll_concurrency)
-        if self.log_store is not None:
+    def _ensure_resource_collector(self) -> ResourceCollector:
+        if self._resource_collector is None:
+            self._resource_collector = ResourceCollector(self.kubectl, concurrency=self.poll_concurrency)
+        return self._resource_collector
+
+    def _ensure_log_collector(self) -> LogCollector | None:
+        if self._log_collector is None and self.log_store is not None:
             self._log_collector = LogCollector(self.kubectl, self.log_store, concurrency=self.poll_concurrency)
+        return self._log_collector
+
+    def _track_pod(self, pod_name: str, task_id: JobName, attempt_id: int, phase: str) -> None:
+        """Register a pod with background collectors, creating them lazily."""
+        log_collector = self._ensure_log_collector()
+        if log_collector is not None:
+            log_collector.track(pod_name, task_id, attempt_id)
+        if phase == "Running":
+            self._ensure_resource_collector().track(pod_name, task_id, attempt_id)
+
+    def _untrack_pod(self, task_id: JobName, attempt_id: int) -> None:
+        """Remove a pod from all background collectors."""
+        if self._log_collector is not None:
+            self._log_collector.untrack(task_id, attempt_id)
+        if self._resource_collector is not None:
+            self._resource_collector.untrack(task_id, attempt_id)
 
     def sync(self, batch: DirectProviderBatch) -> DirectProviderSyncResult:
         """Sync task state: apply new pods, delete killed pods, poll running pods."""
@@ -1258,6 +1287,7 @@ class K8sTaskProvider:
                     continue
                 # Grace exhausted — pod is truly gone.
                 self._pod_not_found_counts.pop(cursor_key, None)
+                self._untrack_pod(entry.task_id, entry.attempt_id)
                 updates.append(
                     TaskUpdate(
                         task_id=entry.task_id,
@@ -1272,12 +1302,7 @@ class K8sTaskProvider:
             update = _task_update_from_pod(entry, pod)
             phase = pod.get("status", {}).get("phase", "")
 
-            # Register with background collectors.
-            if self._log_collector is not None:
-                self._log_collector.track(pod_name, entry.task_id, entry.attempt_id)
-            if self._resource_collector is not None:
-                if phase == "Running":
-                    self._resource_collector.track(pod_name, entry.task_id, entry.attempt_id)
+            self._track_pod(pod_name, entry.task_id, entry.attempt_id, phase)
 
             # Read latest cached resource usage (non-blocking).
             resource_usage = None
@@ -1285,10 +1310,7 @@ class K8sTaskProvider:
                 resource_usage = self._resource_collector.get(entry.task_id, entry.attempt_id)
 
             if phase in ("Succeeded", "Failed"):
-                if self._log_collector is not None:
-                    self._log_collector.untrack(entry.task_id, entry.attempt_id)
-                if self._resource_collector is not None:
-                    self._resource_collector.untrack(entry.task_id, entry.attempt_id)
+                self._untrack_pod(entry.task_id, entry.attempt_id)
 
             updates.append(
                 TaskUpdate(
