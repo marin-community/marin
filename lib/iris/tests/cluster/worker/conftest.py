@@ -137,6 +137,9 @@ def mock_runtime():
     runtime.stage_bundle = Mock()
     runtime.list_iris_containers = Mock(return_value=[])
     runtime.remove_all_iris_containers = Mock(return_value=0)
+    runtime.remove_containers = Mock(return_value=0)
+    runtime.discover_containers = Mock(return_value=[])
+    runtime.adopt_container = Mock(side_effect=lambda cid: create_mock_container_handle())
     runtime.cleanup = Mock()
     return runtime
 
