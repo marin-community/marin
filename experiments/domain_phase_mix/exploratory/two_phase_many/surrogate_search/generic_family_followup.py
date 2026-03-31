@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
+from scipy.optimize import minimize
 from scipy.optimize import nnls
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.structured_epoch_family import (
@@ -112,11 +114,13 @@ class GenericFamilyRetainedTotalSurrogate:
         params: dict[str, float] | None = None,
         family_totals: tuple[str, ...] = GENERIC_FAMILY_NAMES,
         quality_discount: bool = True,
+        pair_cc_domains: bool = True,
     ):
         self.packet = packet
         self.params = dict(TUNED_GENERIC_FAMILY_PARAMS if params is None else params)
         self.family_totals = tuple(family_totals)
         self.quality_discount = bool(quality_discount)
+        self.pair_cc_domains = bool(pair_cc_domains)
         self.coef_: np.ndarray | None = None
         self.intercept_: float | None = None
 
@@ -138,11 +142,14 @@ class GenericFamilyRetainedTotalSurrogate:
         features: list[np.ndarray] = []
         group_totals: list[np.ndarray] = []
 
-        for idx in self.packet.singletons:
+        singleton_indices = self.packet.singletons if self.pair_cc_domains else list(range(self.packet.base.m))
+        pair_map = self.packet.pairs if self.pair_cc_domains else []
+
+        for idx in singleton_indices:
             features.append(np.log1p(alpha * x[:, idx : idx + 1]))
             group_totals.append(x[:, idx])
 
-        for hi, lo in self.packet.pairs:
+        for hi, lo in pair_map:
             pair_signal_total = x[:, hi] + (beta * x[:, lo] if self.quality_discount else x[:, lo])
             features.append(np.log1p(alpha * pair_signal_total)[:, None])
             group_totals.append(x[:, hi] + x[:, lo])
@@ -181,3 +188,170 @@ class GenericFamilyRetainedTotalSurrogate:
             raise RuntimeError("Model must be fit before prediction")
         design = self.build_design(weights)
         return np.asarray(self.intercept_ + design @ self.coef_, dtype=float)
+
+
+def fitted_generic_family_components(
+    packet: GenericFamilyPacket,
+    model: GenericFamilyRetainedTotalSurrogate,
+) -> dict[str, Any]:
+    """Extract fitted coefficients grouped by feature type."""
+    if model.coef_ is None:
+        raise RuntimeError("Model must be fit")
+
+    n_singletons = len(packet.singletons) if model.pair_cc_domains else packet.base.m
+    n_pairs = len(packet.pairs) if model.pair_cc_domains else 0
+    n_families = len(model.family_totals)
+
+    offset = 0
+    singleton_coef = np.asarray(model.coef_[offset : offset + n_singletons], dtype=float)
+    offset += n_singletons
+    pair_coef = np.asarray(model.coef_[offset : offset + n_pairs], dtype=float)
+    offset += n_pairs
+    family_coef = {
+        family_name: float(coef)
+        for family_name, coef in zip(
+            model.family_totals,
+            model.coef_[offset : offset + n_families],
+            strict=True,
+        )
+    }
+    offset += n_families
+    penalty_coef = float(model.coef_[offset])
+    return {
+        "singleton_coef": singleton_coef,
+        "pair_coef": pair_coef,
+        "family_coef": family_coef,
+        "penalty_coef": penalty_coef,
+    }
+
+
+def optimize_generic_family_model(
+    packet: GenericFamilyPacket,
+    model: GenericFamilyRetainedTotalSurrogate,
+    *,
+    n_random: int = 20,
+    seed: int = 0,
+) -> tuple[Any, np.ndarray, np.ndarray]:
+    """Optimize a fitted generic-family model over the two phase simplices."""
+    if model.coef_ is None or model.intercept_ is None:
+        raise RuntimeError("Model must be fit")
+
+    parts = fitted_generic_family_components(packet, model)
+    singleton_coef = parts["singleton_coef"]
+    pair_coef = parts["pair_coef"]
+    family_coef = parts["family_coef"]
+    penalty_coef = float(parts["penalty_coef"])
+
+    n_domains = packet.base.m
+    c0 = packet.base.c0
+    c1 = packet.base.c1
+    alpha = float(model.params["alpha"])
+    eta = float(model.params["eta"])
+    lam = float(model.params["lam"])
+    tau = float(model.params["tau"])
+    beta = float(model.params["beta"]) if model.quality_discount else 1.0
+    rng = np.random.default_rng(seed)
+
+    pair_topics = packet.pair_topics if model.pair_cc_domains else []
+    pair_map = packet.pairs if model.pair_cc_domains else []
+    singleton_indices = packet.singletons if model.pair_cc_domains else list(range(packet.base.m))
+    family_indices = {
+        family_name: np.asarray(packet.family_map[family_name], dtype=int) for family_name in model.family_totals
+    }
+
+    def value_grad_logits(z: np.ndarray) -> tuple[float, np.ndarray]:
+        logits0 = z[:n_domains]
+        logits1 = z[n_domains:]
+        p0 = np.exp(logits0 - np.max(logits0))
+        p0 /= np.sum(p0)
+        p1 = np.exp(logits1 - np.max(logits1))
+        p1 /= np.sum(p1)
+
+        e0 = c0 * p0
+        retained = np.exp(-lam * (1.0 - p1))
+        x = retained * e0 + eta * c1 * p1
+        dx_dp0 = retained * c0
+        dx_dp1 = lam * retained * e0 + eta * c1
+
+        value = float(model.intercept_)
+        grad_x = np.zeros(n_domains, dtype=float)
+
+        for local_idx, domain_idx in enumerate(singleton_indices):
+            coef = float(singleton_coef[local_idx])
+            signal = np.log1p(alpha * x[domain_idx])
+            value -= coef * signal
+            grad_x[domain_idx] -= coef * alpha / (1.0 + alpha * x[domain_idx])
+
+        for local_idx, ((hi, lo), topic) in enumerate(zip(pair_map, pair_topics, strict=True)):
+            del topic
+            coef = float(pair_coef[local_idx])
+            total = x[hi] + beta * x[lo]
+            signal = np.log1p(alpha * total)
+            value -= coef * signal
+            common = coef * alpha / (1.0 + alpha * total)
+            grad_x[hi] -= common
+            grad_x[lo] -= common * beta
+
+        for family_name in model.family_totals:
+            coef = float(family_coef[family_name])
+            members = family_indices[family_name]
+            total = float(np.sum(x[members]))
+            signal = np.log1p(alpha * total)
+            value -= coef * signal
+            grad_x[members] -= coef * alpha / (1.0 + alpha * total)
+
+        if penalty_coef != 0.0:
+            for domain_idx in singleton_indices:
+                u = np.log1p(x[domain_idx]) - tau
+                sp = float(softplus(np.asarray(u)))
+                value += penalty_coef * sp**2
+                sigmoid_u = float(1.0 / (1.0 + np.exp(-np.clip(u, -50.0, 50.0))))
+                grad_x[domain_idx] += penalty_coef * (2.0 * sp * sigmoid_u / (1.0 + x[domain_idx]))
+
+            for hi, lo in pair_map:
+                total = x[hi] + x[lo]
+                u = np.log1p(total) - tau
+                sp = float(softplus(np.asarray(u)))
+                value += penalty_coef * sp**2
+                sigmoid_u = float(1.0 / (1.0 + np.exp(-np.clip(u, -50.0, 50.0))))
+                common = penalty_coef * (2.0 * sp * sigmoid_u / (1.0 + total))
+                grad_x[hi] += common
+                grad_x[lo] += common
+
+        grad_p0 = grad_x * dx_dp0
+        grad_p1 = grad_x * dx_dp1
+        grad0 = p0 * (grad_p0 - float(np.dot(grad_p0, p0)))
+        grad1 = p1 * (grad_p1 - float(np.dot(grad_p1, p1)))
+        return value, np.concatenate([grad0, grad1])
+
+    starts = [
+        np.zeros(2 * n_domains, dtype=float),
+        *[
+            np.concatenate(
+                [
+                    np.log(rng.dirichlet(np.ones(n_domains))),
+                    np.log(rng.dirichlet(np.ones(n_domains))),
+                ]
+            )
+            for _ in range(n_random)
+        ],
+    ]
+
+    best_result = None
+    best_value = float("inf")
+    for start in starts:
+        result = minimize(value_grad_logits, start, jac=True, method="L-BFGS-B", options={"maxiter": 800})
+        if result.fun < best_value:
+            best_value = float(result.fun)
+            best_result = result
+
+    if best_result is None:
+        raise RuntimeError("Generic-family optimization failed")
+
+    logits0 = best_result.x[:n_domains]
+    logits1 = best_result.x[n_domains:]
+    p0 = np.exp(logits0 - np.max(logits0))
+    p0 /= np.sum(p0)
+    p1 = np.exp(logits1 - np.max(logits1))
+    p1 /= np.sum(p1)
+    return best_result, p0, p1

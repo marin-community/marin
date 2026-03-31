@@ -1,0 +1,201 @@
+{
+  "model": "Phase Composition Sparse PLS",
+  "optimum": {
+    "gap_below_observed_best": -0.01963321469503554,
+    "nearest_observed_run_name": "run_00200",
+    "nearest_observed_tv_distance": 0.8204511921682524,
+    "nearest_observed_value": 1.0687605142593384,
+    "observed_best_run_name": "run_00125",
+    "observed_best_value": 1.0571987628936768,
+    "optimizer_message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
+    "optimizer_success": true,
+    "phase0_entropy": 0.0030417458972778894,
+    "phase0_max_weight": 0.9997341279452312,
+    "phase0_support_below_1e4": 37,
+    "phase0_support_below_1e6": 11,
+    "phase0_top_domains": [
+      {
+        "domain": "dolmino_stack_edu_fim",
+        "epochs": 37.78522311189477,
+        "weight": 0.9997341279452312
+      },
+      {
+        "domain": "dolmino_synth_code",
+        "epochs": 0.037658572669084726,
+        "weight": 0.00014036571489868283
+      },
+      {
+        "domain": "dolma3_cc/art_and_design_high",
+        "epochs": 0.00041101597458696867,
+        "weight": 9.273597043324474e-06
+      },
+      {
+        "domain": "dolma3_cc/food_and_dining_high",
+        "epochs": 0.0002610049805109564,
+        "weight": 8.811984207116633e-06
+      },
+      {
+        "domain": "dolma3_cc/health_high",
+        "epochs": 9.436063058555801e-05,
+        "weight": 8.120529807901188e-06
+      },
+      {
+        "domain": "dolma3_cc/games_high",
+        "epochs": 0.00017229307189992063,
+        "weight": 7.69312226086609e-06
+      },
+      {
+        "domain": "dolma3_cc/finance_and_business_high",
+        "epochs": 6.919024300810063e-05,
+        "weight": 7.437925049316417e-06
+      },
+      {
+        "domain": "dolma3_cc/games_low",
+        "epochs": 0.0004352366913209923,
+        "weight": 7.286156212423894e-06
+      },
+      {
+        "domain": "dolma3_cc/history_and_geography_low",
+        "epochs": 0.0009143750190620066,
+        "weight": 6.7188654578501506e-06
+      },
+      {
+        "domain": "dolma3_cc/health_low",
+        "epochs": 0.00017456439228218695,
+        "weight": 6.402706732951226e-06
+      }
+    ],
+    "phase1_entropy": 1.1223054443485316,
+    "phase1_max_weight": 0.7362375606028869,
+    "phase1_support_below_1e4": 3,
+    "phase1_support_below_1e6": 1,
+    "phase1_top_domains": [
+      {
+        "domain": "dolma3_stack_edu",
+        "epochs": 6.946820556451523,
+        "weight": 0.7362375606028869
+      },
+      {
+        "domain": "dolmino_stack_edu_fim",
+        "epochs": 1.2082354947368519,
+        "weight": 0.12787160262160485
+      },
+      {
+        "domain": "dolmino_synth_code",
+        "epochs": 3.3283831149917056,
+        "weight": 0.04962385372359579
+      },
+      {
+        "domain": "dolmino_synth_instruction",
+        "epochs": 0.6305851598866943,
+        "weight": 0.008962740901055697
+      },
+      {
+        "domain": "dolma3_cc/food_and_dining_high",
+        "epochs": 0.048117455927441155,
+        "weight": 0.006498117559123638
+      },
+      {
+        "domain": "dolma3_cc/education_and_jobs_low",
+        "epochs": 0.05942092206562725,
+        "weight": 0.005780968023437656
+      },
+      {
+        "domain": "dolmino_olmocr_pdfs_hq",
+        "epochs": 0.03377593725913395,
+        "weight": 0.005497505233030513
+      },
+      {
+        "domain": "dolmino_synth_qa",
+        "epochs": 0.012423938406511783,
+        "weight": 0.005177178277179008
+      },
+      {
+        "domain": "dolma3_cc/literature_low",
+        "epochs": 0.0946787758384172,
+        "weight": 0.005155279392867556
+      },
+      {
+        "domain": "dolma3_cc/science_math_and_technology_low",
+        "epochs": 0.05835831637864018,
+        "weight": 0.005117993542900042
+      }
+    ],
+    "predicted_optimum_value": 1.0375655481986412
+  },
+  "parameter_count": {
+    "linear_coefficients": 7,
+    "reported_total": 8,
+    "total_with_shapes": 8
+  },
+  "reproduction": {
+    "cv_r2_mean": 0.6905647634831906,
+    "cv_spearman_mean": 0.8186482848458532,
+    "fold_metrics": [
+      {
+        "fold": 1.0,
+        "r2": 0.6906103740760435,
+        "spearman": 0.8572448979591836
+      },
+      {
+        "fold": 2.0,
+        "r2": 0.7343862779960075,
+        "spearman": 0.879830655666522
+      },
+      {
+        "fold": 3.0,
+        "r2": 0.6223850614950694,
+        "spearman": 0.7644376899696049
+      },
+      {
+        "fold": 4.0,
+        "r2": 0.7193891335674167,
+        "spearman": 0.7939643942683456
+      },
+      {
+        "fold": 5.0,
+        "r2": 0.686052970281416,
+        "spearman": 0.7977637863656101
+      }
+    ],
+    "full_fit_coefficients": {
+      "exp(expneg_phase_sum__dolmino_stem_heavy_crawl)": -0.0014261085082590114,
+      "exp_phase_gap__dolma3_stack_edu": -0.00303215467923863,
+      "expneg_phase_sum__dolma3_stack_edu": 0.008721125982836897,
+      "expneg_phase_sum__dolmino_stack_edu_fim": 0.009306695873327327,
+      "expneg_phase_sum__dolmino_stem_heavy_crawl": -0.004270230436610335,
+      "invsq1p_phase_sum__dolmino_synth_code": -0.004066915922231693,
+      "negrelu_phase_alr__phase_1_dolma3_arxiv__over__phase_1_dolmino_synth_thinking": 0.0029753758608494075
+    },
+    "full_fit_intercept": 1.1176876690377833,
+    "outlier_filter": {
+      "dropped_rows": 0,
+      "kept_rows": 241,
+      "lower": 1.0420054197311401,
+      "upper": 1.1920489072799683
+    },
+    "rows": 241,
+    "selected_terms": [
+      "expneg_phase_sum__dolmino_stack_edu_fim",
+      "expneg_phase_sum__dolma3_stack_edu",
+      "exp(expneg_phase_sum__dolmino_stem_heavy_crawl)",
+      "negrelu_phase_alr__phase_1_dolma3_arxiv__over__phase_1_dolmino_synth_thinking",
+      "exp_phase_gap__dolma3_stack_edu",
+      "invsq1p_phase_sum__dolmino_synth_code",
+      "expneg_phase_sum__dolmino_stem_heavy_crawl"
+    ],
+    "target": "eval/uncheatable_eval/bpb",
+    "train_r2": 0.7079311306814557,
+    "train_spearman": 0.8232896677068688
+  },
+  "selected_terms": [
+    "expneg_phase_sum__dolmino_stack_edu_fim",
+    "expneg_phase_sum__dolma3_stack_edu",
+    "exp(expneg_phase_sum__dolmino_stem_heavy_crawl)",
+    "negrelu_phase_alr__phase_1_dolma3_arxiv__over__phase_1_dolmino_synth_thinking",
+    "exp_phase_gap__dolma3_stack_edu",
+    "invsq1p_phase_sum__dolmino_synth_code",
+    "expneg_phase_sum__dolmino_stem_heavy_crawl"
+  ],
+  "target": "eval/uncheatable_eval/bpb"
+}

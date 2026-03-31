@@ -54,6 +54,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 FULL_OUTPUT_CSV = SCRIPT_DIR / "grp_evaluation_table_full.csv"
 SLIDE_OUTPUT_CSV = SCRIPT_DIR / "grp_evaluation_table_slide.csv"
 LATEX_OUTPUT = SCRIPT_DIR / "grp_evaluation_table_rows.tex"
+EXISTING_FULL_OUTPUT_CSV = SCRIPT_DIR / "grp_evaluation_table_full.csv"
 
 DEFAULT_PACKET_ROOT = Path("/Users/calvinxu/Downloads/chatgpt_5_4_packet_real_epochs_uncheatable_bpb")
 DEFAULT_CACHED_CV_CSV = Path(
@@ -61,7 +62,17 @@ DEFAULT_CACHED_CV_CSV = Path(
 )
 DEFAULT_DSRE_CV_SOURCE = SCRIPT_DIR / "power_ridge_single.md"
 
-MODEL_ORDER = ("GRP", "GRP w/o family signals", "Olmix loglinear", "CES", "DS-RE-CEQ")
+MODEL_ORDER = (
+    "GRP",
+    "GRP w/o family signals",
+    "GRP w/o retention",
+    "GRP w/o retention or family signals",
+    "GRP w/o quality splits",
+    "GRP w/o quality splits or family signals",
+    "Olmix loglinear",
+    "CES",
+    "DS-RE-CEQ",
+)
 SHAPE_PARAMETER_COUNT = len(TUNED_GENERIC_FAMILY_PARAMS)
 
 
@@ -139,6 +150,9 @@ def compute_grp_metrics(
     cv_seed: int,
     model_name: str = "GRP",
     family_totals: tuple[str, ...] = GENERIC_FAMILY_NAMES,
+    params: dict[str, float] | None = None,
+    active_shape_parameters: int = SHAPE_PARAMETER_COUNT,
+    pair_cc_domains: bool = True,
     notes: str | None = None,
 ) -> dict[str, Any]:
     """Compute GRP-family train and CV metrics in-repo."""
@@ -148,15 +162,18 @@ def compute_grp_metrics(
     frame = packet.base.frame
     name_col = packet.base.name_col
 
+    model_params = dict(TUNED_GENERIC_FAMILY_PARAMS if params is None else params)
     model = GenericFamilyRetainedTotalSurrogate(
         packet,
-        params=TUNED_GENERIC_FAMILY_PARAMS,
+        params=model_params,
         family_totals=family_totals,
         quality_discount=True,
+        pair_cc_domains=pair_cc_domains,
     ).fit(weights, y)
     train_pred = model.predict(weights)
     train = regression_metrics(frame, name_col, y, train_pred)
     counts = _grp_param_count(packet, model)
+    counts["n_params"] = counts["linear_coefficients"] + counts["intercept_params"] + active_shape_parameters
 
     kf = KFold(n_splits=5, shuffle=True, random_state=cv_seed)
     oof = np.zeros_like(y, dtype=float)
@@ -164,9 +181,10 @@ def compute_grp_metrics(
     for _fold_idx, (tr, te) in enumerate(kf.split(weights)):
         fold_model = GenericFamilyRetainedTotalSurrogate(
             packet,
-            params=TUNED_GENERIC_FAMILY_PARAMS,
+            params=model_params,
             family_totals=family_totals,
             quality_discount=True,
+            pair_cc_domains=pair_cc_domains,
         ).fit(weights[tr], y[tr])
         pred = fold_model.predict(weights[te])
         oof[te] = pred
@@ -411,6 +429,14 @@ def _slide_frame(full: pd.DataFrame) -> pd.DataFrame:
     ].copy()
 
 
+def _existing_row(path: Path, model_name: str) -> dict[str, Any]:
+    full = pd.read_csv(path)
+    matches = full.loc[full["model"] == model_name]
+    if matches.empty:
+        raise ValueError(f"Missing existing cached row for {model_name!r} in {path}")
+    return dict(matches.iloc[0])
+
+
 def _latex_rows(slide: pd.DataFrame) -> str:
     lines = []
     for row in slide.itertuples(index=False):
@@ -456,13 +482,80 @@ def main() -> None:
         family_totals=(),
         notes="Computed from the same fixed tuned GRP nonlinear parameters, but with the three family features removed.",
     )
-    cached_rows = load_cached_baseline_metrics(sources)
-    dsre_row = load_dsre_ceq_metrics(
-        sources=sources,
+    no_retention_params = dict(TUNED_GENERIC_FAMILY_PARAMS)
+    no_retention_params["lam"] = 0.0
+    grp_no_retention_row = compute_grp_metrics(
         cv_seed=args.cv_seed,
+        model_name="GRP w/o retention",
+        family_totals=GENERIC_FAMILY_NAMES,
+        params=no_retention_params,
+        active_shape_parameters=SHAPE_PARAMETER_COUNT - 1,
+        notes=(
+            "Computed from the same fixed tuned GRP nonlinear parameters, "
+            "but with retention disabled by fixing lambda = 0."
+        ),
     )
+    grp_no_retention_no_groups_row = compute_grp_metrics(
+        cv_seed=args.cv_seed,
+        model_name="GRP w/o retention or family signals",
+        family_totals=(),
+        params=no_retention_params,
+        active_shape_parameters=SHAPE_PARAMETER_COUNT - 1,
+        notes=(
+            "Computed from the same fixed tuned GRP nonlinear parameters, "
+            "but with both retention disabled by fixing lambda = 0 and the "
+            "three family features removed."
+        ),
+    )
+    grp_no_quality_splits_row = compute_grp_metrics(
+        cv_seed=args.cv_seed,
+        model_name="GRP w/o quality splits",
+        family_totals=GENERIC_FAMILY_NAMES,
+        pair_cc_domains=False,
+        active_shape_parameters=SHAPE_PARAMETER_COUNT - 1,
+        notes=(
+            "Computed from the same fixed tuned GRP nonlinear parameters, "
+            "but with CC high/low buckets treated as separate domains rather "
+            "than paired signals."
+        ),
+    )
+    grp_no_quality_splits_no_groups_row = compute_grp_metrics(
+        cv_seed=args.cv_seed,
+        model_name="GRP w/o quality splits or family signals",
+        family_totals=(),
+        pair_cc_domains=False,
+        active_shape_parameters=SHAPE_PARAMETER_COUNT - 1,
+        notes=(
+            "Computed from the same fixed tuned GRP nonlinear parameters, "
+            "but with CC high/low buckets treated as separate domains and the "
+            "three family features removed."
+        ),
+    )
+    if sources.packet_train_csv.exists():
+        cached_rows = load_cached_baseline_metrics(sources)
+        dsre_row = load_dsre_ceq_metrics(
+            sources=sources,
+            cv_seed=args.cv_seed,
+        )
+    else:
+        cached_rows = [
+            _existing_row(EXISTING_FULL_OUTPUT_CSV, "Olmix loglinear"),
+            _existing_row(EXISTING_FULL_OUTPUT_CSV, "CES"),
+        ]
+        dsre_row = _existing_row(EXISTING_FULL_OUTPUT_CSV, "DS-RE-CEQ")
 
-    full = pd.DataFrame([grp_row, grp_ablation_row, *cached_rows, dsre_row])
+    full = pd.DataFrame(
+        [
+            grp_row,
+            grp_ablation_row,
+            grp_no_retention_row,
+            grp_no_retention_no_groups_row,
+            grp_no_quality_splits_row,
+            grp_no_quality_splits_no_groups_row,
+            *cached_rows,
+            dsre_row,
+        ]
+    )
     full["model"] = pd.Categorical(full["model"], categories=MODEL_ORDER, ordered=True)
     full = full.sort_values("model").reset_index(drop=True)
     slide = _slide_frame(full)

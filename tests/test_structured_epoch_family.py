@@ -23,6 +23,11 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.ge
     GenericFamilyRetainedTotalSurrogate,
     load_generic_family_packet,
 )
+from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.phase_composition_sparse_pls import (
+    load_phase_composition_packet,
+    optimize_phase_composition_sparse_pls_model,
+    reproduction_cv_summary,
+)
 
 
 def test_ccglobalpremium_retainedtotal_feature_counts_match_expected_topology():
@@ -155,3 +160,27 @@ def test_generic_family_packet_and_surrogate_fit_expected_structure():
     assert packet.family_map["tech_code"]
     assert packet.family_map["reasoning"]
     assert pred.shape == (4,)
+
+
+def test_phase_composition_sparse_pls_reproduces_downloaded_cv_summary():
+    data = load_phase_composition_packet()
+    summary, model = reproduction_cv_summary(data)
+    pred = model.predict(data.w[:4])
+
+    assert summary["rows"] == 241
+    assert abs(summary["cv_r2_mean"] - 0.6906) < 5e-4
+    assert abs(summary["cv_spearman_mean"] - 0.8186) < 5e-4
+    assert pred.shape == (4,)
+
+
+def test_phase_composition_sparse_pls_optimizer_returns_normalized_schedule():
+    data = load_phase_composition_packet()
+    _, model = reproduction_cv_summary(data)
+    _, phase0, phase1 = optimize_phase_composition_sparse_pls_model(data, model, n_random=0, seed=0)
+
+    assert phase0.shape == (data.m,)
+    assert phase1.shape == (data.m,)
+    assert phase0.min() >= 0.0
+    assert phase1.min() >= 0.0
+    assert abs(float(phase0.sum()) - 1.0) < 1e-8
+    assert abs(float(phase1.sum()) - 1.0) < 1e-8
