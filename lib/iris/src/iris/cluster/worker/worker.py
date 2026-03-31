@@ -172,10 +172,20 @@ class Worker:
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
         # Push logs to the central LogService co-hosted on the controller.
+        # Attach a handler immediately with a placeholder key so that logs
+        # emitted during registration (before worker_id is known) are captured.
+        # _attach_log_handler() replaces this with the real key after registration.
         self._log_pusher: LogPusher | None = None
         self._log_handler: RemoteLogHandler | None = None
         if config.controller_address:
             self._log_pusher = LogPusher(config.controller_address)
+            self._log_handler = RemoteLogHandler(
+                self._log_pusher,
+                key=worker_log_key("unregistered"),
+            )
+            self._log_handler.setLevel(logging.INFO)
+            self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+            logging.getLogger().addHandler(self._log_handler)
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
@@ -362,6 +372,8 @@ class Worker:
         if self._controller_client:
             self._controller_client.close()
         self._detach_log_handler()
+        if self._log_pusher is not None:
+            self._log_pusher.close()
         self._bundle_store.close()
 
     def _run_lifecycle(self, stop_event: threading.Event) -> None:

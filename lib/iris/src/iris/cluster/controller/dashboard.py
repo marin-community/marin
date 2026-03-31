@@ -458,6 +458,7 @@ class ProxyControllerDashboard:
             Route("/blobs/{blob_id:str}", self._proxy_blob),
             Route("/health", self._health),
             Route("/iris.cluster.ControllerService/{method}", self._proxy_rpc, methods=["POST"]),
+            Route("/iris.logging.LogService/{method}", self._proxy_log_rpc, methods=["POST"]),
             static_files_mount(),
         ]
 
@@ -491,6 +492,20 @@ class ProxyControllerDashboard:
         body = await request.body()
         upstream_resp = await self._client.post(
             f"/iris.cluster.ControllerService/{method}",
+            content=body,
+            headers={"content-type": request.headers.get("content-type", "application/json")},
+        )
+        return Response(
+            content=upstream_resp.content,
+            status_code=upstream_resp.status_code,
+            media_type=upstream_resp.headers.get("content-type"),
+        )
+
+    async def _proxy_log_rpc(self, request: Request) -> Response:
+        method = request.path_params["method"]
+        body = await request.body()
+        upstream_resp = await self._client.post(
+            f"/iris.logging.LogService/{method}",
             content=body,
             headers={"content-type": request.headers.get("content-type", "application/json")},
         )

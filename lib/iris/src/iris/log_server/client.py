@@ -29,6 +29,9 @@ class LogPusher:
         if entries:
             self._client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
 
+    def close(self) -> None:
+        self._client.close()
+
 
 class RemoteLogHandler(logging.Handler):
     """Python logging.Handler that batches records and pushes to a LogService.
@@ -54,6 +57,7 @@ class RemoteLogHandler(logging.Handler):
         self._flush_interval = flush_interval
         self._buffer: list[logging_pb2.LogEntry] = []
         self._lock = threading.Lock()
+        self._flushing = False
         self._closed = False
 
         # Periodic flush thread
@@ -73,7 +77,7 @@ class RemoteLogHandler(logging.Handler):
         self._schedule_flush()
 
     def emit(self, record: logging.LogRecord) -> None:
-        if self._closed:
+        if self._closed or self._flushing:
             return
         try:
             entry = logging_pb2.LogEntry(
@@ -95,15 +99,18 @@ class RemoteLogHandler(logging.Handler):
             return
         entries = self._buffer
         self._buffer = []
+        # Guard against re-entrancy: the debug log below propagates through
+        # the root logger, which may route back to this handler's emit().
+        # Without this flag, emit() would block on self._lock -> deadlock.
+        self._flushing = True
         try:
             self._pusher.push(self._key, entries)
         except Exception:
-            # Log locally but don't lose the entries silently.
-            # We could re-buffer, but that risks unbounded growth if the
-            # server is permanently down. Drop and let handleError report.
             logging.getLogger(__name__).debug(
                 "Failed to push %d log entries for key %s", len(entries), self._key, exc_info=True
             )
+        finally:
+            self._flushing = False
 
     def flush(self) -> None:
         with self._lock:

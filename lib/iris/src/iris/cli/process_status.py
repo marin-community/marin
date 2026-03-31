@@ -140,7 +140,7 @@ def profile(
     /system/worker/<id> for a worker, /alice/job/0 for a task container.
     """
     url = require_controller_url(ctx)
-    rpc_target = target or _CONTROLLER_LOG_TARGET
+    rpc_target = target or ""
     label = target or "Controller"
 
     if profiler == "threads":
