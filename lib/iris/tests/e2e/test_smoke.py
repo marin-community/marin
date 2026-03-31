@@ -653,6 +653,72 @@ def test_exec_in_container(smoke_cluster):
     smoke_cluster.kill(job)
 
 
+def test_worker_restart_preserves_task(smoke_cluster):
+    """Restarting a worker preserves its running task via container adoption.
+
+    Submits a task that logs every second, restarts the worker running it,
+    then verifies the task is still RUNNING and eventually succeeds. Fetches
+    logs to confirm continuity across the restart.
+    """
+    # Submit a task that logs periodically for 90 seconds
+    job = smoke_cluster.submit(TestJobs.log_periodic, "smoke-restart", 90, 1.0)
+    smoke_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
+
+    # Wait for task itself to be RUNNING (not just BUILDING)
+    deadline = time.monotonic() + smoke_cluster.job_timeout
+    while time.monotonic() < deadline:
+        task = smoke_cluster.task_status(job, task_index=0)
+        if task.state == cluster_pb2.TASK_STATE_RUNNING:
+            break
+        time.sleep(0.5)
+    assert task.state == cluster_pb2.TASK_STATE_RUNNING, f"Task stuck in {cluster_pb2.TaskState.Name(task.state)}"
+
+    # Let a few ticks log before we restart
+    time.sleep(5)
+
+    # Find the worker running this task
+    worker_id = task.worker_id
+    assert worker_id, "Task has no worker_id"
+
+    # Restart the worker via the controller RPC
+    restart_resp = smoke_cluster.controller_client.restart_worker(
+        cluster_pb2.Controller.RestartWorkerRequest(worker_id=worker_id),
+        timeout_ms=60_000,
+    )
+    assert restart_resp.accepted, f"Restart rejected: {restart_resp.error}"
+
+    # Wait for the worker to come back as healthy
+    worker_back = False
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        time.sleep(5)
+        workers_resp = smoke_cluster.controller_client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+        for w in workers_resp.workers:
+            if w.worker_id == worker_id and w.healthy:
+                worker_back = True
+                break
+        if worker_back:
+            break
+    assert worker_back, f"Worker {worker_id} did not re-register within 120s"
+
+    # Verify the task is still running (not retried or failed)
+    task_after = smoke_cluster.task_status(job, task_index=0)
+    assert (
+        task_after.state == cluster_pb2.TASK_STATE_RUNNING
+    ), f"Task should still be RUNNING after restart, got {cluster_pb2.TaskState.Name(task_after.state)}"
+
+    # Wait for the job to complete naturally
+    final = smoke_cluster.wait(job, timeout=120)
+    assert (
+        final.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    ), f"Job should succeed after restart, got {cluster_pb2.JobState.Name(final.state)}"
+
+    # Verify logs span the restart — should have ticks from before and after
+    logs = smoke_cluster.get_task_logs(job, task_index=0)
+    tick_lines = [line for line in logs if "tick " in line]
+    assert len(tick_lines) >= 10, f"Expected >=10 tick log lines spanning restart, got {len(tick_lines)}"
+
+
 # ============================================================================
 # Checkpoint / restore
 # ============================================================================
