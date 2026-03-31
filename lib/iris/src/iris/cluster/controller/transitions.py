@@ -34,8 +34,8 @@ from iris.cluster.controller.schema import (
     EndpointRow,
     JobDetailRow,
     WorkerDetailRow,
-    _proto_cache,
-    _proto_decoder,
+    proto_cache,
+    proto_decoder,
 )
 from iris.cluster.log_store import LogStore, task_log_key
 from iris.cluster.types import (
@@ -307,7 +307,7 @@ def _decommit_worker_resources(
     )
 
 
-_LAUNCH_JOB_DECODER = _proto_decoder(cluster_pb2.Controller.LaunchJobRequest)
+_LAUNCH_JOB_DECODER = proto_decoder(cluster_pb2.Controller.LaunchJobRequest)
 
 
 def _kill_non_terminal_tasks(
@@ -345,7 +345,7 @@ def _kill_non_terminal_tasks(
                 (cluster_pb2.TASK_STATE_KILLED, now_ms, reason, task_id, int(row["current_attempt_id"])),
             )
         if worker_id is not None:
-            req = _proto_cache.get_or_decode(row["request_proto"], _LAUNCH_JOB_DECODER)
+            req = proto_cache.get_or_decode(row["request_proto"], _LAUNCH_JOB_DECODER)
             _decommit_worker_resources(cur, str(worker_id), req.resources)
             task_kill_workers[task_name] = WorkerId(str(worker_id))
         tasks_to_kill.add(task_name)
@@ -413,7 +413,7 @@ def _resolve_preemption_policy(cur: Any, job_id: JobName) -> int:
     row = cur.execute("SELECT request_proto FROM jobs WHERE job_id = ?", (job_id.to_wire(),)).fetchone()
     if row is None:
         return cluster_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
-    req = _proto_cache.get_or_decode(row["request_proto"], _LAUNCH_JOB_DECODER)
+    req = proto_cache.get_or_decode(row["request_proto"], _LAUNCH_JOB_DECODER)
     if req.preemption_policy != cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED:
         return req.preemption_policy
     if req.replicas <= 1:
@@ -935,7 +935,7 @@ class ControllerTransitions:
             # Direct-provider tasks have NULL worker_id — skip decommit for them.
             for row in running_rows:
                 if row["worker_id"] is not None and not int(row["is_reservation_holder"]):
-                    job_req = _proto_cache.get_or_decode(row["request_proto"], _LAUNCH_JOB_DECODER)
+                    job_req = proto_cache.get_or_decode(row["request_proto"], _LAUNCH_JOB_DECODER)
                     _decommit_worker_resources(cur, str(row["worker_id"]), job_req.resources)
             now_ms = Timestamp.now().epoch_ms()
             task_terminal_placeholders = ",".join("?" for _ in TERMINAL_TASK_STATES)
@@ -1374,9 +1374,7 @@ class ControllerTransitions:
             if job_id_wire not in job_req_cache:
                 job_row = cur.execute("SELECT request_proto FROM jobs WHERE job_id = ?", (job_id_wire,)).fetchone()
                 if job_row is not None:
-                    job_req_cache[job_id_wire] = _proto_cache.get_or_decode(
-                        job_row["request_proto"], _LAUNCH_JOB_DECODER
-                    )
+                    job_req_cache[job_id_wire] = proto_cache.get_or_decode(job_row["request_proto"], _LAUNCH_JOB_DECODER)
                 else:
                     job_req_cache[job_id_wire] = None
             job_req = job_req_cache[job_id_wire]

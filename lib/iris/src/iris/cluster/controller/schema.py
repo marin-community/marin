@@ -63,7 +63,7 @@ class ProtoCache:
 
 
 # Module-level singleton used by Projection.decode for cached=True columns.
-_proto_cache = ProtoCache()
+proto_cache = ProtoCache()
 
 
 def _identity(value: Any) -> Any:
@@ -79,24 +79,16 @@ def _nullable(decoder: RowDecoder) -> RowDecoder:
     return inner
 
 
-def _decode_worker_id(value: Any) -> WorkerId:
+def decode_worker_id(value: Any) -> WorkerId:
     return WorkerId(str(value))
 
 
-def _decode_timestamp_ms(value: Any) -> Timestamp:
+def decode_timestamp_ms(value: Any) -> Timestamp:
     return Timestamp.from_ms(int(value))
 
 
 def _decode_bool_int(value: Any) -> bool:
     return bool(int(value))
-
-
-def _decode_int(value: Any) -> int:
-    return int(value)
-
-
-def _decode_str(value: Any) -> str:
-    return str(value)
 
 
 def _decode_json_dict(value: Any) -> dict[str, Any]:
@@ -111,7 +103,7 @@ def _decode_json_list(value: Any) -> list[str]:
     return json.loads(str(value))
 
 
-def _proto_decoder(proto_factory: Callable[[], T]) -> Callable[[Any], T]:
+def proto_decoder(proto_factory: Callable[[], T]) -> Callable[[Any], T]:
     def decode(value: Any) -> T:
         proto = proto_factory()
         proto.ParseFromString(value)
@@ -351,6 +343,24 @@ class Projection(Generic[T]):
         self._select_aliased: str = ", ".join(f"{table.alias}.{c.name}" for c in columns)
         self._select_bare: str = ", ".join(c.name for c in columns)
 
+        # Pre-compute effective decoders: wrap cached fields through the global proto cache.
+        if any(c.cached for c in columns):
+            self._effective_decoders: tuple[Callable, ...] = tuple(
+                (
+                    (lambda d: lambda v: proto_cache.get_or_decode(v, d) if v is not None else d(v))(dec)
+                    if is_cached
+                    else dec
+                )
+                for dec, is_cached in zip(self._decoders, self._cached_flags, strict=True)
+            )
+        else:
+            self._effective_decoders = self._decoders
+
+        # Pre-compute zipped decode tuples for the fast path.
+        self._decode_zipped: tuple[tuple[str, str, Callable], ...] = tuple(
+            zip(self._names, self._db_columns, self._effective_decoders, strict=True)
+        )
+
     def select_clause(self, *, prefix: bool = True) -> str:
         """Column list for a SELECT statement.
 
@@ -371,27 +381,9 @@ class Projection(Generic[T]):
         check if first row has all columns, then use tight comprehension loop.
         For columns with ``cached=True``, wraps the decoder through ProtoCache.
         """
-        names = self._names
         columns = self._db_columns
-        decoders = self._decoders
-        cached_flags = self._cached_flags
         cls = self._row_cls
-
-        # Build effective decoders: wrap cached fields through the global proto cache.
-        has_cached = any(cached_flags)
-        if has_cached:
-            effective_decoders = tuple(
-                (
-                    (lambda d: lambda v: _proto_cache.get_or_decode(v, d) if v is not None else d(v))(dec)
-                    if is_cached
-                    else dec
-                )
-                for dec, is_cached in zip(decoders, cached_flags, strict=True)
-            )
-        else:
-            effective_decoders = decoders
-
-        zipped = tuple(zip(names, columns, effective_decoders, strict=True))
+        zipped = self._decode_zipped
 
         result: list = []
         it = iter(rows)
@@ -429,15 +421,9 @@ class Projection(Generic[T]):
                 raise KeyError(f"Missing required column {col!r} for {self._row_cls.__name__}")
 
         values: dict[str, Any] = {}
-        for name, col, decoder, is_cached in zip(
-            self._names, self._db_columns, self._decoders, self._cached_flags, strict=True
-        ):
+        for name, col, decoder in zip(self._names, self._db_columns, self._effective_decoders, strict=True):
             if col in row_keys:
-                raw = row[col]
-                if is_cached and raw is not None:
-                    values[name] = _proto_cache.get_or_decode(raw, decoder)
-                else:
-                    values[name] = decoder(raw)
+                values[name] = decoder(row[col])
             else:
                 field_name, default_val, is_factory = self._defaults[col]
                 values[field_name] = default_val() if is_factory else default_val
@@ -490,22 +476,22 @@ USERS = Table(
     "users",
     "u",
     columns=(
-        Column("user_id", "TEXT", "PRIMARY KEY", python_type=str, decoder=_decode_str),
+        Column("user_id", "TEXT", "PRIMARY KEY", python_type=str, decoder=str),
         Column(
             "created_at_ms",
             "INTEGER",
             "NOT NULL",
             python_name="created_at",
             python_type=Timestamp,
-            decoder=_decode_timestamp_ms,
+            decoder=decode_timestamp_ms,
         ),
-        Column("display_name", "TEXT", "", python_type=str | None, decoder=_nullable(_decode_str), default=None),
+        Column("display_name", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
         Column(
             "role",
             "TEXT",
             "NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user', 'worker'))",
             python_type=str,
-            decoder=_decode_str,
+            decoder=str,
             default="user",
         ),
     ),
@@ -516,7 +502,7 @@ JOBS = Table(
     "j",
     columns=(
         Column("job_id", "TEXT", "PRIMARY KEY", python_type=JobName, decoder=JobName.from_wire),
-        Column("user_id", "TEXT", "NOT NULL REFERENCES users(user_id)", python_type=str, decoder=_decode_str),
+        Column("user_id", "TEXT", "NOT NULL REFERENCES users(user_id)", python_type=str, decoder=str),
         Column(
             "parent_job_id",
             "TEXT",
@@ -524,26 +510,26 @@ JOBS = Table(
             python_type=JobName | None,
             decoder=_nullable(JobName.from_wire),
         ),
-        Column("root_job_id", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
-        Column("depth", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int, default=0),
+        Column("root_job_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column("depth", "INTEGER", "NOT NULL", python_type=int, decoder=int, default=0),
         Column(
             "request_proto",
             "BLOB",
             "NOT NULL",
             python_name="request",
             python_type=cluster_pb2.Controller.LaunchJobRequest,
-            decoder=_proto_decoder(cluster_pb2.Controller.LaunchJobRequest),
+            decoder=proto_decoder(cluster_pb2.Controller.LaunchJobRequest),
             expensive=True,
             cached=True,
         ),
-        Column("state", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
+        Column("state", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column(
             "submitted_at_ms",
             "INTEGER",
             "NOT NULL",
             python_name="submitted_at",
             python_type=Timestamp,
-            decoder=_decode_timestamp_ms,
+            decoder=decode_timestamp_ms,
         ),
         Column(
             "root_submitted_at_ms",
@@ -551,7 +537,7 @@ JOBS = Table(
             "NOT NULL",
             python_name="root_submitted_at",
             python_type=Timestamp,
-            decoder=_decode_timestamp_ms,
+            decoder=decode_timestamp_ms,
         ),
         Column(
             "started_at_ms",
@@ -559,7 +545,7 @@ JOBS = Table(
             "",
             python_name="started_at",
             python_type=Timestamp | None,
-            decoder=_nullable(_decode_timestamp_ms),
+            decoder=_nullable(decode_timestamp_ms),
         ),
         Column(
             "finished_at_ms",
@@ -567,12 +553,12 @@ JOBS = Table(
             "",
             python_name="finished_at",
             python_type=Timestamp | None,
-            decoder=_nullable(_decode_timestamp_ms),
+            decoder=_nullable(decode_timestamp_ms),
         ),
-        Column("scheduling_deadline_epoch_ms", "INTEGER", "", python_type=int | None, decoder=_nullable(_decode_int)),
-        Column("error", "TEXT", "", python_type=str | None, decoder=_nullable(_decode_str)),
-        Column("exit_code", "INTEGER", "", python_type=int | None, decoder=_nullable(_decode_int)),
-        Column("num_tasks", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
+        Column("scheduling_deadline_epoch_ms", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("error", "TEXT", "", python_type=str | None, decoder=_nullable(str)),
+        Column("exit_code", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("num_tasks", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column(
             "is_reservation_holder",
             "INTEGER",
@@ -581,7 +567,7 @@ JOBS = Table(
             decoder=_decode_bool_int,
         ),
         # Migration 0008
-        Column("name", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=_decode_str, default=""),
+        Column("name", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
         # Migration 0013
         Column(
             "has_reservation", "INTEGER", "NOT NULL DEFAULT 0", python_type=bool, decoder=_decode_bool_int, default=False
@@ -593,7 +579,7 @@ JOBS = Table(
             "",
             python_name="resources",
             python_type=cluster_pb2.ResourceSpecProto | None,
-            decoder=_nullable(_proto_decoder(cluster_pb2.ResourceSpecProto)),
+            decoder=_nullable(proto_decoder(cluster_pb2.ResourceSpecProto)),
             default=None,
             expensive=True,
             cached=True,
@@ -617,11 +603,9 @@ JOBS = Table(
             decoder=_decode_bool_int,
             default=False,
         ),
-        Column("coscheduling_group_by", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=_decode_str, default=""),
-        Column(
-            "scheduling_timeout_ms", "INTEGER", "", python_type=int | None, decoder=_nullable(_decode_int), default=None
-        ),
-        Column("max_task_failures", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=_decode_int, default=0),
+        Column("coscheduling_group_by", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("scheduling_timeout_ms", "INTEGER", "", python_type=int | None, decoder=_nullable(int), default=None),
+        Column("max_task_failures", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
     ),
     indexes=(
         "CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_job_id)",
@@ -652,17 +636,17 @@ TASKS = Table(
             python_type=JobName,
             decoder=JobName.from_wire,
         ),
-        Column("task_index", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
-        Column("state", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
-        Column("error", "TEXT", "", python_type=str | None, decoder=_nullable(_decode_str)),
-        Column("exit_code", "INTEGER", "", python_type=int | None, decoder=_nullable(_decode_int)),
+        Column("task_index", "INTEGER", "NOT NULL", python_type=int, decoder=int),
+        Column("state", "INTEGER", "NOT NULL", python_type=int, decoder=int),
+        Column("error", "TEXT", "", python_type=str | None, decoder=_nullable(str)),
+        Column("exit_code", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
         Column(
             "submitted_at_ms",
             "INTEGER",
             "NOT NULL",
             python_name="submitted_at",
             python_type=Timestamp,
-            decoder=_decode_timestamp_ms,
+            decoder=decode_timestamp_ms,
         ),
         Column(
             "started_at_ms",
@@ -670,7 +654,7 @@ TASKS = Table(
             "",
             python_name="started_at",
             python_type=Timestamp | None,
-            decoder=_nullable(_decode_timestamp_ms),
+            decoder=_nullable(decode_timestamp_ms),
         ),
         Column(
             "finished_at_ms",
@@ -678,39 +662,37 @@ TASKS = Table(
             "",
             python_name="finished_at",
             python_type=Timestamp | None,
-            decoder=_nullable(_decode_timestamp_ms),
+            decoder=_nullable(decode_timestamp_ms),
         ),
-        Column("max_retries_failure", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
-        Column("max_retries_preemption", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
-        Column("failure_count", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
-        Column("preemption_count", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
+        Column("max_retries_failure", "INTEGER", "NOT NULL", python_type=int, decoder=int),
+        Column("max_retries_preemption", "INTEGER", "NOT NULL", python_type=int, decoder=int),
+        Column("failure_count", "INTEGER", "NOT NULL", python_type=int, decoder=int),
+        Column("preemption_count", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column(
             "resource_usage_proto",
             "BLOB",
             "",
             python_name="resource_usage",
             python_type=cluster_pb2.ResourceUsage | None,
-            decoder=_nullable(_proto_decoder(cluster_pb2.ResourceUsage)),
+            decoder=_nullable(proto_decoder(cluster_pb2.ResourceUsage)),
             expensive=True,
         ),
-        Column("current_attempt_id", "INTEGER", "NOT NULL DEFAULT -1", python_type=int, decoder=_decode_int),
-        Column("priority_neg_depth", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
-        Column("priority_root_submitted_ms", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
-        Column("priority_insertion", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
+        Column("current_attempt_id", "INTEGER", "NOT NULL DEFAULT -1", python_type=int, decoder=int),
+        Column("priority_neg_depth", "INTEGER", "NOT NULL", python_type=int, decoder=int),
+        Column("priority_root_submitted_ms", "INTEGER", "NOT NULL", python_type=int, decoder=int),
+        Column("priority_insertion", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         # Migration 0012_container_name
-        Column("container_id", "TEXT", "", python_type=str | None, decoder=_nullable(_decode_str), default=None),
+        Column("container_id", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
         # Migration 0018
         Column(
             "current_worker_id",
             "TEXT",
             "REFERENCES workers(worker_id) ON DELETE SET NULL",
             python_type=WorkerId | None,
-            decoder=_nullable(_decode_worker_id),
+            decoder=_nullable(decode_worker_id),
             default=None,
         ),
-        Column(
-            "current_worker_address", "TEXT", "", python_type=str | None, decoder=_nullable(_decode_str), default=None
-        ),
+        Column("current_worker_address", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
     ),
     table_constraints=("UNIQUE(job_id, task_index)",),
     indexes=(
@@ -737,23 +719,23 @@ TASK_ATTEMPTS = Table(
             python_type=JobName,
             decoder=JobName.from_wire,
         ),
-        Column("attempt_id", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
+        Column("attempt_id", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         # Migration 0019: ON DELETE SET NULL (was plain FK)
         Column(
             "worker_id",
             "TEXT",
             "REFERENCES workers(worker_id) ON DELETE SET NULL",
             python_type=WorkerId | None,
-            decoder=_nullable(_decode_worker_id),
+            decoder=_nullable(decode_worker_id),
         ),
-        Column("state", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
+        Column("state", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column(
             "created_at_ms",
             "INTEGER",
             "NOT NULL",
             python_name="created_at",
             python_type=Timestamp,
-            decoder=_decode_timestamp_ms,
+            decoder=decode_timestamp_ms,
         ),
         Column(
             "started_at_ms",
@@ -761,7 +743,7 @@ TASK_ATTEMPTS = Table(
             "",
             python_name="started_at",
             python_type=Timestamp | None,
-            decoder=_nullable(_decode_timestamp_ms),
+            decoder=_nullable(decode_timestamp_ms),
         ),
         Column(
             "finished_at_ms",
@@ -769,10 +751,10 @@ TASK_ATTEMPTS = Table(
             "",
             python_name="finished_at",
             python_type=Timestamp | None,
-            decoder=_nullable(_decode_timestamp_ms),
+            decoder=_nullable(decode_timestamp_ms),
         ),
-        Column("exit_code", "INTEGER", "", python_type=int | None, decoder=_nullable(_decode_int)),
-        Column("error", "TEXT", "", python_type=str | None, decoder=_nullable(_decode_str)),
+        Column("exit_code", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("error", "TEXT", "", python_type=str | None, decoder=_nullable(str)),
     ),
     table_constraints=("PRIMARY KEY (task_id, attempt_id)",),
     indexes=(
@@ -805,15 +787,15 @@ WORKERS = Table(
     "workers",
     "w",
     columns=(
-        Column("worker_id", "TEXT", "PRIMARY KEY", python_type=WorkerId, decoder=_decode_worker_id),
-        Column("address", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
+        Column("worker_id", "TEXT", "PRIMARY KEY", python_type=WorkerId, decoder=decode_worker_id),
+        Column("address", "TEXT", "NOT NULL", python_type=str, decoder=str),
         Column(
             "metadata_proto",
             "BLOB",
             "NOT NULL",
             python_name="metadata",
             python_type=cluster_pb2.WorkerMetadata,
-            decoder=_proto_decoder(cluster_pb2.WorkerMetadata),
+            decoder=proto_decoder(cluster_pb2.WorkerMetadata),
             expensive=True,
         ),
         Column("healthy", "INTEGER", "NOT NULL CHECK (healthy IN (0, 1))", python_type=bool, decoder=_decode_bool_int),
@@ -825,26 +807,26 @@ WORKERS = Table(
             decoder=_decode_bool_int,
             default=True,
         ),
-        Column("consecutive_failures", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
+        Column("consecutive_failures", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column(
             "last_heartbeat_ms",
             "INTEGER",
             "NOT NULL",
             python_name="last_heartbeat",
             python_type=Timestamp,
-            decoder=_decode_timestamp_ms,
+            decoder=decode_timestamp_ms,
         ),
-        Column("committed_cpu_millicores", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
+        Column("committed_cpu_millicores", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column(
             "committed_mem_bytes",
             "INTEGER",
             "NOT NULL",
             python_name="committed_mem",
             python_type=int,
-            decoder=_decode_int,
+            decoder=int,
         ),
-        Column("committed_gpu", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
-        Column("committed_tpu", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
+        Column("committed_gpu", "INTEGER", "NOT NULL", python_type=int, decoder=int),
+        Column("committed_tpu", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column(
             "resource_snapshot_proto",
             "BLOB",
@@ -855,12 +837,12 @@ WORKERS = Table(
             expensive=True,
         ),
         # Migration 0016
-        Column("total_cpu_millicores", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=_decode_int, default=0),
-        Column("total_memory_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=_decode_int, default=0),
-        Column("total_gpu_count", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=_decode_int, default=0),
-        Column("total_tpu_count", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=_decode_int, default=0),
-        Column("device_type", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=_decode_str, default=""),
-        Column("device_variant", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=_decode_str, default=""),
+        Column("total_cpu_millicores", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("total_memory_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("total_gpu_count", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("total_tpu_count", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("device_type", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("device_variant", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
     ),
     indexes=(
         # Migration 0004_worker_indexes
@@ -877,18 +859,18 @@ WORKER_ATTRIBUTES = Table(
             "TEXT",
             "NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE",
             python_type=WorkerId,
-            decoder=_decode_worker_id,
+            decoder=decode_worker_id,
         ),
-        Column("key", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
+        Column("key", "TEXT", "NOT NULL", python_type=str, decoder=str),
         Column(
             "value_type",
             "TEXT",
             "NOT NULL CHECK (value_type IN ('str', 'int', 'float'))",
             python_type=str,
-            decoder=_decode_str,
+            decoder=str,
         ),
-        Column("str_value", "TEXT", "", python_type=str | None, decoder=_nullable(_decode_str)),
-        Column("int_value", "INTEGER", "", python_type=int | None, decoder=_nullable(_decode_int)),
+        Column("str_value", "TEXT", "", python_type=str | None, decoder=_nullable(str)),
+        Column("int_value", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
         Column("float_value", "REAL", "", python_type=float | None, decoder=_identity),
     ),
     table_constraints=("PRIMARY KEY (worker_id, key)",),
@@ -904,16 +886,16 @@ WORKER_TASK_HISTORY = Table(
             "TEXT",
             "NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE",
             python_type=WorkerId,
-            decoder=_decode_worker_id,
+            decoder=decode_worker_id,
         ),
-        Column("task_id", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
+        Column("task_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
         Column(
             "assigned_at_ms",
             "INTEGER",
             "NOT NULL",
             python_name="assigned_at",
             python_type=Timestamp,
-            decoder=_decode_timestamp_ms,
+            decoder=decode_timestamp_ms,
         ),
     ),
     indexes=(
@@ -932,10 +914,10 @@ WORKER_RESOURCE_HISTORY = Table(
             "TEXT",
             "NOT NULL REFERENCES workers(worker_id) ON DELETE CASCADE",
             python_type=WorkerId,
-            decoder=_decode_worker_id,
+            decoder=decode_worker_id,
         ),
         Column("snapshot_proto", "BLOB", "NOT NULL", expensive=True),
-        Column("timestamp_ms", "INTEGER", "NOT NULL", python_type=Timestamp, decoder=_decode_timestamp_ms),
+        Column("timestamp_ms", "INTEGER", "NOT NULL", python_type=Timestamp, decoder=decode_timestamp_ms),
     ),
     indexes=(
         "CREATE INDEX IF NOT EXISTS idx_worker_resource_history_worker"
@@ -950,9 +932,9 @@ ENDPOINTS = Table(
     "endpoints",
     "e",
     columns=(
-        Column("endpoint_id", "TEXT", "PRIMARY KEY", python_type=str, decoder=_decode_str),
-        Column("name", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
-        Column("address", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
+        Column("endpoint_id", "TEXT", "PRIMARY KEY", python_type=str, decoder=str),
+        Column("name", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column("address", "TEXT", "NOT NULL", python_type=str, decoder=str),
         Column(
             "job_id",
             "TEXT",
@@ -974,7 +956,7 @@ ENDPOINTS = Table(
             "NOT NULL",
             python_name="registered_at",
             python_type=Timestamp,
-            decoder=_decode_timestamp_ms,
+            decoder=decode_timestamp_ms,
         ),
     ),
     indexes=(
@@ -996,18 +978,18 @@ DISPATCH_QUEUE = Table(
             "TEXT",
             "REFERENCES workers(worker_id) ON DELETE CASCADE",
             python_type=WorkerId | None,
-            decoder=_nullable(_decode_worker_id),
+            decoder=_nullable(decode_worker_id),
         ),
-        Column("kind", "TEXT", "NOT NULL CHECK (kind IN ('run', 'kill'))", python_type=str, decoder=_decode_str),
+        Column("kind", "TEXT", "NOT NULL CHECK (kind IN ('run', 'kill'))", python_type=str, decoder=str),
         Column("payload_proto", "BLOB", "", expensive=True),
-        Column("task_id", "TEXT", "", python_type=str | None, decoder=_nullable(_decode_str)),
+        Column("task_id", "TEXT", "", python_type=str | None, decoder=_nullable(str)),
         Column(
             "created_at_ms",
             "INTEGER",
             "NOT NULL",
             python_name="created_at",
             python_type=Timestamp,
-            decoder=_decode_timestamp_ms,
+            decoder=decode_timestamp_ms,
         ),
     ),
     indexes=("CREATE INDEX IF NOT EXISTS idx_dispatch_worker ON dispatch_queue(worker_id, id)",),
@@ -1018,7 +1000,7 @@ TXN_LOG = Table(
     "tl",
     columns=(
         Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column("kind", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
+        Column("kind", "TEXT", "NOT NULL", python_type=str, decoder=str),
         Column("payload_json", "TEXT", "NOT NULL", python_name="payload", python_type=dict, decoder=_decode_json_dict),
         Column(
             "created_at_ms",
@@ -1026,7 +1008,7 @@ TXN_LOG = Table(
             "NOT NULL",
             python_name="created_at",
             python_type=Timestamp,
-            decoder=_decode_timestamp_ms,
+            decoder=decode_timestamp_ms,
         ),
     ),
     triggers=(
@@ -1052,10 +1034,10 @@ TXN_ACTIONS = Table(
             "INTEGER",
             "NOT NULL REFERENCES txn_log(id) ON DELETE CASCADE",
             python_type=int,
-            decoder=_decode_int,
+            decoder=int,
         ),
-        Column("action", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
-        Column("entity_id", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
+        Column("action", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column("entity_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
         Column("details_json", "TEXT", "NOT NULL", python_name="details", python_type=dict, decoder=_decode_json_dict),
         Column(
             "created_at_ms",
@@ -1063,7 +1045,7 @@ TXN_ACTIONS = Table(
             "NOT NULL",
             python_name="timestamp",
             python_type=Timestamp,
-            decoder=_decode_timestamp_ms,
+            decoder=decode_timestamp_ms,
         ),
     ),
     indexes=("CREATE INDEX IF NOT EXISTS idx_txn_actions_txn ON txn_actions(txn_id, id)",),
@@ -1074,16 +1056,14 @@ SCALING_GROUPS = Table(
     "scaling_groups",
     "sg",
     columns=(
-        Column("name", "TEXT", "PRIMARY KEY", python_type=str, decoder=_decode_str),
-        Column("consecutive_failures", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=_decode_int, default=0),
-        Column("backoff_until_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=_decode_int, default=0),
-        Column("last_scale_up_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=_decode_int, default=0),
-        Column("last_scale_down_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=_decode_int, default=0),
-        Column(
-            "quota_exceeded_until_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=_decode_int, default=0
-        ),
-        Column("quota_reason", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=_decode_str, default=""),
-        Column("updated_at_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=_decode_int, default=0),
+        Column("name", "TEXT", "PRIMARY KEY", python_type=str, decoder=str),
+        Column("consecutive_failures", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("backoff_until_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("last_scale_up_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("last_scale_down_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("quota_exceeded_until_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("quota_reason", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("updated_at_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
     ),
 )
 
@@ -1092,9 +1072,9 @@ SLICES = Table(
     "slices",
     "sl",
     columns=(
-        Column("slice_id", "TEXT", "PRIMARY KEY", python_type=str, decoder=_decode_str),
-        Column("scale_group", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
-        Column("lifecycle", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
+        Column("slice_id", "TEXT", "PRIMARY KEY", python_type=str, decoder=str),
+        Column("scale_group", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column("lifecycle", "TEXT", "NOT NULL", python_type=str, decoder=str),
         Column(
             "worker_ids",
             "TEXT",
@@ -1103,9 +1083,9 @@ SLICES = Table(
             decoder=_decode_json_list,
             default_factory=list,
         ),
-        Column("created_at_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=_decode_int, default=0),
-        Column("last_active_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=_decode_int, default=0),
-        Column("error_message", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=_decode_str, default=""),
+        Column("created_at_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("last_active_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("error_message", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
     ),
     indexes=("CREATE INDEX IF NOT EXISTS idx_slices_scale_group ON slices(scale_group)",),
 )
@@ -1114,10 +1094,10 @@ TRACKED_WORKERS = Table(
     "tracked_workers",
     "tw",
     columns=(
-        Column("worker_id", "TEXT", "PRIMARY KEY", python_type=WorkerId, decoder=_decode_worker_id),
-        Column("slice_id", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
-        Column("scale_group", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
-        Column("internal_address", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
+        Column("worker_id", "TEXT", "PRIMARY KEY", python_type=WorkerId, decoder=decode_worker_id),
+        Column("slice_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column("scale_group", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column("internal_address", "TEXT", "NOT NULL", python_type=str, decoder=str),
     ),
 )
 
@@ -1125,9 +1105,9 @@ RESERVATION_CLAIMS = Table(
     "reservation_claims",
     "rc",
     columns=(
-        Column("worker_id", "TEXT", "PRIMARY KEY", python_type=WorkerId, decoder=_decode_worker_id),
-        Column("job_id", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
-        Column("entry_idx", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
+        Column("worker_id", "TEXT", "PRIMARY KEY", python_type=WorkerId, decoder=decode_worker_id),
+        Column("job_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column("entry_idx", "INTEGER", "NOT NULL", python_type=int, decoder=int),
     ),
 )
 
@@ -1136,11 +1116,11 @@ LOGS = Table(
     "l",
     columns=(
         Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column("key", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
-        Column("source", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
-        Column("data", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
-        Column("epoch_ms", "INTEGER", "NOT NULL", python_type=int, decoder=_decode_int),
-        Column("level", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=_decode_int, default=0),
+        Column("key", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column("source", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column("data", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column("epoch_ms", "INTEGER", "NOT NULL", python_type=int, decoder=int),
+        Column("level", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
     ),
     indexes=("CREATE INDEX IF NOT EXISTS idx_logs_key ON logs(key, id)",),
 )
@@ -1151,7 +1131,7 @@ TASK_PROFILES = Table(
     "tp",
     columns=(
         Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column("task_id", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
+        Column("task_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
         Column("profile_data", "BLOB", "NOT NULL", expensive=True),
         Column(
             "captured_at_ms",
@@ -1159,10 +1139,10 @@ TASK_PROFILES = Table(
             "NOT NULL",
             python_name="captured_at",
             python_type=Timestamp,
-            decoder=_decode_timestamp_ms,
+            decoder=decode_timestamp_ms,
         ),
         # Migration 0014
-        Column("profile_kind", "TEXT", "NOT NULL DEFAULT 'cpu'", python_type=str, decoder=_decode_str, default="cpu"),
+        Column("profile_kind", "TEXT", "NOT NULL DEFAULT 'cpu'", python_type=str, decoder=str, default="cpu"),
     ),
     indexes=(
         # Migration 0014 replaced idx_task_profiles_task with this
@@ -1196,18 +1176,18 @@ AUTH_API_KEYS = Table(
     "auth.api_keys",
     "ak",
     columns=(
-        Column("key_id", "TEXT", "PRIMARY KEY", python_type=str, decoder=_decode_str),
-        Column("key_hash", "TEXT", "NOT NULL UNIQUE", python_type=str, decoder=_decode_str),
-        Column("key_prefix", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
-        Column("user_id", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
-        Column("name", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
+        Column("key_id", "TEXT", "PRIMARY KEY", python_type=str, decoder=str),
+        Column("key_hash", "TEXT", "NOT NULL UNIQUE", python_type=str, decoder=str),
+        Column("key_prefix", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column("user_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column("name", "TEXT", "NOT NULL", python_type=str, decoder=str),
         Column(
             "created_at_ms",
             "INTEGER",
             "NOT NULL",
             python_name="created_at",
             python_type=Timestamp,
-            decoder=_decode_timestamp_ms,
+            decoder=decode_timestamp_ms,
         ),
         Column(
             "last_used_at_ms",
@@ -1215,7 +1195,7 @@ AUTH_API_KEYS = Table(
             "",
             python_name="last_used_at",
             python_type=Timestamp | None,
-            decoder=_nullable(_decode_timestamp_ms),
+            decoder=_nullable(decode_timestamp_ms),
             default=None,
         ),
         Column(
@@ -1224,7 +1204,7 @@ AUTH_API_KEYS = Table(
             "",
             python_name="expires_at",
             python_type=Timestamp | None,
-            decoder=_nullable(_decode_timestamp_ms),
+            decoder=_nullable(decode_timestamp_ms),
             default=None,
         ),
         Column(
@@ -1233,7 +1213,7 @@ AUTH_API_KEYS = Table(
             "",
             python_name="revoked_at",
             python_type=Timestamp | None,
-            decoder=_nullable(_decode_timestamp_ms),
+            decoder=_nullable(decode_timestamp_ms),
             default=None,
         ),
     ),
@@ -1247,15 +1227,15 @@ AUTH_CONTROLLER_SECRETS = Table(
     "auth.controller_secrets",
     "cs",
     columns=(
-        Column("key", "TEXT", "PRIMARY KEY", python_type=str, decoder=_decode_str),
-        Column("value", "TEXT", "NOT NULL", python_type=str, decoder=_decode_str),
+        Column("key", "TEXT", "PRIMARY KEY", python_type=str, decoder=str),
+        Column("value", "TEXT", "NOT NULL", python_type=str, decoder=str),
         Column(
             "created_at_ms",
             "INTEGER",
             "NOT NULL",
             python_name="created_at",
             python_type=Timestamp,
-            decoder=_decode_timestamp_ms,
+            decoder=decode_timestamp_ms,
         ),
     ),
 )

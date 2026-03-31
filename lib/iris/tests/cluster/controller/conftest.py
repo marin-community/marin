@@ -32,7 +32,6 @@ from iris.cluster.controller.db import (
     TERMINAL_TASK_STATES,
     ControllerDB,
     _decode_attribute_rows,
-    _tasks_with_attempts,
     job_is_finished,
     task_can_be_scheduled,
     task_is_finished,
@@ -45,6 +44,7 @@ from iris.cluster.controller.schema import (
     JobDetailRow,
     TaskDetailRow,
     WorkerDetailRow,
+    tasks_with_attempts,
 )
 from iris.cluster.controller.provider import ProviderUnsupportedError
 from iris.cluster.controller.scaling_group import ScalingGroup
@@ -384,7 +384,7 @@ def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> 
                 tuple(task_wires),
             ),
         )
-    return _tasks_with_attempts(tasks, attempts)
+    return tasks_with_attempts(tasks, attempts)
 
 
 def query_task_with_attempts(state: ControllerTransitions, task_id: JobName) -> TaskDetailRow | None:
@@ -394,7 +394,7 @@ def query_task_with_attempts(state: ControllerTransitions, task_id: JobName) -> 
         attempts = ATTEMPT_PROJECTION.decode(
             q.fetchall("SELECT * FROM task_attempts WHERE task_id = ? ORDER BY attempt_id ASC", (wire,)),
         )
-    hydrated = _tasks_with_attempts(tasks, attempts)
+    hydrated = tasks_with_attempts(tasks, attempts)
     return hydrated[0] if hydrated else None
 
 

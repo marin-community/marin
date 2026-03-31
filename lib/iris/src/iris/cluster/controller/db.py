@@ -16,7 +16,7 @@ from threading import Lock, RLock
 from typing import Any
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.schema import _decode_timestamp_ms, _decode_worker_id
+from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from rigging.timing import Deadline, Duration, Timestamp
@@ -279,13 +279,6 @@ def _decode_attribute_rows(rows: Sequence[Any]) -> dict[WorkerId, dict[str, Attr
         else:
             worker_attrs[row.key] = AttributeValue(str(row.str_value or ""))
     return attrs_by_worker
-
-
-def _tasks_with_attempts(tasks: Sequence, attempts: Sequence) -> list:
-    attempts_by_task: dict[JobName, list] = {}
-    for attempt in attempts:
-        attempts_by_task.setdefault(attempt.task_id, []).append(attempt)
-    return [dc_replace(task, attempts=tuple(attempts_by_task.get(task.task_id, ()))) for task in tasks]
 
 
 def endpoint_query_sql(query: EndpointQuery) -> tuple[str, list[object]]:
@@ -766,7 +759,7 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
             f"SELECT t.current_worker_id AS worker_id, t.task_id FROM tasks t "
             f"WHERE t.current_worker_id IN ({placeholders}) AND t.state IN (?, ?, ?)",
             (*[str(wid) for wid in worker_ids], *ACTIVE_TASK_STATES),
-            decoders={"worker_id": _decode_worker_id, "task_id": JobName.from_wire},
+            decoders={"worker_id": decode_worker_id, "task_id": JobName.from_wire},
         )
     running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
     for row in rows:
@@ -857,5 +850,5 @@ def get_task_profiles(
         )
         params = (task_id,)
     with db.snapshot() as q:
-        rows = q.raw(query, params, decoders={"captured_at_ms": _decode_timestamp_ms})
+        rows = q.raw(query, params, decoders={"captured_at_ms": decode_timestamp_ms})
     return [(row.profile_data, row.captured_at_ms, row.profile_kind) for row in rows]
