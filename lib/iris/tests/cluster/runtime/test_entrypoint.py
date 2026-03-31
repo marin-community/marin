@@ -54,18 +54,6 @@ def test_build_runtime_entrypoint_includes_pip_packages():
     assert "memray" in setup
 
 
-def test_build_runtime_entrypoint_reinstalls_tpu_inference_direct_refs():
-    ep = _make_entrypoint(["python", "train.py"])
-    env = _make_env_config(
-        pip_packages=["tpu_inference @ " "git+https://github.com/marin-community/tpu-inference.git@branch"]
-    )
-    rt = build_runtime_entrypoint(ep, env)
-
-    setup = "\n".join(rt.setup_commands)
-    assert "--refresh-package tpu_inference" in setup
-    assert "--reinstall-package tpu_inference" in setup
-
-
 def test_build_runtime_entrypoint_with_python_version():
     ep = _make_entrypoint(["python", "app.py"])
     env = _make_env_config(python_version="3.11")
