@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, cast
 
 import draccus
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -48,6 +49,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
+from levanter.trainer_state import trainables_only
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.tree_utils import inference_mode
 
@@ -57,6 +59,55 @@ logger = logging.getLogger(__name__)
 
 def _policy_model_for_hf_save(model: DpoModel | LmHeadModel) -> LmHeadModel:
     return model.policy if isinstance(model, DpoModel) else model
+
+
+def _restore_policy_model_from_partial_checkpoint(
+    checkpointed_policy_model: LmHeadModel,
+    source_policy_model: LmHeadModel,
+    trainable_filter,
+) -> LmHeadModel:
+    checkpointed_trainables = trainables_only(checkpointed_policy_model, trainable_filter)
+    return eqx.combine(checkpointed_trainables, source_policy_model)
+
+
+def _initialize_policy_model_from_source(
+    *,
+    config: "TrainDpoConfig",
+    model_context,
+    Vocab: Axis,
+    policy_key,
+    adapter_key,
+    parameter_axis_mapping,
+    trainer: Trainer,
+) -> LmHeadModel:
+    if config.initialize_from_hf:
+        policy_model = load_model_from_source(
+            context=model_context,
+            Vocab=Vocab,
+            model_key=policy_key,
+            parameter_axis_mapping=parameter_axis_mapping,
+            compute_dtype=trainer.mp.compute_dtype,
+            cast_to_param=trainer.mp.cast_to_param,
+            hf_ref=config.initialize_from_hf,
+        )
+    elif config.initialize_from_checkpoint_path is not None:
+        policy_model = load_model_from_source(
+            context=model_context,
+            Vocab=Vocab,
+            model_key=policy_key,
+            parameter_axis_mapping=parameter_axis_mapping,
+            compute_dtype=trainer.mp.compute_dtype,
+            cast_to_param=trainer.mp.cast_to_param,
+            checkpoint_path=config.initialize_from_checkpoint_path,
+        )
+    else:
+        policy_model = config.model.build(Vocab, key=policy_key)
+
+    return config.adapter.apply(
+        policy_model,
+        key=adapter_key,
+        axis_mapping=parameter_axis_mapping,
+    )
 
 
 def _num_validation_sequences(total_sequences: int, fraction: float) -> int:
@@ -567,34 +618,24 @@ def main(config: TrainDpoConfig):
                 logger.info(
                     f"No training checkpoint found. Initializing model from HF checkpoint '{config.initialize_from_hf}'"
                 )
-                policy_model = load_model_from_source(
-                    context=model_context,
+                policy_model = _initialize_policy_model_from_source(
+                    config=config,
+                    model_context=model_context,
                     Vocab=Vocab,
-                    model_key=policy_key,
+                    policy_key=policy_key,
+                    adapter_key=adapter_key,
                     parameter_axis_mapping=parameter_axis_mapping,
-                    compute_dtype=trainer.mp.compute_dtype,
-                    cast_to_param=trainer.mp.cast_to_param,
-                    hf_ref=config.initialize_from_hf,
-                )
-                policy_model = config.adapter.apply(
-                    policy_model,
-                    key=adapter_key,
-                    axis_mapping=parameter_axis_mapping,
+                    trainer=trainer,
                 )
             elif config.initialize_from_checkpoint_path is not None:
-                policy_model = load_model_from_source(
-                    context=model_context,
+                policy_model = _initialize_policy_model_from_source(
+                    config=config,
+                    model_context=model_context,
                     Vocab=Vocab,
-                    model_key=policy_key,
+                    policy_key=policy_key,
+                    adapter_key=adapter_key,
                     parameter_axis_mapping=parameter_axis_mapping,
-                    compute_dtype=trainer.mp.compute_dtype,
-                    cast_to_param=trainer.mp.cast_to_param,
-                    checkpoint_path=config.initialize_from_checkpoint_path,
-                )
-                policy_model = config.adapter.apply(
-                    policy_model,
-                    key=adapter_key,
-                    axis_mapping=parameter_axis_mapping,
+                    trainer=trainer,
                 )
             else:
                 logger.info("No checkpoint found. Starting from scratch.")
@@ -602,6 +643,25 @@ def main(config: TrainDpoConfig):
         else:
             logger.info(f"Resuming from step {state.step}, using checkpoint policy weights.")
             policy_model = state.model.policy if isinstance(state.model, DpoModel) else state.model
+            if not isinstance(config.adapter, NoAdaptationConfig):
+                logger.info(
+                    "Adapter checkpoints only store trainable weights. Reconstructing the base policy model from the "
+                    "configured source before overlaying resumed adapter parameters."
+                )
+                source_policy_model = _initialize_policy_model_from_source(
+                    config=config,
+                    model_context=model_context,
+                    Vocab=Vocab,
+                    policy_key=policy_key,
+                    adapter_key=adapter_key,
+                    parameter_axis_mapping=parameter_axis_mapping,
+                    trainer=trainer,
+                )
+                policy_model = _restore_policy_model_from_partial_checkpoint(
+                    policy_model,
+                    source_policy_model,
+                    config.adapter.trainable_filter(source_policy_model),
+                )
 
         if isinstance(config.reference, SeparateReferenceConfig):
             reference_model = _load_separate_reference_model(

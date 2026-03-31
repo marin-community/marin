@@ -55,6 +55,7 @@ from levanter.main.train_dpo import (
     TrainDpoConfig,
     _build_dpo_dataset,
     _derive_training_keys,
+    _restore_policy_model_from_partial_checkpoint,
     _validate_dpo_config,
 )
 from levanter.metrics import Metric
@@ -63,7 +64,7 @@ from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig
 from levanter.optim.model_averaging import ModelAveraging
 from levanter.store.cache import SerialCacheWriter
-from levanter.trainer_state import TrainerState, saveable_training_mask
+from levanter.trainer_state import TrainerState, saveable_training_mask, trainables_only
 from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.tree_utils import inference_mode
 
@@ -615,6 +616,34 @@ def test_eval_model_fills_missing_namedarrays_from_model():
     weight = eval_model.embeddings.token_embeddings.weight
 
     assert is_jax_array_like(weight.array)
+
+
+def test_restore_policy_model_from_partial_checkpoint_recovers_base_model():
+    config = _tiny_gpt2_config()
+    Vocab = Axis("vocab", 32)
+    base_key, wrong_base_key, adapter_key, wrong_adapter_key, example_key = jrandom.split(jrandom.PRNGKey(0), 5)
+
+    adapter = LoraAdaptationConfig(r=4, zero_init_b=False)
+    trained_policy = adapter.apply(config.build(Vocab, key=base_key), key=adapter_key)
+    wrong_resume_skeleton = adapter.apply(config.build(Vocab, key=wrong_base_key), key=wrong_adapter_key)
+    correct_source_skeleton = adapter.apply(config.build(Vocab, key=base_key), key=wrong_adapter_key)
+    trainable_filter = adapter.trainable_filter(trained_policy)
+
+    checkpointed_trainables = trainables_only(trained_policy, trainable_filter)
+    wrong_resumed_policy = eqx.combine(checkpointed_trainables, wrong_resume_skeleton)
+    restored_policy = _restore_policy_model_from_partial_checkpoint(
+        wrong_resumed_policy,
+        correct_source_skeleton,
+        trainable_filter,
+    )
+
+    example = _make_dpo_example(seq_len=8, vocab_size=Vocab.size, key=example_key)
+    trained_logp = _logp_sum(inference_mode(trained_policy, True), example.chosen).scalar()
+    wrong_logp = _logp_sum(inference_mode(wrong_resumed_policy, True), example.chosen).scalar()
+    restored_logp = _logp_sum(inference_mode(restored_policy, True), example.chosen).scalar()
+
+    assert wrong_logp != pytest.approx(trained_logp)
+    assert restored_logp == pytest.approx(trained_logp)
 
 
 def test_vmapped_init_with_sharding_handles_layer_axis():

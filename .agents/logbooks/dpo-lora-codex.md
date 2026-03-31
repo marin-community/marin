@@ -1737,3 +1737,200 @@ For `reference.type=adapter_base`, reference identity should include the frozen 
 - If DPO-specific runtime code keeps growing, promote `lib/levanter/src/levanter/dpo.py` into a `lib/levanter/src/levanter/dpo/` package later.
 - After the library path lands, archive or shrink `experiments/eval_dpo.py` so the production implementation has one canonical home.
 - If eval is still slow after reference caching, revisit eval-specific parameter layout / replicated-weight experiments.
+
+## 2026-03-30 Main Merge Recovery: Preserve Chat Stop Tokens
+
+### What happened
+
+- I reviewed the failed Claude merge attempt and confirmed the main mistake: it tried to resolve the DPO conflicts by provenance ("keep our refactor everywhere") instead of by behavior.
+- That would have dropped the recent `origin/main` change that writes `generation_config.json` with chat stop tokens for HF exports. For chat models this is important because inference stacks like vLLM need the chat stop token, not just the tokenizer EOS token, to stop generation correctly after DPO.
+- The conflict itself was centered in `lib/levanter/src/levanter/main/train_dpo.py`, but the full feature was not limited to conflict markers. Main also added required support in the shared HF export path and corresponding tests/docs.
+
+### Resolution
+
+- I kept the refactored DPO runtime shape from this branch:
+  - `train_dpo.py` remains the canonical entrypoint
+  - the adapter/reference abstraction stays in place
+  - `model_init.py` remains the model/bootstrap helper
+- I ported main's generation-config behavior into the refactored export layer instead of resurrecting main's older inline save path.
+- Concretely, I threaded `generation_config` through:
+  - `lib/levanter/src/levanter/compat/hf_checkpoints.py`
+  - `lib/levanter/src/levanter/adaptation.py`
+  - `lib/levanter/src/levanter/lora.py`
+  - `lib/levanter/src/levanter/main/train_dpo.py`
+- I also brought over the DPO-facing config/docs/tests pieces:
+  - `hf_generation_eos_token_ids` config plumbing
+  - the DPO guide section on generation stop tokens
+  - HF export tests and DPO smoke coverage
+- This is a better refactor than replaying main literally because merged LoRA exports now get the same `generation_config.json` behavior as regular DPO.
+
+### Merge + verification status
+
+- I merged current `origin/main` into `dpo-lora` and created merge commit `e6dcb2e96`.
+- After the merge, `origin/dpo-lora` was confirmed to be `53` commits ahead and `0` commits behind `origin/main`, so the branch contains current main as of `2026-03-30`.
+- Verification for the merge-resolution work:
+  - `./infra/pre-commit.py --fix ...` on the touched DPO/HF export files: passed
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_hf_export.py lib/levanter/tests/test_hf_checkpoints.py lib/levanter/tests/test_dpo.py lib/levanter/tests/test_lora_dpo.py`: `49 passed, 2 skipped`
+
+## 2026-03-30 Implementation: Durable Reference Eval Log-Prob Cache
+
+### Outcome
+
+- I implemented the pre-emption-safe cached reference-eval path in the real DPO runtime.
+- The production implementation lives in `lib/levanter/src/levanter/dpo.py`. `experiments/eval_dpo.py` remains a prototype/profiling artifact and is not the canonical home for this feature.
+- The cache is durable on GCS via Levanter's cache ledger semantics, and then loaded into host RAM for repeated eval use during the run.
+- The feature is opt-in and scoped to validation/eval only. Training-time reference computation and checkpoint state are unchanged.
+
+### Code organization
+
+- New shared DPO runtime module:
+  - `lib/levanter/src/levanter/dpo.py`
+- That module now owns:
+  - `DpoModel`
+  - shared DPO loss helpers
+  - `ReferenceEvalCacheConfig`
+  - `CachedDpoExample`
+  - `CachedReferenceDataset`
+  - `ValidationDatasetSpec`
+  - deterministic cache metadata / cache path helpers
+  - build/load/build-or-load helpers for reference-eval caches
+- `lib/levanter/src/levanter/main/train_dpo.py` stays as orchestration:
+  - builds validation specs
+  - derives reference identity
+  - optionally materializes caches before training
+  - swaps eval datasets onto cached wrappers
+  - leaves training behavior unchanged
+
+### Important implementation details
+
+- `TrainDpoConfig` now has `reference_eval_cache`, and the config is threaded through:
+  - `lib/levanter/src/levanter/main/train_dpo.py`
+  - `lib/levanter/src/levanter/main/lora_dpo.py`
+  - `experiments/simple_dpo_config.py`
+  - `experiments/defaults.py`
+- Validation datasets now preserve provenance needed for deterministic cache identity:
+  - source cache path
+  - split name
+  - slice bounds when using `validation_split_fraction`
+- Cache identity includes:
+  - validation cache provenance
+  - slice bounds
+  - reference identity
+  - sequence length
+  - schema/version kind
+- Cache loading is intentionally strict:
+  - missing cache -> build
+  - unfinished ledger -> build
+  - metadata mismatch -> rebuild
+- The eval loss path now accepts either a normal `DpoExample` or a `CachedDpoExample`, so cached eval skips the reference forward passes while the training path remains the normal uncached computation.
+
+### Testing and docs
+
+- I updated `lib/levanter/tests/test_dpo.py` with focused coverage for:
+  - config parsing
+  - cache-path identity changes
+  - metadata mismatch rejection
+  - cache build/load behavior
+  - cached-vs-uncached DPO-loss parity
+- `lib/levanter/tests/test_lora_dpo.py` now imports the shared DPO helpers from `levanter.dpo`.
+- I added a short "Reference Eval Cache" section to `lib/levanter/docs/guides/DPO-Training.md`.
+
+### Verification
+
+- `./infra/pre-commit.py --fix .agents/logbooks/dpo-lora-codex.md experiments/defaults.py experiments/simple_dpo_config.py lib/levanter/docs/guides/DPO-Training.md lib/levanter/src/levanter/dpo.py lib/levanter/src/levanter/main/lora_dpo.py lib/levanter/src/levanter/main/train_dpo.py lib/levanter/tests/test_dpo.py lib/levanter/tests/test_lora_dpo.py`
+  - passed
+- `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_dpo.py lib/levanter/tests/test_lora_dpo.py`
+  - passed with `34 passed, 1 skipped`
+
+### Commit and push status
+
+- I committed the cache work as `35d9c444b` with subject `[dpo] Cache reference eval logprobs`.
+- I pushed that commit to `origin/dpo-lora`.
+- I did not use the repo's literal `make fix` target for this step because in this dirty worktree it would have swept unrelated local modifications and still would not have included the new untracked `lib/levanter/src/levanter/dpo.py`.
+- Instead I ran the required repo fixer directly on the scoped file set, then committed and pushed only the DPO cache work.
+
+## 2026-03-30 Handoff: LoRA Resume Babysitting On central1
+
+### Goal
+
+- Keep babysitting the resumed LoRA DPO run for W&B run `endlboq3` until it either:
+  - finishes final eval and writes the final merged HF export, or
+  - fails / gets preempted and needs another recovery decision
+- The specific thing we were trying to validate was that the LoRA resume path is now correct after the adapter-checkpoint fix:
+  - trainer state should load from the east5 training checkpoint
+  - base model should be reconstructed from the configured central1 HF source
+  - resumed LoRA weights should be overlaid on top of that base model
+
+### Final corrected relaunch
+
+- Several earlier central1 relaunches were wrong:
+  - one used unsupported deep `draccus` CLI overrides for dataset cache dirs
+  - one used `initialize_from_checkpoint_path` against a LoRA trainer checkpoint and failed with missing base arrays
+  - one used `trainer.initialize_from` together with `initialize_from_hf` and hit the config validation error
+- The clean relaunch path is:
+  - keep `initialize_from_hf` in the config
+  - do **not** use `trainer.initialize_from`
+  - do **not** use `initialize_from_checkpoint_path`
+  - instead pass `--trainer.load_checkpoint_path <east5 trainer checkpoint>`
+- Correct running job:
+  - Iris job id: `/ahmed/lora-bsv2-mi-b0p1-s2-lr7p5e6-b64-v5p8-central1-resume-20260330-2236`
+  - zone / hardware: `us-central1-a`, `v5p-8`
+  - W&B run: `https://wandb.ai/marin-community/dpo/runs/endlboq3`
+  - config: `lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_central1_b64.yaml`
+  - checkpoint source for resume: `gs://marin-us-east5/checkpoints/dpo/lora_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_b64/endlboq3/step-835`
+
+### What the successful relaunch already proved
+
+- W&B reused `endlboq3`
+- The process loaded the east5 trainer checkpoint via `--trainer.load_checkpoint_path`
+- The fixed LoRA resume path ran:
+  - log line: `Resuming from step 836, using checkpoint policy weights.`
+  - log line: `Adapter checkpoints only store trainable weights. Reconstructing the base policy model from the configured source before overlaying resumed adapter parameters.`
+- The run rebuilt the base model from the central1 HF shards and resumed training from step `836`
+- Training completed successfully on the resumed job
+- A final central1 training checkpoint was written to:
+  - `gs://marin-us-central1/checkpoints/dpo/lora_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_b64/endlboq3/step-849`
+
+### Current status at handoff
+
+- Timestamp of last status refresh: `2026-03-30 23:26:48 PDT`
+- Iris state: `JOB_STATE_RUNNING`
+- `preemption_count: 0`
+- The job is in the **final eval loop**, not dead or hung
+- Latest observed eval progress:
+  - `147 / 367` validation batches
+  - about `13.2s/it`
+  - about `48 minutes` remaining from that sample
+- There is still **no** merged HF export under:
+  - `gs://marin-us-central1/checkpoints/dpo/lora_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_b64/merged_hf/endlboq3/`
+- That is expected so far because the export hooks have not fired yet; the job is still inside eval
+
+### Important context for the next agent
+
+- This run is **not** using the new reference-eval cache feature
+  - the YAML has no `reference_eval_cache` block
+  - so final eval is on the old uncached DPO path
+- That is why eval is slow:
+  - uncached DPO eval still computes policy chosen
+  - policy rejected
+  - reference chosen
+  - reference rejected
+- The long final eval time is therefore expected and is not evidence of another resume failure
+- There are occasional log lines `Failed to compress input file`
+  - these appeared while the job was otherwise healthy
+  - they did not correlate with failure, preemption, or checkpoint corruption
+
+### Babysitting instructions for the next agent
+
+- Keep the long cadence; this is now mostly a wait-for-terminal-state problem
+- Watch for three things only:
+  - preemption / worker death
+  - clean end of eval
+  - creation of the final merged HF export
+- If the job completes normally, verify:
+  - terminal success in Iris
+  - final eval finished
+  - merged HF export appears under `.../merged_hf/endlboq3/`
+  - ideally `step-849` or the final-step-equivalent directory created by the export hook
+- If the job fails or gets preempted, do **not** go back to `trainer.initialize_from`
+  - the known-good restart pattern is the same `central1_b64` YAML plus `--trainer.load_checkpoint_path <latest training checkpoint>`

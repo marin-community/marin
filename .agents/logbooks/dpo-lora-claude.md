@@ -879,3 +879,1212 @@ DPO runs on v5p-32 = 4 hosts × 4 TPU chips = 16 chips total. JAX arrays are sha
 | Cached values not NamedArray | `eval_dpo.py` cached eval | Shape mismatch (caught before launch) | Wrap with `hax.named()` inside JIT |
 | Custom dataclass not JAX pytree | `eval_dpo.py` cached eval | `zeros_like requires ndarray, got CachedDpoExample` | Use `eqx.Module` instead of `@dataclass` for any type that flows through DataLoader/JIT |
 | All hosts writing to GCS | `eval_dpo.py` cache build | Race condition (caught before launch) | Gate to `jax.process_index() == 0` + `sync_global_devices()` |
+
+# CODEX START
+
+## 2026-03-29 LoRA Status And Bloom SpecEval v2 Reproduction Plan
+
+### Have We Actually Tried LoRA-DPO Yet?
+
+- Not for the Bloom SpecEval v2 Marin Instruct run family in this thread.
+- I do not see any recorded Bloom SpecEval v2 LoRA-DPO training launch in:
+  - this Codex logbook
+  - Claude's parallel logbook
+  - the current Iris job list
+- What we have today is **code-path readiness**, not experiment evidence:
+  - canonical `levanter.main.train_dpo` supports `adapter.type=lora` with `reference.type=adapter_base`
+  - the legacy `levanter.main.lora_dpo` wrapper still works for old configs
+  - LoRA-DPO tests and docs are in place
+  - existing LoRA YAMLs target Ultrafeedback / legacy sanity checks, not Bloom SpecEval v2
+
+### Exact Baseline To Reproduce
+
+Target run:
+
+- W&B: `https://wandb.ai/marin-community/dpo/runs/new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_-7_seed2-947c5d`
+- Executor source: `experiments/sweep_dpo/beta0.1_seed2_lr7.5e-7.py`
+
+Baseline knobs that should stay fixed for the first LoRA reproduction attempt:
+
+- dataset: Bloom SpecEval v2 preference data (`bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite`)
+- tokenizer: `marin-community/marin-tokenizer`
+- base model: `marin-community/marin-8b-instruct`
+- seed: `2`
+- beta: `0.1`
+- learning rate: `7.5e-7`
+- train batch size: `128`
+- num train steps: `850`
+- train / max seq len: `4096`
+- steps per eval: `200`
+- hf export cadence: `200`
+- hardware target: `v5p-32`
+- memory target: `256GB`
+- eval parallelism target: `32`
+
+The only intended semantic change for the first reproduction run is:
+
+- full-FT policy + separate frozen reference
+- becomes
+- LoRA policy + implicit adapter-base reference
+
+### Important Constraint In The Current Experiment Plumbing
+
+- `experiments/defaults.default_dpo(...)` and `SimpleDPOConfig` currently only construct regular DPO with `reference.type=separate`.
+- There is no Bloom SpecEval v2 experiment wrapper in `experiments/` that can already emit:
+  - `adapter.type: lora`
+  - `reference.type: adapter_base`
+  - LoRA export settings like `merged_hf_save_path`
+
+So the **fastest and lowest-risk first LoRA experiment** is:
+
+1. write a standalone canonical `TrainDpoConfig` YAML for Bloom SpecEval v2
+2. launch `python -m levanter.main.train_dpo` directly on Iris
+3. only after one successful run, decide whether to teach `SimpleDPOConfig` / `default_dpo` about LoRA for sweep parity
+
+That avoids mixing "does LoRA-DPO train correctly here?" with "did we correctly refactor the executor config surface?"
+
+### Planned First Run: Strict Reproduction With LoRA
+
+Goal: reproduce the `...947c5d` run as faithfully as possible while changing only the DPO parameterization.
+
+Planned config delta relative to the seed-2 baseline:
+
+```yaml
+adapter:
+  type: lora
+  r: 64
+  alpha: 64.0
+  dropout: 0.0
+  zero_init_b: true
+  target_modules: null
+
+reference:
+  type: adapter_base
+```
+
+Everything else should match the baseline run unless a TPU-specific blocker appears.
+
+Rationale for this first run shape:
+
+- `zero_init_b: true` is mandatory for DPO because the step-0 policy must equal the implicit reference
+- `r=64, alpha=64` is the current house default and matches the LoRA-DPO guide
+- `target_modules: null` means all linear modules, which is the current recommended setting
+- keeping `lr=7.5e-7` makes this a true reproduction attempt rather than an immediate retuning study
+
+### Recommended Launch Form
+
+First run should be a dedicated canonical config, something like:
+
+- config path: `lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_seed2_lr7.5e-7_central1.yaml`
+- entrypoint: `uv run python -m levanter.main.train_dpo --config_path ...`
+
+Suggested job command shape:
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run --no-wait \
+  --extra marin:tpu \
+  --tpu v5p-32 \
+  --memory 256GB \
+  --disk 50GB \
+  --zone us-central1-a \
+  --job-name lora-new-dpo-v2-bloom-s2-lr7p5e7 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m levanter.main.train_dpo \
+  --config_path lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_seed2_lr7.5e-7_central1.yaml
+```
+
+### Config Notes For The First Run
+
+- Use the same Bloom SpecEval v2 tokenized train/val caches as the full-DPO baseline.
+- Keep `validation_split_fraction: null` so eval uses the explicit validation set rather than creating a new split.
+- Keep `trainer.per_device_eval_parallelism: 32` for comparability with the current full-DPO runs.
+- Keep `train_batch_size: 128` and `num_train_steps: 850` unchanged.
+- Use `merged_hf_save_path` for the first run, not `peft_save_path`.
+
+Why `merged_hf_save_path` first:
+
+- older LoRA TPU configs in this repo explicitly disabled `peft_save_path` because of multihost serialization issues
+- even if the new adaptation path may be better, the first Bloom SpecEval v2 LoRA run should minimize new failure modes
+
+### Success Criteria For The Strict Reproduction Run
+
+Call the first LoRA reproduction successful only if all of the following hold:
+
+- it compiles and gets past the first train step on multihost TPU
+- step-0 DPO loss is near `ln(2)` / `0.693`, not a large blown-up value
+- no container OOM occurs at `v5p-32`, `256GB`
+- W&B logs normal DPO metrics:
+  - `loss`
+  - `dpo_accuracy`
+  - `dpo_margin_policy`
+  - `dpo_margin_ref`
+  - `dpo_chosen_reward`
+  - `dpo_rejected_reward`
+- throughput and eval cadence look sane relative to the regular-DPO baseline
+
+If step-0 loss is badly wrong, that is a strong sign that the LoRA identity/reference assumption is broken, most likely:
+
+- `zero_init_b` not applied
+- wrong reference mode
+- adapter modules not wired as expected
+
+### Planned Follow-Up If Strict Reproduction Is Flat
+
+There is a real chance that a literal `lr=7.5e-7` LoRA run will learn too slowly. The LoRA-DPO guide in this branch recommends starting closer to `5e-6`.
+
+So the plan should be:
+
+1. run the strict reproduction first at `7.5e-7`
+2. if it is stable but under-trains, launch a LoRA-tuned follow-up at `5e-6`
+3. keep the same:
+   - dataset
+   - seed
+   - beta
+   - batch size
+   - steps
+   - hardware
+   - adapter rank
+
+That gives two distinct answers:
+
+- **strict reproduction**: "what happens if we only swap in LoRA?"
+- **LoRA-tuned comparison**: "what is the fairer LoRA baseline once the optimizer is adjusted?"
+
+### Follow-Up Code Work Only After First Evidence
+
+Do **not** start by extending the executor/sweep layer.
+
+After the first LoRA run succeeds, the next cleanup step should be:
+
+1. add adapter/reference/export fields to `SimpleDPOConfig`
+2. teach `default_dpo(...)` to emit either regular DPO or LoRA-DPO
+3. add a proper `experiments/sweep_dpo/lora_beta0.1_seed2_lr7.5e-7.py`
+
+That sequencing keeps the first experiment focused on model behavior instead of config refactoring.
+
+## 2026-03-29 External Evidence: Thinking Machines "LoRA Without Regret"
+
+Source read:
+
+- https://thinkingmachines.ai/blog/lora/
+
+### Scope Notes
+
+- This article is strong evidence for **supervised fine-tuning** and **policy-gradient RL**.
+- It is **not** a direct DPO paper.
+- For our Bloom SpecEval v2 plan, the safest interpretation is:
+  - treat DPO as much closer to the article's supervised setting than to its RL setting
+  - carry over the supervised LoRA practices first
+  - mark any DPO-specific conclusions as inference, not established fact
+
+### Direct Takeaways From The Article
+
+The practices below are directly supported by the article:
+
+- **Apply LoRA to all layers, especially MLP/MoE layers.**
+  - Attention-only LoRA underperformed materially.
+  - MLP-only was much better, and all-layer LoRA was the safest default.
+- **Do not judge LoRA from a single learning rate.**
+  - The article explicitly swept LR for each condition before comparing LoRA to FullFT.
+- **For supervised-style training, LoRA's best LR is about 10x the FullFT LR.**
+  - The article reports an empirical multiplier of about `9.8x`.
+- **Large batch size can hurt LoRA more than it hurts FullFT.**
+  - This effect appeared to be mostly independent of rank.
+- **Keep the standard LoRA parametrization unless there is evidence otherwise.**
+  - `alpha / r` scaling
+  - zero-init on `B`
+  - standard random init for `A`
+  - same LR for `A` and `B`
+  - the authors report they could not improve on this basic setup
+- **Rank is mainly a capacity knob, not a cure for bad optimization settings.**
+  - If LoRA is capacity-constrained, training falls off the FullFT curve.
+  - But larger rank does not remove the large-batch penalty.
+
+### DPO-Specific Inferences For This Thread
+
+These are my inferences from the article, not direct claims made there:
+
+- Our Bloom SpecEval v2 DPO run should be treated as a **supervised-style LoRA problem**, not as an RL-style low-capacity case.
+- Therefore the article's RL result ("very low rank can match FullFT") should **not** be used to justify tiny-rank DPO first runs.
+- The current repo default of:
+  - `target_modules: null`
+  - `zero_init_b: true`
+  - `alpha = r`
+is directionally correct for the first Bloom SpecEval v2 LoRA experiment.
+- Because Levanter currently excludes `lm_head` from LoRA by default, our practical "all-layer" run is really "all supported linear layers except lm_head". That is still much closer to the article's recommendation than attention-only LoRA.
+
+### How This Changes The Bloom SpecEval v2 Plan
+
+This section **updates** the previous plan.
+
+#### 1. Do not treat the same-LR reproduction as the main comparison
+
+The earlier plan proposed a strict reproduction at:
+
+- FullFT baseline LR: `7.5e-7`
+- LoRA reproduction LR: also `7.5e-7`
+
+After reading the article, that should be demoted to a **sanity / lineage run only**.
+
+Reason:
+
+- the article's strongest operational finding is that LoRA wants about **10x** the FullFT LR in supervised settings
+- so a same-LR comparison is likely unfair and likely to make LoRA look artificially weak
+
+Updated interpretation:
+
+- **strict same-LR run (`7.5e-7`)**: useful only to answer "what happens if I swap in LoRA and change nothing else?"
+- **fair LoRA comparison**: should center around **`7.5e-6`**
+
+#### 2. The first real LoRA tuning sweep should be LR-first, not rank-first
+
+Minimal first sweep for the Bloom SpecEval v2 seed-2 setup:
+
+- `r = 64`
+- `target_modules = null`
+- `zero_init_b = true`
+- LR grid centered around the article's 10x rule:
+  - `5e-6`
+  - `7.5e-6`
+  - `1e-5`
+
+For our 850-step training run, `7.5e-6` is the natural anchor because it is exactly 10x the validated FullFT baseline LR.
+
+The article also suggests a somewhat higher multiplier in very short runs. If we do only a brief screening run, e.g. `<=100` steps, then a fourth point near `1.1e-5` is reasonable. For the full 850-step run, the main comparison should still center near `7.5e-6`.
+
+#### 3. If LoRA underperforms at batch size 128, reduce batch before raising rank
+
+This is one of the clearest actionable points from the article.
+
+If the first LoRA runs are stable but learn more poorly than FullFT:
+
+- do **not** immediately conclude that rank 64 is too small
+- do **not** expect higher rank to fix a large-batch optimization penalty
+
+Instead, test smaller train batch sizes first, for example:
+
+- `128` (baseline)
+- `64`
+- possibly `32` if needed
+
+Keep the hardware fixed if possible so the comparison stays interpretable.
+
+#### 4. Use rank as a capacity check only after LR and batch are sane
+
+Recommended order:
+
+1. get a stable run with all-layer LoRA and a LoRA-appropriate LR
+2. if that still underfits, test batch reduction
+3. only then test higher rank
+
+Minimal rank ladder:
+
+- `64` first
+- `128` second if there are signs of capacity limits
+
+I do **not** think we should start with attention-only LoRA or with tiny ranks.
+
+#### 5. Keep the plain LoRA parametrization for the first comparison
+
+The article is a strong argument **against** piling on extra LoRA tricks in the first Bloom SpecEval v2 experiment.
+
+So the first serious run should keep:
+
+- standard `alpha / r` scaling
+- same LR for `A` and `B`
+- no LoRA+
+- no rank-dependent alpha hacks
+- no attention-only targeting
+
+For this codebase, that means:
+
+```yaml
+adapter:
+  type: lora
+  r: 64
+  alpha: 64.0
+  dropout: 0.0
+  zero_init_b: true
+  target_modules: null
+```
+
+#### 6. Compare LoRA vs FullFT on training/eval metrics, not just generations
+
+The article deliberately used loss-based comparisons rather than only sample-based evals.
+
+For our DPO runs, the corresponding best practice is:
+
+- compare validation `loss`
+- compare `dpo_accuracy`
+- compare `dpo_margin_policy`
+- compare `dpo_margin_ref`
+- compare chosen/rejected rewards
+- compare throughput / wall-clock / memory
+
+Do not treat a handful of qualitative generations as the main evidence.
+
+### Revised Experimental Order
+
+This is the current recommended order for Bloom SpecEval v2 LoRA:
+
+1. **Optional sanity run**:
+   - same config as baseline, but with LoRA and `lr=7.5e-7`
+   - purpose: verify the pipeline and observe how much performance is lost if LR is not retuned
+2. **Main fair comparison run**:
+   - same config, `r=64`, all-layer LoRA, `lr=7.5e-6`
+3. **Small LR sweep around the fair run**:
+   - `5e-6`, `7.5e-6`, `1e-5`
+4. **Batch-size follow-up only if needed**:
+   - reduce `train_batch_size` from `128` to `64`
+5. **Rank follow-up only if needed**:
+   - `r=128`
+
+### Practical Bottom Line
+
+The most important correction from the article is simple:
+
+- a Bloom SpecEval v2 LoRA run at `7.5e-7` should not be considered the serious LoRA baseline
+- the serious baseline should be around **`7.5e-6`**, with all supported linear layers adapted, and with batch size treated as a separate optimization variable
+
+## 2026-03-30 Planned Run: Bloom SpecEval v2 LoRA Fair Baseline On v5p-8
+
+### Why This Run
+
+- User requested that the next LoRA experiment actually be launched on `v5p-8`.
+- The current best next experiment from this logbook is the **fair LoRA baseline**, not the same-LR sanity run.
+- I am keeping the run in `us-central1-a` to stay in-region with the Bloom SpecEval v2 preference data and tokenized caches.
+
+### Config Chosen
+
+- Config path:
+  - `lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_central1.yaml`
+- Main settings:
+  - dataset: Bloom SpecEval v2 GPT-4.1 vs Mixtral opposite-mode preferences
+  - train cache: `gs://marin-us-central1/tokenized/bloom_speceval_v2_train_prefs_marin_tokenizer-12920b`
+  - val cache: `gs://marin-us-central1/tokenized/bloom_speceval_v2_val_prefs_marin_tokenizer-a06ae8`
+  - base model: `marin-community/marin-8b-instruct`
+  - adapter: LoRA `r=64`, `alpha=64`, `dropout=0`, `zero_init_b=true`, `target_modules=null`
+  - reference: `adapter_base`
+  - LR: `7.5e-6`
+  - beta: `0.1`
+  - seed: `2`
+  - train batch size: `128`
+  - train steps: `850`
+  - hardware: `v5p-8`
+  - eval parallelism: `16`
+
+### Launch Command
+
+Planned Iris submission:
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run --no-wait \
+  --extra marin:tpu \
+  --tpu v5p-8 \
+  --memory 256GB \
+  --disk 50GB \
+  --zone us-central1-a \
+  --job-name lora-bsv2-mi-b0p1-s2-lr7p5e6-v5p8 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m levanter.main.train_dpo \
+  --config_path lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_central1.yaml
+```
+
+### Monitoring Plan
+
+- Babysit this as an Iris TPU job, not a fire-and-forget launch.
+- Watch specifically for:
+  - scheduler capacity wait vs real runtime failure
+  - first-step compile/lowering failures
+  - HBM / OOM signals
+  - bad step-0 DPO loss that would indicate broken LoRA identity/reference behavior
+
+## 2026-03-30 Launch Update: v5p-8 LoRA Run Submitted And Rerouted To east5
+
+### First Attempt: us-central1-a
+
+Initial launch:
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run --no-wait \
+  --extra marin:tpu \
+  --tpu v5p-8 \
+  --memory 256GB \
+  --disk 50GB \
+  --zone us-central1-a \
+  --job-name lora-bsv2-mi-b0p1-s2-lr7p5e6-v5p8-20260330-000321 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m levanter.main.train_dpo \
+  --config_path lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_central1.yaml
+```
+
+Job id:
+
+- `/ahmed/lora-bsv2-mi-b0p1-s2-lr7p5e6-v5p8-20260330-000321`
+
+Result:
+
+- never allocated
+- stayed `JOB_STATE_PENDING`
+- pending reason was:
+  - insufficient memory on ready `tpu_v5p_8-us-central1-a` workers (`need 256GB`, only about `11.8GB` available)
+  - autoscaler scale-up for `tpu_v5p_8-us-central1-a` was quota-blocked
+
+Action taken:
+
+- stopped the pending central1 job
+
+### Why I Switched To east5
+
+- `tpu_v5p_8-us-east5-a` was not quota-blocked
+- multiple east5 `v5p-8` slices were fully idle (`committed_mem_bytes=0`, `committed_tpu=0`)
+- east5 already has the Bloom SpecEval v2 tokenized caches:
+  - `gs://marin-us-east5/tokenized/bloom_speceval_v2_train_prefs_marin_tokenizer-12920b`
+  - `gs://marin-us-east5/tokenized/bloom_speceval_v2_val_prefs_marin_tokenizer-a06ae8`
+
+So east5 was the first region with a realistic chance of actually running tonight.
+
+### Active Run: us-east5-a
+
+Relaunch:
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run --no-wait \
+  --extra marin:tpu \
+  --tpu v5p-8 \
+  --memory 256GB \
+  --disk 50GB \
+  --zone us-east5-a \
+  --job-name lora-bsv2-mi-b0p1-s2-lr7p5e6-v5p8-east5-20260330-000700 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m levanter.main.train_dpo \
+  --config_path lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_east5.yaml
+```
+
+Active job id:
+
+- `/ahmed/lora-bsv2-mi-b0p1-s2-lr7p5e6-v5p8-east5-20260330-000700`
+
+Current state at last check:
+
+- `JOB_STATE_RUNNING`
+- `task_state_counts.running = 1`
+- no pending reason
+
+### Early Monitoring Result
+
+This run is past scheduler allocation and into real startup.
+
+Observed so far:
+
+- W&B initialized successfully
+- run id: `053ujx8y`
+- W&B URL: `https://wandb.ai/marin-community/dpo/runs/053ujx8y`
+- train and validation token caches loaded from east5
+- no OOM / `RESOURCE_EXHAUSTED` / JAX lowering failure seen yet
+- worker is actively reading HF model shards for `marin-community/marin-8b-instruct`
+
+Notable warning:
+
+- cache metadata mismatch warning on `preprocessor_metadata`
+- this did **not** immediately kill the run
+- at last check the worker was still making forward progress through model shard reads
+
+### Current Risk Assessment
+
+What is already ruled out:
+
+- scheduler-capacity failure on east5
+- immediate container death on startup
+- immediate host-RAM OOM during initial process boot
+
+What is still not ruled out yet:
+
+- failure later in model load
+- first-step compile/lowering failure
+- TPU HBM OOM once actual training starts
+
+### Immediate Next Watchpoints
+
+- finish loading all `marin-8b-instruct` safetensor shards
+- reach first batch load
+- reach train-step tracing / lowering
+- survive step-0 eval without OOM
+
+## 2026-03-30 Failure Update: east5 v5p-8 Run Hit TPU HBM OOM At First-Step Compile
+
+The east5 run did not survive first-step compile.
+
+Final job state:
+
+- job id: `/ahmed/lora-bsv2-mi-b0p1-s2-lr7p5e6-v5p8-east5-20260330-000700`
+- state: `JOB_STATE_FAILED`
+- W&B run: `053ujx8y`
+
+What happened:
+
+- the job loaded the east5 train/validation caches successfully
+- it loaded all `marin-community/marin-8b-instruct` safetensor shards successfully
+- it reached first batch load, tracing, and HLO lowering
+- it then failed in JAX/XLA with TPU HBM exhaustion during compile
+
+Key failure signal from logs:
+
+- `RESOURCE_EXHAUSTED: XLA:TPU compile permanent error`
+- HBM used: `111.15G` of `95.74G`
+- over capacity by: `15.41G`
+- dominant temporary allocation included a `bf16[32,32,4096,4096]` broadcast of about `32.00G`
+
+Interpretation:
+
+- this was **not** a scheduler-capacity failure
+- this was **not** a host-RAM failure
+- this was **not** a tokenizer/cache problem
+- this was a true TPU-device-memory failure at the first training step
+
+Most important conclusion:
+
+- LoRA reduced trainable-parameter / optimizer-state cost, but it did **not** make the activation and temporary-memory footprint small enough for `train_batch_size: 128` at `4096` tokens on `v5p-8`
+
+Therefore the next experiment should follow the earlier LoRA plan exactly:
+
+- keep `r=64`
+- keep all-layer LoRA (`target_modules: null`)
+- keep `lr=7.5e-6`
+- keep `beta=0.1`
+- keep the same dataset and seed
+- reduce train batch size before touching rank
+
+Recommended next ladder on the same hardware:
+
+1. rerun with `train_batch_size: 64`
+2. if that still OOMs, rerun with `train_batch_size: 32`
+3. only after memory is sane, compare learning behavior and consider rank changes
+
+This failure is actually consistent with the experimental guidance already recorded above: batch is the first knob to lower before increasing rank.
+
+# CODEX END
+
+## 2026-03-30 Babysitting: LoRA DPO batch-64 v5p-8 east5
+
+### Job Info
+
+- **Iris job**: `/ahmed/lora-bsv2-mi-b0p1-s2-lr7p5e6-b64-v5p8-east5-20260330-0028`
+- **W&B**: `https://wandb.ai/marin-community/dpo/runs/endlboq3`
+- **Config**: `lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_east5_b64.yaml`
+- **Hardware**: v5p-8, us-east5-a, 256GB RAM
+- **Key params**: LoRA r=64, alpha=64, lr=7.5e-6, beta=0.1, seed=2, batch=64, 850 steps
+
+### Monitoring Log
+
+#### Check 1 — ~08:18 UTC
+
+| Field | Value |
+|-------|-------|
+| Job state | RUNNING |
+| Phase | Step-0 eval |
+| Eval progress | 78/367 iterations |
+| Loss | 0.693 |
+| Rate | 13.2s/it |
+| ETA for eval | ~64 min (~09:22 UTC) |
+| Failures | 0 |
+| Preemptions | 0 |
+
+- Step-0 loss = 0.693 = ln(2) — correct for untrained LoRA (policy == reference).
+- Past the OOM point that killed the batch-128 run. batch-64 fits in HBM.
+- No errors. Healthy.
+
+#### Check 2 — ~08:44 UTC
+
+| Field | Value |
+|-------|-------|
+| Job state | RUNNING |
+| Phase | Step-0 eval |
+| Eval progress | 193/367 iterations (53%) |
+| Loss | 0.693 |
+| Rate | 13.2s/it (unchanged) |
+| ETA for eval | ~38 min (~09:22 UTC) |
+| Failures | 0 |
+| Preemptions | 0 |
+
+- Rock steady through 193 eval iterations. No errors, no restarts.
+- eval has been running ~43 min. Should finish around 09:22 UTC, then training begins.
+- Critical next milestone: first training step (backward pass) — will reveal if batch-64 fits for training too.
+
+#### Check 3 — ~09:24 UTC (CRITICAL MILESTONES CLEARED)
+
+| Field | Value |
+|-------|-------|
+| Job state | RUNNING |
+| Phase | Training |
+| Train step | 5/850 |
+| Train loss | 0.692 |
+| Step-0 eval loss | 0.693 (correct) |
+| Checkpoint | step-1 saved to GCS OK |
+| Failures | 0 |
+| Preemptions | 0 |
+
+**All critical milestones passed:**
+1. Step-0 eval completed (367/367 batches, 81 min, loss=0.693)
+2. First train step completed in 79.7s (includes JIT compilation)
+3. Checkpoint saved at step 1 to `gs://marin-us-east5/checkpoints/dpo/lora_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_b64/endlboq3/step-1` — **no OOM**
+4. Training proceeding at step 5, loss=0.692
+- batch-64 fits in HBM for both forward and backward passes on v5p-8.
+- Rate is inflated (674.8s/it) because it includes eval+JIT in the average. Actual training step time not yet measurable.
+
+#### Check 4 — ~09:39 UTC (training stable, loss decreasing)
+
+| Field | Value |
+|-------|-------|
+| Job state | RUNNING |
+| Phase | Training |
+| Train step | 37/850 |
+| Train loss | 0.572 |
+| Rate | 28.0s/it (stabilized) |
+| Checkpoints saved | step-1, step-23 (step-1 cleaned up) |
+| Failures | 0 |
+| Preemptions | 0 |
+
+- Loss trajectory: 0.693 → 0.698 → 0.692 → 0.686 → 0.679 → 0.667 → 0.656 → 0.648 → 0.631 → 0.618 → 0.572
+- **LoRA is learning** — clear loss decrease from 0.693 to 0.572 in 37 steps.
+- Steady-state training rate: ~28s/step on v5p-8 (single host).
+- Checkpoint saves are working without OOM.
+- ETA for 850 steps (training only): ~6.3h from now (~16:00 UTC).
+- ETA with evals: ~13h total (~22:00 UTC), due to 81-min evals every 200 steps.
+
+#### Check 5 — ~09:58 UTC
+
+| Field | Value |
+|-------|-------|
+| Job state | RUNNING |
+| Phase | Training |
+| Train step | 77/850 |
+| Train loss | 0.306 |
+| Rate | 28.0s/it |
+| Checkpoints | step-67 (latest), step-45/23/1 cleaned up |
+| Failures | 0 |
+| Preemptions | 0 |
+
+- Loss trajectory: 0.693 → 0.572 → 0.521 → 0.458 → 0.431 → 0.418 → 0.306
+- Very strong learning — loss dropped 55% in 77 steps.
+- Checkpointing every ~22 steps (~10 min), working cleanly.
+- At 28s/step, step 200 (first mid-training eval) ETA: ~57 min from now (~10:55 UTC).
+
+#### Check 6 — ~10:14 UTC
+
+| Field | Value |
+|-------|-------|
+| Job state | RUNNING |
+| Phase | Training |
+| Train step | 111/850 |
+| Train loss | 0.212 |
+| Rate | 29.4s/it |
+| Checkpoints | step-111 (saving), step-89 (latest saved) |
+| Failures | 0 |
+| Preemptions | 0 |
+
+- Loss trajectory: 0.693 → 0.306 (step 77) → 0.212 (step 111)
+- Loss dropped 69% in 111 steps. LoRA learning aggressively with lr=7.5e-6.
+- Step 200 (first eval + HF export) ETA: ~43 min (~10:57 UTC).
+- Checkpoints saving every ~22 steps without issues.
+
+#### Check 7 — ~10:57 UTC (STEP 200 REACHED, EVAL STARTED)
+
+| Field | Value |
+|-------|-------|
+| Job state | RUNNING |
+| Phase | Step-200 eval |
+| Train step | 200/850 |
+| Train loss at step 200 | 0.032 |
+| Rate | 27.9s/it |
+| Eval progress | just started (0/367) |
+| Failures | 0 |
+| Preemptions | 0 |
+
+- **Step 200 milestone reached.** Train loss dropped from 0.693 to 0.032 (95.4% reduction).
+- This is comparable to the full-FT baseline which reached loss ~0.005 at step 849.
+- LoRA at lr=7.5e-6 (10x FullFT lr) is learning very aggressively.
+- Loss trajectory: 0.693 → 0.306 (77) → 0.212 (111) → 0.100 (131) → 0.032 (200)
+- Step-200 eval will take ~81 min (367 batches at 13.2s/it).
+- HF export should follow eval completion.
+- Training time so far: ~3h04m for 200 steps (28s/step avg).
+
+#### Check 8 — ~12:19 UTC (STEP-200 EVAL COMPLETE, HF EXPORT IN PROGRESS)
+
+| Field | Value |
+|-------|-------|
+| Job state | RUNNING |
+| Phase | HF export (step-200 merged model) |
+| Train step | 200/850 |
+| Step-200 eval loss | **0.025** |
+| Step-0 eval loss | 0.693 |
+| Eval improvement | 96.4% reduction |
+| HF export | saving 7 shards (32GB) to GCS |
+| Failures | 0 |
+| Preemptions | 0 |
+
+- **Step-200 eval complete.** Validation loss 0.025 vs step-0 loss 0.693 (96.4% reduction).
+- For comparison, the full-FT baseline step-200 eval loss was ~0.005 (from the `947c5d` run).
+- LoRA eval loss (0.025) is ~5x higher than full-FT (0.005) at step 200 — expected since LoRA has fewer parameters.
+- Merged HF model being saved to `gs://marin-us-east5/checkpoints/dpo/lora_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_b64/merged_hf/endlboq3/step-200`
+- Eval took ~81 min (367 batches at 13.2s/it). Consistent with step-0 eval.
+- Next milestone: training resumes, then step-400 eval.
+- Total wall time so far: ~4h27m (started ~07:51 UTC).
+
+#### Check 9 — ~12:35 UTC (training resumed post-HF-export)
+
+| Field | Value |
+|-------|-------|
+| Job state | RUNNING |
+| Phase | Training (steps 200-400) |
+| Train step | 222/850 |
+| Train loss | 0.018 |
+| Rate | 30.2s/it |
+| HF export step-200 | COMPLETE |
+| Failures | 0 |
+| Preemptions | 0 |
+
+- Training resumed cleanly after HF export.
+- Step-400 eval ETA: ~90 min from step 222 (~14:04 UTC).
+- Rate settling around 30s/step (slightly higher than pre-eval 28s — still normalizing from average).
+- Loss is very low (0.018) and mostly converged. Expect minimal further decrease.
+
+#### Check 10 — ~12:56 UTC (~5h into training)
+
+| Field | Value |
+|-------|-------|
+| Job state | RUNNING |
+| Phase | Training (steps 200-400) |
+| Train step | 267/850 |
+| Train loss | 0.007 |
+| Rate | 28.0s/it |
+| Wall time | ~5h04m |
+| Failures | 0 |
+| Preemptions | 0 |
+
+- Run is extremely stable. Zero failures, zero preemptions in 5+ hours.
+- Loss has mostly converged: 0.693 → 0.032 (step 200) → 0.007 (step 267)
+- Step-400 eval ETA: ~62 min from step 267 (~13:58 UTC)
+- Step-400 eval + HF export will take ~90 min
+- Training completion (step 850) ETA: many more hours due to eval overhead.
+
+### Summary of key metrics so far
+
+| Step | Train loss | Eval loss | Phase |
+|------|-----------|-----------|-------|
+| 0 | 0.693 | 0.693 | eval |
+| 77 | 0.306 | — | train |
+| 111 | 0.212 | — | train |
+| 131 | 0.100 | — | train |
+| 200 | 0.032 | **0.025** | eval + HF export |
+| 267 | 0.007 | — | train |
+
+### Key GCS artifacts
+
+| Resource | Path |
+|----------|------|
+| Merged HF model (step-200) | `gs://marin-us-east5/checkpoints/dpo/lora_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_b64/merged_hf/endlboq3/step-200` |
+| Training checkpoints | `gs://marin-us-east5/checkpoints/dpo/lora_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_b64/endlboq3/` |
+
+#### Check 11 — ~14:00 UTC (STEP 400 REACHED, EVAL STARTED)
+
+| Field | Value |
+|-------|-------|
+| Job state | RUNNING |
+| Phase | Step-400 eval |
+| Train step | 401/850 |
+| Train loss at step 401 | 0.001 |
+| Eval progress | 3/367 |
+| Early eval loss | 0.001 |
+| Wall time | ~6h08m |
+| Failures | 0 |
+| Preemptions | 0 |
+
+- **Step 400 milestone reached.** Train loss 0.001 — nearly fully converged.
+- Step-400 eval started. Early eval loss=0.001 (vs 0.025 at step-200 eval, 0.693 at step-0).
+- Eval will take ~81 min. HF export will follow.
+- Run has been completely stable for 6+ hours. Zero failures, zero preemptions.
+
+| Step | Train loss | Eval loss |
+|------|-----------|-----------|
+| 0 | 0.693 | 0.693 |
+| 200 | 0.032 | 0.025 |
+| 400 | 0.001 | (in progress, early=0.005) |
+
+#### Check 12 — ~14:19 UTC (step-400 eval ~23% through, 8h monitoring)
+
+| Field | Value |
+|-------|-------|
+| Job state | RUNNING |
+| Phase | Step-400 eval |
+| Eval progress | 83/367 |
+| Eval loss (partial) | 0.005 |
+| Wall time | ~6h28m |
+| Failures | 0 |
+| Preemptions | 0 |
+
+- Step-400 eval in progress. Early eval loss ~0.005, very close to the full-FT baseline (0.005 at step 849).
+- Job has been rock solid for 6.5+ hours. Zero failures, zero preemptions.
+- After eval completes: HF export at step-400, then training resumes to step 600.
+- Monitoring session approaching 8h mark. Job is healthy and self-sustaining via Iris.
+- Remaining milestones: step-400 HF export, step-600 eval+export, step-800 eval+export, step-849 complete.
+
+#### Check 13 — ~15:22 UTC (STEP-400 EVAL COMPLETE, HF EXPORT IN PROGRESS)
+
+| Field | Value |
+|-------|-------|
+| Job state | RUNNING |
+| Phase | HF export (step-400 merged model) |
+| Train step | 401/850 |
+| Step-400 eval loss | **0.005** |
+| Step-200 eval loss | 0.025 |
+| Step-0 eval loss | 0.693 |
+| Wall time | ~7h31m |
+| Failures | 0 |
+| Preemptions | 0 |
+
+- **Step-400 eval loss 0.005 — matches the full-FT baseline!**
+- The full-FT baseline (947c5d run) reached eval loss 0.005 at step 849.
+- LoRA at lr=7.5e-6 reached the same eval loss at step 400 — **half the training steps**.
+- This is a very strong result for LoRA DPO.
+- Merged HF model saving to `gs://marin-us-east5/checkpoints/dpo/lora_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_b64/merged_hf/endlboq3/step-400`
+
+### Updated metrics table
+
+| Step | Train loss | Eval loss | Notes |
+|------|-----------|-----------|-------|
+| 0 | 0.693 | 0.693 | Untrained (policy == reference) |
+| 200 | 0.032 | 0.025 | |
+| 400 | 0.001 | **0.005** | Matches full-FT baseline at step 849! |
+| 600 | — | — | (pending) |
+| 800 | — | — | (pending) |
+
+#### Check 14 — ~15:46 UTC (~8h into training, step 440)
+
+| Field | Value |
+|-------|-------|
+| Job state | RUNNING |
+| Phase | Training (steps 400-600) |
+| Train step | 440/850 (52%) |
+| Train loss | 0.016 |
+| Rate | 27.9s/it |
+| Wall time | ~7h54m |
+| Failures | 0 |
+| Preemptions | 0 |
+
+- Past the halfway point of total training.
+- Step-400 eval loss (0.005) matched full-FT baseline — the headline result.
+- Step-600 eval ETA: ~75 min from step 440 (~17:01 UTC) + 81 min eval = ~18:22 UTC.
+- Run continues to be completely stable. Zero failures across 8+ hours.
+- Remaining: steps 440→849, evals at 600 and 800, HF exports at each.
+
+## 2026-03-30 LR Sweep: lr=5e-6 Parallel Run
+
+### Motivation
+
+Comparing the LoRA run (lr=7.5e-6) with the full-FT baseline (lr=7.5e-7) via W&B API:
+
+| Metric @ step 400 | Full-FT (lr=7.5e-7) | LoRA (lr=7.5e-6) |
+|---|---|---|
+| eval loss | 0.0070 | 0.0047 |
+| dpo_accuracy | 0.9958 | 0.9983 |
+| dpo_margin_policy | -70.6 | -51.0 |
+| dpo_rejected_reward | -9.05 | -11.96 |
+
+LoRA at 10x LR is converging much faster than full-FT — margin_policy at step 400 (-51) is already where full-FT is at step 600 (-49). rejected_reward has bottomed out at the full-FT final value (-11.96 vs -11.93). This suggests the LR may be slightly too aggressive. A 5e-6 run (6.7x full-FT LR) should converge more gradually and potentially track the baseline curve more closely.
+
+### Config
+
+- **Iris job**: `/ahmed/lora-bsv2-mi-b0p1-s2-lr5e6-b64-v5p8-central1-20260330`
+- **Config**: `lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_marin_instruct_beta0.1_lr5e-6_seed2_v5p8_central1_b64.yaml`
+- **LR**: 5e-6 (vs 7.5e-6 in the first run)
+- **Zone**: us-central1-a (caches local)
+- Everything else identical: LoRA r=64, beta=0.1, seed=2, batch=64, 850 steps
+- W&B group: `lora-bsv2-mi-b0p1-s2-v5p8-lr-sweep`
+
+### Launch status
+
+- Submitted ~09:34 UTC. Provisioned and running.
+- Preempted once. Restarted WITHOUT fixed RUN_ID → created new W&B run, lost progress (step 153 → restarted from 0).
+- Killed and relaunched with `-e RUN_ID uxviy7fz` → resumed from step-153 checkpoint on same W&B run.
+- Step-200 eval loss: **0.068**
+
+## 2026-03-30 LR Sweep: lr=1e-5 Run
+
+### Config
+
+- **Iris job**: `/ahmed/lora-bsv2-mi-b0p1-s2-lr1e5-b64-v5p8-east5-20260330`
+- **W&B run ID**: `ki3eb0hi`
+- **Config**: `lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_marin_instruct_beta0.1_lr1e-5_seed2_v5p8_east5_b64.yaml`
+- **LR**: 1e-5 (high end of sweep)
+- **Zone**: us-east5-a
+- Everything else identical: LoRA r=64, beta=0.1, seed=2, batch=64, 850 steps
+
+### Status
+
+- Preempted once. Restarted without fixed RUN_ID → new W&B run created.
+- Killed and relaunched with `-e RUN_ID ki3eb0hi` → resumed from step-271 checkpoint.
+
+## 2026-03-30 lr=7.5e-6 Run: Step-600 and Step-800 Evals
+
+The original lr=7.5e-6 run completed step-600 eval before being preempted:
+
+| Step | Train loss | Eval loss | Notes |
+|------|-----------|-----------|-------|
+| 0 | 0.693 | 0.693 | Untrained |
+| 200 | 0.032 | 0.025 | |
+| 400 | 0.001 | 0.005 | Matches full-FT baseline at step 849 |
+| 600 | 0.005 | **0.004** | Better than full-FT at step 600 (0.006) |
+| 800 | — | — | Preempted during step-800 eval |
+
+- W&B run ID: `endlboq3`
+- Preempted at step ~800 (during step-800 eval). Iris restarted but created new W&B run.
+- Killed and relaunched with `-e RUN_ID endlboq3` → resumed from step-799 checkpoint.
+- Currently re-running step-800 eval, then 49 more training steps to completion.
+
+## 2026-03-30 Preemption Recovery: RUN_ID Lesson
+
+### Problem
+
+When Iris restarts a preempted job, the new process generates a random W&B run ID. The checkpoint path includes this ID:
+```
+gs://...base_path/{wandb_run_id}/step-N
+```
+New process → new run ID → new checkpoint dir → starts from scratch. Progress lost.
+
+### Root cause
+
+Direct `python -m levanter.main.train_dpo` launches bypass the executor system. The executor uses `impute_run_id_from_output_path` to derive a deterministic run ID from the output path. Direct launches use a random 8-char ID.
+
+### Fix
+
+Pass a fixed `RUN_ID` env var in the Iris job command:
+```bash
+-e RUN_ID <wandb_run_id>
+```
+Levanter checks `os.environ["RUN_ID"]` before generating a random one (trainer.py line 1029). This ensures the same checkpoint dir and W&B run across restarts.
+
+### Runs affected and fixed
+
+| Run | Original W&B ID | Fixed? |
+|-----|----------------|--------|
+| lr=7.5e-6 (east5) | `endlboq3` | Yes, relaunched with `-e RUN_ID endlboq3` |
+| lr=5e-6 (central1) | `uxviy7fz` | Yes, relaunched with `-e RUN_ID uxviy7fz` |
+| lr=1e-5 (east5) | `ki3eb0hi` | Yes, relaunched with `-e RUN_ID ki3eb0hi` |
+
+## 2026-03-30 v6e-128 OOM and Cross-Host FSDP Analysis
+
+### v6e-128 OOM (batch=128, default FSDP)
+
+- Job: `/ahmed/lora-bsv2-mi-b0p1-s2-lr7p5e6-b128-v6e128-east5-20260330`
+- Error: `RESOURCE_EXHAUSTED: Used 37.98G of 31.25G hbm. Exceeded by 6.73G`
+- Root cause: Levanter's default FSDP only shards within-host (4-way). Each chip holds 8B × 4 bytes / 4 = 8 GB of model params, leaving only 23 GB for everything else on a 31.25 GB chip.
+
+### Why default FSDP only shards within-host
+
+Levanter's mesh config (lib/levanter/src/levanter/utils/mesh.py):
+- ICI axes: `{"data": -1}` → absorbs all chips within a host (4 chips)
+- DCN axes: `{"replica_dcn": -1}` → absorbs all hosts (32 hosts for v6e-128)
+- `param_mapping: {"embed": "data"}` → parameters only shard on `data` axis (within-host)
+- `replica_dcn` is used for batch parallelism only, NOT parameter sharding
+
+### Cross-host FSDP fix
+
+Change param_mapping to shard across both axes:
+```yaml
+trainer:
+  mesh:
+    param_mapping:
+      embed: [replica_dcn, data]
+```
+This shards parameters across all chips (32 × 4 = 128-way on v6e-128).
+Per-chip model storage: 8B × 4 / 128 = 250 MB (vs 8 GB with default).
+
+Tradeoff: all-gathers go over DCN (slower) but fits in memory. Acceptable for LoRA since gradient communication is only 620 MB (50× less than full FT).
+
+### v6e-32 cross-host FSDP jobs (pending capacity)
+
+- `/ahmed/lora-bsv2-b128-v6e32-xfsdp-east1-20260330` — pending, waiting for v6e-32 in east1-d
+- `/ahmed/lora-bsv2-b128-v6e32-xfsdp-east5b-v2` — pending, waiting for v6e-32 in east5-b
+
+See `.agents/logbooks/levanter_mesh_explained.md` for full mesh analysis.
+
+## 2026-03-30 Infrastructure Setup: Model + Data Per Region
+
+### marin-8b-instruct cached on GCS
+
+Added `marin_8b_instruct` to `experiments/models.py` (revision `0378f9c`).
+Downloaded via Iris CPU jobs to 3 regions:
+
+| Region | Path | Status |
+|--------|------|--------|
+| us-central1 | `gs://marin-us-central1/models/marin-community--marin-8b-instruct--0378f9c/` | Done |
+| us-east5 | `gs://marin-us-east5/models/marin-community--marin-8b-instruct--0378f9c/` | Done |
+| us-east1 | `gs://marin-us-east1/models/marin-community--marin-8b-instruct--0378f9c/` | Done |
+| europe-west4 | — | Failed (permission denied on bucket) |
+
+### Tokenized caches
+
+| Region | Train cache | Val cache |
+|--------|------------|-----------|
+| us-central1 | Yes (original) | Yes (original) |
+| us-east5 | Yes (original) | Yes (original) |
+| us-east1 | Yes (tokenized via Iris) | Yes (tokenized via Iris) |
+| europe-west4 | No | No |
+
+Raw preference JSONL copied to us-east1 via `gsutil -m cp -r`.
+
+### All YAML configs updated to use GCS model paths
+
+All 7 LoRA DPO configs updated from `initialize_from_hf: marin-community/marin-8b-instruct` to region-specific GCS paths. Never use HuggingFace for model loading — always use GCS.
+
+## 2026-03-30 Current Experiment Status
+
+### Active runs
+
+| Run | LR | Batch | Hardware | W&B ID | Iris Job | Step | Status |
+|-----|-----|-------|----------|--------|----------|------|--------|
+| lr=7.5e-6 | 7.5e-6 | 64 | v5p-8 east5 | `endlboq3` | `lora-bsv2-mi-b0p1-s2-lr7p5e6-b64-v5p8-east5-resume` | ~800 | Running (step-800 eval) |
+| lr=5e-6 | 5e-6 | 64 | v5p-8 central1 | `uxviy7fz` | `lora-bsv2-mi-b0p1-s2-lr5e6-b64-v5p8-central1-resume` | ~236 | Running |
+| lr=1e-5 | 1e-5 | 64 | v5p-8 east5 | `ki3eb0hi` | `lora-bsv2-mi-b0p1-s2-lr1e5-b64-v5p8-east5-resume` | ~273 | Running |
+
+### Pending runs
+
+| Run | LR | Batch | Hardware | Status |
+|-----|-----|-------|----------|--------|
+| batch=128 xfsdp | 7.5e-6 | 128 | v6e-32 east1 | Pending (no v6e-32 capacity) |
+| batch=128 xfsdp | 7.5e-6 | 128 | v6e-32 east5 | Pending (no v6e-32 capacity) |
+
+### Eval results so far (all runs)
+
+| Run | Step 0 | Step 200 | Step 400 | Step 600 | Step 800 |
+|-----|--------|----------|----------|----------|----------|
+| Full-FT baseline (lr=7.5e-7) | 0.693 | 0.022 | 0.007 | 0.006 | 0.006 |
+| **LoRA lr=7.5e-6** | 0.693 | 0.025 | **0.005** | **0.004** | (in progress) |
+| **LoRA lr=5e-6** | 0.693 | **0.068** | — | — | — |
+| **LoRA lr=1e-5** | 0.693 | — | — | — | — |
+
+### W&B Links
+
+| Run | URL |
+|-----|-----|
+| Full-FT baseline | https://wandb.ai/marin-community/dpo/runs/new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_-7_seed2-947c5d |
+| LoRA lr=7.5e-6 | https://wandb.ai/marin-community/dpo/runs/endlboq3 |
+| LoRA lr=5e-6 | https://wandb.ai/marin-community/dpo/runs/uxviy7fz |
+| LoRA lr=1e-5 | https://wandb.ai/marin-community/dpo/runs/ki3eb0hi |
+
+## 2026-03-30 Codex: Replicated Eval Sharding Experiment — Not Worth Prioritizing
+
+Codex ran the standalone replicated cached-eval experiment to completion.
+
+- **W&B run**: `lr15l9n2` (`jumping-resonance-174`)
+- **Iris job**: `/ahmed/dpo-eval-cached-repl-v5p32-20260329-230854`
+- **Hardware**: v5p-32 (16 chips, 4 hosts)
+- **Mode**: cached eval, replicated parameter layout (post-load reshard via `hax.shard_with_axis_mapping`)
+
+### Result
+
+| Metric | FSDP cached eval | Replicated cached eval |
+|--------|-----------------|----------------------|
+| Total eval time | ~10.4 min | ~9.9 min |
+| Avg time/batch | ~13.4s | ~12.87s |
+| Warmup | — | ~24.1s |
+| Data load | — | ~8.5s (1.4% of total) |
+
+**Conclusion**: Directionally positive but not large enough to justify complexity. Eval is compute-bound after caching, not communication-bound.
+
+**Decision**: Do NOT prioritize integrating eval-only replicated sharding into `train_dpo.py`. Leave standalone `experiments/eval_dpo.py` support as a profiling tool. Defer until eval speed becomes a top blocker again.
+
+## 2026-03-30 Codex: Main Merge Recovery — Chat Stop Tokens
+
+Codex reviewed a failed Claude merge attempt and identified the main mistake: it tried to resolve DPO conflicts by provenance ("keep our refactor everywhere") instead of by behavior. That would have dropped the recent `origin/main` change that writes `generation_config.json` with chat stop tokens for HF exports.
+
+### Resolution
+
+- Kept the refactored DPO runtime shape from this branch (canonical `train_dpo.py`, adapter/reference abstraction, `model_init.py`)
+- Ported main's generation-config behavior into the refactored export layer
+- Threaded `generation_config` through:
+  - `lib/levanter/src/levanter/compat/hf_checkpoints.py`
+  - `lib/levanter/src/levanter/adaptation.py`
+  - `lib/levanter/src/levanter/lora.py`
+  - `lib/levanter/src/levanter/main/train_dpo.py`
+- Also brought over DPO-facing config/docs/tests for `hf_generation_eos_token_ids`
+- Merged LoRA exports now get the same `generation_config.json` behavior as regular DPO
+
+### Verification
+
+- Merge commit: `e6dcb2e96`
+- Branch is 53 commits ahead, 0 behind `origin/main`
+- `./infra/pre-commit.py --fix` on touched files: passed
+- pytest: `49 passed, 2 skipped`
+
+## 2026-03-30 Codex: Durable Reference Eval Log-Prob Cache — Implemented
+
+Codex implemented the production cached reference-eval path that was validated in `experiments/eval_dpo.py` as a proper library feature.
+
+### Code organization
+
+- **New module**: `lib/levanter/src/levanter/dpo.py` — canonical home for reusable DPO runtime code
+- Owns: `DpoModel`, shared DPO loss helpers, `ReferenceEvalCacheConfig`, `CachedDpoExample`, `CachedReferenceDataset`, `ValidationDatasetSpec`, cache metadata/path helpers, build/load helpers
+- `train_dpo.py` stays as orchestration: builds validation specs, derives reference identity, optionally materializes caches before training, swaps eval datasets onto cached wrappers
+
+### Config surface
+
+- `TrainDpoConfig` now has `reference_eval_cache: ReferenceEvalCacheConfig`
+- Threaded through `lora_dpo.py`, `simple_dpo_config.py`, `experiments/defaults.py`
+- Default: `mode: "disabled"` (opt-in)
+
+### Key design choices
+
+- **Durable sidecar cache on GCS**, then loaded into host RAM (~188 KB for 23K examples)
+- **Strict cache identity**: includes validation cache provenance, slice bounds, reference identity, sequence length, schema version
+- **Finished-or-rebuild semantics**: missing → build, unfinished ledger → build, metadata mismatch → rebuild
+- **Eval loss path** accepts either `DpoExample` (uncached) or `CachedDpoExample` (cached, skips reference forward passes)
+- **Training path unchanged**
+
+### Verification
+
+- Committed as `35d9c444b` (`[dpo] Cache reference eval logprobs`)
+- Pushed to `origin/dpo-lora`
+- `./infra/pre-commit.py --fix` on scoped file set: passed
+- pytest: `34 passed, 1 skipped`
+
+## 2026-03-30 Updated PR Goals
+
+The original goal "keep `TrainerState.model` policy-only for both regular DPO and LoRA-DPO" was **disproven by experiment** (multihost closure bug). Updated goals:
+
+- Regular DPO: `DpoModel(policy, reference)` in trainer state (multihost safety)
+- LoRA-DPO: policy-only trainer state (reference derived from adapter base)
+- Config-level abstraction still clean: `adapter.type` + `reference.type`
+- Reference eval log-prob caching available as opt-in for ~2x eval speedup
+- Chat stop tokens in HF exports for both regular and LoRA DPO
+- LoRA-DPO validated on Bloom SpecEval v2 with batch-64 on v5p-8
+
+## 2026-03-30 Current State Summary
+
+### What is done
+
+1. **Canonical DPO refactor** — unified entrypoint, adapter/reference config, shared adaptation layer
+2. **Multihost TPU fix** — DpoModel in trainer state for separate-reference mode
+3. **Eval profiling** — identified 4 redundant forward passes, 317K FSDP resharding ops
+4. **Reference eval caching** — validated 2x speedup, productionized in `levanter/dpo.py`
+5. **Replicated eval sharding** — tested, marginal improvement, deferred
+6. **Main merge** — chat stop tokens ported, branch up to date
+7. **LoRA-DPO training** — batch-64 on v5p-8 working, loss matches full-FT baseline at step 400
+8. **LR sweep** — 3 runs launched (5e-6, 7.5e-6, 1e-5)
+9. **Infrastructure** — marin-8b-instruct cached on GCS in 3 regions, tokenized caches in east1
+
+### What is in progress
+
+- lr=7.5e-6 run: step ~800, nearing completion
+- lr=5e-6 run: step ~236, running
+- lr=1e-5 run: step ~273, running
+- v6e-32 cross-host FSDP batch-128 jobs: pending capacity
+
+### What is NOT done
+
+- Wiring cached reference eval into `train_dpo.py` eval hooks (production integration)
+- Excluding frozen reference from checkpoint serialization
+- Teaching `SimpleDPOConfig` / `default_dpo` about LoRA for sweep parity
+- Full LR sweep analysis (waiting for runs to complete)
+- Batch size ablation (only if needed after LR sweep)

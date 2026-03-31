@@ -57,7 +57,7 @@ from experiments.simple_dpo_config import DPO_EVAL_PARALLELISM
 logger = logging.getLogger(__name__)
 
 PREFERENCE_FORMAT = PreferenceChatLmDatasetFormat()
-WARMUP_BATCHES = 3
+DEFAULT_WARMUP_BATCHES = 1
 MAX_EVAL_BATCHES = 999  # effectively unlimited — run the full val set
 WANDB_TAGS = ["dpo", "eval-profile", "standalone"]
 VAL_CACHE = "gs://marin-us-central1/tokenized/bloom_speceval_v2_val_prefs_marin_tokenizer-a06ae8/validation"
@@ -193,6 +193,18 @@ def _load_ref_cache(cache_dir: str):
     return chosen, rejected
 
 
+def _maybe_reshard_policy_for_eval(*, policy_model, eval_param_layout: str, compute_axis_mapping):
+    if eval_param_layout == "fsdp":
+        return policy_model
+
+    logger.info("Resharding policy model for eval with %s parameter layout", eval_param_layout)
+    t0 = time.time()
+    policy_model = hax.shard_with_axis_mapping(policy_model, compute_axis_mapping)
+    policy_model = jax.block_until_ready(policy_model)
+    logger.info("Policy model resharded in %.1fs", time.time() - t0)
+    return policy_model
+
+
 # ── Loss functions ────────────────────────────────────────────────────────────
 
 
@@ -314,11 +326,29 @@ def main():
         default="build",
         help="uncached=4 fwd passes, build=compute cache+run cached eval, cached=load cache+run",
     )
+    parser.add_argument(
+        "--eval_param_layout",
+        choices=["fsdp", "replicated"],
+        default="fsdp",
+        help="Parameter layout for the eval step. replicated is only supported for cached eval modes.",
+    )
+    parser.add_argument(
+        "--warmup_batches",
+        type=int,
+        default=DEFAULT_WARMUP_BATCHES,
+        help="Number of eval batches to run before timed evaluation for JIT warmup.",
+    )
     parser.add_argument("--max_eval_batches", type=int, default=MAX_EVAL_BATCHES)
     parser.add_argument("--profile", action="store_true", default=False)
     args = parser.parse_args()
 
+    if args.warmup_batches < 0:
+        raise ValueError(f"--warmup_batches must be non-negative, got {args.warmup_batches}")
+    if args.eval_param_layout == "replicated" and args.mode == "uncached":
+        raise ValueError("--eval_param_layout=replicated is only supported for cached eval modes (build or cached).")
+
     max_eval_batches = args.max_eval_batches
+    warmup_batches = args.warmup_batches
 
     trainer_config = _build_trainer_config()
     levanter.initialize(trainer_config)
@@ -346,6 +376,7 @@ def main():
     ref_cache_dir = _ref_cache_path(VAL_CACHE, reference_model_path, sequence_length)
     logger.info("Reference cache path: %s", ref_cache_dir)
     logger.info("Mode: %s", args.mode)
+    logger.info("Eval parameter layout: %s", args.eval_param_layout)
 
     with trainer_config.use_device_mesh():
         Pos = model_config.max_Pos.resize(sequence_length)
@@ -385,8 +416,6 @@ def main():
             )
             logger.info("Reference model loaded in %.1fs", time.time() - t0)
 
-        dpo_model = DpoModel(policy=policy_model, reference=reference_model)
-
         # ── Load val dataset ──────────────────────────────────────────
         val_dataset = _load_validation_dataset(VAL_CACHE, tokenizer=tokenizer, Pos=Pos)
         eval_loader = DataLoader(
@@ -416,6 +445,16 @@ def main():
             )
         elif args.mode == "cached":
             ref_chosen_np, ref_rejected_np = _load_ref_cache(ref_cache_dir)
+
+        if args.mode != "uncached":
+            reference_model = None
+            policy_model = _maybe_reshard_policy_for_eval(
+                policy_model=policy_model,
+                eval_param_layout=args.eval_param_layout,
+                compute_axis_mapping=compute_axis_mapping,
+            )
+
+        dpo_model = DpoModel(policy=policy_model, reference=reference_model)
 
         # ── Set up eval loss function ─────────────────────────────────
         if args.mode == "uncached":
@@ -480,15 +519,19 @@ def main():
             )
 
         # ── Warmup ────────────────────────────────────────────────────
-        logger.info("Warmup: %d batches for JIT compilation (%s)", WARMUP_BATCHES, label)
-        t0 = time.time()
-        warmup_iter = iter(eval_loader)
-        for i in range(WARMUP_BATCHES):
-            batch = next(warmup_iter)
-            batch_loss, _ = eval_loss_fn(dpo_model, batch)
-            logger.info("Warmup %d/%d: loss=%.4f", i + 1, WARMUP_BATCHES, batch_loss.item())
-        warmup_time = time.time() - t0
-        logger.info("Warmup done in %.1fs", warmup_time)
+        if warmup_batches > 0:
+            logger.info("Warmup: %d batches for JIT compilation (%s)", warmup_batches, label)
+            t0 = time.time()
+            warmup_iter = iter(eval_loader)
+            for i in range(warmup_batches):
+                batch = next(warmup_iter)
+                batch_loss, _ = eval_loss_fn(dpo_model, batch)
+                logger.info("Warmup %d/%d: loss=%.4f", i + 1, warmup_batches, batch_loss.item())
+            warmup_time = time.time() - t0
+            logger.info("Warmup done in %.1fs", warmup_time)
+        else:
+            warmup_time = 0.0
+            logger.info("Warmup skipped")
 
         # ── Profiled eval ─────────────────────────────────────────────
         if args.profile:
