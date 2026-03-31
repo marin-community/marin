@@ -1249,6 +1249,58 @@ class Autoscaler:
         self.refresh(worker_status_map, timestamp)
         return self.update(demand_entries, timestamp)
 
+    def get_tracked_worker(self, worker_id: str) -> TrackedWorker | None:
+        """Look up a tracked worker by ID."""
+        return self._workers.get(worker_id)
+
+    def restart_worker(self, worker_id: str) -> None:
+        """Restart a worker with a fresh bootstrap script using the latest image.
+
+        Looks up the worker's slice and scale group from the controller DB
+        (the authoritative source — see #4284), gets a live handle via the
+        slice's describe(), builds a bootstrap script with the latest image
+        tag, and runs it on the worker via SSH.
+        """
+        if self._db is None:
+            raise ValueError("No DB configured — cannot look up worker")
+
+        # Look up worker's slice and group from the DB (always up to date)
+        with self._db.snapshot() as snap:
+            rows = snap.raw(
+                "SELECT slice_id, scale_group FROM tracked_workers WHERE worker_id = ?",
+                params=(worker_id,),
+            )
+        if not rows:
+            raise ValueError(f"Worker {worker_id} not found in tracked_workers DB")
+        row = rows[0]
+
+        group = self._groups.get(row.scale_group)
+        if group is None:
+            raise ValueError(f"Scale group {row.scale_group} not found for worker {worker_id}")
+
+        # Get a handle with SSH access to this specific VM. SliceHandle.describe()
+        # returns RemoteWorkerHandles with the right SSH config for each VM.
+        slice_handle = group.get_slice(row.slice_id)
+        if slice_handle is None:
+            raise ValueError(f"Slice {row.slice_id} not found in group {row.scale_group}")
+
+        workers = slice_handle.describe().workers
+        handle = next((w for w in workers if w.worker_id == worker_id), None)
+        if handle is None:
+            raise ValueError(f"Worker {worker_id} not found in slice {row.slice_id}")
+
+        worker_config = self._per_group_worker_config(group)
+        if worker_config is None:
+            raise ValueError("No base worker config — cannot build bootstrap script")
+
+        worker_config.worker_id = worker_id
+        worker_config.slice_id = row.slice_id
+
+        from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
+
+        script = build_worker_bootstrap_script(worker_config)
+        handle.restart_worker(script)
+
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._workers.update(workers)

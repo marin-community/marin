@@ -1925,3 +1925,31 @@ class ControllerServiceImpl:
             columns=result.columns,
             rows=result.rows,
         )
+
+    def restart_worker(
+        self,
+        request: cluster_pb2.Controller.RestartWorkerRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.RestartWorkerResponse:
+        """Restart a worker while preserving its running containers.
+
+        Delegates to the worker's platform handle which knows how to restart
+        the worker process (e.g., `docker restart` on GCE). The new worker
+        discovers and adopts existing task containers via Docker labels.
+        """
+        require_identity()
+        worker_id = request.worker_id
+        if not worker_id:
+            return cluster_pb2.Controller.RestartWorkerResponse(accepted=False, error="worker_id is required")
+
+        autoscaler = self._controller.autoscaler
+        if autoscaler is None:
+            return cluster_pb2.Controller.RestartWorkerResponse(accepted=False, error="autoscaler not configured")
+
+        try:
+            autoscaler.restart_worker(worker_id)
+            logger.info("Initiated restart for worker %s", worker_id)
+            return cluster_pb2.Controller.RestartWorkerResponse(accepted=True)
+        except Exception as e:
+            logger.warning("Failed to restart worker %s: %s", worker_id, e)
+            return cluster_pb2.Controller.RestartWorkerResponse(accepted=False, error=str(e))
