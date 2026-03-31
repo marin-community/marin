@@ -3,7 +3,7 @@
 
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["numpy", "pandas", "scikit-learn", "scipy"]
+# dependencies = ["numpy", "pandas", "scikit-learn", "scipy", "wandb"]
 # ///
 """Build the GRP evaluation table for the many-domain Uncheatable-BPB slide.
 
@@ -34,6 +34,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import wandb
 from sklearn.model_selection import KFold
 
 from experiments.domain_phase_mix.exploratory.dsre_ceq_tools import fit_dsre_ceq_artifacts
@@ -74,6 +75,41 @@ MODEL_ORDER = (
     "DS-RE-CEQ",
 )
 SHAPE_PARAMETER_COUNT = len(TUNED_GENERIC_FAMILY_PARAMS)
+WANDB_ENTITY = "marin-community"
+WANDB_PROJECT = "marin"
+VALIDATED_METRIC = MANY_DOMAIN_TARGET
+
+
+@dataclass(frozen=True)
+class ValidatedRunSpec:
+    """Exact completed validation run to attach to a model row."""
+
+    model_name: str
+    wandb_run_id: str
+
+
+VALIDATED_RUN_SPECS: tuple[ValidatedRunSpec, ...] = (
+    ValidatedRunSpec(
+        model_name="GRP",
+        wandb_run_id="baseline_genericfamily_retainedtotal_tuned_uncheatable_bpb-d97130",
+    ),
+    ValidatedRunSpec(
+        model_name="GRP w/o retention",
+        wandb_run_id="baseline_genericfamily_no_retention_uncheatable_bpb-8c60eb",
+    ),
+    ValidatedRunSpec(
+        model_name="GRP w/o quality splits or family signals",
+        wandb_run_id="baseline_genericfamily_no_quality_splits_no_groups_uncheatable_bpb-3903ad",
+    ),
+    ValidatedRunSpec(
+        model_name="Olmix loglinear",
+        wandb_run_id="baseline_olmix_loglinear_uncheatable_bpb-97ffd9",
+    ),
+    ValidatedRunSpec(
+        model_name="DS-RE-CEQ",
+        wandb_run_id="baseline_dsre_ceq_predicted-540565",
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -425,8 +461,44 @@ def _slide_frame(full: pd.DataFrame) -> pd.DataFrame:
             "cv_spearman",
             "cv_regret_at_1",
             "cv_foldmean_regret_at_1",
+            "validated_bpb",
         ]
     ].copy()
+
+
+def _fetch_validated_optima() -> dict[str, dict[str, Any]]:
+    api = wandb.Api(timeout=60)
+    out: dict[str, dict[str, Any]] = {}
+    for spec in VALIDATED_RUN_SPECS:
+        run = api.run(f"{WANDB_ENTITY}/{WANDB_PROJECT}/{spec.wandb_run_id}")
+        actual = run.summary.get(VALIDATED_METRIC)
+        if actual is None:
+            raise ValueError(f"Missing {VALIDATED_METRIC} in W&B run {spec.wandb_run_id}")
+        out[spec.model_name] = {
+            "validated_bpb": float(actual),
+            "validated_wandb_run_id": spec.wandb_run_id,
+            "validated_wandb_name": str(run.name),
+            "validated_wandb_state": str(run.state),
+        }
+    return out
+
+
+def _attach_validated_optima(full: pd.DataFrame) -> pd.DataFrame:
+    validated = _fetch_validated_optima()
+    out = full.copy()
+    out["validated_bpb"] = np.nan
+    out["validated_wandb_run_id"] = ""
+    out["validated_wandb_name"] = ""
+    out["validated_wandb_state"] = ""
+    for idx, model_name in enumerate(out["model"]):
+        payload = validated.get(str(model_name))
+        if payload is None:
+            continue
+        out.at[idx, "validated_bpb"] = float(payload["validated_bpb"])
+        out.at[idx, "validated_wandb_run_id"] = str(payload["validated_wandb_run_id"])
+        out.at[idx, "validated_wandb_name"] = str(payload["validated_wandb_name"])
+        out.at[idx, "validated_wandb_state"] = str(payload["validated_wandb_state"])
+    return out
 
 
 def _existing_row(path: Path, model_name: str) -> dict[str, Any]:
@@ -448,7 +520,8 @@ def _latex_rows(slide: pd.DataFrame) -> str:
             f"{_display_float(row.cv_rmse, '.4f')} & "
             f"{_display_float(row.cv_spearman, '.3f')} & "
             f"{_display_float(row.cv_regret_at_1, '.4f')} & "
-            f"{_display_float(row.cv_foldmean_regret_at_1, '.4f')} \\\\"
+            f"{_display_float(row.cv_foldmean_regret_at_1, '.4f')} & "
+            f"{_display_float(row.validated_bpb, '.4f')} \\\\"
         )
     return "\n".join(lines) + "\n"
 
@@ -558,6 +631,7 @@ def main() -> None:
     )
     full["model"] = pd.Categorical(full["model"], categories=MODEL_ORDER, ordered=True)
     full = full.sort_values("model").reset_index(drop=True)
+    full = _attach_validated_optima(full)
     slide = _slide_frame(full)
 
     args.output_csv.write_text(full.to_csv(index=False))
