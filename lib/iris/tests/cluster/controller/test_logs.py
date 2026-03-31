@@ -237,6 +237,11 @@ def test_get_logs_regex_pattern_scoping(log_store: LogStore):
     result_all = log_store.get_logs("/job/parent/.*")
     assert len(result_all.entries) == 2
 
+    # Direct-tasks-only pattern: excludes child job entries
+    result_direct = log_store.get_logs(r"/job/parent/\d+:.*")
+    assert len(result_direct.entries) == 1
+    assert result_direct.entries[0].data == "parent-line"
+
 
 def test_get_logs_regex_pattern_tail_returns_last_n(log_store: LogStore):
     """Tail mode with regex pattern returns the last N entries across all matching keys."""
