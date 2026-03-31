@@ -2,18 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from contextlib import ExitStack
 
-import equinox
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
 import pytest
 import equinox as eqx
+import equinox
 from chex import assert_trees_all_close
+from jax._src import config as jax_config
 from jax.lax import Precision
-from jax.sharding import NamedSharding, PartitionSpec
-from contextlib import ExitStack
+from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec, use_abstract_mesh
 
 import haliax as hax
 from haliax import Axis
@@ -32,7 +33,33 @@ from levanter.layers.attention import (
     dot_product_attention,
 )
 from levanter.grug.attention import align_kv_heads
-from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
+from test_utils import skip_if_module_missing, skip_if_no_torch, skip_if_not_enough_devices, use_test_mesh
+
+
+class _reset_abstract_mesh:
+    def __enter__(self):
+        self._prev = jax_config.abstract_mesh_context_manager.swap_local(jax_config.config_ext.unset)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        jax_config.abstract_mesh_context_manager.set_local(self._prev)
+        return False
+
+
+def _make_explicit_mesh() -> Mesh:
+    return Mesh(
+        np.array(jax.devices()[:8]).reshape(4, 2),
+        axis_names=("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
+
+
+def _make_explicit_abstract_mesh() -> AbstractMesh:
+    return AbstractMesh(
+        axis_sizes=(4, 2),
+        axis_names=("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
 
 
 @pytest.mark.skip
@@ -216,6 +243,20 @@ def test_align_kv_heads_repeats_grouped_query_heads():
     assert jnp.array_equal(aligned[:, :, 1], kv[:, :, 0])
     assert jnp.array_equal(aligned[:, :, 2], kv[:, :, 1])
     assert jnp.array_equal(aligned[:, :, 3], kv[:, :, 1])
+
+
+@skip_if_not_enough_devices(8)
+def test_align_kv_heads_lowers_with_explicit_mesh_axes():
+    mesh = _make_explicit_mesh()
+    abstract_mesh = _make_explicit_abstract_mesh()
+    sharding = NamedSharding(mesh, PartitionSpec("data", None, "model", None))
+    kv = jax.ShapeDtypeStruct((8, 3, 2, 4), jnp.float32, sharding=sharding)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(abstract_mesh):
+        aligned = eqx.filter_eval_shape(lambda: align_kv_heads(kv, num_q_heads=4))
+
+    assert aligned.shape == (8, 3, 4, 4)
+    assert aligned.sharding == NamedSharding(abstract_mesh, PartitionSpec("data", None, "model", None))
 
 
 def test_te_bin_and_group_axes_by_function():
