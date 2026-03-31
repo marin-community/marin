@@ -28,7 +28,7 @@ from iris.cluster.controller.controller import (
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
 
 from iris.cluster.controller.db import job_is_finished, task_can_be_scheduled
-from iris.cluster.controller.schema import WorkerDetailRow
+from iris.cluster.controller.schema import WorkerRow
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
     RESERVATION_HOLDER_JOB_NAME,
@@ -53,6 +53,7 @@ from tests.cluster.controller.conftest import (
     FakeProvider,
     hydrate_worker_attributes as _with_attrs,
     query_job as _query_job,
+    query_job_row as _query_job_row,
     query_task as _query_task,
     query_task_with_attempts as _query_task_with_attempts,
     query_tasks_for_job as _query_tasks_for_job,
@@ -113,24 +114,31 @@ def _make_worker(
     metadata: cluster_pb2.WorkerMetadata | None = None,
     attributes: dict[str, AttributeValue] | None = None,
     healthy: bool = True,
-) -> WorkerDetailRow:
+) -> WorkerRow:
     meta = metadata or _cpu_metadata()
     # Workers always have device attributes from config (Stage 3).
     # Merge explicit attributes on top of the device-derived defaults.
     default_attrs = _default_attributes_for_device(meta.device)
     if attributes:
         default_attrs.update(attributes)
-    return WorkerDetailRow(
+    device = meta.device
+    return WorkerRow(
         worker_id=WorkerId(worker_id),
         address=f"{worker_id}:8080",
-        metadata=meta,
         healthy=healthy,
+        active=True,
         consecutive_failures=0,
         last_heartbeat=Timestamp.now(),
         committed_cpu_millicores=0,
         committed_mem=0,
         committed_gpu=0,
         committed_tpu=0,
+        total_cpu_millicores=4000,
+        total_memory_bytes=8 * 1024**3,
+        total_gpu_count=device.gpu.count if device.HasField("gpu") else 0,
+        total_tpu_count=device.tpu.chip_count if device.HasField("tpu") else 0,
+        device_type=get_device_type(device),
+        device_variant=get_device_variant(device),
         attributes=default_attrs,
     )
 
@@ -718,7 +726,7 @@ def test_taint_constraint_preserves_existing_constraints():
 
 
 def _build_context_with_workers(
-    workers: list[WorkerDetailRow],
+    workers: list[WorkerRow],
     pending_tasks: list[JobName],
     jobs: dict[JobName, JobRequirements],
 ) -> SchedulingContext:
@@ -1144,10 +1152,11 @@ def test_taint_exemption_for_children_of_reservation_job():
     jobs: dict[JobName, JobRequirements] = {}
     has_reservation: set[JobName] = set()
     for task in pending:
-        job = _query_job(ctrl.state, task.job_id)
-        if job and not job_is_finished(job.state):
-            jobs[task.job_id] = job_requirements_from_job(job)
-            if job.request.HasField("reservation"):
+        job_row = _query_job_row(ctrl.state, task.job_id)
+        job_detail = _query_job(ctrl.state, task.job_id)
+        if job_row and not job_is_finished(job_row.state):
+            jobs[task.job_id] = job_requirements_from_job(job_row)
+            if job_detail and job_detail.request.HasField("reservation"):
                 has_reservation.add(task.job_id)
             elif _find_reservation_ancestor(ctrl._db, task.job_id) is not None:
                 has_reservation.add(task.job_id)
@@ -1157,8 +1166,8 @@ def test_taint_exemption_for_children_of_reservation_job():
     # Track direct reservations
     has_direct_reservation: set[JobName] = set()
     for task in pending:
-        job = _query_job(ctrl.state, task.job_id)
-        if job and not job_is_finished(job.state) and job.request.HasField("reservation"):
+        job_detail = _query_job(ctrl.state, task.job_id)
+        if job_detail and not job_is_finished(job_detail.state) and job_detail.request.HasField("reservation"):
             has_direct_reservation.add(task.job_id)
 
     # Child does NOT get NOT_EXISTS constraint (descendant, no constraint at all)
@@ -1253,10 +1262,11 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     jobs: dict[JobName, JobRequirements] = {}
     has_reservation: set[JobName] = set()
     for task in pending:
-        job = _query_job(ctrl.state, task.job_id)
-        if job and not job_is_finished(job.state):
-            jobs[task.job_id] = job_requirements_from_job(job)
-            if job.request.HasField("reservation"):
+        job_row = _query_job_row(ctrl.state, task.job_id)
+        job_detail = _query_job(ctrl.state, task.job_id)
+        if job_row and not job_is_finished(job_row.state):
+            jobs[task.job_id] = job_requirements_from_job(job_row)
+            if job_detail and job_detail.request.HasField("reservation"):
                 has_reservation.add(task.job_id)
             elif _find_reservation_ancestor(ctrl._db, task.job_id) is not None:
                 has_reservation.add(task.job_id)
@@ -1268,8 +1278,8 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     # Track direct reservations
     has_direct_reservation: set[JobName] = set()
     for task in pending:
-        job = _query_job(ctrl.state, task.job_id)
-        if job and not job_is_finished(job.state) and job.request.HasField("reservation"):
+        job_detail = _query_job(ctrl.state, task.job_id)
+        if job_detail and not job_is_finished(job_detail.state) and job_detail.request.HasField("reservation"):
             has_direct_reservation.add(task.job_id)
 
     # Neither grandchild gets any taint constraint (descendants)
@@ -1627,7 +1637,7 @@ def test_holder_task_not_scheduled_on_wrong_device_type(state):
     cpu_worker = _query_worker(state, cpu_wid)
     tpu_worker = _query_worker(state, tpu_wid)
 
-    holder_job = _query_job(state, holder_job_id)
+    holder_job = _query_job_row(state, holder_job_id)
     assert holder_job is not None
     holder_req = job_requirements_from_job(holder_job)
     context = _build_context_with_workers(
