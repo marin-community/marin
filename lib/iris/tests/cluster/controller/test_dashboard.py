@@ -16,10 +16,11 @@ from starlette.testclient import TestClient
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
-    Endpoint,
-    JobDetail,
-    decode_rows,
     healthy_active_workers_with_attributes,
+)
+from iris.cluster.controller.schema import (
+    JOB_DETAIL_PROJECTION,
+    EndpointRow,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -31,6 +32,7 @@ from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
 
 from .conftest import (
+    check_task_can_be_scheduled,
     make_test_entrypoint,
     make_worker_metadata,
     query_tasks_with_attempts as _query_tasks_with_attempts,
@@ -120,7 +122,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     def _get_job_scheduling_diagnostics(job_wire_id):
         """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
         with state._db.snapshot() as q:
-            rows = decode_rows(JobDetail, q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire_id,)))
+            rows = JOB_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire_id,)))
         if not rows:
             return None
         job = rows[0]
@@ -129,11 +131,11 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         req = JobRequirements(
             resources=job.request.resources,
             constraints=list(job.request.constraints),
-            is_coscheduled=job.is_coscheduled,
-            coscheduling_group_by=job.coscheduling_group_by,
+            is_coscheduled=job.request.HasField("coscheduling"),
+            coscheduling_group_by=job.request.coscheduling.group_by if job.request.HasField("coscheduling") else None,
         )
         tasks = _query_tasks_with_attempts(state, job.job_id)
-        schedulable_task_id = next((t.task_id for t in tasks if t.can_be_scheduled()), None)
+        schedulable_task_id = next((t.task_id for t in tasks if check_task_can_be_scheduled(t)), None)
         workers = healthy_active_workers_with_attributes(state._db)
         context = _create_scheduling_context(workers)
         return scheduler.get_job_scheduling_diagnostics(req, context, schedulable_task_id, num_tasks=len(tasks))
@@ -284,7 +286,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
 
     # Add endpoints only for non-terminal jobs
     state.add_endpoint(
-        Endpoint(
+        EndpointRow(
             endpoint_id="ep1",
             name="pending-svc",
             address="h:1",
@@ -295,7 +297,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
         task_id=pending_id.task(0),
     )
     state.add_endpoint(
-        Endpoint(
+        EndpointRow(
             endpoint_id="ep2",
             name="running-svc",
             address="h:2",
