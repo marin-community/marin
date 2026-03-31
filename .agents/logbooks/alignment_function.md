@@ -8750,3 +8750,70 @@ The following entries were originally recorded in `.agents/logbooks/alignment_fu
     - one shared TPU helper
     - one cheap one-statement smoke
     - one canonical full-spec E2E script
+
+### ALIGN-277 - 2026-03-30 22:52 - Added a canonical GPT-4.1 one-statement E2E entrypoint and validated the API-backed path end to end
+
+- New canonical API-backed entrypoint:
+  - `experiments/posttrain/align_gpt_4_1_e2e_one_statement.py`
+- Purpose:
+  - provide a minimal end-to-end alignment smoke for the OpenAI API path,
+    alongside the local GPT-OSS TPU/vLLM path
+  - use:
+    - GPT-4.1 for prompt generation
+    - GPT-4.1 for chosen responses
+    - GPT-4.1 for judging
+    - Mixtral-8x7B-Instruct for opposite-mode rejected responses
+  - constrain the run to:
+    - `ask_clarifying_questions`
+    - so the full pipeline can be validated cheaply
+- Script shape:
+  - reuses the shared posttrain spec:
+    - `experiments/posttrain/specs/openai_model_spec.jsonl`
+  - reuses the shared rejected-model preset helper from:
+    - `experiments/posttrain/gpt_oss_tpu.py`
+  - adds a small:
+    - `--name`
+    - override
+    - so fresh Iris runs can force a new pipeline output prefix without editing
+      the file
+- Fresh validation run:
+  - root job:
+    - `/ahmed/gpt-4-1-e2e-one-statement-20260330-223216`
+  - pipeline name:
+    - `gpt_4_1_e2e_one_statement_20260330-223216`
+  - experiment page:
+    - `https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central1/experiments/align_gpt_4_1_e2e_one_statement-36652f.json`
+  - terminal state:
+    - `JOB_STATE_SUCCEEDED`
+  - every child step succeeded:
+    - `spec`
+    - `prompts`
+    - `chosen`
+    - `rejected`
+    - `judgments`
+    - `preference_pairs`
+- Concrete outputs:
+  - `67` prompts
+  - `67` chosen responses
+  - `67` rejected responses
+  - `67` judgment records
+  - `66` preference pairs
+- Runtime:
+  - total executor wall clock:
+    - about `563s`
+    - about `9.4 min`
+- Notes:
+  - the OpenAI API key was forwarded at job submission time and the API-backed
+    prompt/chosen/judge path completed successfully on Iris
+  - the chosen step ran through Zephyr and shut down cleanly after writing all
+    `67` outputs
+  - the final kept-pair count was:
+    - `66`
+    - out of `67` judgments
+- Interpretation:
+  - Marin now has two validated canonical posttrain alignment smoke paths:
+    - local GPT-OSS TPU/vLLM
+    - API-backed GPT-4.1 + Mixtral rejected
+  - the API-backed path exercises the same spec -> prompts -> chosen/rejected ->
+    judgments -> preference-pairs DAG while swapping the teacher/judge side to
+    OpenAI-hosted inference
