@@ -783,6 +783,12 @@ class Controller:
             log_dir=config.local_state_dir / "logs",
             remote_log_dir=f"{config.remote_state_dir.rstrip('/')}/logs",
         )
+
+        # Wire log store into the K8s provider so its LogCollector can write logs directly.
+        # Collectors are created lazily on first sync(), so just setting the field is enough.
+        if isinstance(self._provider, K8sTaskProvider):
+            self._provider.log_store = self._log_store
+
         self._transitions = ControllerTransitions(
             db=self._db,
             log_store=self._log_store,
