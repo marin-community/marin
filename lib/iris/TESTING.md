@@ -103,7 +103,7 @@ being tested.
 
 ## Timing and Polling
 
-Avoid bare `time.sleep()` in polling loops. Use `iris.time_utils.Deadline`,
+Avoid bare `time.sleep()` in polling loops. Use `rigging.timing.Deadline`,
 `ExponentialBackoff.wait_until()`, or `wait_for_condition` from test utilities.
 
 A single short sleep to let a background thread start is acceptable when
@@ -118,8 +118,10 @@ types even in startup-polling loops.
   `@pytest.mark.e2e`.
 - Docker-dependent tests must also be marked `@pytest.mark.docker`.
 - E2E tests live in `tests/e2e/`.
-- Shared fakes live in `tests/cluster/platform/fakes.py` or
-  `src/iris/test_util.py`. Do not duplicate fakes across files.
+- Shared fakes live in `src/iris/cluster/providers/gcp/fake.py`
+  (`InMemoryGcpService`), `src/iris/cluster/providers/k8s/fake.py`
+  (`InMemoryK8sService`), or `src/iris/test_util.py`. Do not duplicate
+  fakes across files.
 
 ## Protocols
 

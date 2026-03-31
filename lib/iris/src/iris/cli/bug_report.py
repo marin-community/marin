@@ -11,11 +11,12 @@ import logging
 import subprocess
 from dataclasses import dataclass, field
 
+from iris.cluster.log_store import build_log_source
 from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Timestamp
+from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
 _FAILED_JOB_STATES = {"failed", "worker_failed", "unschedulable"}
@@ -150,16 +151,16 @@ def _gather(
     task_logs: dict[str, list[str]] = {}
     for task in tasks_resp.tasks:
         try:
-            log_resp = client.get_task_logs(
-                cluster_pb2.Controller.GetTaskLogsRequest(
-                    id=task.task_id,
-                    max_total_lines=tail,
+            # Fetch all attempts for this task, taking only the last `tail` lines.
+            source = build_log_source(JobName.from_wire(task.task_id))
+            log_resp = client.fetch_logs(
+                cluster_pb2.FetchLogsRequest(
+                    source=source,
+                    max_lines=tail,
+                    tail=True,
                 )
             )
-            lines: list[str] = []
-            for batch in log_resp.task_logs:
-                for entry in batch.logs:
-                    lines.append(entry.data)
+            lines = [entry.data for entry in log_resp.entries]
             task_logs[task.task_id] = lines[-tail:]
         except Exception:
             logger.warning("Failed to fetch logs for task %s", task.task_id, exc_info=True)
@@ -328,7 +329,7 @@ def _task_state_name(state: cluster_pb2.TaskState) -> str:
 def _format_timestamp(ts) -> str:
     if not ts or not ts.epoch_ms:
         return "-"
-    return Timestamp.from_proto(ts).as_formatted_date()
+    return timestamp_from_proto(ts).as_formatted_date()
 
 
 def _compute_duration(start, end) -> str:

@@ -135,7 +135,7 @@ class TestJobs:
     @staticmethod
     def wait_for_sentinel(s):
         """Wait on a sentinel with a short timeout, used for concurrency tests."""
-        from iris.time_utils import Duration
+        from rigging.timing import Duration
 
         s.wait(timeout=Duration.from_seconds(2))
         return "done"

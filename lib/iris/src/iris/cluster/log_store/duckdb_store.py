@@ -46,13 +46,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Condition, Lock
 
+
 import duckdb
 import fsspec.core
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from iris.cluster.log_store._types import _EST_BYTES_PER_ROW, _LIKE_ESCAPE_TABLE, LogReadResult
+from iris.cluster.log_store._types import _EST_BYTES_PER_ROW, REGEX_META_RE, LogReadResult
 from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
@@ -100,17 +101,12 @@ _ROW_GROUP_SIZE = 16_384
 _TAIL_SEQ_MARGIN = 10
 
 
-def _escape_like(s: str) -> str:
-    """Escape SQL LIKE wildcards so the string matches literally."""
-    return s.translate(_LIKE_ESCAPE_TABLE)
-
-
 def _prefix_upper_bound(prefix: str) -> str | None:
     """Return the exclusive upper bound for a prefix range, or None if unbounded.
 
     All strings starting with ``prefix`` satisfy ``prefix <= s < upper``.
     This lets DuckDB use range predicates on Parquet row-group statistics
-    instead of LIKE, which isn't pushed down through parameterized queries.
+    instead of regexp_matches, which isn't pushed down through parameterized queries.
     """
     if not prefix:
         return None
@@ -490,51 +486,33 @@ class DuckDBLogStore:
         tail: bool = False,
         min_level: str = "",
     ) -> LogReadResult:
-        """Fetch logs for a single key."""
+        """Fetch logs for a key or regex pattern.
+
+        If the key contains regex metacharacters, it is interpreted as a
+        regular expression and matched with DuckDB's ``regexp_matches()``.
+        Otherwise it is treated as an exact key lookup.
+        """
         min_level_enum = str_to_log_level(min_level) if min_level else 0
+        is_pattern = bool(REGEX_META_RE.search(key))
 
-        where_parts = ["key = $key", "seq > $cursor"]
-        params: dict = {"key": key, "cursor": cursor}
+        if not is_pattern:
+            where_parts = ["key = $key", "seq > $cursor"]
+            params: dict = {"key": key, "cursor": cursor}
+            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
+            return self._execute_read(
+                where_parts,
+                params,
+                max_lines,
+                tail,
+                cursor,
+                include_key_in_select=False,
+                segment_filter=_SegmentFilter(exact_key=key),
+                exact_key=key,
+            )
+
+        # Regex pattern path.
+        where_parts, params, segment_filter = _regex_query(key, cursor)
         _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-
-        return self._execute_read(
-            where_parts,
-            params,
-            max_lines,
-            tail,
-            cursor,
-            include_key_in_select=False,
-            segment_filter=_SegmentFilter(exact_key=key),
-        )
-
-    def get_logs_by_prefix(
-        self,
-        prefix: str,
-        *,
-        cursor: int = 0,
-        since_ms: int = 0,
-        substring_filter: str = "",
-        max_lines: int = 0,
-        tail: bool = False,
-        min_level: str = "",
-        shallow: bool = False,
-    ) -> LogReadResult:
-        """Fetch logs for all keys matching prefix, ordered by seq."""
-        min_level_enum = str_to_log_level(min_level) if min_level else 0
-
-        # Use range predicates instead of LIKE so DuckDB can push them down
-        # to Parquet row-group statistics and skip non-matching row groups.
-        where_parts = ["key >= $prefix_lo", "seq > $cursor"]
-        params: dict = {"prefix_lo": prefix, "cursor": cursor}
-        upper = _prefix_upper_bound(prefix)
-        if upper is not None:
-            where_parts.append("key < $prefix_hi")
-            params["prefix_hi"] = upper
-        if shallow:
-            where_parts.append("key NOT LIKE $shallow_exclude ESCAPE '\\'")
-            params["shallow_exclude"] = _escape_like(prefix) + "%/%"
-        _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-
         return self._execute_read(
             where_parts,
             params,
@@ -542,7 +520,7 @@ class DuckDBLogStore:
             tail,
             cursor,
             include_key_in_select=True,
-            segment_filter=_SegmentFilter(prefix=prefix),
+            segment_filter=segment_filter,
         )
 
     def has_logs(self, key: str) -> bool:
@@ -803,6 +781,7 @@ class DuckDBLogStore:
         default_cursor: int,
         include_key_in_select: bool,
         segment_filter: _SegmentFilter = _SEGMENT_FILTER_ALL,
+        exact_key: str | None = None,
     ) -> LogReadResult:
         # Acquire the segments read lock BEFORE snapshotting paths. This
         # guarantees that no file in our snapshot can be deleted (by GC or
@@ -870,14 +849,24 @@ class DuckDBLogStore:
                 parsed = TaskAttempt.from_wire(r[1])
                 entry = logging_pb2.LogEntry(source=r[2], data=r[3], level=r[5])
                 entry.timestamp.epoch_ms = r[4]
+                entry.key = r[1]
                 entry.attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
                 entries.append(entry)
         else:
             entries = []
+            # Parse attempt_id from the exact key once for all entries.
+            attempt_id = 0
+            if exact_key and ":" in exact_key:
+                try:
+                    parsed = TaskAttempt.from_wire(exact_key)
+                    attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
+                except ValueError:
+                    pass
             for r in rows:
                 # r: (seq, source, data, epoch_ms, level)
                 entry = logging_pb2.LogEntry(source=r[1], data=r[2], level=r[4])
                 entry.timestamp.epoch_ms = r[3]
+                entry.attempt_id = attempt_id
                 entries.append(entry)
 
         return LogReadResult(entries=entries, cursor=max_seq)
@@ -886,6 +875,57 @@ class DuckDBLogStore:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _regex_literal_prefix(pattern: str) -> str:
+    """Extract the literal prefix from a regex pattern.
+
+    Returns the leading portion of *pattern* that contains no regex
+    metacharacters, so it can be used for Parquet range pushdown.
+    """
+    match = REGEX_META_RE.search(pattern)
+    if match is None:
+        return pattern
+    return pattern[: match.start()]
+
+
+def _regex_query(pattern: str, cursor: int) -> tuple[list[str], dict, _SegmentFilter]:
+    """Build WHERE clauses and segment filter for a regex pattern.
+
+    Extracts a literal prefix for Parquet range pushdown. If the pattern
+    is purely a prefix (literal text followed only by ``.*``), range
+    predicates alone suffice. Otherwise ``regexp_matches()`` is added.
+    """
+    literal_prefix = _regex_literal_prefix(pattern)
+
+    # Pure-prefix pattern: "some/prefix/.*" — the literal prefix covers
+    # everything and the trailing .* matches any suffix.
+    suffix = pattern[len(literal_prefix) :]
+    is_pure_prefix = suffix in (".*", "")
+
+    if is_pure_prefix and literal_prefix:
+        where_parts = ["key >= $prefix_lo", "seq > $cursor"]
+        params: dict = {"prefix_lo": literal_prefix, "cursor": cursor}
+        upper = _prefix_upper_bound(literal_prefix)
+        if upper is not None:
+            where_parts.append("key < $prefix_hi")
+            params["prefix_hi"] = upper
+        return where_parts, params, _SegmentFilter(prefix=literal_prefix)
+
+    # General regex pattern — use regexp_matches with optional prefix pushdown.
+    where_parts = ["regexp_matches(key, $key_pattern)", "seq > $cursor"]
+    params = {"key_pattern": pattern, "cursor": cursor}
+    if literal_prefix:
+        upper = _prefix_upper_bound(literal_prefix)
+        where_parts.append("key >= $prefix_lo")
+        params["prefix_lo"] = literal_prefix
+        if upper is not None:
+            where_parts.append("key < $prefix_hi")
+            params["prefix_hi"] = upper
+        segment_filter = _SegmentFilter(prefix=literal_prefix)
+    else:
+        segment_filter = _SEGMENT_FILTER_ALL
+    return where_parts, params, segment_filter
 
 
 def _add_common_filters(
@@ -900,8 +940,8 @@ def _add_common_filters(
         where_parts.append("epoch_ms > $since_ms")
         params["since_ms"] = since_ms
     if substring_filter:
-        where_parts.append("data LIKE $substring ESCAPE '\\'")
-        params["substring"] = f"%{_escape_like(substring_filter)}%"
+        where_parts.append("contains(data, $substring)")
+        params["substring"] = substring_filter
     if min_level_enum > 0:
         where_parts.append("(level = 0 OR level >= $min_level)")
         params["min_level"] = min_level_enum

@@ -25,8 +25,8 @@ Auth model:
 
 import logging
 import os
-from http.cookies import SimpleCookie
 from collections.abc import Callable
+from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
 import httpx
@@ -37,9 +37,10 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from iris.cluster.controller.actor_proxy import PROXY_ROUTE, ActorProxy
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.dashboard_common import html_shell, static_files_mount
-from iris.rpc.auth import SESSION_COOKIE, AuthInterceptor, NullAuthInterceptor, TokenVerifier
+from iris.cluster.dashboard_common import html_shell, on_shutdown, static_files_mount
+from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
 
@@ -86,11 +87,15 @@ class _RouteAuthMiddleware:
     @public / @requires_auth annotation. Routes without an annotation are
     denied (default-deny). RPC Mount routes and static file mounts are
     skipped (they have their own auth).
+
+    Uses resolve_auth() — the same policy function as the gRPC interceptor —
+    so HTTP and gRPC layers agree on allow/deny for every token state.
     """
 
-    def __init__(self, app: Starlette, verifier: TokenVerifier):
+    def __init__(self, app: Starlette, verifier: TokenVerifier, optional: bool = False):
         self._app = app
         self._verifier = verifier
+        self._optional = optional
         self._router = app.router
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -134,15 +139,13 @@ class _RouteAuthMiddleware:
 
     async def _check_auth(self, scope: Scope, receive: Receive, send: Send) -> None:
         token = _extract_token_from_scope(scope)
-        if token is None:
+        try:
+            identity = resolve_auth(token, self._verifier, self._optional)
+        except ValueError:
             response = JSONResponse({"error": "authentication required"}, status_code=401)
             return await response(scope, receive, send)
-        try:
-            identity = self._verifier.verify(token)
-        except ValueError:
-            response = JSONResponse({"error": "invalid session"}, status_code=401)
-            return await response(scope, receive, send)
-        scope["auth_identity"] = identity
+        if identity is not None:
+            scope["auth_identity"] = identity
         return await self._app(scope, receive, send)
 
 
@@ -168,16 +171,49 @@ def _check_csrf(request: Request) -> bool:
     return origin == expected_origin
 
 
-class _SelectiveAuthInterceptor:
-    """Auth interceptor that skips authentication for specific RPC methods."""
+class _DashboardAuthInterceptor:
+    """RPC auth interceptor that uses resolve_auth() — same policy as HTTP middleware.
 
-    def __init__(self, verifier: TokenVerifier):
-        self._inner = AuthInterceptor(verifier)
+    Login and GetAuthInfo RPCs are always unauthenticated. All other RPCs go
+    through resolve_auth(token, verifier, optional) which:
+    - token present + valid → authenticated identity
+    - token present + invalid → rejected
+    - no token + optional → anonymous/admin fallback via NullAuthInterceptor
+    - no token + required → rejected
+    """
+
+    def __init__(self, verifier: TokenVerifier, optional: bool = False):
+        self._verifier = verifier
+        self._optional = optional
+        self._null = NullAuthInterceptor(verifier=verifier)
 
     def intercept_unary_sync(self, call_next, request, ctx):
+        from iris.rpc.auth import _verified_identity
+
         if ctx.method().name in _UNAUTHENTICATED_RPCS:
             return call_next(request, ctx)
-        return self._inner.intercept_unary_sync(call_next, request, ctx)
+
+        token = extract_bearer_token(ctx.request_headers())
+        try:
+            identity = resolve_auth(token, self._verifier, self._optional)
+        except ValueError as exc:
+            from connectrpc.code import Code
+            from connectrpc.errors import ConnectError
+
+            if token is None:
+                raise ConnectError(Code.UNAUTHENTICATED, str(exc)) from exc
+            logger.warning("Authentication failed: %s", exc)
+            raise ConnectError(Code.UNAUTHENTICATED, "Authentication failed") from exc
+
+        if identity is None:
+            # Optional mode, no token — anonymous fallback.
+            return self._null.intercept_unary_sync(call_next, request, ctx)
+
+        reset_token = _verified_identity.set(identity)
+        try:
+            return call_next(request, ctx)
+        finally:
+            _verified_identity.reset(reset_token)
 
 
 class ControllerDashboard:
@@ -196,12 +232,14 @@ class ControllerDashboard:
         port: int = 8080,
         auth_verifier: TokenVerifier | None = None,
         auth_provider: str | None = None,
+        auth_optional: bool = False,
     ):
         self._service = service
         self._host = host
         self._port = port
         self._auth_verifier = auth_verifier
         self._auth_provider = auth_provider
+        self._auth_optional = auth_optional
         self._app = self._create_app()
 
     @property
@@ -214,12 +252,20 @@ class ControllerDashboard:
 
     def _create_app(self) -> ASGIApp:
         interceptors = [RequestTimingInterceptor(include_traceback=bool(os.environ.get("IRIS_DEBUG")))]
-        if self._auth_provider is not None:
-            interceptors.insert(0, _SelectiveAuthInterceptor(self._auth_verifier))
+        if self._auth_provider is not None and self._auth_verifier is not None:
+            interceptors.insert(0, _DashboardAuthInterceptor(self._auth_verifier, optional=self._auth_optional))
         else:
+            # Null-auth mode: no provider configured. Verify worker tokens
+            # when present but treat everything as anonymous/admin.
             interceptors.insert(0, NullAuthInterceptor(verifier=self._auth_verifier))
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
+
+        self._actor_proxy = ActorProxy(self._service._db)
+
+        @requires_auth
+        async def _proxy_actor_rpc(request: Request) -> Response:
+            return await self._actor_proxy.handle(request)
 
         routes = [
             Route("/", self._dashboard),
@@ -230,13 +276,19 @@ class ControllerDashboard:
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
+            Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
+            Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
         ]
-        app: Starlette | _RouteAuthMiddleware = Starlette(routes=routes)
+
+        app: Starlette | _RouteAuthMiddleware = Starlette(
+            routes=routes,
+            lifespan=on_shutdown(self._actor_proxy.close),
+        )
         if self._auth_verifier is not None and self._auth_provider is not None:
-            app = _RouteAuthMiddleware(app, self._auth_verifier)
+            app = _RouteAuthMiddleware(app, self._auth_verifier, optional=self._auth_optional)
         return app
 
     @public
@@ -283,6 +335,7 @@ class ControllerDashboard:
                 "provider": self._auth_provider,
                 "has_session": has_session,
                 "provider_kind": provider_kind,
+                "optional": self._auth_optional,
             }
         )
 
@@ -339,6 +392,15 @@ class ControllerDashboard:
             return Response(f"Bundle not found: {bundle_id}", status_code=404)
         return Response(data, media_type="application/zip")
 
+    @public
+    def _blob_download(self, request: Request) -> Response:
+        blob_id = request.path_params["blob_id"]
+        try:
+            data = self._service.blob_data(blob_id)
+        except FileNotFoundError:
+            return Response(f"Blob not found: {blob_id}", status_code=404)
+        return Response(data, media_type="application/octet-stream")
+
 
 class ProxyControllerDashboard:
     """Dashboard that proxies RPC calls to a remote Iris controller.
@@ -374,11 +436,13 @@ class ProxyControllerDashboard:
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/bundles/{bundle_id:str}.zip", self._proxy_bundle),
+            Route("/blobs/{blob_id:str}", self._proxy_blob),
             Route("/health", self._health),
             Route("/iris.cluster.ControllerService/{method}", self._proxy_rpc, methods=["POST"]),
             static_files_mount(),
         ]
-        return Starlette(routes=routes, on_shutdown=[self._client.aclose])
+
+        return Starlette(routes=routes, lifespan=on_shutdown(self._client.aclose))
 
     def _proxy_html(self, dashboard_type: str) -> HTMLResponse:
         html = html_shell("Iris Controller (Proxy)", dashboard_type)
@@ -423,3 +487,10 @@ class ProxyControllerDashboard:
         if upstream_resp.status_code != 200:
             return Response(upstream_resp.text, status_code=upstream_resp.status_code)
         return Response(upstream_resp.content, media_type="application/zip")
+
+    async def _proxy_blob(self, request: Request) -> Response:
+        blob_id = request.path_params["blob_id"]
+        upstream_resp = await self._client.get(f"/blobs/{blob_id}")
+        if upstream_resp.status_code != 200:
+            return Response(upstream_resp.text, status_code=upstream_resp.status_code)
+        return Response(upstream_resp.content, media_type="application/octet-stream")

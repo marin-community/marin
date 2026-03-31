@@ -11,7 +11,7 @@ from fray.v1.cluster.ray import get_scheduling_strategy
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.utils import remove_tpu_lockfile_on_exit
-from iris.logging import configure_logging as _init_logging
+from rigging.log_setup import configure_logging as _init_logging
 
 
 @dataclass(frozen=True)

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Union
 
 import jax.numpy as jnp
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 
 import levanter

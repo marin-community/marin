@@ -48,7 +48,7 @@ from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import EnvironmentSpec, Entrypoint, JobName, ResourceSpec
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.time_utils import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 

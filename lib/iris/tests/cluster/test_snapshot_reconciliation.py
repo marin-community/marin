@@ -9,6 +9,7 @@ snapshot restore logic: bugs here cause orphaned VMs (resource leaks) or
 lost slice inventory (capacity gaps).
 """
 
+from dataclasses import dataclass, field
 
 from iris.cluster.controller.scaling_group import (
     GroupSnapshot,
@@ -16,12 +17,93 @@ from iris.cluster.controller.scaling_group import (
     SliceSnapshot,
     restore_scaling_group,
 )
-from iris.cluster.platform.base import Labels
-from iris.time_utils import Timestamp
-from tests.cluster.platform.fakes import (
-    FakeSliceHandle,
-    FakeWorkerHandle,
+from iris.cluster.providers.types import (
+    CloudSliceState,
+    CloudWorkerState,
+    Labels,
+    SliceStatus,
+    WorkerStatus,
 )
+from rigging.timing import Duration, Timestamp
+
+
+@dataclass
+class StubWorkerHandle:
+    """Minimal data carrier satisfying the RemoteWorkerHandle protocol for tests."""
+
+    _vm_id: str
+    _address: str
+
+    @property
+    def worker_id(self) -> str:
+        return self._vm_id
+
+    @property
+    def vm_id(self) -> str:
+        return self._vm_id
+
+    @property
+    def internal_address(self) -> str:
+        return self._address
+
+    @property
+    def external_address(self) -> str | None:
+        return None
+
+    @property
+    def bootstrap_log(self) -> str:
+        return ""
+
+    def status(self) -> WorkerStatus:
+        return WorkerStatus(state=CloudWorkerState.RUNNING)
+
+    def run_command(self, command: str, timeout: Duration | None = None, on_line=None):
+        raise NotImplementedError
+
+    def reboot(self) -> None:
+        raise NotImplementedError
+
+
+@dataclass
+class StubSliceHandle:
+    """Minimal data carrier satisfying the SliceHandle protocol for tests."""
+
+    _slice_id: str
+    _zone: str
+    _scale_group: str
+    _labels: dict[str, str]
+    _workers: list[StubWorkerHandle] = field(default_factory=list)
+    _created_at: Timestamp = field(default_factory=Timestamp.now)
+
+    @property
+    def slice_id(self) -> str:
+        return self._slice_id
+
+    @property
+    def zone(self) -> str:
+        return self._zone
+
+    @property
+    def scale_group(self) -> str:
+        return self._scale_group
+
+    @property
+    def labels(self) -> dict[str, str]:
+        return self._labels
+
+    @property
+    def created_at(self) -> Timestamp:
+        return self._created_at
+
+    def describe(self) -> SliceStatus:
+        return SliceStatus(
+            state=CloudSliceState.READY,
+            worker_count=len(self._workers),
+            workers=list(self._workers),
+        )
+
+    def terminate(self) -> None:
+        pass
 
 
 def _make_slice_snapshot(
@@ -43,33 +125,32 @@ def _make_slice_snapshot(
     )
 
 
-def _make_fake_slice(
+def _make_stub_slice(
     slice_id: str,
     scale_group: str = "tpu-group",
     label_prefix: str = "test",
     worker_ids: list[str] | None = None,
-) -> FakeSliceHandle:
-    """Build a FakeSliceHandle with the right labels for filtering."""
+) -> StubSliceHandle:
+    """Build a StubSliceHandle with the right labels for filtering."""
     labels = Labels(label_prefix)
     slice_labels = {
         labels.iris_managed: "true",
         labels.iris_scale_group: scale_group,
     }
     addrs = worker_ids or ["10.0.0.1"]
-    vms = [
-        FakeWorkerHandle(
-            vm_id=f"{slice_id}-vm-{i}",
-            address=addr,
-            created_at_ms=Timestamp.now().epoch_ms(),
+    workers = [
+        StubWorkerHandle(
+            _vm_id=f"{slice_id}-vm-{i}",
+            _address=addr,
         )
         for i, addr in enumerate(addrs)
     ]
-    return FakeSliceHandle(
-        slice_id=slice_id,
-        scale_group=scale_group,
-        zone="us-central1-a",
-        vms=vms,
-        labels=slice_labels,
+    return StubSliceHandle(
+        _slice_id=slice_id,
+        _zone="us-central1-a",
+        _scale_group=scale_group,
+        _labels=slice_labels,
+        _workers=workers,
     )
 
 
@@ -81,7 +162,7 @@ def _make_fake_slice(
 def test_restore_slice_in_checkpoint_and_cloud_preserves_lifecycle():
     """A READY slice in both checkpoint and cloud keeps its READY lifecycle."""
     slice_snap = _make_slice_snapshot("slice-1", lifecycle="ready", worker_ids=["10.0.0.1"])
-    cloud_handle = _make_fake_slice("slice-1", worker_ids=["10.0.0.1"])
+    cloud_handle = _make_stub_slice("slice-1", worker_ids=["10.0.0.1"])
 
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[slice_snap]),
@@ -101,7 +182,7 @@ def test_restore_booting_slice_that_became_ready_transitions_on_refresh():
     and transition the slice. Restore just sets up the state correctly.
     """
     slice_snap = _make_slice_snapshot("slice-1", lifecycle="booting")
-    cloud_handle = _make_fake_slice("slice-1")
+    cloud_handle = _make_stub_slice("slice-1")
 
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[slice_snap]),
@@ -116,7 +197,7 @@ def test_restore_booting_slice_that_became_ready_transitions_on_refresh():
 def test_restore_initializing_slice_with_cloud_ready():
     """An INITIALIZING slice from checkpoint preserves lifecycle regardless of cloud state."""
     slice_snap = _make_slice_snapshot("slice-1", lifecycle="initializing")
-    cloud_handle = _make_fake_slice("slice-1")
+    cloud_handle = _make_stub_slice("slice-1")
 
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[slice_snap]),
@@ -165,7 +246,7 @@ def test_restore_multiple_slices_some_missing():
     snap_alive = _make_slice_snapshot("slice-alive", lifecycle="ready")
     snap_gone = _make_slice_snapshot("slice-gone", lifecycle="ready")
 
-    cloud_alive = _make_fake_slice("slice-alive")
+    cloud_alive = _make_stub_slice("slice-alive")
 
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(
@@ -188,7 +269,7 @@ def test_restore_multiple_slices_some_missing():
 
 def test_restore_adopts_unknown_cloud_slice_as_booting():
     """A cloud slice absent from checkpoint is adopted as BOOTING."""
-    orphan = _make_fake_slice("slice-orphan")
+    orphan = _make_stub_slice("slice-orphan")
 
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[]),
@@ -204,7 +285,7 @@ def test_restore_adopts_unknown_cloud_slice_as_booting():
 
 def test_restore_adopts_creating_cloud_slice():
     """A CREATING cloud slice is adopted as BOOTING."""
-    creating = _make_fake_slice("slice-creating")
+    creating = _make_stub_slice("slice-creating")
 
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[]),
@@ -220,8 +301,8 @@ def test_restore_mixed_known_and_unknown_slices():
     """Checkpoint has slice-a; cloud has slice-a and slice-b. slice-b is adopted."""
     snap_a = _make_slice_snapshot("slice-a", lifecycle="ready")
 
-    cloud_a = _make_fake_slice("slice-a")
-    cloud_b = _make_fake_slice("slice-b")
+    cloud_a = _make_stub_slice("slice-a")
+    cloud_b = _make_stub_slice("slice-b")
 
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[snap_a]),
@@ -244,11 +325,11 @@ def test_restore_multiple_groups_independent_reconciliation():
     label_prefix = "test"
 
     # Group A: slice-a1 alive, slice-a2 gone
-    cloud_a1 = _make_fake_slice("slice-a1", scale_group="group-a", label_prefix=label_prefix)
+    cloud_a1 = _make_stub_slice("slice-a1", scale_group="group-a", label_prefix=label_prefix)
 
     # Group B: slice-b1 alive, slice-b-orphan appeared during restart
-    cloud_b1 = _make_fake_slice("slice-b1", scale_group="group-b", label_prefix=label_prefix)
-    cloud_b_orphan = _make_fake_slice("slice-b-orphan", scale_group="group-b", label_prefix=label_prefix)
+    cloud_b1 = _make_stub_slice("slice-b1", scale_group="group-b", label_prefix=label_prefix)
+    cloud_b_orphan = _make_stub_slice("slice-b-orphan", scale_group="group-b", label_prefix=label_prefix)
 
     result_a = restore_scaling_group(
         group_snapshot=GroupSnapshot(
@@ -278,8 +359,8 @@ def test_restore_multiple_groups_independent_reconciliation():
 
 def test_restore_empty_checkpoint_with_cloud_slices():
     """Empty checkpoint with existing cloud slices: all adopted."""
-    cloud_1 = _make_fake_slice("slice-1")
-    cloud_2 = _make_fake_slice("slice-2")
+    cloud_1 = _make_stub_slice("slice-1")
+    cloud_2 = _make_stub_slice("slice-2")
 
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[]),

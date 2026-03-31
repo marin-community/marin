@@ -26,24 +26,8 @@ from iris.cluster.controller.controller import (
     job_requirements_from_job,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
-import tempfile
-from pathlib import Path
 
-from iris.cluster.controller.db import (
-    ATTEMPTS,
-    ControllerDB,
-    JOBS,
-    TASKS,
-    WORKERS,
-    ACTIVE_TASK_STATES,
-    WORKER_ATTRIBUTES,
-    Job,
-    Task,
-    Worker,
-    _decode_attribute_rows,
-    _tasks_with_attempts,
-)
-from iris.cluster.log_store import LogStore
+from iris.cluster.controller.db import WorkerDetail
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
     RESERVATION_HOLDER_JOB_NAME,
@@ -63,78 +47,18 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
-from tests.cluster.controller.conftest import FakeProvider
-
-# =============================================================================
-# Helpers
-# =============================================================================
-
-
-def _make_state(**kwargs) -> ControllerTransitions:
-    """Create a ControllerTransitions with a fresh temp DB and log store."""
-    tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
-    db = ControllerDB(db_dir=tmp)
-    log_store = LogStore(log_dir=tmp / "logs")
-    return ControllerTransitions(db=db, log_store=log_store, **kwargs)
-
-
-def _schedulable_tasks(state: ControllerTransitions):
-    with state._db.snapshot() as q:
-        tasks = q.select(
-            TASKS,
-            where=TASKS.c.state.not_null()
-            & ~TASKS.c.state.in_(
-                [
-                    cluster_pb2.TASK_STATE_SUCCEEDED,
-                    cluster_pb2.TASK_STATE_FAILED,
-                    cluster_pb2.TASK_STATE_KILLED,
-                    cluster_pb2.TASK_STATE_UNSCHEDULABLE,
-                    cluster_pb2.TASK_STATE_WORKER_FAILED,
-                ]
-            ),
-            order_by=(
-                TASKS.c.priority_neg_depth.asc(),
-                TASKS.c.priority_root_submitted_ms.asc(),
-                TASKS.c.submitted_at_ms.asc(),
-                TASKS.c.task_id.asc(),
-            ),
-        )
-    return [task for task in tasks if task.can_be_scheduled()]
-
-
-def _worker_running_tasks(state: ControllerTransitions, worker_id: WorkerId):
-    with state._db.snapshot() as q:
-        rows = q.raw(
-            "SELECT t.task_id FROM tasks t "
-            "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
-            "WHERE a.worker_id = ? AND t.state IN (?, ?, ?)",
-            (str(worker_id), *ACTIVE_TASK_STATES),
-            decoders={"task_id": JobName.from_wire},
-        )
-    return frozenset(row.task_id for row in rows)
-
-
-def _with_attrs(state: ControllerTransitions, workers: list[Worker]) -> list[Worker]:
-    from dataclasses import replace as _replace
-
-    if not workers:
-        return workers
-    with state._db.snapshot() as q:
-        attrs = q.select(
-            WORKER_ATTRIBUTES,
-            columns=(
-                WORKER_ATTRIBUTES.c.worker_id,
-                WORKER_ATTRIBUTES.c.key,
-                WORKER_ATTRIBUTES.c.value_type,
-                WORKER_ATTRIBUTES.c.str_value,
-                WORKER_ATTRIBUTES.c.int_value,
-                WORKER_ATTRIBUTES.c.float_value,
-            ),
-            where=WORKER_ATTRIBUTES.c.worker_id.in_([str(w.worker_id) for w in workers]),
-        )
-    attrs_by_worker = _decode_attribute_rows(attrs)
-    return [_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
+from rigging.timing import Timestamp
+from tests.cluster.controller.conftest import (
+    FakeProvider,
+    hydrate_worker_attributes as _with_attrs,
+    query_job as _query_job,
+    query_task as _query_task,
+    query_task_with_attempts as _query_task_with_attempts,
+    query_tasks_for_job as _query_tasks_for_job,
+    query_worker as _query_worker,
+    schedulable_tasks as _schedulable_tasks,
+    worker_running_tasks as _worker_running_tasks,
+)
 
 
 def _cpu_device() -> cluster_pb2.DeviceConfig:
@@ -188,14 +112,14 @@ def _make_worker(
     metadata: cluster_pb2.WorkerMetadata | None = None,
     attributes: dict[str, AttributeValue] | None = None,
     healthy: bool = True,
-) -> Worker:
+) -> WorkerDetail:
     meta = metadata or _cpu_metadata()
     # Workers always have device attributes from config (Stage 3).
     # Merge explicit attributes on top of the device-derived defaults.
     default_attrs = _default_attributes_for_device(meta.device)
     if attributes:
         default_attrs.update(attributes)
-    return Worker(
+    return WorkerDetail(
         worker_id=WorkerId(worker_id),
         address=f"{worker_id}:8080",
         metadata=meta,
@@ -280,39 +204,6 @@ def _submit_job(
     request.name = jid.to_wire()
     state.submit_job(jid, request, Timestamp.now())
     return jid
-
-
-def _query_job(state: ControllerTransitions, job_id: JobName) -> Job | None:
-    with state._db.snapshot() as q:
-        return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
-
-
-def _query_task(state: ControllerTransitions, task_id: JobName) -> Task | None:
-    with state._db.snapshot() as q:
-        return q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
-
-
-def _query_worker(state: ControllerTransitions, worker_id: WorkerId) -> Worker | None:
-    with state._db.snapshot() as q:
-        return q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
-
-
-def _query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list[Task]:
-    with state._db.snapshot() as q:
-        return q.select(TASKS, where=TASKS.c.job_id == job_id.to_wire())
-
-
-def _query_task_with_attempts(state: ControllerTransitions, task_id: JobName) -> Task | None:
-    wire = task_id.to_wire()
-    with state._db.snapshot() as q:
-        tasks = q.select(TASKS, where=TASKS.c.task_id == wire)
-        attempts = q.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id == wire,
-            order_by=(ATTEMPTS.c.attempt_id.asc(),),
-        )
-    hydrated = _tasks_with_attempts(tasks, attempts)
-    return hydrated[0] if hydrated else None
 
 
 # =============================================================================
@@ -826,7 +717,7 @@ def test_taint_constraint_preserves_existing_constraints():
 
 
 def _build_context_with_workers(
-    workers: list[Worker],
+    workers: list[WorkerDetail],
     pending_tasks: list[JobName],
     jobs: dict[JobName, JobRequirements],
 ) -> SchedulingContext:
@@ -1479,7 +1370,7 @@ def test_reservation_match_user_variant_override():
 # =============================================================================
 
 
-def test_holder_task_worker_death_no_failure_record():
+def test_holder_task_worker_death_no_failure_record(state):
     """Holder tasks return to PENDING with no WORKER_FAILED record when their worker dies.
 
     Holder tasks are virtual (never dispatched). When a worker dies, they must
@@ -1487,7 +1378,6 @@ def test_holder_task_worker_death_no_failure_record():
     that they can survive an arbitrary number of worker cycles without leaking
     memory or eventually going terminal.
     """
-    state = _make_state()
     request = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_cpu_device())])
     parent_job_id = _submit_job(state, "res-job", request)
     holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
@@ -1528,7 +1418,7 @@ def test_holder_task_worker_death_no_failure_record():
         assert holder_task.can_be_scheduled(), "holder task must be schedulable again"
 
 
-def test_holder_task_removed_from_worker_when_parent_succeeds():
+def test_holder_task_removed_from_worker_when_parent_succeeds(state):
     """Holder task is cleaned from worker.running_tasks when the parent job succeeds.
 
     PATH A (task-driven termination): a parent task succeeds → on_task_transition
@@ -1539,7 +1429,6 @@ def test_holder_task_removed_from_worker_when_parent_succeeds():
     Previously untested; the existing cancel test only covers PATH B
     (explicit JobCancelledEvent), not this completion-driven path.
     """
-    state = _make_state()
     request = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_cpu_device())])
     parent_job_id = _submit_job(state, "res-job", request)
     holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
@@ -1586,7 +1475,7 @@ def test_holder_task_removed_from_worker_when_parent_succeeds():
     assert holder_task.task_id not in _worker_running_tasks(state, wid_holder)
 
 
-def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already_terminal():
+def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already_terminal(state):
     """Holder is cleaned even when JobCancelledEvent arrives after all parent tasks finished.
 
     The gap: _on_job_cancelled's task loop skips all terminal tasks, so
@@ -1596,7 +1485,6 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
     the holder task would stay in worker.running_tasks indefinitely, making the
     worker appear busy and blocking scale-down idle detection.
     """
-    state = _make_state()
     request = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_cpu_device())])
     parent_job_id = _submit_job(state, "res-job", request)
     holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
@@ -1666,14 +1554,13 @@ def _region_constraint(region: str) -> cluster_pb2.Constraint:
     return Constraint(key="region", op=ConstraintOp.EQ, value=region).to_proto()
 
 
-def test_holder_task_gets_device_constraints_from_tpu_entry():
+def test_holder_task_gets_device_constraints_from_tpu_entry(state):
     """Holder task for a TPU reservation entry must have device-type constraints.
 
     When an entry has explicit constraints (e.g. region) but no device-type,
     the holder job must still get auto-injected device constraints from the
     entry's resource spec. Without this, the holder could land on a CPU worker.
     """
-    state = _make_state()
 
     # Entry has TPU resources + region constraint, but NO device-type constraint.
     entry = _make_reservation_entry(
@@ -1697,14 +1584,13 @@ def test_holder_task_gets_device_constraints_from_tpu_entry():
     assert "region" in constraint_keys, "holder job should still have the explicit region constraint"
 
 
-def test_holder_task_not_scheduled_on_wrong_device_type():
+def test_holder_task_not_scheduled_on_wrong_device_type(state):
     """Holder task for a TPU entry must not be assigned to a CPU worker.
 
     End-to-end test: submit a reservation with a TPU entry that has only a
     region constraint (no device-type), register both a TPU and CPU worker,
     and verify the scheduler assigns the holder to the TPU worker only.
     """
-    state = _make_state()
 
     entry = _make_reservation_entry(
         device=_tpu_device("v5p-64", count=4),

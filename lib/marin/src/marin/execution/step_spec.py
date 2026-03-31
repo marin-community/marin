@@ -10,8 +10,33 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Any
+from urllib.parse import urlparse
 
-from iris.marin_fs import marin_prefix
+from rigging.filesystem import marin_prefix
+
+
+def _is_relative_path(url_or_path: str) -> bool:
+    """Return True if the path is relative (not a URL and doesn't start with /)."""
+    if urlparse(url_or_path).scheme:
+        return False
+    return not url_or_path.startswith("/")
+
+
+@dataclass(frozen=True)
+class _StepSpecMigrationConfig:
+    """Temporary config used by ``StepSpec.as_executor_step()`` during the
+    migration from ``ExecutorStep`` to ``StepSpec``.
+
+    New steps can be authored as ``StepSpec`` and converted to ``ExecutorStep``
+    for use in existing ``Executor.run()`` pipelines.  This config carries
+    the versioning and dependency information that the Executor's
+    ``compute_version`` traversal expects.  Once the migration is complete
+    and all pipelines use ``StepRunner`` directly, this class can be removed.
+    """
+
+    output_path: Any
+    attrs: Any
+    deps: list = dataclasses.field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -69,9 +94,47 @@ class StepSpec:
 
     @cached_property
     def output_path(self) -> str:
-        """Output path of the step"""
-        if self.override_output_path is not None:
-            return self.override_output_path
+        """Output path of the step.
 
+        If ``override_output_path`` is set and relative (no URL scheme, doesn't
+        start with ``/``), it is automatically prefixed with ``output_path_prefix``
+        or ``marin_prefix()``.
+        """
         prefix = self.output_path_prefix or marin_prefix()
+        if self.override_output_path is not None:
+            if _is_relative_path(self.override_output_path):
+                return f"{prefix}/{self.override_output_path}"
+            return self.override_output_path
         return f"{prefix}/{self.name_with_hash}"
+
+    def as_executor_step(self) -> ExecutorStep:  # noqa: F821
+        """Convert to an ``ExecutorStep`` for use in ``Executor.run()`` pipelines.
+
+        The resulting ``ExecutorStep`` preserves this step's output path and
+        caching identity via ``override_output_path``.  Round-tripping through
+        ``resolve_executor_step`` returns the original ``StepSpec``.
+
+        The exists to allow for incremental migration from ``ExecutorStep`` to ``StepSpec``:
+        steps can be authored as ``StepSpec`` and used in existing pipelines without modification.
+        """
+        from marin.execution.executor import ExecutorStep, VersionedValue, THIS_OUTPUT_PATH
+
+        dep_steps = [dep.as_executor_step() for dep in self.deps]
+
+        config = _StepSpecMigrationConfig(
+            output_path=THIS_OUTPUT_PATH,
+            attrs=VersionedValue(self.hash_attrs),
+            deps=dep_steps,
+        )
+
+        result = ExecutorStep(
+            name=self.name,
+            fn=self.fn,
+            config=config,
+            override_output_path=self.output_path,
+        )
+        # Stash the original StepSpec for round-trip recovery in
+        # resolve_executor_step.  Uses object.__setattr__ because
+        # ExecutorStep is frozen.
+        object.__setattr__(result, "_original_step_spec", self)
+        return result

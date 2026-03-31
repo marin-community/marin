@@ -18,7 +18,7 @@ from collections.abc import Iterator, Sequence
 
 import draccus
 import transformers
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig
 from fray.v2.local_backend import LocalClient
@@ -37,7 +37,7 @@ from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

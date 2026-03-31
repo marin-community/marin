@@ -22,7 +22,6 @@ from fray.v2 import (
     wait_all,
 )
 from fray.v2.actor import HostedActor
-from iris.logging import configure_logging
 from marin.rl.curriculum import Curriculum
 from marin.rl.placement import resolve_launcher_region, singleton_region_list
 from marin.rl.rl_job import RLJob, RLJobConfig
@@ -32,6 +31,7 @@ from marin.rl.weight_transfer import WeightTransferMode
 from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
 from marin.training.training import _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

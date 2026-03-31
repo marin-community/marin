@@ -148,7 +148,7 @@ NGRAM_CONFIG = NGramConfig(
 
 
 def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
-    dedupe_config = DedupeConfig(
+    dedupe_config = DeconConfig(
         input_path=dataset_config.path,
         output_path=this_output_path(),
         decontaminate_source=EVAL_DATASET_STEPS,
@@ -156,7 +156,7 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
         false_positive_rate=1e-20,
         ngram=NGRAM_CONFIG,
         processes=1024,
-        mode=DedupMode.TRAIN_TEST_OVERLAP,
+        mode=DeconMode.TRAIN_TEST_OVERLAP,
         text_field=dataset_config.text_field,
     )
 
@@ -188,7 +188,7 @@ Zephyr handles file discovery and parallelism automatically. You can control the
 ```python
 # In build_step function - adjust processes for parallelism
 def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
-    dedupe_config = DedupeConfig(
+    dedupe_config = DeconConfig(
         # ...
         processes=128,  # Control parallelism level
     )
@@ -247,7 +247,7 @@ DEFAULT_NGRAM_CONFIG = NGramConfig(
 
 # Edit the processes parameter in build_step
 def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
-    dedupe_config = DedupeConfig(
+    dedupe_config = DeconConfig(
         # ...
         processes=32,  # Increase for more parallelism
     )

@@ -10,7 +10,6 @@ from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_usage import CompletionUsage
-from transformers import AutoTokenizer
 
 from marin.rl.environments.math_env import MathEnv
 from marin.rl.environments.inference_ctx import InferenceRequestKind, LevanterInferenceContext
@@ -66,9 +65,9 @@ class DummyInferenceContext(LevanterInferenceContext):
         return [create_mock_chat_completion(self.tokenizer) for prompt in prompts]
 
 
-def test_math_env_reward_calculation():
+def test_math_env_reward_calculation(gpt2_tokenizer):
     """Test that math env correctly calculates rewards and creates rollouts."""
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    tokenizer = gpt2_tokenizer
     inference_ctx = DummyInferenceContext(tokenizer)
     train_data = [
         {"problem": "What is 2+2?", "solution": "\\boxed{4}"},

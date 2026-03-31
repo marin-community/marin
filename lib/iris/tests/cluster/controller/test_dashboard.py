@@ -7,6 +7,7 @@ Tests verify dashboard functionality through the Connect RPC endpoints.
 The dashboard serves a web UI that fetches data via RPC calls.
 """
 
+import re
 from unittest.mock import Mock
 
 import pytest
@@ -15,72 +16,30 @@ from starlette.testclient import TestClient
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
-    JOBS,
-    TASKS,
-    ATTEMPTS,
-    ControllerDB,
     Endpoint,
-    _tasks_with_attempts,
+    JobDetail,
+    decode_rows,
     healthy_active_workers_with_attributes,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
-from iris.cluster.log_store import LogStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import Timestamp
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Timestamp
 
-
-def _query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName):
-    """Read tasks with attempts for a job."""
-    with state._db.snapshot() as q:
-        tasks = q.select(
-            TASKS,
-            where=TASKS.c.job_id == job_id.to_wire(),
-            order_by=(TASKS.c.task_index.asc(),),
-        )
-        if not tasks:
-            return []
-        attempts = q.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id.in_([t.task_id.to_wire() for t in tasks]),
-            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
-        )
-    return _tasks_with_attempts(tasks, attempts)
-
-
-def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    """Create a minimal RuntimeEntrypoint proto for testing."""
-    entrypoint = cluster_pb2.RuntimeEntrypoint()
-    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    return entrypoint
-
+from .conftest import (
+    make_test_entrypoint,
+    make_worker_metadata,
+    query_tasks_with_attempts as _query_tasks_with_attempts,
+    register_worker,
+)
 
 # =============================================================================
 # Test Helpers
 # =============================================================================
-
-
-def register_worker(
-    state: ControllerTransitions,
-    worker_id: str,
-    address: str,
-    metadata: cluster_pb2.WorkerMetadata,
-    healthy: bool = True,
-) -> WorkerId:
-    """Register a worker through the state command API."""
-    wid = WorkerId(worker_id)
-    state.register_or_refresh_worker(
-        worker_id=wid,
-        address=address,
-        metadata=metadata,
-        ts=Timestamp.now(),
-    )
-    if not healthy:
-        state._db.execute("UPDATE workers SET healthy = 0 WHERE worker_id = ?", (str(wid),))
-    return wid
 
 
 def submit_job(
@@ -129,16 +88,6 @@ def set_task_state(state: ControllerTransitions, task_id: JobName, new_state: in
 
 
 @pytest.fixture
-def state(tmp_path):
-    db = ControllerDB(db_dir=tmp_path)
-    log_store = LogStore(log_dir=tmp_path / "logs")
-    s = ControllerTransitions(db=db, log_store=log_store)
-    yield s
-    log_store.close()
-    db.close()
-
-
-@pytest.fixture
 def scheduler():
     return Scheduler()
 
@@ -171,7 +120,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     def _get_job_scheduling_diagnostics(job_wire_id):
         """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
         with state._db.snapshot() as q:
-            rows = q.select(JOBS, where=JOBS.c.job_id == job_wire_id)
+            rows = decode_rows(JobDetail, q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire_id,)))
         if not rows:
             return None
         job = rows[0]
@@ -242,34 +191,10 @@ def rpc_post(client: TestClient, method: str, body: dict | None = None):
 
 
 @pytest.fixture
-def make_worker_metadata():
-    """Create WorkerMetadata for testing."""
-
-    def _make(
-        cpu: int = 10,
-        memory_bytes: int = 10 * 1024**3,
-        disk_bytes: int = 10 * 1024**3,
-    ) -> cluster_pb2.WorkerMetadata:
-        device = cluster_pb2.DeviceConfig()
-        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
-
-        return cluster_pb2.WorkerMetadata(
-            hostname="test-worker",
-            ip_address="127.0.0.1",
-            cpu_count=cpu,
-            memory_bytes=memory_bytes,
-            disk_bytes=disk_bytes,
-            device=device,
-        )
-
-    return _make
-
-
-@pytest.fixture
 def job_request():
     return cluster_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-user", "test-job").to_wire(),
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
@@ -327,7 +252,7 @@ def test_list_jobs_includes_terminal_states(client, state, job_request):
         assert j.get("state") in terminal_states
 
 
-def test_list_workers_returns_healthy_status(client, state, make_worker_metadata):
+def test_list_workers_returns_healthy_status(client, state):
     """ListWorkers RPC returns workers with healthy status."""
     register_worker(state, "healthy1", "h1:8080", make_worker_metadata())
     register_worker(state, "healthy2", "h2:8080", make_worker_metadata())
@@ -412,7 +337,7 @@ def test_list_jobs_includes_task_counts(client, state):
     # Submit a job with multiple replicas (replicas is on ResourceSpecProto)
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-replica-job",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=3,
         environment=cluster_pb2.EnvironmentConfig(),
@@ -443,7 +368,7 @@ def test_list_jobs_includes_task_counts(client, state):
 def test_list_users_returns_aggregates(client, state):
     """ListUsers RPC returns one aggregate row per user."""
     request = cluster_pb2.Controller.LaunchJobRequest(
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
@@ -489,7 +414,7 @@ def test_get_job_status_returns_original_request(client, state):
     """GetJobStatus RPC returns the original LaunchJobRequest for the job detail page."""
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="request-detail-job",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
             cpu_millicores=4000,
             memory_bytes=8 * 1024**3,
@@ -600,14 +525,14 @@ def mock_autoscaler():
                 current_demand=3,
                 availability_status="requesting",
                 availability_reason="scale-up in progress",
-                blocked_until=Timestamp.from_ms(0).to_proto(),
+                blocked_until=timestamp_to_proto(Timestamp.from_ms(0)),
             ),
         ],
         current_demand={"test-group": 3},
-        last_evaluation=Timestamp.from_ms(1000).to_proto(),
+        last_evaluation=timestamp_to_proto(Timestamp.from_ms(1000)),
         recent_actions=[
             vm_pb2.AutoscalerAction(
-                timestamp=Timestamp.from_ms(1000).to_proto(),
+                timestamp=timestamp_to_proto(Timestamp.from_ms(1000)),
                 action_type="scale_up",
                 scale_group="test-group",
                 slice_id="slice-1",
@@ -705,14 +630,13 @@ def test_pending_reason_uses_passive_autoscaler_hint_over_scheduler(
     client_with_autoscaler,
     state,
     mock_autoscaler,
-    make_worker_metadata,
 ):
     """GetJobStatus should use autoscaler passive-wait hint even when no active launch."""
     register_worker(state, "w1", "h1:8080", make_worker_metadata())
 
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="diag-constraint",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
@@ -785,7 +709,7 @@ def test_worker_detail_page_escapes_id(client):
     assert "onmouseover" not in response.text or "&quot;" in response.text
 
 
-def test_get_worker_status_recent_tasks_have_timestamps(client, state, make_worker_metadata, job_request):
+def test_get_worker_status_recent_tasks_have_timestamps(client, state, job_request):
     """GetWorkerStatus returns recent_tasks with started_at populated from attempt timestamps."""
     wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
     job_id = submit_job(state, "ts-job", job_request)
@@ -815,7 +739,7 @@ def test_get_worker_status_recent_tasks_have_timestamps(client, state, make_work
     assert tasks[0].get("finishedAt"), "finished_at must be populated from attempt timestamps"
 
 
-def test_get_worker_status_by_worker_id(client, state, make_worker_metadata):
+def test_get_worker_status_by_worker_id(client, state):
     """GetWorkerStatus looks up purely by worker ID — no autoscaler cross-referencing."""
     register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
 
@@ -825,7 +749,7 @@ def test_get_worker_status_by_worker_id(client, state, make_worker_metadata):
     assert resp.get("worker", {}).get("address") == "10.0.0.5:8080"
 
 
-def test_get_worker_status_includes_running_tasks_and_resource_history(client, state, make_worker_metadata, job_request):
+def test_get_worker_status_includes_running_tasks_and_resource_history(client, state, job_request):
     """GetWorkerStatus assembles running tasks and resource history explicitly."""
     wid = register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
     job_id = submit_job(state, "worker-detail-res", job_request)
@@ -867,18 +791,17 @@ def test_health_endpoint_returns_ok(client):
 # =============================================================================
 
 
-def test_get_task_logs_for_missing_task_returns_empty_batch(client):
-    """GetTaskLogs returns a single batch with no logs for a nonexistent task."""
+def test_fetch_logs_for_missing_task_returns_empty_entries(client):
+    """FetchLogs returns empty entries for a nonexistent task."""
+    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
-        "/iris.cluster.ControllerService/GetTaskLogs",
-        json={"id": JobName.root("test-user", "nonexistent").task(0).to_wire()},
+        "/iris.cluster.ControllerService/FetchLogs",
+        json={"source": re.escape(task_id) + ":.*"},
         headers={"Content-Type": "application/json"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    batches = data.get("taskLogs", [])
-    assert len(batches) == 1
-    assert batches[0].get("logs", []) == []
+    assert data.get("entries", []) == []
 
 
 # =============================================================================
@@ -893,7 +816,7 @@ def test_coscheduling_failure_reason_no_workers(client, state):
     """
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="cosched-job",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=2,
         environment=cluster_pb2.EnvironmentConfig(),
@@ -914,7 +837,7 @@ def test_coscheduling_failure_reason_no_workers(client, state):
     assert "no workers match constraints" in reason.lower(), f"Expected constraint failure reason, got: {reason}"
 
 
-def test_coscheduling_failure_reason_insufficient_group(client, state, make_worker_metadata):
+def test_coscheduling_failure_reason_insufficient_group(client, state):
     """Pending coscheduled job reports diagnostic when group is too small.
 
     Diagnostics are on the job-level (via GetJobStatus), not per-task in ListTasks.
@@ -929,7 +852,7 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
     # Submit a coscheduled job needing 4 replicas
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="big-cosched",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
@@ -956,7 +879,7 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
 # =============================================================================
 
 
-def test_worker_attributes_in_list_workers(client, state, make_worker_metadata):
+def test_worker_attributes_in_list_workers(client, state):
     """ListWorkers RPC returns worker attributes in metadata."""
     meta = make_worker_metadata()
     meta.attributes[WellKnownAttribute.TPU_NAME].CopyFrom(cluster_pb2.AttributeValue(string_value="v5litepod-16"))
@@ -982,7 +905,7 @@ def test_list_jobs_returns_all_jobs_for_pagination(client, state):
     for i in range(60):
         request = cluster_pb2.Controller.LaunchJobRequest(
             name=f"job-{i:03d}",
-            entrypoint=_make_test_entrypoint(),
+            entrypoint=make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(),
         )

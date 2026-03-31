@@ -101,11 +101,11 @@ from fray.v2.iris_backend import FrayIrisClient
 from fray.v2.types import TpuConfig
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import WellKnownAttribute
-from iris.marin_fs import collect_gcs_paths
-from iris.marin_fs import get_bucket_location, open_url
-from iris.marin_fs import marin_prefix
-from iris.marin_fs import region_from_prefix
-from iris.marin_fs import split_gcs_path
+from rigging.filesystem import collect_gcs_paths
+from rigging.filesystem import get_bucket_location, open_url
+from rigging.filesystem import marin_prefix
+from rigging.filesystem import region_from_prefix
+from rigging.filesystem import split_gcs_path
 from iris.rpc import config_pb2
 
 from marin.execution.step_spec import StepSpec
@@ -116,7 +116,7 @@ from marin.execution.executor_step_status import (
     StatusFile,
 )
 from marin.utilities.json_encoder import CustomJsonEncoder
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -655,13 +655,23 @@ def resolve_executor_step(
     deps: list[StepSpec] | None = None,
     dag_tpu_regions: list[str] | None = None,
     forced_region: str | None = None,
+    mirror_budget_gb: float | None = None,
 ) -> StepSpec:
     """Convert an ExecutorStep into a StepSpec.
 
     ``config`` should already be instantiated (no InputName / OutputName /
     VersionedValue markers).  The old executor called ``fn(config)``; we wrap
     that into a ``fn(output_path)`` closure expected by ``StepRunner``.
+
+    If *step* was created by :meth:`StepSpec.as_executor_step`, the original
+    ``StepSpec`` is returned directly (with deps replaced by the resolved
+    versions), preserving round-trip identity.
     """
+    # Short-circuit for StepSpec -> ExecutorStep -> StepSpec round-trip.
+    original: StepSpec | None = getattr(step, "_original_step_spec", None)
+    if original is not None:
+        return dataclasses.replace(original, deps=deps or [])
+
     import ray
 
     remote_callable = step.fn if isinstance(step.fn, RemoteCallable) else None
@@ -690,8 +700,14 @@ def resolve_executor_step(
     # output_path parameter that StepRunner passes.
     captured_fn = step_fn
     captured_config = config
+    captured_budget = mirror_budget_gb
 
     def resolved_fn(output_path):
+        if captured_budget is not None:
+            from rigging.filesystem import mirror_budget
+
+            with mirror_budget(captured_budget):
+                return captured_fn(captured_config)
         return captured_fn(captured_config)
 
     # If the original fn was decorated with @remote, propagate the
@@ -889,6 +905,8 @@ def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
     """
 
     def recurse(obj: Any):
+        if isinstance(obj, MirroredValue):
+            return recurse(obj.value)
         if isinstance(obj, VersionedValue):
             return recurse(obj.value)
         if isinstance(obj, OutputName | InputName | ExecutorStep):
@@ -906,6 +924,28 @@ def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
         return obj
 
     return recurse(value)  # type: ignore
+
+
+@dataclass(frozen=True)
+class MirroredValue(Generic[T_co]):
+    """Wraps a path value to signal that it should be mirrored from any marin regional bucket.
+
+    At config instantiation time, the path is resolved to the local marin prefix.
+    Before step execution, the executor copies the data from whichever region has it.
+    """
+
+    value: T_co
+    budget_gb: float = 10
+
+
+def mirrored(value: str | VersionedValue[str], budget_gb: float = 10) -> MirroredValue:
+    """Mark a path for cross-region mirroring with a transfer budget.
+
+    Usage: input_path=mirrored(versioned("documents/stackexchange/..."), budget_gb=50)
+    """
+    if isinstance(value, MirroredValue):
+        raise ValueError("Can't nest MirroredValue")
+    return MirroredValue(value=value, budget_gb=budget_gb)
 
 
 ############################################################
@@ -1018,6 +1058,10 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
         if isinstance(obj, ExecutorStep):
             obj = output_path_of(obj, None)
 
+        if isinstance(obj, MirroredValue):
+            recurse(obj.value, prefix)
+            return
+
         if isinstance(obj, VersionedValue):
             version[prefix] = obj.value
         elif isinstance(obj, InputName):
@@ -1052,6 +1096,37 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
     return _Dependencies(dependencies, pseudo_dependencies, version)
 
 
+def _max_mirror_budget(config: Any) -> float | None:
+    """Extract the maximum mirror budget from MirroredValue entries in a raw config."""
+    max_budget: float | None = None
+
+    def recurse(obj: Any) -> None:
+        nonlocal max_budget
+        if obj is None:
+            return
+        if isinstance(obj, MirroredValue):
+            if max_budget is None or obj.budget_gb > max_budget:
+                max_budget = obj.budget_gb
+            return
+        if isinstance(obj, VersionedValue):
+            recurse(obj.value)
+            return
+        if isinstance(obj, InputName | ExecutorStep):
+            return
+        if is_dataclass(obj):
+            for field in fields(obj):
+                recurse(getattr(obj, field.name))
+        elif isinstance(obj, list):
+            for x in obj:
+                recurse(x)
+        elif isinstance(obj, dict):
+            for x in obj.values():
+                recurse(x)
+
+    recurse(config)
+    return max_budget
+
+
 def instantiate_config(
     config: dataclass, output_path: str, output_paths: dict[ExecutorStep, str], prefix: str
 ) -> dataclass:
@@ -1072,6 +1147,13 @@ def instantiate_config(
 
         if isinstance(obj, ExecutorStep):
             obj = output_path_of(obj)
+
+        if isinstance(obj, MirroredValue):
+            inner = recurse(obj.value)
+            # Resolve to mirror:// protocol — MirrorFileSystem handles cross-region copying
+            if isinstance(inner, str) and not inner.startswith("mirror://"):
+                return f"mirror://{inner}"
+            return inner
 
         if isinstance(obj, InputName):
             if obj.step is None:
@@ -1218,6 +1300,7 @@ class Executor:
                 deps=dep_stubs_by_step[step],
                 dag_tpu_regions=dag_tpu_regions_by_step[step],
                 forced_region=forced_region_by_step[step],
+                mirror_budget_gb=_max_mirror_budget(step.config),
             )
         # Second pass: rebuild with deps pointing to resolved StepSpecs
         result = []

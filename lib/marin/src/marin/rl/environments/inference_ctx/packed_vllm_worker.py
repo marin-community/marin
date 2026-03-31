@@ -135,10 +135,10 @@ def _initialize_runtime(control: socket.socket, worker_index: int) -> _ChildRunt
     if not isinstance(init_request, PackedChildInitRequest):
         raise TypeError(f"Expected PackedChildInitRequest, got {type(init_request)}")
 
-    from iris.logging import configure_logging
     from marin.rl.environments.inference_ctx.async_vllm import AsyncvLLMInferenceContext
     from marin.rl.weight_transfer import create_weight_transfer_client
     from marin.utils import remove_tpu_lockfile_on_exit
+    from rigging.log_setup import configure_logging
 
     configure_logging(level=logging.INFO)
     cleanup_ctx = remove_tpu_lockfile_on_exit()

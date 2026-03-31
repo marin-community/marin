@@ -30,7 +30,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -581,8 +581,8 @@ class Trainer:
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
         checkpointer = self.config.checkpointer.create(self.run_id)
 
-        def checkpoint_hook(info):
-            checkpointer.on_step(tree=info.state.saveable_state, step=info.step)
+        def checkpoint_hook(info, force=False):
+            checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 
