@@ -169,15 +169,11 @@ sudo mv /tmp/iris_worker_config.json /etc/iris/worker_config.json
 
 echo "[iris-init] Phase: worker_start"
 
-# Force-remove existing worker (handles restart policy race)
+# Force-remove existing worker (handles restart policy race).
+# Task containers are NOT removed here — the worker process handles
+# adoption-or-cleanup in start() so it can adopt running containers
+# from a previous worker during rolling restarts.
 sudo docker rm -f iris-worker 2>/dev/null || true
-
-# Clean up ALL iris-managed task containers by label
-echo "[iris-init] Cleaning up iris task containers"
-IRIS_CONTAINERS=$(sudo docker ps -aq --filter "label=iris.managed=true" 2>/dev/null || true)
-if [ -n "$IRIS_CONTAINERS" ]; then
-    sudo docker rm -f $IRIS_CONTAINERS 2>/dev/null || true
-fi
 
 # Start worker container without restart policy first (fail fast during bootstrap)
 sudo docker run -d --name iris-worker \\
