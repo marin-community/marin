@@ -17,7 +17,7 @@ processing them in parallel and producing a merged summary.
 
 Usage:
     uv run scripts/logscan.py <logfile> <query>
-        [--chunk-tokens 10000] [--overlap 0.2]
+        [--chunk-tokens 50000] [--overlap 0.2]
         [--concurrency 16] [--model gemini-2.5-flash-lite]
 
 Requires GEMINI_API_KEY environment variable.
@@ -75,7 +75,7 @@ class Chunk:
 
 def split_into_chunks(
     lines: list[str],
-    chunk_tokens: int = 10_000,
+    chunk_tokens: int = 50_000,
     overlap_fraction: float = 0.2,
 ) -> list[Chunk]:
     """Split lines into overlapping windows of approximately chunk_tokens tokens."""
@@ -280,7 +280,7 @@ def main() -> None:
 
     parser.add_argument("logfile", type=Path, help="Path to the log file")
     parser.add_argument("query", help="What to look for in the logs")
-    parser.add_argument("--chunk-tokens", type=int, default=10_000)
+    parser.add_argument("--chunk-tokens", type=int, default=50_000)
     parser.add_argument("--overlap", type=float, default=0.2)
     parser.add_argument("--concurrency", type=int, default=16)
     parser.add_argument(

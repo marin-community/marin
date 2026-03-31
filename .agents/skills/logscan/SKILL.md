@@ -32,7 +32,7 @@ uv run scripts/logscan.py <logfile> "<query>" [options]
 |---|---|
 | `logfile` | Path to the log file |
 | `query` | Natural language description of what to look for |
-| `--chunk-tokens N` | Tokens per chunk (default: 10000) |
+| `--chunk-tokens N` | Tokens per chunk (default: 50000) |
 | `--overlap F` | Overlap fraction between chunks (default: 0.2) |
 | `--concurrency N` | Max parallel requests (default: 16) |
 | `--model NAME` | Gemini model (default: `gemini-2.5-flash-lite`) |
