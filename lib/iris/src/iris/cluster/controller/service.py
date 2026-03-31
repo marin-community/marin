@@ -320,21 +320,15 @@ def _read_worker_detail(
     )
 
 
-def _tasks_for_listing(db: ControllerDB, *, job_id: JobName | None = None) -> list[TaskDetail]:
+def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetail]:
     with db.read_snapshot() as q:
-        if job_id is not None:
-            tasks = decode_rows(
-                TaskDetail,
-                q.fetchall(
-                    "SELECT * FROM tasks t WHERE t.job_id = ? ORDER BY t.job_id ASC, t.task_index ASC",
-                    (job_id.to_wire(),),
-                ),
-            )
-        else:
-            tasks = decode_rows(
-                TaskDetail,
-                q.fetchall("SELECT * FROM tasks t ORDER BY t.task_id ASC LIMIT 10000"),
-            )
+        tasks = decode_rows(
+            TaskDetail,
+            q.fetchall(
+                "SELECT * FROM tasks t WHERE t.job_id = ? ORDER BY t.job_id ASC, t.task_index ASC",
+                (job_id.to_wire(),),
+            ),
+        )
         if not tasks:
             return []
         task_wires = [t.task_id.to_wire() for t in tasks]
@@ -1119,8 +1113,10 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.ListTasksRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ListTasksResponse:
-        """List all tasks, optionally filtered by job_id."""
-        job_id = JobName.from_wire(request.job_id) if request.job_id else None
+        """List tasks for a job."""
+        if not request.job_id:
+            raise ConnectError(Code.INVALID_ARGUMENT, "job_id is required")
+        job_id = JobName.from_wire(request.job_id)
         tasks = _tasks_for_listing(self._db, job_id=job_id)
         worker_addr_by_id = _worker_addresses_for_tasks(self._db, tasks)
 
