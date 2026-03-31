@@ -52,7 +52,6 @@ class RLRunState:
         self._failure_message: str | None = None
         self._train_step: int = -1
         self._rollout_transfer_counters: dict[int, RolloutTransferCounters] = {}
-        self._rollout_tracker_steps: dict[int, int] = {}
 
     def get_status(self) -> str:
         return self._status.value
@@ -96,14 +95,6 @@ class RLRunState:
         )
         self._rollout_transfer_counters[worker_index] = updated
         return updated
-
-    def get_rollout_tracker_step(self, worker_index: int) -> int:
-        return self._rollout_tracker_steps.get(worker_index, -1)
-
-    def next_rollout_tracker_step(self, worker_index: int) -> int:
-        next_step = self.get_rollout_tracker_step(worker_index) + 1
-        self._rollout_tracker_steps[worker_index] = next_step
-        return next_step
 
     def mark_completed(self) -> None:
         if self._status == RunStatus.RUNNING:

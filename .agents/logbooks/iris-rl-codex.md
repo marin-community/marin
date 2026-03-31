@@ -70,7 +70,9 @@ Purpose: keep a concise, engineering-focused record of the Iris RL migration, in
      `#4286` and branch `packed_rl`; `iris_rl` keeps only the direct/executor
      mainline now, and the packed-only code and experiment ladder were removed
      from this branch to make the mainline easier to reason about.
-   - Multi-host `v6e` trainer/export work now lives in its own logbook.
+   - Multi-host `v6e` trainer/export work now lives on issue `#4287` and branch
+     `multi_host_rl`; `iris_rl` no longer carries the multi-host-specific
+     export branch or experiment entrypoint.
    - Checkpoint robustness work now lives in its own project note.
 
 7. The current bottom line is better than it looked mid-investigation.
@@ -114,9 +116,11 @@ thread.
   - canonical checkpoint note; use this first for checkpoint timing, memory,
     and clean-vs-debug conclusions
 
-- Multi-host trainer subthread:
-  [iris-rl-multihost-trainer.md](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/.agents/logbooks/iris-rl-multihost-trainer.md)
-  - separate `v6e` / distributed trainer export thread
+- Multi-host trainer follow-up:
+  use issue `#4287` plus branch `multi_host_rl`
+  - the dedicated `v6e` / distributed trainer export thread was intentionally
+    moved off `iris_rl` so the main migration branch keeps only the promoted
+    single-host direct/executor path
 
 - Packed rollout follow-up:
   use issue `#4286` plus branch `packed_rl`
@@ -8069,10 +8073,7 @@ Outcome:
 The detailed `v6e` / multi-host trainer thread has been split out of this main
 logbook to keep the migration record lighter.
 
-Dedicated tracking now lives in:
-
-- [iris-rl-multihost-trainer.md](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/.agents/logbooks/iris-rl-multihost-trainer.md)
-- [debug-log-iris-rl-multihost-trainer.md](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/docs/debug-log-iris-rl-multihost-trainer.md)
+Dedicated tracking now lives on issue `#4287` and branch `multi_host_rl`.
 
 This separate thread includes the full chronology for:
 
@@ -8093,7 +8094,15 @@ Carry-forward state relevant to the main Iris RL thread:
   `sequential_host_flatten` export path is invalid on sharded multi-host
   trainers
 - future detailed multi-host work should be logged in the separate multihost
-  logbook, not here
+  branch / issue, not here
+
+Cleanup note for `iris_rl`:
+
+- the temporary multi-host export branch in Arrow Flight was removed from this
+  branch
+- the branch is back to the tried jitted `copy_and_flatten(...)` path only
+- the region-aware multi-host experiment entrypoint was also removed from
+  `iris_rl`
 
 ## TODO Inference Worker Wandb
 
@@ -8322,3 +8331,427 @@ Validation:
   rollout children once the trainer reaches `SUCCEEDED`
 - this only fixes future runs; any already-live orphaned rollout must still be
   stopped manually
+
+## 2026-03-30 21:xx PDT - multihost export thread removed from `iris_rl`
+
+After splitting the `v6e` / multi-host trainer investigation onto issue
+`#4287` and branch `multi_host_rl`, we did a second cleanup pass so `iris_rl`
+no longer carries the experimental multihost export branch in code either.
+
+What changed on `iris_rl`:
+
+- Arrow Flight export is back to one path only:
+  - the tried jitted `copy_and_flatten(...)` path
+  - then `jax.device_get(...)` on process `0`
+- the temporary `sequential_host_flatten` export branch was removed
+- the export-strategy enum / config plumbing was removed from the mainline RL
+  weight-transfer config surface
+- the temporary region-aware multihost experiment entrypoint
+  `experiments/xp_iris_rl_regression_direct_gcs_prod.py` was removed
+- the dedicated multihost notes/docs were removed from `iris_rl`
+
+Why this cleanup was the right move:
+
+- the multihost thread is still unresolved and is now clearly a follow-up, not
+  part of the promoted single-host migration baseline
+- leaving the alternate export branch on `iris_rl` was making the mainline
+  Arrow Flight path harder to reason about even though the branch should now
+  reflect the working direct/executor baseline only
+- the failed `sequential_host_flatten` probe is still useful evidence, but it
+  belongs on `multi_host_rl`, not in the default RL branch
+
+Carry-forward rule:
+
+- if we resume `v6e-16` trainer/export work, start from issue `#4287` and
+  branch `multi_host_rl`
+- `iris_rl` should stay on the simpler single-host path unless multihost work
+  is later proven and promoted back into the mainline
+
+## 2026-03-30 21:15 PDT - executor relaunch resumes W&B identity but not RL progress
+
+After adding `--run-name` to the canonical executor launcher
+`experiments/llama_3_8b_rl_math500.py`, we tested the operationally important
+case of manually killing an executor-backed run and relaunching it with the
+same stable run name.
+
+Tested relaunch:
+
+- original logical run name:
+  `llama-3.1-8bi-math500-exec-20260331-011313`
+- killed run:
+  `/ahmed/iris-rl-math500-exec-20260330-181209`
+- resumed root job:
+  `/ahmed/iris-rl-math500-exec-resume-20260330-210056`
+
+What worked exactly as intended:
+
+- the executor reused the same step key
+  `rl_testing/llama-3.1-8bi-math500-exec-20260331-011313_4160fdff`
+- the executor reused the same RL output path
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-exec-20260331-011313-8e0fad`
+- that output path already contained committed checkpoints through `step-68`
+- the trainer resumed the original W&B run
+  `llama-3.1-8bi-math500-exec-20260331-011313-train`
+- both rollout workers resumed their original stable W&B runs
+
+So the new launcher behavior is already good enough for:
+
+- stable W&B identity across manual relaunches
+- stable executor/output-path identity across manual relaunches
+
+What did **not** resume correctly:
+
+- the trainer did not appear to restore logical train-step progress from the
+  reused checkpoint path
+- trainer logs showed stale rollout replay against `current_step=0`
+  while skipping old rollout batches from the prior attempt
+- the trainer then served weights with `weight_id -1`
+- after that the trainer sat in `Waiting for initial rollouts from step -1...`
+  with an empty buffer
+
+Important live evidence:
+
+- the full subtree stayed `RUNNING` with zero new failures/preemptions, so this
+  was not an immediate hard crash
+- trainer logs confirmed:
+  - W&B resume succeeded
+  - rollout storage reopened the old GCS path
+  - Arrow Flight servers were started successfully
+  - old rollout batches were still present and were treated as stale relative
+    to `current_step=0`
+- rollout logs confirmed:
+  - W&B resume succeeded
+  - the old rollout-storage path was reused
+  - rollout startup eventually resolved the Arrow Flight coordinator and began
+    polling for `step > -1`
+
+Additional bad signal from rollout startup:
+
+- both rollout workers spent startup compiling vLLM and emitted repeated
+  `INVALID_ARGUMENT` scoped-Vmem errors around `ragged_paged_attention`
+- this may be a second executor-resume problem or a pre-existing vLLM startup
+  fragility that the relaunch path happened to expose more clearly
+
+Current interpretation:
+
+- the new `--run-name` support solved the W&B/run-identity problem
+- it also solved reuse of the executor step/output path
+- but manual relaunch is still **not** equivalent to a true RL resume yet,
+  because the trainer appears to come back up as if it were at step `0` rather
+  than recovering the latest committed training state from checkpoint
+
+So the remaining bug is no longer "can we relaunch into the same logical run?"
+The answer to that is yes. The remaining bug is:
+
+- can the executor-backed launcher restore actual trainer/rollout progress after
+  a manual kill-and-relaunch, not just the same W&B ids and GCS paths?
+
+This should be treated as a new executor-resume correctness bug, separate from
+the earlier W&B resume fix.
+
+## 2026-03-30 21:30 PDT - fixed executor manual relaunch so trainer resumes actual RL progress
+
+We then debugged the executor manual-relaunch path in detail and found that the
+remaining problem was not checkpoint discovery itself. The trainer really was
+finding the old checkpoint directory. The problem was that the RL startup logic
+still behaved like a fresh run *after* checkpoint restore.
+
+What was wrong:
+
+- Levanter trainer state was restored from the checkpoint path
+- but `TrainWorker.train()` still unconditionally did fresh-run RL bootstrap:
+  - publish bootstrap weights at `weight_step=-1`
+  - reset replay-buffer current step to `-1`
+  - wait for initial rollouts as though no prior RL progress existed
+- meanwhile the replay-loader had already reopened the old rollout-storage path
+  and started reading old batches against `current_step=0`
+
+So manual relaunch had an inconsistent state machine:
+
+- model/checkpoint identity said "resumed run"
+- RL bootstrap logic said "fresh run"
+
+That mismatch is why we saw:
+
+- stale replay filtering against `current_step=0`
+- trainer serving `weight_id -1`
+- rollout workers reconnecting to the old run but waiting for bootstrap-style
+  first weights instead of continuing from the recovered trainer step
+
+Chosen fix:
+
+- do **not** create a manual-relaunch-specific branch
+- instead, make one shared resume path keyed only off recovered trainer state
+- if `state.step == 0`, this is a true fresh run:
+  - bootstrap at `-1`
+  - wait for bootstrap rollouts
+- if `state.step > 0`, this is a resumed run:
+  - seed replay buffer with the recovered step
+  - republish shared run-state train step
+  - publish startup weights at that recovered step
+  - wait for rollouts stamped with that recovered step
+
+Why this is the right design:
+
+- it preserves the already-working preemption-retry semantics instead of
+  inventing a separate "manual relaunch mode"
+- it removes a bad hidden assumption that "checkpoint restore" and "RL resume"
+  are automatically the same thing
+- it makes RL startup semantics depend on recovered durable state, not on how
+  the process happened to be launched
+
+Live validation after the fix:
+
+- killed the broken relaunch root job
+  `/ahmed/iris-rl-math500-exec-resume-20260330-210056`
+- relaunched the same stable logical run under
+  `/ahmed/iris-rl-math500-exec-resume2-20260330-212944`
+- trainer discovered and loaded the committed checkpoint at `step-62`
+- trainer logged
+  `Trainer recovered state.step=63; startup rollout weight_step=63`
+- trainer received initial rollouts for step `63`
+- trainer then completed fresh progress at steps `63`, `64`, `65`, ...
+
+So the core executor manual-relaunch bug is now understood and fixed:
+
+- same W&B ids: yes
+- same GCS output/checkpoint path: yes
+- same actual RL progress after relaunch: now also yes
+
+## 2026-03-30 21:55 PDT - why the rollout-worker W&B changes were necessary
+
+It is worth stating clearly that the rollout-worker changes were not cosmetic
+cleanup or WandB churn. They were required because rollout workers sit at an
+awkward boundary:
+
+- they are long-lived inference processes, not trainer processes
+- they can retry independently of the trainer
+- they resume the *same* stable W&B run id across retries/relaunches
+- but their local counters and startup state are often attempt-local
+
+That combination means "use whatever local step is handy" is wrong.
+
+### 1. Why we first stopped using `weight_step` as the W&B step
+
+The old rollout logging used the current model weight step directly as the W&B
+step.
+
+That looked simple, but it was semantically wrong:
+
+- `weight_step` is model-version metadata, not a logging clock
+- it can stall for long periods while a worker keeps generating with the same
+  weights
+- it can repeat
+- at resume boundaries it can legitimately be `-1` before first fresh weights
+  arrive
+
+That is exactly why rollout W&B would briefly look "crashed" or emit step-order
+warnings even though the worker was alive: the worker resumed the correct W&B
+run id, then tried to log a perfectly real metric batch at a non-monotonic
+semantic step.
+
+So the first rollout-worker change was justified because:
+
+- W&B step must be a monotonic logging coordinate
+- `weight_step` is not monotonic enough to serve that role
+- therefore we needed to separate:
+  - W&B tracker step
+  - logged metadata like `inference.weight_step` and `inference.train_step`
+
+### 2. Why the first "shared RLRunState tracker step" design was still wrong
+
+Our first fix replaced `weight_step` with a shared per-worker tracker-step
+counter stored in `RLRunState`.
+
+That solved one real problem:
+
+- retries inside a still-live coordinator no longer logged `step=-1`
+
+But the current executor manual-relaunch test exposed the deeper flaw:
+
+- the W&B run id was stable across relaunches
+- the coordinator was *not* stable across relaunches
+- so a fresh coordinator recreated `RLRunState`
+- and the supposedly resume-safe rollout tracker counter restarted from zero
+
+That is why we later saw live warnings like:
+
+- `Tried to log to step 7 that is less than the current step 78`
+
+This was a real bug in our first rollout-worker fix. The mistake was assuming
+that coordinator-local actor state was durable enough to define W&B step for a
+run that intentionally survives coordinator restarts.
+
+### 3. Why the current rollout-worker design is better
+
+The current design removes rollout W&B step allocation from `RLRunState`
+entirely.
+
+Instead, each rollout worker now owns a local monotonic tracker counter, but it
+does **not** start from zero blindly. It is lazily anchored on recovered
+trainer/weight progress:
+
+- first tracker step is based on recovered
+  `max(current_train_step, current_weight_step, 0) * stride`
+- subsequent rollout/eval logs increment locally by `1`
+
+Why this is a better invariant:
+
+- each rollout worker already has its own W&B run id, so cross-worker step
+  coordination is unnecessary
+- the step source no longer depends on ephemeral coordinator actor memory
+- manual relaunch and preemption retry both start from recovered durable RL
+  progress, not from attempt-local process state
+- `weight_step` stays visible as a logged metric, where it belongs
+
+This is the same larger lesson as the trainer-side manual-relaunch fix:
+
+- resume-sensitive semantics must be derived from durable recovered state
+- attempt-local process counters are fine only if they are clearly marked as
+  attempt-local and not reused as global run identity or W&B clocks
+
+### 4. Why these rollout-worker changes are worth keeping
+
+The rollout-worker changes are justified because they cleaned up three distinct
+classes of bugs:
+
+- false W&B "crash" or out-of-order symptoms caused by `step=-1` / repeated
+  `weight_step`
+- counter resets inside resumed rollout runs
+- manual-relaunch regressions where the same W&B run id survived, but the step
+  allocator quietly restarted from zero
+
+So even though the implementation changed twice, the direction was correct the
+whole time:
+
+- first separate semantic model-step metadata from W&B step
+- then separate durable resume semantics from coordinator-local actor memory
+
+That is not churn. That is converging on the actual invariant the rollout side
+needs:
+
+- stable W&B run id for one logical worker
+- monotonic logging step across retries and relaunches
+- explicit logged metadata for trainer/weight progress
+
+## 2026-03-30 23:15 PDT - the synthetic rollout W&B step fix was a real regression; reverted
+
+The next executor manual-relaunch validation exposed a serious problem with the
+second rollout W&B fix.
+
+What happened live on Iris/W&B:
+
+- manual relaunch itself was working
+- trainer resumed real RL progress from checkpoint
+- rollout workers reattached and logged fresh metrics
+- but rollout W&B logs started using giant synthetic step values such as
+  `tracker_step=78000` for `weight_step=78`
+
+This was my bug.
+
+The design mistake was:
+
+- I preserved monotonicity by anchoring rollout W&B step to recovered durable
+  progress
+- but I encoded that progress directly into the visible W&B x-axis via a large
+  synthetic tracker-step stride
+- that made rollout charts practically unusable even though the underlying RL
+  loop was healthy
+
+So the previous conclusion in the section above was too optimistic. It is true
+that `weight_step` and coordinator-local counters were both wrong W&B clocks,
+but the replacement also overshot:
+
+- it fixed ordering
+- it did **not** preserve a sane rollout chart axis
+
+The correction we made next was simpler:
+
+- stop passing an explicit synthetic `step=` for rollout/eval W&B logs
+- keep logging `inference.weight_step` and `inference.train_step` as ordinary
+  metrics
+- let W&B's own resumed per-run counter remain the visible x-axis
+
+That gives up one thing:
+
+- the W&B x-axis is no longer semantically tied to trainer step
+
+But it restores the more important operational property:
+
+- resumed rollout runs do not jump to absurd visible step values like `78k`
+
+At this point the correct lesson is:
+
+- W&B run identity should be stable across retries/relaunches
+- trainer/weight progress should be explicit metrics
+- the visible rollout W&B step should stay a simple logging counter unless we
+  have a much stronger invariant than we do today
+
+## 2026-03-30 23:20 PDT - killed polluted executor relaunch and started a fresh clean run
+
+Because the `78k` rollout-step bug had already polluted the resumed rollout
+W&B histories, I killed the live executor relaunch tree completely:
+
+- `/ahmed/iris-rl-math500-exec-resume4-20260330-220600`
+
+I then launched a fresh executor-backed run from the patched worktree so the
+trainer and rollout workers would start with clean W&B lineages:
+
+- `/ahmed/iris-rl-math500-exec-fresh-20260330-230947`
+- stable run name:
+  `llama-3.1-8bi-math500-exec-20260331-061041`
+
+This fresh run is now the canonical validation target for the post-revert
+rollout W&B behavior. A dedicated Iris + W&B babysitter was also started
+against the fresh run so we can watch for:
+
+- sane rollout W&B step progression
+- Iris/W&B state mismatches
+- trainer progress and checkpointing
+
+Important state of the world after this pivot:
+
+- manual relaunch correctness fix for trainer startup is still believed to be
+  correct
+- the synthetic rollout W&B step design is **not** kept
+- the fresh run is intended to validate the simpler rollback to W&B-managed
+  rollout step progression
+
+The deeper executor manual-relaunch thread remains in
+[`docs/debug-log-executor-manual-relaunch.md`](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/docs/debug-log-executor-manual-relaunch.md).
+
+## 2026-03-31 02:20 PDT - fresh executor run handled a real preemption correctly
+
+The fresh clean executor run
+
+- `/ahmed/iris-rl-math500-exec-fresh-20260330-230947`
+- stable run name:
+  `llama-3.1-8bi-math500-exec-20260331-061041`
+
+later hit a real Iris preemption and retried under a new attempt subtree.
+
+What mattered operationally:
+
+- the old attempt was killed with `Parent task preempted`
+- Iris launched a new coordinator / trainer / rollout subtree for the same
+  logical run
+- trainer W&B stayed on the same stable run id:
+  `llama-3.1-8bi-math500-exec-20260331-061041-train`
+- rollout W&B also stayed on the same stable ids
+- the resumed trainer advanced back into the live training stream and reached
+  `global_step=255` instead of silently restarting from `0`
+
+So the important distinction is:
+
+- the earlier manual-relaunch thread was partly about a user-driven kill and
+  relaunch path
+- this fresh run then gave us the production-relevant confirmation that actual
+  preemption resume still works on the cleaned mainline after all the recent
+  rollback and cleanup work
+
+Current read after this event:
+
+- fresh single-host executor RL remains the canonical mainline on `iris_rl`
+- manual relaunch is still a secondary operational convenience path
+- real preemption recovery is the more important invariant, and this run gave
+  positive evidence that we did not regress it

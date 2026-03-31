@@ -50,6 +50,14 @@ from .train_batch import create_training_batch_from_rollouts
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class InitialRolloutState:
+    """Startup rollout-sync state derived from the recovered trainer step."""
+
+    weight_step: int
+    published_train_step: int | None
+
+
 def _resume_safe_weight_transfer_metrics(step: int, sync_interval_steps: int) -> dict[str, int]:
     """Return monotonic weight-transfer counters for a resumed trainer run.
 
@@ -74,6 +82,23 @@ def _resume_safe_weight_transfer_metrics(step: int, sync_interval_steps: int) ->
         "total_transfers": successful_transfers,
         "successful_transfers": successful_transfers,
     }
+
+
+def _initial_rollout_state(train_step: int) -> InitialRolloutState:
+    """Return rollout startup semantics for a fresh or resumed trainer state.
+
+    Fresh runs still use the historical bootstrap weight id ``-1``. Resumed runs
+    reuse the latest completed trainer step as the startup weight id so manual
+    relaunch and automatic retry converge on the same resume behavior.
+    """
+
+    if train_step < 0:
+        raise ValueError(f"train_step must be non-negative, got {train_step}")
+
+    if train_step == 0:
+        return InitialRolloutState(weight_step=-1, published_train_step=None)
+
+    return InitialRolloutState(weight_step=train_step, published_train_step=train_step)
 
 
 @dataclass(frozen=True)
@@ -345,10 +370,23 @@ class TrainWorker:
         if not self.loss_module.needs_reference_model():
             self.reference_model = None
 
-    def _wait_for_initial_rollouts(self, max_wait_time: float = 7200.0, poll_interval: float = 5.0) -> bool:
-        """Wait for initial rollouts from step -1 to be received.
+    def _seed_initial_rollout_state(self, rollout_state: InitialRolloutState) -> None:
+        """Seed replay/run state before replay ingestion starts."""
+        self.replay_buffer.set_current_step(rollout_state.weight_step)
+        if rollout_state.published_train_step is not None:
+            self._runtime.run_state.update_train_step.remote(rollout_state.published_train_step)
+
+    def _wait_for_initial_rollouts(
+        self,
+        *,
+        weight_step: int,
+        max_wait_time: float = 7200.0,
+        poll_interval: float = 5.0,
+    ) -> bool:
+        """Wait for startup rollouts for the current startup weight step.
 
         Args:
+            weight_step: Weight step rollout workers should generate against before training continues.
             max_wait_time: Maximum time to wait in seconds (default: 2 hours).
                 On Iris, rollout workers may take a long time to get scheduled.
             poll_interval: How often to check for rollouts in seconds (default: 5 seconds)
@@ -356,23 +394,33 @@ class TrainWorker:
         Returns:
             True if initial rollouts were received, False if timeout
         """
-        logger.info("Waiting for initial rollouts from step -1...")
+        logger.info("Waiting for initial rollouts from step %d...", weight_step)
         start_time = time.time()
 
         while time.time() - start_time < max_wait_time:
             buffer_size = self.replay_buffer.size()
             if buffer_size > 0:
                 elapsed = time.time() - start_time
-                logger.info(f"Received initial rollouts! Buffer size: {buffer_size} (waited {elapsed:.1f}s)")
+                logger.info(
+                    "Received initial rollouts for step %d! Buffer size: %d (waited %.1fs)",
+                    weight_step,
+                    buffer_size,
+                    elapsed,
+                )
                 return True
 
             elapsed = time.time() - start_time
             if int(elapsed) % 10 == 0 and elapsed > 0:  # Log every 10 seconds
-                logger.info(f"Still waiting for initial rollouts (elapsed: {elapsed:.0f}s, buffer size: {buffer_size})")
+                logger.info(
+                    "Still waiting for initial rollouts from step %d (elapsed: %.0fs, buffer size: %d)",
+                    weight_step,
+                    elapsed,
+                    buffer_size,
+                )
 
             time.sleep(poll_interval)
 
-        logger.warning(f"Timeout waiting for initial rollouts after {max_wait_time}s")
+        logger.warning("Timeout waiting for initial rollouts from step %d after %.1fs", weight_step, max_wait_time)
         return False
 
     def _checkpoint_debug_snapshot(self) -> dict[str, object]:
@@ -414,39 +462,43 @@ class TrainWorker:
             def _loss_function(model, batch, key):
                 return loss_fn(model, batch, key)
 
-            with (
-                Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer,
-                self.replay_loader,
-            ):
+            with Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer:
                 if debug_checkpointer:
                     install_tensorstore_metrics_hook(trainer, every=1)
                 _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
                 state = trainer.initial_state(training_key, model=self.initial_model)
                 self._drop_bootstrap_model_references()
+                startup_rollout_state = _initial_rollout_state(int(state.step))
+                logger.info(
+                    "Trainer recovered state.step=%d; startup rollout weight_step=%d",
+                    int(state.step),
+                    startup_rollout_state.weight_step,
+                )
+                self._seed_initial_rollout_state(startup_rollout_state)
 
                 if debug_weight_transfer:
                     logger.info(
-                        "Weight transfer debug enabled: strategy=%s, sync_interval_steps=%d, "
+                        "Weight transfer debug enabled: sync_interval_steps=%d, "
                         "mesh_shape=%s, parameter_axis_mapping=%s",
-                        self.config.weight_transfer.export_strategy.value,
                         self.config.weight_transfer.sync_interval_steps,
                         config.trainer.device_mesh.devices.shape,
                         config.trainer.parameter_axis_mapping,
                     )
 
-                # Always transfer initial weights to rollout workers before we attempt to start training
-                self.transfer_server.serve_weights(-1, state.model)
-                self.replay_buffer.set_current_step(-1)
+                with self.replay_loader:
+                    # Always transfer startup weights to rollout workers before we attempt to train.
+                    self.transfer_server.serve_weights(startup_rollout_state.weight_step, state.model)
 
-                # Wait for initial rollouts to ensure we have baseline measurements
-                if not self._wait_for_initial_rollouts():
-                    raise RuntimeError("Timed out waiting for initial rollouts; aborting training.")
+                    # Wait for startup rollouts so both fresh runs and resumed runs begin with
+                    # rollouts that match the currently served weights.
+                    if not self._wait_for_initial_rollouts(weight_step=startup_rollout_state.weight_step):
+                        raise RuntimeError("Timed out waiting for initial rollouts; aborting training.")
 
-                self._configure_training_hooks(trainer)
-                try:
-                    trainer.train(state, self.data_loader)
-                except StopTrainerException:
-                    pass
+                    self._configure_training_hooks(trainer)
+                    try:
+                        trainer.train(state, self.data_loader)
+                    except StopTrainerException:
+                        pass
         except StopTrainerException:
             pass
         except Exception:

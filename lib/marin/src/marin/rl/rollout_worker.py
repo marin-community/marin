@@ -196,6 +196,9 @@ class RolloutTracker:
         )
 
     def log(self, metrics: Mapping[str, Any], *, step: int | None = None):
+        if step is None:
+            self._run.log(metrics)
+            return
         self._run.log(metrics, step=step)
 
     def finish(self):
@@ -769,8 +772,7 @@ class RolloutWorker:
         weight_step: int,
         metrics: Mapping[str, Any],
     ) -> None:
-        """Log one completed evaluation batch using a resume-safe tracker step."""
-        tracker_step = self._next_tracker_step()
+        """Log one completed evaluation batch."""
         log_metrics = self._build_prompt_example_metrics(
             lesson_id,
             batch,
@@ -781,11 +783,10 @@ class RolloutWorker:
         log_metrics["inference.weight_step"] = weight_step
         if eval_type == "eval":
             log_metrics["inference.train_step"] = step
-        self.tracker.log(log_metrics, step=tracker_step)
+        self.tracker.log(log_metrics)
         logger.info(
-            "Eval metrics for lesson %s at tracker_step=%d weight_step=%d: %s",
+            "Eval metrics for lesson %s at weight_step=%d: %s",
             lesson_id,
-            tracker_step,
             weight_step,
             metrics,
         )
@@ -866,9 +867,6 @@ class RolloutWorker:
         self._last_transfer_counters = current_counters
         return _rollout_transfer_metrics_for_logging(current_metrics, cumulative_counters)
 
-    def _next_tracker_step(self) -> int:
-        return self._runtime.run_state.next_rollout_tracker_step.remote(self.config.worker_index).result()
-
     def _log_rollout_metrics(
         self,
         *,
@@ -888,14 +886,12 @@ class RolloutWorker:
         log_metrics["inference.weight_step"] = self._current_weight_step
         if self._current_train_step >= 0:
             log_metrics["inference.train_step"] = self._current_train_step
-        tracker_step = self._next_tracker_step()
         logger.info(
-            "Logging metrics at rollout_step=%d tracker_step=%d weight_step=%d",
+            "Logging metrics at rollout_step=%d weight_step=%d",
             rollout_step,
-            tracker_step,
             self._current_weight_step,
         )
-        self.tracker.log(log_metrics, step=tracker_step)
+        self.tracker.log(log_metrics)
 
     def run(self):
         """Main inference worker loop."""

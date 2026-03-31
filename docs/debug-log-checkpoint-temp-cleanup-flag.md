@@ -52,7 +52,7 @@ Implemented:
 Validation:
 
 - `uv run pytest -q lib/levanter/tests/test_checkpoint.py`
-- `./infra/pre-commit.py --fix lib/levanter/src/levanter/checkpoint.py lib/levanter/tests/test_checkpoint.py experiments/exp_iris_rl_regression_direct_gcs_prod.py experiments/xp_iris_rl_regression_direct_gcs_prod.py docs/debug-log-checkpoint-temp-cleanup-flag.md`
+- `./infra/pre-commit.py --fix lib/levanter/src/levanter/checkpoint.py lib/levanter/tests/test_checkpoint.py experiments/exp_iris_rl_regression_direct_gcs_prod.py docs/debug-log-checkpoint-temp-cleanup-flag.md`
 
 Outcome:
 

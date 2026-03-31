@@ -35,13 +35,11 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
 from haliax.partitioning import ResourceMapping
-from jax.experimental import multihost_utils
 from jax.sharding import Mesh
 from jaxtyping import PyTree
 from levanter.utils.jax_utils import barrier_sync
 
 from .base import (
-    ArrowFlightExportStrategy,
     WeightTransferClient,
     WeightTransferClientMetrics,
     WeightTransferConfig,
@@ -189,20 +187,6 @@ def state_dict_to_batches(
 @partial(jax.jit, donate_argnums=0)
 def update_model(old_model, new_state_dict):
     return hsd.from_state_dict(old_model, new_state_dict)
-
-
-@dataclass(frozen=True)
-class ExportedWeights:
-    """Host-materialized weights prepared for Arrow serialization."""
-
-    flat_dict: dict[str, np.ndarray]
-    shape_dict: dict[str, tuple[int, ...]]
-    param_count: int
-    total_bytes: int
-    largest_param_bytes: int
-    largest_param_name: str | None
-    state_dict_time: float
-    materialize_time: float
 
 
 def _mib_per_second(num_bytes: int, seconds: float) -> float:
@@ -396,38 +380,6 @@ def copy_and_flatten(
     return flat_dict, shape_dict
 
 
-def _maybe_cast_leaf_for_transfer(leaf, convert_to_bfloat16: bool):
-    if not convert_to_bfloat16 or not hasattr(leaf, "dtype"):
-        return leaf
-    if jnp.issubdtype(leaf.dtype, jnp.floating):
-        return leaf.astype(jnp.bfloat16)
-    return leaf
-
-
-def _materialize_flat_leaf_for_transfer(leaf) -> np.ndarray:
-    """Materialize one flattened leaf as a host-local numpy array.
-
-    On multi-host trainers, flattened parameters can be global jax.Arrays that are
-    not fully addressable from one process.  A raw ``jax.device_get`` fails in that
-    case. ``process_allgather(..., tiled=True)`` gathers those shards into a
-    host-local numpy array with the original flattened shape.
-    """
-    if isinstance(leaf, np.ndarray):
-        return leaf
-    if not isinstance(leaf, jax.Array):
-        return np.asarray(leaf)
-    if leaf.is_fully_addressable:
-        return np.asarray(leaf)
-    return multihost_utils.process_allgather(leaf, tiled=True)
-
-
-def _flatten_materialized_leaf(leaf: np.ndarray) -> np.ndarray:
-    array = np.asarray(leaf)
-    if array.ndim == 0:
-        return array
-    return array.reshape(-1)
-
-
 def _summarize_flat_state_dict(flat_dict: dict[str, np.ndarray]) -> tuple[int, int, str | None]:
     total_bytes = 0
     largest_param_bytes = 0
@@ -441,83 +393,6 @@ def _summarize_flat_state_dict(flat_dict: dict[str, np.ndarray]) -> tuple[int, i
             largest_param_name = name
 
     return total_bytes, largest_param_bytes, largest_param_name
-
-
-def _export_weights_tree_jit(model: PyTree, config: WeightTransferConfig) -> ExportedWeights:
-    process_zero = jax.process_index() == 0
-    start_time = time.time()
-    flat_dict, shape_dict = copy_and_flatten(model, config.convert_to_bfloat16)
-    state_dict_done = time.time()
-    materialized = jax.tree.map(_materialize_flat_leaf_for_transfer, flat_dict)
-    materialize_done = time.time()
-
-    if not process_zero:
-        return ExportedWeights(
-            flat_dict={},
-            shape_dict={},
-            param_count=0,
-            total_bytes=0,
-            largest_param_bytes=0,
-            largest_param_name=None,
-            state_dict_time=state_dict_done - start_time,
-            materialize_time=materialize_done - state_dict_done,
-        )
-
-    host_flat_dict = {name: _flatten_materialized_leaf(value) for name, value in materialized.items()}
-    total_bytes, largest_param_bytes, largest_param_name = _summarize_flat_state_dict(host_flat_dict)
-    return ExportedWeights(
-        flat_dict=host_flat_dict,
-        shape_dict=shape_dict,
-        param_count=len(host_flat_dict),
-        total_bytes=total_bytes,
-        largest_param_bytes=largest_param_bytes,
-        largest_param_name=largest_param_name,
-        state_dict_time=state_dict_done - start_time,
-        materialize_time=materialize_done - state_dict_done,
-    )
-
-
-def _export_weights_sequential_host_flatten(model: PyTree, config: WeightTransferConfig) -> ExportedWeights:
-    process_zero = jax.process_index() == 0
-    start_time = time.time()
-    state_dict = hsd.to_state_dict(model)
-    state_dict_done = time.time()
-
-    flat_dict: dict[str, np.ndarray] = {}
-    shape_dict: dict[str, tuple[int, ...]] = {}
-
-    for name, leaf in state_dict.items():
-        transfer_leaf = _maybe_cast_leaf_for_transfer(leaf, config.convert_to_bfloat16)
-        materialized_leaf = _materialize_flat_leaf_for_transfer(transfer_leaf)
-        if process_zero:
-            flat_dict[name] = _flatten_materialized_leaf(materialized_leaf)
-            shape_dict[name] = tuple(int(dim) for dim in leaf.shape)
-
-    materialize_done = time.time()
-
-    if not process_zero:
-        return ExportedWeights(
-            flat_dict={},
-            shape_dict={},
-            param_count=0,
-            total_bytes=0,
-            largest_param_bytes=0,
-            largest_param_name=None,
-            state_dict_time=state_dict_done - start_time,
-            materialize_time=materialize_done - state_dict_done,
-        )
-
-    total_bytes, largest_param_bytes, largest_param_name = _summarize_flat_state_dict(flat_dict)
-    return ExportedWeights(
-        flat_dict=flat_dict,
-        shape_dict=shape_dict,
-        param_count=len(flat_dict),
-        total_bytes=total_bytes,
-        largest_param_bytes=largest_param_bytes,
-        largest_param_name=largest_param_name,
-        state_dict_time=state_dict_done - start_time,
-        materialize_time=materialize_done - state_dict_done,
-    )
 
 
 class ArrowFlightServer(WeightTransferServer):
@@ -593,11 +468,6 @@ class ArrowFlightServer(WeightTransferServer):
         """Serve weights via Arrow Flight using Haliax state_dict serialization.
 
         Distributes parameters across multiple flight servers for parallel serving.
-
-        On multi-host TPUs, copy_and_flatten and device_get trigger JAX collective
-        operations (all-gather) that require ALL processes to participate.  Therefore
-        these calls must run on every process, not just process 0.  Only the Arrow
-        Flight serving (store_weights + coordinator update) is process-0-only.
         """
         self.metrics.total_transfers += 1
 
@@ -605,28 +475,26 @@ class ArrowFlightServer(WeightTransferServer):
         try:
             barrier_sync()
 
-            if self.config.export_strategy == ArrowFlightExportStrategy.SEQUENTIAL_HOST_FLATTEN:
-                exported = _export_weights_sequential_host_flatten(model, self.config)
-            else:
-                exported = _export_weights_tree_jit(model, self.config)
-
-            state_dict_time = start_time + exported.state_dict_time
-            copy_time = state_dict_time + exported.materialize_time
-
-            self.metrics.state_dict_time = exported.state_dict_time
-            self.metrics.materialize_time = exported.materialize_time
-            self.metrics.transfer_bytes = exported.total_bytes
-            self.metrics.total_transfer_bytes += exported.total_bytes
-            self.metrics.param_count = exported.param_count
-            self.metrics.largest_param_bytes = exported.largest_param_bytes
-            self.metrics.materialize_mib_per_second = _mib_per_second(
-                exported.total_bytes,
-                exported.materialize_time,
-            )
-
             if jax.process_index() == 0:
+                flat_dict, shape_dict = copy_and_flatten(model, self.config.convert_to_bfloat16)
+                state_dict_done = time.time()
+                host_flat_dict = jax.device_get(flat_dict)
+                materialize_done = time.time()
+                total_bytes, largest_param_bytes, largest_param_name = _summarize_flat_state_dict(host_flat_dict)
+
+                self.metrics.state_dict_time = state_dict_done - start_time
+                self.metrics.materialize_time = materialize_done - state_dict_done
+                self.metrics.transfer_bytes = total_bytes
+                self.metrics.total_transfer_bytes += total_bytes
+                self.metrics.param_count = len(host_flat_dict)
+                self.metrics.largest_param_bytes = largest_param_bytes
+                self.metrics.materialize_mib_per_second = _mib_per_second(
+                    total_bytes,
+                    self.metrics.materialize_time,
+                )
+
                 # Convert to Arrow RecordBatch per parameter
-                params_dict = state_dict_to_batches(exported.flat_dict, exported.shape_dict, weight_id)
+                params_dict = state_dict_to_batches(host_flat_dict, shape_dict, weight_id)
                 stored_record_batch_count = sum(len(batches) for _, batches in params_dict.values())
                 stored_arrow_bytes = sum(sum(batch.nbytes for batch in batches) for _, batches in params_dict.values())
                 self._latest_store_debug_snapshot = {
@@ -636,7 +504,6 @@ class ArrowFlightServer(WeightTransferServer):
                     "stored_arrow_bytes": stored_arrow_bytes,
                     "stored_arrow_bytes_mib": round(stored_arrow_bytes / _BYTES_PER_MIB, 2),
                     "flight_server_count": len(self._flight_servers),
-                    "export_strategy": self.config.export_strategy.value,
                 }
                 serialize_time = time.time()
 
@@ -654,45 +521,36 @@ class ArrowFlightServer(WeightTransferServer):
                 self._coordinator.update_server.remote(weight_id, param_names, server_locations).result()
                 update_time = time.time()
 
-                self.metrics.serialize_time = serialize_time - copy_time
+                self.metrics.serialize_time = serialize_time - materialize_done
                 self.metrics.store_time = store_time - serialize_time
                 self.metrics.update_time = update_time - store_time
                 self.metrics.serve_time = update_time - start_time
                 self.metrics.serialize_mib_per_second = _mib_per_second(
-                    exported.total_bytes,
+                    total_bytes,
                     self.metrics.serialize_time,
                 )
                 self.metrics.store_mib_per_second = _mib_per_second(
-                    exported.total_bytes,
+                    total_bytes,
                     self.metrics.store_time,
                 )
                 self.metrics.successful_transfers += 1
 
                 logger.info(
-                    "Served weights for weight_id %s via %s: params=%d bytes=%.2f MiB largest=%s (%.2f MiB) "
+                    "Served weights for weight_id %s: params=%d bytes=%.2f MiB largest=%s (%.2f MiB) "
                     "timings: state_dict=%.2fs, materialize=%.2fs, serialize=%.2fs, store=%.2fs, update=%.2fs",
                     weight_id,
-                    self.config.export_strategy.value,
-                    exported.param_count,
-                    exported.total_bytes / _BYTES_PER_MIB,
-                    exported.largest_param_name,
-                    exported.largest_param_bytes / _BYTES_PER_MIB,
-                    exported.state_dict_time,
-                    exported.materialize_time,
-                    serialize_time - copy_time,
+                    len(host_flat_dict),
+                    total_bytes / _BYTES_PER_MIB,
+                    largest_param_name,
+                    largest_param_bytes / _BYTES_PER_MIB,
+                    self.metrics.state_dict_time,
+                    self.metrics.materialize_time,
+                    serialize_time - materialize_done,
                     store_time - serialize_time,
                     update_time - store_time,
                 )
-            else:
-                self.metrics.serialize_time = 0.0
-                self.metrics.store_time = 0.0
-                self.metrics.update_time = 0.0
-                self.metrics.serve_time = copy_time - start_time
-                self.metrics.serialize_mib_per_second = 0.0
-                self.metrics.store_mib_per_second = 0.0
-                self.metrics.successful_transfers += 1
 
-            barrier_sync(timeout=600)
+            barrier_sync()
 
         except Exception:
             self.metrics.failed_transfers += 1

@@ -50,16 +50,3 @@ def test_run_state_accumulates_rollout_transfer_counters_per_worker():
     assert updated == RolloutTransferCounters(total_polls=7, successful_receives=5, failed_receives=1)
 
     assert run_state.get_rollout_transfer_counters(worker_index=0) == RolloutTransferCounters()
-
-
-def test_run_state_tracks_resume_safe_rollout_tracker_steps_per_worker():
-    run_state = RLRunState()
-
-    assert run_state.get_rollout_tracker_step(worker_index=0) == -1
-    assert run_state.next_rollout_tracker_step(worker_index=0) == 0
-    assert run_state.next_rollout_tracker_step(worker_index=0) == 1
-    assert run_state.get_rollout_tracker_step(worker_index=0) == 1
-
-    assert run_state.get_rollout_tracker_step(worker_index=1) == -1
-    assert run_state.next_rollout_tracker_step(worker_index=1) == 0
-    assert run_state.get_rollout_tracker_step(worker_index=1) == 0

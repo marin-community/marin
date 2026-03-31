@@ -16,7 +16,6 @@ from jax.sharding import Mesh
 
 from .arrow_flight import ArrowFlightClient, ArrowFlightCoordinator, ArrowFlightServer
 from .base import (
-    ArrowFlightExportStrategy,
     WeightTransferClient,
     WeightTransferClientMetrics,
     WeightTransferConfig,
@@ -101,7 +100,6 @@ def create_weight_transfer_client(
 __all__ = [
     "ArrowFlightClient",
     "ArrowFlightCoordinator",
-    "ArrowFlightExportStrategy",
     "ArrowFlightServer",
     "GCSCheckpointClient",
     "GCSCheckpointServer",

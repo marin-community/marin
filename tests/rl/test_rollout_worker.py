@@ -113,18 +113,8 @@ def test_resume_safe_transfer_metrics_logs_attempt_and_cumulative_values_after_c
     }
 
 
-def test_log_rollout_metrics_uses_shared_tracker_step_and_logs_weight_train_steps():
-    recorded_worker_indices: list[int] = []
+def test_log_rollout_metrics_uses_wandb_default_step_and_logs_weight_train_steps():
     recorded_logs: list[tuple[dict[str, float | int], int | None]] = []
-
-    class _FakeRemoteResult:
-        def result(self) -> int:
-            return 42
-
-    class _FakeRemoteMethod:
-        def remote(self, worker_index: int) -> _FakeRemoteResult:
-            recorded_worker_indices.append(worker_index)
-            return _FakeRemoteResult()
 
     class _FakeTracker:
         def log(self, metrics: dict[str, float | int], step=None):
@@ -132,7 +122,6 @@ def test_log_rollout_metrics_uses_shared_tracker_step_and_logs_weight_train_step
 
     worker = object.__new__(RolloutWorker)
     worker.config = SimpleNamespace(worker_index=1)
-    worker._runtime = SimpleNamespace(run_state=SimpleNamespace(next_rollout_tracker_step=_FakeRemoteMethod()))
     worker._resume_safe_transfer_metrics = lambda: {"successful_receives": 10}
     worker._policy_ctx = SimpleNamespace(get_metrics=lambda: {"cache_hits": 3})
     worker._rollout_writer = SimpleNamespace(get_metrics=lambda: {"queued_batches": 2})
@@ -147,7 +136,6 @@ def test_log_rollout_metrics_uses_shared_tracker_step_and_logs_weight_train_step
         rollout_step=30,
     )
 
-    assert recorded_worker_indices == [1]
     assert recorded_logs == [
         (
             {
@@ -160,23 +148,13 @@ def test_log_rollout_metrics_uses_shared_tracker_step_and_logs_weight_train_step
                 "inference.weight_step": -1,
                 "inference.train_step": 248,
             },
-            42,
+            None,
         )
     ]
 
 
-def test_log_lesson_eval_uses_shared_tracker_step_and_context_metrics():
-    recorded_worker_indices: list[int] = []
+def test_log_lesson_eval_uses_wandb_default_step_and_context_metrics():
     recorded_logs: list[tuple[dict[str, object], int | None]] = []
-
-    class _FakeRemoteResult:
-        def result(self):
-            return 17
-
-    class _FakeTrackerStepMethod:
-        def remote(self, worker_index: int) -> _FakeRemoteResult:
-            recorded_worker_indices.append(worker_index)
-            return _FakeRemoteResult()
 
     class _FakeTracker:
         def log(self, metrics: dict[str, object], step=None):
@@ -184,10 +162,11 @@ def test_log_lesson_eval_uses_shared_tracker_step_and_context_metrics():
 
     worker = object.__new__(RolloutWorker)
     worker.config = SimpleNamespace(worker_index=0)
-    worker._runtime = SimpleNamespace(run_state=SimpleNamespace(next_rollout_tracker_step=_FakeTrackerStepMethod()))
     worker._build_prompt_example_metrics = lambda lesson_id, batch, step, eval_type="eval": {
         f"inference.{eval_type}/{lesson_id}/sample_table": "table"
     }
+    worker._current_train_step = 12
+    worker._current_weight_step = -1
     worker.tracker = _FakeTracker()
 
     worker._log_lesson_eval(
@@ -199,7 +178,6 @@ def test_log_lesson_eval_uses_shared_tracker_step_and_context_metrics():
         metrics={"inference.eval/lesson-a/avg_reward": 1.0},
     )
 
-    assert recorded_worker_indices == [0]
     assert recorded_logs == [
         (
             {
@@ -208,7 +186,7 @@ def test_log_lesson_eval_uses_shared_tracker_step_and_context_metrics():
                 "inference.weight_step": -1,
                 "inference.train_step": 12,
             },
-            17,
+            None,
         )
     ]
 
