@@ -9,7 +9,6 @@ from typing import Optional, Type
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import pytest
 from jaxtyping import PRNGKeyArray
 
 import haliax as hax
