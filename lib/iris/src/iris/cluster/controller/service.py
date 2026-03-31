@@ -320,18 +320,15 @@ def _read_worker_detail(
     )
 
 
-def _tasks_for_listing(db: ControllerDB, *, job_id: JobName | None = None) -> list[TaskDetail]:
+def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetail]:
     with db.read_snapshot() as q:
-        if job_id is not None:
-            tasks = decode_rows(
-                TaskDetail,
-                q.fetchall(
-                    "SELECT * FROM tasks t WHERE t.job_id = ? ORDER BY t.job_id ASC, t.task_index ASC",
-                    (job_id.to_wire(),),
-                ),
-            )
-        else:
-            tasks = decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks t ORDER BY t.task_id ASC"))
+        tasks = decode_rows(
+            TaskDetail,
+            q.fetchall(
+                "SELECT * FROM tasks t WHERE t.job_id = ? ORDER BY t.job_id ASC, t.task_index ASC",
+                (job_id.to_wire(),),
+            ),
+        )
         if not tasks:
             return []
         task_wires = [t.task_id.to_wire() for t in tasks]
@@ -528,10 +525,17 @@ def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -
 
 
 def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetail]:
+    # PK range scan: '0' (ASCII 48) is the next char after '/' (ASCII 47),
+    # so this matches all job_ids starting with "<job_id>/" without LIKE.
+    prefix = job_id.to_wire() + "/"
+    upper = job_id.to_wire() + chr(ord("/") + 1)
     with db.read_snapshot() as q:
         return decode_rows(
             JobDetail,
-            q.fetchall("SELECT * FROM jobs j WHERE j.job_id LIKE ?", (f"{job_id.to_wire()}/%",)),
+            q.fetchall(
+                "SELECT * FROM jobs j WHERE j.job_id >= ? AND j.job_id < ?",
+                (prefix, upper),
+            ),
         )
 
 
@@ -540,7 +544,7 @@ def _transaction_actions(db: ControllerDB, limit: int = 100) -> list[Transaction
         actions = decode_rows(
             TransactionAction,
             q.fetchall(
-                "SELECT * FROM txn_actions ta ORDER BY ta.created_at_ms DESC LIMIT ?",
+                "SELECT * FROM txn_actions ta ORDER BY ta.id DESC LIMIT ?",
                 (limit,),
             ),
         )
@@ -1109,8 +1113,10 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.ListTasksRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ListTasksResponse:
-        """List all tasks, optionally filtered by job_id."""
-        job_id = JobName.from_wire(request.job_id) if request.job_id else None
+        """List tasks for a job."""
+        if not request.job_id:
+            raise ConnectError(Code.INVALID_ARGUMENT, "job_id is required")
+        job_id = JobName.from_wire(request.job_id)
         tasks = _tasks_for_listing(self._db, job_id=job_id)
         worker_addr_by_id = _worker_addresses_for_tasks(self._db, tasks)
 
@@ -1919,3 +1925,31 @@ class ControllerServiceImpl:
             columns=result.columns,
             rows=result.rows,
         )
+
+    def restart_worker(
+        self,
+        request: cluster_pb2.Controller.RestartWorkerRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.RestartWorkerResponse:
+        """Restart a worker while preserving its running containers.
+
+        Delegates to the worker's platform handle which knows how to restart
+        the worker process (e.g., `docker restart` on GCE). The new worker
+        discovers and adopts existing task containers via Docker labels.
+        """
+        require_identity()
+        worker_id = request.worker_id
+        if not worker_id:
+            return cluster_pb2.Controller.RestartWorkerResponse(accepted=False, error="worker_id is required")
+
+        autoscaler = self._controller.autoscaler
+        if autoscaler is None:
+            return cluster_pb2.Controller.RestartWorkerResponse(accepted=False, error="autoscaler not configured")
+
+        try:
+            autoscaler.restart_worker(worker_id)
+            logger.info("Initiated restart for worker %s", worker_id)
+            return cluster_pb2.Controller.RestartWorkerResponse(accepted=True)
+        except Exception as e:
+            logger.warning("Failed to restart worker %s: %s", worker_id, e)
+            return cluster_pb2.Controller.RestartWorkerResponse(accepted=False, error=str(e))

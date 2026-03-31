@@ -218,6 +218,21 @@ class ThreadContainer:
             self._children.append(child)
         return child
 
+    def detach_child(self, child: "ThreadContainer") -> bool:
+        """Remove a child container from this parent's hierarchy.
+
+        After detaching, the child's threads will NOT be stopped when this
+        parent is stopped. The caller takes ownership of the child's lifecycle.
+
+        Returns True if the child was found and removed.
+        """
+        with self._lock:
+            try:
+                self._children.remove(child)
+                return True
+            except ValueError:
+                return False
+
     def remove(self, thread: ManagedThread) -> None:
         """Remove a thread from this container.
 

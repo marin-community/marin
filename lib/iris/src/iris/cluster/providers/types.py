@@ -226,6 +226,18 @@ class RemoteWorkerHandle(Protocol):
         """Reboot the worker."""
         ...
 
+    def restart_worker(self, bootstrap_script: str) -> None:
+        """Restart the Iris worker process with a fresh bootstrap script.
+
+        Runs the bootstrap script which pulls the latest image, stops the
+        old container, and starts a new one. The new worker process discovers
+        and adopts existing task containers via Docker labels.
+
+        Args:
+            bootstrap_script: Full bootstrap script to execute on the worker VM.
+        """
+        ...
+
 
 class StandaloneWorkerHandle(RemoteWorkerHandle, Protocol):
     """Handle to a standalone worker (e.g., controller). Can be terminated and labeled.
