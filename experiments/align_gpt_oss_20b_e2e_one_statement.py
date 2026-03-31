@@ -6,12 +6,13 @@
 Exercises the full pipeline on `ask_clarifying_questions` only:
   - prompt generation (Stage 1/2/3) on GPT-oss-20B
   - chosen responses on GPT-oss-20B
-  - rejected responses on Mixtral-8x7B-Instruct (opposite prompting)
+  - rejected responses on a configurable rejected-model preset (opposite prompting)
   - judge on GPT-oss-20B
   - stops at preference pairs (no DPO training)
 
 This is the 20B validation of the full align() pipeline path before
 promoting to 120B. Uses model_impl_type="vllm" (the validated backend).
+Set `REJECTED_MODEL_PRESET` to switch between Mixtral and Heretic GPT-OSS 20B.
 
 Submit to Iris:
 
@@ -25,31 +26,32 @@ Submit to Iris:
 
 from pathlib import Path
 
-from experiments.gpt_oss_20b_tpu import GPT_OSS_20B_TPU_DEFAULT_MAX_TOKENS, gpt_oss_20b_tpu_vllm_config
-from experiments.models import gpt_oss_20b_vllm, mixtral_8x7b_instruct
+from experiments.gpt_oss_tpu import (
+    GPT_OSS_TPU_DEFAULT_MAX_TOKENS,
+    RejectedModelPreset,
+    gpt_oss_20b_tpu_vllm_config,
+    rejected_model_label,
+    rejected_model_name_suffix,
+    rejected_model_tag,
+    rejected_model_vllm_config,
+)
+from experiments.models import gpt_oss_20b_vllm
 from marin.alignment.align import AlignConfig, ResponseExecutionMode, align
 from marin.alignment.generate_responses import RejectedPromptStrategy
-from marin.alignment.inference_config import VLLMConfig
-from marin.execution.executor import executor_main, output_path_of
+from marin.execution.executor import executor_main
 
 SPEC_PATH = str(Path(__file__).parent / "posttrain" / "specs" / "openai_model_spec.jsonl")
 GPT_OSS_RESPONSE_MAX_TOKENS = 4096
+REJECTED_MODEL_PRESET = RejectedModelPreset.MIXTRAL
+PIPELINE_NAME = "goss_20b_e2e_one_statement"
+if REJECTED_MODEL_PRESET is not RejectedModelPreset.MIXTRAL:
+    PIPELINE_NAME = f"{PIPELINE_NAME}_{rejected_model_name_suffix(REJECTED_MODEL_PRESET)}"
 
 gpt_oss_vllm = gpt_oss_20b_tpu_vllm_config(
     max_model_len=8192,
-    model_impl_type="vllm",
-    prefer_jax_for_bootstrap=False,
 )
 
-mixtral_vllm = VLLMConfig(
-    model=output_path_of(mixtral_8x7b_instruct),
-    tensor_parallel_size=4,
-    max_model_len=8192,
-    gpu_memory_utilization=0.9,
-    tpu_type="v5p-8",
-    disk="10g",
-    ram="256g",
-)
+rejected_vllm = rejected_model_vllm_config(REJECTED_MODEL_PRESET)
 
 align_config = AlignConfig(
     ideation_model=gpt_oss_vllm,
@@ -62,13 +64,13 @@ align_config = AlignConfig(
     extract_workers=1,
     prompt_batch_size=256,
     response_batch_size=256,
-    understanding_max_tokens=GPT_OSS_20B_TPU_DEFAULT_MAX_TOKENS,
+    understanding_max_tokens=GPT_OSS_TPU_DEFAULT_MAX_TOKENS,
     understanding_temperature=1.0,
     understanding_max_attempts=5,
-    concretize_max_tokens=GPT_OSS_20B_TPU_DEFAULT_MAX_TOKENS,
+    concretize_max_tokens=GPT_OSS_TPU_DEFAULT_MAX_TOKENS,
     concretize_temperature=1.0,
     concretize_max_attempts=5,
-    extract_max_tokens=GPT_OSS_20B_TPU_DEFAULT_MAX_TOKENS,
+    extract_max_tokens=GPT_OSS_TPU_DEFAULT_MAX_TOKENS,
     judge_workers=1,
     judge_batch_size=256,
     teacher_n=1,
@@ -86,15 +88,23 @@ align_config = AlignConfig(
 )
 
 dataset_steps = align(
-    name="goss_20b_e2e_one_statement",
+    name=PIPELINE_NAME,
     pretrained_model=gpt_oss_20b_vllm,
     spec=SPEC_PATH,
     model_config=None,
     teacher_model=gpt_oss_vllm,
     align_config=align_config,
     dpo_config=None,
-    rejected_model=mixtral_vllm,
-    tags=["debug", "vllm", "gpt-oss-20b", "mixtral-rejected", "opposite-mode", "one-statement", "e2e"],
+    rejected_model=rejected_vllm,
+    tags=[
+        "debug",
+        "vllm",
+        "gpt-oss-20b",
+        rejected_model_tag(REJECTED_MODEL_PRESET),
+        "opposite-mode",
+        "one-statement",
+        "e2e",
+    ],
 )
 
 if __name__ == "__main__":
@@ -102,7 +112,7 @@ if __name__ == "__main__":
         steps=dataset_steps,
         description=(
             "Single-statement E2E alignment pipeline: GPT-oss-20B for "
-            "prompts/chosen/judge, Mixtral opposite-mode rejected, "
+            f"prompts/chosen/judge, {rejected_model_label(REJECTED_MODEL_PRESET)} opposite-mode rejected, "
             "on ask_clarifying_questions only"
         ),
     )

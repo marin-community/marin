@@ -2705,3 +2705,258 @@ Attempted to scrape vLLM's Prometheus `/metrics` during sweeps for KV cache usag
 - **Uncensored GPT-OSS 120B:** 1/138 refusals (0.7%)
 - Statements with 100% censored refusal: `avoid_abuse`, `avoid_hateful_content`, `avoid_info_hazards`, `do_not_encourage_self_harm`, `present_perspectives`, `prevent_imminent_harm`, `sexual_content_involving_minors`
 - **Conclusion:** uncensored model is required for rejected-response generation in the alignment pipeline — censored model's refusals produce useless training data
+
+### 2026-03-30 18:35 PDT - GTPU-052 de-fork plan: remove the custom `tpu_inference` git ref and validate the stock lockfile package
+
+#### Why this is worth doing
+
+- The repo already carries a standard `tpu-inference` dependency in `uv.lock`:
+  - `tpu-inference==0.13.2.post6` from PyPI
+- The current GPT-OSS experiment helpers still override that with a git ref:
+  - `tpu_inference @ git+https://github.com/marin-community/tpu-inference.git@ahmed/gpt-oss-tpu-bringup-v5`
+- The original reason for the fork was GPT-OSS TPU bring-up on the JAX / `flax_nnx` / `abstract_load` route:
+  - GPT-OSS registration in the JAX loader
+  - `skip_quantization=True`
+  - bootstrap routing via `prefer_jax_for_bootstrap=true`
+- The path that actually works now is different:
+  - `MODEL_IMPL_TYPE=vllm`
+  - `/v1/chat/completions`
+  - top-level `reasoning_effort="low"`
+  - `--reasoning-parser openai_gptoss`
+- That means the fork may now be legacy baggage rather than a real runtime requirement.
+
+#### Current uncertainty
+
+- This worktree still contains an untracked top-level `tpu_inference/` source overlay.
+- Because Iris bundles the workspace, that overlay can shadow the installed wheel on remote jobs.
+- So the recent successful GPT-OSS runs do **not** yet prove that the stock locked package is sufficient by itself.
+
+#### Working hypothesis
+
+- The current validated GPT-OSS path no longer requires fork-only GPT-OSS JAX loader code because:
+  - Marin now forces GPT-OSS to `MODEL_IMPL_TYPE=vllm`
+  - Marin blocks `flax_nnx` for GPT-OSS early
+  - the critical GPT-OSS fixes that made the pipeline work live in Marin, not in `tpu_inference`
+- If that hypothesis is true, we should be able to:
+  1. remove the local overlay,
+  2. stop installing the git fork,
+  3. rerun a one-statement E2E smoke,
+  4. see the same successful pipeline behavior.
+
+#### De-fork execution plan
+
+1. **Eliminate the local overlay confounder**
+
+   - Move the untracked workspace overlay out of the bundle path before any validation run:
+
+   ```bash
+   mv tpu_inference scratch/tpu_inference_overlay_hold
+   ```
+
+   - Goal:
+     - guarantee remote jobs do not import `/app/tpu_inference/...` from the workspace
+     - force imports to come from the installed package only
+
+2. **Stop overriding the lockfile package**
+
+   - Update the GPT-OSS TPU helpers so they no longer install the git fork:
+     - `experiments/gpt_oss_120b_tpu.py`
+     - `experiments/gpt_oss_20b_tpu.py`
+   - Remove `extra_pip_packages=(GPT_OSS_TPU_INFERENCE_PACKAGE,)`
+   - Delete the helper constant if no remaining caller needs it.
+
+   Target shape:
+
+   ```python
+   return VLLMConfig(
+       ...,
+       additional_config=_gpt_oss_120b_tpu_additional_config(...),
+       model_impl_type=model_impl_type,
+   )
+   ```
+
+3. **Keep the validated Marin-side GPT-OSS contract unchanged**
+
+   - Do **not** change any of the fixes that are already validated:
+     - `MODEL_IMPL_TYPE=vllm`
+     - GPT-OSS `/v1/chat/completions`
+     - top-level `reasoning_effort`
+     - `--reasoning-parser openai_gptoss`
+     - CLI forwarding for `additional_config`, `tensor_parallel_size`, tokenizer, etc.
+
+   - This is a dependency-isolation experiment, not a serving-contract redesign.
+
+4. **Run the smallest decisive smoke first**
+
+   - First validation target:
+     - `experiments/align_gpt_oss_20b_e2e_one_statement.py`
+   - Why this one:
+     - full pipeline path
+     - cheap enough to rerun
+     - already passed post-merge
+     - uses the same GPT-OSS serving contract we care about
+
+   Planned launch:
+
+   ```bash
+   uv run iris --config lib/iris/examples/marin.yaml job run --no-wait \
+     --job-name goss-20b-e2e-one-statement-defork \
+     --cpu 4 --memory 16GB --disk 10GB \
+     --region us-central1 \
+     -- python experiments/align_gpt_oss_20b_e2e_one_statement.py
+   ```
+
+5. **Inspect the import/source signal directly**
+
+   - If the run fails during model startup, inspect logs for which `tpu_inference` source is active:
+     - stock site-packages wheel
+     - workspace overlay
+     - git-ref install
+   - In the success case, capture enough logs to prove we are no longer depending on:
+     - `/app/tpu_inference/...` from the workspace overlay
+     - the git ref install path
+
+6. **Promote to 120B only after the 20B smoke passes cleanly**
+
+   - Second validation target:
+     - `experiments/align_gpt_oss_120b_full_spec_e2e.py`
+   - Only do this after the 20B one-statement run proves the dependency change is safe.
+
+#### Success criteria
+
+- The untracked workspace overlay is absent from the Iris bundle.
+- GPT-OSS 20B one-statement E2E still succeeds end-to-end.
+- Logs show the runtime is using the standard installed `tpu-inference`, not the local overlay.
+- No code path tries to install the `ahmed/gpt-oss-tpu-bringup-v5` git ref.
+- The working GPT-OSS contract remains:
+  - `MODEL_IMPL_TYPE=vllm`
+  - `/v1/chat/completions`
+  - top-level `reasoning_effort`
+  - `openai_gptoss` parser
+
+#### Failure criteria and interpretation
+
+- If the deforked 20B smoke fails and the failure points at:
+  - missing GPT-OSS registration,
+  - loader policy around GPT-OSS architecture selection,
+  - missing streamed-weight support,
+  - or TPU-specific GPT-OSS model code,
+  then the stock `tpu-inference` package is still insufficient.
+
+- In that case, do **not** immediately restore the full old setup blindly.
+  - First identify the exact missing capability.
+  - Then choose one of:
+    1. upstream the missing fork delta to `tpu-inference`,
+    2. carry a minimal temporary patch with a clearly scoped reason,
+    3. keep the fork only if the missing functionality is truly still required by the validated `MODEL_IMPL_TYPE=vllm` path.
+
+#### Clean end state we want
+
+- No untracked `tpu_inference/` overlay in the Marin workspace
+- No git-ref `extra_pip_packages` override in the GPT-OSS helpers
+- GPT-OSS experiments rely on the same standard `tpu-inference` package as the rest of the repo
+- Any remaining GPT-OSS-specific logic lives in Marin where it belongs:
+  - request shaping
+  - parser selection
+  - env overrides
+  - launch args
+
+### 2026-03-30 20:20 PDT - GTPU-052 first de-fork smoke reached real GPT-OSS serving
+
+Implemented the first pass of the de-fork plan:
+
+- Removed the tracked GPT-OSS helper references to
+  `tpu_inference @ git+https://github.com/marin-community/tpu-inference.git@ahmed/gpt-oss-tpu-bringup-v5`
+  from:
+  - `experiments/gpt_oss_20b_tpu.py`
+  - `experiments/gpt_oss_120b_tpu.py`
+  - the two tracked comparison scripts that also threaded that override
+- Moved the untracked top-level workspace overlay out of the Iris bundle path:
+  - `tpu_inference/` -> `scratch/tpu_inference_overlay_hold_20260330/`
+- Kept the validated Marin-side GPT-OSS contract unchanged:
+  - `MODEL_IMPL_TYPE=vllm`
+  - `/v1/chat/completions`
+  - top-level `reasoning_effort`
+  - `--reasoning-parser openai_gptoss`
+
+Sanity check:
+
+- `align_gpt_oss_20b_e2e_one_statement.py` now resolves to:
+  - `extra_pip_packages=()`
+  - `model_impl_type="vllm"`
+  - the expected TPU `additional_config`
+
+Launched the smallest decisive smoke with a fresh name to force all executor
+steps to rerun:
+
+- Job:
+  - `/ahmed/goss-20b-e2e-one-statement-defork-20260330-1845`
+- Entrypoint:
+  - temporary local copy of the 20B one-statement E2E script with a unique
+    pipeline name
+
+Observed results:
+
+- Child `sys.path` no longer shows `/app/tpu_inference/...` from the workspace
+  overlay.
+- The deforked run reached:
+  - `marin.inference.vllm_server Starting vLLM environment`
+  - `Starting vLLM native server ...`
+  - `vLLM environment ready`
+- Prompt generation completed successfully under the stock package:
+  - Stage 1 completed
+  - Stage 2 completed
+  - Stage 3 completed with the usual single skipped extraction after retries
+  - `Total prompts generated: 66`
+- The run then advanced into later E2E steps:
+  - `prompts` step succeeded
+  - `chosen` started running
+  - `rejected` was initially queued behind TPU capacity
+- Latest controller snapshot before stopping:
+  - `spec`: `SUCCEEDED`
+  - `prompts`: `SUCCEEDED`
+  - `chosen`: `RUNNING`
+  - `rejected`: `RUNNING`
+
+Interpretation:
+
+- This is strong evidence that the old custom fork is not required just to boot
+  GPT-OSS 20B on TPU and run the smallest GPT-OSS `vllm` prompt-generation path.
+- The highest-risk dependency confounder is now gone:
+  - no git-ref install override
+  - no local workspace overlay shadowing site-packages
+
+Remaining work:
+
+- Let the current de-fork smoke finish end-to-end or fail later with a concrete
+  step-specific error.
+- If it finishes cleanly, remove any remaining untracked/legacy fork-era
+  artifacts and consider fixing the stale default knobs in
+  `experiments/gpt_oss_20b_tpu.py` so the helper itself defaults to the known
+  good `vllm` path.
+
+### 2026-03-30 20:27 PDT - GTPU-052 generation branches both passed under stock tpu-inference
+
+Follow-up on the same de-fork smoke:
+
+- `chosen` reached `vLLM environment ready`, served all `66/66` GPT-OSS
+  requests, wrote its shard, and finished `SUCCEEDED`
+- `rejected` reached `vLLM environment ready`, served all `66/66` rejected
+  requests, wrote its shard, and finished `SUCCEEDED`
+
+Current controller state:
+
+- `spec`: `SUCCEEDED`
+- `prompts`: `SUCCEEDED`
+- `chosen`: `SUCCEEDED`
+- `rejected`: `SUCCEEDED`
+- `judgments`: `RUNNING`
+
+Interpretation:
+
+- This materially strengthens the de-fork result.
+- The stock lockfile `tpu-inference` package is now validated not just for GPT-OSS
+  prompt generation, but also for the chosen and rejected response-generation
+  branches of the smallest one-statement E2E pipeline.
+- At this point the remaining uncertainty is later-stage pipeline behavior, not
+  TPU bring-up or `tpu_inference` dependency selection.

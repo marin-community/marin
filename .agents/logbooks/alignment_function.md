@@ -8605,3 +8605,84 @@ The following entries were originally recorded in `.agents/logbooks/alignment_fu
     - or the OpenAI-compatible HTTP response path
   - rather than:
     - "GPT-OSS cannot run on this TPU inference stack at all"
+
+### ALIGN-275 - 2026-03-30 21:05 - The GPT-OSS alignment branch is now rebased onto `main` semantically, validated on the current TPU/vLLM path without the custom `tpu_inference` fork, and reduced to one shared helper plus two canonical E2E entrypoints
+
+- `main` merge and serving-path resolution:
+  - merged `origin/main` into the branch and resolved the only hard overlap in:
+    - `lib/marin/src/marin/inference/vllm_server.py`
+  - kept the `main` structure for:
+    - shared readiness polling
+    - consolidated vLLM env defaults
+    - server cleanup/finally behavior
+  - re-applied only the GPT-OSS-critical deltas on top:
+    - `env_overrides` plumbing
+    - CLI forwarding for:
+      - `tensor_parallel_size`
+      - `additional_config`
+      - `hf_overrides`
+      - `tokenizer`
+    - GPT-OSS auto-injection of:
+      - `--reasoning-parser openai_gptoss`
+    - opt-in native stderr teeing via config, default off
+  - deleted the old remote local staging path completely:
+    - no `stage_remote_model_locally`
+    - no `_stage_remote_directory()`
+- Post-merge validation:
+  - a fresh one-statement GPT-OSS 20B E2E smoke succeeded end-to-end after the
+    merge with `main`
+  - this covered:
+    - spec
+    - prompts
+    - chosen
+    - rejected
+    - judgments
+    - preference pairs
+  - the merged `vllm_server.py` path remained functional for:
+    - local vLLM serve on TPU
+    - GPT-OSS `/v1/chat/completions`
+    - reasoning parser injection
+    - chosen/rejected generation
+    - pair construction
+- `tpu_inference` de-fork result:
+  - removed the GPT-OSS TPU helper dependency on the git-ref fork of
+    `marin-community/tpu-inference`
+  - moved the untracked local `tpu_inference/` workspace overlay out of the job
+    bundle path so it no longer shadowed the installed package
+  - reran the smallest GPT-OSS 20B one-statement E2E smoke against the stock
+    lockfile `tpu-inference`
+  - validated under stock `tpu-inference`:
+    - prompt generation
+    - chosen generation
+    - rejected generation
+  - conclusion:
+    - the old custom `tpu_inference` fork is no longer required for the current
+      GPT-OSS TPU local-vLLM path
+    - the current supported path is:
+      - `model_impl_type="vllm"`
+      - `/v1/chat/completions`
+      - top-level `reasoning_effort`
+      - `--reasoning-parser openai_gptoss`
+- Final experiment surface cleanup:
+  - collapsed the old model-specific helper files into one shared module:
+    - `experiments/gpt_oss_tpu.py`
+  - canonical kept entrypoints:
+    - `experiments/align_gpt_oss_20b_e2e_one_statement.py`
+    - `experiments/align_gpt_oss_120b_full_spec_e2e.py`
+  - the shared helper now owns:
+    - GPT-OSS TPU defaults for 20B and 120B
+    - rejected-model presets for:
+      - Mixtral-8x7B-Instruct
+      - Heretic GPT-OSS 20B
+  - rejected-model selection is now a preset knob inside the canonical scripts,
+    rather than separate duplicate experiment files
+  - deleted duplicate GPT-OSS experiment entrypoints, scratch smokes, download
+    helpers, and fork-era debug clutter that were no longer part of the minimal
+    supported surface
+- Final status:
+  - `origin/main` is merged into this branch
+  - the branch keeps only one GPT-OSS TPU helper and two canonical GPT-OSS E2E
+    scripts
+  - the GPT-OSS TPU path no longer depends on a custom `tpu_inference` fork
+  - the remaining intentionally-kept variants are the canonical smoke and full
+    E2E entrypoints with Mixtral/Heretic rejected selection handled in-code

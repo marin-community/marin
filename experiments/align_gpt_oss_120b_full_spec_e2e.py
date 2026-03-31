@@ -6,7 +6,7 @@
 Runs the complete pipeline on all 46 OpenAI Model Spec statements:
   - prompt generation (Stage 1/2/3) on GPT-oss-120B
   - chosen responses on GPT-oss-120B (spec-guided)
-  - rejected responses on Mixtral-8x7B-Instruct (opposite prompting)
+  - rejected responses on a configurable rejected-model preset (opposite prompting)
   - judge on GPT-oss-120B
   - preference pairs (no DPO training)
 
@@ -17,6 +17,7 @@ Uses the validated serving contract from ALIGN-274:
   - max_model_len=8192, teacher_max_tokens=4096
   - response_batch_size=256 (full vLLM concurrency)
   - extract_max_tokens=8192 (improved extraction with SELF-CONTAINED prompt)
+Set `REJECTED_MODEL_PRESET` to switch between Mixtral and Heretic GPT-OSS 20B.
 
 Submit to Iris:
 
@@ -31,16 +32,27 @@ Submit to Iris:
 
 from pathlib import Path
 
-from experiments.gpt_oss_120b_tpu import GPT_OSS_TPU_DEFAULT_MAX_TOKENS, gpt_oss_120b_tpu_vllm_config
-from experiments.models import gpt_oss_120b_vllm, mixtral_8x7b_instruct
+from experiments.gpt_oss_tpu import (
+    GPT_OSS_TPU_DEFAULT_MAX_TOKENS,
+    RejectedModelPreset,
+    gpt_oss_120b_tpu_vllm_config,
+    rejected_model_label,
+    rejected_model_name_suffix,
+    rejected_model_tag,
+    rejected_model_vllm_config,
+)
+from experiments.models import gpt_oss_120b_vllm
 from marin.alignment.align import AlignConfig, ResponseExecutionMode, align
 from marin.alignment.generate_responses import RejectedPromptStrategy
-from marin.alignment.inference_config import VLLMConfig
-from marin.execution.executor import executor_main, output_path_of
+from marin.execution.executor import executor_main
 
 SPEC_PATH = str(Path(__file__).parent / "posttrain" / "specs" / "openai_model_spec.jsonl")
 
 GPT_OSS_RESPONSE_MAX_TOKENS = 4096
+REJECTED_MODEL_PRESET = RejectedModelPreset.MIXTRAL
+PIPELINE_NAME = "goss_120b_full_spec_e2e"
+if REJECTED_MODEL_PRESET is not RejectedModelPreset.MIXTRAL:
+    PIPELINE_NAME = f"{PIPELINE_NAME}_{rejected_model_name_suffix(REJECTED_MODEL_PRESET)}"
 
 gpt_oss_vllm = gpt_oss_120b_tpu_vllm_config(
     max_model_len=8192,
@@ -49,15 +61,7 @@ gpt_oss_vllm = gpt_oss_120b_tpu_vllm_config(
     prefer_jax_for_bootstrap=False,
 )
 
-mixtral_vllm = VLLMConfig(
-    model=output_path_of(mixtral_8x7b_instruct),
-    tensor_parallel_size=4,
-    max_model_len=8192,
-    gpu_memory_utilization=0.9,
-    tpu_type="v5p-8",
-    disk="10g",
-    ram="256g",
-)
+rejected_vllm = rejected_model_vllm_config(REJECTED_MODEL_PRESET)
 
 align_config = AlignConfig(
     ideation_model=gpt_oss_vllm,
@@ -94,15 +98,15 @@ align_config = AlignConfig(
 )
 
 dataset_steps = align(
-    name="goss_120b_full_spec_e2e",
+    name=PIPELINE_NAME,
     pretrained_model=gpt_oss_120b_vllm,
     spec=SPEC_PATH,
     model_config=None,
     teacher_model=gpt_oss_vllm,
     align_config=align_config,
     dpo_config=None,
-    rejected_model=mixtral_vllm,
-    tags=["vllm", "gpt-oss-120b", "mixtral-rejected", "opposite-mode", "full-spec", "e2e"],
+    rejected_model=rejected_vllm,
+    tags=["vllm", "gpt-oss-120b", rejected_model_tag(REJECTED_MODEL_PRESET), "opposite-mode", "full-spec", "e2e"],
 )
 
 if __name__ == "__main__":
@@ -110,7 +114,7 @@ if __name__ == "__main__":
         steps=dataset_steps,
         description=(
             "Full-spec E2E alignment pipeline: GPT-oss-120B for "
-            "prompts/chosen/judge, Mixtral opposite-mode rejected, "
+            f"prompts/chosen/judge, {rejected_model_label(REJECTED_MODEL_PRESET)} opposite-mode rejected, "
             "all 46 OpenAI Model Spec statements, batch_size=256"
         ),
     )
