@@ -2674,14 +2674,14 @@ def test_holder_tasks_consume_zero_resources(state):
     assert len(holder_tasks) == 1
 
     worker_before = _query_worker(state, wid)
-    gpus_before = worker_before.available_gpus
+    gpus_before = worker_before.total_gpu_count - worker_before.committed_gpu
 
     # Assign holder task
     state.queue_assignments([Assignment(task_id=holder_tasks[0].task_id, worker_id=wid)])
 
     # Worker's available GPUs should NOT decrease (zero resources)
     worker_after = _query_worker(state, wid)
-    assert worker_after.available_gpus == gpus_before
+    assert worker_after.total_gpu_count - worker_after.committed_gpu == gpus_before
 
     # But the task should be tracked in running_tasks
     assert holder_tasks[0].task_id in worker_running_tasks(state, wid)
@@ -2705,7 +2705,7 @@ def test_holder_task_cleanup_releases_no_resources(state):
     state.queue_assignments([Assignment(task_id=holder_tasks[0].task_id, worker_id=wid)])
 
     worker_before = _query_worker(state, wid)
-    gpus_before = worker_before.available_gpus
+    gpus_before = worker_before.total_gpu_count - worker_before.committed_gpu
 
     # Kill the holder task via parent job cancellation
     parent_job_id = JobName.root("test-user", "j1")
@@ -2713,7 +2713,7 @@ def test_holder_task_cleanup_releases_no_resources(state):
 
     # Worker GPUs should be unchanged (nothing to release)
     worker_after = _query_worker(state, wid)
-    assert worker_after.available_gpus == gpus_before
+    assert worker_after.total_gpu_count - worker_after.committed_gpu == gpus_before
 
 
 def test_holder_tasks_excluded_from_building_counts(state):

@@ -41,9 +41,11 @@ from iris.cluster.controller.schema import (
     JOB_DETAIL_PROJECTION,
     TASK_DETAIL_PROJECTION,
     WORKER_DETAIL_PROJECTION,
+    WORKER_ROW_PROJECTION,
     JobDetailRow,
     TaskDetailRow,
     WorkerDetailRow,
+    WorkerRow,
     tasks_with_attempts,
 )
 from iris.cluster.controller.provider import ProviderUnsupportedError
@@ -261,9 +263,9 @@ def query_job(state: ControllerTransitions, job_id: JobName) -> JobDetailRow | N
         )
 
 
-def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerDetailRow | None:
+def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerRow | None:  # type: ignore[not-a-type]
     with state._db.snapshot() as q:
-        return WORKER_DETAIL_PROJECTION.decode_one(
+        return WORKER_ROW_PROJECTION.decode_one(
             q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", (str(worker_id),)),
         )
 
@@ -480,7 +482,7 @@ def worker_running_tasks(state: ControllerTransitions, worker_id: WorkerId) -> f
     return frozenset(row.task_id for row in rows)
 
 
-def hydrate_worker_attributes(state: ControllerTransitions, workers: list[WorkerDetailRow]) -> list[WorkerDetailRow]:
+def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> list:
     if not workers:
         return workers
     worker_ids = [str(w.worker_id) for w in workers]
@@ -495,9 +497,9 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list[Worker
     return [_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
 
 
-def healthy_active_workers(state: ControllerTransitions) -> list[WorkerDetailRow]:
+def healthy_active_workers(state: ControllerTransitions) -> list[WorkerRow]:  # type: ignore[not-a-type]
     with state._db.snapshot() as q:
-        workers = WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers WHERE healthy = 1 AND active = 1"))
+        workers = WORKER_ROW_PROJECTION.decode(q.fetchall("SELECT * FROM workers WHERE healthy = 1 AND active = 1"))
     return hydrate_worker_attributes(state, workers)
 
 
