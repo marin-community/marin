@@ -12,6 +12,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 
 from levanter.data.text import DpoExample
+from levanter.dpo import _logp_sum, dpo_loss_from_logps
 from levanter.layers.attention import AttentionMask
 from levanter.lora import (
     LoraConfig,
@@ -21,7 +22,6 @@ from levanter.lora import (
     save_merged_hf_model,
     unwrap_lora_modules,
 )
-from levanter.main.train_dpo import _logp_sum, dpo_loss_from_logps
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample
 from levanter.utils.tree_utils import inference_mode

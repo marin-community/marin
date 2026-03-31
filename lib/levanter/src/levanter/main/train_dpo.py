@@ -8,8 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, cast
 
 import draccus
-import equinox as eqx
-import haliax as hax
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -34,8 +32,18 @@ from levanter.data.text import (
     PreferenceLmDataConfig,
     dataset_for_preference_format,
 )
+from levanter.dpo import (
+    CachedDpoExample,
+    CachedReferenceDataset,
+    DpoModel,
+    ReferenceEvalCacheConfig,
+    ValidationDatasetSpec,
+    build_or_load_reference_eval_cache,
+    dpo_loss,
+    reference_eval_cache_metadata,
+    reference_eval_cache_path,
+)
 from levanter.main.model_init import load_model_from_source, prepare_model_init_context
-from levanter.metrics import Metric, ReductionType
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
@@ -47,35 +55,8 @@ from levanter.utils.tree_utils import inference_mode
 logger = logging.getLogger(__name__)
 
 
-class DpoModel(eqx.Module):
-    policy: LmHeadModel
-    reference: LmHeadModel
-
-
 def _policy_model_for_hf_save(model: DpoModel | LmHeadModel) -> LmHeadModel:
     return model.policy if isinstance(model, DpoModel) else model
-
-
-def dpo_loss_from_logps(
-    delta_pi: hax.NamedArray,
-    delta_ref: hax.NamedArray,
-    *,
-    beta: float,
-) -> tuple[jnp.ndarray, dict[str, Metric]]:
-    logits = (delta_pi - delta_ref) * beta
-    loss = hax.mean(hax.nn.softplus(-logits)).scalar()
-    metrics = {
-        "dpo_loss": Metric.from_value(loss, ReductionType.MEAN),
-        "dpo_margin_policy": Metric.from_value(hax.mean(delta_pi).scalar(), ReductionType.MEAN),
-        "dpo_margin_ref": Metric.from_value(hax.mean(delta_ref).scalar(), ReductionType.MEAN),
-        "dpo_accuracy": Metric.from_value(hax.mean(logits > 0).scalar(), ReductionType.MEAN),
-    }
-    return loss, metrics
-
-
-def _logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:
-    nll = model.compute_next_token_loss(example, reduction=hax.sum, reduction_axis="position", key=key)
-    return -nll
 
 
 def _num_validation_sequences(total_sequences: int, fraction: float) -> int:
@@ -159,7 +140,7 @@ def _build_validation_split(
     *,
     key: jrandom.PRNGKey,
     fraction: float,
-) -> tuple[AsyncDataset[DpoExample], dict[str, AsyncDataset[DpoExample]]]:
+) -> tuple[AsyncDataset[DpoExample], dict[str, ValidationDatasetSpec]]:
     """Build train/validation split from a single component config."""
     training_components = _get_training_components(config)
     if len(training_components) != 1:
@@ -208,7 +189,16 @@ def _build_validation_split(
 
     train_dataset = cast(AsyncDataset[DpoExample], mixture)
     val_base = cast(AsyncDataset[DpoExample], val_base)
-    return train_dataset, {name: val_base}
+    return train_dataset, {
+        name: ValidationDatasetSpec(
+            name=name,
+            dataset=val_base,
+            source_cache_path=cache.cache_dir,
+            source_split="train",
+            slice_start=total_len - num_val,
+            slice_end=total_len,
+        )
+    }
 
 
 class DpoReferenceConfig(draccus.ChoiceRegistry):
@@ -258,6 +248,7 @@ class TrainDpoConfig:
     use_hf_model_config: bool = False
 
     validation_split_fraction: float | None = 0.1
+    reference_eval_cache: ReferenceEvalCacheConfig = field(default_factory=ReferenceEvalCacheConfig)
 
     hf_save_path: Optional[str] = None
     hf_upload: bool | str = False
@@ -335,6 +326,93 @@ def _load_separate_reference_model(
     return named_jit(trainer.mp.cast_to_compute, parameter_axis_mapping)(reference_model)
 
 
+def _reference_eval_cache_identity(config: TrainDpoConfig) -> dict[str, Any]:
+    if isinstance(config.reference, SeparateReferenceConfig):
+        return {
+            "reference_type": "separate",
+            "reference": config.reference,
+        }
+
+    if isinstance(config.reference, AdapterBaseReferenceConfig):
+        base_source: dict[str, Any] = {
+            "initialize_from_hf": config.initialize_from_hf,
+            "initialize_from_checkpoint_path": config.initialize_from_checkpoint_path,
+            "use_hf_model_config": config.use_hf_model_config,
+        }
+        if not config.initialize_from_hf and config.initialize_from_checkpoint_path is None:
+            base_source["model"] = config.model
+            base_source["seed"] = config.trainer.seed
+
+        return {
+            "reference_type": "adapter_base",
+            "reference": config.reference,
+            "adapter": config.adapter,
+            "base_source": base_source,
+        }
+
+    raise TypeError(f"Unsupported reference configuration: {type(config.reference).__name__}")
+
+
+def _build_validation_specs(config: PreferenceLmDataConfig, Pos: Axis) -> dict[str, ValidationDatasetSpec]:
+    validation_specs: dict[str, ValidationDatasetSpec] = {}
+    val_caches = config.build_caches("validation")
+    for name, component in config.components.items():
+        cache = val_caches.get(name)
+        if cache is None:
+            continue
+        validation_specs[name] = ValidationDatasetSpec(
+            name=name,
+            dataset=cast(
+                AsyncDataset[DpoExample],
+                dataset_for_preference_format(cast(PreferenceChatLmDatasetFormat, component.format), Pos, cache),
+            ),
+            source_cache_path=cache.cache_dir,
+            source_split="validation",
+        )
+    return validation_specs
+
+
+def _maybe_prepare_cached_validation_specs(
+    *,
+    config: TrainDpoConfig,
+    validation_specs: dict[str, ValidationDatasetSpec],
+    trainer,
+    reference_model: LmHeadModel,
+    reference_identity: dict[str, Any],
+    seq_len: int,
+) -> dict[str, ValidationDatasetSpec]:
+    if not validation_specs or config.reference_eval_cache.mode == "disabled":
+        return validation_specs
+    if config.reference_eval_cache.mode != "build_or_load":
+        raise ValueError(f"Unsupported reference_eval_cache.mode: {config.reference_eval_cache.mode}")
+
+    cached_specs: dict[str, ValidationDatasetSpec] = {}
+    for name, spec in validation_specs.items():
+        base_dataset = cast(AsyncDataset[DpoExample], spec.dataset)
+        metadata = reference_eval_cache_metadata(spec, reference_identity=reference_identity, seq_len=seq_len)
+        cache_dir = reference_eval_cache_path(
+            spec,
+            reference_identity=reference_identity,
+            seq_len=seq_len,
+            cache_dir=config.reference_eval_cache.cache_dir,
+        )
+        ref_chosen, ref_rejected = build_or_load_reference_eval_cache(
+            reference_model=reference_model,
+            dataset=base_dataset,
+            eval_loader=trainer.data_loader(base_dataset, trainer.EvalBatch),
+            compute_axis_mapping=trainer.compute_axis_mapping,
+            mp=trainer.mp,
+            cache_dir=cache_dir,
+            metadata=metadata,
+        )
+        cached_specs[name] = dataclasses.replace(
+            spec,
+            dataset=CachedReferenceDataset(base_dataset, ref_chosen, ref_rejected),
+        )
+
+    return cached_specs
+
+
 def _install_separate_reference_export_hooks(
     *,
     trainer,
@@ -399,15 +477,17 @@ def main(config: TrainDpoConfig):
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
     reference_provider: AdapterBaseReferenceModelProvider | None = None
 
-    def loss_function(model: DpoModel | LmHeadModel, example: DpoExample, *, key=None):
+    def loss_function(model: DpoModel | LmHeadModel, example: DpoExample | CachedDpoExample, *, key=None):
         if isinstance(model, DpoModel):
             policy_model = model.policy
-            reference_model = inference_mode(model.reference, True)
+            reference_model = None if isinstance(example, CachedDpoExample) else inference_mode(model.reference, True)
         else:
-            if reference_provider is None:
-                raise RuntimeError("Reference provider is not initialized.")
             policy_model = model
-            reference_model = reference_provider.model_for(policy_model)
+            reference_model = None
+            if not isinstance(example, CachedDpoExample):
+                if reference_provider is None:
+                    raise RuntimeError("Reference provider is not initialized.")
+                reference_model = reference_provider.model_for(policy_model)
 
         if key is not None:
             key_chosen, key_rejected = jrandom.split(key)
@@ -415,25 +495,14 @@ def main(config: TrainDpoConfig):
             key_chosen = None
             key_rejected = None
 
-        with jax.named_scope("policy_chosen"):
-            logp_pi_chosen = _logp_sum(policy_model, example.chosen, key=key_chosen)
-        with jax.named_scope("policy_rejected"):
-            logp_pi_rejected = _logp_sum(policy_model, example.rejected, key=key_rejected)
-
-        with jax.named_scope("reference_chosen"):
-            logp_ref_chosen = jax.lax.stop_gradient(_logp_sum(reference_model, example.chosen, key=key_chosen))
-        with jax.named_scope("reference_rejected"):
-            logp_ref_rejected = jax.lax.stop_gradient(_logp_sum(reference_model, example.rejected, key=key_rejected))
-
-        delta_pi = logp_pi_chosen - logp_pi_rejected
-        delta_ref = logp_ref_chosen - logp_ref_rejected
-
-        loss, metrics = dpo_loss_from_logps(delta_pi, delta_ref, beta=config.beta)
-        chosen_reward = (logp_pi_chosen - logp_ref_chosen) * config.beta
-        rejected_reward = (logp_pi_rejected - logp_ref_rejected) * config.beta
-        metrics["dpo_chosen_reward"] = Metric.from_value(hax.mean(chosen_reward).scalar(), ReductionType.MEAN)
-        metrics["dpo_rejected_reward"] = Metric.from_value(hax.mean(rejected_reward).scalar(), ReductionType.MEAN)
-        return loss, metrics
+        return dpo_loss(
+            policy_model,
+            reference_model,
+            example,
+            beta=config.beta,
+            key_chosen=key_chosen,
+            key_rejected=key_rejected,
+        )
 
     with Trainer(config.trainer, optimizer, loss_function) as trainer:
         seed = config.trainer.seed
@@ -462,12 +531,12 @@ def main(config: TrainDpoConfig):
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 
-        validation_sets: dict[str, AsyncDataset[DpoExample]] = {}
+        validation_specs: dict[str, ValidationDatasetSpec] = {}
         if config.validation_split_fraction is not None:
             fraction = config.validation_split_fraction
             if fraction < 0 or fraction >= 1:
                 raise ValueError(f"validation_split_fraction must be in [0, 1), got {fraction}")
-            train_dataset, validation_sets = _build_validation_split(
+            train_dataset, validation_specs = _build_validation_split(
                 config.data,
                 Pos,
                 key=data_key,
@@ -475,15 +544,7 @@ def main(config: TrainDpoConfig):
             )
         else:
             train_dataset = _build_dpo_dataset(config.data, Pos, key=data_key)
-            val_caches = config.data.build_caches("validation")
-            for name, component in config.data.components.items():
-                cache = val_caches.get(name)
-                if cache is None:
-                    continue
-                validation_sets[name] = cast(
-                    AsyncDataset[DpoExample],
-                    dataset_for_preference_format(cast(PreferenceChatLmDatasetFormat, component.format), Pos, cache),
-                )
+            validation_specs = _build_validation_specs(config.data, Pos)
 
         initial_policy_model = config.model.build(Vocab, key=policy_key)
         initial_policy_model = config.adapter.apply(
@@ -556,6 +617,23 @@ def main(config: TrainDpoConfig):
             reference_provider = _build_reference_provider(config)
             state = dataclasses.replace(state, model=policy_model)
 
+        if validation_specs and config.reference_eval_cache.mode != "disabled":
+            if isinstance(state.model, DpoModel):
+                eval_reference_model = state.model.reference
+            else:
+                if reference_provider is None:
+                    raise RuntimeError("Reference provider is not initialized.")
+                eval_reference_model = reference_provider.model_for(state.model)
+
+            validation_specs = _maybe_prepare_cached_validation_specs(
+                config=config,
+                validation_specs=validation_specs,
+                trainer=trainer,
+                reference_model=eval_reference_model,
+                reference_identity=_reference_eval_cache_identity(config),
+                seq_len=Pos.size,
+            )
+
         all_param_count = parameter_count(state.model)
         trainable_param_count = parameter_count(state.trainable_model)
         levanter.tracker.log_summary(
@@ -590,9 +668,9 @@ def main(config: TrainDpoConfig):
 
             trainer.add_hook(log_mixture_weights, every=1)
 
-        if validation_sets:
-            for name, dataset in validation_sets.items():
-                trainer.add_eval_hook(dataset, name=name or None)
+        if validation_specs:
+            for name, spec in validation_specs.items():
+                trainer.add_eval_hook(spec.dataset, name=name or None)
         else:
             logger.warning("No validation datasets provided.")
 

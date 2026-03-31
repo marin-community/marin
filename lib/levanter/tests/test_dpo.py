@@ -17,11 +17,12 @@ from transformers import AutoTokenizer
 
 import haliax as hax
 from haliax import Axis
-from haliax.partitioning import set_mesh
+from haliax.partitioning import ResourceAxis, set_mesh
 from haliax.quantization import apply_updates, partition_for_grad_overwrite
 from haliax.jax_utils import is_jax_array_like
 from jax.sharding import Mesh
 
+from levanter.data.loader import DataLoader
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import (
@@ -34,17 +35,27 @@ from levanter.data.text import (
     TextLmDatasetFormat,
 )
 from levanter.adaptation import LoraAdaptationConfig, NoAdaptationConfig
+from levanter.dpo import (
+    CachedDpoExample,
+    DpoModel,
+    ReferenceEvalCacheConfig,
+    ValidationDatasetSpec,
+    _logp_sum,
+    build_or_load_reference_eval_cache,
+    dpo_loss,
+    dpo_loss_from_logps,
+    load_reference_eval_cache,
+    reference_eval_cache_metadata,
+    reference_eval_cache_path,
+)
 from levanter.main.lora_dpo import LoraDpoConfig, _translate_legacy_lora_dpo_config
 from levanter.main.train_dpo import (
     AdapterBaseReferenceConfig,
-    DpoModel,
     SeparateReferenceConfig,
     TrainDpoConfig,
     _build_dpo_dataset,
     _derive_training_keys,
-    _logp_sum,
     _validate_dpo_config,
-    dpo_loss_from_logps,
 )
 from levanter.metrics import Metric
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
@@ -53,6 +64,7 @@ from levanter.optim import AdamConfig
 from levanter.optim.model_averaging import ModelAveraging
 from levanter.store.cache import SerialCacheWriter
 from levanter.trainer_state import TrainerState, saveable_training_mask
+from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.tree_utils import inference_mode
 
 
@@ -85,6 +97,14 @@ def _tiny_gpt2_config() -> Gpt2Config:
 def _build_policy_model(config: Gpt2Config):
     Vocab = hax.Axis("vocab", 32)
     return config.build(Vocab, key=jrandom.PRNGKey(0))
+
+
+def _make_dpo_example(*, seq_len: int = 8, vocab_size: int = 32, key=jrandom.PRNGKey(0)) -> DpoExample:
+    Pos = hax.Axis("position", seq_len)
+    chosen_key, rejected_key = jrandom.split(key)
+    chosen = LmExample.causal(hax.random.randint(chosen_key, Pos, 0, vocab_size))
+    rejected = LmExample.causal(hax.random.randint(rejected_key, Pos, 0, vocab_size))
+    return DpoExample(chosen=chosen, rejected=rejected)
 
 
 def test_trainer_state_init_with_policy_model():
@@ -173,6 +193,9 @@ def test_canonical_dpo_config_parses_from_yaml(tmp_path: Path):
                 "  type: separate",
                 "  model_path: meta-llama/Llama-3.1-8B-Instruct",
                 "  is_hf: true",
+                "reference_eval_cache:",
+                "  mode: build_or_load",
+                "  cache_dir: gs://example-bucket/reference-eval",
             ]
         )
     )
@@ -181,6 +204,10 @@ def test_canonical_dpo_config_parses_from_yaml(tmp_path: Path):
 
     assert isinstance(config.adapter, NoAdaptationConfig)
     assert isinstance(config.reference, SeparateReferenceConfig)
+    assert config.reference_eval_cache == ReferenceEvalCacheConfig(
+        mode="build_or_load",
+        cache_dir="gs://example-bucket/reference-eval",
+    )
 
 
 def test_canonical_lora_dpo_config_parses_from_yaml(tmp_path: Path):
@@ -324,6 +351,142 @@ def test_dpo_metrics_are_explicit_metrics():
     assert isinstance(metrics["dpo_margin_policy"], Metric)
     assert isinstance(metrics["dpo_margin_ref"], Metric)
     assert isinstance(metrics["dpo_accuracy"], Metric)
+
+
+def test_dpo_loss_matches_cached_reference_values():
+    config = _tiny_gpt2_config()
+    policy_model = _build_policy_model(config)
+
+    Vocab = hax.Axis("vocab", 32)
+    reference_model = config.build(Vocab, key=jrandom.PRNGKey(1))
+    reference_model = inference_mode(reference_model, True)
+
+    example = _make_dpo_example(key=jrandom.PRNGKey(2))
+
+    logp_ref_chosen = _logp_sum(reference_model, example.chosen, key=None)
+    logp_ref_rejected = _logp_sum(reference_model, example.rejected, key=None)
+    cached_example = CachedDpoExample(
+        chosen=example.chosen,
+        rejected=example.rejected,
+        logp_ref_chosen=float(np.asarray(logp_ref_chosen.array)),
+        logp_ref_rejected=float(np.asarray(logp_ref_rejected.array)),
+    )
+
+    uncached_loss, uncached_metrics = dpo_loss(policy_model, reference_model, example, beta=0.1)
+    cached_loss, cached_metrics = dpo_loss(policy_model, None, cached_example, beta=0.1)
+
+    assert np.isclose(float(uncached_loss), float(cached_loss))
+    assert np.isclose(float(uncached_metrics["dpo_loss"]), float(cached_metrics["dpo_loss"]))
+    assert np.isclose(float(uncached_metrics["dpo_accuracy"]), float(cached_metrics["dpo_accuracy"]))
+
+
+def test_reference_eval_cache_path_changes_with_slice_bounds():
+    dataset = ListAsyncDataset([_make_dpo_example()])
+    base_spec = ValidationDatasetSpec(
+        name="val",
+        dataset=dataset,
+        source_cache_path="gs://bucket/tokenized/run/validation",
+        source_split="validation",
+    )
+    split_spec = dataclasses.replace(base_spec, source_split="train", slice_start=10, slice_end=20)
+    reference_identity = {"reference_type": "separate", "reference": {"model_path": "hf/model"}}
+
+    base_path = reference_eval_cache_path(base_spec, reference_identity=reference_identity, seq_len=32, cache_dir=None)
+    split_path = reference_eval_cache_path(
+        split_spec, reference_identity=reference_identity, seq_len=32, cache_dir=None
+    )
+
+    assert base_path != split_path
+
+
+def test_load_reference_eval_cache_rejects_metadata_mismatch(tmp_path: Path):
+    cache_dir = tmp_path / "reference_eval_cache"
+    spec = ValidationDatasetSpec(
+        name="val",
+        dataset=ListAsyncDataset([_make_dpo_example()]),
+        source_cache_path=str(tmp_path / "validation"),
+        source_split="validation",
+    )
+    metadata = reference_eval_cache_metadata(
+        spec,
+        reference_identity={"reference_type": "separate", "reference": {"model_path": "hf/model-a"}},
+        seq_len=8,
+    )
+
+    with SerialCacheWriter(
+        str(cache_dir),
+        {"logp_ref_chosen": np.zeros((), dtype=np.float32), "logp_ref_rejected": np.zeros((), dtype=np.float32)},
+        metadata=metadata,
+    ) as writer:
+        writer.write_batch(
+            {
+                "logp_ref_chosen": np.array([1.0], dtype=np.float32),
+                "logp_ref_rejected": np.array([2.0], dtype=np.float32),
+            }
+        )
+
+    mismatched_metadata = reference_eval_cache_metadata(
+        spec,
+        reference_identity={"reference_type": "separate", "reference": {"model_path": "hf/model-b"}},
+        seq_len=8,
+    )
+
+    with pytest.raises(FileNotFoundError, match="metadata mismatch"):
+        load_reference_eval_cache(str(cache_dir), metadata=mismatched_metadata)
+
+
+def test_build_or_load_reference_eval_cache_matches_direct_logps(tmp_path: Path):
+    config = _tiny_gpt2_config()
+    reference_model = inference_mode(_build_policy_model(config), True)
+
+    examples = [_make_dpo_example(key=jrandom.PRNGKey(i)) for i in range(3)]
+    dataset = ListAsyncDataset(examples)
+    spec = ValidationDatasetSpec(
+        name="val",
+        dataset=dataset,
+        source_cache_path=str(tmp_path / "validation"),
+        source_split="validation",
+    )
+    reference_identity = {"reference_type": "separate", "reference": {"model_path": "hf/model"}}
+    cache_dir = reference_eval_cache_path(
+        spec, reference_identity=reference_identity, seq_len=8, cache_dir=str(tmp_path / "cache")
+    )
+    metadata = reference_eval_cache_metadata(spec, reference_identity=reference_identity, seq_len=8)
+
+    with local_cpu_mesh() as mesh, hax.axis_mapping({"batch": ResourceAxis.DATA}):
+        loader = DataLoader(
+            dataset,
+            batch_size=1,
+            mesh=mesh,
+            axis_resources=None,
+            max_buffered_batches=1,
+            prefetch_size=1,
+            allow_nondivisible_batch_size=True,
+        )
+        chosen, rejected = build_or_load_reference_eval_cache(
+            reference_model=reference_model,
+            dataset=dataset,
+            eval_loader=loader,
+            compute_axis_mapping=None,
+            mp=jmp.get_policy("f32"),
+            cache_dir=cache_dir,
+            metadata=metadata,
+        )
+
+    expected_chosen = np.asarray(
+        [float(np.asarray(_logp_sum(reference_model, ex.chosen, key=None).array)) for ex in examples], dtype=np.float32
+    )
+    expected_rejected = np.asarray(
+        [float(np.asarray(_logp_sum(reference_model, ex.rejected, key=None).array)) for ex in examples],
+        dtype=np.float32,
+    )
+
+    assert np.allclose(chosen, expected_chosen)
+    assert np.allclose(rejected, expected_rejected)
+
+    loaded_chosen, loaded_rejected = load_reference_eval_cache(cache_dir, metadata=metadata)
+    assert np.allclose(loaded_chosen, expected_chosen)
+    assert np.allclose(loaded_rejected, expected_rejected)
 
 
 def test_logp_sum_passes_key_for_dropout():

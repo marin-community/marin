@@ -874,3 +874,866 @@ The next best step is:
 4. measure steady-state batches and communication before trying higher batch sizes
 
 If that experiment shows a real gain, then we can decide whether it is worth teaching the loader or training eval hooks about an explicit eval-only replicated layout.
+
+## 2026-03-30 Outcome: Standalone Replicated Cached Eval Worked, But Is Not Worth Prioritizing
+
+We ran the standalone replicated cached-eval experiment to completion on Iris.
+
+Identifiers:
+
+- W&B run: `lr15l9n2`
+- W&B display name: `jumping-resonance-174`
+- Iris job: `/ahmed/dpo-eval-cached-repl-v5p32-20260329-230854`
+
+Run shape:
+
+- mode: `cached`
+- eval parameter layout: `replicated`
+- hardware: `v5p-32`
+- devices: `16`
+- hosts: `4`
+- checkpoint: `step-849` from `new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_-7_seed2-947c5d`
+
+Controller outcome:
+
+- Iris job finished `JOB_STATE_SUCCEEDED`
+- `4/4` tasks succeeded
+- no preemptions
+- no worker failures
+
+Measured result:
+
+- total eval time: about `592.2s` (`9.9 min`)
+- warmup time: about `24.1s`
+- batches run: `46`
+- data load time: about `8.2s` to `8.8s`
+- loss compute time: about `583.3s` to `583.9s`
+- average time per batch: about `12.87s`
+
+Metric summary from W&B:
+
+- `eval_cached/loss`: `0.00551`
+- `eval_cached/dpo_loss`: `0.00551`
+- `eval_cached/dpo_accuracy`: `0.9958`
+- `eval_cached/dpo_chosen_reward`: `2.5412`
+- `eval_cached/dpo_rejected_reward`: `-11.9235`
+- `eval_cached/dpo_margin_policy`: `-45.0787`
+- `eval_cached/dpo_margin_ref`: `-189.7258`
+
+Interpretation:
+
+- the standalone replicated-layout path is real and stable on multihost TPU
+- cached eval remains overwhelmingly compute-bound after caching
+- data loading was only about `1.4%` to `1.5%` of total eval time
+- the remaining time is dominated by loss compute, not by input loading
+
+Most important practical conclusion:
+
+- the end-to-end improvement versus the earlier cached full-validation result (`~10.4 min`) is only modest (`~9.9 min` here)
+- that is directionally positive, but not large enough to justify more complexity right now
+
+Decision:
+
+- do **not** prioritize integrating eval-only replicated sharding into `train_dpo.py`
+- do **not** spend more time teaching the loader or training eval hooks about replicated eval layout right now
+- leave the standalone `experiments/eval_dpo.py` support in place as a profiling/benchmark tool
+- defer this thread until eval speed becomes a top blocker again
+
+In short: this experiment de-risked the idea, but it did not earn promotion into the mainline DPO path yet.
+
+## 2026-03-29 LoRA Status And Bloom SpecEval v2 Reproduction Plan
+
+### Have We Actually Tried LoRA-DPO Yet?
+
+- Not for the Bloom SpecEval v2 Marin Instruct run family in this thread.
+- I do not see any recorded Bloom SpecEval v2 LoRA-DPO training launch in:
+  - this Codex logbook
+  - Claude's parallel logbook
+  - the current Iris job list
+- What we have today is **code-path readiness**, not experiment evidence:
+  - canonical `levanter.main.train_dpo` supports `adapter.type=lora` with `reference.type=adapter_base`
+  - the legacy `levanter.main.lora_dpo` wrapper still works for old configs
+  - LoRA-DPO tests and docs are in place
+  - existing LoRA YAMLs target Ultrafeedback / legacy sanity checks, not Bloom SpecEval v2
+
+### Exact Baseline To Reproduce
+
+Target run:
+
+- W&B: `https://wandb.ai/marin-community/dpo/runs/new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_-7_seed2-947c5d`
+- Executor source: `experiments/sweep_dpo/beta0.1_seed2_lr7.5e-7.py`
+
+Baseline knobs that should stay fixed for the first LoRA reproduction attempt:
+
+- dataset: Bloom SpecEval v2 preference data (`bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite`)
+- tokenizer: `marin-community/marin-tokenizer`
+- base model: `marin-community/marin-8b-instruct`
+- seed: `2`
+- beta: `0.1`
+- learning rate: `7.5e-7`
+- train batch size: `128`
+- num train steps: `850`
+- train / max seq len: `4096`
+- steps per eval: `200`
+- hf export cadence: `200`
+- hardware target: `v5p-32`
+- memory target: `256GB`
+- eval parallelism target: `32`
+
+The only intended semantic change for the first reproduction run is:
+
+- full-FT policy + separate frozen reference
+- becomes
+- LoRA policy + implicit adapter-base reference
+
+### Important Constraint In The Current Experiment Plumbing
+
+- `experiments/defaults.default_dpo(...)` and `SimpleDPOConfig` currently only construct regular DPO with `reference.type=separate`.
+- There is no Bloom SpecEval v2 experiment wrapper in `experiments/` that can already emit:
+  - `adapter.type: lora`
+  - `reference.type: adapter_base`
+  - LoRA export settings like `merged_hf_save_path`
+
+So the **fastest and lowest-risk first LoRA experiment** is:
+
+1. write a standalone canonical `TrainDpoConfig` YAML for Bloom SpecEval v2
+2. launch `python -m levanter.main.train_dpo` directly on Iris
+3. only after one successful run, decide whether to teach `SimpleDPOConfig` / `default_dpo` about LoRA for sweep parity
+
+That avoids mixing "does LoRA-DPO train correctly here?" with "did we correctly refactor the executor config surface?"
+
+### Planned First Run: Strict Reproduction With LoRA
+
+Goal: reproduce the `...947c5d` run as faithfully as possible while changing only the DPO parameterization.
+
+Planned config delta relative to the seed-2 baseline:
+
+```yaml
+adapter:
+  type: lora
+  r: 64
+  alpha: 64.0
+  dropout: 0.0
+  zero_init_b: true
+  target_modules: null
+
+reference:
+  type: adapter_base
+```
+
+Everything else should match the baseline run unless a TPU-specific blocker appears.
+
+Rationale for this first run shape:
+
+- `zero_init_b: true` is mandatory for DPO because the step-0 policy must equal the implicit reference
+- `r=64, alpha=64` is the current house default and matches the LoRA-DPO guide
+- `target_modules: null` means all linear modules, which is the current recommended setting
+- keeping `lr=7.5e-7` makes this a true reproduction attempt rather than an immediate retuning study
+
+### Recommended Launch Form
+
+First run should be a dedicated canonical config, something like:
+
+- config path: `lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_seed2_lr7.5e-7_central1.yaml`
+- entrypoint: `uv run python -m levanter.main.train_dpo --config_path ...`
+
+Suggested job command shape:
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run --no-wait \
+  --extra marin:tpu \
+  --tpu v5p-32 \
+  --memory 256GB \
+  --disk 50GB \
+  --zone us-central1-a \
+  --job-name lora-new-dpo-v2-bloom-s2-lr7p5e7 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m levanter.main.train_dpo \
+  --config_path lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_seed2_lr7.5e-7_central1.yaml
+```
+
+### Config Notes For The First Run
+
+- Use the same Bloom SpecEval v2 tokenized train/val caches as the full-DPO baseline.
+- Keep `validation_split_fraction: null` so eval uses the explicit validation set rather than creating a new split.
+- Keep `trainer.per_device_eval_parallelism: 32` for comparability with the current full-DPO runs.
+- Keep `train_batch_size: 128` and `num_train_steps: 850` unchanged.
+- Use `merged_hf_save_path` for the first run, not `peft_save_path`.
+
+Why `merged_hf_save_path` first:
+
+- older LoRA TPU configs in this repo explicitly disabled `peft_save_path` because of multihost serialization issues
+- even if the new adaptation path may be better, the first Bloom SpecEval v2 LoRA run should minimize new failure modes
+
+### Success Criteria For The Strict Reproduction Run
+
+Call the first LoRA reproduction successful only if all of the following hold:
+
+- it compiles and gets past the first train step on multihost TPU
+- step-0 DPO loss is near `ln(2)` / `0.693`, not a large blown-up value
+- no container OOM occurs at `v5p-32`, `256GB`
+- W&B logs normal DPO metrics:
+  - `loss`
+  - `dpo_accuracy`
+  - `dpo_margin_policy`
+  - `dpo_margin_ref`
+  - `dpo_chosen_reward`
+  - `dpo_rejected_reward`
+- throughput and eval cadence look sane relative to the regular-DPO baseline
+
+If step-0 loss is badly wrong, that is a strong sign that the LoRA identity/reference assumption is broken, most likely:
+
+- `zero_init_b` not applied
+- wrong reference mode
+- adapter modules not wired as expected
+
+### Planned Follow-Up If Strict Reproduction Is Flat
+
+There is a real chance that a literal `lr=7.5e-7` LoRA run will learn too slowly. The LoRA-DPO guide in this branch recommends starting closer to `5e-6`.
+
+So the plan should be:
+
+1. run the strict reproduction first at `7.5e-7`
+2. if it is stable but under-trains, launch a LoRA-tuned follow-up at `5e-6`
+3. keep the same:
+   - dataset
+   - seed
+   - beta
+   - batch size
+   - steps
+   - hardware
+   - adapter rank
+
+That gives two distinct answers:
+
+- **strict reproduction**: "what happens if we only swap in LoRA?"
+- **LoRA-tuned comparison**: "what is the fairer LoRA baseline once the optimizer is adjusted?"
+
+### Follow-Up Code Work Only After First Evidence
+
+Do **not** start by extending the executor/sweep layer.
+
+After the first LoRA run succeeds, the next cleanup step should be:
+
+1. add adapter/reference/export fields to `SimpleDPOConfig`
+2. teach `default_dpo(...)` to emit either regular DPO or LoRA-DPO
+3. add a proper `experiments/sweep_dpo/lora_beta0.1_seed2_lr7.5e-7.py`
+
+That sequencing keeps the first experiment focused on model behavior instead of config refactoring.
+
+## 2026-03-29 External Evidence: Thinking Machines "LoRA Without Regret"
+
+Source read:
+
+- https://thinkingmachines.ai/blog/lora/
+
+### Scope Notes
+
+- This article is strong evidence for **supervised fine-tuning** and **policy-gradient RL**.
+- It is **not** a direct DPO paper.
+- For our Bloom SpecEval v2 plan, the safest interpretation is:
+  - treat DPO as much closer to the article's supervised setting than to its RL setting
+  - carry over the supervised LoRA practices first
+  - mark any DPO-specific conclusions as inference, not established fact
+
+### Direct Takeaways From The Article
+
+The practices below are directly supported by the article:
+
+- **Apply LoRA to all layers, especially MLP/MoE layers.**
+  - Attention-only LoRA underperformed materially.
+  - MLP-only was much better, and all-layer LoRA was the safest default.
+- **Do not judge LoRA from a single learning rate.**
+  - The article explicitly swept LR for each condition before comparing LoRA to FullFT.
+- **For supervised-style training, LoRA's best LR is about 10x the FullFT LR.**
+  - The article reports an empirical multiplier of about `9.8x`.
+- **Large batch size can hurt LoRA more than it hurts FullFT.**
+  - This effect appeared to be mostly independent of rank.
+- **Keep the standard LoRA parametrization unless there is evidence otherwise.**
+  - `alpha / r` scaling
+  - zero-init on `B`
+  - standard random init for `A`
+  - same LR for `A` and `B`
+  - the authors report they could not improve on this basic setup
+- **Rank is mainly a capacity knob, not a cure for bad optimization settings.**
+  - If LoRA is capacity-constrained, training falls off the FullFT curve.
+  - But larger rank does not remove the large-batch penalty.
+
+### DPO-Specific Inferences For This Thread
+
+These are my inferences from the article, not direct claims made there:
+
+- Our Bloom SpecEval v2 DPO run should be treated as a **supervised-style LoRA problem**, not as an RL-style low-capacity case.
+- Therefore the article's RL result ("very low rank can match FullFT") should **not** be used to justify tiny-rank DPO first runs.
+- The current repo default of:
+  - `target_modules: null`
+  - `zero_init_b: true`
+  - `alpha = r`
+is directionally correct for the first Bloom SpecEval v2 LoRA experiment.
+- Because Levanter currently excludes `lm_head` from LoRA by default, our practical "all-layer" run is really "all supported linear layers except lm_head". That is still much closer to the article's recommendation than attention-only LoRA.
+
+### How This Changes The Bloom SpecEval v2 Plan
+
+This section **updates** the previous plan.
+
+#### 1. Do not treat the same-LR reproduction as the main comparison
+
+The earlier plan proposed a strict reproduction at:
+
+- FullFT baseline LR: `7.5e-7`
+- LoRA reproduction LR: also `7.5e-7`
+
+After reading the article, that should be demoted to a **sanity / lineage run only**.
+
+Reason:
+
+- the article's strongest operational finding is that LoRA wants about **10x** the FullFT LR in supervised settings
+- so a same-LR comparison is likely unfair and likely to make LoRA look artificially weak
+
+Updated interpretation:
+
+- **strict same-LR run (`7.5e-7`)**: useful only to answer "what happens if I swap in LoRA and change nothing else?"
+- **fair LoRA comparison**: should center around **`7.5e-6`**
+
+#### 2. The first real LoRA tuning sweep should be LR-first, not rank-first
+
+Minimal first sweep for the Bloom SpecEval v2 seed-2 setup:
+
+- `r = 64`
+- `target_modules = null`
+- `zero_init_b = true`
+- LR grid centered around the article's 10x rule:
+  - `5e-6`
+  - `7.5e-6`
+  - `1e-5`
+
+For our 850-step training run, `7.5e-6` is the natural anchor because it is exactly 10x the validated FullFT baseline LR.
+
+The article also suggests a somewhat higher multiplier in very short runs. If we do only a brief screening run, e.g. `<=100` steps, then a fourth point near `1.1e-5` is reasonable. For the full 850-step run, the main comparison should still center near `7.5e-6`.
+
+#### 3. If LoRA underperforms at batch size 128, reduce batch before raising rank
+
+This is one of the clearest actionable points from the article.
+
+If the first LoRA runs are stable but learn more poorly than FullFT:
+
+- do **not** immediately conclude that rank 64 is too small
+- do **not** expect higher rank to fix a large-batch optimization penalty
+
+Instead, test smaller train batch sizes first, for example:
+
+- `128` (baseline)
+- `64`
+- possibly `32` if needed
+
+Keep the hardware fixed if possible so the comparison stays interpretable.
+
+#### 4. Use rank as a capacity check only after LR and batch are sane
+
+Recommended order:
+
+1. get a stable run with all-layer LoRA and a LoRA-appropriate LR
+2. if that still underfits, test batch reduction
+3. only then test higher rank
+
+Minimal rank ladder:
+
+- `64` first
+- `128` second if there are signs of capacity limits
+
+I do **not** think we should start with attention-only LoRA or with tiny ranks.
+
+#### 5. Keep the plain LoRA parametrization for the first comparison
+
+The article is a strong argument **against** piling on extra LoRA tricks in the first Bloom SpecEval v2 experiment.
+
+So the first serious run should keep:
+
+- standard `alpha / r` scaling
+- same LR for `A` and `B`
+- no LoRA+
+- no rank-dependent alpha hacks
+- no attention-only targeting
+
+For this codebase, that means:
+
+```yaml
+adapter:
+  type: lora
+  r: 64
+  alpha: 64.0
+  dropout: 0.0
+  zero_init_b: true
+  target_modules: null
+```
+
+#### 6. Compare LoRA vs FullFT on training/eval metrics, not just generations
+
+The article deliberately used loss-based comparisons rather than only sample-based evals.
+
+For our DPO runs, the corresponding best practice is:
+
+- compare validation `loss`
+- compare `dpo_accuracy`
+- compare `dpo_margin_policy`
+- compare `dpo_margin_ref`
+- compare chosen/rejected rewards
+- compare throughput / wall-clock / memory
+
+Do not treat a handful of qualitative generations as the main evidence.
+
+### Revised Experimental Order
+
+This is the current recommended order for Bloom SpecEval v2 LoRA:
+
+1. **Optional sanity run**:
+   - same config as baseline, but with LoRA and `lr=7.5e-7`
+   - purpose: verify the pipeline and observe how much performance is lost if LR is not retuned
+2. **Main fair comparison run**:
+   - same config, `r=64`, all-layer LoRA, `lr=7.5e-6`
+3. **Small LR sweep around the fair run**:
+   - `5e-6`, `7.5e-6`, `1e-5`
+4. **Batch-size follow-up only if needed**:
+   - reduce `train_batch_size` from `128` to `64`
+5. **Rank follow-up only if needed**:
+   - `r=128`
+
+### Practical Bottom Line
+
+The most important correction from the article is simple:
+
+- a Bloom SpecEval v2 LoRA run at `7.5e-7` should not be considered the serious LoRA baseline
+- the serious baseline should be around **`7.5e-6`**, with all supported linear layers adapted, and with batch size treated as a separate optimization variable
+
+## 2026-03-30 Planned Run: Bloom SpecEval v2 LoRA Fair Baseline On v5p-8
+
+### Why This Run
+
+- User requested that the next LoRA experiment actually be launched on `v5p-8`.
+- The current best next experiment from this logbook is the **fair LoRA baseline**, not the same-LR sanity run.
+- I am keeping the run in `us-central1-a` to stay in-region with the Bloom SpecEval v2 preference data and tokenized caches.
+
+### Config Chosen
+
+- Config path:
+  - `lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_central1.yaml`
+- Main settings:
+  - dataset: Bloom SpecEval v2 GPT-4.1 vs Mixtral opposite-mode preferences
+  - train cache: `gs://marin-us-central1/tokenized/bloom_speceval_v2_train_prefs_marin_tokenizer-12920b`
+  - val cache: `gs://marin-us-central1/tokenized/bloom_speceval_v2_val_prefs_marin_tokenizer-a06ae8`
+  - base model: `marin-community/marin-8b-instruct`
+  - adapter: LoRA `r=64`, `alpha=64`, `dropout=0`, `zero_init_b=true`, `target_modules=null`
+  - reference: `adapter_base`
+  - LR: `7.5e-6`
+  - beta: `0.1`
+  - seed: `2`
+  - train batch size: `128`
+  - train steps: `850`
+  - hardware: `v5p-8`
+  - eval parallelism: `16`
+
+### Launch Command
+
+Planned Iris submission:
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run --no-wait \
+  --extra marin:tpu \
+  --tpu v5p-8 \
+  --memory 256GB \
+  --disk 50GB \
+  --zone us-central1-a \
+  --job-name lora-bsv2-mi-b0p1-s2-lr7p5e6-v5p8 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m levanter.main.train_dpo \
+  --config_path lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_central1.yaml
+```
+
+### Monitoring Plan
+
+- Babysit this as an Iris TPU job, not a fire-and-forget launch.
+- Watch specifically for:
+  - scheduler capacity wait vs real runtime failure
+  - first-step compile/lowering failures
+  - HBM / OOM signals
+  - bad step-0 DPO loss that would indicate broken LoRA identity/reference behavior
+
+## 2026-03-30 Launch Update: v5p-8 LoRA Run Submitted And Rerouted To east5
+
+### First Attempt: us-central1-a
+
+Initial launch:
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run --no-wait \
+  --extra marin:tpu \
+  --tpu v5p-8 \
+  --memory 256GB \
+  --disk 50GB \
+  --zone us-central1-a \
+  --job-name lora-bsv2-mi-b0p1-s2-lr7p5e6-v5p8-20260330-000321 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m levanter.main.train_dpo \
+  --config_path lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_central1.yaml
+```
+
+Job id:
+
+- `/ahmed/lora-bsv2-mi-b0p1-s2-lr7p5e6-v5p8-20260330-000321`
+
+Result:
+
+- never allocated
+- stayed `JOB_STATE_PENDING`
+- pending reason was:
+  - insufficient memory on ready `tpu_v5p_8-us-central1-a` workers (`need 256GB`, only about `11.8GB` available)
+  - autoscaler scale-up for `tpu_v5p_8-us-central1-a` was quota-blocked
+
+Action taken:
+
+- stopped the pending central1 job
+
+### Why I Switched To east5
+
+- `tpu_v5p_8-us-east5-a` was not quota-blocked
+- multiple east5 `v5p-8` slices were fully idle (`committed_mem_bytes=0`, `committed_tpu=0`)
+- east5 already has the Bloom SpecEval v2 tokenized caches:
+  - `gs://marin-us-east5/tokenized/bloom_speceval_v2_train_prefs_marin_tokenizer-12920b`
+  - `gs://marin-us-east5/tokenized/bloom_speceval_v2_val_prefs_marin_tokenizer-a06ae8`
+
+So east5 was the first region with a realistic chance of actually running tonight.
+
+### Active Run: us-east5-a
+
+Relaunch:
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run --no-wait \
+  --extra marin:tpu \
+  --tpu v5p-8 \
+  --memory 256GB \
+  --disk 50GB \
+  --zone us-east5-a \
+  --job-name lora-bsv2-mi-b0p1-s2-lr7p5e6-v5p8-east5-20260330-000700 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m levanter.main.train_dpo \
+  --config_path lib/levanter/config/dpo/lora_dpo_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_east5.yaml
+```
+
+Active job id:
+
+- `/ahmed/lora-bsv2-mi-b0p1-s2-lr7p5e6-v5p8-east5-20260330-000700`
+
+Current state at last check:
+
+- `JOB_STATE_RUNNING`
+- `task_state_counts.running = 1`
+- no pending reason
+
+### Early Monitoring Result
+
+This run is past scheduler allocation and into real startup.
+
+Observed so far:
+
+- W&B initialized successfully
+- run id: `053ujx8y`
+- W&B URL: `https://wandb.ai/marin-community/dpo/runs/053ujx8y`
+- train and validation token caches loaded from east5
+- no OOM / `RESOURCE_EXHAUSTED` / JAX lowering failure seen yet
+- worker is actively reading HF model shards for `marin-community/marin-8b-instruct`
+
+Notable warning:
+
+- cache metadata mismatch warning on `preprocessor_metadata`
+- this did **not** immediately kill the run
+- at last check the worker was still making forward progress through model shard reads
+
+### Current Risk Assessment
+
+What is already ruled out:
+
+- scheduler-capacity failure on east5
+- immediate container death on startup
+- immediate host-RAM OOM during initial process boot
+
+What is still not ruled out yet:
+
+- failure later in model load
+- first-step compile/lowering failure
+- TPU HBM OOM once actual training starts
+
+### Immediate Next Watchpoints
+
+- finish loading all `marin-8b-instruct` safetensor shards
+- reach first batch load
+- reach train-step tracing / lowering
+- survive step-0 eval without OOM
+
+## 2026-03-30 Failure Update: east5 v5p-8 Run Hit TPU HBM OOM At First-Step Compile
+
+The east5 run did not survive first-step compile.
+
+Final job state:
+
+- job id: `/ahmed/lora-bsv2-mi-b0p1-s2-lr7p5e6-v5p8-east5-20260330-000700`
+- state: `JOB_STATE_FAILED`
+- W&B run: `053ujx8y`
+
+What happened:
+
+- the job loaded the east5 train/validation caches successfully
+- it loaded all `marin-community/marin-8b-instruct` safetensor shards successfully
+- it reached first batch load, tracing, and HLO lowering
+- it then failed in JAX/XLA with TPU HBM exhaustion during compile
+
+Key failure signal from logs:
+
+- `RESOURCE_EXHAUSTED: XLA:TPU compile permanent error`
+- HBM used: `111.15G` of `95.74G`
+- over capacity by: `15.41G`
+- dominant temporary allocation included a `bf16[32,32,4096,4096]` broadcast of about `32.00G`
+
+Interpretation:
+
+- this was **not** a scheduler-capacity failure
+- this was **not** a host-RAM failure
+- this was **not** a tokenizer/cache problem
+- this was a true TPU-device-memory failure at the first training step
+
+Most important conclusion:
+
+- LoRA reduced trainable-parameter / optimizer-state cost, but it did **not** make the activation and temporary-memory footprint small enough for `train_batch_size: 128` at `4096` tokens on `v5p-8`
+
+Therefore the next experiment should follow the earlier LoRA plan exactly:
+
+- keep `r=64`
+- keep all-layer LoRA (`target_modules: null`)
+- keep `lr=7.5e-6`
+- keep `beta=0.1`
+- keep the same dataset and seed
+- reduce train batch size before touching rank
+
+Recommended next ladder on the same hardware:
+
+1. rerun with `train_batch_size: 64`
+2. if that still OOMs, rerun with `train_batch_size: 32`
+3. only after memory is sane, compare learning behavior and consider rank changes
+
+This failure is actually consistent with the experimental guidance already recorded above: batch is the first knob to lower before increasing rank.
+
+## 2026-03-30 Design Plan: Durable Reference Eval Log-Prob Cache
+
+### Problem
+
+- DPO eval during training still does four forward passes because `loss_function` in `lib/levanter/src/levanter/main/train_dpo.py:402` computes both policy and reference log-probs inline.
+- The eval hook added in `lib/levanter/src/levanter/main/train_dpo.py:593` goes through the generic `Trainer.add_eval_hook(...)` path in `lib/levanter/src/levanter/trainer.py:606`, so eval currently reuses the uncached training loss.
+- `experiments/eval_dpo.py:79` proved that caching reference log-probs gives about a 2x eval speedup, but that file is a standalone profiling script and the wrong long-term home for production DPO logic.
+- Pre-emption is routine on these jobs, so an in-memory-only cache is not acceptable. The cache must survive restarts and be safe to rebuild after partial writes.
+
+### Goals
+
+- Add an opt-in DPO config flag that builds or loads a reference-eval cache before training starts.
+- Persist the cache to GCS, then load it into host RAM for repeated eval use within the run.
+- Keep the cache scoped to validation/eval only. Do not change the training step, optimizer state, or checkpoint format.
+- Reuse Levanter's existing finished-ledger cache semantics from `lib/levanter/src/levanter/store/cache.py:137` so incomplete caches are treated as missing and rebuilt.
+- Keep the generic `Trainer` API unchanged. This is DPO-specific behavior and should live in DPO code, not as a trainer-wide abstraction.
+- Support both DPO reference modes:
+  - `reference.type=separate`
+  - `reference.type=adapter_base`
+
+### Non-Goals
+
+- Do not turn `experiments/eval_dpo.py` into a production library module.
+- Do not cache training-time reference log-probs.
+- Do not put the cache in device RAM or TPU HBM.
+- Do not serialize cached reference log-probs inside training checkpoints.
+- Do not introduce generic eval-cache machinery for all trainers.
+
+### Proposed Code Organization
+
+- Add a new library module: `lib/levanter/src/levanter/dpo.py`
+- Keep `lib/levanter/src/levanter/main/train_dpo.py` as the orchestration layer:
+  - build validation dataset specs
+  - decide whether caching is enabled
+  - call the cache build/load helper before `trainer.add_eval_hook(...)`
+- Leave `experiments/eval_dpo.py` as disposable profiling / validation code. After the library path lands, either:
+  - reduce it to a thin profiling script that imports the library helpers, or
+  - archive/delete it if nobody needs the standalone path anymore
+
+Reason for using `levanter/dpo.py` instead of adding more code to `train_dpo.py`:
+
+- the cache logic is real runtime behavior, not experiment glue
+- it is too DPO-specific for `trainer.py`
+- it is not purely data formatting, so it does not belong in `data/text/preference.py`
+- it gives us one canonical home for reusable DPO runtime code instead of leaving it trapped in the CLI entrypoint
+- it is lower churn than introducing a full `levanter/dpo/` package right now, while still setting up a natural migration path if DPO code keeps growing
+
+### Proposed API Shape
+
+```python
+@dataclass(frozen=True)
+class ReferenceEvalCacheConfig:
+    mode: Literal["disabled", "build_or_load"] = "disabled"
+    cache_dir: str | None = None
+
+
+@dataclass(frozen=True)
+class ValidationDatasetSpec:
+    name: str
+    dataset: AsyncDataset[DpoExample]
+    source_cache_path: str
+    source_split: str
+    slice_start: int | None = None
+    slice_end: int | None = None
+```
+
+```python
+if config.reference_eval_cache.mode == "build_or_load":
+    validation_specs = prepare_reference_eval_caches(
+        validation_specs,
+        config=config,
+        trainer=trainer,
+        tokenizer=tokenizer,
+        model_context=model_context,
+        Pos=Pos,
+    )
+
+for spec in validation_specs:
+    trainer.add_eval_hook(spec.dataset, name=spec.name or None)
+```
+
+### Core Design Choices
+
+#### 1. Durable sidecar cache, then RAM
+
+- Source of truth: GCS sidecar cache
+- Fast serving path during the run: host RAM numpy arrays
+- Not worth streaming from GCS every eval batch because the cache is tiny
+- Not worth putting in checkpoint state because it is derived, immutable, and easier to rebuild than to checkpoint safely
+
+Approximate size:
+
+- two `float32` values per example
+- `8 bytes/example`
+- `23,552` examples is about `188 KB`
+- even `1,000,000` examples is only about `8 MB`
+
+Conclusion: persist to GCS for durability, then load into RAM per host once.
+
+#### 2. Keep eval caching out of the generic trainer
+
+- `Trainer.add_eval_hook(...)` in `lib/levanter/src/levanter/trainer.py:606` is intentionally generic.
+- We should not add DPO-specific cache controls there.
+- The DPO loss in `train_dpo.py` should instead accept either:
+  - a normal `DpoExample`
+  - a cached `CachedDpoExample`
+- That keeps the generic trainer unchanged while letting eval compile a separate cached path when needed.
+
+#### 3. Use a custom dataset wrapper, not `AsyncDataset.map(...)`
+
+- `MappedAsyncDataset` in `lib/levanter/src/levanter/data/dataset.py:227` does not pass the example index into the user callback; it only calls `fn(item, ...)`.
+- The cache attach step needs the dataset index so it can read `ref_chosen[index]` and `ref_rejected[index]`.
+- So the right production shape is the same basic idea validated in `experiments/eval_dpo.py:477`: a small `AsyncDataset` wrapper that returns `CachedDpoExample` by index.
+
+#### 4. Strict cache identity
+
+Cache key must include:
+
+- validation cache identity
+- validation slice identity
+  - full validation cache
+  - or train-cache slice bounds when `validation_split_fraction` is used
+- reference identity
+- sequence length
+- cache schema version
+
+For `reference.type=separate`, reference identity should include:
+
+- `reference.model_path`
+- `reference.is_hf`
+- model config class / shape if needed for safety
+
+For `reference.type=adapter_base`, reference identity should include the frozen base initialization source, not the current policy weights:
+
+- `initialize_from_hf`
+- `initialize_from_checkpoint_path`
+- relevant model/tokenizer identity
+- adapter type and settings only if they change the base-model view semantics
+
+#### 5. Finished-or-rebuild semantics
+
+- `TreeCache.load(...)` in `lib/levanter/src/levanter/store/cache.py:137` already refuses unfinished caches.
+- We should lean into that:
+  - if the cache is missing: build
+  - if the ledger is unfinished: build
+  - if metadata/version mismatches: rebuild
+- Important change from current generic cache loading behavior:
+  - metadata mismatch should be treated as a cache miss for this path, not merely a warning
+
+### Implementation Outline
+
+1. Add config surface
+   - Extend `TrainDpoConfig` in `lib/levanter/src/levanter/main/train_dpo.py`
+   - Extend `SimpleDPOConfig` in `experiments/simple_dpo_config.py`
+   - Thread the config through `experiments/defaults.py`
+
+2. Refactor validation-set construction
+   - Replace the plain `dict[str, AsyncDataset[DpoExample]]` with `ValidationDatasetSpec`
+   - Preserve provenance needed for deterministic cache paths:
+     - source cache path
+     - split name
+     - slice bounds when using `validation_split_fraction`
+
+3. Add `levanter/dpo.py`
+   - Move reusable DPO runtime helpers out of `train_dpo.py`
+   - Move only the validated cache ideas from `experiments/eval_dpo.py`
+   - Add:
+     - `DpoModel`
+     - `dpo_loss_from_logps`
+     - `ReferenceEvalCacheConfig`
+     - `CachedDpoExample`
+     - `CachedReferenceDataset`
+     - `ValidationDatasetSpec`
+     - deterministic cache-path builder
+     - strict cache metadata builder
+     - build-or-load helper that uses `SerialCacheWriter` and `TreeCache`
+   - Keep the implementation process-safe:
+     - all hosts compute
+     - process 0 writes
+     - all hosts barrier before load/continue
+
+4. Wire the cache into `train_dpo.py`
+   - After validation datasets are built and after the reference identity is known, call the cache helper before training starts
+   - Replace uncached eval datasets with cached wrappers when available
+   - Extend the DPO loss to branch on `CachedDpoExample` and skip the reference forward passes in eval
+   - Leave the training path unchanged
+
+5. Add tests
+   - Extend `lib/levanter/tests/test_dpo.py` and add a focused new test file if needed
+   - Cover:
+     - deterministic cache-key changes when source cache / slice / reference / seq len changes
+     - unfinished cache rebuild behavior
+     - cached vs uncached DPO-loss parity on a small real model/dataset path
+     - `validation_split_fraction` provenance produces distinct cache keys from explicit validation caches
+
+6. Update docs
+   - Add a short note to `lib/levanter/docs/guides/DPO-Training.md`
+   - Document:
+     - what the flag does
+     - that it writes a durable sidecar cache
+     - that the first run pays a one-time build cost
+     - that later runs reuse the completed cache
+
+### Notes
+
+- This should be opt-in at first. Default behavior should remain uncached until the path is validated in real training jobs.
+- The cache builder should be invoked before training starts, not lazily inside the first eval hook. That makes failure/rebuild behavior obvious and keeps step-0 eval timing less surprising.
+- The first implementation should stay conservative and only cache validation reference log-probs. Training-time caching is a separate problem with different correctness and storage tradeoffs.
+- The reference cache should remain a DPO-only feature until there is a second real user of the same pattern.
+
+### Future Work
+
+- If DPO-specific runtime code keeps growing, promote `lib/levanter/src/levanter/dpo.py` into a `lib/levanter/src/levanter/dpo/` package later.
+- After the library path lands, archive or shrink `experiments/eval_dpo.py` so the production implementation has one canonical home.
+- If eval is still slow after reference caching, revisit eval-specific parameter layout / replicated-weight experiments.

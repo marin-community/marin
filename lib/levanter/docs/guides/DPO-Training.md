@@ -101,6 +101,27 @@ adapter:
 
 reference:
   type: adapter_base
+```
+
+### Reference Eval Cache
+
+Set `reference_eval_cache.mode: build_or_load` to precompute validation-set
+reference log-probs before training starts, write them to a durable sidecar
+cache, and reuse them on later resumes or reruns:
+
+```yaml
+reference_eval_cache:
+  mode: build_or_load
+  # Optional override. By default Levanter writes a hashed cache under a
+  # sibling `reference_logprobs/` directory next to the validation cache.
+  cache_dir: "gs://my-bucket/dpo/reference_eval"
+```
+
+This cache is eval-only. Training still computes reference log-probs in the
+normal way. The first run pays a one-time build cost; later runs load the
+completed cache and skip the reference forward passes during validation. If a
+job is preempted mid-build, the unfinished cache is ignored and rebuilt on the
+next start.
 
 ### Generation Stop Tokens
 

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.dpo import ReferenceEvalCacheConfig
 from levanter.schedule import IntSchedule
 
 # DPO runs two models (policy + reference) but eval doesn't need gradients/optimizer,
@@ -41,6 +42,7 @@ class SimpleDPOConfig:
     reference_is_hf: bool = True
     beta: float = 0.1
     validation_split_fraction: float | None = 0.1
+    reference_eval_cache: ReferenceEvalCacheConfig = field(default_factory=ReferenceEvalCacheConfig)
 
     train_seq_len: int | None = None
     max_seq_len: int = 4096

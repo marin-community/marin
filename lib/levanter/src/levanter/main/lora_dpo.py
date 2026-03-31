@@ -14,6 +14,7 @@ from typing import Optional
 from levanter.adaptation import LoraAdaptationConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data.text import PreferenceLmDataConfig
+from levanter.dpo import ReferenceEvalCacheConfig
 from levanter.lora import LoraConfig
 from levanter.main.train_dpo import AdapterBaseReferenceConfig, TrainDpoConfig, main as train_dpo_main
 from levanter.optim import AdamConfig, OptimizerConfig
@@ -33,6 +34,7 @@ class LoraDpoConfig:
     use_hf_model_config: bool = False
     trust_remote_code: bool = False
     validation_split_fraction: float | None = 0.1
+    reference_eval_cache: ReferenceEvalCacheConfig = field(default_factory=ReferenceEvalCacheConfig)
 
     peft_save_path: Optional[str] = None
     peft_hf_upload: bool | str = False
@@ -73,6 +75,7 @@ def _translate_legacy_lora_dpo_config(config: LoraDpoConfig) -> TrainDpoConfig:
         initialize_from_hf=config.initialize_from_hf,
         use_hf_model_config=config.use_hf_model_config,
         validation_split_fraction=config.validation_split_fraction,
+        reference_eval_cache=config.reference_eval_cache,
         hf_save_steps=config.hf_save_steps,
         peft_save_path=config.peft_save_path,
         peft_hf_upload=config.peft_hf_upload,

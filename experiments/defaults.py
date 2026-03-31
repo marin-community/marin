@@ -734,6 +734,7 @@ def default_dpo(
         ),
         beta=dpo_config.beta,
         validation_split_fraction=dpo_config.validation_split_fraction,
+        reference_eval_cache=dpo_config.reference_eval_cache,
         hf_save_steps=steps_per_export_hf,
         hf_save_dtype=dpo_config.hf_save_dtype,
         hf_generation_eos_token_ids=dpo_config.hf_generation_eos_token_ids,
