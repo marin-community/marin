@@ -7,6 +7,7 @@ Focuses on format-to-flag mapping, default handling, and CLI structure —
 not on pass-through of constructor arguments.
 """
 
+import json
 import os
 
 import pytest
@@ -183,8 +184,6 @@ def test_run_memray_profile_returns_nonempty_output(proto_format):
 
 def test_run_memray_profile_stats_returns_valid_json():
     """Stats reporter returns parseable JSON, not a file-path string."""
-    import json
-
     _allocate_during(1)
     cfg = cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.STATS, leaks=False)
     pid = str(os.getpid())
