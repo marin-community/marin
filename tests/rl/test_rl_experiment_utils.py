@@ -53,6 +53,11 @@ def _test_config(
     inference_tpu_type: str,
     train_ram: str | None = None,
     inference_ram: str | None = None,
+    zone: str | None = None,
+    delete_previous_temporary_checkpoint_after_save: bool = True,
+    debug_checkpointer: bool = False,
+    debug_checkpointer_log_interval: float = 60.0,
+    debug_checkpointer_dump_stacks_after: float | None = 60.0,
 ) -> RLExperimentConfig:
     return RLExperimentConfig(
         model_config=ModelConfig(
@@ -76,6 +81,11 @@ def _test_config(
         inference_tpu_type=inference_tpu_type,
         train_ram=train_ram,
         inference_ram=inference_ram,
+        zone=zone,
+        delete_previous_temporary_checkpoint_after_save=delete_previous_temporary_checkpoint_after_save,
+        debug_checkpointer=debug_checkpointer,
+        debug_checkpointer_log_interval=debug_checkpointer_log_interval,
+        debug_checkpointer_dump_stacks_after=debug_checkpointer_dump_stacks_after,
     )
 
 
@@ -228,6 +238,41 @@ def test_build_rl_job_config_propagates_ram_overrides(monkeypatch):
     assert job_config.run_config.inference_ram == "300g"
 
 
+def test_build_rl_job_config_propagates_checkpoint_controls_and_instance_id(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(
+            train_tpu_type="v5p-8",
+            inference_tpu_type="v5p-8",
+            zone="us-central1-b",
+            delete_previous_temporary_checkpoint_after_save=False,
+            debug_checkpointer=True,
+            debug_checkpointer_log_interval=15.0,
+            debug_checkpointer_dump_stacks_after=45.0,
+        ),
+        curriculum=_test_curriculum(),
+        model_path="gs://marin-us-central1/models/test-model",
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+        instance_id="rl-test-instance",
+    )
+
+    assert job_config.instance_id == "rl-test-instance"
+    assert job_config.run_config.zone == "us-central1-b"
+    assert job_config.curriculum.actor_name == "curriculum-rl-test-instance"
+    assert job_config.weight_transfer.coordinator_name == "wt-coord-rl-test-instance"
+    assert not job_config.trainer.checkpointer.delete_previous_temporary_checkpoint_after_save
+    assert job_config.trainer.checkpointer.debug_checkpointer
+    assert job_config.trainer.checkpointer.debug_checkpointer_log_interval == 15.0
+    assert job_config.trainer.checkpointer.debug_checkpointer_dump_stacks_after == 45.0
+
+
 def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):
     calls = {}
 
@@ -248,11 +293,17 @@ def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):
         output_path="gs://marin-us-central1/rl_testing/exec-gcs-small-test",
     )
 
-    monkeypatch.setattr("marin.rl.rl_experiment_utils._build_rl_job_config", lambda **_kwargs: "job-config")
+    def _fake_build_rl_job_config(**kwargs):
+        calls["build_kwargs"] = kwargs
+        return "job-config"
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._build_rl_job_config", _fake_build_rl_job_config)
     monkeypatch.setattr("marin.rl.rl_experiment_utils.RLJob", _FakeRLJob)
 
     result = _run_rl_experiment_step(step_config)
 
+    assert calls["build_kwargs"]["name"] == "exec-gcs-small-test"
+    assert calls["build_kwargs"]["instance_id"].startswith("exec-gcs-small-test-")
     assert calls["job_config"] == "job-config"
     assert calls["name"] == "exec-gcs-small-test"
     assert result == PathMetadata(path="gs://marin-us-central1/rl_testing/exec-gcs-small-test")

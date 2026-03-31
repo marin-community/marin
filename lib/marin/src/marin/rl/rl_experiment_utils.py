@@ -5,6 +5,7 @@ import dataclasses
 import datetime
 import importlib
 import logging
+import uuid
 from urllib.parse import urlparse
 
 import jmp
@@ -78,6 +79,10 @@ class RLExperimentConfig:
     num_train_steps: int = 500
     steps_per_eval: int = 100
     checkpointer_save_interval: int = 600
+    delete_previous_temporary_checkpoint_after_save: bool = True
+    debug_checkpointer: bool = False
+    debug_checkpointer_log_interval: float = 60.0
+    debug_checkpointer_dump_stacks_after: float | None = 60.0
 
     # wandb
     project_name: str = "marin_post_training"
@@ -123,6 +128,7 @@ class RLExperimentConfig:
     num_rollout_workers: int = 1
     train_ram: str | None = None
     inference_ram: str | None = None
+    zone: str | None = None
 
 
 def launcher_region_for_rl_experiment(config: RLExperimentConfig) -> str:
@@ -196,6 +202,8 @@ def _build_rl_job_config(
     curriculum: CurriculumConfig,
     model_path: str,
     output_path: str,
+    *,
+    instance_id: str | None = None,
 ) -> RLJobConfig:
     model_config_class = _resolve_config_class(config.model_config.config_class_path)
     converter = HFCheckpointConverter(
@@ -232,6 +240,10 @@ def _build_rl_job_config(
         checkpointer=CheckpointerConfig(
             base_path=checkpoints_path,
             save_interval=datetime.timedelta(seconds=config.checkpointer_save_interval),
+            delete_previous_temporary_checkpoint_after_save=config.delete_previous_temporary_checkpoint_after_save,
+            debug_checkpointer=config.debug_checkpointer,
+            debug_checkpointer_log_interval=config.debug_checkpointer_log_interval,
+            debug_checkpointer_dump_stacks_after=config.debug_checkpointer_dump_stacks_after,
         ),
         mesh=MeshConfig(
             axes={"context": 1, "model": 1},
@@ -256,8 +268,12 @@ def _build_rl_job_config(
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=config.weight_transfer_sync_interval_steps,
         max_weight_transfer_wait_time=config.max_weight_transfer_wait_time,
-        coordinator_name=f"weight_transfer_coordinator_{name}",
+        coordinator_name=f"wt-coord-{instance_id}" if instance_id is not None else f"weight_transfer_coordinator_{name}",
     )
+
+    curriculum_config = curriculum
+    if instance_id is not None:
+        curriculum_config = dataclasses.replace(curriculum, actor_name=f"curriculum-{instance_id}")
 
     # Create RLJobConfig using the unified interface
     job_config = RLJobConfig(
@@ -274,7 +290,7 @@ def _build_rl_job_config(
                 max_rollout_step_delay=config.max_rollout_step_delay,
             ),
         ),
-        curriculum=curriculum,
+        curriculum=curriculum_config,
         tokenizer=model_path,
         inference_type="vllm",
         inference_config=vLLMInferenceContextConfig(
@@ -307,8 +323,10 @@ def _build_rl_job_config(
             train_ram=config.train_ram,
             inference_ram=config.inference_ram,
             regions=singleton_region_list(launcher_region_for_rl_experiment(config)),
+            zone=config.zone,
         ),
         inflight_weight_updates=config.inflight_weight_updates,
+        instance_id=instance_id,
         rollout_tracker=RolloutTrackerConfig(
             project=config.project_name,
             name=f"{name}-rollout",
@@ -323,13 +341,16 @@ def _build_rl_job_config(
 
 
 def _run_rl_experiment_step(config: RLStepConfig) -> PathMetadata:
+    instance_id = f"{config.name}-{datetime.datetime.now(datetime.UTC).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     job_config = _build_rl_job_config(
         name=config.name,
         config=config.experiment_config,
         curriculum=config.curriculum,
         model_path=config.model_path,
         output_path=config.output_path,
+        instance_id=instance_id,
     )
+    logger.info("Launching RL executor step run %s with instance_id=%s", config.name, instance_id)
     RLJob(job_config).run(config.name)
     return PathMetadata(path=config.output_path)
 

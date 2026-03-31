@@ -100,6 +100,11 @@ thread.
   - best source for rollout/eval root-cause analysis, `e4par` / `e4ms2`
     performance numbers, and the long clean-run checkpoint table
 
+- Canonical executor-backed Math500 launcher:
+  [llama_3_8b_rl_math500.py](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/experiments/llama_3_8b_rl_math500.py)
+  - clean executor-first successor to the old `exp2039` launcher; use this for
+    modern executor-backed Llama 3.1 8B Math500 runs
+
 - Checkpoint robustness subthread:
   [ckpt_rl.md](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/.agents/projects/ckpt_rl.md)
   - canonical checkpoint note; use this first for checkpoint timing, memory,
