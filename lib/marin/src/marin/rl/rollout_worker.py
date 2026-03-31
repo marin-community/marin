@@ -134,9 +134,15 @@ def _rollout_transfer_metrics_for_logging(
         "total_polls": cumulative_counters.total_polls,
         "successful_receives": cumulative_counters.successful_receives,
         "failed_receives": cumulative_counters.failed_receives,
+        "total_receive_bytes": int(metrics["total_receive_bytes"]),
+        "receive_bytes": int(metrics["receive_bytes"]),
+        "param_count": int(metrics["param_count"]),
+        "largest_param_bytes": int(metrics["largest_param_bytes"]),
         "fetch_time": metrics["fetch_time"],
         "decode_time": metrics["decode_time"],
         "poll_time": metrics["poll_time"],
+        "fetch_mib_per_second": metrics["fetch_mib_per_second"],
+        "decode_mib_per_second": metrics["decode_mib_per_second"],
     }
 
 

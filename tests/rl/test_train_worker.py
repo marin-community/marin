@@ -114,16 +114,28 @@ def test_weight_transfer_hook_logs_global_and_attempt_metrics(monkeypatch):
     worker.weight_transfer_hook(trainer, info)
 
     assert served_weights == [(67, model)]
-    assert logged_metrics == [
-        (
-            {
-                "weight_transfer/attempt_total_transfers": 8,
-                "weight_transfer/attempt_successful_transfers": 8,
-                "weight_transfer/attempt_failed_transfers": 0,
-                "weight_transfer/total_transfers": 69,
-                "weight_transfer/successful_transfers": 69,
-                "weight_transfer/serve_time_seconds": 0.0,
-            },
-            67,
-        )
-    ]
+    assert len(logged_metrics) == 1
+    metrics, step = logged_metrics[0]
+    assert step == 67
+    assert metrics["weight_transfer/attempt_total_transfers"] == 8
+    assert metrics["weight_transfer/attempt_successful_transfers"] == 8
+    assert metrics["weight_transfer/attempt_failed_transfers"] == 0
+    assert metrics["weight_transfer/total_transfers"] == 69
+    assert metrics["weight_transfer/successful_transfers"] == 69
+    assert metrics["weight_transfer/serve_time_seconds"] == 0.0
+
+
+def test_checkpoint_debug_snapshot_includes_replay_buffer_and_transfer_state():
+    worker = TrainWorker.__new__(TrainWorker)
+    worker.replay_buffer = SimpleNamespace(get_stats=lambda: {"total_size": 128}, _current_step=251)
+    worker.transfer_server = SimpleNamespace(
+        get_debug_snapshot=lambda: {"latest_store": {"stored_arrow_bytes": 1024}, "latest_transfer_metrics": {"a": 1}}
+    )
+
+    assert worker._checkpoint_debug_snapshot() == {
+        "replay_buffer": {"total_size": 128, "current_step": 251},
+        "weight_transfer": {
+            "latest_store": {"stored_arrow_bytes": 1024},
+            "latest_transfer_metrics": {"a": 1},
+        },
+    }

@@ -6,6 +6,7 @@
 import asyncio
 import logging
 import os
+import sys
 import urllib.parse
 from dataclasses import dataclass
 from functools import partial
@@ -28,6 +29,26 @@ from jaxtyping import PyTree
 from levanter.utils import fsspec_utils, jax_utils
 
 logger = logging.getLogger(__name__)
+
+
+def _flush_debug_checkpointer_output() -> None:
+    seen_handlers: set[int] = set()
+    for candidate in (logger, logging.getLogger()):
+        for handler in candidate.handlers:
+            handler_id = id(handler)
+            if handler_id in seen_handlers:
+                continue
+            seen_handlers.add(handler_id)
+            try:
+                handler.flush()
+            except Exception:
+                pass
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:
+            pass
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -176,6 +197,7 @@ def tree_serialize_leaves_tensorstore(
             largest_path or "<none>",
             _format_gib(largest_array_bytes),
         )
+        _flush_debug_checkpointer_output()
 
     # Create specs for each array
     tspecs = []
@@ -185,9 +207,11 @@ def tree_serialize_leaves_tensorstore(
 
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize entering manager.serialize for %s", checkpoint_dir)
+        _flush_debug_checkpointer_output()
     manager.serialize(arrays, tspecs, on_commit_callback=commit_callback)
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize returned from manager.serialize for %s", checkpoint_dir)
+        _flush_debug_checkpointer_output()
 
     if manager_was_none:
         manager.wait_until_finished()

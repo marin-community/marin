@@ -92,6 +92,16 @@ def parse_args() -> argparse.Namespace:
         help="TPU type for both trainer and rollout workers.",
     )
     parser.add_argument(
+        "--train-ram",
+        default=PROD_TPU_WORKER_RAM,
+        help="Host RAM request for the trainer TPU job.",
+    )
+    parser.add_argument(
+        "--inference-ram",
+        default=PROD_TPU_WORKER_RAM,
+        help="Host RAM request for each rollout TPU job.",
+    )
+    parser.add_argument(
         "--inflight-weight-updates",
         action="store_true",
         help="Enable inflight rollout weight updates.",
@@ -128,8 +138,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--debug-checkpointer-dump-stacks-after",
         type=float,
-        default=None,
-        help="If set, dump Python thread stacks after this many seconds in one checkpoint phase.",
+        default=60.0,
+        help="Dump Python thread stacks after this many seconds in one checkpoint phase when "
+        "--debug-checkpointer is enabled.",
+    )
+    parser.add_argument(
+        "--delete-previous-temporary-checkpoint-after-save",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Delete the prior temporary checkpoint after a new checkpoint commits successfully. "
+        "Disable to isolate checkpoint save cost from previous-temp cleanup.",
     )
     return parser.parse_args()
 
@@ -204,6 +222,7 @@ def main() -> None:
             checkpointer=CheckpointerConfig(
                 base_path=f"{MARIN_PREFIX}/checkpoints/{name}",
                 save_interval=datetime.timedelta(seconds=600),
+                delete_previous_temporary_checkpoint_after_save=args.delete_previous_temporary_checkpoint_after_save,
                 debug_checkpointer=args.debug_checkpointer,
                 debug_checkpointer_log_interval=args.debug_checkpointer_log_interval,
                 debug_checkpointer_dump_stacks_after=args.debug_checkpointer_dump_stacks_after,
@@ -267,8 +286,8 @@ def main() -> None:
             train_tpu_type=args.tpu_type,
             num_rollout_workers=args.num_rollout_workers,
             inference_tpu_type=args.tpu_type,
-            train_ram=PROD_TPU_WORKER_RAM,
-            inference_ram=PROD_TPU_WORKER_RAM,
+            train_ram=args.train_ram,
+            inference_ram=args.inference_ram,
             regions=[args.region],
             zone=args.zone,
         ),
@@ -283,7 +302,7 @@ def main() -> None:
     logger.info(
         "Running E4 direct + GCS + prod probe: %s (instance=%s) "
         "(n_prompts=%d, eval_frequency=%d, inflight=%s, rollout_workers=%d, "
-        "region=%s, zone=%s, tpu_type=%s, kv_cache_metrics=%s)",
+        "region=%s, zone=%s, tpu_type=%s, train_ram=%s, inference_ram=%s, kv_cache_metrics=%s)",
         name,
         instance_name,
         args.n_prompts,
@@ -293,6 +312,8 @@ def main() -> None:
         args.region,
         args.zone,
         args.tpu_type,
+        args.train_ram,
+        args.inference_ram,
         args.kv_cache_metrics,
     )
     _run_rl_coordinator(job_config)

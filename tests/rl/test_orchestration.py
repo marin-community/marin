@@ -69,6 +69,7 @@ class _FakeWorkerConfig:
     run_id: str
     worker_index: int = 0
     tracker_config: object | None = None
+    weight_transfer: object = dataclasses.field(default_factory=lambda: SimpleNamespace(debug_weight_transfer=False))
     trainer: object = dataclasses.field(
         default_factory=lambda: SimpleNamespace(
             checkpointer=SimpleNamespace(debug_checkpointer=False),
@@ -210,8 +211,68 @@ def test_run_rl_coordinator_enables_unbuffered_logs_for_debug_checkpointer(monke
     _run_rl_coordinator(config)
 
     assert len(client.submissions) == 2
-    assert client.submissions[0].environment.env_vars["PYTHONUNBUFFERED"] == "1"
-    assert client.submissions[1].environment.env_vars["PYTHONUNBUFFERED"] == "1"
+    for request in client.submissions:
+        assert request.environment.env_vars["PYTHONUNBUFFERED"] == "1"
+        assert request.environment.env_vars["JAX_TRACEBACK_FILTERING"] == "off"
+        assert request.environment.env_vars["JAX_LOGGING_LEVEL"] == "INFO"
+        assert (
+            request.environment.env_vars["JAX_DEBUG_LOG_MODULES"]
+            == "jax.experimental.array_serialization.serialization,"
+            "jax.experimental.array_serialization.tensorstore_impl,jax._src.distributed"
+        )
+        assert request.environment.env_vars["JAX_INCLUDE_FULL_TRACEBACKS_IN_LOCATIONS"] == "1"
+        assert request.environment.env_vars["TF_CPP_MIN_LOG_LEVEL"] == "0"
+        assert request.environment.env_vars["TF_CPP_MAX_VLOG_LEVEL"] == "1"
+        assert (
+            request.environment.env_vars["TF_CPP_VMODULE"] == "coordination_service=2,coordination_service_agent=2,tsl=1"
+        )
+
+
+def test_run_rl_coordinator_enables_transfer_debug_env_vars(monkeypatch):
+    client = _FakeClient()
+    hosted_runtime = _HostedRuntime(runtime=SimpleNamespace(), hosted_actors=[])
+    config = SimpleNamespace(
+        run_id="rl-test",
+        resolved_instance_id="rl-test",
+        pip_dependency_groups=["math"],
+        run_config=RunConfig(
+            train_tpu_type="v5p-8",
+            inference_tpu_type="v5p-8",
+            num_rollout_workers=1,
+            regions=["us-central1"],
+        ),
+    )
+
+    class _DebugRLJob(_FakeRLJob):
+        def to_worker_configs(self):
+            trainer = SimpleNamespace(checkpointer=SimpleNamespace(debug_checkpointer=False))
+            weight_transfer = SimpleNamespace(debug_weight_transfer=True)
+            return _FakeWorkerConfig(
+                seed=7,
+                run_id="train",
+                trainer=trainer,
+                weight_transfer=weight_transfer,
+            ), _FakeWorkerConfig(
+                seed=11,
+                run_id="rollout",
+                weight_transfer=weight_transfer,
+            )
+
+    monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
+    monkeypatch.setattr("marin.rl.orchestration.RLJob", _DebugRLJob)
+    monkeypatch.setattr(
+        "marin.rl.orchestration._create_runtime_handles",
+        lambda _client, _config: hosted_runtime,
+    )
+    monkeypatch.setattr("marin.rl.orchestration.wait_all", lambda _jobs, raise_on_failure: None)
+
+    _run_rl_coordinator(config)
+
+    assert len(client.submissions) == 2
+    for request in client.submissions:
+        assert request.environment.env_vars["PYTHONUNBUFFERED"] == "1"
+        assert request.environment.env_vars["JAX_TRACEBACK_FILTERING"] == "off"
+        assert request.environment.env_vars["TF_CPP_MIN_LOG_LEVEL"] == "0"
 
 
 def test_run_rl_coordinator_assigns_stable_rollout_wandb_names(monkeypatch):

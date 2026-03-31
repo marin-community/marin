@@ -78,9 +78,15 @@ def test_resume_safe_transfer_metrics_logs_attempt_and_cumulative_values_after_c
                 "total_polls": 5,
                 "successful_receives": 5,
                 "failed_receives": 0,
+                "total_receive_bytes": 4096,
+                "receive_bytes": 1024,
+                "param_count": 3,
+                "largest_param_bytes": 512,
                 "fetch_time": 1.25,
                 "decode_time": 0.75,
                 "poll_time": 0.5,
+                "fetch_mib_per_second": 8.0,
+                "decode_mib_per_second": 4.0,
             }
 
     worker = object.__new__(RolloutWorker)
@@ -103,9 +109,15 @@ def test_resume_safe_transfer_metrics_logs_attempt_and_cumulative_values_after_c
         "total_polls": 97,
         "successful_receives": 10,
         "failed_receives": 1,
+        "total_receive_bytes": 4096,
+        "receive_bytes": 1024,
+        "param_count": 3,
+        "largest_param_bytes": 512,
         "fetch_time": 1.25,
         "decode_time": 0.75,
         "poll_time": 0.5,
+        "fetch_mib_per_second": 8.0,
+        "decode_mib_per_second": 4.0,
     }
 
 

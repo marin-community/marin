@@ -17,6 +17,7 @@ import jax
 import jax.tree_util as jtu
 import numpy as np
 import optax
+import pytest
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from jax import ShapeDtypeStruct
@@ -28,11 +29,14 @@ from levanter.checkpoint import (
     Checkpointer,
     CheckpointerConfig,
     CheckpointInterval,
+    _collect_debug_checkpointer_state,
     _load_metadata,
     discover_latest_checkpoint,
     load_checkpoint,
     load_checkpoint_or_initialize,
+    register_debug_checkpointer_state_provider,
     save_checkpoint,
+    unregister_debug_checkpointer_state_provider,
 )
 from levanter.trainer_state import TrainerState
 
@@ -263,16 +267,44 @@ def test_checkpoint_discovery():
 def test_checkpointer_config_propagates_debug_settings():
     config = CheckpointerConfig(
         base_path="/tmp/checkpoints",
+        delete_previous_temporary_checkpoint_after_save=False,
         debug_checkpointer=True,
         debug_checkpointer_log_interval=12.5,
         debug_checkpointer_dump_stacks_after=45.0,
+        debug_checkpointer_tracemalloc_frames=17,
+        debug_checkpointer_top_allocations=5,
+        debug_checkpointer_force_gc_before_serialize=False,
+        debug_checkpointer_flush_logs=False,
     )
 
     checkpointer = config.create("run-1")
 
+    assert checkpointer.delete_previous_temporary_checkpoint_after_save is False
     assert checkpointer.debug_checkpointer is True
     assert checkpointer.debug_checkpointer_log_interval == 12.5
     assert checkpointer.debug_checkpointer_dump_stacks_after == 45.0
+    assert checkpointer.debug_checkpointer_tracemalloc_frames == 17
+    assert checkpointer.debug_checkpointer_top_allocations == 5
+    assert checkpointer.debug_checkpointer_force_gc_before_serialize is False
+    assert checkpointer.debug_checkpointer_flush_logs is False
+
+
+def test_debug_checkpointer_state_providers_register_and_unregister():
+    provider_name = "unit-test-provider"
+    provider = lambda: {"weight_transfer": {"bytes": 123}}
+
+    try:
+        register_debug_checkpointer_state_provider(provider_name, provider)
+        assert _collect_debug_checkpointer_state()[provider_name] == {"weight_transfer": {"bytes": 123}}
+    finally:
+        unregister_debug_checkpointer_state_provider(provider_name)
+
+    assert provider_name not in _collect_debug_checkpointer_state()
+
+
+def test_checkpointer_config_rejects_invalid_debug_tracemalloc_settings():
+    with pytest.raises(AssertionError, match="debug_checkpointer_tracemalloc_frames must be positive"):
+        CheckpointerConfig(debug_checkpointer_tracemalloc_frames=0)
 
 
 def test_checkpointer_deletes_previous_checkpoints():
@@ -375,6 +407,36 @@ def test_checkpointer_deletes_previous_checkpoints_under_relative_base_paths():
         checkpointer.wait_until_finished()
         # step 2 should delete step 1 if we're handling relative paths properly
         assert _get_checkpoint_steps(tmpdir) == [2]
+
+
+def test_checkpointer_can_keep_previous_temporary_checkpoint_after_save():
+    fake_now = datetime.datetime(2021, 1, 1, 0, 0, 0)
+    tick = 10
+
+    def advance_time(delta_seconds):
+        nonlocal fake_now
+        fake_now += timedelta(seconds=delta_seconds)
+
+    with tempfile.TemporaryDirectory(prefix="checkpoints") as tmpdir:
+        checkpointer = Checkpointer(
+            tmpdir,
+            timedelta(seconds=tick),
+            [],
+            dt_now_injection=lambda: fake_now,
+            delete_previous_temporary_checkpoint_after_save=False,
+        )
+
+        _on_step(checkpointer, 0)
+
+        advance_time(tick)
+        _on_step(checkpointer, 1)
+        checkpointer.wait_until_finished()
+        assert _get_checkpoint_steps(tmpdir) == [1]
+
+        advance_time(tick)
+        _on_step(checkpointer, 2)
+        checkpointer.wait_until_finished()
+        assert _get_checkpoint_steps(tmpdir) == [1, 2]
 
 
 def test_load_from_checkpoint_or_initialize():

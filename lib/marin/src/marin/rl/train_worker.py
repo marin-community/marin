@@ -23,6 +23,10 @@ import jax.random as jrandom
 import levanter
 import wandb
 from levanter import callbacks
+from levanter.checkpoint import (
+    register_debug_checkpointer_state_provider,
+    unregister_debug_checkpointer_state_provider,
+)
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook
 from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
@@ -371,13 +375,35 @@ class TrainWorker:
         logger.warning(f"Timeout waiting for initial rollouts after {max_wait_time}s")
         return False
 
+    def _checkpoint_debug_snapshot(self) -> dict[str, object]:
+        replay_stats = self.replay_buffer.get_stats()
+        replay_stats["current_step"] = self.replay_buffer._current_step
+
+        transfer_snapshot: dict[str, object] = {}
+        if hasattr(self.transfer_server, "get_debug_snapshot"):
+            maybe_snapshot = self.transfer_server.get_debug_snapshot()
+            transfer_snapshot = dict(maybe_snapshot)
+
+        return {
+            "replay_buffer": replay_stats,
+            "weight_transfer": transfer_snapshot,
+        }
+
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
         faulthandler.enable()
         debug_checkpointer = self.config.trainer.checkpointer.debug_checkpointer
-        if debug_checkpointer and hasattr(signal, "SIGUSR2"):
+        debug_weight_transfer = self.config.weight_transfer.debug_weight_transfer
+        if (debug_checkpointer or debug_weight_transfer) and hasattr(signal, "SIGUSR2"):
             faulthandler.register(signal.SIGUSR2, file=sys.stderr, all_threads=True)
         logger.info("Starting RLOO training with Levanter...")
+
+        checkpoint_debug_provider_name = f"{self.config.run_id}-checkpoint-debug"
+        if debug_checkpointer:
+            register_debug_checkpointer_state_provider(
+                checkpoint_debug_provider_name,
+                self._checkpoint_debug_snapshot,
+            )
 
         try:
             config = self.config
@@ -398,6 +424,16 @@ class TrainWorker:
                 state = trainer.initial_state(training_key, model=self.initial_model)
                 self._drop_bootstrap_model_references()
 
+                if debug_weight_transfer:
+                    logger.info(
+                        "Weight transfer debug enabled: strategy=%s, sync_interval_steps=%d, "
+                        "mesh_shape=%s, parameter_axis_mapping=%s",
+                        self.config.weight_transfer.export_strategy.value,
+                        self.config.weight_transfer.sync_interval_steps,
+                        config.trainer.device_mesh.devices.shape,
+                        config.trainer.parameter_axis_mapping,
+                    )
+
                 # Always transfer initial weights to rollout workers before we attempt to start training
                 self.transfer_server.serve_weights(-1, state.model)
                 self.replay_buffer.set_current_step(-1)
@@ -407,7 +443,6 @@ class TrainWorker:
                     raise RuntimeError("Timed out waiting for initial rollouts; aborting training.")
 
                 self._configure_training_hooks(trainer)
-
                 try:
                     trainer.train(state, self.data_loader)
                 except StopTrainerException:
@@ -418,6 +453,8 @@ class TrainWorker:
             logger.exception("TRAIN WORKER CRASHED")
             raise
         finally:
+            if debug_checkpointer:
+                unregister_debug_checkpointer_state_provider(checkpoint_debug_provider_name)
             try:
                 self.stop()
             except Exception:

@@ -4,6 +4,7 @@
 import json
 import logging
 from datetime import timedelta
+from enum import Enum
 from pathlib import Path
 
 # Todo(Percy, dlwh): Can we remove this jax dependency?
@@ -18,6 +19,8 @@ class CustomJsonEncoder(json.JSONEncoder):
             return {"days": obj.days, "seconds": obj.seconds, "microseconds": obj.microseconds}
         if isinstance(obj, Path):
             return str(obj)
+        if isinstance(obj, Enum):
+            return obj.value
         if obj in (float32, bfloat16):
             return str(obj)
         try:

@@ -37,6 +37,20 @@ logger = logging.getLogger(__name__)
 
 RL_COORDINATOR_CPU_DISK = "30g"
 RL_COORDINATOR_RESOURCES = ResourceConfig.with_cpu(cpu=0.5, preemptible=False, disk=RL_COORDINATOR_CPU_DISK)
+JAX_CHECKPOINT_DEBUG_MODULES = ",".join(
+    (
+        "jax.experimental.array_serialization.serialization",
+        "jax.experimental.array_serialization.tensorstore_impl",
+        "jax._src.distributed",
+    )
+)
+TF_CPP_CHECKPOINT_DEBUG_VMODULE = ",".join(
+    (
+        "coordination_service=2",
+        "coordination_service_agent=2",
+        "tsl=1",
+    )
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -118,8 +132,19 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         rollout_extras = _rollout_worker_extras(config)
 
         env = {"EQX_ON_ERROR": "nan"}
-        if train_config.trainer.checkpointer.debug_checkpointer:
+        if train_config.trainer.checkpointer.debug_checkpointer or train_config.weight_transfer.debug_weight_transfer:
             env["PYTHONUNBUFFERED"] = "1"
+        if train_config.trainer.checkpointer.debug_checkpointer:
+            env["JAX_TRACEBACK_FILTERING"] = "off"
+            env["JAX_LOGGING_LEVEL"] = "INFO"
+            env["JAX_DEBUG_LOG_MODULES"] = JAX_CHECKPOINT_DEBUG_MODULES
+            env["JAX_INCLUDE_FULL_TRACEBACKS_IN_LOCATIONS"] = "1"
+            env["TF_CPP_MIN_LOG_LEVEL"] = "0"
+            env["TF_CPP_MAX_VLOG_LEVEL"] = "1"
+            env["TF_CPP_VMODULE"] = TF_CPP_CHECKPOINT_DEBUG_VMODULE
+        if train_config.weight_transfer.debug_weight_transfer:
+            env["JAX_TRACEBACK_FILTERING"] = "off"
+            env["TF_CPP_MIN_LOG_LEVEL"] = "0"
         env = _add_run_env_variables(env)
         train_worker_env = create_environment(
             env_vars=env,

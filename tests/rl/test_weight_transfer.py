@@ -18,6 +18,7 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.models.llama import LlamaConfig
 from marin.rl.environments.inference_ctx import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 from marin.rl.weight_transfer import (
+    ArrowFlightExportStrategy,
     WeightTransferConfig,
     WeightTransferMode,
     create_weight_transfer_client,
@@ -184,6 +185,29 @@ def test_multiple_weight_updates(weight_transfer_config, sample_params):
     client.cleanup()
 
 
+def test_arrow_flight_server_debug_snapshot_reports_stored_bytes(sample_params):
+    config = WeightTransferConfig(
+        mode=WeightTransferMode.ARROW_FLIGHT,
+        sync_interval_steps=1,
+        checkpoint_dir=tempfile.mkdtemp(),
+    )
+    server, client = create_test_weight_transfer_pair(config)
+
+    try:
+        server.serve_weights(7, sample_params)
+
+        debug_snapshot = server.get_debug_snapshot()
+        latest_store = debug_snapshot["latest_store"]
+        assert latest_store["latest_weight_id"] == 7
+        assert latest_store["stored_param_count"] > 0
+        assert latest_store["stored_record_batch_count"] > 0
+        assert latest_store["stored_arrow_bytes"] > 0
+        assert latest_store["flight_server_count"] > 0
+    finally:
+        server.cleanup()
+        client.cleanup()
+
+
 def test_arrow_flight_coordinator_accepts_rollback_weight_ids():
     from fray.v2 import current_client
     from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
@@ -237,6 +261,39 @@ def test_concurrent_clients(weight_transfer_config, sample_params):
         server.cleanup()
         client_1.cleanup()
         client_2.cleanup()
+
+
+def test_arrow_flight_sequential_host_flatten_exports_and_tracks_bytes(sample_params):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        config = WeightTransferConfig(
+            mode=WeightTransferMode.ARROW_FLIGHT,
+            sync_interval_steps=1,
+            checkpoint_dir=temp_dir,
+            export_strategy=ArrowFlightExportStrategy.SEQUENTIAL_HOST_FLATTEN,
+        )
+
+        server, client = create_test_weight_transfer_pair(config)
+
+        try:
+            server.serve_weights(1, sample_params)
+            update = client.receive_weights(sample_params)
+
+            assert update is not None
+            assert update.weight_id == 1
+
+            server_metrics = server.get_metrics()
+            assert server_metrics.transfer_bytes > 0
+            assert server_metrics.param_count > 0
+            assert server_metrics.materialize_time >= 0
+
+            client_metrics = client.get_metrics()
+            assert client_metrics["receive_bytes"] > 0
+            assert client_metrics["param_count"] > 0
+            assert client_metrics["largest_param_bytes"] > 0
+
+        finally:
+            server.cleanup()
+            client.cleanup()
 
 
 @pytest.mark.skip("Manual benchmark test")

@@ -34,7 +34,7 @@ from marin.rl.rl_job import RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
-from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
+from marin.rl.weight_transfer import ArrowFlightExportStrategy, WeightTransferConfig, WeightTransferMode
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,8 @@ DEFAULT_TPU_TYPE = "v5p-8"
 DEFAULT_ROLLOUT_TENSOR_PARALLEL_SIZE = 4
 DEFAULT_ROLLOUT_GPU_MEMORY_UTILIZATION = 0.90
 DEFAULT_ROLLOUT_MAX_MODEL_LEN = 2048
+DEFAULT_TRAINER_MODEL_AXIS_SIZE = 1
+DEFAULT_TRAINER_CONTEXT_AXIS_SIZE = 1
 
 
 def _marin_prefix(region: str) -> str:
@@ -107,6 +109,16 @@ def parse_args() -> argparse.Namespace:
         help="TPU type for trainer. Defaults to --tpu-type if not set.",
     )
     parser.add_argument(
+        "--train-ram",
+        default=PROD_TPU_WORKER_RAM,
+        help="Host RAM request for the trainer TPU job.",
+    )
+    parser.add_argument(
+        "--inference-ram",
+        default=PROD_TPU_WORKER_RAM,
+        help="Host RAM request for each rollout TPU job.",
+    )
+    parser.add_argument(
         "--inflight-weight-updates",
         action="store_true",
         help="Enable inflight rollout weight updates.",
@@ -159,8 +171,39 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--debug-checkpointer-dump-stacks-after",
         type=float,
-        default=None,
-        help="Dump Python thread stacks after this many seconds in one checkpoint phase.",
+        default=60.0,
+        help="Dump Python thread stacks after this many seconds in one checkpoint phase when "
+        "--debug-checkpointer is enabled.",
+    )
+    parser.add_argument(
+        "--delete-previous-temporary-checkpoint-after-save",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Delete the prior temporary checkpoint after a new checkpoint commits successfully. "
+        "Disable to isolate checkpoint save cost from previous-temp cleanup.",
+    )
+    parser.add_argument(
+        "--debug-weight-transfer",
+        action="store_true",
+        help="Enable verbose Arrow Flight transfer diagnostics and debug worker env vars.",
+    )
+    parser.add_argument(
+        "--weight-transfer-export-strategy",
+        default=ArrowFlightExportStrategy.TREE_JIT.value,
+        choices=[strategy.value for strategy in ArrowFlightExportStrategy],
+        help="How the trainer prepares weights for Arrow Flight serving.",
+    )
+    parser.add_argument(
+        "--trainer-model-axis-size",
+        type=int,
+        default=DEFAULT_TRAINER_MODEL_AXIS_SIZE,
+        help="Trainer mesh size for the model axis.",
+    )
+    parser.add_argument(
+        "--trainer-context-axis-size",
+        type=int,
+        default=DEFAULT_TRAINER_CONTEXT_AXIS_SIZE,
+        help="Trainer mesh size for the context axis.",
     )
     return parser.parse_args()
 
@@ -238,12 +281,13 @@ def main() -> None:
             checkpointer=CheckpointerConfig(
                 base_path=f"{marin_prefix}/checkpoints/{name}",
                 save_interval=datetime.timedelta(seconds=600),
+                delete_previous_temporary_checkpoint_after_save=args.delete_previous_temporary_checkpoint_after_save,
                 debug_checkpointer=args.debug_checkpointer,
                 debug_checkpointer_log_interval=args.debug_checkpointer_log_interval,
                 debug_checkpointer_dump_stacks_after=args.debug_checkpointer_dump_stacks_after,
             ),
             mesh=MeshConfig(
-                axes={"context": 1, "model": 1},
+                axes={"context": args.trainer_context_axis_size, "model": args.trainer_model_axis_size},
                 shared_mapping={"mlp": "model", "heads": "model", "position": "context"},
             ),
         ),
@@ -292,6 +336,8 @@ def main() -> None:
             sync_interval_steps=1,
             max_weight_transfer_wait_time=0,
             coordinator_name=f"wt-coord-{instance_name}",
+            export_strategy=ArrowFlightExportStrategy(args.weight_transfer_export_strategy),
+            debug_weight_transfer=args.debug_weight_transfer,
         ),
         inflight_weight_updates=args.inflight_weight_updates,
         run_id=name,
@@ -301,8 +347,8 @@ def main() -> None:
             train_tpu_type=train_tpu_type,
             num_rollout_workers=args.num_rollout_workers,
             inference_tpu_type=args.tpu_type,
-            train_ram=PROD_TPU_WORKER_RAM,
-            inference_ram=PROD_TPU_WORKER_RAM,
+            train_ram=args.train_ram,
+            inference_ram=args.inference_ram,
             regions=[region],
             zone=args.zone,
         ),
@@ -317,8 +363,9 @@ def main() -> None:
     logger.info(
         "Running E4 region-aware probe: %s (instance=%s) "
         "(region=%s, zone=%s, train_tpu=%s, rollout_tpu=%s, n_prompts=%d, eval_frequency=%d, "
-        "inflight=%s, rollout_workers=%d, rollout_tp=%d, "
+        "inflight=%s, rollout_workers=%d, train_ram=%s, inference_ram=%s, rollout_tp=%d, "
         "rollout_gpu_mem=%.2f, rollout_max_model_len=%d, kv_cache_metrics=%s, "
+        "trainer_model_axis=%d, trainer_context_axis=%d, transfer_debug=%s, transfer_strategy=%s, "
         "model=%s, prefix=%s)",
         name,
         instance_name,
@@ -330,10 +377,16 @@ def main() -> None:
         args.eval_frequency,
         args.inflight_weight_updates,
         args.num_rollout_workers,
+        args.train_ram,
+        args.inference_ram,
         args.rollout_tensor_parallel_size,
         args.rollout_gpu_memory_utilization,
         args.rollout_max_model_len,
         args.kv_cache_metrics,
+        args.trainer_model_axis_size,
+        args.trainer_context_axis_size,
+        args.debug_weight_transfer,
+        args.weight_transfer_export_strategy,
         model_path,
         marin_prefix,
     )
