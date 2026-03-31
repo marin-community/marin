@@ -4,6 +4,7 @@
 """Iris Controller logic for connecting state, scheduler and managing workers."""
 
 import atexit
+import enum
 import logging
 import sys
 import tempfile
@@ -97,6 +98,15 @@ _SLOW_HEARTBEAT_MS = 5000
 # How often the prune loop trims worker_task_history (independent of the
 # full data-prune interval, which is typically 1 hour).
 _HISTORY_CLEANUP_INTERVAL_S = 60.0
+
+
+class SchedulingOutcome(enum.Enum):
+    """Result of a scheduling cycle, used to drive adaptive backoff."""
+
+    NO_PENDING_TASKS = "no_pending_tasks"
+    NO_ASSIGNMENTS = "no_assignments"
+    ASSIGNMENTS_MADE = "assignments_made"
+
 
 _HEALTH_SUMMARY_INTERVAL = RateLimiter(interval_seconds=30)
 
@@ -654,8 +664,11 @@ class ControllerConfig:
     remote_state_dir: str = ""
     """Remote URI for controller checkpoints and worker profiles (e.g. gs://bucket/iris/state)."""
 
-    scheduler_interval: Duration = field(default_factory=lambda: Duration.from_seconds(0.5))
-    """How often to run the scheduling loop."""
+    scheduler_min_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
+    """Minimum scheduling loop interval (used when cluster is active)."""
+
+    scheduler_max_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
+    """Maximum scheduling loop interval (reached via exponential backoff when idle)."""
 
     heartbeat_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     """How often to send heartbeats to workers."""
@@ -859,12 +872,10 @@ class Controller:
         )
 
     def wake(self) -> None:
-        """Signal the controller loop to run immediately.
+        """Signal the scheduling loop to run immediately and reset backoff.
 
-        Called when events occur that may make scheduling possible:
-        - New job submitted
-        - New worker registered
-        - Task finished (freeing capacity)
+        Called on new job submission. Resets the adaptive backoff so the
+        scheduler responds to new work within one cycle.
         """
         self._wake_event.set()
 
@@ -972,12 +983,22 @@ class Controller:
             logger.exception("atexit checkpoint failed")
 
     def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
-        """Scheduling loop: task assignment and worker timeout checks only."""
-        limiter = RateLimiter(interval_seconds=self._config.scheduler_interval.to_seconds())
+        """Scheduling loop with adaptive backoff.
+
+        Backs off from min to max interval when idle (no pending tasks or no
+        assignments possible). Resets to min interval when woken by a new job
+        submission or when assignments are made.
+        """
+        backoff = ExponentialBackoff(
+            initial=self._config.scheduler_min_interval.to_seconds(),
+            maximum=self._config.scheduler_max_interval.to_seconds(),
+            factor=2.0,
+            jitter=0.1,
+        )
         while not stop_event.is_set():
-            self._wake_event.wait(timeout=limiter.time_until_next())
+            interval = backoff.next_interval()
+            woken = self._wake_event.wait(timeout=interval)
             self._wake_event.clear()
-            limiter.mark_run()
 
             if stop_event.is_set():
                 break
@@ -985,7 +1006,12 @@ class Controller:
             if self._checkpoint_in_progress:
                 continue
 
-            self._run_scheduling()
+            if woken:
+                backoff.reset()
+
+            outcome = self._run_scheduling()
+            if outcome == SchedulingOutcome.ASSIGNMENTS_MADE:
+                backoff.reset()
 
     def _run_prune_loop(self, stop_event: threading.Event) -> None:
         """Background pruning loop: history cleanup every 60s, full data prune on the configured interval."""
@@ -1302,7 +1328,7 @@ class Controller:
             self._transitions.replace_reservation_claims(claims)
         return changed
 
-    def _run_scheduling(self) -> None:
+    def _run_scheduling(self) -> SchedulingOutcome:
         """Run one scheduling cycle.
 
         Three-phase scheduling:
@@ -1341,7 +1367,7 @@ class Controller:
 
         if not pending_tasks:
             self._scheduling_diagnostics = {}
-            return
+            return SchedulingOutcome.NO_PENDING_TASKS
 
         # Handle timeouts and reservation gates before scheduling.
         # Holder tasks participate in scheduling like normal tasks.
@@ -1380,7 +1406,7 @@ class Controller:
 
         if not schedulable_task_ids:
             self._scheduling_diagnostics = {}
-            return
+            return SchedulingOutcome.NO_PENDING_TASKS
 
         # Inject reservation taints: claimed workers get a taint attribute,
         # non-reservation jobs get a NOT_EXISTS constraint for it.
@@ -1419,6 +1445,10 @@ class Controller:
         # Cache diagnostics for jobs that still have unassigned tasks.
         # RPCs read from this cache instead of recomputing per request.
         self._cache_scheduling_diagnostics(context, jobs, all_assignments, schedulable_task_ids)
+
+        if all_assignments:
+            return SchedulingOutcome.ASSIGNMENTS_MADE
+        return SchedulingOutcome.NO_ASSIGNMENTS
 
     def _cache_scheduling_diagnostics(
         self,
