@@ -1,5 +1,287 @@
 # DPO LoRA Claude Logbook
 
+## Tune-LoRA Sweep Jobs (2026-03-31)
+
+### Job Launch — 2026-03-31T07:27Z
+
+Launched 5 LoRA DPO tuning jobs on Iris (v5p-8) from `experiments/tune_lora/`:
+
+| Experiment | LR | Seed | Iris Job ID | Status |
+|---|---|---|---|---|
+| `beta0p1_lr5e6_seed2_b64` | 5e-6 | 2 | `/ahmed/iris-run-beta0p1_lr5e6_seed2_b64-20260331-072714` | RUNNING (train_dpo PENDING) |
+| `beta0p1_lr6p25e6_seed2_b64` | 6.25e-6 | 2 | `/ahmed/iris-run-beta0p1_lr6p25e6_seed2_b64-20260331-072731` | RUNNING (train_dpo PENDING) |
+| `beta0p1_lr8p75e6_seed2_b64` | 8.75e-6 | 2 | `/ahmed/iris-run-beta0p1_lr8p75e6_seed2_b64-20260331-072745` | RUNNING (train_dpo PENDING) |
+| `beta0p1_lr1e5_seed2_b64` | 1e-5 | 2 | `/ahmed/iris-run-beta0p1_lr1e5_seed2_b64-20260331-072752` | RUNNING (train_dpo PENDING) |
+| `beta0p1_lr7p5e6_seed0_b64` | 7.5e-6 | 0 | `/ahmed/iris-run-beta0p1_lr7p5e6_seed0_b64-20260331-072757` | RUNNING (train_dpo PENDING) |
+
+All executor parents RUNNING, train_dpo sub-jobs PENDING (awaiting v5p-8 allocation). 0 failures, 0 preemptions across all jobs.
+
+### Babysit Check Log
+
+#### Check 0 — 2026-03-31T07:28Z
+- All 5 executor parents: `JOB_STATE_RUNNING`
+- All 5 `train_dpo` sub-jobs: `JOB_STATE_PENDING` (waiting for v5p-8 TPU)
+- Failures: 0 across all jobs
+- Preemptions: 0 across all jobs
+- Action: None needed. Monitoring every 10 min.
+
+#### Check 1 — 2026-03-31T07:38Z
+- All 5 executor parents: `JOB_STATE_RUNNING`
+- All 5 `train_dpo` sub-jobs: `JOB_STATE_PENDING`
+  - Scheduler message: "Insufficient memory (need 400.0GB, available 2.8G...)" — autoscaler spinning up v5p-8 workers
+- Failures: 0 across all jobs
+- Preemptions: 0 across all jobs
+- Action: None needed. Waiting for v5p-8 TPU allocation.
+
+#### Check 2 — 2026-03-31T07:48Z
+- All 5 executor parents: `JOB_STATE_RUNNING`
+- All 5 `train_dpo` sub-jobs: `JOB_STATE_PENDING`
+  - Scheduler message unchanged: "Insufficient memory (need 400.0GB, available 2.8G...)" — still waiting for v5p-8 scale-up
+- Failures: 0 across all jobs
+- Preemptions: 0 across all jobs
+- Action: None needed. Autoscaler provisioning in progress (~20 min since launch).
+
+#### Check 3 — 2026-03-31T07:58Z
+- All 5 executor parents: `JOB_STATE_RUNNING`
+- All 5 `train_dpo` sub-jobs: **`JOB_STATE_RUNNING`** (v5p-8 TPUs allocated!)
+- Failures: 0 across all jobs
+- Preemptions: 0 across all jobs
+- Action: None needed. All jobs now actively training on TPU.
+
+#### Check 4 — 2026-03-31T08:08Z
+- All 5 executor parents: `JOB_STATE_RUNNING`
+- All 5 `train_dpo` sub-jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Action: None needed. Steady state.
+
+#### Check 5 — 2026-03-31T08:18Z
+- All 5 executor parents: `JOB_STATE_RUNNING`
+- All 5 `train_dpo` sub-jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Action: None needed. Steady state (~50 min into training).
+
+#### Check 6 — 2026-03-31T08:30Z
+- All 5 executor parents: `JOB_STATE_RUNNING`
+- All 5 `train_dpo` sub-jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Action: None needed. Steady state (~1h into training).
+
+#### Check 7 — 2026-03-31T08:40Z
+- All 5 executor parents: `JOB_STATE_RUNNING`
+- All 5 `train_dpo` sub-jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Action: None needed. Steady state (~1h10m into training).
+
+#### Check 8 — 2026-03-31T08:50Z
+- All 5 executor parents: `JOB_STATE_RUNNING`
+- All 5 `train_dpo` sub-jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Action: None needed. Steady state (~1h20m into training).
+
+#### Check 9 — 2026-03-31T09:00Z
+- All 10 jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Steady state (~1h30m into training).
+
+#### Check 10 — 2026-03-31T09:10Z
+- All 10 jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Steady state (~1h40m into training).
+
+#### Check 11 — 2026-03-31T09:20Z
+- All 10 jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Steady state (~1h50m into training).
+
+#### Check 12 — 2026-03-31T09:30Z
+- All 10 jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Steady state (~2h into training).
+
+#### Check 13 — 2026-03-31T09:40Z
+- All 10 jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Steady state (~2h10m into training).
+
+#### Check 14 — 2026-03-31T09:50Z
+- All 10 jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Steady state (~2h20m into training).
+
+#### Check 15 — 2026-03-31T10:00Z
+- All 10 jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Steady state (~2h30m into training).
+
+#### Check 16 — 2026-03-31T10:10Z
+- All 10 jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Steady state (~2h40m into training).
+
+#### Check 17 — 2026-03-31T10:20Z
+- All 10 jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Steady state (~2h50m into training).
+
+#### Check 18 — 2026-03-31T10:30Z
+- All 10 jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Steady state (~3h into training).
+
+#### Check 19 — 2026-03-31T10:40Z — FAILURES DETECTED
+- **lr=7.5e-6, seed=0** (`iris-run-beta0p1_lr7p5e6_seed0_b64-20260331-072757`):
+  - Executor parent: `FAILED` — "Exit code 133: OOM killed (container exceeded memory limit)"
+  - train_dpo sub-job: `KILLED` — "Job exceeded max_task_failures"
+- **lr=6.25e-6, seed=2** (`iris-run-beta0p1_lr6p25e6_seed2_b64-20260331-072731`):
+  - Executor parent: `FAILED` — "Exit code 133: OOM killed (container exceeded memory limit)"
+  - train_dpo sub-job: `KILLED` — "Job exceeded max_task_failures"
+- **lr=5e-6, seed=2**: RUNNING (OK)
+- **lr=8.75e-6, seed=2**: RUNNING (OK)
+- **lr=1e-5, seed=2**: RUNNING (OK)
+- **Root cause**: Executor parent allocated only 1 GiB default memory via `iris job run`. The executor Python process OOM'd. Not a TPU/training issue.
+- **Action**: Re-launching 2 failed jobs with `--memory 4GB` for executor parent.
+- **Re-launched**:
+  - lr=7.5e-6, seed=0 → `/ahmed/iris-run-beta0p1_lr7p5e6_seed0_b64-20260331-103046` (memory=4GB)
+  - lr=6.25e-6, seed=2 → `/ahmed/iris-run-beta0p1_lr6p25e6_seed2_b64-20260331-103055` (memory=4GB)
+- **Mistake 1**: Original launch used default `--memory 1GB` for executor parent. Should have specified `--memory 4GB`. The remaining 3 jobs (lr=5e-6, lr=8.75e-6, lr=1e-5) are still running on 1GB — they may OOM too. Will monitor closely.
+
+#### Check 20 — 2026-03-31T10:50Z — RE-LAUNCH FAILED
+- Re-launched jobs both `FAILED`:
+  - "Exit code: 2. stderr: python: can't open file '/app/experime..."
+  - **Mistake 2**: Re-launched from main repo (`cd /Users/ahmed/code/marin`) but `experiments/tune_lora/` only exists in the worktree. Workspace bundle didn't include the scripts.
+- **Action**: Re-launching again from the worktree directory with `--memory 4GB`.
+- 3 original surviving jobs (lr=5e-6, lr=8.75e-6, lr=1e-5) still RUNNING.
+- **Re-launched (attempt 2, from worktree, 4GB memory)**:
+  - lr=7.5e-6, seed=0 → `/ahmed/iris-run-beta0p1_lr7p5e6_seed0_b64-20260331-104044` (6.5 MB bundle — correct)
+  - lr=6.25e-6, seed=2 → `/ahmed/iris-run-beta0p1_lr6p25e6_seed2_b64-20260331-104054` (6.5 MB bundle — correct)
+
+#### Check 21 — 2026-03-31T10:50Z — ALL RECOVERED
+- All 5 active jobs now RUNNING (executors + train_dpo sub-jobs):
+  - lr=5e-6, seed=2 (original) — RUNNING
+  - lr=8.75e-6, seed=2 (original) — RUNNING
+  - lr=1e-5, seed=2 (original) — RUNNING
+  - lr=7.5e-6, seed=0 (re-launched, 4GB) — RUNNING, train_dpo RUNNING
+  - lr=6.25e-6, seed=2 (re-launched, 4GB) — RUNNING, train_dpo RUNNING
+- Failures: 0 on active jobs | Preemptions: 0
+- Action: None needed. Back to steady state.
+
+#### Check 22 — 2026-03-31T11:00Z — ANOTHER OOM
+- **lr=8.75e-6, seed=2** (`iris-run-beta0p1_lr8p75e6_seed2_b64-20260331-072745`):
+  - Executor parent: `FAILED` — "Exit code 133: OOM killed (container exceeded memory limit)" (1GB)
+  - train_dpo sub-job: `KILLED` — "Job exceeded max_task_failures"
+- Same root cause as Check 19: original executor launched with default 1GB memory.
+- 4 other active jobs still RUNNING.
+- **Action**: Re-launching lr=8.75e-6 from worktree with `--memory 4GB`.
+- **Re-launched**: lr=8.75e-6, seed=2 → `/ahmed/iris-run-beta0p1_lr8p75e6_seed2_b64-20260331-110037` (4GB, 6.5 MB bundle)
+- Remaining original jobs on 1GB: lr=5e-6 and lr=1e-5. Expecting they may OOM too.
+
+#### Check 23 — 2026-03-31T11:10Z
+- All 5 active jobs RUNNING (executors + train_dpo):
+  - lr=5e-6, seed=2 (original, 1GB) — RUNNING (~3h40m)
+  - lr=1e-5, seed=2 (original, 1GB) — RUNNING (~3h40m)
+  - lr=7.5e-6, seed=0 (re-launched, 4GB) — RUNNING (~30m)
+  - lr=6.25e-6, seed=2 (re-launched, 4GB) — RUNNING (~30m)
+  - lr=8.75e-6, seed=2 (re-launched, 4GB) — RUNNING (~10m, TPU allocated)
+- Failures: 0 on active jobs | Preemptions: 0
+
+#### Check 24 — 2026-03-31T11:20Z — OOM on lr=5e-6
+- **lr=5e-6, seed=2** (`iris-run-beta0p1_lr5e6_seed2_b64-20260331-072714`):
+  - Executor parent: `FAILED` — "Exit code 133: OOM killed" (1GB)
+  - train_dpo sub-job: `KILLED` — "Job exceeded max_task_failures"
+- 4 other active jobs still RUNNING.
+- **Re-launched**: lr=5e-6, seed=2 → `/ahmed/iris-run-beta0p1_lr5e6_seed2_b64-20260331-112030` (4GB, worktree)
+- Last remaining 1GB original: lr=1e-5, seed=2. Expecting OOM soon.
+
+#### Check 25 — 2026-03-31T11:30Z
+- All 5 active jobs RUNNING:
+  - lr=5e-6, seed=2 (re-launched, 4GB) — RUNNING, train_dpo RUNNING (~10m)
+  - lr=6.25e-6, seed=2 (re-launched, 4GB) — RUNNING (~50m)
+  - lr=7.5e-6, seed=0 (re-launched, 4GB) — RUNNING (~50m)
+  - lr=8.75e-6, seed=2 (re-launched, 4GB) — RUNNING (~30m)
+  - lr=1e-5, seed=2 (original, 1GB) — RUNNING (~4h, last 1GB survivor)
+- Failures: 0 on active jobs | Preemptions: 0
+
+#### Check 26 — 2026-03-31T11:40Z
+- All 10 jobs (5 executors + 5 train_dpo): `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- lr=1e-5 original (1GB) still surviving at ~4h10m. Steady state.
+
+#### Check 27 — 2026-03-31T11:50Z
+- All 10 jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Steady state. lr=1e-5 (1GB) still alive at ~4h20m.
+
+#### Check 28 — 2026-03-31T12:00Z
+- All 10 jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Steady state. lr=1e-5 (1GB) at ~4h30m — may have dodged OOM.
+
+#### Check 29 — 2026-03-31T12:10Z
+- All 10 jobs: `JOB_STATE_RUNNING`
+- Failures: 0 | Preemptions: 0
+- Steady state (~4h40m for lr=1e-5 original).
+
+#### Check 30 — 2026-03-31T12:20Z — LAST 1GB OOM
+- **lr=1e-5, seed=2** (`iris-run-beta0p1_lr1e5_seed2_b64-20260331-072752`):
+  - Executor parent: `FAILED` — "Exit code 133: OOM killed" (1GB) after ~4h50m
+  - train_dpo sub-job: `KILLED` — "Job exceeded max_task_failures"
+- All 5 original 1GB executors have now OOM'd (4/5 recovered, this is the last).
+- **Re-launched**: lr=1e-5, seed=2 → `/ahmed/iris-run-beta0p1_lr1e5_seed2_b64-20260331-122035` (4GB, worktree)
+- All 5 jobs now on 4GB executors. No more 1GB time bombs.
+
+#### Active Job Summary (post-recovery)
+| Experiment | Iris Job ID | Executor Memory | Status |
+|---|---|---|---|
+| lr=5e-6, seed=2 | `112030` | 4GB | RUNNING |
+| lr=6.25e-6, seed=2 | `104054` | 4GB | RUNNING |
+| lr=7.5e-6, seed=0 | `104044` | 4GB | RUNNING |
+| lr=8.75e-6, seed=2 | `110037` | 4GB | RUNNING |
+| lr=1e-5, seed=2 | `122035` | 4GB | RUNNING (just launched) |
+
+#### Check 31 — 2026-03-31T12:30Z
+- All 10 jobs: `JOB_STATE_RUNNING` (all 4GB executors now)
+- lr=1e-5 re-launch already has TPU allocated
+- Failures: 0 | Preemptions: 0
+- Steady state. All 5 jobs on 4GB executors — OOM risk eliminated.
+
+#### Checks 32–48 — 2026-03-31T12:40–15:20Z
+- All jobs steady through checks 32–48.
+
+#### Check 49 — 2026-03-31T15:30Z — lr=1e-5 EXECUTOR FAILED + lr=7.5e-6 PREEMPTED
+- **lr=1e-5, seed=2** (`122035`):
+  - Executor parent: `FAILED` — "ValueError: Executor step 'tokenized/bloom_speceval_v2_train_prefs_marin_tokenizer' has cross-region GCS dependencies. Found regions {us-central1, us-east5}."
+  - train_dpo sub-job: `KILLED` — "Parent task preempted"
+  - Root cause: Executor landed in a region where the cache/output path (us-east5) doesn't match the train data (us-central1). Region-inference code raises ValueError.
+  - **Action**: Re-launching. The executor should land in a compatible region on retry.
+- **lr=7.5e-6, seed=0** (`104044`):
+  - train_dpo: PREEMPTED, auto-rescheduled by Iris (new timestamp 15:21:25). Executor still RUNNING.
+  - **Action**: None (not interpreting preemptions per user instructions).
+- 3 other jobs: RUNNING, healthy.
+- **Re-launched**: lr=1e-5, seed=2 → `/ahmed/iris-run-beta0p1_lr1e5_seed2_b64-20260331-153209` (4GB, worktree)
+
+#### Check 50 — 2026-03-31T15:40Z — PERSISTENT CROSS-REGION FAILURE
+- **lr=1e-5, seed=2** (`153209`): `FAILED` again — same cross-region GCS ValueError
+- **lr=7.5e-6, seed=0** (`104044`): Executor `FAILED` with same cross-region error. train_dpo `KILLED` (parent preempted).
+  - Error: "Executor step 'tokenized/bloom_speceval_v2_train_prefs_marin_tokenizer' has cross-region GCS dependencies. Found regions {us-central1, us-east5}. us-central1: train_paths; us-east5: cache_path, output_path"
+  - Root cause: tokenized cache was allocated in us-east5 but train data is in us-central1. Executor validation rejects cross-region deps.
+- **Action**: Re-launching both with `--region us-central1` to pin executor region.
+- 3 other jobs (lr=5e-6, lr=6.25e-6, lr=8.75e-6): RUNNING, healthy.
+- **Re-launched with `--region us-central1`**:
+  - lr=1e-5, seed=2 → `/ahmed/iris-run-beta0p1_lr1e5_seed2_b64-20260331-154129`
+  - lr=7.5e-6, seed=0 → `/ahmed/iris-run-beta0p1_lr7p5e6_seed0_b64-20260331-154158`
+
+#### Check 51 — 2026-03-31T16:10Z — REGION PIN WORKED, ALL RECOVERED
+- All 5 active jobs RUNNING (executors + train_dpo):
+  - lr=5e-6, seed=2 (`112030`) — RUNNING (~4h50m)
+  - lr=6.25e-6, seed=2 (`104054`) — RUNNING (~5h30m)
+  - lr=8.75e-6, seed=2 (`110037`) — RUNNING (~5h10m)
+  - lr=1e-5, seed=2 (`154129`, us-central1 pinned) — RUNNING, train_dpo RUNNING
+  - lr=7.5e-6, seed=0 (`154158`, us-central1 pinned) — RUNNING, train_dpo RUNNING
+- Failures: 0 on active jobs | Preemptions: 0
+- `--region us-central1` resolved the cross-region GCS error.
+
+---
+
 ## PR Goals
 
 - Unify regular DPO and LoRA-DPO under the canonical `levanter.main.train_dpo` entrypoint.
