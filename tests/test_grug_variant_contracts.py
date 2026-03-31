@@ -31,6 +31,7 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
+from levanter.grug.attention import align_kv_heads
 from levanter.distributed import DistributedConfig, RayConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -263,3 +264,54 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
+
+
+def test_align_kv_heads_repeats_grouped_query_heads():
+    kv = jnp.arange(2 * 3 * 2 * 4, dtype=jnp.float32).reshape(2, 3, 2, 4)
+
+    aligned = align_kv_heads(kv, num_q_heads=4)
+
+    assert aligned.shape == (2, 3, 4, 4)
+    assert jnp.array_equal(aligned[:, :, 0], kv[:, :, 0])
+    assert jnp.array_equal(aligned[:, :, 1], kv[:, :, 0])
+    assert jnp.array_equal(aligned[:, :, 2], kv[:, :, 1])
+    assert jnp.array_equal(aligned[:, :, 3], kv[:, :, 1])
+
+
+def test_grug_moe_attention_supports_grouped_query_xsa():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+
+    cfg = model_module.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=16,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=32,
+        dense_intermediate_dim=32,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        head_dim=4,
+        max_seq_len=8,
+        sliding_window=8,
+    )
+    head_dim = cfg.inferred_head_dim
+    x = jax.random.normal(jax.random.PRNGKey(1), (2, 8, cfg.hidden_dim), dtype=jnp.float32)
+    w_q = jax.random.normal(jax.random.PRNGKey(0), (cfg.hidden_dim, cfg.num_heads * head_dim))
+    w_k = jax.random.normal(jax.random.PRNGKey(1), (cfg.hidden_dim, cfg.num_kv_heads * head_dim))
+    w_v = jax.random.normal(jax.random.PRNGKey(2), (cfg.hidden_dim, cfg.num_kv_heads * head_dim))
+
+    q = model_module.rearrange(jnp.einsum("bsh,hd->bsd", x, w_q), "... (n d) -> ... n d", d=head_dim)
+    k = model_module.rearrange(jnp.einsum("bsh,hd->bsd", x, w_k), "... (m d) -> ... m d", d=head_dim)
+    v = model_module.rearrange(jnp.einsum("bsh,hd->bsd", x, w_v), "... (m d) -> ... m d", d=head_dim)
+    q = model_module.rms_norm(q)
+    k = model_module.rms_norm(k)
+    q, k = model_module.apply_rotary_embedding(q, k, seq_len=x.shape[1], head_dim=head_dim, rope=cfg.rope)
+    attn_out = model_module.attention(q, k, v, GrugAttentionMask.causal())
+    aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
+    dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
+    v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+    xsa_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+
+    assert xsa_out.shape == (2, 8, cfg.num_heads, head_dim)
