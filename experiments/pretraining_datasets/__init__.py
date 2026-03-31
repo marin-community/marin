@@ -12,6 +12,7 @@ Dataset families are organized in separate modules:
 - dolmino: DOLMINO (12 splits + combined math)
 - nemotron: NEMOTRON CC v1 (7 quality-based splits)
 - nemotron_v2: Nemotron v2 collection (CC v2/v2.1, Code, Math, Specialized, SFT)
+- sec_docs: SEC filings for RoPE-extension experiments (4 form-type splits)
 - simple: Single-corpus datasets
 
 Use `python -m experiments.pretraining_datasets list` to see all available datasets.
@@ -48,6 +49,12 @@ from experiments.pretraining_datasets.nemotron_v2 import (
     downloads as nemotron_v2_downloads,
     tokenize_nemotron_v2_family,
 )
+from experiments.pretraining_datasets.sec_docs import (
+    SEC_DOCS_DATASETS,
+    downloads as sec_docs_downloads,
+    tokenize_sec_docs,
+    tokenize_sec_docs_subset,
+)
 from experiments.pretraining_datasets.simple import downloads as simple_downloads, tokenized as simple_tokenized
 
 # Re-export constants
@@ -64,6 +71,7 @@ __all__ = [
     "NEMOTRON_WEIGHTS",
     "nemotron_mix",
     "nemotron_mix_block_shuffle",
+    "SEC_DOCS_DATASETS",
     "tokenize_dolma",
     "tokenize_dolmino",
     "tokenize_dolmino_math",
@@ -71,6 +79,8 @@ __all__ = [
     "tokenize_nemotron",
     "tokenize_nemotron_subset",
     "tokenize_nemotron_v2_family",
+    "tokenize_sec_docs",
+    "tokenize_sec_docs_subset",
 ]
 
 
@@ -121,6 +131,11 @@ DATASETS = {
         "subsets": list(NEMOTRON_DATASETS.keys()),
         "download": nemotron_cc_download(),
         "tokenize_fn": tokenize_nemotron,
+    },
+    "sec_docs": {
+        "subsets": list(SEC_DOCS_DATASETS.keys()),
+        "download": sec_docs_downloads["sec_docs"],
+        "tokenize_fn": tokenize_sec_docs,
     },
     "dolma": {
         "subsets": list(DOLMA_DATASETS.keys()),
