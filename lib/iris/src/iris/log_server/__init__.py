@@ -3,9 +3,9 @@
 
 """Push-based log service for Iris.
 
-The log service receives log entries from workers and the controller via
-PushLogs RPC and serves them via QueryLogs. It is initially co-hosted on
-the controller but designed for independent deployment.
+The log service receives log entries via PushLogs and serves them via
+FetchLogs (same API as ControllerService.FetchLogs for client compat).
+Co-hosted on the controller but designed for independent deployment.
 """
 
 from iris.log_server.client import LogPusher, RemoteLogHandler

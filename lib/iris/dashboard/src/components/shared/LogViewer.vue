@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useControllerRpc, useWorkerRpc } from '@/composables/useRpc'
+import { useLogServiceRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type { FetchLogsResponse, LogEntry, TaskAttempt } from '@/types/rpc'
 import { timestampMs, logLevelClass, formatLogTime } from '@/utils/formatting'
@@ -34,8 +34,8 @@ function levelPriority(lvl: string | undefined): number {
   return LOG_LEVEL_PRIORITY[lvl.toLowerCase()] ?? 1
 }
 
-// Choose the right RPC based on what we're viewing
-const useRpc = props.source === 'worker' ? useWorkerRpc : useControllerRpc
+// FetchLogs is served by the LogService (co-hosted on the controller)
+const useRpc = useLogServiceRpc
 
 // Task IDs end with a numeric segment (e.g. /alice/job/0), job IDs don't.
 const isTask = props.taskId ? /\/\d+$/.test(props.taskId) : false

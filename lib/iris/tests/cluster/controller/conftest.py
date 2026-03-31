@@ -54,6 +54,7 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.provider import ProviderUnsupportedError
 from iris.cluster.controller.scaling_group import ScalingGroup
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -68,7 +69,7 @@ from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2, config_pb2, logging_pb2
+from iris.rpc import cluster_pb2, config_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 from tests.cluster.providers.conftest import make_mock_platform
@@ -111,25 +112,6 @@ class FakeProvider:
         batches: list[DispatchBatch],
     ) -> list[tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]]:
         return [(b, None, "no stub") for b in batches]
-
-    def fetch_live_logs(
-        self,
-        worker_id: WorkerId,
-        address: str | None,
-        task_id: str,
-        attempt_id: int,
-        cursor: int,
-        max_lines: int,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        raise ProviderUnsupportedError("fake")
-
-    def fetch_process_logs(
-        self,
-        worker_id: WorkerId,
-        address: str | None,
-        request: cluster_pb2.FetchLogsRequest,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        raise ProviderUnsupportedError("fake")
 
     def get_process_status(
         self,
@@ -188,6 +170,7 @@ def controller_service(state, mock_controller, tmp_path) -> ControllerServiceImp
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
+        log_service=LogServiceImpl(state._log_store),
     )
 
 

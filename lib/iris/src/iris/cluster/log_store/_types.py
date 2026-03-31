@@ -13,6 +13,13 @@ from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import logging_pb2
 
 CONTROLLER_LOG_KEY = "/system/controller"
+_WORKER_LOG_PREFIX = "/system/worker/"
+
+
+def worker_log_key(worker_id: str) -> str:
+    """Build the log store key for a worker's process logs."""
+    return f"{_WORKER_LOG_PREFIX}{worker_id}"
+
 
 # Characters that indicate a regex pattern (vs. a literal key).
 REGEX_META_RE = re.compile(r"[.*+?\[\](){}^$|\\]")

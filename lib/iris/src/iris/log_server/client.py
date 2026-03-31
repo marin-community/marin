@@ -13,14 +13,10 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING
 
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
 from iris.rpc.logging_connect import LogServiceClientSync
-
-if TYPE_CHECKING:
-    pass
 
 
 class LogPusher:

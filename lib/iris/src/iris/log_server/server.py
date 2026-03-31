@@ -4,7 +4,8 @@
 """LogService RPC implementation.
 
 Thin wrapper around the existing LogStore interface, exposing push (ingest)
-and query (read) operations via Connect/RPC.
+and fetch (query) operations via Connect/RPC. FetchLogs uses the same
+request/response messages as ControllerService.FetchLogs for client compat.
 """
 
 from __future__ import annotations
@@ -33,11 +34,11 @@ class LogServiceImpl:
             self._log_store.append(request.key, list(request.entries))
         return logging_pb2.PushLogsResponse()
 
-    def query_logs(
+    def fetch_logs(
         self,
-        request: logging_pb2.QueryLogsRequest,
+        request: logging_pb2.FetchLogsRequest,
         ctx: Any,
-    ) -> logging_pb2.QueryLogsResponse:
+    ) -> logging_pb2.FetchLogsResponse:
         max_lines = request.max_lines if request.max_lines > 0 else 1000
         result = self._log_store.get_logs(
             request.source,
@@ -48,4 +49,4 @@ class LogServiceImpl:
             tail=request.tail,
             min_level=request.min_level,
         )
-        return logging_pb2.QueryLogsResponse(entries=result.entries, cursor=result.cursor)
+        return logging_pb2.FetchLogsResponse(entries=result.entries, cursor=result.cursor)

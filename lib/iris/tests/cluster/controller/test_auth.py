@@ -64,6 +64,7 @@ def service(state, tmp_path):
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
+        log_service=LogServiceImpl(state._log_store),
     )
 
 

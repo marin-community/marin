@@ -13,6 +13,7 @@ from pathlib import Path
 import uvicorn
 
 from iris.chaos import chaos
+from iris.cluster.log_store import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.log_server.client import LogPusher, RemoteLogHandler
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
@@ -290,7 +291,7 @@ class Worker:
             attempt = TaskAttempt.adopt(
                 discovered=container,
                 container_handle=handle,
-                log_store=self._log_store,
+                log_pusher=self._log_pusher,
                 port_allocator=self._port_allocator,
                 poll_interval_seconds=self._config.poll_interval.to_seconds(),
             )
@@ -443,7 +444,7 @@ class Worker:
         if self._log_pusher and self._worker_id:
             self._log_handler = RemoteLogHandler(
                 self._log_pusher,
-                key=f"/system/worker/{self._worker_id}",
+                key=worker_log_key(self._worker_id),
             )
             self._log_handler.setLevel(logging.INFO)
             self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))

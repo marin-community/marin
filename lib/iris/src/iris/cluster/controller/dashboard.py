@@ -30,6 +30,7 @@ from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
 import httpx
+from google.protobuf.json_format import MessageToDict, ParseDict
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
@@ -41,6 +42,7 @@ from iris.cluster.controller.actor_proxy import PROXY_ROUTE, ActorProxy
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, on_shutdown, static_files_mount
 from iris.log_server.server import LogServiceImpl
+from iris.rpc import logging_pb2
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
@@ -274,6 +276,14 @@ class ControllerDashboard:
         async def _proxy_actor_rpc(request: Request) -> Response:
             return await self._actor_proxy.handle(request)
 
+        @requires_auth
+        async def _fetch_logs_compat(request: Request) -> JSONResponse:
+            """Backward-compat proxy: old clients POST to ControllerService/FetchLogs."""
+            body = await request.json()
+            req = ParseDict(body, logging_pb2.FetchLogsRequest())
+            resp = self._log_service.fetch_logs(req, None)
+            return JSONResponse(MessageToDict(resp, preserving_proto_field_name=True))
+
         routes = [
             Route("/", self._dashboard),
             Route("/auth/session_bootstrap", self._session_bootstrap),
@@ -286,6 +296,7 @@ class ControllerDashboard:
             Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
             Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
+            Route("/iris.cluster.ControllerService/FetchLogs", _fetch_logs_compat, methods=["POST"]),
             Mount(log_wsgi_app.path, app=log_app),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),

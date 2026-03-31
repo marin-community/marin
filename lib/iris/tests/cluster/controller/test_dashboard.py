@@ -160,6 +160,7 @@ def service(state, scheduler, tmp_path):
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
+        log_service=LogServiceImpl(state._log_store),
     )
 
 
@@ -179,6 +180,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
+        log_service=LogServiceImpl(state._log_store),
     )
 
 
@@ -797,7 +799,20 @@ def test_health_endpoint_returns_ok(client):
 
 
 def test_fetch_logs_for_missing_task_returns_empty_entries(client):
-    """FetchLogs returns empty entries for a nonexistent task."""
+    """FetchLogs on LogService returns empty entries for a nonexistent task."""
+    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
+    resp = client.post(
+        "/iris.logging.LogService/FetchLogs",
+        json={"source": re.escape(task_id) + ":.*"},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("entries", []) == []
+
+
+def test_fetch_logs_backward_compat_proxy(client):
+    """The old ControllerService/FetchLogs path proxies to LogService."""
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
         "/iris.cluster.ControllerService/FetchLogs",
@@ -981,6 +996,7 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
+        log_service=LogServiceImpl(state._log_store),
     )
     dashboard = ControllerDashboard(svc, log_service=LogServiceImpl(svc._log_store))
     k8s_client = TestClient(dashboard.app)

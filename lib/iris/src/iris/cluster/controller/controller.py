@@ -1031,6 +1031,7 @@ class Controller:
             controller=self,
             bundle_store=self._bundle_store,
             log_store=self._log_store,
+            log_service=self._log_service,
             auth=config.auth,
         )
         self._dashboard = ControllerDashboard(

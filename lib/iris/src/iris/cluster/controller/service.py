@@ -86,10 +86,11 @@ from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.log_store import CONTROLLER_LOG_KEY, LogStore, build_log_source
+from iris.cluster.log_store import CONTROLLER_LOG_KEY, LogStore, build_log_source, worker_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, WorkerId, get_gpu_count, get_tpu_count
+from iris.log_server.server import LogServiceImpl
 from iris.rpc import cluster_pb2, logging_pb2, vm_pb2
 from iris.rpc.proto_utils import job_state_name, task_state_name
 from iris.time_proto import timestamp_to_proto
@@ -759,6 +760,7 @@ class ControllerServiceImpl:
         controller: ControllerProtocol,
         bundle_store: BundleStore,
         log_store: LogStore,
+        log_service: LogServiceImpl | None = None,
         auth: ControllerAuth | None = None,
     ):
         self._transitions = transitions
@@ -766,6 +768,7 @@ class ControllerServiceImpl:
         self._controller = controller
         self._bundle_store = bundle_store
         self._log_store = log_store
+        self._log_service = log_service or LogServiceImpl(log_store)
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
 
@@ -1466,7 +1469,7 @@ class ControllerServiceImpl:
 
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
 
-        fetch_request = cluster_pb2.FetchLogsRequest(
+        fetch_request = logging_pb2.FetchLogsRequest(
             source=source,
             since_ms=request.since_ms,
             cursor=request.cursor,
@@ -1476,7 +1479,7 @@ class ControllerServiceImpl:
             min_level=request.min_level,
         )
 
-        fetch_response = self.fetch_logs(fetch_request, ctx)
+        fetch_response = self._log_service.fetch_logs(fetch_request, ctx)
         entries = fetch_response.entries
 
         batch = cluster_pb2.Controller.TaskLogBatch(
@@ -1617,28 +1620,6 @@ class ControllerServiceImpl:
             ]
         )
 
-    def fetch_logs(
-        self,
-        request: cluster_pb2.FetchLogsRequest,
-        ctx: Any,
-    ) -> cluster_pb2.FetchLogsResponse:
-        """Fetch logs by source key with filtering and pagination.
-
-        All logs (controller, worker, task) are served from the central LogStore
-        which receives pushes from the co-hosted LogService.
-        """
-        max_lines = request.max_lines if request.max_lines > 0 else 1000
-        result = self._log_store.get_logs(
-            request.source,
-            since_ms=request.since_ms,
-            cursor=request.cursor,
-            substring_filter=request.substring,
-            max_lines=max_lines,
-            tail=request.tail,
-            min_level=request.min_level,
-        )
-        return cluster_pb2.FetchLogsResponse(entries=result.entries, cursor=result.cursor)
-
     # --- Worker Detail ---
 
     def get_worker_status(
@@ -1677,7 +1658,7 @@ class ControllerServiceImpl:
         worker_log_entries: list[logging_pb2.LogEntry] = []
         try:
             result = self._log_store.get_logs(
-                f"/system/worker/{worker.worker_id}",
+                worker_log_key(worker.worker_id),
                 max_lines=200,
                 tail=True,
             )

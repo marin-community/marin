@@ -283,7 +283,7 @@ class TaskAttempt:
         cls,
         discovered: DiscoveredContainer,
         container_handle: ContainerHandle,
-        log_store: LogStore,
+        log_pusher: LogPusher | None,
         port_allocator: PortAllocator,
         poll_interval_seconds: float = 5.0,
     ) -> "TaskAttempt":
@@ -320,7 +320,7 @@ class TaskAttempt:
             default_task_image=None,
             resolve_image=None,
             port_allocator=port_allocator,
-            log_store=log_store,
+            log_pusher=log_pusher,
             poll_interval_seconds=poll_interval_seconds,
             container_handle=container_handle,
             initial_status=cluster_pb2.TASK_STATE_RUNNING,
@@ -856,24 +856,32 @@ class TaskAttempt:
             # Sleep before next poll
             time.sleep(self._poll_interval_seconds)
 
-    def _append_log(self, *, source: str, data: str) -> None:
-        """Append a single log entry, pushing to the central LogService."""
-        if not self._log_pusher:
-            return
+    def _make_log_entry(self, *, source: str, data: str) -> logging_pb2.LogEntry:
+        """Build a LogEntry proto from a source/data pair, parsing the level prefix."""
         level_name = parse_log_level(data)
         level = str_to_log_level(level_name) if level_name else 0
         entry = logging_pb2.LogEntry(source=source, data=data, level=level)
         entry.timestamp.epoch_ms = Timestamp.now().epoch_ms()
+        return entry
+
+    def _push_logs(self, entries: list[logging_pb2.LogEntry]) -> None:
+        """Push a batch of log entries to the central LogService."""
+        if not self._log_pusher or not entries:
+            return
         try:
-            self._log_pusher.push(self._log_key, [entry])
+            self._log_pusher.push(self._log_key, entries)
         except Exception:
-            logger.debug("Failed to push log for task %s", self.task_id, exc_info=True)
+            logger.debug("Failed to push %d logs for task %s", len(entries), self.task_id, exc_info=True)
+
+    def _append_log(self, *, source: str, data: str) -> None:
+        """Push a single log entry (for rare events like errors)."""
+        self._push_logs([self._make_log_entry(source=source, data=data)])
 
     def _stream_logs(self, reader: RuntimeLogReader) -> None:
-        """Fetch new logs from container and append to log store."""
+        """Fetch new logs from container and push as a batch."""
         try:
-            for log_line in reader.read():
-                self._append_log(source=log_line.source, data=log_line.data)
+            entries = [self._make_log_entry(source=line.source, data=line.data) for line in reader.read()]
+            self._push_logs(entries)
         except Exception:
             logger.debug("Log streaming failed for task %s", self.task_id, exc_info=True)
 

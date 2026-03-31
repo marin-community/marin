@@ -22,6 +22,7 @@ from iris.cluster.log_store._types import (
     _EST_BYTES_PER_ROW,
     build_log_source,
     task_log_key,
+    worker_log_key,
 )
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
@@ -97,4 +98,5 @@ __all__ = [
     "LogStoreHandler",
     "build_log_source",
     "task_log_key",
+    "worker_log_key",
 ]

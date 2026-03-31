@@ -18,8 +18,9 @@ from iris.cluster.types import (
     ResourceSpec,
     is_job_finished,
 )
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.logging_connect import LogServiceClientSync
 from rigging.timing import Duration
 
 
@@ -34,6 +35,7 @@ class IrisIntegrationCluster:
     url: str
     client: IrisClient
     controller_client: ControllerServiceClientSync
+    log_client: LogServiceClientSync
     job_timeout: float = 60.0
 
     def submit(
@@ -155,6 +157,6 @@ class IrisIntegrationCluster:
 
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
         task_id = job.job_id.task(task_index).to_wire()
-        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
-        response = self.controller_client.fetch_logs(request)
+        request = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        response = self.log_client.fetch_logs(request)
         return [f"{e.source}: {e.data}" for e in response.entries]
