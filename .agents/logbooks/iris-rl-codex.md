@@ -66,6 +66,10 @@ Purpose: keep a concise, engineering-focused record of the Iris RL migration, in
 
 6. We split off subthreads once they became deep enough to distract from the
    main migration record.
+   - Packed vLLM / packed rollout is now a dedicated follow-up thread on issue
+     `#4286` and branch `packed_rl`; `iris_rl` keeps only the direct/executor
+     mainline now, and the packed-only code and experiment ladder were removed
+     from this branch to make the mainline easier to reason about.
    - Multi-host `v6e` trainer/export work now lives in its own logbook.
    - Checkpoint robustness work now lives in its own project note.
 
@@ -113,6 +117,11 @@ thread.
 - Multi-host trainer subthread:
   [iris-rl-multihost-trainer.md](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/.agents/logbooks/iris-rl-multihost-trainer.md)
   - separate `v6e` / distributed trainer export thread
+
+- Packed rollout follow-up:
+  use issue `#4286` plus branch `packed_rl`
+  - packed vLLM experiments and implementation notes were intentionally split
+    off the `iris_rl` branch once the mainline direct/executor path stabilized
 
 - Early bootstrap / artifact-path thread:
   [debug-log-rl-model-bootstrap.md](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/docs/debug-log-rl-model-bootstrap.md)
@@ -8217,3 +8226,99 @@ Practical carry-forward:
 - any future detailed checkpoint experiments, tables, or follow-up hypotheses
   should be logged in
   [ckpt_rl.md](/Users/ahmed/code/marin/.claude/worktrees/precious-squishing-melody/.agents/projects/ckpt_rl.md)
+
+## 2026-03-30 19:xx PDT - `iris_rl` trimmed back to the direct/executor mainline
+
+After splitting the packed rollout thread onto issue `#4286` and branch
+`packed_rl`, we removed the packed-only implementation and experiment ladder
+from `iris_rl` so the migration branch reflects the actual promoted baseline
+instead of every side experiment attempted along the way.
+
+What was removed from `iris_rl`:
+
+- packed inference modules under
+  `lib/marin/src/marin/rl/environments/inference_ctx/`
+- packed-only regression / feasibility experiment scripts
+- packed-specific test coverage that no longer belongs on the mainline branch
+
+What was simplified on the mainline branch:
+
+- `RLJob` no longer carries packed-vLLM-only dispatch/config on `iris_rl`
+- rollout worker no longer carries the packed-owned weight-sync path or the
+  async eval queue/coalescing machinery that was added specifically to make one
+  packed worker behave more like two samplers
+- environment/inference interfaces no longer carry packed-only
+  `request_kind` plumbing
+- `evaluate_environment.py` was updated to use the simpler direct/mainline
+  inference context interface
+
+Why this cleanup was worth doing:
+
+- direct `e4ms2` plus the new executor-backed launcher is the real promoted
+  baseline on `iris_rl`
+- packed rollout remains valid and potentially useful, but it is a distinct
+  optimization thread, not a prerequisite for the migration PR
+- keeping packed-only code in the main migration branch was making RL harder to
+  read, test, and debug after the mainline had already stabilized
+
+Carry-forward rule:
+
+- future packed vLLM / packed rollout work should land on `packed_rl` and issue
+  `#4286`, not back on `iris_rl`, unless we later decide to promote it into the
+  default RL path
+
+## 2026-03-30 20:xx PDT - coordinator now terminates rollout children after trainer success
+
+The clean `500/500` control run exposed a separate shutdown-tail bug even after
+checkpointing itself had been declared stable.
+
+Observed on the completed direct run:
+
+- root job:
+  `/ahmed/iris-rl-e4ms2-500-0329-clean-nodelprevtmp-r1`
+- trainer child succeeded
+- `rollout-0` succeeded
+- `rollout-1` later retried and remained `RUNNING` long after training was
+  finished
+
+Late live evidence from Iris/logs:
+
+- the surviving rollout resumed the stable W&B run
+  `iris-rl-e4ms2-500-clean-nodelprevtmp-rollout-1`
+- it then sat in "waiting for first weight transfer" startup
+- after that it looped on Arrow Flight connection failures against dead trainer
+  endpoints
+- the root coordinator stayed `RUNNING` because it was still waiting for that
+  rollout child to exit
+
+Diagnosis:
+
+- this was not just W&B lag; it was a real orphaned rollout child
+- the coordinator was waiting on trainer and rollout jobs as one group
+- if a rollout was retried after trainer success, the coordinator could keep
+  waiting forever instead of actively shutting the rollout down once training
+  had already completed
+
+Chosen fix:
+
+- keep the fix in the coordinator, not in rollout-side "exit on failed
+  run-state" semantics
+- wait for the trainer child to finish successfully first
+- then terminate any rollout children still not in a terminal state
+- then wait for the rollout children to stop
+
+Why this shape is preferred:
+
+- the trainer-success boundary is the cleanest authoritative signal that no
+  more rollout work is needed
+- it avoids inventing new rollout-side semantics around failed run-state during
+  retry windows
+- it directly closes the exact failure mode seen on the clean `500`-step run:
+  late rollout retry after training had already finished
+
+Validation:
+
+- added a regression test proving the coordinator terminates still-running
+  rollout children once the trainer reaches `SUCCEEDED`
+- this only fixes future runs; any already-live orphaned rollout must still be
+  stopped manually

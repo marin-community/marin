@@ -19,7 +19,7 @@ from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.completion_usage import CompletionUsage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
-from marin.rl.environments.inference_ctx.base import BaseInferenceContext, InferenceRequestKind
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
 from marin.rl.environments.inference_ctx.render import Llama3Renderer, Qwen3Renderer, Renderer, Message
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
@@ -374,7 +374,6 @@ class vLLMInferenceContext(BaseInferenceContext):
     def batch_completions(
         self,
         prompts: list[str] | list[list[dict]],
-        request_kind: InferenceRequestKind,
         temperature: float,
         n: int,
         max_tokens: int | None = None,
@@ -392,7 +391,6 @@ class vLLMInferenceContext(BaseInferenceContext):
             stop: Stop sequences
             system_prompt: Optional system prompt (only used if prompts are strings)
         """
-        del request_kind
         if SamplingParams is None:
             raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
         kwargs = {

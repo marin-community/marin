@@ -16,6 +16,7 @@ from fray.v2 import (
     Entrypoint,
     JobHandle,
     JobRequest,
+    JobStatus,
     ResourceConfig,
     create_environment,
     current_client,
@@ -186,22 +187,17 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
             **rollout_resource_kwargs,
         )
 
-        # Submit child jobs
-        jobs: list[JobHandle] = []
-
-        # Training worker
-        jobs.append(
-            client.submit(
-                JobRequest(
-                    name=f"rl-{config.resolved_instance_id}-train",
-                    entrypoint=Entrypoint.from_callable(_train_worker_entry, args=(train_config, runtime)),
-                    resources=train_resources,
-                    environment=train_worker_env,
-                    max_retries_failure=run_config.max_retries_failure,
-                    max_retries_preemption=run_config.max_retries_preemption,
-                )
+        train_job = client.submit(
+            JobRequest(
+                name=f"rl-{config.resolved_instance_id}-train",
+                entrypoint=Entrypoint.from_callable(_train_worker_entry, args=(train_config, runtime)),
+                resources=train_resources,
+                environment=train_worker_env,
+                max_retries_failure=run_config.max_retries_failure,
+                max_retries_preemption=run_config.max_retries_preemption,
             )
         )
+        rollout_jobs: list[JobHandle] = []
 
         # Rollout workers
         for i in range(run_config.num_rollout_workers):
@@ -216,7 +212,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
                 worker_index=i,
                 tracker_config=tracker_config,
             )
-            jobs.append(
+            rollout_jobs.append(
                 client.submit(
                     JobRequest(
                         name=f"rl-{config.resolved_instance_id}-rollout-{i}",
@@ -231,15 +227,29 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
 
         logger.info(
             "Submitted %d child jobs (1 trainer + %d rollout workers)",
-            len(jobs),
+            1 + len(rollout_jobs),
             run_config.num_rollout_workers,
         )
 
-        wait_all(jobs, raise_on_failure=True)
+        train_status = train_job.wait(raise_on_failure=True)
+        if train_status != JobStatus.SUCCEEDED:
+            raise RuntimeError(f"Trainer finished with unexpected status {train_status}")
+
+        _terminate_rollout_jobs(rollout_jobs)
+        wait_all(rollout_jobs, raise_on_failure=False)
         logger.info("RL coordinator finished for run %s", config.run_id)
     finally:
         if hosted_runtime is not None:
             _shutdown_hosted_actors(hosted_runtime.hosted_actors)
+
+
+def _terminate_rollout_jobs(rollout_jobs: list[JobHandle]) -> None:
+    for rollout_job in rollout_jobs:
+        status = rollout_job.status()
+        if JobStatus.finished(status):
+            continue
+        logger.info("Stopping rollout job %s after trainer completion", rollout_job.job_id)
+        rollout_job.terminate()
 
 
 def _shutdown_hosted_actors(hosted_actors: list[HostedActor]) -> None:

@@ -38,7 +38,6 @@ from marin.rl.environments.inference_ctx import LevanterInferenceContextConfig
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.rollout_worker import create_inference_context
 from marin.rl.types import RolloutGroup
-from marin.rl.weight_transfer import WeightTransferConfig
 from marin.training.training import _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 from transformers import AutoTokenizer
@@ -215,8 +214,6 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
                         axis_mapping=trainer_config.compute_axis_mapping,
                     ),
                     inflight_weight_updates=False,
-                    weight_transfer_config=WeightTransferConfig(),
-                    coordinator_handle=None,
                 )
 
                 # Sample examples, generate responses, and create rollouts from selected lesson

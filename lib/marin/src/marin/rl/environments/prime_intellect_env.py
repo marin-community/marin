@@ -6,7 +6,7 @@ Environment Wrapper for the Environments Hub by Prime-Intellect, which contains 
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import Any, ClassVar, cast
 
 import jax.numpy as jnp
 import numpy as np
@@ -14,12 +14,7 @@ import numpy as np
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.process_vllm_results import process_vllm_chat_results
 from marin.rl.environments.inference_ctx import BaseInferenceContext
-from marin.rl.environments.inference_ctx.base import InferenceRequestKind
 from marin.rl.types import Rollout, RolloutGroup
-
-# Lazy import for optional dependencies
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -83,14 +78,13 @@ class PrimeIntellectEnv(MarinEnv):
         temperature: float,
         prng_key,
         mode: str = "train",
-        request_kind: InferenceRequestKind = InferenceRequestKind.TRAIN,
         max_tokens: int | None = None,
         top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample problems and generate responses using the model."""
-        del prng_key, request_kind, system_prompt
+        del prng_key, system_prompt
         self._ensure_verifiers_installed()
         from verifiers.types import GenerateOutputs
         import subprocess

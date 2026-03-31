@@ -9,7 +9,6 @@ as well as methods for tokenization and logprob extraction from an OpenAI ChatCo
 """
 
 import logging
-from enum import StrEnum
 from typing import Any
 
 import numpy as np
@@ -22,33 +21,11 @@ from levanter.models.lm_model import LmHeadModel
 logger = logging.getLogger(__name__)
 
 
-class InferenceRequestKind(StrEnum):
-    """Logical request types seen by an inference context."""
-
-    TRAIN = "train"
-    EVAL = "eval"
-    MICRO_EVAL = "micro_eval"
-
-
 class BaseInferenceContext:
     """Base class for inference contexts."""
 
     def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
         raise NotImplementedError
-
-    def owns_weight_transfer(self) -> bool:
-        """Return whether this context manages weight sync internally."""
-        return False
-
-    def wait_for_initial_weights(self, timeout: float) -> int | None:
-        """Wait until the context is ready to serve real model weights."""
-        del timeout
-        return None
-
-    def current_weight_id(self, request_kind: InferenceRequestKind = InferenceRequestKind.TRAIN) -> int | None:
-        """Return the latest batch-consistent weight id served by the context."""
-        del request_kind
-        return None
 
     def shutdown(self) -> None:
         raise NotImplementedError
@@ -60,7 +37,6 @@ class BaseInferenceContext:
     def batch_completions(
         self,
         prompts: list[str] | list[list[dict]],
-        request_kind: InferenceRequestKind,
         temperature: float,
         n: int,
         max_tokens: int | None = None,

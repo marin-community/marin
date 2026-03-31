@@ -26,7 +26,6 @@ from levanter.trainer import TrainerConfig
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments.inference_ctx import (
     LevanterInferenceContextConfig,
-    PackedvLLMInferenceContextConfig,
     vLLMInferenceContextConfig,
 )
 from marin.rl.replay_buffer import ReplayBufferConfig
@@ -134,7 +133,7 @@ class RLJobConfig:
     """Configuration for TPU pod deployment."""
 
     # Inference server (auto-configured by default)
-    inference_config: InferenceServerConfig | vLLMInferenceContextConfig | PackedvLLMInferenceContextConfig | None = None
+    inference_config: InferenceServerConfig | vLLMInferenceContextConfig | None = None
     """Configuration for inference context."""
 
     system_prompt: str | None = None
