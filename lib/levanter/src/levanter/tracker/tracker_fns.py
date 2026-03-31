@@ -181,7 +181,7 @@ def log_hyperparameters(hparams: dict[str, Any]):
     _global_tracker.log_hyperparameters(hparams)
 
 
-def log_configuration(hparams: Any, config_name: Optional[str] = None):
+def log_configuration(hparams: Any):
     """
      Logs a configuration object to the global tracker as hyperparameters.
 
