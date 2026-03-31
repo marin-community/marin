@@ -21,6 +21,7 @@ from fray.v2 import (
     create_environment,
     current_client,
 )
+from levanter.adaptation import NoAdaptationConfig
 from levanter.main import train_dpo
 from levanter.main import train_lm
 from levanter.main.train_dpo import TrainDpoConfig
@@ -110,11 +111,23 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
             base_path=os.path.join(pod_config.output_path, DEFAULT_CHECKPOINTS_PATH),
         ),
     )
+    hf_output_path = os.path.join(pod_config.output_path, DEFAULT_HF_CHECKPOINTS_PATH)
+
+    if isinstance(pod_config.train_config, TrainDpoConfig) and not isinstance(
+        pod_config.train_config.adapter, NoAdaptationConfig
+    ):
+        config = replace(
+            pod_config.train_config,
+            trainer=trainer,
+            hf_save_path=None,
+            merged_hf_save_path=hf_output_path,
+        )
+        return replace(pod_config, train_config=config)
 
     config = replace(
         pod_config.train_config,
         trainer=trainer,
-        hf_save_path=os.path.join(pod_config.output_path, DEFAULT_HF_CHECKPOINTS_PATH),
+        hf_save_path=hf_output_path,
     )
     return replace(pod_config, train_config=config)
 

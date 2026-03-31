@@ -4,8 +4,10 @@
 from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
+from levanter.adaptation import AdaptationConfig, NoAdaptationConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.dpo import ReferenceEvalCacheConfig
+from levanter.main.train_dpo import DpoReferenceConfig, SeparateReferenceConfig
 from levanter.schedule import IntSchedule
 
 # DPO runs two models (policy + reference) but eval doesn't need gradients/optimizer,
@@ -38,11 +40,15 @@ class SimpleDPOConfig:
     model_name_or_path: str | None = None
     initialize_from_checkpoint_path: str | None = None
 
+    adapter: AdaptationConfig = field(default_factory=NoAdaptationConfig)
+    reference: DpoReferenceConfig = field(default_factory=SeparateReferenceConfig)
     reference_model_path: str | None = None
     reference_is_hf: bool = True
     beta: float = 0.1
     validation_split_fraction: float | None = 0.1
-    reference_eval_cache: ReferenceEvalCacheConfig = field(default_factory=ReferenceEvalCacheConfig)
+    reference_eval_cache: ReferenceEvalCacheConfig = field(
+        default_factory=lambda: ReferenceEvalCacheConfig(mode="build_or_load")
+    )
 
     train_seq_len: int | None = None
     max_seq_len: int = 4096

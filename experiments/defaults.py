@@ -18,6 +18,7 @@ from fray.v2 import ResourceConfig
 from marin.execution.remote import remote
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
+from levanter.adaptation import NoAdaptationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import (
     BlockShuffleConfig,
@@ -682,9 +683,20 @@ def default_dpo(
     schedule = BatchSchedule(unwrap_versioned_value(dpo_config.train_batch_size))
     total_examples = schedule.global_data_offset_by_step(dpo_config.num_train_steps)
 
-    reference_model_path = dpo_config.reference_model_path or dpo_config.model_name_or_path
-    if reference_model_path is None:
-        raise ValueError("reference_model_path must be set for DPO training.")
+    reference = dpo_config.reference
+    if isinstance(reference, SeparateReferenceConfig) and not reference.model_path:
+        reference_model_path = dpo_config.reference_model_path or dpo_config.model_name_or_path
+        if reference_model_path is None:
+            raise ValueError("reference_model_path must be set for DPO training when using a separate reference.")
+        reference = dataclasses.replace(
+            reference,
+            model_path=reference_model_path,
+            is_hf=dpo_config.reference_is_hf,
+        )
+
+    hf_save_dtype = dpo_config.hf_save_dtype
+    if not isinstance(dpo_config.adapter, NoAdaptationConfig) and hf_save_dtype is not None:
+        raise ValueError("hf_save_dtype is not supported with adapter-based DPO exports.")
 
     inner_config = TrainDpoConfig(
         data=preference_data,
@@ -719,6 +731,7 @@ def default_dpo(
         initialize_from_hf=dpo_config.model_name_or_path if initialize_from_hf else False,
         train_seq_len=train_length,
         model=model_config,
+        adapter=dpo_config.adapter,
         optimizer=AdamConfig(
             learning_rate=dpo_config.learning_rate,
             weight_decay=dpo_config.weight_decay,
@@ -728,15 +741,12 @@ def default_dpo(
             min_lr_ratio=dpo_config.min_lr_ratio,
             max_grad_norm=dpo_config.max_grad_norm,
         ),
-        reference=SeparateReferenceConfig(
-            model_path=reference_model_path,
-            is_hf=dpo_config.reference_is_hf,
-        ),
+        reference=reference,
         beta=dpo_config.beta,
         validation_split_fraction=dpo_config.validation_split_fraction,
         reference_eval_cache=dpo_config.reference_eval_cache,
         hf_save_steps=steps_per_export_hf,
-        hf_save_dtype=dpo_config.hf_save_dtype,
+        hf_save_dtype=hf_save_dtype,
         hf_generation_eos_token_ids=dpo_config.hf_generation_eos_token_ids,
         data_seed=dpo_config.seed,
     )
