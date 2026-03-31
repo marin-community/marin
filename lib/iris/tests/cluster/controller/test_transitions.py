@@ -16,15 +16,18 @@ from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints
 from iris.cluster.controller.autoscaler import DemandEntry
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import (
-    Attempt,
     ControllerDB,
-    Endpoint,
     EndpointQuery,
-    JobDetail,
-    TaskDetail,
-    WorkerDetail,
-    decode_rows,
+    attempt_is_terminal,
     endpoint_query_sql,
+)
+from iris.cluster.controller.schema import (
+    ATTEMPT_PROJECTION,
+    ENDPOINT_PROJECTION,
+    JOB_DETAIL_PROJECTION,
+    TASK_DETAIL_PROJECTION,
+    WORKER_DETAIL_PROJECTION,
+    EndpointRow,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.transitions import (
@@ -44,6 +47,8 @@ from rigging.timing import Duration, Timestamp
 
 from .conftest import (
     building_counts as _building_counts,
+    check_task_can_be_scheduled,
+    check_task_is_finished,
     dispatch_task,
     fail_worker,
     healthy_active_workers,
@@ -85,12 +90,12 @@ def _queued_dispatch(
     return tasks_to_run, tasks_to_kill
 
 
-def _endpoints(state: ControllerTransitions, query: EndpointQuery = EndpointQuery()) -> list[Endpoint]:
+def _endpoints(state: ControllerTransitions, query: EndpointQuery = EndpointQuery()) -> list[EndpointRow]:
     sql, params = endpoint_query_sql(query)
     # Add ORDER BY to match original behavior
     sql += " ORDER BY registered_at_ms DESC, endpoint_id ASC"
     with state._db.snapshot() as q:
-        return decode_rows(Endpoint, q.fetchall(sql, tuple(params)))
+        return ENDPOINT_PROJECTION.decode(q.fetchall(sql, tuple(params)))
 
 
 def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions):
@@ -106,8 +111,10 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions
                 jobs[job_id] = JobRequirements(
                     resources=job.request.resources,
                     constraints=list(job.request.constraints),
-                    is_coscheduled=job.is_coscheduled,
-                    coscheduling_group_by=job.coscheduling_group_by,
+                    is_coscheduled=job.request.HasField("coscheduling"),
+                    coscheduling_group_by=(
+                        job.request.coscheduling.group_by if job.request.HasField("coscheduling") else None
+                    ),
                 )
     return scheduler.create_scheduling_context(
         workers,
@@ -123,7 +130,7 @@ def test_db_snapshot_select_returns_typed_rows(state) -> None:
 
     job_wire = JobName.root("test-user", "typed-rows").to_wire()
     with state._db.snapshot() as q:
-        jobs = decode_rows(JobDetail, q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire,)))
+        jobs = JOB_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire,)))
         task_count = q.fetchone("SELECT COUNT(*) FROM tasks WHERE job_id = ?", (job_wire,))[0]
 
     assert len(jobs) == 1
@@ -190,7 +197,7 @@ def test_job_lifecycle_failure_exhausted_retries(harness):
     harness.transition(task.task_id, cluster_pb2.TASK_STATE_FAILED, error="Task failed")
 
     assert harness.query_task(task.task_id).state == cluster_pb2.TASK_STATE_FAILED
-    assert harness.query_task(task.task_id).is_finished()
+    assert check_task_is_finished(harness.query_task(task.task_id))
     assert harness.query_job(job_id).state == cluster_pb2.JOB_STATE_FAILED
 
 
@@ -209,7 +216,7 @@ def test_task_failure_with_retry_requeues(harness):
     harness.transition(task.task_id, cluster_pb2.TASK_STATE_FAILED)
 
     assert harness.query_task(task.task_id).state == cluster_pb2.TASK_STATE_PENDING
-    assert harness.query_task(task.task_id).can_be_scheduled()
+    assert check_task_can_be_scheduled(harness.query_task(task.task_id))
     assert harness.query_job(job_id).state == cluster_pb2.JOB_STATE_RUNNING
     pending = _schedulable_tasks(harness.state)
     assert len(pending) == 1
@@ -310,7 +317,7 @@ def test_cancel_job_removes_endpoints_for_job_tree(state):
     dispatch_task(state, child_tasks[0], child_worker)
 
     state.add_endpoint(
-        Endpoint(
+        EndpointRow(
             endpoint_id="parent-ep",
             name="parent/actor",
             address="host1:9000",
@@ -321,7 +328,7 @@ def test_cancel_job_removes_endpoints_for_job_tree(state):
         task_id=parent_tasks[0].task_id,
     )
     state.add_endpoint(
-        Endpoint(
+        EndpointRow(
             endpoint_id="child-ep",
             name="parent/child/actor",
             address="host2:9000",
@@ -351,7 +358,7 @@ def test_cancelled_job_tasks_excluded_from_demand(harness):
     assert harness.query_job(job_id).state == cluster_pb2.JOB_STATE_KILLED
     for task in tasks:
         assert harness.query_task(task.task_id).state == cluster_pb2.TASK_STATE_KILLED
-        assert not harness.query_task(task.task_id).can_be_scheduled()
+        assert not check_task_can_be_scheduled(harness.query_task(task.task_id))
 
     assert len(_schedulable_tasks(harness.state)) == 0
     assert len(compute_demand_entries(harness.state._db)) == 0
@@ -375,7 +382,7 @@ def test_worker_failure_cascades_to_running_tasks(harness):
 
     assert _query_worker(harness.state, worker_id) is None
     assert harness.query_task(task.task_id).state == cluster_pb2.TASK_STATE_PENDING
-    assert harness.query_task(task.task_id).can_be_scheduled()
+    assert check_task_can_be_scheduled(harness.query_task(task.task_id))
     assert len(_schedulable_tasks(harness.state)) == 1
 
 
@@ -400,20 +407,20 @@ def test_failed_worker_is_pruned_from_state(state):
 
     # list_all_workers only returns w2
     with state._db.snapshot() as q:
-        all_workers = decode_rows(WorkerDetail, q.fetchall("SELECT * FROM workers"))
+        all_workers = WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers"))
     assert len(all_workers) == 1
     assert all_workers[0].worker_id == w2
 
     # Task was requeued despite worker removal
     assert tasks[0].state == cluster_pb2.TASK_STATE_PENDING
-    assert tasks[0].can_be_scheduled()
+    assert check_task_can_be_scheduled(tasks[0])
 
     # A re-registering worker creates a fresh entry
     w1_again = register_worker(state, "w1", "host1:8080", make_worker_metadata())
     assert _query_worker(state, w1_again) is not None
     assert _query_worker(state, w1_again).healthy is True
     with state._db.snapshot() as q:
-        assert len(decode_rows(WorkerDetail, q.fetchall("SELECT * FROM workers"))) == 2
+        assert len(WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers"))) == 2
 
 
 def test_dispatch_failure_marks_worker_failed_and_requeues_task(state):
@@ -444,7 +451,7 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(state):
     assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
     assert _query_task(state, task.task_id).preemption_count == 0
     assert _query_task(state, task.task_id).failure_count == 0
-    assert _query_task(state, task.task_id).can_be_scheduled()
+    assert check_task_can_be_scheduled(_query_task(state, task.task_id))
 
     # 3. Task should be requeued for retry
     pending = _schedulable_tasks(state)
@@ -469,7 +476,7 @@ def test_task_assigned_to_missing_worker_is_ignored(state):
     # Task remains schedulable and no attempt/resources are committed.
     assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
     assert _query_task(state, task.task_id).current_attempt_id == -1
-    assert _query_task(state, task.task_id).can_be_scheduled()
+    assert check_task_can_be_scheduled(_query_task(state, task.task_id))
     assert task.task_id in {t.task_id for t in _schedulable_tasks(state)}
 
 
@@ -562,7 +569,7 @@ def test_preemption_does_not_count_toward_max_task_failures(state):
 
     # Preemption doesn't count toward failure threshold; task requeued to PENDING
     assert tasks[0].state == cluster_pb2.TASK_STATE_PENDING
-    assert tasks[0].can_be_scheduled()
+    assert check_task_can_be_scheduled(tasks[0])
     assert _query_job(state, job.job_id).state == cluster_pb2.JOB_STATE_RUNNING
 
 
@@ -582,7 +589,7 @@ def test_terminal_states_clean_up_endpoints(state):
 
     dispatch_task(state, task, worker_id)
 
-    ep = Endpoint(
+    ep = EndpointRow(
         endpoint_id="ep1",
         name="j1/actor",
         address="a:1",
@@ -612,7 +619,7 @@ def test_endpoint_visibility_by_job_state(state):
     job = _query_job(state, JobName.root("test-user", "ns-1"))
     task = tasks[0]
 
-    ep = Endpoint(
+    ep = EndpointRow(
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
@@ -648,7 +655,7 @@ def test_endpoint_deleted_on_task_failure_with_retry(state):
 
     dispatch_task(state, task, worker_id)
 
-    ep = Endpoint(
+    ep = EndpointRow(
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
@@ -679,7 +686,7 @@ def test_endpoint_deleted_on_worker_failure(state):
 
     dispatch_task(state, task, worker_id)
 
-    ep = Endpoint(
+    ep = EndpointRow(
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
@@ -725,7 +732,7 @@ def test_endpoint_survives_building_state(state):
     )
 
     # Register endpoint during BUILDING (e.g. jax_init.py pre-registration)
-    ep = Endpoint(
+    ep = EndpointRow(
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
@@ -769,7 +776,7 @@ def test_namespace_isolation(state):
     dispatch_task(state, tasks2[0], worker_id)
 
     state.add_endpoint(
-        Endpoint(
+        EndpointRow(
             endpoint_id="ep-1",
             name="ns-1/actor",
             address="10.0.0.1:8080",
@@ -779,7 +786,7 @@ def test_namespace_isolation(state):
         )
     )
     state.add_endpoint(
-        Endpoint(
+        EndpointRow(
             endpoint_id="ep-2",
             name="ns-2/actor",
             address="10.0.0.2:8080",
@@ -836,7 +843,7 @@ def test_hierarchical_job_tracking(state):
     # get_children only returns direct children
     parent_wire = JobName.root("test-user", "parent").to_wire()
     with state._db.snapshot() as q:
-        children = decode_rows(JobDetail, q.fetchall("SELECT * FROM jobs WHERE parent_job_id = ?", (parent_wire,)))
+        children = JOB_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM jobs WHERE parent_job_id = ?", (parent_wire,)))
     assert len(children) == 2
     assert {c.job_id for c in children} == {
         JobName.from_string("/test-user/parent/child1"),
@@ -846,8 +853,7 @@ def test_hierarchical_job_tracking(state):
     # No children for leaf nodes
     grandchild_wire = JobName.from_string("/test-user/parent/child1/grandchild").to_wire()
     with state._db.snapshot() as q:
-        leaf_children = decode_rows(
-            JobDetail,
+        leaf_children = JOB_DETAIL_PROJECTION.decode(
             q.fetchall("SELECT * FROM jobs WHERE parent_job_id = ?", (grandchild_wire,)),
         )
     assert leaf_children == []
@@ -1038,7 +1044,7 @@ def test_coscheduled_task_failure_kills_siblings(state):
     tasks = submit_job(state, "j1", req)
 
     job = _query_job(state, JobName.root("test-user", "j1"))
-    assert job.is_coscheduled
+    assert job.request.HasField("coscheduling")
 
     # Dispatch all tasks
     for i, task in enumerate(tasks):
@@ -1133,7 +1139,7 @@ def test_coscheduled_task_worker_failure_kills_siblings(state):
 
     # Task-0 is retriable, siblings still running
     assert _query_task(state, tasks[0].task_id).preemption_count == 1
-    assert _query_task(state, tasks[0].task_id).can_be_scheduled()
+    assert check_task_can_be_scheduled(_query_task(state, tasks[0].task_id))
     for task in tasks[1:]:
         assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_RUNNING
 
@@ -1144,7 +1150,7 @@ def test_coscheduled_task_worker_failure_kills_siblings(state):
     txn = transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker crashed (second)")
 
     assert _query_task(state, tasks[0].task_id).state == cluster_pb2.TASK_STATE_WORKER_FAILED
-    assert _query_task(state, tasks[0].task_id).is_finished()
+    assert check_task_is_finished(_query_task(state, tasks[0].task_id))
     for task in tasks[1:]:
         assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_WORKER_FAILED
         assert task.task_id in txn.tasks_to_kill
@@ -1200,7 +1206,7 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(state):
     tasks = submit_job(state, "j1", req)
 
     job = _query_job(state, JobName.root("test-user", "j1"))
-    assert not job.is_coscheduled
+    assert not job.request.HasField("coscheduling")
 
     for i, task in enumerate(tasks):
         dispatch_task(state, task, WorkerId(f"w{i}"))
@@ -1246,8 +1252,8 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(state):
 
     # Task-0 failed but is retriable, requeued to PENDING
     assert tasks[0].state == cluster_pb2.TASK_STATE_PENDING
-    assert tasks[0].can_be_scheduled()  # Can retry
-    assert not tasks[0].is_finished()  # Not terminal
+    assert check_task_can_be_scheduled(tasks[0])  # Can retry
+    assert not check_task_is_finished(tasks[0])  # Not terminal
 
     # Siblings should still be running (no cascade for retriable failures)
     for task in tasks[1:]:
@@ -1329,10 +1335,10 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
     assert _query_task(state, task.task_id).current_attempt_id == 1
     # The old attempt (0) is still in RUNNING state (non-terminal)
     with state._db.snapshot() as q:
-        attempts = decode_rows(
-            Attempt, q.fetchall("SELECT * FROM task_attempts WHERE task_id = ?", (task.task_id.to_wire(),))
+        attempts = ATTEMPT_PROJECTION.decode(
+            q.fetchall("SELECT * FROM task_attempts WHERE task_id = ?", (task.task_id.to_wire(),))
         )
-    assert not attempts[0].is_terminal
+    assert not attempt_is_terminal(attempts[0].state)
 
     with caplog.at_level(logging.ERROR, logger="iris.cluster.controller.transitions"):
         state.apply_task_updates(
@@ -2005,7 +2011,7 @@ def test_requeued_task_maintains_priority_position(state):
 
     # Verify task was requeued
     assert deep_tasks[0].state == cluster_pb2.TASK_STATE_PENDING
-    assert deep_tasks[0].can_be_scheduled()
+    assert check_task_can_be_scheduled(deep_tasks[0])
 
     # Check queue order — requeued deep job should still come before shallow
     pending = _schedulable_tasks(state)
@@ -2187,7 +2193,7 @@ def test_worker_failed_from_assigned_is_delivery_failure(state):
     assert _query_task(state, task.task_id).preemption_count == 0
     assert _query_task(state, task.task_id).failure_count == 0
     assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
-    assert _query_task(state, task.task_id).can_be_scheduled()
+    assert check_task_can_be_scheduled(_query_task(state, task.task_id))
 
 
 def test_worker_failed_from_running_counts_as_preemption(state):
@@ -2215,7 +2221,7 @@ def test_worker_failed_from_running_counts_as_preemption(state):
     assert _query_task(state, task.task_id).preemption_count == 1
     assert _query_task(state, task.task_id).failure_count == 0
     assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
-    assert _query_task(state, task.task_id).can_be_scheduled()
+    assert check_task_can_be_scheduled(_query_task(state, task.task_id))
 
 
 def test_worker_failed_from_building_counts_as_preemption(state):
@@ -3005,7 +3011,7 @@ def test_endpoint_registered_after_task_terminal_is_orphaned(state):
     # Now a slow register_endpoint arrives AFTER the task is terminal.
     # This simulates the task process still alive briefly after the
     # controller processed the terminal heartbeat.
-    ep = Endpoint(
+    ep = EndpointRow(
         endpoint_id="orphan-ep",
         name="leak/actor",
         address="a:1",
@@ -3265,14 +3271,14 @@ def _submit_job_direct(
 
 def _task_state_direct(state: ControllerTransitions, task_id: JobName) -> int:
     with state._db.snapshot() as q:
-        tasks = decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (task_id.to_wire(),)))
+        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (task_id.to_wire(),)))
     assert len(tasks) == 1
     return tasks[0].state
 
 
 def _task_row_direct(state: ControllerTransitions, task_id: JobName):
     with state._db.snapshot() as q:
-        tasks = decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (task_id.to_wire(),)))
+        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (task_id.to_wire(),)))
     assert len(tasks) == 1
     return tasks[0]
 

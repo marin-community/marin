@@ -27,7 +27,8 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
 
-from iris.cluster.controller.db import WorkerDetail
+from iris.cluster.controller.db import job_is_finished, task_can_be_scheduled
+from iris.cluster.controller.schema import WorkerDetailRow
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
     RESERVATION_HOLDER_JOB_NAME,
@@ -112,14 +113,14 @@ def _make_worker(
     metadata: cluster_pb2.WorkerMetadata | None = None,
     attributes: dict[str, AttributeValue] | None = None,
     healthy: bool = True,
-) -> WorkerDetail:
+) -> WorkerDetailRow:
     meta = metadata or _cpu_metadata()
     # Workers always have device attributes from config (Stage 3).
     # Merge explicit attributes on top of the device-derived defaults.
     default_attrs = _default_attributes_for_device(meta.device)
     if attributes:
         default_attrs.update(attributes)
-    return WorkerDetail(
+    return WorkerDetailRow(
         worker_id=WorkerId(worker_id),
         address=f"{worker_id}:8080",
         metadata=meta,
@@ -459,7 +460,7 @@ def test_cleanup_removes_finished_job_claims():
     ctrl.state.cancel_job(jid, reason="test")
 
     job = _query_job(ctrl.state, jid)
-    assert job.is_finished()
+    assert job_is_finished(job.state)
 
     ctrl._cleanup_stale_claims()
 
@@ -717,7 +718,7 @@ def test_taint_constraint_preserves_existing_constraints():
 
 
 def _build_context_with_workers(
-    workers: list[WorkerDetail],
+    workers: list[WorkerDetailRow],
     pending_tasks: list[JobName],
     jobs: dict[JobName, JobRequirements],
 ) -> SchedulingContext:
@@ -1144,7 +1145,7 @@ def test_taint_exemption_for_children_of_reservation_job():
     has_reservation: set[JobName] = set()
     for task in pending:
         job = _query_job(ctrl.state, task.job_id)
-        if job and not job.is_finished():
+        if job and not job_is_finished(job.state):
             jobs[task.job_id] = job_requirements_from_job(job)
             if job.request.HasField("reservation"):
                 has_reservation.add(task.job_id)
@@ -1157,7 +1158,7 @@ def test_taint_exemption_for_children_of_reservation_job():
     has_direct_reservation: set[JobName] = set()
     for task in pending:
         job = _query_job(ctrl.state, task.job_id)
-        if job and not job.is_finished() and job.request.HasField("reservation"):
+        if job and not job_is_finished(job.state) and job.request.HasField("reservation"):
             has_direct_reservation.add(task.job_id)
 
     # Child does NOT get NOT_EXISTS constraint (descendant, no constraint at all)
@@ -1253,7 +1254,7 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     has_reservation: set[JobName] = set()
     for task in pending:
         job = _query_job(ctrl.state, task.job_id)
-        if job and not job.is_finished():
+        if job and not job_is_finished(job.state):
             jobs[task.job_id] = job_requirements_from_job(job)
             if job.request.HasField("reservation"):
                 has_reservation.add(task.job_id)
@@ -1268,7 +1269,7 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     has_direct_reservation: set[JobName] = set()
     for task in pending:
         job = _query_job(ctrl.state, task.job_id)
-        if job and not job.is_finished() and job.request.HasField("reservation"):
+        if job and not job_is_finished(job.state) and job.request.HasField("reservation"):
             has_direct_reservation.add(task.job_id)
 
     # Neither grandchild gets any taint constraint (descendants)
@@ -1395,7 +1396,11 @@ def test_holder_task_worker_death_no_failure_record(state):
         current_holder = _query_task_with_attempts(state, holder_task.task_id)
         assert current_holder is not None
         assert current_holder.state == cluster_pb2.TASK_STATE_ASSIGNED
-        assert current_holder.active_worker_id == worker_id
+        # active_worker_id: non-None when state is not PENDING
+        assert current_holder.state != cluster_pb2.TASK_STATE_PENDING
+        current_attempt = current_holder.attempts[-1] if current_holder.attempts else None
+        active_wid = current_attempt.worker_id if current_attempt is not None else current_holder.current_worker_id
+        assert active_wid == worker_id
 
         # Kill the worker — holder task must NOT go through WORKER_FAILED.
         batch = state.drain_dispatch(worker_id)
@@ -1414,8 +1419,16 @@ def test_holder_task_worker_death_no_failure_record(state):
         assert (
             len(holder_task.attempts) == 0
         ), f"cycle {cycle}: attempt list leaked ({len(holder_task.attempts)} entries)"
-        assert holder_task.active_worker_id is None, "no active worker after death"
-        assert holder_task.can_be_scheduled(), "holder task must be schedulable again"
+        # active_worker_id should be None when PENDING
+        assert holder_task.state == cluster_pb2.TASK_STATE_PENDING, "no active worker after death"
+        assert task_can_be_scheduled(
+            holder_task.state,
+            holder_task.current_attempt_id,
+            holder_task.failure_count,
+            holder_task.max_retries_failure,
+            holder_task.preemption_count,
+            holder_task.max_retries_preemption,
+        ), "holder task must be schedulable again"
 
 
 def test_holder_task_removed_from_worker_when_parent_succeeds(state):

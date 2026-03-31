@@ -29,6 +29,7 @@ from rigging.timing import Duration, Timestamp
 from tests.cluster.conftest import eq_constraint, in_constraint
 from .conftest import (
     building_counts as _building_counts,
+    check_task_can_be_scheduled,
     healthy_active_workers,
     make_job_request,
     make_test_entrypoint as _make_test_entrypoint,
@@ -48,8 +49,8 @@ def _job_requirements_from_job(job) -> JobRequirements:
     return JobRequirements(
         resources=job.request.resources,
         constraints=list(job.request.constraints),
-        is_coscheduled=job.is_coscheduled,
-        coscheduling_group_by=job.coscheduling_group_by,
+        is_coscheduled=job.request.HasField("coscheduling"),
+        coscheduling_group_by=job.request.coscheduling.group_by if job.request.HasField("coscheduling") else None,
     )
 
 
@@ -110,7 +111,7 @@ def _build_context(scheduler, state):
     task_ids = []
     jobs = {}
     for task in pending_tasks:
-        if not task.can_be_scheduled():
+        if not check_task_can_be_scheduled(task):
             continue
         task_ids.append(task.task_id)
         if task.job_id not in jobs:
@@ -283,7 +284,7 @@ def test_scheduler_detects_timed_out_tasks(state):
     jobs = {}
     timed_out_tasks = []
     for task in pending_tasks:
-        if not task.can_be_scheduled():
+        if not check_task_can_be_scheduled(task):
             continue
         j = _query_job(state, task.job_id)
         if (
@@ -742,7 +743,7 @@ def test_coscheduled_job_assigns_all_tasks_atomically(scheduler, state):
     # Tasks assigned in order: task-0 -> worker-0, task-1 -> worker-1, etc.
     for task_id, worker_id in result.assignments:
         task = _query_task(state, task_id)
-        expected_worker_id = f"w{task.task_index}"
+        expected_worker_id = f"w{int(task.task_id.to_wire().rsplit('/', 1)[-1])}"
         assert worker_id == WorkerId(expected_worker_id)
 
 
@@ -859,9 +860,8 @@ def test_coscheduled_job_assigns_tasks_in_order(scheduler, state):
         attr = _worker_attr(state, worker_id, WellKnownAttribute.TPU_WORKER_ID)
         assert attr is not None
         worker_tpu_id = attr.value
-        assert (
-            task.task_index == worker_tpu_id
-        ), f"Task {task.task_index} assigned to worker with tpu-worker-id={worker_tpu_id}"
+        task_idx = int(task.task_id.to_wire().rsplit("/", 1)[-1])
+        assert task_idx == worker_tpu_id, f"Task {task_idx} assigned to worker with tpu-worker-id={worker_tpu_id}"
 
 
 def test_coscheduled_job_with_constraints(scheduler, state):
@@ -1462,7 +1462,7 @@ def test_scheduler_reports_device_variant_mismatch(scheduler, state):
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
-        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if t.can_be_scheduled()), None
+        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if check_task_can_be_scheduled(t)), None
     )
     diagnostics = scheduler.get_job_scheduling_diagnostics(
         job_req, context, schedulable_task_id, num_tasks=len(_query_tasks_for_job(state, job.job_id))
@@ -1499,7 +1499,7 @@ def test_scheduler_reports_tpu_count_exceeded(scheduler, state):
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
-        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if t.can_be_scheduled()), None
+        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if check_task_can_be_scheduled(t)), None
     )
     diagnostics = scheduler.get_job_scheduling_diagnostics(
         job_req, context, schedulable_task_id, num_tasks=len(_query_tasks_for_job(state, job.job_id))
@@ -1535,7 +1535,7 @@ def test_scheduler_reports_device_type_mismatch(scheduler, state):
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
-        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if t.can_be_scheduled()), None
+        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if check_task_can_be_scheduled(t)), None
     )
     diagnostics = scheduler.get_job_scheduling_diagnostics(
         job_req, context, schedulable_task_id, num_tasks=len(_query_tasks_for_job(state, job.job_id))
@@ -1572,7 +1572,7 @@ def test_scheduler_reports_coscheduling_capacity_details(scheduler, state):
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
-        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if t.can_be_scheduled()), None
+        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if check_task_can_be_scheduled(t)), None
     )
     diagnostics = scheduler.get_job_scheduling_diagnostics(
         job_req, context, schedulable_task_id, num_tasks=len(_query_tasks_for_job(state, job.job_id))
@@ -1593,7 +1593,7 @@ def test_diagnostics_for_schedulable_job_does_not_say_unknown_failure(scheduler,
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
-        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if t.can_be_scheduled()), None
+        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if check_task_can_be_scheduled(t)), None
     )
     diagnostics = scheduler.get_job_scheduling_diagnostics(
         job_req, context, schedulable_task_id, num_tasks=len(_query_tasks_for_job(state, job.job_id))
