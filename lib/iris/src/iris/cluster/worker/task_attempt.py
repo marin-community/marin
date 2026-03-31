@@ -269,7 +269,7 @@ class TaskAttempt:
         self.build_finished: Timestamp | None = None
         self.build_from_cache: bool = False
         self.image_tag: str = ""
-        self._building_start_monotonic: float = 0.0
+        self._build_phase_start: float = 0.0
 
         # Internals
         self._container_handle: ContainerHandle | None = container_handle
@@ -636,7 +636,7 @@ class TaskAttempt:
         """
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
         self.started_at = Timestamp.now()
-        self._building_start_monotonic = time.monotonic()
+        self._build_phase_start = time.monotonic()
 
         download_start = time.monotonic()
 
@@ -837,7 +837,7 @@ class TaskAttempt:
             status = handle.status()
 
             if self.status == cluster_pb2.TASK_STATE_BUILDING and status.phase == ContainerPhase.RUNNING:
-                building_duration = time.monotonic() - self._building_start_monotonic
+                building_duration = time.monotonic() - self._build_phase_start
                 logger.info("Task %s BUILDING→RUNNING after %.1fs", self.task_id, building_duration)
                 self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
 
