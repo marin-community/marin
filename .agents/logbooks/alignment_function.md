@@ -8686,3 +8686,67 @@ The following entries were originally recorded in `.agents/logbooks/alignment_fu
   - the GPT-OSS TPU path no longer depends on a custom `tpu_inference` fork
   - the remaining intentionally-kept variants are the canonical smoke and full
     E2E entrypoints with Mixtral/Heretic rejected selection handled in-code
+
+### ALIGN-276 - 2026-03-30 22:04 - Moved the canonical GPT-OSS experiment surface under `experiments/posttrain/` and revalidated the full one-statement 20B E2E pipeline from the new layout
+
+- Canonical posttrain layout:
+  - shared helper:
+    - `experiments/posttrain/gpt_oss_tpu.py`
+  - canonical smoke:
+    - `experiments/posttrain/align_gpt_oss_20b_e2e_one_statement.py`
+  - canonical full-spec E2E:
+    - `experiments/posttrain/align_gpt_oss_120b_full_spec_e2e.py`
+- Layout-specific cleanup:
+  - moved the GPT-OSS helper and both canonical entrypoints under
+    `experiments/posttrain/` without turning that directory into a Python package
+  - updated the canonical spec path to:
+    - `experiments/posttrain/specs/openai_model_spec.jsonl`
+  - kept sibling imports simple via:
+    - `from gpt_oss_tpu import ...`
+    - while adding `experiments/posttrain` to `sys.path` at launch time
+  - set the shared 120B TPU default RAM to:
+    - `400g`
+    - to match the validated vLLM path rather than leaving a misleading `256g`
+      default
+- Fresh post-move validation run:
+  - root job:
+    - `/ahmed/goss-20b-e2e-one-statement-posttrain-20260330-213639`
+  - pipeline name:
+    - `goss_20b_e2e_one_statement_posttrain_20260330-213639`
+  - terminal state:
+    - `JOB_STATE_SUCCEEDED`
+  - every child step succeeded:
+    - `spec`
+    - `prompts`
+    - `chosen`
+    - `rejected`
+    - `judgments`
+    - `preference_pairs`
+- Concrete outputs from the rerun:
+  - prompt generation produced:
+    - `67` prompts
+  - chosen generation produced:
+    - `67` chosen responses
+  - rejected generation produced:
+    - `67` rejected responses
+  - judging produced:
+    - `67` judgment records
+  - preference-pair construction completed successfully on the full set
+- Observed caveat:
+  - the judge still emitted several:
+    - `Failed to parse judge response`
+  - warnings during the run
+  - but the job finished with:
+    - `failures=0`
+  - and still wrote the full `67` judgment records plus preference pairs
+- Interpretation:
+  - moving the canonical GPT-OSS experiments under `experiments/posttrain/` did
+    not break:
+    - local-spec upload into the alignment DAG
+    - GPT-OSS TPU local-vLLM serving
+    - rejected-model preset wiring
+    - end-to-end chosen/rejected/judge/pair generation
+  - the current supported GPT-OSS posttrain surface is now:
+    - one shared TPU helper
+    - one cheap one-statement smoke
+    - one canonical full-spec E2E script
