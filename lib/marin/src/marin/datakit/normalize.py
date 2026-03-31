@@ -219,7 +219,7 @@ def normalize_to_parquet(
         pipeline = _build_pipeline(files, output_dir, num_shards, text_field, id_field)
         ctx = ZephyrContext(
             name=f"normalize-{subdir.replace('/', '-') if subdir else 'all'}",
-            resources=ResourceConfig(cpu=1, ram="4g"),
+            resources=ResourceConfig(cpu=2, ram="16g", disk="10g"),
         )
         ctx.execute(pipeline)
 
