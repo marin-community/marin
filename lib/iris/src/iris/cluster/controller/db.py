@@ -23,6 +23,7 @@ from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
+
 class Row:
     """Lightweight result row with attribute access for raw query results."""
 

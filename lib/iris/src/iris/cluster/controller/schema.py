@@ -705,6 +705,9 @@ TASKS = Table(
         # Migration 0010_dashboard
         "CREATE INDEX IF NOT EXISTS idx_tasks_state_attempt" " ON tasks(state, task_id, current_attempt_id, job_id)",
         "CREATE INDEX IF NOT EXISTS idx_tasks_job_failures" " ON tasks(job_id, failure_count, preemption_count)",
+        # Migration 0020
+        "CREATE INDEX IF NOT EXISTS idx_tasks_current_worker"
+        " ON tasks(current_worker_id) WHERE current_worker_id IS NOT NULL",
     ),
 )
 
