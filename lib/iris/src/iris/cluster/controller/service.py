@@ -1196,7 +1196,6 @@ class ControllerServiceImpl:
             metadata=request.metadata,
             ts=Timestamp.now(),
         )
-        self._controller.wake()
 
         logger.info("Worker registered: %s at %s", worker_id, request.address)
         return cluster_pb2.Controller.RegisterResponse(
