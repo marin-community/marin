@@ -3067,6 +3067,7 @@ def test_prune_old_terminal_jobs(state):
         worker_retention=Duration.from_seconds(86400),
         log_retention=Duration.from_seconds(86400),
         txn_action_retention=Duration.from_seconds(86400),
+        profile_retention=Duration.from_seconds(86400),
     )
 
     assert result.jobs_deleted == 1
@@ -3099,6 +3100,7 @@ def test_prune_old_inactive_workers(state):
         worker_retention=Duration.from_seconds(86400),
         log_retention=Duration.from_seconds(86400),
         txn_action_retention=Duration.from_seconds(86400),
+        profile_retention=Duration.from_seconds(86400),
     )
 
     assert result.workers_deleted == 1
@@ -3138,6 +3140,7 @@ def test_prune_old_logs_and_txn_actions(state):
         worker_retention=Duration.from_seconds(86400),
         log_retention=Duration.from_seconds(86400),
         txn_action_retention=Duration.from_seconds(86400),
+        profile_retention=Duration.from_seconds(86400),
     )
 
     assert result.logs_deleted == 1  # old log pruned, recent kept
@@ -3160,6 +3163,7 @@ def test_prune_noop_when_nothing_old(state):
         worker_retention=Duration.from_seconds(86400),
         log_retention=Duration.from_seconds(86400),
         txn_action_retention=Duration.from_seconds(86400),
+        profile_retention=Duration.from_seconds(86400),
     )
 
     assert result == PruneResult()
@@ -3228,6 +3232,7 @@ def test_prune_old_data_short_circuits_when_nothing_prunable(state):
         worker_retention=Duration.from_seconds(86400),
         log_retention=Duration.from_seconds(86400),
         txn_action_retention=Duration.from_seconds(86400),
+        profile_retention=Duration.from_seconds(86400),
     )
 
     assert result == PruneResult()

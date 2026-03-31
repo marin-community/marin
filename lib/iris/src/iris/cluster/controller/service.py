@@ -331,7 +331,10 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName | None = None) -> li
                 ),
             )
         else:
-            tasks = decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks t ORDER BY t.task_id ASC"))
+            tasks = decode_rows(
+                TaskDetail,
+                q.fetchall("SELECT * FROM tasks t ORDER BY t.task_id ASC LIMIT 10000"),
+            )
         if not tasks:
             return []
         task_wires = [t.task_id.to_wire() for t in tasks]
@@ -528,10 +531,14 @@ def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -
 
 
 def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetail]:
+    prefix = job_id.to_wire() + "/"
     with db.read_snapshot() as q:
         return decode_rows(
             JobDetail,
-            q.fetchall("SELECT * FROM jobs j WHERE j.job_id LIKE ?", (f"{job_id.to_wire()}/%",)),
+            q.fetchall(
+                "SELECT * FROM jobs j WHERE j.job_id >= ? AND j.job_id < ?",
+                (prefix, prefix[:-1] + "0"),
+            ),
         )
 
 
@@ -540,7 +547,7 @@ def _transaction_actions(db: ControllerDB, limit: int = 100) -> list[Transaction
         actions = decode_rows(
             TransactionAction,
             q.fetchall(
-                "SELECT * FROM txn_actions ta ORDER BY ta.created_at_ms DESC LIMIT ?",
+                "SELECT * FROM txn_actions ta ORDER BY ta.id DESC LIMIT ?",
                 (limit,),
             ),
         )

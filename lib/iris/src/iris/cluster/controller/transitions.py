@@ -108,10 +108,17 @@ class PruneResult:
     workers_deleted: int = 0
     logs_deleted: int = 0
     txn_actions_deleted: int = 0
+    profiles_deleted: int = 0
 
     @property
     def total(self) -> int:
-        return self.jobs_deleted + self.workers_deleted + self.logs_deleted + self.txn_actions_deleted
+        return (
+            self.jobs_deleted
+            + self.workers_deleted
+            + self.logs_deleted
+            + self.txn_actions_deleted
+            + self.profiles_deleted
+        )
 
 
 class HeartbeatAction(enum.Enum):
@@ -1996,6 +2003,7 @@ class ControllerTransitions:
         worker_retention: Duration,
         log_retention: Duration,
         txn_action_retention: Duration,
+        profile_retention: Duration,
         stop_event: threading.Event | None = None,
         pause_between_s: float = 1.0,
     ) -> PruneResult:
@@ -2010,6 +2018,7 @@ class ControllerTransitions:
             worker_retention: Delete inactive/unhealthy workers whose last heartbeat is older than this.
             log_retention: Delete log rows older than this.
             txn_action_retention: Delete txn_actions older than this.
+            profile_retention: Delete task_profiles older than this.
             stop_event: If set, abort early (e.g. during shutdown).
             pause_between_s: Sleep between individual deletes to reduce lock contention.
         """
@@ -2092,19 +2101,37 @@ class ControllerTransitions:
             txn_actions_deleted += batch
             time.sleep(pause_between_s)
 
+        # 5. Task profiles: batch of 1000 per transaction (no CASCADE)
+        profiles_deleted = 0
+        profile_cutoff_ms = now_ms - profile_retention.to_ms()
+        while not _stopped():
+            with self._db.transaction() as cur:
+                c = cur.execute(
+                    "DELETE FROM task_profiles WHERE rowid IN "
+                    "(SELECT rowid FROM task_profiles WHERE captured_at_ms < ? LIMIT 1000)",
+                    (profile_cutoff_ms,),
+                )
+                batch = c.rowcount
+            if batch == 0:
+                break
+            profiles_deleted += batch
+            time.sleep(pause_between_s)
+
         result = PruneResult(
             jobs_deleted=jobs_deleted,
             workers_deleted=workers_deleted,
             logs_deleted=logs_deleted,
             txn_actions_deleted=txn_actions_deleted,
+            profiles_deleted=profiles_deleted,
         )
         if result.total > 0:
             logger.info(
-                "Pruned old data: %d jobs, %d workers, %d logs, %d txn_actions",
+                "Pruned old data: %d jobs, %d workers, %d logs, %d txn_actions, %d profiles",
                 result.jobs_deleted,
                 result.workers_deleted,
                 result.logs_deleted,
                 result.txn_actions_deleted,
+                result.profiles_deleted,
             )
             self._db.optimize()
         return result
