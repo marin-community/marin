@@ -114,7 +114,6 @@ def run_opposite_comparison(config: OppositeComparisonConfig) -> None:
         disk="80g",
         ram="290g",
         model_impl_type="vllm",
-        stage_remote_model_locally=False,
         extra_pip_packages=(GPT_OSS_TPU_INFERENCE_PACKAGE,),
     )
 

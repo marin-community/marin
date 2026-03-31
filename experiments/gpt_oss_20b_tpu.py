@@ -47,6 +47,5 @@ def gpt_oss_20b_tpu_vllm_config(
             prefer_jax_for_bootstrap=prefer_jax_for_bootstrap,
         ),
         model_impl_type=model_impl_type,
-        stage_remote_model_locally=False,
         extra_pip_packages=(GPT_OSS_TPU_INFERENCE_PACKAGE,),
     )

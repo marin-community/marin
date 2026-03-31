@@ -16,13 +16,13 @@ import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 from urllib.parse import urlparse
 
 import requests
-from iris.marin_fs import marin_prefix, url_to_fs
+from iris.marin_fs import marin_prefix
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 
@@ -30,8 +30,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_VLLM_TPU_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
 DEFAULT_VLLM_GPU_DOCKER_IMAGE: str = "nvcr.io/nvidia/vllm:25.12.post1-py3"
 VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu",)
-REMOTE_STAGE_COPY_WORKERS = 4
-REMOTE_STAGE_PROGRESS_INTERVAL = 2
 GPT_OSS_REASONING_PARSER = "openai_gptoss"
 
 _SENSITIVE_ENV_KEYS = frozenset(
@@ -216,8 +214,13 @@ class DockerVllmServerBackend(VllmServerBackend):
 
 
 class NativeVllmServerBackend(VllmServerBackend):
-    def __init__(self, env_overrides: dict[str, str] | None) -> None:
+    def __init__(
+        self,
+        env_overrides: dict[str, str] | None,
+        native_stderr_mode: Literal["file", "tee"],
+    ) -> None:
         self._env_overrides = env_overrides or {}
+        self._native_stderr_mode = native_stderr_mode
 
     def start(
         self,
@@ -235,6 +238,7 @@ class NativeVllmServerBackend(VllmServerBackend):
             timeout_seconds=timeout_seconds,
             extra_cli_args=extra_cli_args,
             env_overrides=self._env_overrides,
+            native_stderr_mode=self._native_stderr_mode,
         )
 
     def logs_tail(self, handle: VllmServerHandle, *, max_lines: int = 200) -> str:
@@ -265,11 +269,12 @@ def _resolve_vllm_backend(
     docker_image: str | None,
     docker_run_args: list[str] | None,
     env_overrides: dict[str, str] | None,
+    native_stderr_mode: Literal["file", "tee"],
 ) -> VllmServerBackend:
     if mode == "docker":
         return DockerVllmServerBackend(docker_image, docker_run_args, env_overrides)
     if mode == "native":
-        return NativeVllmServerBackend(env_overrides)
+        return NativeVllmServerBackend(env_overrides, native_stderr_mode)
     raise ValueError(f"Unknown vLLM mode {mode!r}; expected 'native' or 'docker'.")
 
 
@@ -333,81 +338,59 @@ def _has_cli_flag(args: list[str], flag: str) -> bool:
     return flag in args
 
 
-def _stage_remote_directory(remote_dir: str, *, prefix: str) -> str:
-    logger.info("Staging remote vLLM directory locally from %s", remote_dir)
-    fs, fs_path = url_to_fs(remote_dir)
-    base_path = fs_path.rstrip("/")
-    if not fs.exists(base_path):
-        raise FileNotFoundError(f"Remote directory does not exist: {remote_dir}")
+def _gpt_oss_engine_kwarg_candidates(engine_kwargs: dict[str, object]) -> list[str]:
+    candidates: list[str] = []
 
-    staged_root = tempfile.mkdtemp(prefix=prefix)
-    staged_dir = os.path.join(staged_root, "model")
-    os.makedirs(staged_dir, exist_ok=True)
+    tokenizer = engine_kwargs.get("tokenizer")
+    if isinstance(tokenizer, str):
+        candidates.append(tokenizer)
 
-    logger.info("Listing remote files under %s", remote_dir)
-    remote_files = sorted(fs.find(base_path, withdirs=False))
-    if not remote_files:
-        raise FileNotFoundError(f"No files found under remote directory: {remote_dir}")
+    hf_overrides = engine_kwargs.get("hf_overrides")
+    if not isinstance(hf_overrides, dict):
+        return candidates
 
-    remote_entries: list[tuple[str, str, int]] = []
-    total_bytes = 0
-    for remote_file in remote_files:
-        relative_path = os.path.relpath(remote_file, base_path)
-        local_path = os.path.join(staged_dir, relative_path)
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        size = int(fs.info(remote_file).get("size", 0))
-        total_bytes += size
-        remote_entries.append((remote_file, local_path, size))
+    model_type = hf_overrides.get("model_type")
+    if isinstance(model_type, str):
+        candidates.append(model_type)
 
-    logger.info(
-        "Resolved %d remote files totaling %.2f GiB for local staging from %s",
-        len(remote_entries),
-        total_bytes / 1024**3,
-        remote_dir,
-    )
+    architectures = hf_overrides.get("architectures")
+    if isinstance(architectures, list):
+        candidates.extend(arch for arch in architectures if isinstance(arch, str))
 
-    parsed = urlparse(remote_dir)
-    remote_scheme = parsed.scheme
-    completed_files = 0
-    copied_bytes = 0
-    max_workers = min(REMOTE_STAGE_COPY_WORKERS, len(remote_entries))
+    return candidates
 
-    def _copy_one(remote_file: str, local_path: str) -> int:
-        remote_uri = f"{remote_scheme}://{remote_file}"
-        thread_fs, thread_path = url_to_fs(remote_uri)
-        thread_fs.get(thread_path, local_path)
-        return os.path.getsize(local_path)
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_entry = {
-            executor.submit(_copy_one, remote_file, local_path): (remote_file, local_path, size)
-            for remote_file, local_path, size in remote_entries
-        }
-        for future in as_completed(future_to_entry):
-            remote_file, _local_path, expected_size = future_to_entry[future]
-            copied_size = future.result()
-            completed_files += 1
-            copied_bytes += copied_size
-            if completed_files % REMOTE_STAGE_PROGRESS_INTERVAL == 0 or completed_files == len(remote_entries):
-                logger.info(
-                    "Remote staging progress for %s: %d/%d files (%.1f%%), %.2f/%.2f GiB copied",
-                    remote_dir,
-                    completed_files,
-                    len(remote_entries),
-                    100.0 * completed_files / len(remote_entries),
-                    copied_bytes / 1024**3,
-                    total_bytes / 1024**3,
-                )
-            if copied_size != expected_size:
-                logger.warning(
-                    "Remote staging size mismatch for %s: expected %.2f GiB, copied %.2f GiB",
-                    remote_file,
-                    expected_size / 1024**3,
-                    copied_size / 1024**3,
-                )
+def _poll_until_ready(
+    server_url: str,
+    *,
+    timeout_seconds: int,
+    poll_interval_seconds: float = 5,
+    check_alive: Callable[[], None] | None = None,
+) -> None:
+    """Block until ``GET {server_url}/models`` returns 200."""
 
-    logger.info("Finished local staging of %s into %s", remote_dir, staged_dir)
-    return staged_dir
+    models_url = f"{server_url}/models"
+    start_time = time.time()
+
+    while True:
+        if check_alive is not None:
+            check_alive()
+
+        try:
+            response = requests.get(models_url, timeout=5)
+            if response.status_code == 200:
+                return
+        except (requests.ConnectionError, requests.Timeout):
+            pass
+
+        elapsed = time.time() - start_time
+        if elapsed > timeout_seconds:
+            raise TimeoutError(
+                f"vLLM server at {models_url} did not become ready within {timeout_seconds}s "
+                f"(elapsed {elapsed:.1f}s)."
+            )
+
+        time.sleep(poll_interval_seconds)
 
 
 def _get_first_model_id(server_url: str) -> str:
@@ -438,6 +421,7 @@ class VllmEnvironment:
         docker_run_args: list[str] | None = None,
         extra_args: list[str] | None = None,
         env_overrides: dict[str, str] | None = None,
+        native_stderr_mode: Literal["file", "tee"] = "file",
     ) -> None:
         self.model_name_or_path, self.model = resolve_model_name_or_path(model)
         self.mode = resolve_vllm_mode(mode)
@@ -447,49 +431,24 @@ class VllmEnvironment:
         self.docker_image = docker_image
         self.docker_run_args = docker_run_args
         self.env_overrides = env_overrides or {}
-        self.extra_args = list(extra_args or [])
+        self.native_stderr_mode = native_stderr_mode
+        self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
+        if _looks_like_gpt_oss_model(
+            self.model_name_or_path,
+            self.model.name,
+            *_gpt_oss_engine_kwarg_candidates(self.model.engine_kwargs),
+        ) and not _has_cli_flag(self.extra_cli_args, "--reasoning-parser"):
+            self.extra_cli_args.extend(["--reasoning-parser", GPT_OSS_REASONING_PARSER])
         self._backend = _resolve_vllm_backend(
             self.mode,
             docker_image=self.docker_image,
             docker_run_args=self.docker_run_args,
             env_overrides=self.env_overrides,
+            native_stderr_mode=self.native_stderr_mode,
         )
 
         self.vllm_server: VllmServerHandle | None = None
         self.model_id: str | None = None
-        self._staged_model_root: str | None = None
-        self._staged_tokenizer_root: str | None = None
-
-    def _prepare_local_launch(self) -> tuple[str, list[str]]:
-        engine_kwargs = dict(self.model.engine_kwargs)
-        original_model_name_or_path = self.model_name_or_path
-        model_name_or_path = self.model_name_or_path
-
-        if engine_kwargs.get("stage_remote_model_locally") and _is_object_store_path(model_name_or_path):
-            staged_dir = _stage_remote_directory(model_name_or_path, prefix="marin-vllm-model-")
-            self._staged_model_root = os.path.dirname(staged_dir)
-            model_name_or_path = staged_dir
-            engine_kwargs.pop("load_format", None)
-            engine_kwargs.pop("stage_remote_model_locally", None)
-
-            tokenizer = engine_kwargs.get("tokenizer")
-            if tokenizer is None or tokenizer == self.model_name_or_path:
-                engine_kwargs["tokenizer"] = staged_dir
-            elif isinstance(tokenizer, str) and _is_object_store_path(tokenizer):
-                staged_tokenizer_dir = _stage_remote_directory(tokenizer, prefix="marin-vllm-tokenizer-")
-                self._staged_tokenizer_root = os.path.dirname(staged_tokenizer_dir)
-                engine_kwargs["tokenizer"] = staged_tokenizer_dir
-        else:
-            engine_kwargs.pop("stage_remote_model_locally", None)
-
-        self.model_name_or_path = model_name_or_path
-        self.model.engine_kwargs = engine_kwargs
-        extra_cli_args = [*_engine_kwargs_to_cli_args(engine_kwargs), *self.extra_args]
-        if _looks_like_gpt_oss_model(original_model_name_or_path, model_name_or_path) and not _has_cli_flag(
-            extra_cli_args, "--reasoning-parser"
-        ):
-            extra_cli_args.extend(["--reasoning-parser", GPT_OSS_REASONING_PARSER])
-        return model_name_or_path, extra_cli_args
 
     def __enter__(self) -> "VllmEnvironment":
         if self.vllm_server is None:
@@ -505,13 +464,12 @@ class VllmEnvironment:
                 },
             )
             try:
-                model_name_or_path, extra_cli_args = self._prepare_local_launch()
                 self.vllm_server = self._backend.start(
-                    model_name_or_path=model_name_or_path,
+                    model_name_or_path=self.model_name_or_path,
                     host=self.host,
                     port=self.port,
                     timeout_seconds=self.timeout_seconds,
-                    extra_cli_args=extra_cli_args,
+                    extra_cli_args=self.extra_cli_args,
                 )
                 self.model_id = _get_first_model_id(self.vllm_server.server_url)
                 logger.info(
@@ -541,12 +499,6 @@ class VllmEnvironment:
         if self.vllm_server is not None:
             self._backend.stop(self.vllm_server)
             self.vllm_server = None
-        if self._staged_model_root is not None:
-            shutil.rmtree(self._staged_model_root, ignore_errors=True)
-            self._staged_model_root = None
-        if self._staged_tokenizer_root is not None:
-            shutil.rmtree(self._staged_tokenizer_root, ignore_errors=True)
-            self._staged_tokenizer_root = None
 
     @property
     def server_url(self) -> str:
@@ -564,6 +516,7 @@ class VllmEnvironment:
             "docker_container_name": self.vllm_server.docker_container_name if self.vllm_server else None,
             "docker_image": self.vllm_server.docker_image if self.vllm_server else self.docker_image,
             "docker_run_cmd": self.vllm_server.docker_run_cmd if self.vllm_server else None,
+            "native_stderr_mode": self.native_stderr_mode,
         }
 
     def logs_tail(self, *, max_lines: int = 200) -> str:
@@ -800,12 +753,10 @@ def _start_vllm_docker_server(
             )
         logger.info(f"No docker_image specified; defaulting to {docker_image} for {resource_type}.")
 
-    env: dict[str, str] = _vllm_jax_env(env_overrides=env_overrides)
+    env: dict[str, str] = _build_vllm_env_dict(env_overrides=env_overrides)
     explain_cache_misses = os.environ.get("JAX_EXPLAIN_CACHE_MISSES")
     if explain_cache_misses is not None:
         env["JAX_EXPLAIN_CACHE_MISSES"] = explain_cache_misses
-    env["TPU_MIN_LOG_LEVEL"] = os.environ.get("TPU_MIN_LOG_LEVEL", "3")
-    env["TPU_STDERR_LOG_LEVEL"] = os.environ.get("TPU_STDERR_LOG_LEVEL", "3")
     for key in ("HF_TOKEN", "WANDB_API_KEY"):
         value = os.environ.get(key)
         if value:
@@ -861,110 +812,114 @@ def _start_vllm_docker_server(
         docker_run_cmd=_redact_docker_run_command(cmd),
     )
 
-    server_models_url = f"{handle.server_url}/models"
-    start_time = time.time()
+    def _check_docker_alive() -> None:
+        if not _docker_container_running(resolved_name):
+            logs = _docker_logs_tail(resolved_name)
+            inspect = _docker_inspect(resolved_name)
+            raise RuntimeError(
+                "vLLM Docker sidecar exited before becoming ready.\n"
+                f"Container: {resolved_name}\n"
+                f"Image: {docker_image}\n"
+                f"Command: {_redact_docker_run_command(cmd)}\n"
+                f"--- docker logs (tail) ---\n{logs}\n"
+                f"--- docker inspect ---\n{inspect[:8000]}"
+            )
 
     try:
-        while True:
-            running = _docker_container_running(resolved_name)
-            if not running:
-                logs = _docker_logs_tail(resolved_name)
-                inspect = _docker_inspect(resolved_name)
-                raise RuntimeError(
-                    "vLLM Docker sidecar exited before becoming ready.\n"
-                    f"Container: {resolved_name}\n"
-                    f"Image: {docker_image}\n"
-                    f"Command: {_redact_docker_run_command(cmd)}\n"
-                    f"--- docker logs (tail) ---\n{logs}\n"
-                    f"--- docker inspect ---\n{inspect[:8000]}"
-                )
-
-            try:
-                response = requests.get(server_models_url, timeout=5)
-                if response.status_code == 200:
-                    return handle
-            except requests.ConnectionError:
-                # Server not ready yet.
-                pass
-            except requests.Timeout:
-                # Server not ready yet.
-                pass
-
-            elapsed_time = time.time() - start_time
-            if elapsed_time > timeout_seconds:
-                logs = _docker_logs_tail(resolved_name)
-                subprocess.run(["docker", "rm", "-f", resolved_name], check=False, capture_output=True, text=True)
-                raise TimeoutError(
-                    "Failed to start vLLM Docker sidecar within timeout period.\n"
-                    f"Container: {resolved_name}\n"
-                    f"Image: {docker_image}\n"
-                    f"Endpoint: {server_models_url}\n"
-                    f"Elapsed seconds: {elapsed_time:.1f}\n"
-                    f"--- docker logs (tail) ---\n{logs}"
-                )
-
-            time.sleep(poll_interval_seconds)
+        _poll_until_ready(
+            handle.server_url,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+            check_alive=_check_docker_alive,
+        )
+        return handle
     except Exception:
         subprocess.run(["docker", "rm", "-f", resolved_name], check=False, capture_output=True, text=True)
         raise
-
-
-def _vllm_jax_env(*, env_overrides: dict[str, str] | None = None) -> dict[str, str | Any]:
-    env: dict[str, str | Any] = {
-        "TOKENIZERS_PARALLELISM": "false",
-        # See `_vllm_env`.
-        "MODEL_IMPL_TYPE": os.environ.get("MODEL_IMPL_TYPE", "vllm"),
-        "JAX_ENABLE_COMPILATION_CACHE": os.environ.get("JAX_ENABLE_COMPILATION_CACHE", "1"),
-        "JAX_COMPILATION_CACHE_DIR": os.environ.get(
-            "JAX_COMPILATION_CACHE_DIR",
-            _default_jax_compilation_cache_dir(),
-        ),
-        "VLLM_XLA_CACHE_PATH": os.environ.get(
-            "VLLM_XLA_CACHE_PATH",
-            os.environ.get("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir()),
-        ),
-        "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": os.environ.get("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1"),
-        "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": os.environ.get("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2"),
-    }
-
-    # Pass through vLLM knobs when callers set them in the environment.
-    for key in (
-        "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
-        "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
-        "VLLM_TPU_SKIP_PRECOMPILE",
-    ):
-        value = os.environ.get(key)
-        if value is not None:
-            env[key] = value
-
-    if env_overrides:
-        env.update(env_overrides)
-    return env
 
 
 def _default_jax_compilation_cache_dir() -> str:
     return f"{marin_prefix()}/compilation-cache"
 
 
-def _vllm_env(*, env_overrides: dict[str, str] | None = None) -> dict[str, str]:
-    env = dict(os.environ)
+# Keys with canonical defaults applied to both Docker and native vLLM startups.
+_VLLM_ENV_DEFAULTS: tuple[tuple[str, str], ...] = (
     # tpu_inference defaults MODEL_IMPL_TYPE=auto, which selects flax_nnx for many
     # architectures. flax_nnx currently fails without an auto mesh context, so
     # default to the vllm implementation unless the user overrides it.
-    env.setdefault("MODEL_IMPL_TYPE", "vllm")
+    ("MODEL_IMPL_TYPE", "vllm"),
     # Reduce TPU runtime logging noise by default (match training defaults).
-    env.setdefault("TPU_MIN_LOG_LEVEL", "3")
-    env.setdefault("TPU_STDERR_LOG_LEVEL", "3")
-    env.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
-    env.setdefault("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir())
-    # vllm-tpu uses XLA compilation caches; this env var is the one it keys off.
-    env.setdefault("VLLM_XLA_CACHE_PATH", env["JAX_COMPILATION_CACHE_DIR"])
-    # Cache aggressively for iterative bring-up workflows.
-    env.setdefault("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1")
-    env.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2")
+    ("TPU_MIN_LOG_LEVEL", "3"),
+    ("TPU_STDERR_LOG_LEVEL", "3"),
+    ("JAX_ENABLE_COMPILATION_CACHE", "1"),
+)
+
+# Keys that are passed through to the container when set in the host environment.
+_VLLM_PASSTHROUGH_KEYS: tuple[str, ...] = (
+    "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
+    "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
+    "VLLM_TPU_SKIP_PRECOMPILE",
+)
+
+
+def _build_vllm_env_dict(*, env_overrides: dict[str, str] | None = None) -> dict[str, str]:
+    """Build the canonical vLLM environment dict."""
+
+    cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir())
+    env: dict[str, str] = {
+        "TOKENIZERS_PARALLELISM": "false",
+        "JAX_COMPILATION_CACHE_DIR": cache_dir,
+        # vllm-tpu uses XLA compilation caches; this env var is the one it keys off.
+        "VLLM_XLA_CACHE_PATH": os.environ.get("VLLM_XLA_CACHE_PATH", cache_dir),
+        # Cache aggressively for iterative bring-up workflows.
+        "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": os.environ.get("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1"),
+        "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": os.environ.get("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2"),
+    }
+    for key, default in _VLLM_ENV_DEFAULTS:
+        env[key] = os.environ.get(key, default)
+    for key in _VLLM_PASSTHROUGH_KEYS:
+        value = os.environ.get(key)
+        if value is not None:
+            env[key] = value
     if env_overrides:
         env.update(env_overrides)
     return env
+
+
+def _vllm_env(*, env_overrides: dict[str, str] | None = None) -> dict[str, str]:
+    """Build the vLLM environment for the native subprocess backend."""
+
+    env = dict(os.environ)
+    canonical = _build_vllm_env_dict()
+    for key, value in canonical.items():
+        env.setdefault(key, value)
+    if env_overrides:
+        env.update(env_overrides)
+    return env
+
+
+def _mirror_file_to_stderr(
+    *,
+    process: subprocess.Popen[str],
+    stderr_path: str,
+    poll_interval_seconds: float = 0.5,
+) -> None:
+    with open(stderr_path, "r", errors="replace") as stderr_reader:
+        while True:
+            line = stderr_reader.readline()
+            if line:
+                sys.stderr.write(line)
+                sys.stderr.flush()
+                continue
+
+            if process.poll() is not None:
+                remainder = stderr_reader.read()
+                if remainder:
+                    sys.stderr.write(remainder)
+                    sys.stderr.flush()
+                return
+
+            time.sleep(poll_interval_seconds)
 
 
 def _start_vllm_native_server(
@@ -975,6 +930,7 @@ def _start_vllm_native_server(
     timeout_seconds: int = 3600,
     extra_cli_args: list[str] | None = None,
     env_overrides: dict[str, str] | None = None,
+    native_stderr_mode: Literal["file", "tee"] = "file",
 ) -> VllmServerHandle:
     """Start `vllm serve` in-process and wait until `/v1/models` responds."""
 
@@ -1004,24 +960,17 @@ def _start_vllm_native_server(
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
         f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
     )
-    process = subprocess.Popen(cmd, stdout=stdout_f, stderr=subprocess.PIPE, text=True, env=native_env)
-
-    def _tee_stderr() -> None:
-        """Forward vLLM subprocess stderr to both the log file and sys.stderr."""
-        assert process.stderr is not None
-        for line in process.stderr:
-            stderr_f.write(line)
-            stderr_f.flush()
-            sys.stderr.write(line)
-            sys.stderr.flush()
-
-    stderr_thread = threading.Thread(target=_tee_stderr, daemon=True)
-    stderr_thread.start()
+    process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True, env=native_env)
+    if native_stderr_mode == "tee":
+        threading.Thread(
+            target=_mirror_file_to_stderr,
+            kwargs={"process": process, "stderr_path": stderr_path},
+            daemon=True,
+        ).start()
 
     server_url: str = f"http://{host}:{resolved_port}/v1"
-    start_time: float = time.time()
 
-    while True:
+    def _check_process_alive() -> None:
         if process.poll() is not None:
             stdout_f.close()
             stderr_f.close()
@@ -1034,29 +983,19 @@ def _start_vllm_native_server(
                 f"{logs}"
             )
 
-        try:
-            response = requests.get(f"{server_url}/models", timeout=5)
-            if response.status_code == 200:
-                break
-        except requests.ConnectionError:
-            # Server not ready yet.
-            pass
-        except requests.Timeout:
-            # Server not ready yet.
-            pass
+    try:
+        _poll_until_ready(
+            server_url,
+            timeout_seconds=timeout_seconds,
+            check_alive=_check_process_alive,
+        )
+    except Exception:
+        process.kill()
+        raise
+    finally:
+        stdout_f.close()
+        stderr_f.close()
 
-        elapsed_time = time.time() - start_time
-        if elapsed_time > timeout_seconds:
-            process.kill()
-            stdout_f.close()
-            stderr_f.close()
-            logs = _native_logs_tail(log_dir)
-            raise TimeoutError("Failed to start vLLM server within timeout period.\n" f"Logs: {log_dir}\n" f"{logs}")
-
-        time.sleep(5)
-
-    stdout_f.close()
-    stderr_f.close()
     return VllmServerHandle(
         server_url=server_url,
         port=resolved_port,

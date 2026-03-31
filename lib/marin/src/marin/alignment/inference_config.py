@@ -120,10 +120,9 @@ class VLLMConfig(InferenceConfig):
         additional_config: Optional vLLM TPU additional-config payload.
         model_impl_type: Optional TPU model implementation selection. This is
             forwarded as ``MODEL_IMPL_TYPE`` for native/docker TPU startup.
-        stage_remote_model_locally: When true, remote object-store checkpoints
-            are copied to local worker disk before launching `vllm serve`, and
-            the server is started from the staged local directory instead of
-            `runai_streamer`.
+        native_stderr_mode: Native-server stderr handling mode. ``"file"``
+            keeps stderr in the native log files only. ``"tee"`` also mirrors
+            stderr into the parent worker logs for easier debugging.
         extra_pip_packages: Additional pip packages to install in remote jobs
             before launching the model.
     """
@@ -144,7 +143,7 @@ class VLLMConfig(InferenceConfig):
     docker_image: str | None = None
     additional_config: dict[str, Any] | None = None
     model_impl_type: Literal["auto", "vllm", "flax_nnx"] | None = None
-    stage_remote_model_locally: bool = False
+    native_stderr_mode: Literal["file", "tee"] = "file"
     extra_pip_packages: tuple[str, ...] = ()
 
     @property
@@ -205,7 +204,6 @@ class VLLMConfig(InferenceConfig):
                 self.docker_image,
                 additional_config_json,
                 self.model_impl_type,
-                self.stage_remote_model_locally,
                 self.extra_pip_packages,
             )
         )

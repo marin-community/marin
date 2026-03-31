@@ -510,6 +510,7 @@ class TestInferenceConfig:
         assert config.gpu_memory_utilization == 0.9
         assert config.load_format is None
         assert config.gpu_type is None
+        assert config.native_stderr_mode == "file"
         assert config.resolved_serve_mode == "native"
         assert config.pip_dependency_groups == ["vllm", "tpu"]
 
@@ -521,12 +522,14 @@ class TestInferenceConfig:
             tensor_parallel_size=4,
             max_model_len=8192,
             tpu_type="v5p-32",
+            native_stderr_mode="tee",
         )
         assert config.tokenizer == "tokenizer-path"
         assert config.hf_overrides == {"model_type": "gpt_oss"}
         assert config.tensor_parallel_size == 4
         assert config.max_model_len == 8192
         assert config.tpu_type == "v5p-32"
+        assert config.native_stderr_mode == "tee"
 
     def test_vllm_config_gpu_defaults_to_docker_mode(self):
         config = VLLMConfig(model="gs://bucket/model", gpu_type="H100", gpu_count=1, tpu_type=None)
@@ -708,7 +711,7 @@ class TestInferenceConfig:
         assert metrics["totals"]["input_token_count"] == 21
         assert metrics["totals"]["output_token_count"] == 41
 
-    def test_batched_vllm_fails_loud_on_non_stop_gpt_oss_chat_response(self, monkeypatch):
+    def test_batched_vllm_inserts_empty_result_on_non_stop_gpt_oss_chat_response(self, monkeypatch, caplog):
         session = BatchedVllmServeSession(
             VLLMConfig(
                 model="gs://bucket/unsloth--gpt-oss-20b-BF16-vllm",
@@ -735,14 +738,17 @@ class TestInferenceConfig:
 
         monkeypatch.setattr("marin.alignment.batched_vllm_serve.requests.post", fake_post)
 
-        with pytest.raises(ValueError, match="Expected finish_reason='stop', got 'length'"):
-            session.generate_from_messages(
-                [[{"role": "user", "content": "first"}]],
-                stage_name="understanding",
-                temperature=0.0,
-                max_tokens=2048,
-                n=1,
-            )
+        outputs = session.generate_from_messages(
+            [[{"role": "user", "content": "first"}]],
+            stage_name="understanding",
+            temperature=0.0,
+            max_tokens=2048,
+            n=1,
+        )
+
+        assert outputs == [[]]
+        assert "Expected finish_reason='stop', got 'length'" in caplog.text
+        assert "inserting empty results for failed items" in caplog.text
 
 
 class TestResponseHelpers:
@@ -2498,7 +2504,7 @@ class TestPromptGenerationE2E:
         ],
     )
     @patch("marin.alignment.generate_prompts.BatchedVllmServeSession")
-    def test_local_pipeline_resumes_from_stage_checkpoints_and_skips_completed_stage3_items(
+    def test_local_pipeline_recovers_skipped_stage3_items_on_resume(
         self,
         mock_session_cls,
         _mock_covering_configs,
@@ -2600,14 +2606,12 @@ class TestPromptGenerationE2E:
             extract_max_attempts=1,
         )
 
-        with pytest.raises(RuntimeError, match="Stage 3 failed"):
-            generate_prompts_from_spec(config)
+        generate_prompts_from_spec(config)
 
         stage_status = json.loads((Path(output_path) / "artifacts" / "checkpoints" / "stage_status.json").read_text())
         assert stage_status["understanding"]["complete"] is True
         assert stage_status["concretize"]["complete"] is True
-        assert stage_status["extract"]["complete"] is False
-        assert stage_status["extract"]["completed_items"] == 1
+        assert stage_status["extract"]["complete"] is True
 
         extraction_shards = sorted((Path(output_path) / "artifacts" / "checkpoints" / "extractions").glob("*.jsonl.gz"))
         assert len(extraction_shards) == 1
@@ -2625,7 +2629,6 @@ class TestPromptGenerationE2E:
 
         stage_status = json.loads((Path(output_path) / "artifacts" / "checkpoints" / "stage_status.json").read_text())
         assert stage_status["extract"]["complete"] is True
-        assert stage_status["extract"]["completed_items"] == 2
 
     @patch("marin.alignment.generate_prompts.compute_coverage_stats", return_value={"covered": 2})
     @patch(

@@ -259,8 +259,6 @@ def _build_model_config(config: VLLMConfig) -> ModelConfig:
         engine_kwargs["hf_overrides"] = config.hf_overrides
     if config.additional_config is not None:
         engine_kwargs["additional_config"] = config.additional_config
-    if config.stage_remote_model_locally:
-        engine_kwargs["stage_remote_model_locally"] = True
     return ModelConfig(
         name=model_name,
         path=config.model if is_object_store or os.path.exists(config.model) else None,
@@ -355,6 +353,7 @@ class BatchedVllmServeSession:
             timeout_seconds=self.timeout_seconds,
             docker_image=self.config.docker_image,
             env_overrides=_vllm_env_overrides(self.config),
+            native_stderr_mode=self.config.native_stderr_mode,
         )
         self._remove_lock_context = remove_tpu_lockfile_on_exit()
         self._remove_lock_context.__enter__()

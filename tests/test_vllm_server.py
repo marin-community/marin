@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import (
     GPT_OSS_REASONING_PARSER,
     VllmEnvironment,
     VllmServerHandle,
+    _build_vllm_env_dict,
     _engine_kwargs_to_cli_args,
+    _vllm_env,
 )
 
 
@@ -31,102 +31,53 @@ def test_engine_kwargs_to_cli_args_includes_tensor_parallel_size() -> None:
     ]
 
 
-def test_engine_kwargs_to_cli_args_ignores_local_staging_flag() -> None:
+def test_engine_kwargs_to_cli_args_includes_extended_server_args() -> None:
     args = _engine_kwargs_to_cli_args(
         {
-            "stage_remote_model_locally": True,
+            "tokenizer": "gs://bucket/tokenizer",
+            "hf_overrides": {"architectures": ["GptOssForCausalLM"], "model_type": "gpt_oss"},
+            "additional_config": {"skip_quantization": True},
             "tensor_parallel_size": 4,
         }
     )
 
-    assert args == ["--tensor-parallel-size", "4"]
+    assert args == [
+        "--tokenizer",
+        "gs://bucket/tokenizer",
+        "--hf-overrides",
+        '{"architectures": ["GptOssForCausalLM"], "model_type": "gpt_oss"}',
+        "--additional-config",
+        '{"skip_quantization": true}',
+        "--tensor-parallel-size",
+        "4",
+    ]
 
 
-def test_vllm_environment_stages_remote_model_locally(monkeypatch, tmp_path: Path) -> None:
-    model_stage_root = tmp_path / "model-stage"
-    model_stage_dir = model_stage_root / "model"
-    model_stage_dir.mkdir(parents=True)
-    tokenizer_stage_root = tmp_path / "tokenizer-stage"
-    tokenizer_stage_dir = tokenizer_stage_root / "model"
-    tokenizer_stage_dir.mkdir(parents=True)
+def test_vllm_env_builders_apply_env_overrides(monkeypatch) -> None:
+    monkeypatch.delenv("MODEL_IMPL_TYPE", raising=False)
+    monkeypatch.delenv("TPU_STDERR_LOG_LEVEL", raising=False)
 
-    def fake_stage_remote_directory(remote_dir: str, *, prefix: str) -> str:
-        if remote_dir == "gs://bucket/model":
-            return str(model_stage_dir)
-        if remote_dir == "gs://bucket/tokenizer":
-            return str(tokenizer_stage_dir)
-        raise AssertionError(f"Unexpected remote dir: {remote_dir}")
+    docker_env = _build_vllm_env_dict(env_overrides={"MODEL_IMPL_TYPE": "flax_nnx"})
+    native_env = _vllm_env(env_overrides={"TPU_STDERR_LOG_LEVEL": "1"})
 
-    monkeypatch.setattr("marin.inference.vllm_server._stage_remote_directory", fake_stage_remote_directory)
-    monkeypatch.setattr("marin.inference.vllm_server._get_first_model_id", lambda _url: "staged-model-id")
-
-    captured: dict[str, object] = {}
-
-    class FakeBackend:
-        def start(self, **kwargs):
-            captured.update(kwargs)
-            return VllmServerHandle(server_url="http://127.0.0.1:8000/v1", port=8000, log_dir="/tmp")
-
-        def logs_tail(self, handle, *, max_lines=200):
-            return ""
-
-        def diagnostics(self, handle, *, max_lines=200):
-            return {}
-
-        def stop(self, handle):
-            captured["stopped"] = True
-
-    env = VllmEnvironment(
-        ModelConfig(
-            name="gpt-oss",
-            path="gs://bucket/model",
-            engine_kwargs={
-                "load_format": "runai_streamer",
-                "stage_remote_model_locally": True,
-                "tokenizer": "gs://bucket/tokenizer",
-                "tensor_parallel_size": 4,
-            },
-        ),
-        mode="native",
-    )
-    env._backend = FakeBackend()
-
-    with env:
-        assert captured["model_name_or_path"] == str(model_stage_dir)
-        assert captured["extra_cli_args"] == [
-            "--tokenizer",
-            str(tokenizer_stage_dir),
-            "--tensor-parallel-size",
-            "4",
-        ]
-
-    assert captured["stopped"] is True
-    assert not model_stage_root.exists()
-    assert not tokenizer_stage_root.exists()
+    assert docker_env["MODEL_IMPL_TYPE"] == "flax_nnx"
+    assert native_env["MODEL_IMPL_TYPE"] == "vllm"
+    assert native_env["TPU_STDERR_LOG_LEVEL"] == "1"
 
 
 def test_vllm_environment_adds_gpt_oss_reasoning_parser(monkeypatch) -> None:
-    monkeypatch.setattr("marin.inference.vllm_server._get_first_model_id", lambda _url: "gpt-oss-model-id")
-
     captured: dict[str, object] = {}
 
-    class FakeBackend:
-        def start(self, **kwargs):
-            captured.update(kwargs)
-            return VllmServerHandle(server_url="http://127.0.0.1:8000/v1", port=8000, log_dir="/tmp")
+    def fake_start_native_server(**kwargs):
+        captured.update(kwargs)
+        return VllmServerHandle(server_url="http://127.0.0.1:8000/v1", port=8000, log_dir="/tmp")
 
-        def logs_tail(self, handle, *, max_lines=200):
-            return ""
-
-        def diagnostics(self, handle, *, max_lines=200):
-            return {}
-
-        def stop(self, handle):
-            captured["stopped"] = True
+    monkeypatch.setattr("marin.inference.vllm_server._get_first_model_id", lambda _url: "gpt-oss-model-id")
+    monkeypatch.setattr("marin.inference.vllm_server._start_vllm_native_server", fake_start_native_server)
 
     env = VllmEnvironment(
         ModelConfig(
-            name="gpt-oss",
+            name="local-model",
             path="gs://bucket/unsloth--gpt-oss-20b-BF16-vllm",
             engine_kwargs={
                 "load_format": "runai_streamer",
@@ -135,16 +86,57 @@ def test_vllm_environment_adds_gpt_oss_reasoning_parser(monkeypatch) -> None:
         ),
         mode="native",
     )
-    env._backend = FakeBackend()
+    env.__enter__()
+    env.close()
 
-    with env:
-        assert captured["extra_cli_args"] == [
-            "--load-format",
-            "runai_streamer",
-            "--tensor-parallel-size",
-            "4",
-            "--reasoning-parser",
-            GPT_OSS_REASONING_PARSER,
-        ]
+    assert captured["extra_cli_args"] == [
+        "--load-format",
+        "runai_streamer",
+        "--tensor-parallel-size",
+        "4",
+        "--reasoning-parser",
+        GPT_OSS_REASONING_PARSER,
+    ]
 
-    assert captured["stopped"] is True
+
+def test_vllm_environment_passes_native_server_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_start_native_server(**kwargs):
+        captured.update(kwargs)
+        return VllmServerHandle(server_url="http://127.0.0.1:8000/v1", port=8000, log_dir="/tmp")
+
+    monkeypatch.setattr("marin.inference.vllm_server._get_first_model_id", lambda _url: "model-id")
+    monkeypatch.setattr("marin.inference.vllm_server._start_vllm_native_server", fake_start_native_server)
+
+    env = VllmEnvironment(
+        ModelConfig(name="local-model", path="/tmp/model", engine_kwargs={}),
+        mode="native",
+        env_overrides={"MODEL_IMPL_TYPE": "vllm"},
+        native_stderr_mode="tee",
+    )
+    env.__enter__()
+    env.close()
+
+    assert captured["env_overrides"] == {"MODEL_IMPL_TYPE": "vllm"}
+    assert captured["native_stderr_mode"] == "tee"
+
+
+def test_vllm_environment_defaults_native_stderr_mode_to_file(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_start_native_server(**kwargs):
+        captured.update(kwargs)
+        return VllmServerHandle(server_url="http://127.0.0.1:8000/v1", port=8000, log_dir="/tmp")
+
+    monkeypatch.setattr("marin.inference.vllm_server._get_first_model_id", lambda _url: "model-id")
+    monkeypatch.setattr("marin.inference.vllm_server._start_vllm_native_server", fake_start_native_server)
+
+    env = VllmEnvironment(
+        ModelConfig(name="local-model", path="/tmp/model", engine_kwargs={}),
+        mode="native",
+    )
+    env.__enter__()
+    env.close()
+
+    assert captured["native_stderr_mode"] == "file"
