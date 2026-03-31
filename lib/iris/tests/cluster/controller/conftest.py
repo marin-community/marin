@@ -35,11 +35,15 @@ from iris.cluster.controller.db import (
     job_is_finished,
     task_can_be_scheduled,
     task_is_finished,
+    worker_available_cpu_millicores,
+    worker_available_gpus,
+    worker_available_memory,
+    worker_available_tpus,
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
     JOB_DETAIL_PROJECTION,
-    JOB_ROW_PROJECTION,
+    JOB_SCHEDULING_PROJECTION,
     TASK_DETAIL_PROJECTION,
     WORKER_ROW_PROJECTION,
     JobDetailRow,
@@ -263,14 +267,14 @@ def query_job(state: ControllerTransitions, job_id: JobName) -> JobDetailRow | N
 
 
 def query_job_row(state: ControllerTransitions, job_id: JobName):
-    """Query a job as a JobRow (scheduling projection with resources/constraints)."""
+    """Query a job as a JobSchedulingRow (scheduling projection with resources/constraints)."""
     with state._db.snapshot() as q:
-        return JOB_ROW_PROJECTION.decode_one(
+        return JOB_SCHEDULING_PROJECTION.decode_one(
             q.fetchall("SELECT * FROM jobs WHERE job_id = ? LIMIT 1", (job_id.to_wire(),))
         )
 
 
-def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerRow | None:  # type: ignore[not-a-type]
+def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerRow | None:
     with state._db.snapshot() as q:
         return WORKER_ROW_PROJECTION.decode_one(
             q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", (str(worker_id),)),
@@ -501,10 +505,20 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> li
             tuple(worker_ids),
         )
     attrs_by_worker = _decode_attribute_rows(attrs)
-    return [_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
+    return [
+        _replace(
+            w,
+            attributes=attrs_by_worker.get(w.worker_id, {}),
+            available_cpu_millicores=worker_available_cpu_millicores(w.total_cpu_millicores, w.committed_cpu_millicores),
+            available_memory=worker_available_memory(w.total_memory_bytes, w.committed_mem),
+            available_gpus=worker_available_gpus(w.total_gpu_count, w.committed_gpu),
+            available_tpus=worker_available_tpus(w.total_tpu_count, w.committed_tpu),
+        )
+        for w in workers
+    ]
 
 
-def healthy_active_workers(state: ControllerTransitions) -> list[WorkerRow]:  # type: ignore[not-a-type]
+def healthy_active_workers(state: ControllerTransitions) -> list[WorkerRow]:
     with state._db.snapshot() as q:
         workers = WORKER_ROW_PROJECTION.decode(q.fetchall("SELECT * FROM workers WHERE healthy = 1 AND active = 1"))
     return hydrate_worker_attributes(state, workers)

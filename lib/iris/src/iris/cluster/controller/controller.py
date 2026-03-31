@@ -41,17 +41,17 @@ from iris.cluster.controller.db import (
     job_is_finished,
     job_scheduling_deadline,
     running_tasks_by_worker,
-    task_can_be_scheduled,
+    task_row_can_be_scheduled,
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
     JOB_DETAIL_PROJECTION,
-    JOB_ROW_PROJECTION,
+    JOB_SCHEDULING_PROJECTION,
     TASK_DETAIL_PROJECTION,
     TASK_ROW_PROJECTION,
     WORKER_DETAIL_PROJECTION,
     JobDetailRow,
-    JobRow,
+    JobSchedulingRow,
     TaskDetailRow,
     TaskRow,
     WorkerDetailRow,
@@ -113,7 +113,7 @@ _HEALTH_SUMMARY_INTERVAL = RateLimiter(interval_seconds=30)
 RESERVATION_TAINT_KEY = "reservation-job"
 
 
-def job_requirements_from_job(job: JobRow) -> JobRequirements:  # type: ignore[not-a-type]
+def job_requirements_from_job(job: JobSchedulingRow) -> JobRequirements:
     """Convert a job row to scheduler-compatible JobRequirements."""
     return JobRequirements(
         resources=job.resources or cluster_pb2.ResourceSpecProto(),
@@ -160,20 +160,13 @@ def compute_demand_entries(
     demand_entries: list[DemandEntry] = []
 
     # Collect all schedulable pending tasks, grouped by job.
-    tasks_by_job: dict[JobName, list[TaskRow]] = defaultdict(list)  # type: ignore[not-a-type]
-    all_schedulable: list[TaskRow] = []  # type: ignore[not-a-type]
+    tasks_by_job: dict[JobName, list[TaskRow]] = defaultdict(list)
+    all_schedulable: list[TaskRow] = []
     pending = _schedulable_tasks(queries)
     job_rows = list(_jobs_by_id(queries, {task.job_id for task in pending}).values()) if pending else []
     jobs_by_id = {job.job_id: job for job in job_rows}
     for task in pending:
-        if not task_can_be_scheduled(
-            task.state,
-            task.current_attempt_id,
-            task.failure_count,
-            task.max_retries_failure,
-            task.preemption_count,
-            task.max_retries_preemption,
-        ):
+        if not task_row_can_be_scheduled(task):
             continue
         if task.job_id not in jobs_by_id:
             continue
@@ -296,22 +289,22 @@ def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClai
     }
 
 
-def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, JobRow]:  # type: ignore[not-a-type]
+def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, JobSchedulingRow]:
     if not job_ids:
         return {}
     wires = [job_id.to_wire() for job_id in job_ids]
     placeholders = ",".join("?" for _ in wires)
     with queries.read_snapshot() as snapshot:
-        jobs = JOB_ROW_PROJECTION.decode(
+        jobs = JOB_SCHEDULING_PROJECTION.decode(
             snapshot.fetchall(
-                f"SELECT {JOB_ROW_PROJECTION.select_clause()} FROM jobs j WHERE j.job_id IN ({placeholders})",
+                f"SELECT {JOB_SCHEDULING_PROJECTION.select_clause()} FROM jobs j WHERE j.job_id IN ({placeholders})",
                 tuple(wires),
             ),
         )
     return {job.job_id: job for job in jobs}
 
 
-def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobDetailRow]:  # type: ignore[not-a-type]
+def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobDetailRow]:
     """Fetch only jobs that have reservations, filtering at the SQL level.
 
     Uses the denormalized has_reservation column to avoid deserializing
@@ -326,7 +319,7 @@ def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> l
     return JOB_DETAIL_PROJECTION.decode(rows)
 
 
-def _schedulable_tasks(queries: ControllerDB) -> list[TaskRow]:  # type: ignore[not-a-type]
+def _schedulable_tasks(queries: ControllerDB) -> list[TaskRow]:
     # Only PENDING tasks can pass can_be_scheduled(); no need to fetch ASSIGNED/BUILDING/RUNNING.
     with queries.read_snapshot() as snapshot:
         tasks = TASK_ROW_PROJECTION.decode(
@@ -337,21 +330,10 @@ def _schedulable_tasks(queries: ControllerDB) -> list[TaskRow]:  # type: ignore[
                 (cluster_pb2.TASK_STATE_PENDING,),
             ),
         )
-    return [
-        task
-        for task in tasks
-        if task_can_be_scheduled(
-            task.state,
-            task.current_attempt_id,
-            task.failure_count,
-            task.max_retries_failure,
-            task.preemption_count,
-            task.max_retries_preemption,
-        )
-    ]
+    return [task for task in tasks if task_row_can_be_scheduled(task)]
 
 
-def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -> dict[JobName, TaskDetailRow]:  # type: ignore[not-a-type]
+def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -> dict[JobName, TaskDetailRow]:
     if not task_ids:
         return {}
     task_wires = [task_id.to_wire() for task_id in task_ids]
@@ -373,7 +355,7 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
     return {task.task_id: task for task in tasks_with_attempts(tasks, attempts)}
 
 
-def _building_counts(queries: ControllerDB, workers: list[WorkerRow]) -> dict[WorkerId, int]:  # type: ignore[not-a-type]
+def _building_counts(queries: ControllerDB, workers: list[WorkerRow]) -> dict[WorkerId, int]:
     """Count tasks in BUILDING or ASSIGNED state per worker, excluding reservation-holder jobs."""
     if not workers:
         return {}
@@ -396,7 +378,7 @@ def _building_counts(queries: ControllerDB, workers: list[WorkerRow]) -> dict[Wo
     return {row.worker_id: row.cnt for row in rows}
 
 
-def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, WorkerDetailRow]:  # type: ignore[not-a-type]
+def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, WorkerDetailRow]:
     if not worker_ids:
         return {}
     wires = [str(wid) for wid in worker_ids]
@@ -424,7 +406,7 @@ def _task_worker_mapping(queries: ControllerDB, task_ids: set[JobName]) -> dict[
 
 
 def _worker_matches_reservation_entry(
-    worker: WorkerRow,  # type: ignore[not-a-type]
+    worker: WorkerRow,
     res_entry: cluster_pb2.ReservationEntry,
 ) -> bool:
     """Check if a worker is eligible for a reservation entry.
@@ -447,9 +429,9 @@ def _worker_matches_reservation_entry(
 
 
 def _inject_reservation_taints(
-    workers: list[WorkerRow],  # type: ignore[not-a-type]
+    workers: list[WorkerRow],
     claims: dict[WorkerId, ReservationClaim],
-) -> list[WorkerRow]:  # type: ignore[not-a-type]
+) -> list[WorkerRow]:
     """Create modified worker copies with reservation taints and prioritization.
 
     Claimed workers receive a ``reservation-job`` attribute set to the claiming
@@ -462,8 +444,8 @@ def _inject_reservation_taints(
     if not claims:
         return workers
 
-    claimed: list[WorkerRow] = []  # type: ignore[not-a-type]
-    unclaimed: list[WorkerRow] = []  # type: ignore[not-a-type]
+    claimed: list[WorkerRow] = []
+    unclaimed: list[WorkerRow] = []
     for worker in workers:
         claim = claims.get(worker.worker_id)
         if claim is not None:
@@ -1138,7 +1120,7 @@ class Controller:
         workers_by_id = {w.worker_id: w for w in workers}
         tasks_by_worker = running_tasks_by_worker(self._db, set(workers_by_id.keys()))
 
-        profile_targets: list[tuple[JobName, WorkerRow]] = []  # type: ignore[not-a-type]
+        profile_targets: list[tuple[JobName, WorkerRow]] = []
         for worker_id, task_ids in tasks_by_worker.items():
             worker = workers_by_id[worker_id]
             for task_id in task_ids:
@@ -1161,7 +1143,7 @@ class Controller:
 
     def _dispatch_profiles(
         self,
-        targets: list[tuple[JobName, WorkerRow]],  # type: ignore[not-a-type]
+        targets: list[tuple[JobName, WorkerRow]],
         profile_type: cluster_pb2.ProfileType,
         profile_kind: str,
         duration: int,
@@ -1179,7 +1161,7 @@ class Controller:
     def _capture_one_profile(
         self,
         task_id: JobName,
-        worker: WorkerRow,  # type: ignore[not-a-type]
+        worker: WorkerRow,
         profile_type: cluster_pb2.ProfileType,
         profile_kind: str,
         duration: int,
@@ -1212,7 +1194,7 @@ class Controller:
 
     def _is_reservation_satisfied(
         self,
-        job: JobRow,  # type: ignore[not-a-type]
+        job: JobSchedulingRow,
         claims: dict[WorkerId, ReservationClaim] | None = None,
     ) -> bool:
         """Check if a job's reservation is fully satisfied.
@@ -1373,14 +1355,7 @@ class Controller:
         cap = self._config.max_tasks_per_job_per_cycle
         jobs_by_id = _jobs_by_id(self._db, {task.job_id for task in pending_tasks})
         for task in pending_tasks:
-            if not task_can_be_scheduled(
-                task.state,
-                task.current_attempt_id,
-                task.failure_count,
-                task.max_retries_failure,
-                task.preemption_count,
-                task.max_retries_preemption,
-            ):
+            if not task_row_can_be_scheduled(task):
                 continue
             job = jobs_by_id.get(task.job_id)
             if not job:
@@ -1503,7 +1478,7 @@ class Controller:
         if result.has_real_dispatch:
             self._heartbeat_event.set()
 
-    def _mark_task_unschedulable(self, task: TaskRow) -> None:  # type: ignore[not-a-type]
+    def _mark_task_unschedulable(self, task: TaskRow) -> None:
         """Mark a task as unschedulable due to timeout."""
         if self._config.dry_run:
             logger.info("[DRY-RUN] Would mark task %s as unschedulable", task.task_id)
@@ -1521,7 +1496,7 @@ class Controller:
         if result.tasks_to_kill:
             self.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
 
-    def create_scheduling_context(self, workers: list[WorkerRow]) -> SchedulingContext:  # type: ignore[not-a-type]
+    def create_scheduling_context(self, workers: list[WorkerRow]) -> SchedulingContext:
         """Create a scheduling context for the given workers."""
         building_counts = _building_counts(self._db, workers)
         return self._scheduler.create_scheduling_context(

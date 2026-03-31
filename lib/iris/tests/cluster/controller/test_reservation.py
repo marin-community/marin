@@ -121,7 +121,12 @@ def _make_worker(
     default_attrs = _default_attributes_for_device(meta.device)
     if attributes:
         default_attrs.update(attributes)
-    device = meta.device
+    dt = get_device_type(meta.device)
+    dv = get_device_variant(meta.device) or ""
+    total_cpu = meta.cpu_count * 1000
+    total_mem = meta.memory_bytes
+    total_gpu = meta.gpu_count
+    total_tpu = 1 if meta.tpu_name else 0
     return WorkerRow(
         worker_id=WorkerId(worker_id),
         address=f"{worker_id}:8080",
@@ -133,13 +138,17 @@ def _make_worker(
         committed_mem=0,
         committed_gpu=0,
         committed_tpu=0,
-        total_cpu_millicores=4000,
-        total_memory_bytes=8 * 1024**3,
-        total_gpu_count=device.gpu.count if device.HasField("gpu") else 0,
-        total_tpu_count=device.tpu.chip_count if device.HasField("tpu") else 0,
-        device_type=get_device_type(device),
-        device_variant=get_device_variant(device),
+        total_cpu_millicores=total_cpu,
+        total_memory_bytes=total_mem,
+        total_gpu_count=total_gpu,
+        total_tpu_count=total_tpu,
+        device_type=dt,
+        device_variant=dv,
         attributes=default_attrs,
+        available_cpu_millicores=total_cpu,
+        available_memory=total_mem,
+        available_gpus=total_gpu,
+        available_tpus=total_tpu,
     )
 
 

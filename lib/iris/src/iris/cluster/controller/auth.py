@@ -58,7 +58,7 @@ def create_api_key(
     )
 
 
-def lookup_api_key_by_hash(db: ControllerDB, key_hash: str) -> ApiKeyRow | None:  # type: ignore[not-a-type]
+def lookup_api_key_by_hash(db: ControllerDB, key_hash: str) -> ApiKeyRow | None:
     """Find an API key by its SHA-256 hash."""
     with db.snapshot() as q:
         return API_KEY_PROJECTION.decode_one(
@@ -84,7 +84,7 @@ def revoke_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> bool:
         return cur._cursor.rowcount > 0
 
 
-def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list[ApiKeyRow]:  # type: ignore[not-a-type]
+def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list[ApiKeyRow]:
     """List API keys, optionally filtered by user."""
     with db.snapshot() as q:
         if user_id:

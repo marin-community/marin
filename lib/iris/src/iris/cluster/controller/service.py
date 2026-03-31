@@ -50,14 +50,14 @@ from iris.cluster.controller.db import (
     endpoint_query_sql,
     job_is_finished,
     running_tasks_by_worker,
-    task_can_be_scheduled,
+    task_row_can_be_scheduled,
 )
 from iris.cluster.controller.schema import (
     API_KEY_PROJECTION,
     ATTEMPT_PROJECTION,
     ENDPOINT_PROJECTION,
     JOB_DETAIL_PROJECTION,
-    JOB_LISTING_PROJECTION,
+    JOB_ROW_PROJECTION,
     TASK_DETAIL_PROJECTION,
     TXN_ACTION_PROJECTION,
     WORKER_DETAIL_PROJECTION,
@@ -139,14 +139,14 @@ USER_JOB_STATES = (
 )
 
 
-def _current_attempt(task: TaskDetailRow) -> AttemptRow | None:  # type: ignore[not-a-type]
+def _current_attempt(task: TaskDetailRow) -> AttemptRow | None:
     """Get the latest attempt for a task detail row."""
     if not task.attempts:
         return None
     return task.attempts[-1]
 
 
-def _task_worker_id(task: TaskDetailRow) -> WorkerId | None:  # type: ignore[not-a-type]
+def _task_worker_id(task: TaskDetailRow) -> WorkerId | None:
     """Get the effective worker_id for a task detail row."""
     current = _current_attempt(task)
     if current is None:
@@ -154,14 +154,14 @@ def _task_worker_id(task: TaskDetailRow) -> WorkerId | None:  # type: ignore[not
     return current.worker_id
 
 
-def _active_worker_id(task: TaskDetailRow) -> WorkerId | None:  # type: ignore[not-a-type]
+def _active_worker_id(task: TaskDetailRow) -> WorkerId | None:
     """Get the active worker_id (None for pending tasks)."""
     if task.state == cluster_pb2.TASK_STATE_PENDING:
         return None
     return _task_worker_id(task)
 
 
-def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> cluster_pb2.TaskStatus:  # type: ignore[not-a-type]
+def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> cluster_pb2.TaskStatus:
     """Convert a task row to a TaskStatus proto.
 
     Handles attempt conversion, timestamps, and resource_usage.
@@ -218,7 +218,7 @@ def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> cluster_pb2.
     return proto
 
 
-def worker_status_message(w: WorkerDetailRow) -> str:  # type: ignore[not-a-type]
+def worker_status_message(w: WorkerDetailRow) -> str:
     """Build a human-readable status message for unhealthy workers."""
     if w.healthy:
         return ""
@@ -279,14 +279,14 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 # =============================================================================
 
 
-def _read_job(db: ControllerDB, job_id: JobName) -> JobDetailRow | None:  # type: ignore[not-a-type]
+def _read_job(db: ControllerDB, job_id: JobName) -> JobDetailRow | None:
     with db.read_snapshot() as q:
         return JOB_DETAIL_PROJECTION.decode_one(
             q.fetchall("SELECT * FROM jobs j WHERE j.job_id = ?", (job_id.to_wire(),))
         )
 
 
-def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskDetailRow | None:  # type: ignore[not-a-type]
+def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskDetailRow | None:
     task_wire = task_id.to_wire()
     with db.read_snapshot() as q:
         task = TASK_DETAIL_PROJECTION.decode_one(q.fetchall("SELECT * FROM tasks t WHERE t.task_id = ?", (task_wire,)))
@@ -301,7 +301,7 @@ def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskDetailRo
     return tasks_with_attempts([task], attempts)[0]
 
 
-def _read_worker(db: ControllerDB, worker_id: WorkerId) -> WorkerDetailRow | None:  # type: ignore[not-a-type]
+def _read_worker(db: ControllerDB, worker_id: WorkerId) -> WorkerDetailRow | None:
     with db.read_snapshot() as q:
         return WORKER_DETAIL_PROJECTION.decode_one(
             q.fetchall("SELECT * FROM workers w WHERE w.worker_id = ?", (str(worker_id),))
@@ -324,7 +324,7 @@ def _worker_address(db: ControllerDB, worker_id: WorkerId) -> str | None:
 
 @dataclass(frozen=True)
 class _WorkerDetail:
-    worker: WorkerDetailRow  # type: ignore[not-a-type]
+    worker: WorkerDetailRow
     running_tasks: frozenset[JobName]
     resource_history: tuple[cluster_pb2.WorkerResourceSnapshot, ...]
 
@@ -359,7 +359,7 @@ def _read_worker_detail(
     )
 
 
-def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetailRow]:  # type: ignore[not-a-type]
+def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetailRow]:
     with db.read_snapshot() as q:
         tasks = TASK_DETAIL_PROJECTION.decode(
             q.fetchall(
@@ -381,7 +381,7 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetailR
     return tasks_with_attempts(tasks, attempts)
 
 
-def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[TaskDetailRow]) -> dict[WorkerId, str]:  # type: ignore[not-a-type]
+def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[TaskDetailRow]) -> dict[WorkerId, str]:
     """Fetch addresses only for workers referenced by the given tasks."""
     worker_ids = {_task_worker_id(t) for t in tasks}
     worker_ids.discard(None)
@@ -429,7 +429,7 @@ def _jobs_paginated(
     descending: bool = True,
     offset: int = 0,
     limit: int = 50,
-) -> tuple[list[JobRow], int]:  # type: ignore[not-a-type]
+) -> tuple[list[JobRow], int]:
     """Fetch a page of top-level jobs with SQL-level filtering, sorting, and pagination."""
     conditions = ["j.depth = 1"]
     params: list[object] = []
@@ -461,7 +461,7 @@ def _jobs_paginated(
 
     if needs_task_agg:
         select_sql = f"""
-            SELECT {JOB_LISTING_PROJECTION.select_clause()},
+            SELECT {JOB_ROW_PROJECTION.select_clause()},
                    COALESCE(SUM(t.failure_count), 0) AS agg_failures,
                    COALESCE(SUM(t.preemption_count), 0) AS agg_preemptions
             FROM jobs j
@@ -472,7 +472,7 @@ def _jobs_paginated(
         """
     else:
         select_sql = f"""
-            SELECT {JOB_LISTING_PROJECTION.select_clause()}
+            SELECT {JOB_ROW_PROJECTION.select_clause()}
             FROM jobs j
             WHERE {where_clause}
             ORDER BY {order_expr} {direction}
@@ -493,23 +493,23 @@ def _jobs_paginated(
         else:
             total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
 
-    jobs = JOB_LISTING_PROJECTION.decode(rows)
+    jobs = JOB_ROW_PROJECTION.decode(rows)
     return jobs, total
 
 
-def _descendants_for_roots(db: ControllerDB, root_job_ids: list[str]) -> list[JobRow]:  # type: ignore[not-a-type]
+def _descendants_for_roots(db: ControllerDB, root_job_ids: list[str]) -> list[JobRow]:
     """Fetch all descendant jobs (depth > 1) for the given root job IDs in a single query."""
     if not root_job_ids:
         return []
     placeholders = ",".join("?" for _ in root_job_ids)
     sql = f"""
-        SELECT {JOB_LISTING_PROJECTION.select_clause()}
+        SELECT {JOB_ROW_PROJECTION.select_clause()}
         FROM jobs j
         WHERE j.root_job_id IN ({placeholders}) AND j.depth > 1
     """
     with db.read_snapshot() as q:
         rows = q.fetchall(sql, tuple(root_job_ids))
-    return JOB_LISTING_PROJECTION.decode(rows)
+    return JOB_ROW_PROJECTION.decode(rows)
 
 
 def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
@@ -550,18 +550,18 @@ def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = No
     return summaries
 
 
-def _worker_roster(db: ControllerDB) -> list[WorkerDetailRow]:  # type: ignore[not-a-type]
+def _worker_roster(db: ControllerDB) -> list[WorkerDetailRow]:
     with db.read_snapshot() as q:
         return WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers w"))
 
 
-def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -> list[EndpointRow]:  # type: ignore[not-a-type]
+def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -> list[EndpointRow]:
     sql, params = endpoint_query_sql(query)
     with db.read_snapshot() as q:
         return ENDPOINT_PROJECTION.decode(q.fetchall(sql, tuple(params)))
 
 
-def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetailRow]:  # type: ignore[not-a-type]
+def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetailRow]:
     # PK range scan: '0' (ASCII 48) is the next char after '/' (ASCII 47),
     # so this matches all job_ids starting with "<job_id>/" without LIKE.
     prefix = job_id.to_wire() + "/"
@@ -575,7 +575,7 @@ def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetailRow]:  
         )
 
 
-def _transaction_actions(db: ControllerDB, limit: int = 100) -> list[TransactionActionRow]:  # type: ignore[not-a-type]
+def _transaction_actions(db: ControllerDB, limit: int = 100) -> list[TransactionActionRow]:
     with db.read_snapshot() as q:
         actions = TXN_ACTION_PROJECTION.decode(
             q.fetchall(
@@ -617,7 +617,7 @@ def _live_user_stats(db: ControllerDB) -> list[UserStats]:
     return list(by_user.values())
 
 
-def _tasks_for_worker(db: ControllerDB, worker_id: WorkerId, limit: int = 50) -> list[TaskDetailRow]:  # type: ignore[not-a-type]
+def _tasks_for_worker(db: ControllerDB, worker_id: WorkerId, limit: int = 50) -> list[TaskDetailRow]:
     with db.read_snapshot() as q:
         history_rows = q.raw(
             "SELECT wth.task_id FROM worker_task_history wth "
@@ -683,7 +683,7 @@ class ControllerProtocol(Protocol):
         task_kill_workers: dict[JobName, WorkerId] | None = None,
     ) -> None: ...
 
-    def create_scheduling_context(self, workers: list[WorkerRow]) -> SchedulingContext: ...  # type: ignore[not-a-type]
+    def create_scheduling_context(self, workers: list[WorkerRow]) -> SchedulingContext: ...
 
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
@@ -1009,7 +1009,7 @@ class ControllerServiceImpl:
 
     def _job_to_proto(
         self,
-        j: JobRow,  # type: ignore[not-a-type]
+        j: JobRow,
         task_summary: TaskJobSummary | None,
         autoscaler_pending_hints: dict[str, PendingHint],
     ) -> cluster_pb2.JobStatus:
@@ -1056,7 +1056,7 @@ class ControllerServiceImpl:
 
     def _jobs_to_protos(
         self,
-        jobs: list[JobRow],  # type: ignore[not-a-type]
+        jobs: list[JobRow],
         task_summaries: dict[JobName, TaskJobSummary],
         autoscaler_pending_hints: dict[str, PendingHint],
     ) -> list[cluster_pb2.JobStatus]:
@@ -1162,14 +1162,7 @@ class ControllerServiceImpl:
             # Don't add scheduling diagnostics in list view - too expensive
             # Users should check job detail page for scheduling diagnostics
             if task.state == cluster_pb2.TASK_STATE_PENDING:
-                proto_task_status.can_be_scheduled = task_can_be_scheduled(
-                    task.state,
-                    task.current_attempt_id,
-                    task.failure_count,
-                    task.max_retries_failure,
-                    task.preemption_count,
-                    task.max_retries_preemption,
-                )
+                proto_task_status.can_be_scheduled = task_row_can_be_scheduled(task)
 
             task_statuses.append(proto_task_status)
 

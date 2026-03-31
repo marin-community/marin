@@ -24,8 +24,8 @@ from iris.cluster.controller.db import (
     TERMINAL_TASK_STATES,
     ControllerDB,
     TransactionCursor,
-    task_can_be_scheduled,
-    task_is_finished,
+    task_row_can_be_scheduled,
+    task_row_is_finished,
 )
 from iris.cluster.controller.schema import (
     JOB_DETAIL_PROJECTION,
@@ -1068,7 +1068,7 @@ class ControllerTransitions:
         has_real_dispatch = False
         with self._db.transaction() as cur:
             now_ms = Timestamp.now().epoch_ms()
-            job_cache: dict[str, JobDetailRow] = {}  # type: ignore[not-a-type]
+            job_cache: dict[str, JobDetailRow] = {}
             jobs_to_update: set[str] = set()
             for assignment in assignments:
                 task_row = cur.execute(
@@ -1082,14 +1082,7 @@ class ControllerTransitions:
                     rejected.append(assignment)
                     continue
                 task = TASK_DETAIL_PROJECTION.decode_one([task_row])
-                if not task_can_be_scheduled(
-                    task.state,
-                    task.current_attempt_id,
-                    task.failure_count,
-                    task.max_retries_failure,
-                    task.preemption_count,
-                    task.max_retries_preemption,
-                ):
+                if not task_row_can_be_scheduled(task):
                     rejected.append(assignment)
                     continue
                 job_id_wire = task.job_id.to_wire()
@@ -1098,7 +1091,11 @@ class ControllerTransitions:
                     if job_row is None:
                         rejected.append(assignment)
                         continue
-                    job_cache[job_id_wire] = JOB_DETAIL_PROJECTION.decode_one([job_row])
+                    decoded_job = JOB_DETAIL_PROJECTION.decode_one([job_row])
+                    if decoded_job is None:
+                        rejected.append(assignment)
+                        continue
+                    job_cache[job_id_wire] = decoded_job
                 job = job_cache[job_id_wire]
                 attempt_id = int(task_row["current_attempt_id"]) + 1
                 cur.execute(
@@ -1211,13 +1208,7 @@ class ControllerTransitions:
             if task_row is None:
                 continue
             task = TASK_DETAIL_PROJECTION.decode_one([task_row])
-            if task_is_finished(
-                task.state,
-                task.failure_count,
-                task.max_retries_failure,
-                task.preemption_count,
-                task.max_retries_preemption,
-            ) or update.new_state in (
+            if task_row_is_finished(task) or update.new_state in (
                 cluster_pb2.TASK_STATE_UNSPECIFIED,
                 cluster_pb2.TASK_STATE_PENDING,
             ):
@@ -1531,13 +1522,7 @@ class ControllerTransitions:
                     else:
                         # Steady-state: check finished / stale attempt before writing.
                         task = self._db.decode_task(task_row)
-                        if task_is_finished(
-                            task.state,
-                            task.failure_count,
-                            task.max_retries_failure,
-                            task.preemption_count,
-                            task.max_retries_preemption,
-                        ):
+                        if task_row_is_finished(task):
                             continue
                         if update.attempt_id != int(task_row["current_attempt_id"]):
                             continue
@@ -1974,7 +1959,7 @@ class ControllerTransitions:
             self._record_transaction(cur, "remove_finished_job", [("job_removed", job_id.to_wire(), {"state": state})])
             return True
 
-    def remove_worker(self, worker_id: WorkerId) -> WorkerDetailRow | None:  # type: ignore[not-a-type]
+    def remove_worker(self, worker_id: WorkerId) -> WorkerDetailRow | None:
         with self._db.transaction() as cur:
             row = cur.execute("SELECT * FROM workers WHERE worker_id = ?", (str(worker_id),)).fetchone()
             if row is None:
@@ -2351,7 +2336,7 @@ class ControllerTransitions:
 
     # --- Endpoint Management ---
 
-    def add_endpoint(self, endpoint: EndpointRow, task_id: JobName | None = None) -> bool:  # type: ignore[not-a-type]
+    def add_endpoint(self, endpoint: EndpointRow, task_id: JobName | None = None) -> bool:
         """Add an endpoint row to the DB, associated with a non-terminal task.
 
         Returns True if the endpoint was inserted, False if the task is already
@@ -2378,7 +2363,7 @@ class ControllerTransitions:
             )
             return True
 
-    def remove_endpoint(self, endpoint_id: str) -> EndpointRow | None:  # type: ignore[not-a-type]
+    def remove_endpoint(self, endpoint_id: str) -> EndpointRow | None:
         return self._db.delete_endpoint(endpoint_id)
 
     # ---------------------------------------------------------------------
@@ -2548,13 +2533,7 @@ class ControllerTransitions:
                 if task_row is None:
                     continue
                 task = TASK_DETAIL_PROJECTION.decode_one([task_row])
-                if task_is_finished(
-                    task.state,
-                    task.failure_count,
-                    task.max_retries_failure,
-                    task.preemption_count,
-                    task.max_retries_preemption,
-                ) or update.new_state in (
+                if task_row_is_finished(task) or update.new_state in (
                     cluster_pb2.TASK_STATE_UNSPECIFIED,
                     cluster_pb2.TASK_STATE_PENDING,
                 ):

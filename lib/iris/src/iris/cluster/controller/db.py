@@ -148,6 +148,23 @@ def task_is_retry_exhausted(
     return False
 
 
+def task_row_is_finished(task: Any) -> bool:
+    return task_is_finished(
+        task.state, task.failure_count, task.max_retries_failure, task.preemption_count, task.max_retries_preemption
+    )
+
+
+def task_row_can_be_scheduled(task: Any) -> bool:
+    return task_can_be_scheduled(
+        task.state,
+        task.current_attempt_id,
+        task.failure_count,
+        task.max_retries_failure,
+        task.preemption_count,
+        task.max_retries_preemption,
+    )
+
+
 def worker_available_cpu_millicores(total_cpu_millicores: int, committed_cpu_millicores: int) -> int:
     return total_cpu_millicores - committed_cpu_millicores
 
@@ -813,7 +830,17 @@ def healthy_active_workers_with_attributes(db: ControllerDB) -> list:
         if not workers:
             return []
     attrs_by_worker = db.get_worker_attributes()
-    return [dc_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
+    return [
+        dc_replace(
+            w,
+            attributes=attrs_by_worker.get(w.worker_id, {}),
+            available_cpu_millicores=worker_available_cpu_millicores(w.total_cpu_millicores, w.committed_cpu_millicores),
+            available_memory=worker_available_memory(w.total_memory_bytes, w.committed_mem),
+            available_gpus=worker_available_gpus(w.total_gpu_count, w.committed_gpu),
+            available_tpus=worker_available_tpus(w.total_tpu_count, w.committed_tpu),
+        )
+        for w in workers
+    ]
 
 
 def insert_task_profile(

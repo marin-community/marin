@@ -216,6 +216,7 @@ class Table:
         self,
         *column_names: str,
         extra_fields: tuple[ExtraField, ...] = (),
+        row_cls: type | None = None,
     ) -> Projection:
         """Create a typed projection over a subset of columns.
 
@@ -225,6 +226,9 @@ class Table:
         ``extra_fields`` adds non-DB fields to the generated row class (e.g.
         ``attempts``, ``attributes``) that are populated post-hoc via
         ``dataclasses.replace``.
+
+        When ``row_cls`` is provided the projection uses that class directly
+        instead of generating one via ``_make_row_class``.
         """
         cols: list[Column] = []
         for cn in column_names:
@@ -233,7 +237,7 @@ class Table:
                     f"Unknown column {cn!r} in table {self.name!r}. " f"Available: {sorted(self._column_map.keys())}"
                 )
             cols.append(self._column_map[cn])
-        return Projection(self, tuple(cols), extra_fields=extra_fields)
+        return Projection(self, tuple(cols), extra_fields=extra_fields, row_cls=row_cls)
 
     def select_clause(self, *column_names: str, prefix: bool = True) -> str:
         """Generate 'alias.col1, alias.col2, ...' for a SELECT.
@@ -302,6 +306,21 @@ def _make_row_class(
     return cls
 
 
+def _validate_row_cls(
+    row_cls: type,
+    columns: tuple[Column, ...],
+    extra_fields: tuple[ExtraField, ...],
+) -> None:
+    """Validate that a hand-written row class has all expected fields."""
+    cls_field_names = {f.name for f in dataclasses.fields(row_cls)}
+    for col in columns:
+        if col.field_name not in cls_field_names:
+            raise TypeError(f"{row_cls.__name__} is missing field {col.field_name!r} " f"(from column {col.name!r})")
+    for ef in extra_fields:
+        if ef.name not in cls_field_names:
+            raise TypeError(f"{row_cls.__name__} is missing extra field {ef.name!r}")
+
+
 class Projection(Generic[T]):
     """A typed subset of a Table's columns with a pre-compiled decoder.
 
@@ -315,6 +334,7 @@ class Projection(Generic[T]):
         columns: tuple[Column, ...],
         *,
         extra_fields: tuple[ExtraField, ...] = (),
+        row_cls: type | None = None,
     ):
         self.table = table
         self.columns = columns
@@ -324,6 +344,20 @@ class Projection(Generic[T]):
         self._db_columns: tuple[str, ...] = tuple(c.name for c in columns)
         self._decoders: tuple[Callable, ...] = tuple(c.decoder for c in columns)
         self._cached_flags: tuple[bool, ...] = tuple(c.cached for c in columns)
+
+        # Pre-compute effective decoders: wrap cached fields through the global proto cache
+        # so that both fast and slow decode paths share the same logic.
+        if any(self._cached_flags):
+            self._effective_decoders: tuple[Callable, ...] = tuple(
+                (
+                    (lambda d: lambda v: proto_cache.get_or_decode(v, d) if v is not None else d(v))(dec)
+                    if is_cached
+                    else dec
+                )
+                for dec, is_cached in zip(self._decoders, self._cached_flags, strict=True)
+            )
+        else:
+            self._effective_decoders = self._decoders
 
         # Pre-compute defaults for fields that have them (keyed by column name).
         defaults: dict[str, tuple[str, Any | Callable[[], Any], bool]] = {}
@@ -336,8 +370,11 @@ class Projection(Generic[T]):
 
         self._required_columns: tuple[str, ...] = tuple(c.name for c in columns if c.name not in defaults)
 
-        # Generate the frozen dataclass row type at init time.
-        self._row_cls: type = _make_row_class(f"{table.name}_projection", columns, extra_fields)
+        if row_cls is not None:
+            _validate_row_cls(row_cls, columns, extra_fields)
+            self._row_cls: type = row_cls
+        else:
+            self._row_cls = _make_row_class(f"{table.name}_projection", columns, extra_fields)
 
         # Pre-compute SELECT column strings (aliased and bare).
         self._select_aliased: str = ", ".join(f"{table.alias}.{c.name}" for c in columns)
@@ -381,9 +418,12 @@ class Projection(Generic[T]):
         check if first row has all columns, then use tight comprehension loop.
         For columns with ``cached=True``, wraps the decoder through ProtoCache.
         """
+        names = self._names
         columns = self._db_columns
+        effective_decoders = self._effective_decoders
         cls = self._row_cls
-        zipped = self._decode_zipped
+
+        zipped = tuple(zip(names, columns, effective_decoders, strict=True))
 
         result: list = []
         it = iter(rows)
@@ -1276,11 +1316,269 @@ AUTH_TABLES: tuple[Table, ...] = (
 )
 
 # ---------------------------------------------------------------------------
+# Hand-written row dataclasses
+#
+# Detail types are strict supersets of their corresponding Row types: they
+# contain all the same fields (in a compatible order) plus extras.  This
+# structural relationship lets callers accept a Detail wherever a Row is
+# expected without inheritance.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class JobRow:
+    """Lightweight job row for listings — excludes expensive blobs like constraints_proto."""
+
+    job_id: JobName
+    state: int
+    submitted_at: Timestamp
+    root_submitted_at: Timestamp
+    started_at: Timestamp | None
+    finished_at: Timestamp | None
+    scheduling_deadline_epoch_ms: int | None
+    error: str | None
+    exit_code: int | None
+    num_tasks: int
+    is_reservation_holder: bool
+    has_reservation: bool
+    name: str
+    depth: int
+    resources: cluster_pb2.ResourceSpecProto | None
+    has_coscheduling: bool
+    coscheduling_group_by: str
+    scheduling_timeout_ms: int | None
+    max_task_failures: int
+
+
+@dataclass(frozen=True, slots=True)
+class JobSchedulingRow:
+    """Full job row for scheduling — adds constraints_proto over JobRow."""
+
+    job_id: JobName
+    state: int
+    submitted_at: Timestamp
+    root_submitted_at: Timestamp
+    started_at: Timestamp | None
+    finished_at: Timestamp | None
+    scheduling_deadline_epoch_ms: int | None
+    error: str | None
+    exit_code: int | None
+    num_tasks: int
+    is_reservation_holder: bool
+    has_reservation: bool
+    name: str
+    depth: int
+    resources: cluster_pb2.ResourceSpecProto | None
+    constraints: list[cluster_pb2.Constraint]
+    has_coscheduling: bool
+    coscheduling_group_by: str
+    scheduling_timeout_ms: int | None
+    max_task_failures: int
+
+
+@dataclass(frozen=True, slots=True)
+class JobDetailRow:
+    """Full job detail — superset of JobSchedulingRow, adds request_proto."""
+
+    job_id: JobName
+    state: int
+    submitted_at: Timestamp
+    root_submitted_at: Timestamp
+    started_at: Timestamp | None
+    finished_at: Timestamp | None
+    scheduling_deadline_epoch_ms: int | None
+    error: str | None
+    exit_code: int | None
+    num_tasks: int
+    is_reservation_holder: bool
+    has_reservation: bool
+    name: str
+    depth: int
+    resources: cluster_pb2.ResourceSpecProto | None
+    constraints: list[cluster_pb2.Constraint]
+    has_coscheduling: bool
+    coscheduling_group_by: str
+    scheduling_timeout_ms: int | None
+    max_task_failures: int
+    request: cluster_pb2.Controller.LaunchJobRequest
+
+
+@dataclass(frozen=True, slots=True)
+class TaskRow:
+    """Lightweight task row for scheduling."""
+
+    task_id: JobName
+    job_id: JobName
+    state: int
+    current_attempt_id: int
+    failure_count: int
+    preemption_count: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    submitted_at: Timestamp
+
+
+@dataclass(frozen=True, slots=True)
+class TaskDetailRow:
+    """Full task detail — superset of TaskRow, adds diagnostics and attempts."""
+
+    task_id: JobName
+    job_id: JobName
+    state: int
+    current_attempt_id: int
+    failure_count: int
+    preemption_count: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    submitted_at: Timestamp
+    error: str | None
+    exit_code: int | None
+    started_at: Timestamp | None
+    finished_at: Timestamp | None
+    resource_usage: cluster_pb2.ResourceUsage | None
+    current_worker_id: WorkerId | None
+    current_worker_address: str | None
+    container_id: str | None = None
+    attempts: tuple = dataclasses.field(default_factory=tuple)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerRow:
+    """Worker row for scheduling and health checks."""
+
+    worker_id: WorkerId
+    address: str
+    healthy: bool
+    active: bool
+    consecutive_failures: int
+    last_heartbeat: Timestamp
+    committed_cpu_millicores: int
+    committed_mem: int
+    committed_gpu: int
+    committed_tpu: int
+    total_cpu_millicores: int
+    total_memory_bytes: int
+    total_gpu_count: int
+    total_tpu_count: int
+    device_type: str
+    device_variant: str
+    attributes: dict = dataclasses.field(default_factory=dict)
+    available_cpu_millicores: int = 0
+    available_memory: int = 0
+    available_gpus: int = 0
+    available_tpus: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerDetailRow:
+    """Full worker detail — superset of WorkerRow, adds metadata_proto blob."""
+
+    worker_id: WorkerId
+    address: str
+    healthy: bool
+    active: bool
+    consecutive_failures: int
+    last_heartbeat: Timestamp
+    committed_cpu_millicores: int
+    committed_mem: int
+    committed_gpu: int
+    committed_tpu: int
+    total_cpu_millicores: int
+    total_memory_bytes: int
+    total_gpu_count: int
+    total_tpu_count: int
+    device_type: str
+    device_variant: str
+    metadata: cluster_pb2.WorkerMetadata
+    attributes: dict = dataclasses.field(default_factory=dict)
+    available_cpu_millicores: int = 0
+    available_memory: int = 0
+    available_gpus: int = 0
+    available_tpus: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptRow:
+    """Task attempt row."""
+
+    task_id: JobName
+    attempt_id: int
+    worker_id: WorkerId | None
+    state: int
+    created_at: Timestamp
+    started_at: Timestamp | None
+    finished_at: Timestamp | None
+    exit_code: int | None
+    error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class EndpointRow:
+    """Registered service endpoint."""
+
+    endpoint_id: str
+    name: str
+    address: str
+    job_id: JobName
+    metadata: dict
+    registered_at: Timestamp
+
+
+@dataclass(frozen=True, slots=True)
+class TransactionActionRow:
+    """Transaction action log entry."""
+
+    timestamp: Timestamp
+    action: str
+    entity_id: str
+    details: dict
+
+
+@dataclass(frozen=True, slots=True)
+class ApiKeyRow:
+    """API key record."""
+
+    key_id: str
+    key_hash: str
+    key_prefix: str
+    user_id: str
+    name: str
+    created_at: Timestamp
+    last_used_at: Timestamp | None = None
+    expires_at: Timestamp | None = None
+    revoked_at: Timestamp | None = None
+
+
+# ---------------------------------------------------------------------------
 # Projections -- typed column subsets that replace hand-maintained column strings
 # ---------------------------------------------------------------------------
 
-# Full job row for scheduling (includes constraints_proto).
+# Lightweight job row for listings (excludes constraints_proto blob).
 JOB_ROW_PROJECTION = JOBS.projection(
+    "job_id",
+    "state",
+    "submitted_at_ms",
+    "root_submitted_at_ms",
+    "started_at_ms",
+    "finished_at_ms",
+    "scheduling_deadline_epoch_ms",
+    "error",
+    "exit_code",
+    "num_tasks",
+    "is_reservation_holder",
+    "has_reservation",
+    "name",
+    "depth",
+    "resources_proto",
+    "has_coscheduling",
+    "coscheduling_group_by",
+    "scheduling_timeout_ms",
+    "max_task_failures",
+    row_cls=JobRow,
+)
+
+# Full job row for scheduling (includes constraints_proto).
+JOB_SCHEDULING_PROJECTION = JOBS.projection(
     "job_id",
     "state",
     "submitted_at_ms",
@@ -1301,29 +1599,7 @@ JOB_ROW_PROJECTION = JOBS.projection(
     "coscheduling_group_by",
     "scheduling_timeout_ms",
     "max_task_failures",
-)
-
-# Listing projection: same as JOB_ROW but without constraints_proto (avoids blob fetch).
-JOB_LISTING_PROJECTION = JOBS.projection(
-    "job_id",
-    "state",
-    "submitted_at_ms",
-    "root_submitted_at_ms",
-    "started_at_ms",
-    "finished_at_ms",
-    "scheduling_deadline_epoch_ms",
-    "error",
-    "exit_code",
-    "num_tasks",
-    "is_reservation_holder",
-    "has_reservation",
-    "name",
-    "depth",
-    "resources_proto",
-    "has_coscheduling",
-    "coscheduling_group_by",
-    "scheduling_timeout_ms",
-    "max_task_failures",
+    row_cls=JobSchedulingRow,
 )
 
 # Worker row for scheduling and health checks.
@@ -1344,7 +1620,14 @@ WORKER_ROW_PROJECTION = WORKERS.projection(
     "total_tpu_count",
     "device_type",
     "device_variant",
-    extra_fields=(ExtraField("attributes", dict, default_factory=dict),),
+    extra_fields=(
+        ExtraField("attributes", dict, default_factory=dict),
+        ExtraField("available_cpu_millicores", int, default=0),
+        ExtraField("available_memory", int, default=0),
+        ExtraField("available_gpus", int, default=0),
+        ExtraField("available_tpus", int, default=0),
+    ),
+    row_cls=WorkerRow,
 )
 
 # Task row for scheduling.
@@ -1358,25 +1641,16 @@ TASK_ROW_PROJECTION = TASKS.projection(
     "max_retries_failure",
     "max_retries_preemption",
     "submitted_at_ms",
+    row_cls=TaskRow,
 )
-
-# ---------------------------------------------------------------------------
-# Type aliases for existing projections
-# ---------------------------------------------------------------------------
-
-JobRow = JOB_ROW_PROJECTION.row_cls
-JobListingRow = JOB_LISTING_PROJECTION.row_cls
-WorkerRow = WORKER_ROW_PROJECTION.row_cls
-TaskRow = TASK_ROW_PROJECTION.row_cls
 
 # ---------------------------------------------------------------------------
 # Detail / full-entity projections
 # ---------------------------------------------------------------------------
 
-# Full job detail including request_proto blob (matches legacy JobDetail).
+# Full job detail — superset of JobSchedulingRow, adds request_proto.
 JOB_DETAIL_PROJECTION = JOBS.projection(
     "job_id",
-    "request_proto",
     "state",
     "submitted_at_ms",
     "root_submitted_at_ms",
@@ -1390,50 +1664,69 @@ JOB_DETAIL_PROJECTION = JOBS.projection(
     "has_reservation",
     "name",
     "depth",
+    "resources_proto",
+    "constraints_proto",
+    "has_coscheduling",
+    "coscheduling_group_by",
+    "scheduling_timeout_ms",
+    "max_task_failures",
+    "request_proto",
+    row_cls=JobDetailRow,
 )
-JobDetailRow = JOB_DETAIL_PROJECTION.row_cls
 
-# Full task detail including post-hoc 'attempts' field (matches legacy TaskDetail).
+# Full task detail — superset of TaskRow, adds diagnostics and attempts.
 TASK_DETAIL_PROJECTION = TASKS.projection(
     "task_id",
     "job_id",
     "state",
-    "error",
-    "exit_code",
-    "submitted_at_ms",
-    "started_at_ms",
-    "finished_at_ms",
-    "max_retries_failure",
-    "max_retries_preemption",
+    "current_attempt_id",
     "failure_count",
     "preemption_count",
-    "current_attempt_id",
+    "max_retries_failure",
+    "max_retries_preemption",
+    "submitted_at_ms",
+    "error",
+    "exit_code",
+    "started_at_ms",
+    "finished_at_ms",
     "resource_usage_proto",
     "current_worker_id",
     "current_worker_address",
     "container_id",
     extra_fields=(ExtraField("attempts", tuple, default_factory=tuple),),
+    row_cls=TaskDetailRow,
 )
-TaskDetailRow = TASK_DETAIL_PROJECTION.row_cls
 
-# Full worker detail including metadata_proto blob (matches legacy WorkerDetail).
+# Full worker detail — superset of WorkerRow, adds metadata_proto blob.
 WORKER_DETAIL_PROJECTION = WORKERS.projection(
     "worker_id",
     "address",
-    "metadata_proto",
     "healthy",
+    "active",
     "consecutive_failures",
     "last_heartbeat_ms",
     "committed_cpu_millicores",
     "committed_mem_bytes",
     "committed_gpu",
     "committed_tpu",
-    "active",
-    extra_fields=(ExtraField("attributes", dict, default_factory=dict),),
+    "total_cpu_millicores",
+    "total_memory_bytes",
+    "total_gpu_count",
+    "total_tpu_count",
+    "device_type",
+    "device_variant",
+    "metadata_proto",
+    extra_fields=(
+        ExtraField("attributes", dict, default_factory=dict),
+        ExtraField("available_cpu_millicores", int, default=0),
+        ExtraField("available_memory", int, default=0),
+        ExtraField("available_gpus", int, default=0),
+        ExtraField("available_tpus", int, default=0),
+    ),
+    row_cls=WorkerDetailRow,
 )
-WorkerDetailRow = WORKER_DETAIL_PROJECTION.row_cls
 
-# Task attempt row (matches legacy Attempt).
+# Task attempt row.
 ATTEMPT_PROJECTION = TASK_ATTEMPTS.projection(
     "task_id",
     "attempt_id",
@@ -1444,10 +1737,10 @@ ATTEMPT_PROJECTION = TASK_ATTEMPTS.projection(
     "finished_at_ms",
     "exit_code",
     "error",
+    row_cls=AttemptRow,
 )
-AttemptRow = ATTEMPT_PROJECTION.row_cls
 
-# Endpoint row (matches legacy Endpoint).
+# Endpoint row.
 ENDPOINT_PROJECTION = ENDPOINTS.projection(
     "endpoint_id",
     "name",
@@ -1455,19 +1748,19 @@ ENDPOINT_PROJECTION = ENDPOINTS.projection(
     "job_id",
     "metadata_json",
     "registered_at_ms",
+    row_cls=EndpointRow,
 )
-EndpointRow = ENDPOINT_PROJECTION.row_cls
 
-# Transaction action row (matches legacy TransactionAction).
+# Transaction action row.
 TXN_ACTION_PROJECTION = TXN_ACTIONS.projection(
     "created_at_ms",
     "action",
     "entity_id",
     "details_json",
+    row_cls=TransactionActionRow,
 )
-TransactionActionRow = TXN_ACTION_PROJECTION.row_cls
 
-# API key row (matches legacy ApiKey).
+# API key row.
 API_KEY_PROJECTION = AUTH_API_KEYS.projection(
     "key_id",
     "key_hash",
@@ -1478,8 +1771,8 @@ API_KEY_PROJECTION = AUTH_API_KEYS.projection(
     "last_used_at_ms",
     "expires_at_ms",
     "revoked_at_ms",
+    row_cls=ApiKeyRow,
 )
-ApiKeyRow = API_KEY_PROJECTION.row_cls
 
 
 # ---------------------------------------------------------------------------
@@ -1487,13 +1780,13 @@ ApiKeyRow = API_KEY_PROJECTION.row_cls
 # ---------------------------------------------------------------------------
 
 
-def tasks_with_attempts(tasks: Sequence[TaskDetailRow], attempts: Sequence[AttemptRow]) -> list[TaskDetailRow]:  # type: ignore[not-a-type]
+def tasks_with_attempts(tasks: Sequence[TaskDetailRow], attempts: Sequence[AttemptRow]) -> list[TaskDetailRow]:
     """Attach attempt rows to their parent task detail rows.
 
     Groups attempts by task_id and returns copies of each task with its
     ``attempts`` field populated as a tuple.
     """
-    attempts_by_task: dict[JobName, list[AttemptRow]] = {}  # type: ignore[not-a-type]
+    attempts_by_task: dict[JobName, list[AttemptRow]] = {}
     for attempt in attempts:
         attempts_by_task.setdefault(attempt.task_id, []).append(attempt)
     return [dataclasses.replace(task, attempts=tuple(attempts_by_task.get(task.task_id, ()))) for task in tasks]
