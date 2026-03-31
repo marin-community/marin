@@ -69,7 +69,12 @@ def _tokenize_step(
     worker_ram: str = "10g",
     text_key: str = "text",
 ) -> ExecutorStep:
-    """Create a tokenization ExecutorStep with explicit worker resources."""
+    """Create a tokenization ExecutorStep with explicit worker resources.
+
+    We use this instead of default_tokenize because default_tokenize doesn't
+    expose worker_resources, and many datasets have compressed shards that
+    decompress to 10-30GB, OOMing the default 10g zephyr workers.
+    """
     kwargs = {}
     if worker_ram != "10g":
         kwargs["worker_resources"] = ResourceConfig(ram=worker_ram, disk="10g")
@@ -96,7 +101,12 @@ def _nemotron_tokenize(
     text_key: str = "text",
     reshard: bool = False,
 ) -> ExecutorStep:
-    """Tokenize a Nemotron v2 subset. Optionally reshard large parquets first."""
+    """Tokenize a Nemotron v2 subset. Optionally reshard large parquets first.
+
+    reshard=True converts parquet files to smaller JSONL shards before tokenizing.
+    Needed when individual parquet files are multi-GB (e.g. SFT-Math has 8.7GB
+    parquets) and would OOM zephyr tokenization workers that load one file at a time.
+    """
     dl = downloads[family]
     glob = NEMOTRON_V2_DATASETS[family].subsets[subset]
 
@@ -113,9 +123,7 @@ def _nemotron_tokenize(
     return _tokenize_step(f"{family}/{subset}", train_paths, worker_ram=worker_ram, text_key=text_key)
 
 
-def _cp_raw_tokenize(
-    name: str, hf_id: str, revision: str, glob: str, *, worker_ram: str = "10g"
-) -> ExecutorStep:
+def _cp_raw_tokenize(name: str, hf_id: str, revision: str, glob: str, *, worker_ram: str = "10g") -> ExecutorStep:
     """Download + tokenize a raw Common Pile dataset."""
     dl = ExecutorStep(
         name=f"raw/common_pile/{name}",
@@ -123,7 +131,7 @@ def _cp_raw_tokenize(
         config=DownloadConfig(
             hf_dataset_id=hf_id,
             revision=versioned(revision),
-            hf_urls_glob=[glob],
+            hf_urls_glob=[glob],  # explicit glob to avoid HfFileSystem.find() truncation (#4170)
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
         ),
@@ -131,9 +139,7 @@ def _cp_raw_tokenize(
     return _tokenize_step(f"common_pile/{name}", [dl / glob], worker_ram=worker_ram)
 
 
-def _cp_filtered_tokenize(
-    name: str, filtered_step, *, worker_ram: str = "10g"
-) -> ExecutorStep:
+def _cp_filtered_tokenize(name: str, filtered_step, *, worker_ram: str = "10g") -> ExecutorStep:
     """Tokenize a pre-downloaded Common Pile filtered dataset."""
     return _tokenize_step(f"common_pile/{name}", [filtered_step / "**/*.json*"], worker_ram=worker_ram)
 
@@ -147,6 +153,7 @@ nemotron_cc_v2_high_quality = _nemotron_tokenize("nemotron_cc_v2", "high_quality
 nemotron_cc_v2_high_quality_synthetic = _nemotron_tokenize("nemotron_cc_v2", "high_quality_synthetic")
 nemotron_cc_v2_medium_high_quality = _nemotron_tokenize("nemotron_cc_v2", "medium_high_quality")
 nemotron_cc_v2_medium_quality = _nemotron_tokenize("nemotron_cc_v2", "medium_quality")
+# translated_diverse_qa has 2GB parquets; reshard + 20g workers to avoid OOM
 nemotron_cc_v2_translated_diverse_qa = _nemotron_tokenize(
     "nemotron_cc_v2", "translated_diverse_qa", worker_ram="20g", reshard=True
 )
@@ -155,52 +162,97 @@ nemotron_cc_v2_translated_diverse_qa = _nemotron_tokenize(
 # Nemotron CC-v2.1
 # ============================================================================
 
+# CC-v2.1 parquets are 1-2GB each; 20g workers needed to decompress without OOM
 nemotron_cc_v2_1_high_quality = _nemotron_tokenize("nemotron_cc_v2_1", "high_quality", worker_ram="20g")
 nemotron_cc_v2_1_high_quality_dqa = _nemotron_tokenize("nemotron_cc_v2_1", "high_quality_dqa", worker_ram="20g")
-nemotron_cc_v2_1_high_quality_synthetic = _nemotron_tokenize("nemotron_cc_v2_1", "high_quality_synthetic", worker_ram="20g")
-nemotron_cc_v2_1_high_quality_translated = _nemotron_tokenize("nemotron_cc_v2_1", "high_quality_translated", worker_ram="20g")
-nemotron_cc_v2_1_high_quality_translated_synthetic = _nemotron_tokenize("nemotron_cc_v2_1", "high_quality_translated_synthetic", worker_ram="20g")
+nemotron_cc_v2_1_high_quality_synthetic = _nemotron_tokenize(
+    "nemotron_cc_v2_1", "high_quality_synthetic", worker_ram="20g"
+)
+nemotron_cc_v2_1_high_quality_translated = _nemotron_tokenize(
+    "nemotron_cc_v2_1", "high_quality_translated", worker_ram="20g"
+)
+nemotron_cc_v2_1_high_quality_translated_synthetic = _nemotron_tokenize(
+    "nemotron_cc_v2_1", "high_quality_translated_synthetic", worker_ram="20g"
+)
 nemotron_cc_v2_1_medium_high_quality = _nemotron_tokenize("nemotron_cc_v2_1", "medium_high_quality", worker_ram="20g")
-nemotron_cc_v2_1_medium_high_quality_synthetic = _nemotron_tokenize("nemotron_cc_v2_1", "medium_high_quality_synthetic", worker_ram="20g")
-nemotron_cc_v2_1_medium_high_quality_translated = _nemotron_tokenize("nemotron_cc_v2_1", "medium_high_quality_translated", worker_ram="20g")
+nemotron_cc_v2_1_medium_high_quality_synthetic = _nemotron_tokenize(
+    "nemotron_cc_v2_1", "medium_high_quality_synthetic", worker_ram="20g"
+)
+nemotron_cc_v2_1_medium_high_quality_translated = _nemotron_tokenize(
+    "nemotron_cc_v2_1", "medium_high_quality_translated", worker_ram="20g"
+)
 nemotron_cc_v2_1_medium_quality = _nemotron_tokenize("nemotron_cc_v2_1", "medium_quality", worker_ram="20g")
 
 # ============================================================================
 # Nemotron CC-Code, CC-Math, Code-v2, Specialized, SFT
 # ============================================================================
 
+# CC-Code-v1 uses default text_key="text" (NOT "content" — despite being code, the
+# HF dataset column is "text"). Code-v2 synthetic subsets use "content".
 nemotron_cc_code_v1 = _nemotron_tokenize("nemotron_cc_code_v1", "all", reshard=True)
 
 nemotron_cc_math_3 = _nemotron_tokenize("nemotron_cc_math_v1", "3", reshard=True)
 nemotron_cc_math_mind = _nemotron_tokenize("nemotron_cc_math_v1", "4plus_mind")
 
-nemotron_code_v2_qa = _nemotron_tokenize("nemotron_pretraining_code_v2", "synthetic_question_answering", text_key="content", reshard=True)
-nemotron_code_v2_student_teacher = _nemotron_tokenize("nemotron_pretraining_code_v2", "synthetic_student_teacher", text_key="content")
-nemotron_code_v2_code_review = _nemotron_tokenize("nemotron_pretraining_code_v2", "synthetic_code_review", text_key="content")
-nemotron_code_v2_rewriting = _nemotron_tokenize("nemotron_pretraining_code_v2", "synthetic_rewriting", text_key="content")
-nemotron_code_v2_transpilation = _nemotron_tokenize("nemotron_pretraining_code_v2", "synthetic_transpilation", text_key="content")
+# Code-v2 synthetic subsets use "content" column, not "text"
+nemotron_code_v2_qa = _nemotron_tokenize(
+    "nemotron_pretraining_code_v2", "synthetic_question_answering", text_key="content", reshard=True
+)
+nemotron_code_v2_student_teacher = _nemotron_tokenize(
+    "nemotron_pretraining_code_v2", "synthetic_student_teacher", text_key="content"
+)
+nemotron_code_v2_code_review = _nemotron_tokenize(
+    "nemotron_pretraining_code_v2", "synthetic_code_review", text_key="content"
+)
+nemotron_code_v2_rewriting = _nemotron_tokenize(
+    "nemotron_pretraining_code_v2", "synthetic_rewriting", text_key="content"
+)
+nemotron_code_v2_transpilation = _nemotron_tokenize(
+    "nemotron_pretraining_code_v2", "synthetic_transpilation", text_key="content"
+)
 
-nemotron_specialized_rqa = _nemotron_tokenize("nemotron_pretraining_specialized_v1", "rqa", worker_ram="20g", reshard=True)
-nemotron_specialized_infinibyte = _nemotron_tokenize("nemotron_pretraining_specialized_v1", "infinibyte_reasoning", worker_ram="20g", reshard=True)
+# Specialized-v1 rqa/infinibyte/stem_sft have large parquets; reshard + extra RAM
+nemotron_specialized_rqa = _nemotron_tokenize(
+    "nemotron_pretraining_specialized_v1", "rqa", worker_ram="20g", reshard=True
+)
+nemotron_specialized_infinibyte = _nemotron_tokenize(
+    "nemotron_pretraining_specialized_v1", "infinibyte_reasoning", worker_ram="20g", reshard=True
+)
 nemotron_specialized_wiki_rewrite = _nemotron_tokenize("nemotron_pretraining_specialized_v1", "wiki_rewrite")
 nemotron_specialized_scientific_coding = _nemotron_tokenize("nemotron_pretraining_specialized_v1", "scientific_coding")
-nemotron_specialized_math_textbooks = _nemotron_tokenize("nemotron_pretraining_specialized_v1", "math_textbooks", reshard=True)
-nemotron_specialized_stem_sft = _nemotron_tokenize("nemotron_pretraining_specialized_v1", "stem_sft", worker_ram="20g", reshard=True)
+nemotron_specialized_math_textbooks = _nemotron_tokenize(
+    "nemotron_pretraining_specialized_v1", "math_textbooks", reshard=True
+)
+nemotron_specialized_stem_sft = _nemotron_tokenize(
+    "nemotron_pretraining_specialized_v1", "stem_sft", worker_ram="20g", reshard=True
+)
 
 nemotron_specialized_v1_1_code_concepts = _nemotron_tokenize("nemotron_pretraining_specialized_v1_1", "code_concepts")
-nemotron_specialized_v1_1_algorithmic = _nemotron_tokenize("nemotron_pretraining_specialized_v1_1", "unconditional_algorithmic")
+nemotron_specialized_v1_1_algorithmic = _nemotron_tokenize(
+    "nemotron_pretraining_specialized_v1_1", "unconditional_algorithmic"
+)
 nemotron_specialized_v1_1_formal_logic = _nemotron_tokenize("nemotron_pretraining_specialized_v1_1", "formal_logic")
 nemotron_specialized_v1_1_economics = _nemotron_tokenize("nemotron_pretraining_specialized_v1_1", "economics")
-nemotron_specialized_v1_1_multiple_choice = _nemotron_tokenize("nemotron_pretraining_specialized_v1_1", "multiple_choice")
+nemotron_specialized_v1_1_multiple_choice = _nemotron_tokenize(
+    "nemotron_pretraining_specialized_v1_1", "multiple_choice"
+)
 
 nemotron_sft_code = _nemotron_tokenize("nemotron_pretraining_sft_v1", "sft_code", reshard=True)
 nemotron_sft_general = _nemotron_tokenize("nemotron_pretraining_sft_v1", "sft_general", reshard=True)
+# SFT-Math has an 8.7GB parquet tail shard; needs 120g reshard workers (set in
+# reshard_parquet.py) and 40g tokenize workers
 nemotron_sft_math = _nemotron_tokenize("nemotron_pretraining_sft_v1", "sft_math", worker_ram="40g", reshard=True)
 
 # ============================================================================
 # FinePDFs (null text rows filtered during reshard)
 # ============================================================================
 
+# FinePDFs has two problems:
+# 1. Some parquet rows have text=None, which crashes the tokenizer (TypeError in
+#    BatchTokenizer). We filter these out during reshard (filter_null_text=True).
+# 2. The 4.9GB parquets reshard into ~3GB JSONL.gz shards (zephyr's default shard
+#    size), which decompress to ~15GB+. Tokenize workers need 80g to handle these.
+# input_glob="" because finepdfs_by_language already includes the *.parquet glob.
 finepdfs_resharded = ExecutorStep(
     name="resharded/finepdfs_eng_Latn",
     fn=reshard_parquet,
@@ -211,14 +263,14 @@ finepdfs_resharded = ExecutorStep(
         filter_null_text=True,
     ),
 )
-finepdfs = _tokenize_step(
-    "finepdfs_eng_Latn", [finepdfs_resharded / "**/*.jsonl.gz"], worker_ram="80g"
-)
+finepdfs = _tokenize_step("finepdfs_eng_Latn", [finepdfs_resharded / "**/*.jsonl.gz"], worker_ram="80g")
 
 # ============================================================================
 # FineTranslations
 # ============================================================================
 
+# FineTranslations prepare step produces 7149 shards at ~760MB compressed each;
+# 20g workers needed for decompression overhead
 finetranslations = _tokenize_step(
     "finetranslations_parallel", [finetranslations_prepared / "**/*.jsonl.gz"], worker_ram="20g"
 )
@@ -276,20 +328,31 @@ numinamath = default_tokenize(
 # ============================================================================
 
 cp_peS2o = _cp_raw_tokenize("peS2o", "common-pile/peS2o", "2caeba1", "v0/documents/*.json.gz")
+# pubmed/arxiv/caselaw/hansard have 1-3GB compressed shards; 20g workers for decompression
 cp_pubmed = _cp_raw_tokenize("pubmed", "common-pile/pubmed", "648b8cf", "data/*.jsonl.gz", worker_ram="20g")
 cp_arxiv_papers = _cp_raw_tokenize("arxiv_papers", "common-pile/arxiv_papers", "963fe98", "*.jsonl.gz", worker_ram="20g")
 cp_arxiv_abstracts = _cp_raw_tokenize("arxiv_abstracts", "common-pile/arxiv_abstracts", "828e35d", "*.jsonl.gz")
-cp_caselaw = _cp_raw_tokenize("caselaw_access_project", "common-pile/caselaw_access_project", "3c2cb50", "*.jsonl.gz", worker_ram="20g")
+cp_caselaw = _cp_raw_tokenize(
+    "caselaw_access_project", "common-pile/caselaw_access_project", "3c2cb50", "*.jsonl.gz", worker_ram="20g"
+)
 cp_doab = _cp_raw_tokenize("doab", "common-pile/doab", "89e7a35", "*.json.gz")
-cp_uk_hansard = _cp_raw_tokenize("uk_hansard", "common-pile/uk_hansard", "05eeb43", "uk_hansard/*.jsonl.gz", worker_ram="20g")
-cp_peps = _cp_raw_tokenize("python_enhancement_proposals", "common-pile/python_enhancement_proposals", "f932757", "raw/documents/*.jsonl.gz")
-cp_public_domain_review = _cp_raw_tokenize("public_domain_review", "common-pile/public_domain_review", "e9c7669", "v0/*.jsonl.gz")
+cp_uk_hansard = _cp_raw_tokenize(
+    "uk_hansard", "common-pile/uk_hansard", "05eeb43", "uk_hansard/*.jsonl.gz", worker_ram="20g"
+)
+cp_peps = _cp_raw_tokenize(
+    "python_enhancement_proposals", "common-pile/python_enhancement_proposals", "f932757", "raw/documents/*.jsonl.gz"
+)
+cp_public_domain_review = _cp_raw_tokenize(
+    "public_domain_review", "common-pile/public_domain_review", "e9c7669", "v0/*.jsonl.gz"
+)
 
 # ============================================================================
 # Common Pile: filtered datasets (<90% kept)
 # ============================================================================
 
 cp_wikiteam = _cp_filtered_tokenize("wikiteam", wikiteam_filtered)
+# pre_1929_books/regulations/project_gutenberg/library_of_congress/usgpo OOM at 20g;
+# bumped to 40g (filtered output shards are large due to long documents)
 cp_pre_1929_books = _cp_filtered_tokenize("pre_1929_books", pre_1929_books_filtered, worker_ram="40g")
 cp_ubuntu_irc = _cp_filtered_tokenize("ubuntu_irc", ubuntu_irc_filtered, worker_ram="20g")
 cp_regulations = _cp_filtered_tokenize("regulations", regulations_filtered, worker_ram="40g")
@@ -314,9 +377,7 @@ cp_uspto = _cp_filtered_tokenize("uspto", uspto_filtered, worker_ram="20g")
 
 cp_stackexchange = _cp_filtered_tokenize("stackexchange", stackexchange_filtered)
 cp_github_archive = _cp_filtered_tokenize("github_archive", github_archive_filtered)
-cp_stackv2_code = _tokenize_step(
-    "common_pile/stackv2_code", [stackv2_code_filtered / "**/*.jsonl.gz"], worker_ram="20g"
-)
+cp_stackv2_code = _tokenize_step("common_pile/stackv2_code", [stackv2_code_filtered / "**/*.jsonl.gz"], worker_ram="20g")
 
 # ============================================================================
 # ALL_COMPONENTS — used by tokenize_single.py
@@ -408,10 +469,12 @@ ALL_COMPONENTS: dict[str, ExecutorStep] = {
 }
 
 if __name__ == "__main__":
-    executor_main(steps=[
-        stackv2_code_filtered,
-        finetranslations_prepared,
-        numinamath_prepared,
-        bhl_full_books,
-        *ALL_COMPONENTS.values(),
-    ])
+    executor_main(
+        steps=[
+            stackv2_code_filtered,
+            finetranslations_prepared,
+            numinamath_prepared,
+            bhl_full_books,
+            *ALL_COMPONENTS.values(),
+        ]
+    )

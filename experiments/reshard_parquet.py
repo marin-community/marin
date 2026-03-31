@@ -9,7 +9,6 @@ no single file is too large for tokenization workers to handle.
 
 import dataclasses
 
-from marin.execution.executor import ExecutorStep, this_output_path
 from zephyr import Dataset, ZephyrContext, load_parquet
 
 
@@ -32,6 +31,8 @@ def reshard_parquet(config: ReshardConfig):
     pipeline = ds.write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     ctx = ZephyrContext(
         name="reshard-parquet",
+        # 120g needed because load_parquet decompresses entire parquet files in memory;
+        # SFT-Math has 8.7GB parquets that expand to ~50GB+ in memory during read.
         resources=ResourceConfig(cpu=2, ram="120g"),
     )
     ctx.execute(pipeline)

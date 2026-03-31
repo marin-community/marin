@@ -20,7 +20,6 @@ import dataclasses
 from experiments.defaults import default_download, default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.processing.tokenize.data_configs import TokenizerStep
 from zephyr import Dataset, ZephyrContext, load_parquet
 
 FINETRANSLATIONS_HF_ID = "HuggingFaceFW/finetranslations"
@@ -30,7 +29,7 @@ finetranslations_raw = default_download(
     name="finetranslations",
     hf_dataset_id=FINETRANSLATIONS_HF_ID,
     revision=FINETRANSLATIONS_REVISION,
-    hf_urls_glob=["data/**/*.parquet"],
+    hf_urls_glob=["data/**/*.parquet"],  # explicit glob to avoid HfFileSystem.find() truncation
 )
 
 
@@ -58,6 +57,7 @@ def prepare_finetranslations(config: PrepareFinetranslationsConfig):
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
     from fray.cluster import ResourceConfig
+
     ctx = ZephyrContext(
         name="prepare-finetranslations",
         resources=ResourceConfig(cpu=2, ram="16g"),

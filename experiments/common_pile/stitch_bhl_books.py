@@ -19,8 +19,9 @@ import logging
 
 from experiments.common_pile.tokenize_common_pile import biodiversity_heritage_library_filtered
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.processing.tokenize import TokenizeConfig, tokenize
+from zephyr import Dataset, ZephyrContext
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ def _stitch_pages(item_id: str, pages: Iterator[dict]) -> dict:
 
 def stitch_bhl_full_books(config: StitchBHLConfig):
     """Group BHL pages by item_id, sort by page_num, concat into books."""
+
     def load_jsonl_lenient(source):
         """Read JSONL/JSON.gz, skipping truncated or corrupt lines."""
         import gzip
@@ -81,6 +83,7 @@ def stitch_bhl_full_books(config: StitchBHLConfig):
         .write_jsonl(f"{config.output_path}/books-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
     from fray.cluster import ResourceConfig
+
     ctx = ZephyrContext(
         name="stitch-bhl-books",
         resources=ResourceConfig(cpu=2, ram="16g"),
@@ -97,9 +100,6 @@ bhl_full_books = ExecutorStep(
         output_path=this_output_path(),
     ),
 )
-
-from marin.processing.tokenize import TokenizeConfig, tokenize
-from marin.execution.executor import versioned
 
 bhl_full_books_tokenized = ExecutorStep(
     name="tokenized/common_pile/biodiversity_heritage_library_books",
