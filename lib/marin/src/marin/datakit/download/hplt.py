@@ -6,7 +6,9 @@
 import json
 import logging
 import os
+import time
 from collections.abc import Iterator
+from contextlib import closing
 
 import requests
 import urllib3
@@ -27,10 +29,21 @@ HPLT_MAP_URL = f"{HPLT_BASE_URL}/eng_Latn.map"
 # Shard counts per WDS quality tier
 HPLT_SHARD_COUNTS = {5: 74, 6: 119, 7: 275, 8: 479, 9: 344, 10: 3}
 
-# Web-register codes that are top-level categories
+# Turku web-register codes (https://turkunlp.org/register-annotation-docs/)
+# Top-level: MT=Machine Translated, LY=Lyrical, SP=Spoken, ID=Interactive Discussion,
+# NA=Narrative, HI=How-To/Instructions, IN=Informational, OP=Opinion, IP=Informational Persuasion
 TOP_LEVEL_REGISTERS = frozenset({"MT", "LY", "SP", "ID", "NA", "HI", "IN", "OP", "IP"})
 
-# Sub-registers that indicate good prose content
+# All known sub-register codes from the Turku schema
+ALL_SUB_REGISTERS = frozenset({
+    "ob", "nb", "ne", "ra", "re", "rv", "sr", "it", "en", "av", "rs",  # good prose
+    "lt", "fi", "dtp", "oi", "on", "oh", "oo", "os", "ed", "oe", "ds",  # other sub-registers
+})
+
+# Sub-registers indicating good prose content:
+# ob=Opinion Blog, nb=Narrative Blog, ne=News Report, ra=Research Article, re=Recipe,
+# rv=Review, sr=Sports Report, it=Interview, en=Encyclopedia Article, av=Advice,
+# rs=Religious Blog/Sermon
 GOOD_SUB_REGISTERS = frozenset({"ob", "nb", "ne", "ra", "re", "rv", "sr", "it", "en", "av", "rs"})
 
 # Top-level registers that indicate good content on their own
@@ -59,6 +72,9 @@ def _iter_jsonl_from_zstd_stream(raw_stream) -> Iterator[dict]:
                 if not line_bytes.strip():
                     continue
                 yield json.loads(line_bytes)
+        # Flush trailing bytes (last record may lack a trailing newline)
+        if buf.strip():
+            yield json.loads(bytes(buf))
 
 
 def passes_quality_filter(doc: dict, wds_tier: int) -> bool:
@@ -68,8 +84,8 @@ def passes_quality_filter(doc: dict, wds_tier: int) -> bool:
     achieving ~99% agreement on coherent/incoherent classification.
     """
     wr = doc.get("web-register", {})
-    mt = wr.get("MT", 0)
-    ds = wr.get("ds", 0)
+    mt = wr.get("MT", 0)  # Machine Translated score
+    ds = wr.get("ds", 0)  # Description with Intent to Sell score
 
     # Hard rejections
     if doc.get("pii"):
@@ -80,13 +96,13 @@ def passes_quality_filter(doc: dict, wds_tier: int) -> bool:
         return False
 
     top_regs = {k: v for k, v in wr.items() if k in TOP_LEVEL_REGISTERS}
-    sub_regs = {k: v for k, v in wr.items() if k not in TOP_LEVEL_REGISTERS}
+    sub_regs = {k: v for k, v in wr.items() if k in ALL_SUB_REGISTERS}
     dominant_top = max(top_regs, key=top_regs.get) if top_regs else None
     dominant_sub = max(sub_regs, key=sub_regs.get) if sub_regs else None
 
-    if dominant_sub == "lt":
+    if dominant_sub == "lt":  # Legal Terms and Conditions
         return False
-    if dominant_top == "IP" and not any(wr.get(s, 0) > 0.15 for s in GOOD_SUB_REGISTERS):
+    if dominant_top == "IP" and not any(wr.get(s, 0) > 0.15 for s in GOOD_SUB_REGISTERS):  # pure Informational Persuasion
         return False
 
     # Keep rules
@@ -136,7 +152,7 @@ def _download_shard_attempt(tier: int, shard: int, url: str, output_file_path: s
     num_kept = 0
     num_non_cc = 0
 
-    with atomic_rename(output_file_path) as temp_path:
+    with closing(response), atomic_rename(output_file_path) as temp_path:
         with open_url(temp_path, "w", compression="zstd") as out:
             for record in _iter_jsonl_from_zstd_stream(response.raw):
                 num_input += 1
@@ -180,8 +196,6 @@ def _download_shard_attempt(tier: int, shard: int, url: str, output_file_path: s
 
 def download_single_hplt_shard(tier: int, shard: int, url: str, output_file_path: str) -> dict:
     """Stream an HPLT shard with retries for transient network errors."""
-    import time
-
     for attempt in range(MAX_SHARD_RETRIES):
         try:
             logger.info(f"Processing HPLT shard {tier}_{shard} (attempt {attempt + 1}/{MAX_SHARD_RETRIES})")
@@ -196,7 +210,11 @@ def download_single_hplt_shard(tier: int, shard: int, url: str, output_file_path
             wait = 2 ** (attempt + 1)
             logger.warning(f"Shard {tier}_{shard} failed (attempt {attempt + 1}): {e}. Retrying in {wait}s.")
             time.sleep(wait)
-    raise RuntimeError("unreachable")
+    raise RuntimeError(f"unreachable: retry loop for shard {tier}_{shard} exited without return or raise")
+
+
+def _shard_output_path(output_path: str, tier: int, shard: int) -> str:
+    return os.path.join(output_path, f"{tier}_{shard}.jsonl.zst")
 
 
 def download_hplt_v3(output_path: str) -> None:
@@ -204,15 +222,10 @@ def download_hplt_v3(output_path: str) -> None:
     all_shards = _get_all_shard_urls()
     logger.info(f"Processing {len(all_shards)} HPLT shards")
 
-    def process_shard(shard_info):
-        tier, shard, url = shard_info
-        output_file = os.path.join(output_path, f"{tier}_{shard}.jsonl.zst")
-        return download_single_hplt_shard(tier, shard, url, output_file)
-
     pipeline = (
         Dataset.from_list(all_shards)
-        .filter(lambda info: not fsspec_exists(os.path.join(output_path, f"{info[0]}_{info[1]}.jsonl.zst")))
-        .map(lambda info: process_shard(info))
+        .filter(lambda info: not fsspec_exists(_shard_output_path(output_path, info[0], info[1])))
+        .map(lambda info: download_single_hplt_shard(info[0], info[1], info[2], _shard_output_path(output_path, info[0], info[1])))
         .write_jsonl(os.path.join(output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
     )
 
@@ -227,4 +240,5 @@ def download_hplt_v3_step() -> StepSpec:
     return StepSpec(
         name="raw/hplt_v3",
         fn=lambda output_path: download_hplt_v3(output_path=output_path),
+        override_output_path="raw/hplt_v3",
     )
