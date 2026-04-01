@@ -142,9 +142,8 @@ def _make_session() -> requests.Session:
 MAX_SHARD_RETRIES = 3
 
 
-def _download_shard_attempt(tier: int, shard: int, url: str, output_file_path: str) -> dict:
+def _download_shard_attempt(tier: int, shard: int, url: str, output_file_path: str, session: requests.Session) -> dict:
     """Single attempt to stream and filter an HPLT shard."""
-    session = _make_session()
     response = session.get(url, headers={"user-agent": "marin-hplt-ingress/1.0"}, stream=True)
     response.raise_for_status()
 
@@ -196,10 +195,11 @@ def _download_shard_attempt(tier: int, shard: int, url: str, output_file_path: s
 
 def download_single_hplt_shard(tier: int, shard: int, url: str, output_file_path: str) -> dict:
     """Stream an HPLT shard with retries for transient network errors."""
+    session = _make_session()
     for attempt in range(MAX_SHARD_RETRIES):
         try:
             logger.info(f"Processing HPLT shard {tier}_{shard} (attempt {attempt + 1}/{MAX_SHARD_RETRIES})")
-            return _download_shard_attempt(tier, shard, url, output_file_path)
+            return _download_shard_attempt(tier, shard, url, output_file_path, session)
         except (
             requests.exceptions.ConnectionError,
             requests.exceptions.ChunkedEncodingError,
