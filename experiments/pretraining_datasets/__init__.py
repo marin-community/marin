@@ -25,6 +25,11 @@ from experiments.pretraining_datasets.dolma import (
     tokenize_dolma,
 )
 from marin.datakit.download.dolma import DOLMA_DATASETS
+from experiments.pretraining_datasets.hplt import (
+    HPLT_DATASETS,
+    hplt_v3_download,
+    tokenize_hplt_v3,
+)
 from experiments.pretraining_datasets.dolmino import (
     DOLMINO_DATASETS,
     DOLMINO_LLAMA3_OVERRIDES,
@@ -58,6 +63,7 @@ __all__ = [
     "DOLMA_OLMO_MIXTURE_WEIGHTS",
     "DOLMINO_DATASETS",
     "DOLMINO_LLAMA3_OVERRIDES",
+    "HPLT_DATASETS",
     "NEMOTRON_DATASETS",
     "NEMOTRON_LLAMA3_OVERRIDES",
     "NEMOTRON_V2_DATASETS",
@@ -110,6 +116,11 @@ DATASETS = {
         "subsets": ["all"],
         "download": dolmino_downloads["dolmino"],
         "tokenize_fn": lambda: {"dolmino_math/all": tokenize_dolmino_math()},
+    },
+    "hplt_v3": {
+        "subsets": list(HPLT_DATASETS.keys()),
+        "download": hplt_v3_download(),
+        "tokenize_fn": tokenize_hplt_v3,
     },
     # Multi-subset datasets
     "dolmino": {
