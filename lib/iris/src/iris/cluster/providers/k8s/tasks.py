@@ -69,11 +69,12 @@ _K8S_LABEL_MAX_LEN = 63
 _POD_NOT_FOUND_GRACE_CYCLES = 3
 
 # Kubernetes terminated reasons that indicate infrastructure failure (not application error).
-# OOMKilled: container exceeded memory limits or node ran out of memory.
 # Evicted: kubelet evicted the pod due to resource pressure.
 # DeadlineExceeded: pod's activeDeadlineSeconds expired.
 # Preempting: scheduler preempted the pod for a higher-priority workload.
-_INFRASTRUCTURE_FAILURE_REASONS = frozenset({"OOMKilled", "Evicted", "DeadlineExceeded", "Preempting"})
+# NOTE: OOMKilled is intentionally excluded — it indicates a misconfigured job
+# (requesting too little memory), not transient infrastructure failure.
+_INFRASTRUCTURE_FAILURE_REASONS = frozenset({"Evicted", "DeadlineExceeded", "Preempting"})
 
 
 def _constraints_to_node_selector(
@@ -500,8 +501,8 @@ def _is_infrastructure_failure(pod: dict) -> bool:
 def _task_update_from_pod(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
     """Build a TaskUpdate from a Kubernetes Pod dict.
 
-    Infrastructure failures (OOMKilled, eviction) are reported as WORKER_FAILED
-    so they count against max_retries_preemption (default: 100).
+    Infrastructure failures (eviction, preemption) are reported as WORKER_FAILED
+    so they count against max_retries_preemption.
     Application failures (non-zero exit code) are reported as FAILED so they
     count against max_retries_failure (default: 0, no retries).
     """
