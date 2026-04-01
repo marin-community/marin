@@ -141,7 +141,7 @@ class IrisTestCluster:
         scheduling_timeout: Duration | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
-        max_retries_preemption: int = 100,
+        max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
         coscheduling: CoschedulingConfig | None = None,
         constraints: list[Constraint] | None = None,
