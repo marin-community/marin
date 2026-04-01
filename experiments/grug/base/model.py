@@ -14,6 +14,7 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
+from levanter.backward_metrics import BackwardMetricSink, observe_grad_sumsq
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head, Plogits, unshard
@@ -205,9 +206,12 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
+        backward_sink: BackwardMetricSink | None = None,
     ) -> jax.Array:
         """Compute next-token cross-entropy loss for a batch."""
         hidden = self(token_ids, mask=mask)
+        if backward_sink is not None:
+            hidden, backward_sink = observe_grad_sumsq(hidden, backward_sink)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
