@@ -41,7 +41,9 @@ _KUBECTL_TIMEOUT = 1800.0
 
 _S3_SECRET_NAME = "iris-s3-credentials"
 _CONTROLLER_CPU_REQUEST = "2"
-_CONTROLLER_MEMORY_REQUEST = "4Gi"
+# The controller enumerates cluster-wide pod state and restores from persisted
+# state snapshots; 4Gi has proven too small on busy CoreWeave clusters.
+_CONTROLLER_MEMORY_REQUEST = "16Gi"
 
 
 # S3-compatible endpoints that require virtual-hosted-style addressing where the
