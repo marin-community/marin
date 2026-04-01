@@ -4,6 +4,7 @@
 import dataclasses
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import draccus
 import equinox as eqx
@@ -55,7 +56,9 @@ from levanter.main.train_dpo import (
     TrainDpoConfig,
     _build_dpo_dataset,
     _derive_training_keys,
+    _periodic_eval_callback,
     _restore_policy_model_from_partial_checkpoint,
+    _scheduled_eval_callback,
     _validate_dpo_config,
 )
 from levanter.metrics import Metric
@@ -179,6 +182,31 @@ def test_training_keys_preserve_legacy_full_dpo_model_key_path():
     assert np.array_equal(np.asarray(model_key), np.asarray(legacy_model_key))
     assert np.array_equal(np.asarray(policy_key), np.asarray(legacy_policy_key))
     assert np.array_equal(np.asarray(training_key), np.asarray(legacy_training_key))
+
+
+def test_periodic_eval_callback_dedupes_same_step():
+    calls: list[int] = []
+    callback = _periodic_eval_callback(lambda info: calls.append(info.step))
+
+    callback(SimpleNamespace(step=0), force=True)
+    callback(SimpleNamespace(step=0))
+    callback(SimpleNamespace(step=1))
+    callback(SimpleNamespace(step=1), force=True)
+
+    assert calls == [0, 1]
+
+
+def test_scheduled_eval_callback_runs_only_on_scheduled_steps():
+    calls: list[int] = []
+    callback = _scheduled_eval_callback(lambda info: calls.append(info.step), {5, 10})
+
+    callback(SimpleNamespace(step=0), force=True)
+    callback(SimpleNamespace(step=4))
+    callback(SimpleNamespace(step=5))
+    callback(SimpleNamespace(step=5), force=True)
+    callback(SimpleNamespace(step=10))
+
+    assert calls == [0, 5, 10]
 
 
 def test_canonical_dpo_config_parses_from_yaml(tmp_path: Path):

@@ -5,7 +5,7 @@ import dataclasses
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Optional, cast
+from typing import Any, Callable, Optional, cast
 
 import draccus
 import equinox as eqx
@@ -17,6 +17,7 @@ from haliax.partitioning import named_jit, round_axis_for_partitioning
 
 import levanter
 import levanter.callbacks
+import levanter.eval
 from levanter import callbacks
 from levanter.adaptation import (
     AdaptationConfig,
@@ -29,6 +30,7 @@ from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import (
     DpoExample,
+    LmDataConfig,
     PreferenceChatLmDatasetFormat,
     PreferenceLmDataConfig,
     dataset_for_preference_format,
@@ -46,7 +48,7 @@ from levanter.dpo import (
 )
 from levanter.main.model_init import load_model_from_source, prepare_model_init_context
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
@@ -300,6 +302,8 @@ class TrainDpoConfig:
 
     validation_split_fraction: float | None = 0.1
     reference_eval_cache: ReferenceEvalCacheConfig = field(default_factory=ReferenceEvalCacheConfig)
+    lm_validation_data: LmDataConfig | None = None
+    lm_validation_prefix: str = "lm_eval"
 
     hf_save_path: Optional[str] = None
     hf_upload: bool | str = False
@@ -323,6 +327,34 @@ def _derive_training_keys(seed: int) -> tuple[jax.Array, jax.Array, jax.Array, j
     data_key, adapter_key, model_key, training_key = jrandom.split(jrandom.PRNGKey(seed), 4)
     policy_key, _ = jrandom.split(model_key)
     return data_key, model_key, policy_key, adapter_key, training_key
+
+
+def _periodic_eval_callback(callback: Callable[[Any], Any]) -> Callable[..., None]:
+    last_eval_step: int | None = None
+
+    def maybe_run_eval(step_info, *, force: bool = False):
+        del force
+        nonlocal last_eval_step
+        if last_eval_step == step_info.step:
+            return
+        callback(step_info)
+        last_eval_step = step_info.step
+
+    return maybe_run_eval
+
+
+def _scheduled_eval_callback(callback: Callable[[Any], Any], eval_steps: set[int]) -> Callable[..., None]:
+    last_eval_step: int | None = None
+
+    def maybe_run_eval(step_info, *, force: bool = False):
+        nonlocal last_eval_step
+        if last_eval_step == step_info.step:
+            return
+        if force or step_info.step in eval_steps:
+            callback(step_info)
+            last_eval_step = step_info.step
+
+    return maybe_run_eval
 
 
 def _validate_dpo_config(config: TrainDpoConfig) -> None:
@@ -706,6 +738,10 @@ def main(config: TrainDpoConfig):
             }
         )
 
+        max_eval_examples_per_ds = config.trainer.max_eval_batches
+        if max_eval_examples_per_ds is not None:
+            max_eval_examples_per_ds *= config.trainer.eval_batch_size
+
         flops_per_token = config.model.flops_per_token(vocab_size, Pos.size)
         flops_per_example = 3 * flops_per_token * Pos.size if flops_per_token is not None else None
         trainer.add_hook(
@@ -730,13 +766,44 @@ def main(config: TrainDpoConfig):
 
             trainer.add_hook(log_mixture_weights, every=1)
 
-        initial_eval_callbacks: list[Any] = []
-        if validation_specs:
-            for name, spec in validation_specs.items():
-                if config.scheduled_eval_steps is None:
-                    trainer.add_eval_hook(spec.dataset, name=name or None)
-                    continue
+        lm_eval_callback: Callable[[Any], Any] | None = None
+        if config.lm_validation_data is not None:
+            tagged_lm_eval_datasets = config.lm_validation_data.tagged_eval_sets(Pos)
+            if tagged_lm_eval_datasets:
+                checkpoint_path = None
+                if config.trainer.checkpointer is not None:
+                    checkpoint_path = config.trainer.checkpointer.expanded_path(trainer.run_id)
 
+                def lm_eval_loss(model: DpoModel | LmHeadModel, batch: LmExample) -> levanter.eval.LossFnOutput:
+                    policy_model = inference_mode(_policy_model_for_hf_save(model), True)
+                    policy_model = trainer.mp.cast_to_compute(policy_model)
+                    per_pos_loss = policy_model.compute_next_token_loss(batch, reduction=None, reduction_axis=()).array
+                    per_pos_weight = batch.loss_weight.array
+                    per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
+                    return per_pos_loss, per_pos_weight, per_pos_token_id
+
+                lm_eval_callback = levanter.eval.cb_tagged_lm_evaluate(
+                    trainer.EvalBatch,
+                    tagged_lm_eval_datasets,
+                    tokenizer=tokenizer,
+                    device_mesh=trainer.device_mesh,
+                    axis_mapping=trainer.compute_axis_mapping,
+                    max_examples_per_dataset=max_eval_examples_per_ds,
+                    prefix=config.lm_validation_prefix,
+                    mp=trainer.mp,
+                    checkpoint_path=checkpoint_path,
+                    loss_fn=lm_eval_loss,
+                    eval_ema=False,
+                )
+            else:
+                logger.warning("No LM evaluation datasets provided for DPO.")
+
+        initial_eval_callbacks: list[Any] = []
+        if validation_specs or lm_eval_callback is not None:
+            eval_steps = set(config.scheduled_eval_steps) if config.scheduled_eval_steps is not None else None
+            hook_every = 1 if eval_steps is not None else config.trainer.steps_per_eval
+
+            for name, spec in validation_specs.items():
                 eval_loader = trainer.data_loader(spec.dataset, trainer.EvalBatch)
                 if not eval_loader or (
                     trainer.config.max_eval_batches is not None and trainer.config.max_eval_batches <= 0
@@ -754,17 +821,20 @@ def main(config: TrainDpoConfig):
                     max_batches=trainer.config.max_eval_batches,
                     name=name or None,
                 )
-                initial_eval_callbacks.append(compute_loss)
+                if eval_steps is None:
+                    wrapped_callback = _periodic_eval_callback(compute_loss)
+                else:
+                    wrapped_callback = _scheduled_eval_callback(compute_loss, eval_steps)
+                initial_eval_callbacks.append(wrapped_callback)
+                trainer.add_hook(wrapped_callback, every=hook_every)
 
-                scheduled_eval_steps = set(config.scheduled_eval_steps)
-
-                def maybe_run_eval(
-                    step_info, *, force: bool = False, cb=compute_loss, eval_steps=scheduled_eval_steps
-                ):
-                    if force or step_info.step in eval_steps:
-                        cb(step_info)
-
-                trainer.add_hook(maybe_run_eval, every=1)
+            if lm_eval_callback is not None:
+                if eval_steps is None:
+                    wrapped_callback = _periodic_eval_callback(lm_eval_callback)
+                else:
+                    wrapped_callback = _scheduled_eval_callback(lm_eval_callback, eval_steps)
+                initial_eval_callbacks.append(wrapped_callback)
+                trainer.add_hook(wrapped_callback, every=hook_every)
         else:
             logger.warning("No validation datasets provided.")
 
@@ -805,7 +875,7 @@ def main(config: TrainDpoConfig):
             initial_eval_state = dataclasses.replace(state, step=1)
             initial_eval_info = callbacks.StepInfo(initial_eval_state, 0.0, 0.0)
             for callback in initial_eval_callbacks:
-                callback(initial_eval_info)
+                callback(initial_eval_info, force=True)
 
         trainer.train(state, train_loader)
 

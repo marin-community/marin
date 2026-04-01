@@ -64,6 +64,7 @@ from marin.processing.tokenize import (
     TokenizerStep,
     add_validation_sets_to_mixture,
     lm_data_config,
+    lm_mixture_data_config,
     tokenize,
 )
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
@@ -672,6 +673,12 @@ def default_dpo(
     preference_data = PreferenceLmDataConfig.from_lm_data_config(pretraining_data)
     preference_data = dataclasses.replace(preference_data, permutation_type="feistel")
     dpo_tokenizer_name = unwrap_versioned_value(preference_data.tokenizer)
+    lm_validation_data = lm_mixture_data_config(
+        default_validation_sets(tokenizer=dpo_tokenizer_name),
+        {},
+        missing_weights_are_validation=True,
+        include_raw_paths=False,
+    )
 
     name = _truncate_wandb_name(name)
 
@@ -757,6 +764,7 @@ def default_dpo(
         beta=dpo_config.beta,
         validation_split_fraction=dpo_config.validation_split_fraction,
         reference_eval_cache=dpo_config.reference_eval_cache,
+        lm_validation_data=lm_validation_data,
         hf_save_steps=steps_per_export_hf,
         hf_save_dtype=hf_save_dtype,
         hf_generation_eos_token_ids=dpo_config.hf_generation_eos_token_ids,

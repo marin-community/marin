@@ -2038,3 +2038,61 @@ For `reference.type=adapter_base`, reference identity should include the frozen 
   - explicit step-based DPO configs when a script sets `num_train_steps` / `steps_per_eval`
   - one-epoch auto budgeting plus 5-point eval cadence when those fields are left unset
 - The main Bloom SpecEval v2 scripts now opt into the new auto path directly.
+
+## 2026-04-01 DPO LM Eval Integration
+
+### Goal
+
+- Add the standard pretraining LM eval suites to DPO runs without mixing them into preference validation.
+- Apply this automatically to both:
+  - the standard Bloom SpecEval v2 DPO run
+  - the LoRA DPO sweep, via `default_dpo(...)`
+
+### What changed
+
+- Updated [`experiments/defaults.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/defaults.py) so `default_dpo(...)` now always builds a separate `lm_validation_data` from `default_validation_sets(tokenizer=...)`.
+- This reuses the same validation bundle used by pretraining:
+  - Paloma tokenized eval sets
+  - Uncheatable Eval tokenized eval sets
+- Updated [`lib/levanter/src/levanter/main/train_dpo.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/main/train_dpo.py) to add:
+  - `lm_validation_data: LmDataConfig | None`
+  - `lm_validation_prefix: str = "lm_eval"`
+- DPO now runs LM evals through `levanter.eval.cb_tagged_lm_evaluate(...)` on the same cadence as DPO preference eval:
+  - initial eval before training
+  - scheduled interior evals
+  - final forced eval at end of training
+
+### Logging behavior
+
+- Preference validation remains under `eval/...` and still reports DPO loss metrics for preference datasets.
+- LM eval metrics are logged separately under `lm_eval/...` so they do not collide with preference loss:
+  - `lm_eval/paloma/...`
+  - `lm_eval/uncheatable_eval/...`
+- This keeps DPO-specific validation and LM generalization validation distinct in W&B.
+
+### Implementation details
+
+- I did **not** try to cram `default_validation_sets()` into `PreferenceLmDataConfig`; those datasets are LM eval data, not preference pairs.
+- Instead, DPO now carries two parallel validation paths:
+  - preference validation for DPO loss
+  - LM validation for next-token loss / bpb on Paloma and Uncheatable
+- Added small callback wrappers in `train_dpo.py` to prevent duplicate eval runs when:
+  - initial eval happens at step 0
+  - trainer force-runs hooks at the final step
+
+### Validation performed
+
+- Ran:
+  - `make fix`
+  - `uv run python -m pytest -o addopts='' tests/test_training.py`
+  - `uv run --directory lib/levanter --group test python -m pytest tests/test_dpo.py tests/test_lora_dpo.py`
+- Results:
+  - `tests/test_training.py`: `9 passed`
+  - Levanter DPO tests: `37 passed, 1 skipped`
+
+### Resulting behavior
+
+- Any DPO experiment that goes through `default_dpo(...)` now picks up Paloma + Uncheatable LM evals automatically.
+- That includes:
+  - [`experiments/dpo_bloom_speceval_v2.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/dpo_bloom_speceval_v2.py)
+  - [`experiments/tune_lora/common.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/tune_lora/common.py)
