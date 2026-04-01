@@ -89,7 +89,10 @@ DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
 
 
-def _runtime_extras_for_device(device: CpuConfig | TpuConfig | GpuConfig) -> list[str]:
+def _runtime_extras_for_training(
+    train_config: TrainLmConfig | TrainDpoConfig,
+    device: CpuConfig | TpuConfig | GpuConfig,
+) -> list[str]:
     """Resolve runtime dependency groups for the submitted job environment.
 
     Set MARIN_SKIP_RUNTIME_EXTRAS=1 to bypass dynamic extras installation when
@@ -104,6 +107,8 @@ def _runtime_extras_for_device(device: CpuConfig | TpuConfig | GpuConfig) -> lis
         extras.append("tpu")
     elif isinstance(device, GpuConfig):
         extras.append("gpu")
+    if isinstance(train_config, TrainLmConfig) and train_config.eval_harness is not None:
+        extras.append("eval")
     return extras
 
 
@@ -139,10 +144,13 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
 
 def _suppress_ray_config(config: TrainConfigT) -> TrainConfigT:
     """
-    Levanter wants to auto-start the Ray cluster, but we're already in a Ray cluster. Disable that.
+    Disable Levanter's internal Ray bootstrap knobs.
+
+    Marin manages execution via Fray, so Levanter should never try to create or
+    scale its own Ray cluster from inside a submitted job.
     """
     if config.trainer.ray.auto_start_cluster:
-        logger.info("Ray cluster is set to auto-start, but that's not what we want for Marin. Disabling.")
+        logger.info("Disabling Levanter ray.auto_start_cluster for Marin-managed execution.")
         return replace(
             config,
             trainer=replace(
@@ -151,7 +159,7 @@ def _suppress_ray_config(config: TrainConfigT) -> TrainConfigT:
             ),
         )
     elif config.trainer.ray.start_workers:
-        logger.info("Ray cluster is set to start workers, but that's not what we want for Marin. Disabling.")
+        logger.info("Disabling Levanter ray.start_workers for Marin-managed execution.")
         return replace(
             config,
             trainer=replace(config.trainer, ray=replace(config.trainer.ray, start_workers=False)),
@@ -282,11 +290,7 @@ def _prepare_training_run(
     if not isinstance(config.resources.device, CpuConfig):
         _doublecheck_paths(config)
 
-    extras: list[str] = []
-    if isinstance(config.resources.device, TpuConfig):
-        extras.append("tpu")
-    elif isinstance(config.resources.device, GpuConfig):
-        extras.append("gpu")
+    extras = _runtime_extras_for_training(train_config, config.resources.device)
 
     return config, train_config, env, extras
 
@@ -316,10 +320,10 @@ def _submit_training_job(
 
 
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
-    """Run the Levanter LM training main function on a Ray cluster.
+    """Run the Levanter LM training main function through Fray.
 
-    This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
-    It should also be run with a Ray cluster already running.
+    This function is designed to run inside Marin/Fray-managed jobs or from a
+    context that can submit Fray jobs.
 
     - WANDB_API_KEY: The API key for Weights and Biases.
     - RUN_ID: (Optional) The run ID for this training run. Will default to a random UID if not set.
@@ -328,7 +332,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     This function makes a number of changes to the config and ensures a few things are set:
     - The run ID is set, or sets a default if not.
     - WANDB_API_KEY is set.
-    - It disables the auto-ray-start and auto-worker-start options since we're already in a Ray cluster.
+    - It disables Levanter's internal Ray bootstrap options.
     - It checks that configured GCS paths are in the same region as the VM (except train/validation source URLs).
     """
     config, train_config, env, extras = _prepare_training_run(config)
@@ -353,10 +357,10 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
 
 def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
-    """Run the Levanter DPO training main function on a Ray cluster.
+    """Run the Levanter DPO training main function through Fray.
 
-    This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
-    It should also be run with a Ray cluster already running.
+    This function is designed to run inside Marin/Fray-managed jobs or from a
+    context that can submit Fray jobs.
     """
     config, train_config, env, extras = _prepare_training_run(config)
 

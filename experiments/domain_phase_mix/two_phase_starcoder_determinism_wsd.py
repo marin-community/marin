@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -34,7 +37,7 @@ from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.dolma import DOLMA_LLAMA3_OVERRIDES
 from experiments.pretraining_datasets.nemotron import NEMOTRON_LLAMA3_OVERRIDES
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 NAME = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_determinism_wsd"
 OBJECTIVE_METRIC = "eval/paloma/dolma_100_programing_languages/bpb"
@@ -279,8 +282,7 @@ def _resolve_prefix_with_fallback(
         ok, missing = _preflight_prefix(explicit_prefix)
         if not ok:
             raise RuntimeError(
-                "Explicit --marin_prefix failed cache preflight. Missing SUCCESS status for:\n"
-                + "\n".join(missing)
+                "Explicit --marin_prefix failed cache preflight. Missing SUCCESS status for:\n" + "\n".join(missing)
             )
         return explicit_prefix, None, {"checked": [explicit_prefix], "selected": explicit_prefix, "missing": []}
 
@@ -290,18 +292,20 @@ def _resolve_prefix_with_fallback(
             return env_prefix, None, {"checked": [], "selected": env_prefix, "missing": []}
         ok, missing = _preflight_prefix(env_prefix)
         if not ok:
-            raise RuntimeError(
-                "MARIN_PREFIX failed cache preflight. Missing SUCCESS status for:\n" + "\n".join(missing)
-            )
+            raise RuntimeError("MARIN_PREFIX failed cache preflight. Missing SUCCESS status for:\n" + "\n".join(missing))
         return env_prefix, None, {"checked": [env_prefix], "selected": env_prefix, "missing": []}
 
     if skip_preflight:
         # No explicit/env prefix and no preflight requested: preserve historical default.
-        return "gs://marin-us-central1", CLUSTER_REGION_ORDER[0][0], {
-            "checked": [],
-            "selected": "gs://marin-us-central1",
-            "missing": [],
-        }
+        return (
+            "gs://marin-us-central1",
+            CLUSTER_REGION_ORDER[0][0],
+            {
+                "checked": [],
+                "selected": "gs://marin-us-central1",
+                "missing": [],
+            },
+        )
 
     checks: list[dict[str, Any]] = []
     for cluster_yaml, prefix in CLUSTER_REGION_ORDER:
@@ -419,8 +423,7 @@ def build_executor_steps(
     )
 
     weight_configs = [
-        WeightConfig(run_id=spec.run_id, phase_weights=copy.deepcopy(spec.phase_weights))
-        for spec in run_specs
+        WeightConfig(run_id=spec.run_id, phase_weights=copy.deepcopy(spec.phase_weights)) for spec in run_specs
     ]
     summary = {
         "kind": "determinism_seed_jitter",

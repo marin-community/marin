@@ -57,7 +57,7 @@ from experiments.pretraining_datasets.dolma3_pool import (
     DOLMA3_POOL_PARTITIONS,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 STACK_EDU_EXECUTOR_MAX_CONCURRENT = 14
 STACK_EDU_SQL_PARTITION = "stack_edu/SQL"
 

@@ -49,7 +49,7 @@ from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from experiments.domain_phase_mix.weight_sampler import DirichletSamplingParams, SamplingStrategy, compute_unimax_weights
 from experiments.evals.task_configs import CORE_TASKS, CODE_TASKS, convert_to_task_metrics
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================

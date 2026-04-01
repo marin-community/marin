@@ -27,7 +27,7 @@ from experiments.domain_phase_mix.two_phase_many_power_ridge_single import (
     power_ridge_single_summary_json,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 DEFAULT_NAME_PREFIX = POWER_RIDGE_SINGLE_SOURCE_EXPERIMENT
 FIT_SUMMARY_JSON = "power_ridge_single_fit_summary.json"

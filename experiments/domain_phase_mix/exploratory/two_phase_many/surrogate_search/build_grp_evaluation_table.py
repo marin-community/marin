@@ -26,12 +26,14 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import fsspec
 import numpy as np
 import pandas as pd
 import wandb
@@ -85,13 +87,23 @@ class ValidatedRunSpec:
     """Exact completed validation run to attach to a model row."""
 
     model_name: str
-    wandb_run_id: str
+    wandb_run_id: str | None = None
+    eval_metrics_jsonl: str | None = None
 
 
 VALIDATED_RUN_SPECS: tuple[ValidatedRunSpec, ...] = (
     ValidatedRunSpec(
         model_name="GRP",
         wandb_run_id="baseline_genericfamily_retainedtotal_tuned_uncheatable_bpb-d97130",
+    ),
+    ValidatedRunSpec(
+        model_name="GRP w/o family signals",
+        eval_metrics_jsonl=(
+            "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/"
+            "ngd3dm2_genericfamily_no_groups_uncheatable_bpb/"
+            "baseline_genericfamily_no_groups_uncheatable_bpb-573c71/"
+            "checkpoints/eval_metrics.jsonl"
+        ),
     ),
     ValidatedRunSpec(
         model_name="GRP w/o retention",
@@ -470,16 +482,38 @@ def _fetch_validated_optima() -> dict[str, dict[str, Any]]:
     api = wandb.Api(timeout=60)
     out: dict[str, dict[str, Any]] = {}
     for spec in VALIDATED_RUN_SPECS:
-        run = api.run(f"{WANDB_ENTITY}/{WANDB_PROJECT}/{spec.wandb_run_id}")
-        actual = run.summary.get(VALIDATED_METRIC)
-        if actual is None:
-            raise ValueError(f"Missing {VALIDATED_METRIC} in W&B run {spec.wandb_run_id}")
-        out[spec.model_name] = {
-            "validated_bpb": float(actual),
-            "validated_wandb_run_id": spec.wandb_run_id,
-            "validated_wandb_name": str(run.name),
-            "validated_wandb_state": str(run.state),
-        }
+        if spec.wandb_run_id is not None:
+            run = api.run(f"{WANDB_ENTITY}/{WANDB_PROJECT}/{spec.wandb_run_id}")
+            actual = run.summary.get(VALIDATED_METRIC)
+            if actual is None:
+                raise ValueError(f"Missing {VALIDATED_METRIC} in W&B run {spec.wandb_run_id}")
+            out[spec.model_name] = {
+                "validated_bpb": float(actual),
+                "validated_wandb_run_id": spec.wandb_run_id,
+                "validated_wandb_name": str(run.name),
+                "validated_wandb_state": str(run.state),
+            }
+            continue
+
+        if spec.eval_metrics_jsonl is not None:
+            fs, _, paths = fsspec.get_fs_token_paths(spec.eval_metrics_jsonl)
+            path = paths[0]
+            with fs.open(path, "r") as f:
+                rows = [json.loads(line) for line in f if line.strip()]
+            if not rows:
+                raise ValueError(f"No eval rows found in {spec.eval_metrics_jsonl}")
+            actual = rows[-1].get(VALIDATED_METRIC)
+            if actual is None:
+                raise ValueError(f"Missing {VALIDATED_METRIC} in {spec.eval_metrics_jsonl}")
+            out[spec.model_name] = {
+                "validated_bpb": float(actual),
+                "validated_wandb_run_id": "",
+                "validated_wandb_name": spec.eval_metrics_jsonl,
+                "validated_wandb_state": "artifact",
+            }
+            continue
+
+        raise ValueError(f"No validation source configured for {spec.model_name}")
     return out
 
 

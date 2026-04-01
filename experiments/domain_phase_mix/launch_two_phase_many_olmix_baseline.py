@@ -22,7 +22,7 @@ from experiments.domain_phase_mix.two_phase_many_olmix_loglinear import (
     create_olmix_loglinear_weight_config,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 DEFAULT_NAME_PREFIX = "pinlin_calvin_xu/data_mixture/ngd3dm2_olmix_bpb"
 

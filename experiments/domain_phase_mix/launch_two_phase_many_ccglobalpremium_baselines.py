@@ -29,7 +29,7 @@ from experiments.domain_phase_mix.two_phase_many_ccglobalpremium_baselines impor
     create_ccglobalpremium_threshold_weight_config,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 DEFAULT_NAME_PREFIX = CCGLOBALPREMIUM_SOURCE_EXPERIMENT
 FIT_SUMMARY_JSON = "ccglobalpremium_fit_summary.json"

@@ -46,7 +46,7 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 from experiments.evals.task_configs import MMLU_SL_VERB_5_SHOT
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 NAME = "pinlin_calvin_xu/data_mixture/ngd3dm2_olmix_sl_verb_choice_logprob_norm_mmlu_sl_verb_rerun"
 DEFAULT_MAX_CONCURRENT = 1

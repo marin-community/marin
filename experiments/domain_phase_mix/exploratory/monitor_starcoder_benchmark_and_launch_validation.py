@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 # /// script
 # requires-python = ">=3.11"
@@ -22,7 +22,6 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "lib" / "marin" / "src"))
 sys.path.insert(0, str(REPO_ROOT / "lib" / "levanter" / "src"))
 sys.path.insert(0, str(REPO_ROOT / "lib" / "iris" / "src"))
-RAY_RUN_SCRIPT = REPO_ROOT / "lib" / "marin" / "src" / "marin" / "run" / "ray_run.py"
 LAUNCH_SCRIPT = SCRIPT_DIR / "launch_starcoder_optima_validation.py"
 REQUIRED_BENCHMARK_ARTIFACTS = (
     "selection_records.csv",
@@ -70,7 +69,8 @@ def _launch_validation_job(
     *,
     benchmark_output_dir: Path,
     dataset: str,
-    cluster: str,
+    region: str,
+    iris_config: Path,
     data_seed: int,
 ) -> dict[str, str]:
     launch_script = _repo_relative_path(LAUNCH_SCRIPT)
@@ -78,11 +78,25 @@ def _launch_validation_job(
     command = [
         "uv",
         "run",
-        str(RAY_RUN_SCRIPT),
-        "--no_wait",
-        "--cluster",
-        cluster,
-        "--include-exploratory",
+        "python",
+        "-m",
+        "marin.run.iris_run",
+        "--config",
+        str(iris_config.resolve()),
+        "--",
+        "--no-wait",
+        "--region",
+        region,
+        "--zone",
+        "us-east5-a",
+        "--memory",
+        "4GB",
+        "--disk",
+        "10GB",
+        "--extra",
+        "marin:tpu",
+        "--extra",
+        "marin:eval",
         "--",
         "python",
         launch_script,
@@ -96,7 +110,8 @@ def _launch_validation_job(
     completed = subprocess.run(command, capture_output=True, text=True, check=True)
     return {
         "dataset": dataset,
-        "cluster": cluster,
+        "region": region,
+        "iris_config": str(iris_config),
         "command": " ".join(command),
         "stdout": completed.stdout.strip(),
         "stderr": completed.stderr.strip(),
@@ -106,7 +121,8 @@ def _launch_validation_job(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Monitor benchmark completion and launch validation runs")
     parser.add_argument("--benchmark-output-dir", type=Path, required=True)
-    parser.add_argument("--cluster", type=str, default="us-central1")
+    parser.add_argument("--region", type=str, default="us-central1")
+    parser.add_argument("--iris-config", type=Path, default=Path("lib/iris/examples/marin.yaml"))
     parser.add_argument("--poll-seconds", type=int, default=600)
     parser.add_argument("--datasets", type=str, default="two_phase_starcoder,three_phase_starcoder")
     parser.add_argument("--data-seed", type=int, default=0)
@@ -141,7 +157,8 @@ def main() -> None:
                     _launch_validation_job(
                         benchmark_output_dir=benchmark_output_dir,
                         dataset=dataset,
-                        cluster=args.cluster,
+                        region=args.region,
+                        iris_config=args.iris_config.resolve(),
                         data_seed=args.data_seed,
                     )
                 )

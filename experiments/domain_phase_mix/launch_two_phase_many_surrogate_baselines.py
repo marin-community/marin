@@ -27,7 +27,7 @@ from experiments.domain_phase_mix.two_phase_many_surrogate_baselines import (
     create_dsre_ceq_st_lite_weight_config,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 DEFAULT_NAME_PREFIX = SURROGATE_BASELINES_SOURCE_EXPERIMENT
 

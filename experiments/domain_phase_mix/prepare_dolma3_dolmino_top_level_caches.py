@@ -16,7 +16,7 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     build_top_level_domain_steps,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:

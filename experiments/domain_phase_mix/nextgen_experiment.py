@@ -37,7 +37,7 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
 )
 from experiments.domain_phase_mix.two_phase_starcoder_experiment import create_two_phase_experiment
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_OBJECTIVE = "eval/paloma/dolma_100_programing_languages/bpb"

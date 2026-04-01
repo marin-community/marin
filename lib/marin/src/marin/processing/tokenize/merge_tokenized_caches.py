@@ -10,7 +10,7 @@ import json
 import logging
 import os
 
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from levanter.data.text import (
     LmDatasetFormatBase,
     LmDatasetSourceConfigBase,

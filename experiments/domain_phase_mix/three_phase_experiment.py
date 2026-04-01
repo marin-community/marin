@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -46,7 +49,7 @@ from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig
 from experiments.domain_phase_mix.domains import get_three_partition_domains
 from experiments.domain_phase_mix.experiment import MixtureExperiment
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================

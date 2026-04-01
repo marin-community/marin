@@ -26,7 +26,7 @@ from experiments.domain_phase_mix.two_phase_many_phasecomp_sparse_pls_baseline i
     phasecomp_sparse_pls_summary_json,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 DEFAULT_NAME_PREFIX = PHASECOMP_SPARSE_PLS_SOURCE_EXPERIMENT
 FIT_SUMMARY_JSON = "phasecomp_sparse_pls_fit_summary.json"

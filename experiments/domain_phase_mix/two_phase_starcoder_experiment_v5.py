@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -76,7 +79,7 @@ from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import executor_main
 from marin.utils import create_cache_tokenizer_step
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================

@@ -26,7 +26,7 @@ from experiments.domain_phase_mix.two_phase_many_genericfamily_tuned_baseline im
     genericfamily_tuned_summary_json,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 DEFAULT_NAME_PREFIX = GENERICFAMILY_TUNED_SOURCE_EXPERIMENT
 FIT_SUMMARY_JSON = "genericfamily_tuned_fit_summary.json"

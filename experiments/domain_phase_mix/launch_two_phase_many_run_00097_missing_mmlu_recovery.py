@@ -20,7 +20,7 @@ from marin.execution.executor import ExecutorStep, InputName, executor_main, out
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_PRO_5_SHOT
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 NAME = "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_missing_mmlu_recovery"
 SEED_STUDY_ROOT = "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_seed_study"

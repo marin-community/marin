@@ -41,7 +41,7 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
 )
 from experiments.domain_phase_mix.two_phase_many_observed_runs import load_two_phase_many_phase_weights
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 NAME = "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_compute_scaling"
 SOURCE_RUN_NAME = "run_00097"

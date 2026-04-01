@@ -23,7 +23,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from iris.marin_fs import marin_prefix
+from rigging.filesystem import marin_prefix
 from scipy.optimize import minimize
 from scipy.stats import spearmanr
 

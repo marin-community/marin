@@ -29,7 +29,7 @@ from experiments.domain_phase_mix.two_phase_many_dsre_predicted_baselines import
     dsre_ceq_predicted_summary_json,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 DEFAULT_NAME_PREFIX = DSRE_PREDICTED_BASELINES_SOURCE_EXPERIMENT
 FIT_SUMMARY_JSON = "dsre_predicted_fit_summary.json"

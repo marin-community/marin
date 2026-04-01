@@ -26,7 +26,7 @@ from experiments.domain_phase_mix.two_phase_many_genericfamily_no_retention_base
     genericfamily_no_retention_summary_json,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 DEFAULT_NAME_PREFIX = GENERICFAMILY_NO_RETENTION_SOURCE_EXPERIMENT
 FIT_SUMMARY_JSON = "genericfamily_no_retention_fit_summary.json"

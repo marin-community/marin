@@ -26,7 +26,7 @@ from experiments.domain_phase_mix.two_phase_many_dsre_predicted_topic_collapsed 
     dsre_ceq_predicted_topic_collapsed_summary_json,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 DEFAULT_NAME_PREFIX = DSRE_CEQ_PREDICTED_TOPIC_COLLAPSED_SOURCE_EXPERIMENT
 FIT_SUMMARY_JSON = "dsre_predicted_topic_collapsed_fit_summary.json"

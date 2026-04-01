@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 # ruff: noqa: E402
@@ -22,7 +25,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pandas as pd
-from iris.marin_fs import marin_prefix
+from rigging.filesystem import marin_prefix
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -56,7 +59,7 @@ from experiments.domain_phase_mix.two_phase_starcoder_experiment import (
     create_two_phase_experiment,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 STATIC_POLICIES = (
     "feature_maximin_observed",
@@ -475,9 +478,7 @@ def main() -> None:
             raise ValueError("Either --benchmark-output-dir or --launch-plan-json-base64 is required")
         benchmark_output_dir = args.benchmark_output_dir.resolve()
         run_id_base = args.run_id_base or DEFAULT_RUN_ID_BASE[args.dataset]
-        default_name = (
-            f"pinlin_calvin_xu/data_mixture/{args.dataset}_selector_validation/{benchmark_output_dir.name}"
-        )
+        default_name = f"pinlin_calvin_xu/data_mixture/{args.dataset}_selector_validation/{benchmark_output_dir.name}"
         name_prefix = args.name_prefix or default_name
         plan_path = _launch_validation_runs(
             dataset=args.dataset,

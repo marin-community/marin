@@ -26,7 +26,7 @@ from experiments.domain_phase_mix.two_phase_many_thresholdtotal_overfit import (
     thresholdtotal_overfit_summary_json,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 DEFAULT_NAME_PREFIX = THRESHOLDTOTAL_OVERFIT_SOURCE_EXPERIMENT
 FIT_SUMMARY_JSON = "thresholdtotal_overfit_fit_summary.json"

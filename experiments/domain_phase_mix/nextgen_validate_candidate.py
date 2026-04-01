@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +17,7 @@ from dataclasses import dataclass
 
 import fsspec
 
-from iris.marin_fs import marin_prefix
+from rigging.filesystem import marin_prefix
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import executor_main
 from marin.utils import create_cache_tokenizer_step
@@ -29,7 +32,7 @@ from experiments.domain_phase_mix.three_phase_starcoder_experiment import (
     create_three_phase_experiment,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 CANDIDATES_JSON = "candidates.json"
 CANDIDATE_ASSIGNMENTS_JSON = "candidate_assignments.json"

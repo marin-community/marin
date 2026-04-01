@@ -30,6 +30,7 @@ from iris.cluster.constraints import (
     device_variant_constraint,
     preemptible_constraint,
     region_constraint,
+    zone_constraint,
 )
 from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.cluster.types import Entrypoint as IrisEntrypoint
@@ -120,6 +121,8 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
         constraints.append(preemptible_constraint(False))
     if resources.regions:
         constraints.append(region_constraint(resources.regions))
+    if resources.zone:
+        constraints.append(zone_constraint(resources.zone))
     if resources.device_alternatives:
         if isinstance(resources.device, (TpuConfig, GpuConfig)):
             all_variants = [resources.device.variant, *resources.device_alternatives]

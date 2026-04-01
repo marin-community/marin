@@ -28,7 +28,7 @@ from experiments.domain_phase_mix.two_phase_many_dsre_baselines import (
     create_dsre_observed_consensus_weight_config,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 DEFAULT_NAME_PREFIX = DSRE_BASELINES_SOURCE_EXPERIMENT
 

@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -72,7 +75,7 @@ from experiments.pretraining_datasets.dolma3_pool import (
     tokenize_dolma3_pool_subset,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================

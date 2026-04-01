@@ -33,7 +33,7 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     create_two_phase_dolma3_dolmino_top_level_experiment,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 NAME = "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_seed_study"
 SOURCE_RUN_NAME = "run_00097"

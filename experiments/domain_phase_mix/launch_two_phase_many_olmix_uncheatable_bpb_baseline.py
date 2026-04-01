@@ -29,7 +29,7 @@ from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_uncheatable imp
     load_fit_from_local_results,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 DEFAULT_NAME_PREFIX = SOURCE_EXPERIMENT
 

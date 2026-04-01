@@ -51,7 +51,7 @@ DEFAULT_MUON_CONFIG = MuonHConfig(
     warmup=1000,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================

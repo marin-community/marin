@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -44,7 +47,7 @@ from experiments.domain_phase_mix.two_phase_starcoder_experiment import (
     create_two_phase_experiment,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 DEFAULT_DATASET = "all"
 CENTRAL1_PREFIX = "gs://marin-us-central1"

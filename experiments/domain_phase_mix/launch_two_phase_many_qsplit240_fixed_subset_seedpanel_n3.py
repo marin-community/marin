@@ -37,7 +37,7 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
 )
 from experiments.domain_phase_mix.two_phase_many_observed_runs import load_original_qsplit240_with_core_baselines
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 NAME = "pinlin_calvin_xu/data_mixture/ngd3dm2_qsplit240_fixed_subset_seedpanel_n3"
 TRAINER_SEEDS = (SEED_SWEEP_START, SEED_SWEEP_START + 1, SEED_SWEEP_START + 2)

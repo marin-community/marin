@@ -37,7 +37,7 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
 )
 from experiments.domain_phase_mix.two_phase_many_observed_runs import load_two_phase_many_phase_weights
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 NAME = "pinlin_calvin_xu/data_mixture/ngd3dm2_first10_fixed_subset_panel"
 SOURCE_RUN_NAMES = tuple(f"run_{run_id:05d}" for run_id in range(2, 12))
