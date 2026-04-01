@@ -555,7 +555,7 @@ class IrisClient:
         coscheduling: CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
-        max_retries_preemption: int = 100,
+        max_retries_preemption: int = 10000,
         timeout: Duration | None = None,
         user: str | None = None,
         reservation: list[ReservationEntry] | None = None,

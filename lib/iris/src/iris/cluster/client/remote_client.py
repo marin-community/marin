@@ -78,7 +78,7 @@ class RemoteClusterClient:
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
-        max_retries_preemption: int = 100,
+        max_retries_preemption: int = 10000,
         timeout: Duration | None = None,
         reservation: cluster_pb2.ReservationConfig | None = None,
         preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
