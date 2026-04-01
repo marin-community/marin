@@ -1934,3 +1934,107 @@ For `reference.type=adapter_base`, reference identity should include the frozen 
   - ideally `step-849` or the final-step-equivalent directory created by the export hook
 - If the job fails or gets preempted, do **not** go back to `trainer.initialize_from`
   - the known-good restart pattern is the same `central1_b64` YAML plus `--trainer.load_checkpoint_path <latest training checkpoint>`
+
+## 2026-03-31 DPO Schedule Follow-up
+
+### Scope of this follow-up
+
+- User wanted the `SimpleDPOConfig` surface to support a stable "one pass over the train set" mode for DPO experiments instead of hard-coding step budgets.
+- User also wanted a default validation cadence that runs:
+  - once before training
+  - three evenly spaced interior validations
+  - once at the end
+- This follow-up was code-only. I did **not** launch a new TPU training run in this pass.
+
+### Config / runtime changes
+
+- Updated [`experiments/simple_dpo_config.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/simple_dpo_config.py) so:
+  - `num_train_steps: int | None = None`
+  - `num_epochs: float = 1.0`
+  - `steps_per_eval: int | None = None`
+  - added validation in `__post_init__` for non-positive values
+- Updated [`experiments/defaults.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/defaults.py) so `default_dpo(...)` now:
+  - keeps explicit `num_train_steps` / `steps_per_eval` if they are set
+  - otherwise enables runtime auto-resolution through `TrainDpoOnPodConfig(auto_num_epochs=..., auto_validation_runs=5)`
+- Updated [`lib/marin/src/marin/training/training.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/marin/src/marin/training/training.py) so DPO runtime launch now:
+  - reads tokenizer stats from the concrete cache path
+  - uses `total_elements` as the DPO train-set size
+  - applies the same validation-split rule as DPO runtime
+  - converts `num_epochs` into `num_train_steps` with `BatchSchedule.find_step_containing_offset(...) + 1`
+  - resolves exact interior eval steps for the 5-validation schedule
+
+### Shared stats helper
+
+- Added [`lib/marin/src/marin/processing/tokenize/cache_stats.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/marin/src/marin/processing/tokenize/cache_stats.py).
+- This is intentionally a **read-side only** helper for this PR:
+  - `TokenizedCacheStats`
+  - `tokenized_cache_stats_path(...)`
+  - `read_tokenized_cache_stats(...)`
+- It uses `rigging.filesystem.url_to_fs(...)` plus `open_url(...)` instead of `os.path.join(...)`.
+- Exported the helper from [`lib/marin/src/marin/processing/tokenize/__init__.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/marin/src/marin/processing/tokenize/__init__.py).
+- I explicitly did **not** refactor the tokenizer write path in this pass; it still writes the same `.stats.json` schema in place.
+
+### DPO eval scheduling changes
+
+- Updated [`lib/levanter/src/levanter/main/train_dpo.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/main/train_dpo.py) to add:
+  - `scheduled_eval_steps`
+  - `run_initial_eval`
+- Implemented:
+  - explicit initial validation before training starts
+  - exact interior eval steps via a small hook wrapper
+  - final validation through the trainer's existing forced end-of-training hook path
+- Removed the old extra DPO-side `trainer.run_hooks(last_info, force=True)` call because [`Trainer.train()`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/trainer.py) already force-runs hooks at the end.
+
+### Review / correctness conclusions
+
+- I reviewed a competing critique carefully. The main conclusions after code inspection and tests:
+  - removing the extra DPO-side `run_hooks(..., force=True)` is **not** a regression because `Trainer.train()` already force-runs hooks at the end
+  - the synthetic initial eval logs at **step 0**, not step 1, because `StepInfo.step = state.step - 1`
+  - using `.stats.json` is the right source of DPO dataset size for this feature; for preference data the meaningful field is `total_elements`
+  - private imports from `train_dpo.py` were avoided in the final version by moving the stats read into a shared helper and keeping the tiny DPO-specific component/split logic local in `training.py`
+
+### Experiment/config updates made in this pass
+
+- Updated [`experiments/tune_lora/common.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/tune_lora/common.py):
+  - `LoraTuneSpec.num_epochs = 1.0`
+  - removed the explicit `num_train_steps=850`
+  - removed the explicit `steps_per_eval=200`
+- Updated [`experiments/dpo_bloom_speceval_v2.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/dpo_bloom_speceval_v2.py):
+  - switched the main script from `num_train_steps=850` to `num_epochs=1.0`
+  - removed the explicit `steps_per_eval=200`
+- I intentionally left [`experiments/dpo_bloom_speceval_v2_profile.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/dpo_bloom_speceval_v2_profile.py) alone because that script is explicitly built around fixed eval timing for profiling.
+
+### Expected resolved budgets with current Bloom SpecEval v2 cache
+
+- The train tokenizer stats we have been using report `108,765` train preference pairs.
+- Therefore:
+  - LoRA sweep config in `experiments/tune_lora/common.py` with batch `64` and `num_epochs=1.0` resolves to `1700` train steps
+  - auto eval schedule there is 5 total validations:
+    - initial
+    - steps `425`, `850`, `1275`
+    - final
+- Main non-LoRA Bloom SpecEval v2 script with batch `128` and `num_epochs=1.0` resolves to `850` train steps
+  - auto eval schedule there is 5 total validations:
+    - initial
+    - steps `213`, `426`, `639`
+    - final
+
+### Validation performed
+
+- Ran:
+  - `./infra/pre-commit.py --fix lib/marin/src/marin/processing/tokenize/cache_stats.py lib/marin/src/marin/processing/tokenize/__init__.py lib/marin/src/marin/training/training.py tests/test_training.py`
+  - `uv run python -m pytest -o addopts='' tests/test_training.py`
+  - `cd lib/levanter && uv run --group test python -m pytest tests/test_dpo.py tests/test_lora_dpo.py`
+  - `./infra/pre-commit.py --fix experiments/dpo_bloom_speceval_v2.py`
+- Results:
+  - targeted Marin checks passed
+  - `tests/test_training.py`: `8 passed`
+  - Levanter DPO tests: `35 passed, 1 skipped`
+
+### Current handoff state
+
+- No new runtime experiment launched in this follow-up.
+- Code now supports:
+  - explicit step-based DPO configs when a script sets `num_train_steps` / `steps_per_eval`
+  - one-epoch auto budgeting plus 5-point eval cadence when those fields are left unset
+- The main Bloom SpecEval v2 scripts now opt into the new auto path directly.

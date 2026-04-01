@@ -19,7 +19,8 @@
 Run DPO on the Bloom SpecEval v2 preference dataset (GPT-4.1 chosen vs Mixtral opposite-mode rejected).
 
 The preference data is pre-built by bloom's export_marin_preference.py and lives on GCS at:
-  gs://marin-us-central1/preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite/{train,val}/
+  train: gs://marin-us-central1/preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite/train/
+  val:   gs://marin-us-central1/preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite/val_deduped/
 
 This experiment tokenizes that data and runs DPO training.
 """
@@ -44,8 +45,8 @@ tokenized_train = default_tokenize(
 )
 
 tokenized_eval = default_tokenize(
-    name="bloom_speceval_v2_val_prefs_marin_tokenizer",
-    dataset=f"{GCS_PREFIX}/val/*.jsonl.gz",
+    name="bloom_speceval_v2_val_deduped_prefs_marin_tokenizer",
+    dataset=f"{GCS_PREFIX}/val_deduped/shard-00000.jsonl.gz",
     tokenizer=marin_tokenizer,
     format=PreferenceChatLmDatasetFormat(),
     is_validation=True,
@@ -91,6 +92,6 @@ if __name__ == "__main__":
         steps=[
             tokenized_train,
             tokenized_eval,
-            training_step,
+            # training_step,
         ]
     )
