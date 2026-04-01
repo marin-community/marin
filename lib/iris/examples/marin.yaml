@@ -37,7 +37,7 @@ scale_groups:
   # Intentionally lower priority than accelerator groups.
   # e2-highmem-2: best on-demand RAM/$ on GCP (~$0.09/hr, 8 GB/vCPU).
   cpu_vm_e2_highmem_2_ondemand:
-    zones: [us-central1-a, us-east1-b, us-west1-a, europe-west4-a]
+    zones: [us-central1-a, us-central2-b, us-east1-b, us-east1-d, us-east5-a, us-east5-b, us-west1-a, us-west4-a, europe-west4-a, europe-west4-b]
     num_vms: 1
     priority: 1000
     resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, preemptible: false }
