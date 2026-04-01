@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import queue
-import tempfile
 import threading
 import uuid
 from collections.abc import Callable, Iterable
@@ -58,23 +57,11 @@ def atomic_rename(output_path: str) -> Iterable[str]:
     Yields a unique temporary path to write to. On successful exit, atomically
     renames the temp file to the final path. On failure, cleans up the temp file.
 
-    For S3-compatible stores, writes to a local temp directory first, then uploads
-    via fs.put() to avoid server-side multipart copy which is unreliable on some
-    providers (e.g. Cloudflare R2).
-
     Example:
         with atomic_rename("output.jsonl.gz") as tmp_path:
             write_data(tmp_path)
         # File is now at output.jsonl.gz
     """
-    if output_path.startswith("s3://"):
-        fs, resolved_path = url_to_fs(output_path)
-        with tempfile.TemporaryDirectory() as local_tmp_dir:
-            local_path = os.path.join(local_tmp_dir, "output")
-            yield local_path
-            fs.put(local_path, resolved_path, recursive=True)
-        return
-
     temp_path = unique_temp_path(output_path)
     fs = url_to_fs(output_path)[0]
 
