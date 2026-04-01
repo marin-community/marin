@@ -807,19 +807,14 @@ class ControllerTransitions:
                 else None
             )
             max_failures = int(request.max_task_failures)
-            exec_timeout: int | None = (
-                int(request.timeout.milliseconds)
-                if request.HasField("timeout") and request.timeout.milliseconds > 0
-                else None
-            )
             cur.execute(
                 "INSERT INTO jobs("
                 "job_id, user_id, parent_job_id, root_job_id, depth, request_proto, state, submitted_at_ms, "
                 "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
                 "error, exit_code, num_tasks, is_reservation_holder, has_reservation, name, "
                 "resources_proto, constraints_proto, has_coscheduling, coscheduling_group_by, "
-                "scheduling_timeout_ms, max_task_failures, execution_timeout_ms"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "scheduling_timeout_ms, max_task_failures"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job_id.to_wire(),
                     job_id.user,
@@ -842,7 +837,6 @@ class ControllerTransitions:
                     cosched_group,
                     sched_timeout,
                     max_failures,
-                    exec_timeout,
                 ),
             )
 

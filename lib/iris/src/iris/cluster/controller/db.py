@@ -847,39 +847,44 @@ class TimedOutTask:
 
     task_id: JobName
     worker_id: WorkerId | None
-    execution_timeout_ms: int
 
 
 def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOutTask]:
-    """Find executing tasks whose runtime exceeds their job's execution_timeout_ms.
+    """Find executing tasks whose runtime exceeds their job's execution timeout.
 
-    Checks tasks in BUILDING or RUNNING state whose started_at_ms + execution_timeout_ms
-    is in the past.
+    Reads the timeout from the job's request_proto. Checks tasks in BUILDING or
+    RUNNING state whose started_at_ms + timeout is in the past.
     """
     now_ms = now.epoch_ms()
     executing_states = tuple(sorted(EXECUTING_TASK_STATES))
     placeholders = ",".join("?" for _ in executing_states)
     with db.read_snapshot() as q:
         rows = q.raw(
-            f"SELECT t.task_id, t.current_worker_id AS worker_id, j.execution_timeout_ms "
+            f"SELECT t.task_id, t.current_worker_id AS worker_id, "
+            f"t.started_at_ms, j.request_proto "
             f"FROM tasks t "
             f"JOIN jobs j ON j.job_id = t.job_id "
             f"WHERE t.state IN ({placeholders}) "
-            f"AND j.execution_timeout_ms IS NOT NULL "
-            f"AND j.execution_timeout_ms > 0 "
-            f"AND t.started_at_ms IS NOT NULL "
-            f"AND (t.started_at_ms + j.execution_timeout_ms) <= ?",
-            (*executing_states, now_ms),
+            f"AND j.request_proto IS NOT NULL "
+            f"AND t.started_at_ms IS NOT NULL",
+            (*executing_states,),
             decoders={
                 "task_id": JobName.from_wire,
                 "worker_id": lambda v: WorkerId(v) if v is not None else None,
-                "execution_timeout_ms": int,
+                "started_at_ms": int,
+                "request_proto": bytes,
             },
         )
-    return [
-        TimedOutTask(task_id=row.task_id, worker_id=row.worker_id, execution_timeout_ms=row.execution_timeout_ms)
-        for row in rows
-    ]
+    result: list[TimedOutTask] = []
+    for row in rows:
+        request = cluster_pb2.Controller.LaunchJobRequest()
+        request.ParseFromString(row.request_proto)
+        if not request.HasField("timeout") or request.timeout.milliseconds <= 0:
+            continue
+        timeout_ms = int(request.timeout.milliseconds)
+        if row.started_at_ms + timeout_ms <= now_ms:
+            result.append(TimedOutTask(task_id=row.task_id, worker_id=row.worker_id))
+    return result
 
 
 def tasks_for_job_with_attempts(db: ControllerDB, job_id: JobName) -> list:

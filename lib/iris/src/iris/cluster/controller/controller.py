@@ -1016,6 +1016,7 @@ class Controller:
         self._autoscaler: Autoscaler | None = autoscaler
 
         self._heartbeat_iteration = 0
+        self._last_timeout_check_ms: int = 0
 
         # Cached scheduling diagnostics: populated each scheduling cycle for
         # pending jobs that could not be assigned.  Keyed by job wire ID.
@@ -1756,25 +1757,27 @@ class Controller:
         if result.has_real_dispatch:
             self._heartbeat_event.set()
 
+    _TIMEOUT_CHECK_INTERVAL_MS = 60_000  # Check at most once per minute.
+
     def _enforce_execution_timeouts(self) -> None:
         """Kill executing tasks that have exceeded their job's execution timeout.
 
-        Queries for tasks in BUILDING/RUNNING state whose started_at_ms +
-        execution_timeout_ms is in the past, then cancels them via the same
-        kill path used for job cancellation.
+        Throttled to run at most once per minute. Queries for tasks in
+        BUILDING/RUNNING state whose started_at_ms + timeout is in the past,
+        then cancels them via the same kill path used for job cancellation.
         """
         if self._config.dry_run:
             return
-        timed_out = timed_out_executing_tasks(self._db, Timestamp.now())
+        now = Timestamp.now()
+        now_ms = now.epoch_ms()
+        if now_ms - self._last_timeout_check_ms < self._TIMEOUT_CHECK_INTERVAL_MS:
+            return
+        self._last_timeout_check_ms = now_ms
+        timed_out = timed_out_executing_tasks(self._db, now)
         if not timed_out:
             return
         for task in timed_out:
-            timeout = Duration.from_ms(task.execution_timeout_ms)
-            logger.warning(
-                "Task %s exceeded execution timeout (%s), killing",
-                task.task_id,
-                timeout,
-            )
+            logger.warning("Task %s exceeded execution timeout, killing", task.task_id)
         task_ids = {t.task_id for t in timed_out}
         task_kill_workers = {t.task_id: t.worker_id for t in timed_out if t.worker_id is not None}
         result = self._transitions.cancel_tasks_for_timeout(task_ids, reason="Execution timeout exceeded")
