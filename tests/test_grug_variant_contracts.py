@@ -14,7 +14,6 @@ import json
 import logging
 import uuid
 from io import StringIO
-
 from pathlib import Path
 
 import equinox as eqx
@@ -31,7 +30,6 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
-from levanter.grug.attention import align_kv_heads
 from levanter.distributed import DistributedConfig, RayConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -264,4 +262,3 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
-
