@@ -1,0 +1,205 @@
+rigging.distributed_lock.DistributedLease:
+  defined_in: lib/rigging/src/rigging/distributed_lock.py:77
+  depends_on:
+  - rigging.distributed_lock.Lease
+  - rigging.distributed_lock.LeaseLostError
+  - rigging.distributed_lock.default_worker_id
+  params: {}
+  public_methods:
+    __init__:
+      depends_on:
+      - rigging.distributed_lock.default_worker_id
+      params:
+        lock_path: Path to the lock file on the target storage backend.
+        worker_id: Unique identifier for this lock holder; defaults to default_worker_id() if None.
+      returns: None
+      signature: 'def __init__(self, lock_path: str, worker_id: str | None = None) -> None'
+      summary: Initializes the lease with a lock file path and an optional worker ID, falling back to default_worker_id()
+        if none is provided.
+    has_active_holder:
+      depends_on:
+      - rigging.distributed_lock.DistributedLease._read_with_generation
+      - rigging.distributed_lock.Lease.is_stale
+      params: {}
+      returns: bool
+      signature: def has_active_holder(self) -> bool
+      summary: Returns True if the lock file exists and contains a non-stale lease from any worker.
+    refresh:
+      depends_on:
+      - rigging.distributed_lock.DistributedLease._read_with_generation
+      - rigging.distributed_lock.DistributedLease._write
+      - rigging.distributed_lock.Lease
+      - rigging.distributed_lock.LeaseLostError
+      - time.time
+      params: {}
+      returns: None
+      signature: def refresh(self) -> None
+      summary: Updates the lease timestamp for the current holder, raising LeaseLostError if the lock file is missing or held
+        by a different worker.
+    release:
+      depends_on:
+      - rigging.distributed_lock.DistributedLease._read_with_generation
+      - rigging.distributed_lock.DistributedLease._delete
+      params: {}
+      returns: None
+      signature: def release(self) -> None
+      summary: Deletes the lock file if it is currently held by this worker; idempotent and silently ignores a missing lock
+        file.
+    try_acquire:
+      depends_on:
+      - rigging.distributed_lock.DistributedLease._read_with_generation
+      - rigging.distributed_lock.DistributedLease._write
+      - rigging.distributed_lock.Lease
+      - time.time
+      params: {}
+      returns: "bool \u2014 True if this worker now holds the lock, False otherwise."
+      signature: def try_acquire(self) -> bool
+      summary: Attempts a single non-blocking acquisition of the lock, stealing it if the existing lease is stale; returns
+        True on success, False if a fresh lock is held by another worker.
+  returns: N/A
+  signature: class DistributedLease(abc.ABC)
+  summary: Abstract base class implementing the distributed lease protocol (acquire, refresh, release) on top of abstract
+    storage operations that subclasses must provide.
+rigging.distributed_lock.FsspecLease:
+  defined_in: lib/rigging/src/rigging/distributed_lock.py:374
+  depends_on:
+  - rigging.distributed_lock.DistributedLease
+  - fsspec.core.url_to_fs
+  - fsspec.AbstractFileSystem
+  - time.sleep
+  params: {}
+  public_methods:
+    _get_fs:
+      depends_on:
+      - fsspec.core.url_to_fs
+      params: {}
+      returns: "tuple[fsspec.AbstractFileSystem, str] \u2014 (fs, resolved_path)"
+      signature: def _get_fs(self) -> tuple[fsspec.AbstractFileSystem, str]
+      summary: Resolves self.lock_path via fsspec.core.url_to_fs and returns the (filesystem, path) pair.
+  returns: N/A
+  signature: class FsspecLease(DistributedLease)
+  summary: Best-effort DistributedLease for arbitrary fsspec filesystems; provides weak atomicity by writing the lease and
+    reading it back after a short sleep to detect lost races.
+rigging.distributed_lock.GcsLease:
+  defined_in: lib/rigging/src/rigging/distributed_lock.py:181
+  depends_on:
+  - rigging.distributed_lock.DistributedLease
+  - google.cloud.storage.Client
+  - google.api_core.exceptions.NotFound
+  params: {}
+  public_methods:
+    _parse_gcs_path:
+      depends_on: []
+      params:
+        path: GCS URI string in the form gs://bucket/blob_path.
+      returns: "tuple[str, str] \u2014 (bucket_name, blob_path)"
+      signature: 'def _parse_gcs_path(path: str) -> tuple[str, str]'
+      summary: Static method that strips the 'gs://' prefix and splits a GCS URI into a (bucket, blob_path) tuple.
+  returns: N/A
+  signature: class GcsLease(DistributedLease)
+  summary: DistributedLease backed by Google Cloud Storage, using GCS object generation numbers for conditional writes to
+    ensure atomicity.
+rigging.distributed_lock.Lease:
+  defined_in: lib/rigging/src/rigging/distributed_lock.py:45
+  depends_on:
+  - time.time
+  params: {}
+  public_methods:
+    is_stale:
+      depends_on:
+      - time.time
+      - rigging.distributed_lock.HEARTBEAT_TIMEOUT
+      params: {}
+      returns: bool
+      signature: def is_stale(self) -> bool
+      summary: Returns True if the elapsed time since the stored timestamp exceeds HEARTBEAT_TIMEOUT.
+  returns: N/A
+  signature: class Lease
+  summary: Dataclass representing the persisted state of a distributed lock, storing the holder's worker ID and the last heartbeat
+    timestamp.
+rigging.distributed_lock.LeaseLostError:
+  defined_in: lib/rigging/src/rigging/distributed_lock.py:37
+  depends_on: []
+  params: {}
+  returns: N/A
+  signature: class LeaseLostError(Exception)
+  summary: Exception raised when the current worker's lease has been taken over by another worker, indicating a fatal loss
+    of lock ownership.
+rigging.distributed_lock.LocalFileLease:
+  defined_in: lib/rigging/src/rigging/distributed_lock.py:327
+  depends_on:
+  - rigging.distributed_lock.DistributedLease
+  - fcntl
+  - os.makedirs
+  - os.remove
+  params: {}
+  returns: N/A
+  signature: class LocalFileLease(DistributedLease)
+  summary: DistributedLease backed by the local filesystem, using fcntl advisory file locks to serialize concurrent reads
+    and writes.
+rigging.distributed_lock.S3Lease:
+  defined_in: lib/rigging/src/rigging/distributed_lock.py:237
+  depends_on:
+  - rigging.distributed_lock.DistributedLease
+  - botocore.session
+  - botocore.config.Config
+  - botocore.exceptions.ClientError
+  params: {}
+  public_methods:
+    __init__:
+      depends_on:
+      - rigging.distributed_lock.DistributedLease.__init__
+      params:
+        lock_path: S3 URI in the form s3://bucket/key.
+        worker_id: Optional unique holder identifier.
+      returns: None
+      signature: 'def __init__(self, lock_path: str, worker_id: str | None = None) -> None'
+      summary: Calls the parent constructor and initializes _last_etag to None for tracking the ETag of the most recently
+        read object.
+    _make_client:
+      depends_on:
+      - botocore.session.get_session
+      - botocore.config.Config
+      - os.environ.get
+      params: {}
+      returns: botocore S3 client instance
+      signature: def _make_client()
+      summary: Static method that creates a botocore S3 client, optionally configuring a custom endpoint URL and virtual-host
+        addressing style from environment variables.
+    _parse_s3_path:
+      depends_on: []
+      params:
+        path: S3 URI string in the form s3://bucket/key.
+      returns: "tuple[str, str] \u2014 (bucket_name, key)"
+      signature: 'def _parse_s3_path(path: str) -> tuple[str, str]'
+      summary: Static method that strips the 's3://' prefix and splits an S3 URI into a (bucket, key) tuple.
+  returns: N/A
+  signature: class S3Lease(DistributedLease)
+  summary: DistributedLease backed by S3-compatible object storage, using conditional PutObject with If-None-Match/If-Match
+    headers injected via botocore event hooks.
+rigging.distributed_lock.create_lock:
+  defined_in: lib/rigging/src/rigging/distributed_lock.py:425
+  depends_on:
+  - rigging.distributed_lock._is_gcs_path
+  - rigging.distributed_lock._is_s3_path
+  - rigging.distributed_lock._is_local_path
+  - rigging.distributed_lock.GcsLease
+  - rigging.distributed_lock.S3Lease
+  - rigging.distributed_lock.LocalFileLease
+  - rigging.distributed_lock.FsspecLease
+  params:
+    lock_path: URI path to the lock file; scheme determines backend (gs://, s3://, local path, or arbitrary fsspec URL).
+    worker_id: Optional unique holder identifier; passed through to the selected DistributedLease subclass.
+  returns: 'A DistributedLease instance: GcsLease for gs://, S3Lease for s3://, LocalFileLease for local paths, FsspecLease
+    otherwise.'
+  signature: 'def create_lock(lock_path: str, worker_id: str | None = None) -> DistributedLease'
+  summary: Factory that selects and instantiates the appropriate DistributedLease subclass based on the URI scheme of lock_path.
+rigging.distributed_lock.default_worker_id:
+  defined_in: lib/rigging/src/rigging/distributed_lock.py:55
+  depends_on:
+  - os.uname
+  - threading.get_ident
+  params: {}
+  returns: str in the format '{hostname}-{thread_id}'
+  signature: def default_worker_id() -> str
+  summary: Returns a string combining the hostname and current thread identifier, suitable as a unique lock holder ID.
