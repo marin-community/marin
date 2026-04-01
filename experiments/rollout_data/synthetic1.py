@@ -4,7 +4,7 @@
 """PrimeIntellect/SYNTHETIC-1 pretraining dataset.
 
 Usage:
-    uv run lib/marin/src/marin/run/ray_run.py -- python experiments/synthetic1.py
+    uv run lib/marin/src/marin/run/ray_run.py -- python experiments/rollout_data/synthetic1.py
 """
 
 from marin.datakit.download.synthetic1 import download_synthetic1_step

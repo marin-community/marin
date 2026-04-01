@@ -67,7 +67,7 @@ def download_superior_reasoning_step() -> StepSpec:
         "raw/superior-reasoning-sft",
         hf_dataset_id=HF_DATASET_ID,
         revision=HF_REVISION,
-        hf_urls_glob=[stage for stage in STAGES],
+        hf_urls_glob=STAGES,
     )
 
     return StepSpec(

@@ -34,8 +34,7 @@ def row_to_doc(row: dict) -> dict | None:
     if not conversations:
         return None
 
-    rendered = "\n\n".join(render_message(m) for m in conversations)
-    text = rendered
+    text = "\n\n".join(render_message(m) for m in conversations)
 
     return {
         "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
