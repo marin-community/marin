@@ -1,5 +1,7 @@
 # Collapse workspace to single package
 
+**Status**: Implemented (Option B). See commit `59d30e6d0`.
+
 **Context**: Russell (infra lead) wants to explore collapsing the 7-member uv workspace back into a single `marin` package. The workspace/members structure hasn't been paying for itself.
 
 ## Current state
