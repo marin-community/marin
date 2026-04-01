@@ -95,6 +95,7 @@ class AuthzAction(StrEnum):
 POLICY: dict[AuthzAction, frozenset[str]] = {
     AuthzAction.REGISTER_WORKER: frozenset({"worker"}),
     AuthzAction.MANAGE_OTHER_KEYS: frozenset(),  # admin only
+    AuthzAction.MANAGE_BUDGETS: frozenset(),  # admin only
 }
 
 

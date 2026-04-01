@@ -1499,14 +1499,21 @@ class Controller:
     def _run_scheduling(self) -> SchedulingOutcome:
         """Run one scheduling cycle.
 
-        Three-phase scheduling:
-        1. Preemption: kill running holder tasks on claimed workers when peer
-           tasks are pending, freeing resources for real work.
-        2. Preference pass: for reservation jobs, try claimed workers first.
-           The claims set is small (≤ reservation entry count), so this is cheap.
-        3. Normal pass: remaining tasks go through the standard scheduler.
+        Six-phase scheduling:
+        1. Reservation claims: clean up stale claims and claim workers for
+           reservation jobs.
+        2. State reads: fetch pending tasks and workers, filter by deadlines,
+           reservation gates, and per-job cap.
+        3. Budget/band interleaving: compute user spend, map tasks to effective
+           priority bands (down-weighting over-budget users), round-robin users
+           within each band, and apply per-user cap.
+        4. Preference pass: steer reservation tasks toward their claimed workers
+           (skips coscheduled jobs which need atomic assignment).
+        5. Normal scheduling: run find_assignments for all remaining tasks.
+        6. Preemption pass: evict lower-priority running tasks to free capacity
+           for higher-priority unscheduled work.
 
-        All passes share a single SchedulingContext so capacity deductions
+        Phases 4-6 share a single SchedulingContext so capacity deductions
         are visible across passes.
 
         No lock is needed since only one scheduling thread exists. All state
@@ -1658,6 +1665,7 @@ class Controller:
             for tid in schedulable_task_ids
             if tid not in assigned_ids and tid.parent is not None and tid.parent in jobs
         ]
+        preemptions: list[tuple[JobName, JobName]] = []
         if unscheduled:
             claimed_workers = set(claims.keys())
             running_info = _get_running_tasks_with_band_and_value(
@@ -1674,7 +1682,7 @@ class Controller:
         # RPCs read from this cache instead of recomputing per request.
         self._cache_scheduling_diagnostics(context, jobs, all_assignments, schedulable_task_ids)
 
-        if all_assignments:
+        if all_assignments or preemptions:
             return SchedulingOutcome.ASSIGNMENTS_MADE
         return SchedulingOutcome.NO_ASSIGNMENTS
 
