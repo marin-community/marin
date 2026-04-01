@@ -767,15 +767,21 @@ class ControllerTransitions:
                 ),
             )
 
-            # Resolve priority band: inherit from parent, or default to INTERACTIVE.
-            band_sort_key = cluster_pb2.PRIORITY_BAND_INTERACTIVE
-            if parent_job_id is not None:
+            # Resolve priority band: use explicit request value, inherit from parent, or default to INTERACTIVE.
+            requested_band = int(request.priority_band)
+            if requested_band != cluster_pb2.PRIORITY_BAND_UNSPECIFIED:
+                band_sort_key = requested_band
+            elif parent_job_id is not None:
                 parent_band_row = cur.execute(
                     "SELECT priority_band FROM tasks WHERE job_id = ? LIMIT 1",
                     (parent_job_id,),
                 ).fetchone()
                 if parent_band_row is not None:
                     band_sort_key = parent_band_row["priority_band"]
+                else:
+                    band_sort_key = cluster_pb2.PRIORITY_BAND_INTERACTIVE
+            else:
+                band_sort_key = cluster_pb2.PRIORITY_BAND_INTERACTIVE
 
             replicas = int(request.replicas)
             validation_error: str | None = None
@@ -1854,7 +1860,8 @@ class ControllerTransitions:
 
             # Update task
             cur.execute(
-                "UPDATE tasks SET state = ?, error = ?, finished_at_ms = ?, preemption_count = ? WHERE task_id = ?",
+                "UPDATE tasks SET state = ?, error = ?, finished_at_ms = ?, preemption_count = ?, "
+                "current_worker_id = NULL, current_worker_address = NULL WHERE task_id = ?",
                 (new_state, reason, finished_ms, preemption_count, task_id.to_wire()),
             )
 
@@ -1874,7 +1881,7 @@ class ControllerTransitions:
             job_id = JobName.from_wire(str(row["job_id"]))
             new_job_state = self._recompute_job_state(cur, job_id)
             if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
-                cascade_kills, cascade_workers = _cascade_terminal_job(cur, job_id, now_ms, reason)
+                cascade_kills, cascade_workers = _finalize_terminal_job(cur, job_id, new_job_state, now_ms)
                 tasks_to_kill.update(cascade_kills)
                 task_kill_workers.update(cascade_workers)
             elif new_state == cluster_pb2.TASK_STATE_PENDING:

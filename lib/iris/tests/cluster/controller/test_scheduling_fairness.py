@@ -16,19 +16,14 @@ from .conftest import (
     make_job_request,
     query_task,
     query_tasks_for_job,
-    set_task_band,
     submit_job,
 )
 
 
 def _submit_user_job(state, user: str, name: str, replicas: int = 1, band: int | None = None) -> list:
     """Submit a job for a specific user, optionally overriding band."""
-    req = make_job_request(name=f"/{user}/{name}", cpu=1, replicas=replicas)
-    tasks = submit_job(state, f"/{user}/{name}", req)
-    if band is not None:
-        for t in tasks:
-            set_task_band(state._db, t.task_id, band)
-    return tasks
+    req = make_job_request(name=f"/{user}/{name}", cpu=1, replicas=replicas, priority_band=band or 0)
+    return submit_job(state, f"/{user}/{name}", req)
 
 
 def test_production_scheduled_before_interactive():
@@ -191,12 +186,10 @@ def test_child_inherits_parent_band():
     with make_controller_state() as state:
         # Submit parent as PRODUCTION
         parent_id = JobName.root("alice", "parent-prod")
-        parent_req = make_job_request(name="/alice/parent-prod", cpu=1, replicas=1)
-        parent_tasks = submit_job(state, "/alice/parent-prod", parent_req)
-
-        # Set parent's band to PRODUCTION
-        for t in parent_tasks:
-            set_task_band(state._db, t.task_id, cluster_pb2.PRIORITY_BAND_PRODUCTION)
+        parent_req = make_job_request(
+            name="/alice/parent-prod", cpu=1, replicas=1, priority_band=cluster_pb2.PRIORITY_BAND_PRODUCTION
+        )
+        submit_job(state, "/alice/parent-prod", parent_req)
 
         # Submit child job
         child_id = parent_id.child("child")
@@ -313,3 +306,17 @@ def test_zero_budget_means_unlimited():
         for task in schedulable:
             band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
             assert band == cluster_pb2.PRIORITY_BAND_INTERACTIVE
+
+
+def test_submit_with_explicit_band_stores_band():
+    """Submitting a job with an explicit priority_band stores it in task rows."""
+    with make_controller_state() as state:
+        req = make_job_request(name="/alice/batch-job", cpu=1, replicas=2, priority_band=cluster_pb2.PRIORITY_BAND_BATCH)
+        tasks = submit_job(state, "/alice/batch-job", req)
+
+        assert len(tasks) == 2
+        for t in tasks:
+            task = query_task(state, t.task_id)
+            assert (
+                task.priority_band == cluster_pb2.PRIORITY_BAND_BATCH
+            ), f"Task {t.task_id} has band {task.priority_band}, expected PRIORITY_BAND_BATCH"

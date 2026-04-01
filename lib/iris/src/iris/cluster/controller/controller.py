@@ -57,6 +57,8 @@ from iris.cluster.controller.schema import (
     TaskRow,
     WorkerDetailRow,
     WorkerRow,
+    proto_cache,
+    proto_decoder,
     tasks_with_attempts,
 )
 from iris.cluster.controller.budget import (
@@ -106,6 +108,8 @@ from iris.rpc.auth import TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp
 
 logger = logging.getLogger(__name__)
+
+_RESOURCE_SPEC_DECODER = proto_decoder(cluster_pb2.ResourceSpecProto)
 
 # Sentinel for dry-run scheduling with per-worker limits disabled.
 _UNLIMITED = sys.maxsize
@@ -376,7 +380,8 @@ def _get_running_tasks_with_band_and_value(
     """
     with db.read_snapshot() as q:
         rows = q.raw(
-            "SELECT t.task_id, t.priority_band, t.current_worker_id AS worker_id, j.request_proto "
+            "SELECT t.task_id, t.priority_band, t.current_worker_id AS worker_id, "
+            "j.resources_proto, j.has_coscheduling "
             "FROM tasks t "
             "JOIN jobs j ON j.job_id = t.job_id "
             "WHERE t.state = ? AND t.current_worker_id IS NOT NULL",
@@ -394,8 +399,7 @@ def _get_running_tasks_with_band_and_value(
         wid = row.worker_id
         if wid in claimed_workers:
             continue
-        request = cluster_pb2.Controller.LaunchJobRequest()
-        request.ParseFromString(row.request_proto)
+        resources = proto_cache.get_or_decode(row.resources_proto, _RESOURCE_SPEC_DECODER)
         band = compute_effective_band(row.priority_band, row.task_id.user, _spend, _limits)
         result.append(
             RunningTaskInfo(
@@ -403,12 +407,12 @@ def _get_running_tasks_with_band_and_value(
                 worker_id=wid,
                 band_sort_key=band,
                 resource_value=resource_value(
-                    request.resources.cpu_millicores,
-                    request.resources.memory_bytes,
-                    get_gpu_count(request.resources.device) + get_tpu_count(request.resources.device),
+                    resources.cpu_millicores,
+                    resources.memory_bytes,
+                    get_gpu_count(resources.device) + get_tpu_count(resources.device),
                 ),
-                is_coscheduled=request.HasField("coscheduling"),
-                resources=request.resources,
+                is_coscheduled=bool(int(row.has_coscheduling)),
+                resources=resources,
             )
         )
     return result
@@ -457,7 +461,7 @@ def _run_preemption_pass(
 
             # If current capacity already fits, no preemption needed
             if cap.can_fit(req) is None:
-                break
+                continue
 
             # Check if freeing the victim's resources would create enough capacity
             hypothetical = WorkerCapacity(

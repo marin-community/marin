@@ -10,11 +10,14 @@ from dataclasses import dataclass
 from typing import Generic, TypeVar
 
 from iris.cluster.controller.db import ACTIVE_TASK_STATES, QuerySnapshot
+from iris.cluster.controller.schema import proto_cache, proto_decoder
 from iris.cluster.types import JobName
 from iris.cluster.types import get_gpu_count, get_tpu_count
 from iris.rpc import cluster_pb2
 
 T = TypeVar("T")
+
+_RESOURCE_SPEC_DECODER = proto_decoder(cluster_pb2.ResourceSpecProto)
 
 
 @dataclass(frozen=True)
@@ -53,16 +56,18 @@ def compute_user_spend(snapshot: QuerySnapshot) -> dict[str, int]:
     """Compute per-user budget spend from active tasks.
 
     Joins tasks (in ASSIGNED/BUILDING/RUNNING states) with jobs to get user_id
-    and the resource spec proto.  Resource values are computed in Python because
-    the spec lives in a serialized proto blob.
+    and the resource spec proto.  Uses GROUP BY to count tasks per job and
+    decodes the compact ``resources_proto`` (not the full ``request_proto``)
+    once per job via ProtoCache.
 
     Returns ``{user_id: total_resource_value}`` for users with active tasks.
     """
     placeholders = ",".join("?" for _ in _ACTIVE_TASK_STATES)
     rows = snapshot.raw(
-        f"SELECT j.job_id, j.request_proto FROM tasks t "
-        f"JOIN jobs j ON t.job_id = j.job_id "
-        f"WHERE t.state IN ({placeholders})",
+        f"SELECT j.job_id, j.resources_proto, COUNT(*) as task_count "
+        f"FROM tasks t JOIN jobs j ON t.job_id = j.job_id "
+        f"WHERE t.state IN ({placeholders}) "
+        f"GROUP BY j.job_id",
         tuple(_ACTIVE_TASK_STATES),
         decoders={"job_id": JobName.from_wire},
     )
@@ -70,11 +75,10 @@ def compute_user_spend(snapshot: QuerySnapshot) -> dict[str, int]:
     spend: dict[str, int] = defaultdict(int)
     for row in rows:
         user_id = row.job_id.user
-        request = cluster_pb2.Controller.LaunchJobRequest()
-        request.ParseFromString(row.request_proto)
-        res = request.resources
+        res = proto_cache.get_or_decode(row.resources_proto, _RESOURCE_SPEC_DECODER)
         accel = get_gpu_count(res.device) + get_tpu_count(res.device)
-        spend[user_id] += resource_value(res.cpu_millicores, res.memory_bytes, accel)
+        value = resource_value(res.cpu_millicores, res.memory_bytes, accel)
+        spend[user_id] += value * int(row.task_count)
     return dict(spend)
 
 

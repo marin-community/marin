@@ -721,7 +721,7 @@ TASKS = Table(
         Column("priority_neg_depth", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column("priority_root_submitted_ms", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column("priority_insertion", "INTEGER", "NOT NULL", python_type=int, decoder=int),
-        # Migration 0013_budgets
+        # Migration 0021_budgets
         Column("priority_band", "INTEGER", "NOT NULL DEFAULT 2", python_type=int, decoder=int),
         # Migration 0012_container_name
         Column("container_id", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),

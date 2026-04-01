@@ -1040,6 +1040,54 @@ message Controller {
   message ListUserBudgetsResponse {
     repeated GetUserBudgetResponse users = 1;
   }
+
+  // --- Scheduler State ---
+  message GetSchedulerStateRequest {}
+
+  message SchedulerTaskEntry {
+    string task_id = 1;
+    string job_id = 2;
+    string user_id = 3;
+    PriorityBand original_band = 4;
+    PriorityBand effective_band = 5;
+    int32 queue_position = 6;
+    int32 resource_value = 7;
+  }
+
+  message SchedulerBandGroup {
+    PriorityBand band = 1;
+    repeated SchedulerTaskEntry tasks = 2;
+    int32 total_in_band = 3;
+  }
+
+  message SchedulerUserBudget {
+    string user_id = 1;
+    int64 budget_limit = 2;
+    int64 budget_spent = 3;
+    PriorityBand max_band = 4;
+    PriorityBand effective_band = 5;
+    float utilization_percent = 6;
+  }
+
+  message SchedulerRunningTask {
+    string task_id = 1;
+    string job_id = 2;
+    string user_id = 3;
+    string worker_id = 4;
+    PriorityBand effective_band = 5;
+    int32 resource_value = 6;
+    bool preemptible = 7;
+    repeated PriorityBand preemptible_by = 8;
+    bool is_coscheduled = 9;
+  }
+
+  message GetSchedulerStateResponse {
+    repeated SchedulerBandGroup pending_queue = 1;
+    repeated SchedulerUserBudget user_budgets = 2;
+    repeated SchedulerRunningTask running_tasks = 3;
+    int32 total_pending = 4;
+    int32 total_running = 5;
+  }
 }
 
 // ============================================================================
@@ -1210,6 +1258,9 @@ service ControllerService {
   rpc SetUserBudget(Controller.SetUserBudgetRequest) returns (Controller.SetUserBudgetResponse);
   rpc GetUserBudget(Controller.GetUserBudgetRequest) returns (Controller.GetUserBudgetResponse);
   rpc ListUserBudgets(Controller.ListUserBudgetsRequest) returns (Controller.ListUserBudgetsResponse);
+
+  // Scheduler state (dashboard)
+  rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
 }
 
 service WorkerService {

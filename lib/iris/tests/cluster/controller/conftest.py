@@ -419,6 +419,7 @@ def make_job_request(
     max_retries_failure: int = 0,
     max_retries_preemption: int = 0,
     scheduling_timeout_seconds: int = 0,
+    priority_band: int = 0,
 ) -> cluster_pb2.Controller.LaunchJobRequest:
     job_name = JobName.from_string(name) if name.startswith("/") else JobName.root("test-user", name)
     request = cluster_pb2.Controller.LaunchJobRequest(
@@ -429,6 +430,7 @@ def make_job_request(
         max_retries_failure=max_retries_failure,
         max_retries_preemption=max_retries_preemption,
         replicas=replicas,
+        priority_band=priority_band,
     )
     if scheduling_timeout_seconds > 0:
         request.scheduling_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(scheduling_timeout_seconds)))
@@ -880,5 +882,10 @@ def advance_all_tpus(service: InMemoryGcpService, state: str = "READY") -> None:
 
 
 def set_task_band(db: ControllerDB, task_id: JobName, band: int) -> None:
-    """Directly set priority_band on a task row for testing."""
+    """Directly set priority_band on a task row for testing.
+
+    Prefer setting priority_band on the LaunchJobRequest for new submissions.
+    This helper is still needed for tests that change a task's band mid-flight
+    (e.g., simulating admin band overrides or budget-triggered demotions).
+    """
     db.execute("UPDATE tasks SET priority_band = ? WHERE task_id = ?", (band, task_id.to_wire()))

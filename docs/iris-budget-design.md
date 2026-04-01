@@ -93,7 +93,7 @@ rpc GetUserBudget(Controller.GetUserBudgetRequest) returns (Controller.GetUserBu
 rpc ListUserBudgets(Controller.ListUserBudgetsRequest) returns (Controller.ListUserBudgetsResponse);
 ```
 
-### 3.2 DB Migration (`migrations/0013_budgets.py`)
+### 3.2 DB Migration (`migrations/0021_budgets.py`)
 
 ```sql
 -- New column on tasks for priority band sort key
@@ -561,7 +561,7 @@ a mock DB or in-memory SQLite.
 
 | File | Change |
 |---|---|
-| `lib/iris/src/iris/cluster/controller/migrations/0013_budgets.py` | Add `priority_band` column to tasks, create `user_budgets` table, rebuild pending index |
+| `lib/iris/src/iris/cluster/controller/migrations/0021_budgets.py` | Add `priority_band` column to tasks, create `user_budgets` table, rebuild pending index |
 | `lib/iris/src/iris/cluster/controller/db.py` | Add `get_user_budget()`, `set_user_budget()` methods on `TransactionCursor`/`ControllerDB`. Add `priority_band` to `TASKS` table descriptor. |
 
 **Tests**: migration applies cleanly, round-trip budget CRUD, verify new index is used
