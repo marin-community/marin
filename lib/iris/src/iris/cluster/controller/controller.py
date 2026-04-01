@@ -1779,10 +1779,9 @@ class Controller:
         for task in timed_out:
             logger.warning("Task %s exceeded execution timeout, killing", task.task_id)
         task_ids = {t.task_id for t in timed_out}
-        task_kill_workers = {t.task_id: t.worker_id for t in timed_out if t.worker_id is not None}
         result = self._transitions.cancel_tasks_for_timeout(task_ids, reason="Execution timeout exceeded")
         if result.tasks_to_kill:
-            self.kill_tasks_on_workers(result.tasks_to_kill, task_kill_workers)
+            self.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
 
     def _mark_task_unschedulable(self, task: TaskRow) -> None:
         """Mark a task as unschedulable due to timeout."""
