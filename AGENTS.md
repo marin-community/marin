@@ -6,6 +6,8 @@ Start with the shared practices below. Consult subproject manuals for directory-
 - `lib/marin/AGENTS.md` — Marin (pipeline framework)
 - `lib/iris/AGENTS.md` — Iris (job orchestration)
 
+For module-level API reference, see @docs/agent/MAP.md.
+
 ## Workflow Playbooks
 
 Skills are task-focused playbooks in `.agents/skills/` (also accessible as

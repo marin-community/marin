@@ -13,10 +13,11 @@
 # ///
 """Generate agent-optimized documentation for Marin.
 
-Produces a three-tier documentation hierarchy in docs/agent/:
-  - Tier 1: MAP.md (module index, ~4KB, always loaded by agents)
-  - Tier 2: modules/*.md (per-module reference cards, ~2-8KB each)
-  - Tier 3: api/*.yaml (function-level structured docs)
+Produces a two-tier documentation hierarchy in docs/agent/:
+  - MAP.md (module index, ~4KB, auto-loaded via @docs/agent/MAP.md in AGENTS.md)
+  - modules/*.md (per-module reference cards, ~2-8KB each, read on demand)
+
+Agents navigate: MAP.md → module doc → source code. Two hops.
 
 Uses the claude CLI for LLM generation and content-addressed caching
 to skip unchanged modules.
@@ -39,9 +40,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from agent_docs.cache import DocCache, compute_stale_modules, load_cache, save_cache
 from agent_docs.graph import build_repo_graph, print_graph_stats
-from agent_docs.tier1 import generate_tier1
-from agent_docs.tier2 import generate_tier2
-from agent_docs.tier3 import generate_tier3
+from agent_docs.tier1 import generate_map
+from agent_docs.tier2 import generate_module_docs
 
 
 def main() -> None:
@@ -83,14 +83,13 @@ def main() -> None:
 
     logging.info("Stale modules (%d): %s", len(stale), ", ".join(sorted(stale)))
 
-    # Bottom-up generation
-    updated_t3 = generate_tier3(graph, cache, stale, repo_root, model=args.model, dry_run=args.dry_run)
-    updated_t2 = generate_tier2(graph, cache, stale, updated_t3, repo_root, model=args.model, dry_run=args.dry_run)
-    generate_tier1(graph, cache, updated_t2, repo_root, model=args.model, dry_run=args.dry_run)
+    # Two-step pipeline: module docs → MAP.md
+    updated_modules = generate_module_docs(graph, cache, stale, repo_root, model=args.model, dry_run=args.dry_run)
+    generate_map(graph, cache, updated_modules, repo_root, model=args.model, dry_run=args.dry_run)
 
     if not args.dry_run:
         save_cache(cache, repo_root)
-        logging.info("Done. Updated: %d Tier 3, %d Tier 2 modules", len(updated_t3), len(updated_t2))
+        logging.info("Done. Updated %d module docs.", len(updated_modules))
 
 
 if __name__ == "__main__":

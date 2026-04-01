@@ -1,30 +1,49 @@
 ## Module Index
 
 ### rigging
-`rigging.distributed_lock` — Distributed mutual exclusion via heartbeated lease files on GCS, S3, local, or fsspec backends; coordinates exclusive resource access across workers.
+`rigging.distributed_lock` — Distributed lease-based locking over GCS, S3, local, and fsspec backends for coordinating exclusive access across workers. → `docs/agent/modules/rigging.distributed_lock.md`
+
+### marin
+*(no summaries provided)*
+
+### levanter
+*(no summaries provided)*
+
+### haliax
+*(no summaries provided)*
+
+### fray
+*(no summaries provided)*
+
+### iris
+*(no summaries provided)*
+
+### zephyr
+*(no summaries provided)*
+
+### dupekit
+*(no summaries provided)*
 
 ---
 
 ## Dependency Edges
 
-`rigging.distributed_lock -> google.cloud.storage` (GCS conditional writes)
-`rigging.distributed_lock -> botocore` (S3 conditional PutObject)
-`rigging.distributed_lock -> fsspec` (generic filesystem abstraction and URI dispatch)
+*(No cross-library import edges present in provided summaries.)*
 
 ---
 
 ## Entry Points
 
-`rigging.distributed_lock.create_lock(lock_path, worker_id=None)` — Instantiate the correct backend lease for a given URI scheme; primary entry point for acquiring distributed locks.
+*(Summaries for marin.run, marin.execution, marin.training, marin.processing, and levanter.main were not provided. Populate this section when those module summaries are supplied.)*
 
 ---
 
 ## Conventions
 
-**Config style:** Not applicable to this module; no draccus dataclasses present.
-
-**Artifact paths:** Lock files are addressed by URI scheme: `gs://` routes to `GcsLease`, `s3://` routes to `S3Lease`, bare paths route to `LocalFileLease`, all others fall back to `FsspecLease`.
-
-**Naming patterns:** Worker IDs default to `{hostname}-{thread_id}`; in containerized environments supply an explicit globally-unique ID to avoid collisions.
-
-**Common patterns:** Lease acquire/refresh/release protocol — call `try_acquire()`, loop calling `refresh()` as a heartbeat, call `release()` on exit. `LeaseLostError` propagates from `refresh()` and must be caught at the operation boundary, not swallowed. Stale lease theft is automatic: any lease older than `HEARTBEAT_TIMEOUT` is eligible to be stolen by a competing `try_acquire()` call. `FsspecLease` provides only weak atomicity (write-then-readback); use GCS or S3 backends for strong mutual exclusion guarantees.
+- **Config style:** Draccus dataclasses; compose sub-configs via embedding, not inheritance; no `default_*` wrappers; force explicit critical parameters.
+- **Artifact paths:** Rooted at `MARIN_PREFIX`; output paths constructed per-step; version hashing used to avoid collisions.
+- **Execution patterns:** Steps described via `StepSpec`; remote execution dispatched through `RemoteCallable`; parallelism managed by Fray.
+- **Locking:** Use `rigging.distributed_lock.create_lock(path, worker_id)` to acquire exclusive access to shared resources; call `refresh()` in a heartbeat loop and treat `LeaseLostError` as fatal.
+- **Lock backend selection:** Path prefix determines backend — `gs://` → `GcsLease` (atomic CAS), `s3://` → `S3Lease` (atomic CAS), local path → `LocalFileLease`, other → `FsspecLease` (best-effort only).
+- **No backward compat shims:** Update all call sites; no `hasattr` guards or fallback paths.
+- **Imports:** All at top of file; no local imports except to break cycles; no `TYPE_CHECKING` guards.
