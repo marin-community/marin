@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""MAP.md generator: the top-level module index loaded into every agent conversation."""
+"""MAP.md generator: the top-level package index loaded into every agent conversation."""
 
 from __future__ import annotations
 
@@ -10,58 +10,56 @@ from pathlib import Path
 
 from agent_docs.cache import DocCache, hash_text
 from agent_docs.claude_cli import generate
-from agent_docs.graph import RepoGraph
 from agent_docs.prompts import MAP_PROMPT
 
 logger = logging.getLogger(__name__)
 
-MODULES_DIR = "docs/agent/modules"
+PACKAGES_DIR = "docs/agent/packages"
 OUTPUT_FILE = "docs/agent/MAP.md"
 
 
 def generate_map(
-    graph: RepoGraph,
+    graph: object,  # unused, kept for backward compat
     cache: DocCache,
-    updated_modules: set[str],
+    updated_packages: set[str],
     repo_root: Path,
     *,
     model: str = "sonnet",
     dry_run: bool = False,
 ) -> bool:
-    """Generate MAP.md from all module docs.
+    """Generate MAP.md from all package docs.
 
     Returns True if MAP.md was regenerated.
     """
-    if not updated_modules:
-        logger.info("No module docs updated, skipping MAP.md generation")
+    if not updated_packages:
+        logger.info("No package docs updated, skipping MAP.md generation")
         return False
 
-    modules_dir = repo_root / MODULES_DIR
-    if not modules_dir.exists():
-        logger.warning("No modules directory found at %s", modules_dir)
+    packages_dir = repo_root / PACKAGES_DIR
+    if not packages_dir.exists():
+        logger.warning("No packages directory found at %s", packages_dir)
         return False
 
-    # Collect all module doc summaries
     summaries: list[str] = []
-    for md_file in sorted(modules_dir.glob("*.md")):
+    for md_file in sorted(packages_dir.glob("*.md")):
         content = md_file.read_text()
         if content.strip():
-            mod_name = md_file.stem
-            summaries.append(f"# {mod_name}\n\n{content}")
+            pkg_name = md_file.stem
+            summaries.append(f"# {pkg_name}\n\n{content}")
 
     if not summaries:
-        logger.warning("No module docs found")
+        logger.warning("No package docs found")
         return False
 
     combined = "\n\n---\n\n".join(summaries)
 
     if dry_run:
-        logger.info("[dry-run] Would generate MAP.md from %d module summaries", len(summaries))
+        logger.info("[dry-run] Would generate MAP.md from %d package summaries", len(summaries))
         return False
 
-    logger.info("Generating MAP.md from %d module summaries", len(summaries))
+    logger.info("Generating MAP.md from %d package summaries", len(summaries))
 
-    prompt = MAP_PROMPT.format(module_summaries=combined)
+    prompt = MAP_PROMPT.format(package_summaries=combined)
 
     try:
         response = generate(prompt, model=model, max_budget_usd=0.50)

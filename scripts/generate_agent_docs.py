@@ -14,20 +14,24 @@
 """Generate agent-optimized documentation for Marin.
 
 Produces a two-tier documentation hierarchy in docs/agent/:
-  - MAP.md (module index, ~4KB, auto-loaded via @docs/agent/MAP.md in AGENTS.md)
-  - modules/*.md (per-module reference cards, ~2-8KB each, read on demand)
+  - MAP.md (package index, ~4KB, auto-loaded via @docs/agent/MAP.md in AGENTS.md)
+  - packages/*.md (per-package reference cards, ~2-4KB each, read on demand)
 
-Agents navigate: MAP.md → module doc → source code. Two hops.
+Packages are grouped by filesystem directory (not depth-2 modules), giving
+natural sub-package boundaries like marin.processing.classification.deduplication
+instead of the overly broad marin.processing.
+
+Agents navigate: MAP.md → package doc → source code. Two hops.
 
 Uses the claude CLI for LLM generation and content-addressed caching
-to skip unchanged modules.
+to skip unchanged packages.
 
 Usage:
     ./scripts/generate_agent_docs.py                    # incremental update
     ./scripts/generate_agent_docs.py --full              # regenerate everything
     ./scripts/generate_agent_docs.py --dry-run           # show what would change
-    ./scripts/generate_agent_docs.py --module marin.execution  # single module
-    ./scripts/generate_agent_docs.py --stats             # print graph stats only
+    ./scripts/generate_agent_docs.py --package marin.processing.classification.deduplication
+    ./scripts/generate_agent_docs.py --stats             # print package stats only
 """
 
 import argparse
@@ -38,19 +42,38 @@ from pathlib import Path
 # Add scripts/ to path so agent_docs package is importable
 sys.path.insert(0, str(Path(__file__).parent))
 
-from agent_docs.cache import DocCache, compute_stale_modules, load_cache, save_cache
-from agent_docs.graph import build_repo_graph, print_graph_stats
+from agent_docs.cache import DocCache, load_cache, save_cache
+from agent_docs.packages import PackageInfo, compute_stale_packages, discover_packages
 from agent_docs.tier1 import generate_map
-from agent_docs.tier2 import generate_module_docs
+from agent_docs.tier2 import generate_package_docs
+
+
+def print_package_stats(packages: dict[str, PackageInfo]) -> None:
+    """Print statistics about discovered packages."""
+    total_funcs = 0
+    total_classes = 0
+    print(f"\n{'Package':<60} {'Funcs':>6} {'Classes':>8} {'Files':>6}")
+    print("-" * 84)
+    for name in sorted(packages):
+        pkg = packages[name]
+        pub_funcs = sum(1 for f in pkg.functions if f.is_public)
+        pub_classes = sum(1 for c in pkg.classes if c.is_public)
+        total_funcs += pub_funcs
+        total_classes += pub_classes
+        if pub_funcs + pub_classes > 0:
+            print(f"{name:<60} {pub_funcs:>6} {pub_classes:>8} {len(pkg.file_paths):>6}")
+    print("-" * 84)
+    print(f"{'TOTAL':<60} {total_funcs:>6} {total_classes:>8}")
+    print(f"\n{len(packages)} packages discovered")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate agent-optimized docs for Marin")
     parser.add_argument("--full", action="store_true", help="Ignore cache, regenerate everything")
     parser.add_argument("--dry-run", action="store_true", help="Print what would be regenerated")
-    parser.add_argument("--module", type=str, help="Regenerate only a specific module")
+    parser.add_argument("--package", type=str, help="Regenerate only a specific package")
     parser.add_argument("--model", type=str, default="sonnet", help="Claude model to use")
-    parser.add_argument("--stats", action="store_true", help="Print graph stats and exit")
+    parser.add_argument("--stats", action="store_true", help="Print package stats and exit")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 
@@ -60,36 +83,40 @@ def main() -> None:
     )
 
     repo_root = Path(__file__).parent.parent
-    logging.info("Building dependency graph...")
-    graph = build_repo_graph(repo_root)
+    logging.info("Discovering packages...")
+    packages = discover_packages(repo_root)
 
     if args.stats:
-        print_graph_stats(graph)
+        print_package_stats(packages)
         return
 
     cache = DocCache() if args.full else load_cache(repo_root)
 
-    if args.module:
-        if args.module not in graph.modules:
-            print(f"Module '{args.module}' not found. Available: {sorted(graph.modules.keys())}")
+    if args.package:
+        if args.package not in packages:
+            print(f"Package '{args.package}' not found. Available:")
+            for name in sorted(packages):
+                pkg = packages[name]
+                pub = sum(1 for f in pkg.functions if f.is_public) + sum(1 for c in pkg.classes if c.is_public)
+                if pub > 0:
+                    print(f"  {name} ({pub} public items)")
             sys.exit(1)
-        stale = {args.module}
+        stale = {args.package}
     else:
-        stale = compute_stale_modules(graph, cache)
+        stale = compute_stale_packages(packages, cache)
 
     if not stale:
-        logging.info("Nothing to regenerate — all modules up to date.")
+        logging.info("Nothing to regenerate — all packages up to date.")
         return
 
-    logging.info("Stale modules (%d): %s", len(stale), ", ".join(sorted(stale)))
+    logging.info("Stale packages (%d): %s", len(stale), ", ".join(sorted(stale)))
 
-    # Two-step pipeline: module docs → MAP.md
-    updated_modules = generate_module_docs(graph, cache, stale, repo_root, model=args.model, dry_run=args.dry_run)
-    generate_map(graph, cache, updated_modules, repo_root, model=args.model, dry_run=args.dry_run)
+    updated = generate_package_docs(packages, cache, stale, repo_root, model=args.model, dry_run=args.dry_run)
+    generate_map(None, cache, updated, repo_root, model=args.model, dry_run=args.dry_run)
 
     if not args.dry_run:
         save_cache(cache, repo_root)
-        logging.info("Done. Updated %d module docs.", len(updated_modules))
+        logging.info("Done. Updated %d package docs.", len(updated))
 
 
 if __name__ == "__main__":
