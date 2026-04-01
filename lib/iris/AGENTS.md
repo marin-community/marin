@@ -13,6 +13,7 @@ Distributed job orchestration replacing Ray with simpler primitives. Start with 
 - `docs/image-push.md` — multi-region image push/pull architecture
 - `docs/constraints.md` — constraint system design
 - `docs/users.md` — user/auth system design
+- `docs/sql-redesign.md` — SQL layer redesign plan (schema registry, write consolidation, normalization, state machine hardening)
 
 ## Source Layout
 

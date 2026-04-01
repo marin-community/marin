@@ -618,6 +618,8 @@ exec {quoted_cmd}
             "create",
             "--ulimit",
             "core=0:0",
+            "--ulimit",
+            "nofile=65536:524288",
             "-w",
             config.workdir,
         ]

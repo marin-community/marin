@@ -46,7 +46,7 @@ const taskLogState = props.taskId
         ? `${props.taskId}:${selectedAttemptId.value}`
         : isTask
           ? `${props.taskId}:.*`
-          : `${props.taskId}/.*`,
+          : `${props.taskId}/\\d+:.*`,
       maxLines: tailLines.value || undefined,
       tail: true,
     }))

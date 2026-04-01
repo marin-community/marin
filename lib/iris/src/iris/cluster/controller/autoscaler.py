@@ -47,7 +47,8 @@ from iris.cluster.constraints import (
     soft_constraint_score,
     split_hard_soft,
 )
-from iris.cluster.controller.db import ControllerDB, _decode_json_list, _decode_timestamp_ms
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import _decode_json_list, decode_timestamp_ms
 from iris.cluster.types import WorkerStatusMap
 from iris.cluster.controller.scaling_group import (
     GroupAvailability,
@@ -1319,10 +1320,10 @@ class Autoscaler:
                 "FROM scaling_groups",
                 decoders={
                     "consecutive_failures": int,
-                    "backoff_until_ms": _decode_timestamp_ms,
-                    "last_scale_up_ms": _decode_timestamp_ms,
-                    "last_scale_down_ms": _decode_timestamp_ms,
-                    "quota_exceeded_until_ms": _decode_timestamp_ms,
+                    "backoff_until_ms": decode_timestamp_ms,
+                    "last_scale_up_ms": decode_timestamp_ms,
+                    "last_scale_down_ms": decode_timestamp_ms,
+                    "quota_exceeded_until_ms": decode_timestamp_ms,
                 },
             )
             slice_rows = snapshot.raw(
@@ -1331,8 +1332,8 @@ class Autoscaler:
                 "FROM slices",
                 decoders={
                     "worker_ids": _decode_json_list,
-                    "created_at_ms": _decode_timestamp_ms,
-                    "last_active_ms": _decode_timestamp_ms,
+                    "created_at_ms": decode_timestamp_ms,
+                    "last_active_ms": decode_timestamp_ms,
                 },
             )
             tracked_rows = snapshot.raw(

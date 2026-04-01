@@ -4,6 +4,7 @@
 """Iris Controller logic for connecting state, scheduler and managing workers."""
 
 import atexit
+import enum
 import logging
 import sys
 import tempfile
@@ -35,22 +36,28 @@ from iris.cluster.controller.checkpoint import (
     write_checkpoint,
 )
 from iris.cluster.controller.db import (
-    Attempt,
     ControllerDB,
-    JOB_ROW_COLUMNS,
-    JobDetail,
-    JobRow,
-    TASK_ROW_COLUMNS,
-    TaskDetail,
-    TaskRow,
-    WorkerDetail,
-    WorkerRow,
-    _decode_row,
-    _tasks_with_attempts,
-    decode_rows,
     healthy_active_workers_with_attributes,
     insert_task_profile,
+    job_is_finished,
+    job_scheduling_deadline,
     running_tasks_by_worker,
+    task_row_can_be_scheduled,
+)
+from iris.cluster.controller.schema import (
+    ATTEMPT_PROJECTION,
+    JOB_DETAIL_PROJECTION,
+    JOB_SCHEDULING_PROJECTION,
+    TASK_DETAIL_PROJECTION,
+    TASK_ROW_PROJECTION,
+    WORKER_DETAIL_PROJECTION,
+    JobDetailRow,
+    JobSchedulingRow,
+    TaskDetailRow,
+    TaskRow,
+    WorkerDetailRow,
+    WorkerRow,
+    tasks_with_attempts,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
@@ -98,6 +105,15 @@ _SLOW_HEARTBEAT_MS = 5000
 # full data-prune interval, which is typically 1 hour).
 _HISTORY_CLEANUP_INTERVAL_S = 60.0
 
+
+class SchedulingOutcome(enum.Enum):
+    """Result of a scheduling cycle, used to drive adaptive backoff."""
+
+    NO_PENDING_TASKS = "no_pending_tasks"
+    NO_ASSIGNMENTS = "no_assignments"
+    ASSIGNMENTS_MADE = "assignments_made"
+
+
 _HEALTH_SUMMARY_INTERVAL = RateLimiter(interval_seconds=30)
 
 # Taint attribute injected onto claimed workers to prevent non-reservation
@@ -107,13 +123,13 @@ _HEALTH_SUMMARY_INTERVAL = RateLimiter(interval_seconds=30)
 RESERVATION_TAINT_KEY = "reservation-job"
 
 
-def job_requirements_from_job(job: JobRow) -> JobRequirements:
+def job_requirements_from_job(job: JobSchedulingRow) -> JobRequirements:
     """Convert a job row to scheduler-compatible JobRequirements."""
     return JobRequirements(
         resources=job.resources or cluster_pb2.ResourceSpecProto(),
         constraints=job.constraints,
-        is_coscheduled=job.is_coscheduled,
-        coscheduling_group_by=job.coscheduling_group_by if job.is_coscheduled else None,
+        is_coscheduled=job.has_coscheduling,
+        coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
     )
 
 
@@ -160,7 +176,7 @@ def compute_demand_entries(
     job_rows = list(_jobs_by_id(queries, {task.job_id for task in pending}).values()) if pending else []
     jobs_by_id = {job.job_id: job for job in job_rows}
     for task in pending:
-        if not task.can_be_scheduled():
+        if not task_row_can_be_scheduled(task):
             continue
         if task.job_id not in jobs_by_id:
             continue
@@ -212,7 +228,7 @@ def compute_demand_entries(
         job = jobs_by_id.get(job_id)
         if not job:
             continue
-        if job.is_finished():
+        if job_is_finished(job.state):
             continue
 
         job_constraints = job.constraints
@@ -231,7 +247,7 @@ def compute_demand_entries(
                 required_zones=None,
             )
 
-        if job.is_coscheduled:
+        if job.has_coscheduling:
             remaining_ids = []
             for t in tasks:
                 if t.task_id in absorbed_task_ids:
@@ -283,23 +299,22 @@ def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClai
     }
 
 
-def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, JobRow]:
+def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, JobSchedulingRow]:
     if not job_ids:
         return {}
     wires = [job_id.to_wire() for job_id in job_ids]
     placeholders = ",".join("?" for _ in wires)
     with queries.read_snapshot() as snapshot:
-        jobs = decode_rows(
-            JobRow,
+        jobs = JOB_SCHEDULING_PROJECTION.decode(
             snapshot.fetchall(
-                f"SELECT {JOB_ROW_COLUMNS} FROM jobs j WHERE j.job_id IN ({placeholders})",
+                f"SELECT {JOB_SCHEDULING_PROJECTION.select_clause()} FROM jobs j WHERE j.job_id IN ({placeholders})",
                 tuple(wires),
             ),
         )
     return {job.job_id: job for job in jobs}
 
 
-def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobDetail]:
+def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobDetailRow]:
     """Fetch only jobs that have reservations, filtering at the SQL level.
 
     Uses the denormalized has_reservation column to avoid deserializing
@@ -311,46 +326,43 @@ def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> l
             f"SELECT * FROM jobs WHERE state IN ({placeholders}) AND has_reservation = 1",
             list(states),
         )
-    return [_decode_row(JobDetail, row) for row in rows]
+    return JOB_DETAIL_PROJECTION.decode(rows)
 
 
 def _schedulable_tasks(queries: ControllerDB) -> list[TaskRow]:
     # Only PENDING tasks can pass can_be_scheduled(); no need to fetch ASSIGNED/BUILDING/RUNNING.
     with queries.read_snapshot() as snapshot:
-        tasks = decode_rows(
-            TaskRow,
+        tasks = TASK_ROW_PROJECTION.decode(
             snapshot.fetchall(
-                f"SELECT {TASK_ROW_COLUMNS} FROM tasks t WHERE t.state = ? "
+                f"SELECT {TASK_ROW_PROJECTION.select_clause()} FROM tasks t WHERE t.state = ? "
                 "ORDER BY t.priority_neg_depth ASC, t.priority_root_submitted_ms ASC, "
                 "t.submitted_at_ms ASC, t.priority_insertion ASC",
                 (cluster_pb2.TASK_STATE_PENDING,),
             ),
         )
-    return [task for task in tasks if task.can_be_scheduled()]
+    return [task for task in tasks if task_row_can_be_scheduled(task)]
 
 
-def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -> dict[JobName, TaskDetail]:
+def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -> dict[JobName, TaskDetailRow]:
     if not task_ids:
         return {}
     task_wires = [task_id.to_wire() for task_id in task_ids]
     placeholders = ",".join("?" for _ in task_wires)
     with queries.read_snapshot() as snapshot:
-        tasks = decode_rows(
-            TaskDetail,
+        tasks = TASK_DETAIL_PROJECTION.decode(
             snapshot.fetchall(
                 f"SELECT * FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
                 tuple(task_wires),
             ),
         )
-        attempts = decode_rows(
-            Attempt,
+        attempts = ATTEMPT_PROJECTION.decode(
             snapshot.fetchall(
                 f"SELECT * FROM task_attempts a WHERE a.task_id IN ({placeholders}) "
                 "ORDER BY a.task_id ASC, a.attempt_id ASC",
                 tuple(task_wires),
             ),
         )
-    return {task.task_id: task for task in _tasks_with_attempts(tasks, attempts)}
+    return {task.task_id: task for task in tasks_with_attempts(tasks, attempts)}
 
 
 def _building_counts(queries: ControllerDB, workers: list[WorkerRow]) -> dict[WorkerId, int]:
@@ -376,14 +388,13 @@ def _building_counts(queries: ControllerDB, workers: list[WorkerRow]) -> dict[Wo
     return {row.worker_id: row.cnt for row in rows}
 
 
-def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, WorkerDetail]:
+def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, WorkerDetailRow]:
     if not worker_ids:
         return {}
     wires = [str(wid) for wid in worker_ids]
     placeholders = ",".join("?" for _ in wires)
     with queries.read_snapshot() as snapshot:
-        workers = decode_rows(
-            WorkerDetail,
+        workers = WORKER_DETAIL_PROJECTION.decode(
             snapshot.fetchall(f"SELECT * FROM workers w WHERE w.worker_id IN ({placeholders})", tuple(wires)),
         )
     return {worker.worker_id: worker for worker in workers}
@@ -405,7 +416,7 @@ def _task_worker_mapping(queries: ControllerDB, task_ids: set[JobName]) -> dict[
 
 
 def _worker_matches_reservation_entry(
-    worker: WorkerDetail,
+    worker: WorkerRow,
     res_entry: cluster_pb2.ReservationEntry,
 ) -> bool:
     """Check if a worker is eligible for a reservation entry.
@@ -654,8 +665,11 @@ class ControllerConfig:
     remote_state_dir: str = ""
     """Remote URI for controller checkpoints and worker profiles (e.g. gs://bucket/iris/state)."""
 
-    scheduler_interval: Duration = field(default_factory=lambda: Duration.from_seconds(0.5))
-    """How often to run the scheduling loop."""
+    scheduler_min_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
+    """Minimum scheduling loop interval (used when cluster is active)."""
+
+    scheduler_max_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
+    """Maximum scheduling loop interval (reached via exponential backoff when idle)."""
 
     heartbeat_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     """How often to send heartbeats to workers."""
@@ -865,12 +879,10 @@ class Controller:
         )
 
     def wake(self) -> None:
-        """Signal the controller loop to run immediately.
+        """Signal the scheduling loop to run immediately and reset backoff.
 
-        Called when events occur that may make scheduling possible:
-        - New job submitted
-        - New worker registered
-        - Task finished (freeing capacity)
+        Called on new job submission. Resets the adaptive backoff so the
+        scheduler responds to new work within one cycle.
         """
         self._wake_event.set()
 
@@ -978,12 +990,22 @@ class Controller:
             logger.exception("atexit checkpoint failed")
 
     def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
-        """Scheduling loop: task assignment and worker timeout checks only."""
-        limiter = RateLimiter(interval_seconds=self._config.scheduler_interval.to_seconds())
+        """Scheduling loop with adaptive backoff.
+
+        Backs off from min to max interval when idle (no pending tasks or no
+        assignments possible). Resets to min interval when woken by a new job
+        submission or when assignments are made.
+        """
+        backoff = ExponentialBackoff(
+            initial=self._config.scheduler_min_interval.to_seconds(),
+            maximum=self._config.scheduler_max_interval.to_seconds(),
+            factor=2.0,
+            jitter=0.1,
+        )
         while not stop_event.is_set():
-            self._wake_event.wait(timeout=limiter.time_until_next())
+            interval = backoff.next_interval()
+            woken = self._wake_event.wait(timeout=interval)
             self._wake_event.clear()
-            limiter.mark_run()
 
             if stop_event.is_set():
                 break
@@ -991,7 +1013,12 @@ class Controller:
             if self._checkpoint_in_progress:
                 continue
 
-            self._run_scheduling()
+            if woken:
+                backoff.reset()
+
+            outcome = self._run_scheduling()
+            if outcome == SchedulingOutcome.ASSIGNMENTS_MADE:
+                backoff.reset()
 
     def _run_prune_loop(self, stop_event: threading.Event) -> None:
         """Background pruning loop: history cleanup every 60s, full data prune on the configured interval."""
@@ -1199,7 +1226,7 @@ class Controller:
 
     def _is_reservation_satisfied(
         self,
-        job: JobRow,
+        job: JobSchedulingRow,
         claims: dict[WorkerId, ReservationClaim] | None = None,
     ) -> bool:
         """Check if a job's reservation is fully satisfied.
@@ -1253,7 +1280,7 @@ class Controller:
                 stale.append(worker_id)
                 continue
             job = jobs_by_id.get(claim.job_id)
-            if job is None or job.is_finished():
+            if job is None or job_is_finished(job.state):
                 stale.append(worker_id)
         for wid in stale:
             del claims[wid]
@@ -1308,7 +1335,7 @@ class Controller:
             self._transitions.replace_reservation_claims(claims)
         return changed
 
-    def _run_scheduling(self) -> None:
+    def _run_scheduling(self) -> SchedulingOutcome:
         """Run one scheduling cycle.
 
         Three-phase scheduling:
@@ -1347,7 +1374,7 @@ class Controller:
 
         if not pending_tasks:
             self._scheduling_diagnostics = {}
-            return
+            return SchedulingOutcome.NO_PENDING_TASKS
 
         # Handle timeouts and reservation gates before scheduling.
         # Holder tasks participate in scheduling like normal tasks.
@@ -1360,19 +1387,20 @@ class Controller:
         cap = self._config.max_tasks_per_job_per_cycle
         jobs_by_id = _jobs_by_id(self._db, {task.job_id for task in pending_tasks})
         for task in pending_tasks:
-            if not task.can_be_scheduled():
+            if not task_row_can_be_scheduled(task):
                 continue
             job = jobs_by_id.get(task.job_id)
             if not job:
                 continue
-            if job.scheduling_deadline is not None and job.scheduling_deadline.expired():
+            deadline = job_scheduling_deadline(job.scheduling_deadline_epoch_ms)
+            if deadline is not None and deadline.expired():
                 self._mark_task_unschedulable(task)
                 continue
             # Gate: skip real tasks whose job has an unsatisfied reservation.
             # Holder tasks are always schedulable (they ARE the reservation).
             if not job.is_reservation_holder and not self._is_reservation_satisfied(job, claims):
                 continue
-            if cap > 0 and not job.is_coscheduled and tasks_per_job[task.job_id] >= cap:
+            if cap > 0 and not job.has_coscheduling and tasks_per_job[task.job_id] >= cap:
                 continue
             tasks_per_job[task.job_id] += 1
             schedulable_task_ids.append(task.task_id)
@@ -1386,7 +1414,7 @@ class Controller:
 
         if not schedulable_task_ids:
             self._scheduling_diagnostics = {}
-            return
+            return SchedulingOutcome.NO_PENDING_TASKS
 
         # Inject reservation taints: claimed workers get a taint attribute,
         # non-reservation jobs get a NOT_EXISTS constraint for it.
@@ -1425,6 +1453,10 @@ class Controller:
         # Cache diagnostics for jobs that still have unassigned tasks.
         # RPCs read from this cache instead of recomputing per request.
         self._cache_scheduling_diagnostics(context, jobs, all_assignments, schedulable_task_ids)
+
+        if all_assignments:
+            return SchedulingOutcome.ASSIGNMENTS_MADE
+        return SchedulingOutcome.NO_ASSIGNMENTS
 
     def _cache_scheduling_diagnostics(
         self,
