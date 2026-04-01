@@ -48,6 +48,17 @@ from experiments.pretraining_datasets.nemotron_v2 import (
     downloads as nemotron_v2_downloads,
     tokenize_nemotron_v2_family,
 )
+from experiments.pretraining_datasets.common_pile import cp_downloads, cp_tokenized
+from experiments.pretraining_datasets.finepdfs import finepdfs_downloads, finepdfs_tokenized
+from experiments.pretraining_datasets.finetranslations import (
+    finetranslations_download,
+    finetranslations_tokenized,
+)
+from experiments.pretraining_datasets.institutional_books import (
+    institutional_books_download,
+    institutional_books_tokenized,
+)
+from experiments.pretraining_datasets.numinamath import numinamath_download, numinamath_tokenized
 from experiments.pretraining_datasets.simple import downloads as simple_downloads, tokenized as simple_tokenized
 
 # Re-export constants
@@ -105,6 +116,21 @@ DATASETS = {
         "download": simple_downloads["fineweb_edu"],
         "tokenize_fn": lambda: {"fineweb_edu/all": simple_tokenized["fineweb_edu"]},
     },
+    "finetranslations": {
+        "subsets": ["all"],
+        "download": finetranslations_download,
+        "tokenize_fn": lambda: {"finetranslations/all": finetranslations_tokenized},
+    },
+    "numinamath": {
+        "subsets": ["all"],
+        "download": numinamath_download,
+        "tokenize_fn": lambda: {"numinamath/all": numinamath_tokenized},
+    },
+    "institutional_books": {
+        "subsets": ["all"],
+        "download": institutional_books_download,
+        "tokenize_fn": lambda: {"institutional_books/all": institutional_books_tokenized},
+    },
     # Special combined dataset
     "dolmino_math": {
         "subsets": ["all"],
@@ -126,6 +152,17 @@ DATASETS = {
         "subsets": list(DOLMA_DATASETS.keys()),
         "download": dolma_downloads["dolma"],
         "tokenize_fn": tokenize_dolma,
+    },
+    "finepdfs": {
+        "subsets": list(finepdfs_tokenized.keys()),
+        "default_subset": "eng_Latn",
+        "download_fn": lambda subset: finepdfs_downloads[subset],
+        "tokenize_fn": lambda: {f"finepdfs/{subset}": step for subset, step in finepdfs_tokenized.items()},
+    },
+    "cp": {
+        "subsets": [name.removeprefix("cp/") for name in cp_tokenized],
+        "download_fn": lambda subset: cp_downloads[subset],
+        "tokenize_fn": lambda: cp_tokenized,
     },
     # Nemotron v2 datasets (from nvidia/Nemotron-Pre-Training-Datasets collection)
     **{

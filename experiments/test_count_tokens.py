@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from experiments.count_tokens import _is_matching_output_dir, _matching_output_dirs
 
 
