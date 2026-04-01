@@ -13,11 +13,9 @@ from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 import itertools
 import os
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    import pyarrow as pa
-
+import pyarrow as pa
 from rigging.filesystem import open_url, url_to_fs
 import msgspec
 import logging
@@ -92,6 +90,24 @@ def ensure_parent_dir(path: str) -> None:
             os.makedirs(output_dir, exist_ok=True)
 
 
+@contextmanager
+def _open_write_stream(fs, resolved_path: str, output_path: str):
+    """Open a binary write stream with compression inferred from ``output_path``."""
+    if output_path.endswith(".zst"):
+        import zstandard as zstd
+
+        cctx = zstd.ZstdCompressor(level=2, threads=1)
+        with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE) as raw_f:
+            with cctx.stream_writer(raw_f) as f:
+                yield f
+    elif output_path.endswith(".gz"):
+        with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE, compression="gzip") as f:
+            yield f
+    else:
+        with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
+            yield f
+
+
 def write_jsonl_file(records: Iterable, output_path: str) -> dict:
     """Write records to a JSONL file with automatic compression."""
     ensure_parent_dir(output_path)
@@ -101,36 +117,17 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
 
     with atomic_rename(output_path) as temp_path:
         fs, resolved_temp = url_to_fs(temp_path)
-        if output_path.endswith(".zst"):
-            import zstandard as zstd
-
-            cctx = zstd.ZstdCompressor(level=2, threads=1)
-            with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as raw_f:
-                with cctx.stream_writer(raw_f) as f:
-                    for record in records:
-                        f.write(encoder.encode(record) + b"\n")
-                        count += 1
-                        counters.increment("zephyr/records_out")
-        elif output_path.endswith(".gz"):
-            with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE, compression="gzip") as f:
-                for record in records:
-                    f.write(encoder.encode(record) + b"\n")
-                    count += 1
-                    counters.increment("zephyr/records_out")
-        else:
-            with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
-                for record in records:
-                    f.write(encoder.encode(record) + b"\n")
-                    count += 1
-                    counters.increment("zephyr/records_out")
+        with _open_write_stream(fs, resolved_temp, output_path) as f:
+            for record in records:
+                f.write(encoder.encode(record) + b"\n")
+                count += 1
+                counters.increment("zephyr/records_out")
 
     return {"path": output_path, "count": count}
 
 
 def infer_arrow_schema(records: list[dict[str, Any]]) -> Any:
     """Infer a PyArrow schema from a batch of record dicts"""
-    import pyarrow as pa
-
     return pa.Table.from_pylist(records).schema
 
 
@@ -152,8 +149,6 @@ def _accumulate_tables(
     tracks byte size incrementally, and yields a single ``concat_tables``
     result each time the threshold is reached.
     """
-    import pyarrow as pa
-
     chunks: list[pa.Table] = []
     bytesize = 0
     convert: Callable | None = None
@@ -196,7 +191,6 @@ def write_parquet_file(
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
     """
-    import pyarrow as pa
     import pyarrow.parquet as pq
 
     ensure_parent_dir(output_path)
@@ -241,7 +235,6 @@ def write_vortex_file(
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
     """
-    import pyarrow as pa
     import vortex
 
     ensure_parent_dir(output_path)
