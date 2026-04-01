@@ -28,12 +28,12 @@ import fsspec
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as pad
-import pyarrow.parquet as pq
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import log_time
 
 from zephyr.plan import deterministic_hash
+from zephyr.spill_writer import SpillWriter
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -571,12 +571,7 @@ def _write_parquet_scatter(
     seg_idx = 0
     seg_paths: list[str] = []
     schema: pa.Schema | None = None
-    writer: pq.ParquetWriter | None = None
-    seg_file = ""
-
-    pending_chunk: pa.RecordBatch | None = None
-    pending_target: int = -1
-    pending_cnt: int = 0
+    spill_writer: SpillWriter | None = None
 
     avg_item_bytes: float = 0.0
     _sampled_avg = False
@@ -586,34 +581,16 @@ def _write_parquet_scatter(
             buffers[target] = _ShardBuffer(shard_idx=target, pickled=pickled, has_sort=sort_fn is not None)
         return buffers[target]
 
-    def _flush_pending() -> None:
-        nonlocal n_chunks_flushed, pending_chunk
-        if pending_chunk is None:
-            return
-        writer.write_batch(pending_chunk)
-        seg_shard_counts[seg_idx][pending_target] = seg_shard_counts[seg_idx].get(pending_target, 0) + 1
-        n_chunks_flushed += 1
-        pending_chunk = None
-        if n_chunks_flushed % 10 == 0:
-            logger.info(
-                "[shard %d segment %d] Wrote %d parquet chunks so far (latest chunk size: %d items)",
-                source_shard,
-                seg_idx,
-                n_chunks_flushed,
-                pending_cnt,
-            )
-
     def _ensure_writer(chunk_schema: pa.Schema) -> pa.Schema:
-        nonlocal schema, writer, seg_file, seg_idx
+        nonlocal schema, spill_writer, seg_idx
         if schema is None:
             schema = chunk_schema
             seg_file = _segment_path(parquet_path, seg_idx)
             seg_paths.append(seg_file)
             ensure_parent_dir(seg_file)
-            writer = pq.ParquetWriter(seg_file, schema, compression="zstd", compression_level=1)
+            spill_writer = SpillWriter(seg_file, schema)
         elif chunk_schema != schema:
-            _flush_pending()
-            writer.close()
+            spill_writer.close()
             schema = pa.unify_schemas([schema, chunk_schema])
             seg_idx += 1
             for buf in buffers.values():
@@ -621,22 +598,19 @@ def _write_parquet_scatter(
             seg_file = _segment_path(parquet_path, seg_idx)
             seg_paths.append(seg_file)
             ensure_parent_dir(seg_file)
-            writer = pq.ParquetWriter(seg_file, schema, compression="zstd", compression_level=1)
+            spill_writer = SpillWriter(seg_file, schema)
             logger.info(
                 "[shard %d] Schema evolved after %d chunks; starting segment %d",
                 source_shard,
                 n_chunks_flushed,
                 seg_idx,
             )
-        else:
-            _flush_pending()
         return schema
 
     def _flush_buffer(buf: _ShardBuffer) -> None:
-        nonlocal pending_chunk, pending_target, pending_cnt, avg_item_bytes, _sampled_avg
+        nonlocal n_chunks_flushed, avg_item_bytes, _sampled_avg
 
         if combiner_fn is not None:
-            # Combiner path: drain buffer to Python, apply combiner, re-sort in Arrow
             buf._flush_micro()
             if not buf.tables:
                 return
@@ -664,9 +638,21 @@ def _write_parquet_scatter(
         write_schema = _ensure_writer(batch.schema)
         if batch.schema != write_schema:
             batch = batch.cast(write_schema)
-        pending_chunk = batch
-        pending_target = buf.shard_idx
-        pending_cnt = len(batch)
+
+        # Each sorted chunk is its own row group (distinct shard/chunk metadata).
+        batch_table = pa.Table.from_batches([batch])
+        spill_writer.write_row_group(batch_table)
+        seg_shard_counts[seg_idx][buf.shard_idx] = seg_shard_counts[seg_idx].get(buf.shard_idx, 0) + 1
+        n_chunks_flushed += 1
+
+        if n_chunks_flushed % 10 == 0:
+            logger.info(
+                "[shard %d segment %d] Wrote %d parquet chunks so far (latest chunk size: %d items)",
+                source_shard,
+                seg_idx,
+                n_chunks_flushed,
+                len(batch),
+            )
 
         if not _sampled_avg and len(batch) > 0:
             avg_item_bytes = batch.nbytes / len(batch)
@@ -682,16 +668,14 @@ def _write_parquet_scatter(
             _flush_buffer(buf)
 
     with log_time(f"Flushing remaining buffers for {parquet_path}"):
-        _flush_pending()
         for target in sorted(buffers.keys()):
             buf = buffers[target]
             if buf.item_count == 0:
                 continue
             _flush_buffer(buf)
-        _flush_pending()
 
-    if writer is not None:
-        writer.close()
+    if spill_writer is not None:
+        spill_writer.close()
 
     per_shard_max_rows: dict[int, int] = {target: buf.max_rows for target, buf in buffers.items() if buf.max_rows > 0}
 

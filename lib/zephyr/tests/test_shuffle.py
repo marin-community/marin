@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for zephyr/shuffle.py.
+"""Unit tests for zephyr/shuffle.py and zephyr/spill_writer.py.
 
 Tests the scatter write/read roundtrip, per-shard stats, needs_external_sort,
-and multi-segment schema evolution — all without spinning up a full coordinator.
+multi-segment schema evolution, SpillWriter, and TableAccumulator — all
+without spinning up a full coordinator.
 """
 
 import pyarrow as pa
@@ -20,6 +21,7 @@ from zephyr.shuffle import (
     _write_parquet_scatter,
     _write_scatter_manifest,
 )
+from zephyr.spill_writer import SpillWriter, TableAccumulator
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -489,3 +491,140 @@ def test_needs_external_sort_zero_memory():
         avg_item_bytes=1000.0,
     )
     assert not shard.needs_external_sort(memory_limit=0)
+
+
+# ---------------------------------------------------------------------------
+# TableAccumulator
+# ---------------------------------------------------------------------------
+
+
+def test_table_accumulator_yields_on_threshold():
+    """add() returns a merged table once accumulated bytes exceed the threshold."""
+    threshold = 100
+    acc = TableAccumulator(threshold)
+    # Small table well under threshold
+    small = pa.table({"x": [1]})
+    assert acc.add(small) is None
+
+    # Large table that pushes over threshold
+    big = pa.table({"x": list(range(1000))})
+    result = acc.add(big)
+    assert result is not None
+    assert len(result) == 1 + 1000
+
+
+def test_table_accumulator_flush_returns_remaining():
+    """flush() returns accumulated data that hasn't hit the threshold yet."""
+    acc = TableAccumulator(10**9)
+    t = pa.table({"x": [1, 2, 3]})
+    assert acc.add(t) is None
+    flushed = acc.flush()
+    assert flushed is not None
+    assert flushed.column("x").to_pylist() == [1, 2, 3]
+
+
+def test_table_accumulator_flush_empty():
+    """flush() returns None when nothing has been accumulated."""
+    acc = TableAccumulator(100)
+    assert acc.flush() is None
+
+
+def test_table_accumulator_resets_after_yield():
+    """After add() yields a result, the accumulator is empty."""
+    acc = TableAccumulator(1)  # threshold of 1 byte = flush every add
+    t = pa.table({"x": [1]})
+    result = acc.add(t)
+    assert result is not None
+    assert acc.flush() is None
+
+
+# ---------------------------------------------------------------------------
+# SpillWriter
+# ---------------------------------------------------------------------------
+
+
+def test_spill_writer_creates_valid_parquet(tmp_path):
+    """SpillWriter produces a readable Parquet file with correct data."""
+    path = str(tmp_path / "out.parquet")
+    schema = pa.schema([("val", pa.int64())])
+    tables = [pa.table({"val": list(range(i * 10, (i + 1) * 10))}) for i in range(5)]
+
+    with SpillWriter(path, schema, row_group_bytes=1) as w:
+        for t in tables:
+            w.write_table(t)
+
+    result = pq.read_table(path)
+    assert result.column("val").to_pylist() == list(range(50))
+
+
+def test_spill_writer_row_group_byte_budget(tmp_path):
+    """Row groups are split based on the byte budget, not row count."""
+    path = str(tmp_path / "out.parquet")
+    schema = pa.schema([("val", pa.int64())])
+
+    # Each table is 8 bytes per int64 * 100 = 800 bytes.
+    # With a 1000-byte budget, each table triggers its own row group.
+    tables = [pa.table({"val": list(range(100))}) for _ in range(5)]
+
+    with SpillWriter(path, schema, row_group_bytes=1000) as w:
+        for t in tables:
+            w.write_table(t)
+
+    meta = pq.read_metadata(path)
+    assert meta.num_row_groups >= 2, f"expected multiple row groups, got {meta.num_row_groups}"
+
+
+def test_spill_writer_write_row_group_no_accumulation(tmp_path):
+    """write_row_group writes each call as a separate row group."""
+    path = str(tmp_path / "out.parquet")
+    schema = pa.schema([("val", pa.int64())])
+
+    with SpillWriter(path, schema, row_group_bytes=10**9) as w:
+        for i in range(3):
+            w.write_row_group(pa.table({"val": [i]}))
+
+    meta = pq.read_metadata(path)
+    assert meta.num_row_groups == 3
+
+
+def test_spill_writer_close_flushes_remaining(tmp_path):
+    """close() flushes accumulated data that hasn't hit the threshold."""
+    path = str(tmp_path / "out.parquet")
+    schema = pa.schema([("val", pa.int64())])
+
+    with SpillWriter(path, schema, row_group_bytes=10**9) as w:
+        w.write_table(pa.table({"val": [1, 2, 3]}))
+
+    result = pq.read_table(path)
+    assert result.column("val").to_pylist() == [1, 2, 3]
+
+
+def test_spill_writer_uses_zstd_compression(tmp_path):
+    """Default compression is zstd."""
+    path = str(tmp_path / "out.parquet")
+    schema = pa.schema([("val", pa.int64())])
+
+    with SpillWriter(path, schema) as w:
+        w.write_table(pa.table({"val": list(range(100))}))
+
+    meta = pq.read_metadata(path)
+    # Check the compression of the first column in the first row group
+    col_meta = meta.row_group(0).column(0)
+    assert "ZSTD" in col_meta.compression.upper()
+
+
+def test_spill_writer_context_manager_on_error(tmp_path):
+    """SpillWriter closes cleanly even when an exception occurs in the with block."""
+    path = str(tmp_path / "out.parquet")
+    schema = pa.schema([("val", pa.int64())])
+
+    try:
+        with SpillWriter(path, schema) as w:
+            w.write_table(pa.table({"val": [1]}))
+            raise ValueError("simulated error")
+    except ValueError:
+        pass
+
+    # File should still be readable with the data written before the error
+    result = pq.read_table(path)
+    assert result.column("val").to_pylist() == [1]

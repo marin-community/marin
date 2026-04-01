@@ -30,6 +30,8 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from iris.env_resources import TaskResources as _TaskResources
 
+from zephyr.spill_writer import SpillWriter, TableAccumulator
+
 logger = logging.getLogger(__name__)
 
 # Fraction of worker memory available for sort (pass 1 and pass 2 are
@@ -42,9 +44,6 @@ _SORT_AMPLIFICATION = 3
 # Target spill row group size in bytes. Each run holds one row group in
 # memory during merge, so this controls per-run memory footprint.
 _SPILL_ROW_GROUP_TARGET_BYTES = 8 * 1024 * 1024  # 8 MB
-
-# Output batch size yielded from the merge.
-_MERGE_OUTPUT_BATCH_SIZE = 100_000
 
 
 @dataclass
@@ -79,24 +78,8 @@ def _compute_budget(chunk_bytes: int) -> _SortBudget:
 
 def _write_spill_file(table: pa.Table, path: str) -> None:
     """Write a sorted table as a Parquet file with byte-budgeted row groups."""
-    writer = pq.ParquetWriter(path, table.schema)
-    offset = 0
-    n = len(table)
-    while offset < n:
-        # Grow the row group until we hit the byte target.
-        # Double the slice size each probe to keep overhead O(log n).
-        lo = offset + 1
-        hi = n
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            if table.slice(offset, mid - offset).nbytes <= _SPILL_ROW_GROUP_TARGET_BYTES:
-                lo = mid
-            else:
-                hi = mid - 1
-        rg_end = lo
-        writer.write_table(table.slice(offset, rg_end - offset))
-        offset = rg_end
-    writer.close()
+    with SpillWriter(path, table.schema, row_group_bytes=_SPILL_ROW_GROUP_TARGET_BYTES) as w:
+        w.write_table(table)
 
 
 def _promote_to_large_string(table: pa.Table) -> pa.Table:
@@ -215,8 +198,7 @@ def _streaming_k_way_merge(
     for src in sources:
         heapq.heappush(heap, _MergeEntry(src.current_sort_value(), src.idx, src))
 
-    output_chunks: list[pa.Table] = []
-    output_rows = 0
+    accumulator = TableAccumulator(_SPILL_ROW_GROUP_TARGET_BYTES)
 
     while heap:
         entry = heapq.heappop(heap)
@@ -229,19 +211,17 @@ def _streaming_k_way_merge(
             take_count = winner.remaining()
 
         chunk = winner.take(take_count)
-        output_chunks.append(chunk)
-        output_rows += len(chunk)
 
         if winner.has_data:
             heapq.heappush(heap, _MergeEntry(winner.current_sort_value(), winner.idx, winner))
 
-        if output_rows >= _MERGE_OUTPUT_BATCH_SIZE:
-            yield pa.concat_tables(output_chunks, promote_options="default")
-            output_chunks.clear()
-            output_rows = 0
+        merged = accumulator.add(chunk)
+        if merged is not None:
+            yield merged
 
-    if output_chunks:
-        yield pa.concat_tables(output_chunks, promote_options="default")
+    remaining = accumulator.flush()
+    if remaining is not None:
+        yield remaining
 
 
 def external_sort_merge(

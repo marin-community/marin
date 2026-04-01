@@ -27,7 +27,7 @@ import pyarrow.compute as pc
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
 
-from zephyr.external_sort import external_sort_merge
+from zephyr.external_sort import _promote_to_large_string, external_sort_merge
 
 from zephyr.dataset import (
     Dataset,
@@ -211,7 +211,7 @@ def _arrow_merge_sorted_chunks(shard: Any) -> pa.Table:
             all_tables.append(table)
     if not all_tables:
         return pa.table({})
-    combined = pa.concat_tables(all_tables, promote_options="default")
+    combined = pa.concat_tables([_promote_to_large_string(t) for t in all_tables], promote_options="default")
     sort_keys: list[tuple[str, str]] = [(_ZEPHYR_SORT_KEY, "ascending")]
     if _ZEPHYR_SORT_SECONDARY in combined.column_names:
         sort_keys.append((_ZEPHYR_SORT_SECONDARY, "ascending"))
@@ -259,22 +259,42 @@ def _arrow_reduce_gen(
             for it in shard.iterators:
                 yield from it.get_chunk_tables()
 
-        all_tables = list(external_sort_merge(_chunk_tables(), sort_keys, external_sort_dir))
-        if not all_tables:
-            return
-        sorted_table = pa.concat_tables(all_tables, promote_options="default")
-
-        key_col = sorted_table.column(_ZEPHYR_SORT_KEY)
-        pickled = _ZEPHYR_PAYLOAD in sorted_table.column_names
-
+        # Stream through the merge, grouping by sort key across batch boundaries.
+        # Only one batch + one group's accumulated rows are in memory at a time.
         is_gen = inspect.isgeneratorfunction(reducer_fn)
-        for start, end, key_value in _find_group_boundaries(key_col):
-            group_table = sorted_table.slice(start, end - start)
+        current_key = None
+        current_group_tables: list[pa.Table] = []
+
+        for batch_table in external_sort_merge(_chunk_tables(), sort_keys, external_sort_dir):
+            pickled = _ZEPHYR_PAYLOAD in batch_table.column_names
+            key_col = batch_table.column(_ZEPHYR_SORT_KEY)
+
+            for start, end, key_value in _find_group_boundaries(key_col):
+                group_slice = batch_table.slice(start, end - start)
+
+                if current_key is None:
+                    current_key = key_value
+                    current_group_tables = [group_slice]
+                elif key_value == current_key:
+                    current_group_tables.append(group_slice)
+                else:
+                    group_table = pa.concat_tables(current_group_tables, promote_options="default")
+                    group_items = unwrap_items(group_table, pickled)
+                    if is_gen:
+                        yield from reducer_fn(current_key, iter(group_items))
+                    else:
+                        yield reducer_fn(current_key, iter(group_items))
+                    current_key = key_value
+                    current_group_tables = [group_slice]
+
+        if current_group_tables:
+            group_table = pa.concat_tables(current_group_tables, promote_options="default")
+            pickled = _ZEPHYR_PAYLOAD in group_table.column_names
             group_items = unwrap_items(group_table, pickled)
             if is_gen:
-                yield from reducer_fn(key_value, iter(group_items))
+                yield from reducer_fn(current_key, iter(group_items))
             else:
-                yield reducer_fn(key_value, iter(group_items))
+                yield reducer_fn(current_key, iter(group_items))
         return
 
     sorted_table = _arrow_merge_sorted_chunks(shard)
