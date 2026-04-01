@@ -888,6 +888,7 @@ def logs(
             stream_logs=True,
             timeout=float("inf"),
             raise_on_failure=False,
+            since_ms=start_since_ms,
             min_level=min_level,
         )
         return
