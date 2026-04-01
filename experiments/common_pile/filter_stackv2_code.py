@@ -12,7 +12,7 @@ Example Usage:
 
 from experiments.common_pile.tokenize_common_pile import stackv2
 from experiments.defaults import default_tokenize
-from experiments.llama import llama3_tokenizer
+from experiments.marin_models import marin_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.transform.common_pile.filter_by_extension import (
     FilterByMetadataExtensionConfig,
@@ -120,7 +120,7 @@ stackv2_code_filtered = ExecutorStep(
 stackv2_code_tokenized = default_tokenize(
     name="common_pile/stackv2_code",
     dataset=stackv2_code_filtered,
-    tokenizer=llama3_tokenizer,
+    tokenizer=marin_tokenizer,
 )
 
 if __name__ == "__main__":

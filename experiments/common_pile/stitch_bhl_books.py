@@ -19,6 +19,7 @@ import logging
 
 from experiments.common_pile.tokenize_common_pile import biodiversity_heritage_library_filtered
 from experiments.defaults import default_tokenize
+from experiments.marin_models import marin_tokenizer
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from zephyr import Dataset, ZephyrContext
@@ -102,7 +103,7 @@ bhl_full_books = ExecutorStep(
 bhl_full_books_tokenized = default_tokenize(
     "common_pile/biodiversity_heritage_library_books",
     bhl_full_books / "**/*.jsonl.gz",
-    tokenizer="stanford-crfm/marin-tokenizer",
+    tokenizer=marin_tokenizer,
     worker_resources=ResourceConfig(ram="20g", disk="10g"),
 )
 
