@@ -646,6 +646,7 @@ JOBS = Table(
         Column("coscheduling_group_by", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
         Column("scheduling_timeout_ms", "INTEGER", "", python_type=int | None, decoder=_nullable(int), default=None),
         Column("max_task_failures", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("execution_timeout_ms", "INTEGER", "", python_type=int | None, decoder=_nullable(int), default=None),
     ),
     indexes=(
         "CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_job_id)",
@@ -1396,6 +1397,7 @@ class JobSchedulingRow:
     coscheduling_group_by: str
     scheduling_timeout_ms: int | None
     max_task_failures: int
+    execution_timeout_ms: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1633,6 +1635,7 @@ JOB_SCHEDULING_PROJECTION = JOBS.projection(
     "coscheduling_group_by",
     "scheduling_timeout_ms",
     "max_task_failures",
+    "execution_timeout_ms",
     row_cls=JobSchedulingRow,
 )
 

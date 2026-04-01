@@ -43,6 +43,7 @@ from iris.cluster.controller.db import (
     job_scheduling_deadline,
     running_tasks_by_worker,
     task_row_can_be_scheduled,
+    timed_out_executing_tasks,
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
@@ -1182,6 +1183,11 @@ class Controller:
             if woken:
                 backoff.reset()
 
+            try:
+                self._enforce_execution_timeouts()
+            except Exception:
+                logger.exception("Execution timeout enforcement failed")
+
             outcome = self._run_scheduling()
             if outcome == SchedulingOutcome.ASSIGNMENTS_MADE:
                 backoff.reset()
@@ -1749,6 +1755,31 @@ class Controller:
         result = self._transitions.queue_assignments(command)
         if result.has_real_dispatch:
             self._heartbeat_event.set()
+
+    def _enforce_execution_timeouts(self) -> None:
+        """Kill executing tasks that have exceeded their job's execution timeout.
+
+        Queries for tasks in BUILDING/RUNNING state whose started_at_ms +
+        execution_timeout_ms is in the past, then cancels them via the same
+        kill path used for job cancellation.
+        """
+        if self._config.dry_run:
+            return
+        timed_out = timed_out_executing_tasks(self._db, Timestamp.now())
+        if not timed_out:
+            return
+        for task in timed_out:
+            timeout = Duration.from_ms(task.execution_timeout_ms)
+            logger.warning(
+                "Task %s exceeded execution timeout (%s), killing",
+                task.task_id,
+                timeout,
+            )
+        task_ids = {t.task_id for t in timed_out}
+        task_kill_workers = {t.task_id: t.worker_id for t in timed_out if t.worker_id is not None}
+        result = self._transitions.cancel_tasks_for_timeout(task_ids, reason="Execution timeout exceeded")
+        if result.tasks_to_kill:
+            self.kill_tasks_on_workers(result.tasks_to_kill, task_kill_workers)
 
     def _mark_task_unschedulable(self, task: TaskRow) -> None:
         """Mark a task as unschedulable due to timeout."""

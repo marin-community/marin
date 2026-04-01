@@ -807,14 +807,19 @@ class ControllerTransitions:
                 else None
             )
             max_failures = int(request.max_task_failures)
+            exec_timeout: int | None = (
+                int(request.timeout.milliseconds)
+                if request.HasField("timeout") and request.timeout.milliseconds > 0
+                else None
+            )
             cur.execute(
                 "INSERT INTO jobs("
                 "job_id, user_id, parent_job_id, root_job_id, depth, request_proto, state, submitted_at_ms, "
                 "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
                 "error, exit_code, num_tasks, is_reservation_holder, has_reservation, name, "
                 "resources_proto, constraints_proto, has_coscheduling, coscheduling_group_by, "
-                "scheduling_timeout_ms, max_task_failures"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "scheduling_timeout_ms, max_task_failures, execution_timeout_ms"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job_id.to_wire(),
                     job_id.user,
@@ -837,6 +842,7 @@ class ControllerTransitions:
                     cosched_group,
                     sched_timeout,
                     max_failures,
+                    exec_timeout,
                 ),
             )
 
@@ -1201,8 +1207,6 @@ class ControllerTransitions:
                         attempt_id=attempt_id,
                         constraints=list(job.request.constraints),
                     )
-                    if job.request.timeout.milliseconds > 0:
-                        run_request.timeout.CopyFrom(job.request.timeout)
                     cur.execute(
                         "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
                         "VALUES (?, 'run', ?, NULL, ?)",
@@ -1897,6 +1901,7 @@ class ControllerTransitions:
             )
         return TxResult()
 
+<<<<<<< HEAD
     def preempt_task(self, task_id: JobName, reason: str) -> TxResult:
         """Preempt a running task, consuming from preemption retry budget.
 
@@ -1980,6 +1985,60 @@ class ControllerTransitions:
 
             self._record_transaction(cur, "preempt_task", [("task_preempted", task_id.to_wire(), {"reason": reason})])
 
+        return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
+
+    def cancel_tasks_for_timeout(self, task_ids: set[JobName], reason: str) -> TxResult:
+        """Mark executing tasks as FAILED due to execution timeout and return kill set.
+
+        Each task is moved to TASK_STATE_FAILED with the given reason.
+        Worker resource decommit follows the same pattern as cancel_job.
+        """
+        if not task_ids:
+            return TxResult()
+        with self._db.transaction() as cur:
+            wires = [tid.to_wire() for tid in task_ids]
+            placeholders = ",".join("?" for _ in wires)
+            rows = cur.execute(
+                f"SELECT t.task_id, t.job_id, t.current_worker_id AS worker_id, t.current_attempt_id, "
+                f"j.request_proto, j.is_reservation_holder "
+                f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
+                f"WHERE t.task_id IN ({placeholders}) AND t.state IN (?, ?, ?)",
+                (*wires, *ACTIVE_TASK_STATES),
+            ).fetchall()
+            tasks_to_kill: set[JobName] = set()
+            task_kill_workers: dict[JobName, WorkerId] = {}
+            now_ms = Timestamp.now().epoch_ms()
+            jobs_to_update: set[str] = set()
+            for row in rows:
+                tid = JobName.from_wire(str(row["task_id"]))
+                tasks_to_kill.add(tid)
+                worker_id_str = row["worker_id"]
+                if worker_id_str is not None:
+                    task_kill_workers[tid] = WorkerId(str(worker_id_str))
+                    if not int(row["is_reservation_holder"]):
+                        job_req = proto_cache.get_or_decode(row["request_proto"], _LAUNCH_JOB_DECODER)
+                        _decommit_worker_resources(cur, str(worker_id_str), job_req.resources)
+                cur.execute(
+                    "UPDATE tasks SET state = ?, error = ?, finished_at_ms = COALESCE(finished_at_ms, ?), "
+                    "current_worker_id = NULL, current_worker_address = NULL WHERE task_id = ?",
+                    (cluster_pb2.TASK_STATE_FAILED, reason, now_ms, str(row["task_id"])),
+                )
+                attempt_id = row["current_attempt_id"]
+                if attempt_id is not None and int(attempt_id) >= 0:
+                    cur.execute(
+                        "UPDATE task_attempts SET state = ?, error = ?, finished_at_ms = COALESCE(finished_at_ms, ?) "
+                        "WHERE task_id = ? AND attempt_id = ?",
+                        (cluster_pb2.TASK_STATE_FAILED, reason, now_ms, str(row["task_id"]), int(attempt_id)),
+                    )
+                cur.execute("DELETE FROM endpoints WHERE task_id = ?", (str(row["task_id"]),))
+                jobs_to_update.add(str(row["job_id"]))
+            for job_wire in jobs_to_update:
+                self._recompute_job_state(cur, JobName.from_wire(job_wire))
+            self._record_transaction(
+                cur,
+                "cancel_tasks_for_timeout",
+                [("task_timeout", tid.to_wire(), {"reason": reason}) for tid in tasks_to_kill],
+            )
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
     def drain_dispatch(self, worker_id: WorkerId) -> DispatchBatch | None:
@@ -2691,6 +2750,7 @@ class ControllerTransitions:
                     attempt_id=attempt_id,
                     constraints=list(job_req.constraints),
                 )
+                # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
                 if job_req.timeout.milliseconds > 0:
                     run_req.timeout.CopyFrom(job_req.timeout)
                 tasks_to_run.append(run_req)

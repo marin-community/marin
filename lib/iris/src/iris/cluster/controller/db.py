@@ -841,6 +841,47 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
     return running
 
 
+@dataclass(frozen=True, slots=True)
+class TimedOutTask:
+    """A running task that has exceeded its execution timeout."""
+
+    task_id: JobName
+    worker_id: WorkerId | None
+    execution_timeout_ms: int
+
+
+def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOutTask]:
+    """Find executing tasks whose runtime exceeds their job's execution_timeout_ms.
+
+    Checks tasks in BUILDING or RUNNING state whose started_at_ms + execution_timeout_ms
+    is in the past.
+    """
+    now_ms = now.epoch_ms()
+    executing_states = tuple(sorted(EXECUTING_TASK_STATES))
+    placeholders = ",".join("?" for _ in executing_states)
+    with db.read_snapshot() as q:
+        rows = q.raw(
+            f"SELECT t.task_id, t.current_worker_id AS worker_id, j.execution_timeout_ms "
+            f"FROM tasks t "
+            f"JOIN jobs j ON j.job_id = t.job_id "
+            f"WHERE t.state IN ({placeholders}) "
+            f"AND j.execution_timeout_ms IS NOT NULL "
+            f"AND j.execution_timeout_ms > 0 "
+            f"AND t.started_at_ms IS NOT NULL "
+            f"AND (t.started_at_ms + j.execution_timeout_ms) <= ?",
+            (*executing_states, now_ms),
+            decoders={
+                "task_id": JobName.from_wire,
+                "worker_id": lambda v: WorkerId(v) if v is not None else None,
+                "execution_timeout_ms": int,
+            },
+        )
+    return [
+        TimedOutTask(task_id=row.task_id, worker_id=row.worker_id, execution_timeout_ms=row.execution_timeout_ms)
+        for row in rows
+    ]
+
+
 def tasks_for_job_with_attempts(db: ControllerDB, job_id: JobName) -> list:
     """Fetch all tasks for a job with their attempt history."""
     from iris.cluster.controller.schema import ATTEMPT_PROJECTION, TASK_DETAIL_PROJECTION, tasks_with_attempts
