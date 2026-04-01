@@ -41,6 +41,4 @@ def test_streaming_passes_since_ms_to_fetch_logs():
 
     assert mock_fetch.call_count >= 1, "fetch_logs should have been called at least once"
     for call in mock_fetch.call_args_list:
-        assert call.kwargs.get("since_ms") == since_ms_value, (
-            f"Expected since_ms={since_ms_value}, got {call.kwargs}"
-        )
+        assert call.kwargs.get("since_ms") == since_ms_value, f"Expected since_ms={since_ms_value}, got {call.kwargs}"
