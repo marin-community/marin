@@ -18,10 +18,9 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-from agent_docs.cache import DocCache, hash_text
 from agent_docs.claude_cli import generate
-from agent_docs.graph import ClassInfo, FunctionInfo
-from agent_docs.packages import PackageInfo, _package_source_hash
+from agent_docs.packages import PackageInfo
+from agent_docs.parsing import ClassInfo, FunctionInfo
 from agent_docs.prompts import FILE_SUMMARY_PROMPT, PACKAGE_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -154,7 +153,7 @@ def _generate_doc(
     return _aggregate_package_doc(name, file_summaries, callee_context, model)
 
 
-def _get_callee_context_for_package(pkg: PackageInfo, existing_docs: dict[str, str]) -> str:
+def _get_callee_context(pkg: PackageInfo, existing_docs: dict[str, str]) -> str:
     """Build callee context from already-generated docs of imported packages."""
     context_parts: list[str] = []
     for dep_name in sorted(pkg.imports_from):
@@ -194,91 +193,84 @@ def _topo_sort_packages(packages: dict[str, PackageInfo]) -> list[str]:
 
 def generate_package_docs(
     packages: dict[str, PackageInfo],
-    cache: DocCache,
-    stale_packages: set[str],
+    target_packages: set[str],
     repo_root: Path,
     *,
     model: str = "sonnet",
     summary_model: str = "haiku",
     dry_run: bool = False,
 ) -> set[str]:
-    """Generate package reference cards for all stale packages.
+    """Generate package reference cards for target packages.
 
     Processes packages in topological order so that callee docs are available
     as context when generating caller docs.
 
-    Returns the set of package names that were updated.
+    Returns the set of package names that were generated.
     """
     output_dir = repo_root / OUTPUT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
 
     pkg_order = _topo_sort_packages(packages)
 
-    # Pre-load existing docs for non-stale packages (callee context)
+    # Pre-load existing docs for non-target packages (callee context)
     existing_docs: dict[str, str] = {}
     for pkg_name in pkg_order:
-        if pkg_name not in stale_packages:
+        if pkg_name not in target_packages:
             md_path = output_dir / f"{pkg_name}.md"
             if md_path.exists():
                 existing_docs[pkg_name] = md_path.read_text()
 
-    stale_with_items = []
+    targets_with_items = []
     for pkg_name in pkg_order:
-        if pkg_name not in stale_packages:
+        if pkg_name not in target_packages:
             continue
         pkg = packages[pkg_name]
         public_items = [f for f in pkg.functions if f.is_public] + [c for c in pkg.classes if c.is_public]
         if not public_items:
             logger.info("Skipping %s (no public items)", pkg_name)
             continue
-        stale_with_items.append((pkg_name, pkg, public_items))
+        targets_with_items.append((pkg_name, pkg, public_items))
 
-    total_stale = len(stale_with_items)
-    if total_stale == 0:
-        logger.info("No stale packages with public items to generate")
+    total = len(targets_with_items)
+    if total == 0:
+        logger.info("No target packages with public items to generate")
         return set()
 
-    logger.info("Generating docs for %d package(s)", total_stale)
+    logger.info("Generating docs for %d package(s)", total)
 
     updated: set[str] = set()
     pipeline_t0 = time.monotonic()
 
-    for idx, (pkg_name, pkg, public_items) in enumerate(stale_with_items, 1):
+    for idx, (pkg_name, pkg, public_items) in enumerate(targets_with_items, 1):
         if dry_run:
             sources = _format_sources(public_items)
             path = "file-summary" if len(sources) > MAX_SOURCE_DIRECT else "direct"
-            logger.info(
-                "[dry-run] [%d/%d] Would generate %s (%d items, %s)", idx, total_stale, pkg_name, len(public_items), path
-            )
+            logger.info("[dry-run] [%d/%d] Would generate %s (%d items, %s)", idx, total, pkg_name, len(public_items), path)
             continue
 
         logger.info(
             "[%d/%d] Generating %s (%d public items, %d files)",
             idx,
-            total_stale,
+            total,
             pkg_name,
             len(public_items),
             len(pkg.file_paths),
         )
         pkg_t0 = time.monotonic()
 
-        callee_context = _get_callee_context_for_package(pkg, existing_docs)
-
+        callee_context = _get_callee_context(pkg, existing_docs)
         response = _generate_doc(pkg_name, pkg, callee_context, model, summary_model)
+
         md_path = output_dir / f"{pkg_name}.md"
         md_path.write_text(response.rstrip() + "\n")
 
         existing_docs[pkg_name] = response
         updated.add(pkg_name)
 
-        source_hash = _package_source_hash(pkg)
-        doc_hash = hash_text(response)
-        cache.update(pkg_name, source_hash, doc_hash, tier=2)
-
         pkg_elapsed = time.monotonic() - pkg_t0
-        logger.info("[%d/%d] %s done (%.1fs, %d chars)", idx, total_stale, pkg_name, pkg_elapsed, len(response))
+        logger.info("[%d/%d] %s done (%.1fs, %d chars)", idx, total, pkg_name, pkg_elapsed, len(response))
 
     total_elapsed = time.monotonic() - pipeline_t0
-    logger.info("Pipeline complete: %d/%d packages updated in %.1fs", len(updated), total_stale, total_elapsed)
+    logger.info("Pipeline complete: %d/%d packages generated in %.1fs", len(updated), total, total_elapsed)
 
     return updated

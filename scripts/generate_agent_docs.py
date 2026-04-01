@@ -23,12 +23,10 @@ instead of the overly broad marin.processing.
 
 Agents navigate: MAP.md → package doc → source code. Two hops.
 
-Uses the claude CLI for LLM generation and content-addressed caching
-to skip unchanged packages.
+Uses the claude CLI for LLM generation.
 
 Usage:
-    ./scripts/generate_agent_docs.py                    # incremental update
-    ./scripts/generate_agent_docs.py --full              # regenerate everything
+    ./scripts/generate_agent_docs.py                    # regenerate all packages
     ./scripts/generate_agent_docs.py --dry-run           # show what would change
     ./scripts/generate_agent_docs.py --package marin.processing.classification.deduplication
     ./scripts/generate_agent_docs.py --stats             # print package stats only
@@ -42,10 +40,9 @@ from pathlib import Path
 # Add scripts/ to path so agent_docs package is importable
 sys.path.insert(0, str(Path(__file__).parent))
 
-from agent_docs.cache import DocCache, load_cache, save_cache
-from agent_docs.packages import PackageInfo, compute_stale_packages, discover_packages
-from agent_docs.tier1 import generate_map
-from agent_docs.tier2 import generate_package_docs
+from agent_docs.map_generator import generate_map
+from agent_docs.package_generator import generate_package_docs
+from agent_docs.packages import PackageInfo, discover_packages
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +68,8 @@ def print_package_stats(packages: dict[str, PackageInfo]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate agent-optimized docs for Marin")
-    parser.add_argument("--full", action="store_true", help="Ignore cache, regenerate everything")
     parser.add_argument("--dry-run", action="store_true", help="Print what would be regenerated")
-    parser.add_argument("--package", type=str, help="Regenerate only a specific package")
+    parser.add_argument("--package", type=str, help="Generate only a specific package")
     parser.add_argument("--model", type=str, default="sonnet", help="Model for aggregation and direct generation")
     parser.add_argument(
         "--summary-model", type=str, default="haiku", help="Model for per-file summaries (large packages only)"
@@ -95,8 +91,6 @@ def main() -> None:
         print_package_stats(packages)
         return
 
-    cache = DocCache() if args.full else load_cache(repo_root)
-
     if args.package:
         if args.package not in packages:
             print(f"Package '{args.package}' not found. Available:")
@@ -106,24 +100,28 @@ def main() -> None:
                 if pub > 0:
                     print(f"  {name} ({pub} public items)")
             sys.exit(1)
-        stale = {args.package}
+        targets = {args.package}
     else:
-        stale = compute_stale_packages(packages, cache)
+        # Generate all packages that have public items
+        targets = {
+            name
+            for name, pkg in packages.items()
+            if any(f.is_public for f in pkg.functions) or any(c.is_public for c in pkg.classes)
+        }
 
-    if not stale:
-        logger.info("Nothing to regenerate — all packages up to date.")
+    if not targets:
+        logger.info("No packages with public items found.")
         return
 
-    logger.info("Stale packages (%d): %s", len(stale), ", ".join(sorted(stale)))
+    logger.info("Target packages (%d): %s", len(targets), ", ".join(sorted(targets)))
 
     updated = generate_package_docs(
-        packages, cache, stale, repo_root, model=args.model, summary_model=args.summary_model, dry_run=args.dry_run
+        packages, targets, repo_root, model=args.model, summary_model=args.summary_model, dry_run=args.dry_run
     )
-    generate_map(cache, updated, repo_root, model=args.model, dry_run=args.dry_run)
+    generate_map(updated, repo_root, model=args.model, dry_run=args.dry_run)
 
     if not args.dry_run:
-        save_cache(cache, repo_root)
-        logger.info("Done. Updated %d package docs.", len(updated))
+        logger.info("Done. Generated %d package docs.", len(updated))
 
 
 if __name__ == "__main__":
