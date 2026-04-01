@@ -6,7 +6,8 @@ Start with the shared practices below. Consult subproject manuals for directory-
 - `lib/marin/AGENTS.md` — Marin (pipeline framework)
 - `lib/iris/AGENTS.md` — Iris (job orchestration)
 
-For module-level API reference, see @docs/agent/MAP.md.
+For API reference, see @docs/agent/MAP.md (package index, always loaded).
+Read individual package docs on demand: `@docs/agent/packages/<package>.md`.
 
 ## Workflow Playbooks
 
