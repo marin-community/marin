@@ -5,25 +5,29 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import time
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 2
 
 
-def generate(
+def _run_claude(
     prompt: str,
     *,
-    model: str = "sonnet",
-    max_budget_usd: float = 0.50,
-    timeout_seconds: int = 600,
-) -> str:
-    """Call claude CLI in non-interactive mode and return the response text.
+    model: str,
+    system_prompt: str,
+    max_budget_usd: float,
+    timeout_seconds: int,
+    output_format: str = "text",
+) -> subprocess.CompletedProcess[str]:
+    """Run the claude CLI with retries on transient failures.
 
-    Retries up to MAX_RETRIES times on transient failures (empty stderr).
+    Returns the successful CompletedProcess, or raises on persistent failure.
     """
     cmd = [
         "claude",
@@ -32,8 +36,10 @@ def generate(
         model,
         "--max-budget-usd",
         str(max_budget_usd),
+        "--output-format",
+        output_format,
         "--system-prompt",
-        "You are a precise documentation generator. Output only what is requested.",
+        system_prompt,
     ]
 
     for attempt in range(1, MAX_RETRIES + 2):
@@ -48,17 +54,15 @@ def generate(
         elapsed = time.monotonic() - t0
 
         if result.returncode == 0:
-            output = strip_markdown_fences(result.stdout)
             logger.debug(
                 "claude %s: %.1fs, %d chars prompt → %d chars output",
                 model,
                 elapsed,
                 len(prompt),
-                len(output),
+                len(result.stdout),
             )
-            return output
+            return result
 
-        # Transient failure (empty stderr) — retry
         if not result.stderr.strip() and attempt <= MAX_RETRIES:
             logger.warning(
                 "claude CLI returned rc=%d with empty stderr (attempt %d/%d, %.1fs), retrying...",
@@ -79,6 +83,50 @@ def generate(
         )
 
     raise RuntimeError("unreachable")
+
+
+def generate(
+    prompt: str,
+    *,
+    model: str = "sonnet",
+    system_prompt: str = "You are a precise documentation generator. Output only what is requested.",
+    max_budget_usd: float = 0.50,
+    timeout_seconds: int = 600,
+) -> str:
+    """Call claude CLI in non-interactive mode and return the response text."""
+    result = _run_claude(
+        prompt,
+        model=model,
+        system_prompt=system_prompt,
+        max_budget_usd=max_budget_usd,
+        timeout_seconds=timeout_seconds,
+        output_format="text",
+    )
+    return strip_markdown_fences(result.stdout)
+
+
+def generate_json(
+    prompt: str,
+    *,
+    model: str = "sonnet",
+    system_prompt: str = "You are a precise documentation generator. Output only what is requested.",
+    max_budget_usd: float = 0.50,
+    timeout_seconds: int = 600,
+) -> dict[str, Any]:
+    """Call claude CLI with --output-format json and return the parsed response.
+
+    The returned dict has at minimum a "result" key with the model's text,
+    plus "total_cost_usd" and "usage" metadata from the CLI.
+    """
+    result = _run_claude(
+        prompt,
+        model=model,
+        system_prompt=system_prompt,
+        max_budget_usd=max_budget_usd,
+        timeout_seconds=timeout_seconds,
+        output_format="json",
+    )
+    return json.loads(result.stdout)
 
 
 def strip_markdown_fences(text: str) -> str:
