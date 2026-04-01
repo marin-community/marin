@@ -21,6 +21,14 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
+from iris.cluster.controller.budget import (
+    UserTask,
+    compute_effective_band,
+    compute_user_spend,
+    interleave_by_user,
+    resource_value,
+)
+from iris.rpc.proto_utils import priority_band_name
 from iris.cluster.controller.auth import (
     DEFAULT_JWT_TTL_SECONDS,
     ControllerAuth,
@@ -59,6 +67,7 @@ from iris.cluster.controller.schema import (
     JOB_DETAIL_PROJECTION,
     JOB_ROW_PROJECTION,
     TASK_DETAIL_PROJECTION,
+    TASK_ROW_PROJECTION,
     TXN_ACTION_PROJECTION,
     WORKER_DETAIL_PROJECTION,
     AttemptRow,
@@ -80,7 +89,7 @@ from iris.cluster.controller.provider import ProviderError
 from iris.cluster.log_store import LogStore, build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import cluster_pb2, logging_pb2, vm_pb2
 from iris.rpc.proto_utils import job_state_name, task_state_name
 from iris.time_proto import timestamp_to_proto
@@ -126,6 +135,7 @@ USER_TASK_STATES = (
     cluster_pb2.TASK_STATE_KILLED,
     cluster_pb2.TASK_STATE_UNSCHEDULABLE,
     cluster_pb2.TASK_STATE_WORKER_FAILED,
+    cluster_pb2.TASK_STATE_PREEMPTED,
 )
 USER_JOB_STATES = (
     cluster_pb2.JOB_STATE_PENDING,
@@ -809,6 +819,21 @@ class ControllerServiceImpl:
         # For non-root jobs, verify the caller owns the parent hierarchy
         if self._auth.provider and verified_user is not None and not job_id.is_root:
             self._authorize_job_owner(job_id)
+
+        # Priority band validation: PRODUCTION requires MANAGE_BUDGETS permission,
+        # and user's max_band from budget table must allow the requested band.
+        # UNSPECIFIED (0) defaults to INTERACTIVE.
+        band = request.priority_band or cluster_pb2.PRIORITY_BAND_INTERACTIVE
+        if band == cluster_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
+            authorize(AuthzAction.MANAGE_BUDGETS)
+        if self._auth.provider and verified_user is not None:
+            user_budget = self._db.get_user_budget(job_id.user)
+            if user_budget is not None and band < user_budget.max_band:
+                raise ConnectError(
+                    Code.PERMISSION_DENIED,
+                    f"User {job_id.user} cannot submit {priority_band_name(band)} jobs (max band: "
+                    f"{priority_band_name(user_budget.max_band)})",
+                )
 
         # Reject submissions if the parent job has already terminated
         if job_id.parent:
@@ -1989,3 +2014,251 @@ class ControllerServiceImpl:
         except Exception as e:
             logger.warning("Failed to restart worker %s: %s", worker_id, e)
             return cluster_pb2.Controller.RestartWorkerResponse(accepted=False, error=str(e))
+
+    def set_user_budget(
+        self,
+        request: cluster_pb2.Controller.SetUserBudgetRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.SetUserBudgetResponse:
+        """Set budget limit and max band for a user. Admin-only."""
+        authorize(AuthzAction.MANAGE_BUDGETS)
+        if not request.user_id:
+            raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
+        max_band = request.max_band or cluster_pb2.PRIORITY_BAND_INTERACTIVE
+        if max_band not in (
+            cluster_pb2.PRIORITY_BAND_PRODUCTION,
+            cluster_pb2.PRIORITY_BAND_INTERACTIVE,
+            cluster_pb2.PRIORITY_BAND_BATCH,
+        ):
+            raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid max_band: {request.max_band}")
+        now = Timestamp.now()
+        # Ensure the user row exists (FK on user_budgets → users)
+        self._db.execute(
+            "INSERT OR IGNORE INTO users(user_id, created_at_ms) VALUES (?, ?)",
+            (request.user_id, now.epoch_ms()),
+        )
+        self._db.set_user_budget(
+            user_id=request.user_id,
+            budget_limit=request.budget_limit,
+            max_band=max_band,
+            now=now,
+        )
+        return cluster_pb2.Controller.SetUserBudgetResponse()
+
+    def get_user_budget(
+        self,
+        request: cluster_pb2.Controller.GetUserBudgetRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetUserBudgetResponse:
+        """Get budget config and current spend for a user."""
+        require_identity()
+        if not request.user_id:
+            raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
+        budget = self._db.get_user_budget(request.user_id)
+        if budget is None:
+            raise ConnectError(Code.NOT_FOUND, f"No budget found for user {request.user_id}")
+        with self._db.read_snapshot() as snap:
+            spend = compute_user_spend(snap)
+        return cluster_pb2.Controller.GetUserBudgetResponse(
+            user_id=budget.user_id,
+            budget_limit=budget.budget_limit,
+            budget_spent=spend.get(request.user_id, 0),
+            max_band=budget.max_band,
+        )
+
+    def list_user_budgets(
+        self,
+        request: cluster_pb2.Controller.ListUserBudgetsRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.ListUserBudgetsResponse:
+        """List all user budgets with current spend."""
+        require_identity()
+        budgets = self._db.list_user_budgets()
+        with self._db.read_snapshot() as snap:
+            spend = compute_user_spend(snap)
+        users = []
+        for b in budgets:
+            users.append(
+                cluster_pb2.Controller.GetUserBudgetResponse(
+                    user_id=b.user_id,
+                    budget_limit=b.budget_limit,
+                    budget_spent=spend.get(b.user_id, 0),
+                    max_band=b.max_band,
+                )
+            )
+        return cluster_pb2.Controller.ListUserBudgetsResponse(users=users)
+
+    def get_scheduler_state(
+        self,
+        request: cluster_pb2.Controller.GetSchedulerStateRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetSchedulerStateResponse:
+        """Return scheduler state for the dashboard: pending queue, budgets, running tasks."""
+        require_identity()
+
+        # --- User budgets and spend ---
+        budgets = self._db.list_user_budgets()
+        budget_limits: dict[str, int] = {b.user_id: b.budget_limit for b in budgets}
+        with self._db.read_snapshot() as snap:
+            user_spend = compute_user_spend(snap)
+
+        # --- Pending queue ---
+        # Inline _schedulable_tasks logic to avoid circular import with controller.py
+        with self._db.read_snapshot() as snap:
+            task_rows = TASK_ROW_PROJECTION.decode(
+                snap.fetchall(
+                    f"SELECT {TASK_ROW_PROJECTION.select_clause()} FROM tasks t WHERE t.state = ? "
+                    "ORDER BY t.priority_band ASC, t.priority_neg_depth ASC, "
+                    "t.priority_root_submitted_ms ASC, t.submitted_at_ms ASC, t.priority_insertion ASC",
+                    (cluster_pb2.TASK_STATE_PENDING,),
+                ),
+            )
+        pending_tasks = [t for t in task_rows if task_row_can_be_scheduled(t)]
+        # Batch-fetch request protos for resource values
+        job_ids = {t.job_id for t in pending_tasks}
+        job_requests: dict[JobName, cluster_pb2.Controller.LaunchJobRequest] = {}
+        if job_ids:
+            wires = [jid.to_wire() for jid in job_ids]
+            placeholders = ",".join("?" for _ in wires)
+            with self._db.read_snapshot() as snap:
+                rows = snap.raw(
+                    f"SELECT job_id, request_proto FROM jobs WHERE job_id IN ({placeholders})",
+                    tuple(wires),
+                    decoders={"job_id": JobName.from_wire},
+                )
+            for row in rows:
+                req = cluster_pb2.Controller.LaunchJobRequest()
+                req.ParseFromString(row.request_proto)
+                job_requests[row.job_id] = req
+
+        # Group by effective band, interleaving by user within each band
+        BAND_ORDER = [
+            cluster_pb2.PRIORITY_BAND_PRODUCTION,
+            cluster_pb2.PRIORITY_BAND_INTERACTIVE,
+            cluster_pb2.PRIORITY_BAND_BATCH,
+        ]
+        MAX_TASKS_PER_BAND = 100
+
+        band_groups: list[cluster_pb2.Controller.SchedulerBandGroup] = []
+        total_pending = len(pending_tasks)
+        # Partition tasks by effective band
+        tasks_by_band: dict[int, list[UserTask]] = {b: [] for b in BAND_ORDER}
+        for task in pending_tasks:
+            eff_band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, budget_limits)
+            ut: UserTask = UserTask(user_id=task.task_id.user, task=(task, eff_band))
+            target_band = eff_band if eff_band in tasks_by_band else cluster_pb2.PRIORITY_BAND_BATCH
+            tasks_by_band[target_band].append(ut)
+
+        global_position = 0
+        for band in BAND_ORDER:
+            band_tasks = tasks_by_band.get(band, [])
+            if not band_tasks:
+                continue
+            interleaved = interleave_by_user(band_tasks, user_spend)
+            total_in_band = len(interleaved)
+            entries: list[cluster_pb2.Controller.SchedulerTaskEntry] = []
+            for task_and_band in interleaved[:MAX_TASKS_PER_BAND]:
+                task, eff_band = task_and_band
+                req = job_requests.get(task.job_id)
+                rv = 0
+                if req is not None:
+                    res = req.resources
+                    accel = get_gpu_count(res.device) + get_tpu_count(res.device)
+                    rv = resource_value(res.cpu_millicores, res.memory_bytes, accel)
+                entries.append(
+                    cluster_pb2.Controller.SchedulerTaskEntry(
+                        task_id=task.task_id.to_wire(),
+                        job_id=task.job_id.to_wire(),
+                        user_id=task.task_id.user,
+                        original_band=task.priority_band,
+                        effective_band=eff_band,
+                        queue_position=global_position,
+                        resource_value=rv,
+                    )
+                )
+                global_position += 1
+            # Advance position for truncated tasks
+            global_position += max(0, total_in_band - MAX_TASKS_PER_BAND)
+            band_groups.append(
+                cluster_pb2.Controller.SchedulerBandGroup(
+                    band=band,
+                    tasks=entries,
+                    total_in_band=total_in_band,
+                )
+            )
+
+        # --- User budgets for response ---
+        budget_protos: list[cluster_pb2.Controller.SchedulerUserBudget] = []
+        for b in budgets:
+            spent = user_spend.get(b.user_id, 0)
+            utilization = (spent / b.budget_limit * 100.0) if b.budget_limit > 0 else 0.0
+            # Show effective band: use INTERACTIVE as the test band to see if user is downgraded
+            eff = compute_effective_band(cluster_pb2.PRIORITY_BAND_INTERACTIVE, b.user_id, user_spend, budget_limits)
+            budget_protos.append(
+                cluster_pb2.Controller.SchedulerUserBudget(
+                    user_id=b.user_id,
+                    budget_limit=b.budget_limit,
+                    budget_spent=spent,
+                    max_band=b.max_band,
+                    effective_band=eff,
+                    utilization_percent=utilization,
+                )
+            )
+
+        # --- Running tasks ---
+        # Inline _get_running_tasks_with_band_and_value logic to avoid circular import
+        with self._db.read_snapshot() as snap:
+            running_rows = snap.raw(
+                "SELECT t.task_id, t.priority_band, t.current_worker_id AS worker_id, j.request_proto "
+                "FROM tasks t "
+                "JOIN jobs j ON j.job_id = t.job_id "
+                "WHERE t.state = ? AND t.current_worker_id IS NOT NULL",
+                (cluster_pb2.TASK_STATE_RUNNING,),
+                decoders={
+                    "task_id": JobName.from_wire,
+                    "priority_band": int,
+                    "worker_id": WorkerId,
+                },
+            )
+        running_protos: list[cluster_pb2.Controller.SchedulerRunningTask] = []
+        for row in running_rows:
+            request = cluster_pb2.Controller.LaunchJobRequest()
+            request.ParseFromString(row.request_proto)
+            eff_band = compute_effective_band(row.priority_band, row.task_id.user, user_spend, budget_limits)
+            res = request.resources
+            accel = get_gpu_count(res.device) + get_tpu_count(res.device)
+            rv = resource_value(res.cpu_millicores, res.memory_bytes, accel)
+            is_cosched = request.HasField("coscheduling")
+            preemptible_by: list[int] = []
+            preemptible = False
+            if not is_cosched:
+                if eff_band == cluster_pb2.PRIORITY_BAND_BATCH:
+                    preemptible = True
+                    preemptible_by = [
+                        cluster_pb2.PRIORITY_BAND_PRODUCTION,
+                        cluster_pb2.PRIORITY_BAND_INTERACTIVE,
+                    ]
+                elif eff_band == cluster_pb2.PRIORITY_BAND_INTERACTIVE:
+                    preemptible = True
+                    preemptible_by = [cluster_pb2.PRIORITY_BAND_PRODUCTION]
+            running_protos.append(
+                cluster_pb2.Controller.SchedulerRunningTask(
+                    task_id=row.task_id.to_wire(),
+                    job_id=(row.task_id.parent or row.task_id).to_wire(),
+                    user_id=row.task_id.user,
+                    worker_id=str(row.worker_id),
+                    effective_band=eff_band,
+                    resource_value=rv,
+                    preemptible=preemptible,
+                    preemptible_by=preemptible_by,
+                    is_coscheduled=is_cosched,
+                )
+            )
+
+        return cluster_pb2.Controller.GetSchedulerStateResponse(
+            pending_queue=band_groups,
+            user_budgets=budget_protos,
+            running_tasks=running_protos,
+            total_pending=total_pending,
+            total_running=len(running_protos),
+        )

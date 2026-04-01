@@ -721,6 +721,8 @@ TASKS = Table(
         Column("priority_neg_depth", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column("priority_root_submitted_ms", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column("priority_insertion", "INTEGER", "NOT NULL", python_type=int, decoder=int),
+        # Migration 0021_budgets
+        Column("priority_band", "INTEGER", "NOT NULL DEFAULT 2", python_type=int, decoder=int),
         # Migration 0012_container_name
         Column("container_id", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
         # Migration 0018
@@ -739,7 +741,8 @@ TASKS = Table(
         # Migration 0002
         "CREATE INDEX IF NOT EXISTS idx_tasks_job_state ON tasks(job_id, state)",
         "CREATE INDEX IF NOT EXISTS idx_tasks_pending"
-        " ON tasks(state, priority_neg_depth, priority_root_submitted_ms, submitted_at_ms, priority_insertion)",
+        " ON tasks(state, priority_band ASC, priority_neg_depth ASC,"
+        " priority_root_submitted_ms ASC, submitted_at_ms ASC, priority_insertion ASC)",
         # Migration 0009
         "CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state)",
         # Migration 0010_dashboard
@@ -1266,6 +1269,24 @@ AUTH_API_KEYS = Table(
     ),
 )
 
+USER_BUDGETS = Table(
+    "user_budgets",
+    "ub",
+    columns=(
+        Column("user_id", "TEXT", "PRIMARY KEY REFERENCES users(user_id)", python_type=str, decoder=str),
+        Column("budget_limit", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int),
+        Column("max_band", "INTEGER", "NOT NULL DEFAULT 2", python_type=int, decoder=int),
+        Column(
+            "updated_at_ms",
+            "INTEGER",
+            "NOT NULL",
+            python_name="updated_at",
+            python_type=Timestamp,
+            decoder=decode_timestamp_ms,
+        ),
+    ),
+)
+
 AUTH_CONTROLLER_SECRETS = Table(
     "auth.controller_secrets",
     "cs",
@@ -1308,6 +1329,7 @@ MAIN_TABLES: tuple[Table, ...] = (
     RESERVATION_CLAIMS,
     LOGS,
     TASK_PROFILES,
+    USER_BUDGETS,
 )
 
 AUTH_TABLES: tuple[Table, ...] = (
@@ -1416,6 +1438,7 @@ class TaskRow:
     max_retries_failure: int
     max_retries_preemption: int
     submitted_at: Timestamp
+    priority_band: int = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -1431,6 +1454,7 @@ class TaskDetailRow:
     max_retries_failure: int
     max_retries_preemption: int
     submitted_at: Timestamp
+    priority_band: int
     error: str | None
     exit_code: int | None
     started_at: Timestamp | None
@@ -1549,6 +1573,16 @@ class ApiKeyRow:
     revoked_at: Timestamp | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class UserBudgetRow:
+    """User budget record."""
+
+    user_id: str
+    budget_limit: int
+    max_band: int
+    updated_at: Timestamp
+
+
 # ---------------------------------------------------------------------------
 # Projections -- typed column subsets that replace hand-maintained column strings
 # ---------------------------------------------------------------------------
@@ -1641,6 +1675,7 @@ TASK_ROW_PROJECTION = TASKS.projection(
     "max_retries_failure",
     "max_retries_preemption",
     "submitted_at_ms",
+    "priority_band",
     row_cls=TaskRow,
 )
 
@@ -1685,6 +1720,7 @@ TASK_DETAIL_PROJECTION = TASKS.projection(
     "max_retries_failure",
     "max_retries_preemption",
     "submitted_at_ms",
+    "priority_band",
     "error",
     "exit_code",
     "started_at_ms",
@@ -1772,6 +1808,15 @@ API_KEY_PROJECTION = AUTH_API_KEYS.projection(
     "expires_at_ms",
     "revoked_at_ms",
     row_cls=ApiKeyRow,
+)
+
+# User budget row.
+USER_BUDGET_PROJECTION = USER_BUDGETS.projection(
+    "user_id",
+    "budget_limit",
+    "max_band",
+    "updated_at_ms",
+    row_cls=UserBudgetRow,
 )
 
 

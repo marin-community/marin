@@ -454,3 +454,50 @@ export interface ListApiKeysResponse {
   keys: ApiKeyInfo[]
 }
 
+// -- Scheduler State --
+
+export interface SchedulerTaskEntry {
+  taskId: string
+  jobId: string
+  userId: string
+  originalBand: string
+  effectiveBand: string
+  queuePosition: number
+  resourceValue: number
+}
+
+export interface SchedulerBandGroup {
+  band: string
+  tasks: SchedulerTaskEntry[]
+  totalInBand: number
+}
+
+export interface SchedulerUserBudget {
+  userId: string
+  budgetLimit: string
+  budgetSpent: string
+  maxBand: string
+  effectiveBand: string
+  utilizationPercent: number
+}
+
+export interface SchedulerRunningTask {
+  taskId: string
+  jobId: string
+  userId: string
+  workerId: string
+  effectiveBand: string
+  resourceValue: number
+  preemptible: boolean
+  preemptibleBy: string[]
+  isCoscheduled: boolean
+}
+
+export interface GetSchedulerStateResponse {
+  pendingQueue: SchedulerBandGroup[]
+  userBudgets: SchedulerUserBudget[]
+  runningTasks: SchedulerRunningTask[]
+  totalPending: number
+  totalRunning: number
+}
+

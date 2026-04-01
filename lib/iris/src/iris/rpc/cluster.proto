@@ -221,6 +221,7 @@ enum TaskState {
   TASK_STATE_WORKER_FAILED = 7;
   TASK_STATE_UNSCHEDULABLE = 8;
   TASK_STATE_ASSIGNED = 9;
+  TASK_STATE_PREEMPTED = 10;
 }
 
 // Status of a single task within a job
@@ -569,6 +570,13 @@ enum ExistingJobPolicy {
   EXISTING_JOB_POLICY_RECREATE = 3;
 }
 
+enum PriorityBand {
+  PRIORITY_BAND_UNSPECIFIED = 0;  // defaults to INTERACTIVE
+  PRIORITY_BAND_PRODUCTION = 1;   // admin-only, never preempted
+  PRIORITY_BAND_INTERACTIVE = 2;  // normal work, default
+  PRIORITY_BAND_BATCH = 3;        // opportunistic, preemptible
+}
+
 // ============================================================================
 // CONTROLLER SERVICE MESSAGES
 // ============================================================================
@@ -634,6 +642,7 @@ message Controller {
 
     JobPreemptionPolicy preemption_policy = 31;
     ExistingJobPolicy existing_job_policy = 32;
+    PriorityBand priority_band = 33;
   }
 
   message LaunchJobResponse {
@@ -1009,6 +1018,76 @@ message Controller {
     string error = 2;
   }
 
+  // --- Budget Management ---
+  message SetUserBudgetRequest {
+    string user_id = 1;
+    int64 budget_limit = 2;      // max budget value (0 = unlimited)
+    PriorityBand max_band = 3;   // highest band this user can submit to (lower number = higher priority)
+  }
+  message SetUserBudgetResponse {}
+
+  message GetUserBudgetRequest {
+    string user_id = 1;
+  }
+  message GetUserBudgetResponse {
+    string user_id = 1;
+    int64 budget_limit = 2;
+    int64 budget_spent = 3;      // current running resource value
+    PriorityBand max_band = 4;
+  }
+
+  message ListUserBudgetsRequest {}
+  message ListUserBudgetsResponse {
+    repeated GetUserBudgetResponse users = 1;
+  }
+
+  // --- Scheduler State ---
+  message GetSchedulerStateRequest {}
+
+  message SchedulerTaskEntry {
+    string task_id = 1;
+    string job_id = 2;
+    string user_id = 3;
+    PriorityBand original_band = 4;
+    PriorityBand effective_band = 5;
+    int32 queue_position = 6;
+    int32 resource_value = 7;
+  }
+
+  message SchedulerBandGroup {
+    PriorityBand band = 1;
+    repeated SchedulerTaskEntry tasks = 2;
+    int32 total_in_band = 3;
+  }
+
+  message SchedulerUserBudget {
+    string user_id = 1;
+    int64 budget_limit = 2;
+    int64 budget_spent = 3;
+    PriorityBand max_band = 4;
+    PriorityBand effective_band = 5;
+    float utilization_percent = 6;
+  }
+
+  message SchedulerRunningTask {
+    string task_id = 1;
+    string job_id = 2;
+    string user_id = 3;
+    string worker_id = 4;
+    PriorityBand effective_band = 5;
+    int32 resource_value = 6;
+    bool preemptible = 7;
+    repeated PriorityBand preemptible_by = 8;
+    bool is_coscheduled = 9;
+  }
+
+  message GetSchedulerStateResponse {
+    repeated SchedulerBandGroup pending_queue = 1;
+    repeated SchedulerUserBudget user_budgets = 2;
+    repeated SchedulerRunningTask running_tasks = 3;
+    int32 total_pending = 4;
+    int32 total_running = 5;
+  }
 }
 
 // ============================================================================
@@ -1174,6 +1253,14 @@ service ControllerService {
 
   // Worker lifecycle
   rpc RestartWorker(Controller.RestartWorkerRequest) returns (Controller.RestartWorkerResponse);
+
+  // Budget management
+  rpc SetUserBudget(Controller.SetUserBudgetRequest) returns (Controller.SetUserBudgetResponse);
+  rpc GetUserBudget(Controller.GetUserBudgetRequest) returns (Controller.GetUserBudgetResponse);
+  rpc ListUserBudgets(Controller.ListUserBudgetsRequest) returns (Controller.ListUserBudgetsResponse);
+
+  // Scheduler state (dashboard)
+  rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
 }
 
 service WorkerService {
