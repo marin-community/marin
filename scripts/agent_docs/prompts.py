@@ -149,19 +149,3 @@ Rules:
 
 {package_summaries}
 """
-
-MERGE_PROMPT = """\
-You are merging multiple partial package reference cards into one cohesive \
-document for package `{package_name}`. Each partial doc covers a subset of the \
-package's API.
-
-Combine them into a single document with the same sections as the originals \
-(Overview, API, Gotchas). Deduplicate and merge — do not repeat entries. \
-The Overview should be a unified narrative, not concatenated paragraphs. \
-Keep total output under 3KB. Preserve all `file_path:line` references and \
-fenced code blocks exactly.
-
-## Partial docs to merge:
-
-{partial_docs}
-"""

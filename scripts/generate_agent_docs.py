@@ -47,6 +47,8 @@ from agent_docs.packages import PackageInfo, compute_stale_packages, discover_pa
 from agent_docs.tier1 import generate_map
 from agent_docs.tier2 import generate_package_docs
 
+logger = logging.getLogger(__name__)
+
 
 def print_package_stats(packages: dict[str, PackageInfo]) -> None:
     """Print statistics about discovered packages."""
@@ -86,7 +88,7 @@ def main() -> None:
     )
 
     repo_root = Path(__file__).parent.parent
-    logging.info("Discovering packages...")
+    logger.info("Discovering packages...")
     packages = discover_packages(repo_root)
 
     if args.stats:
@@ -109,19 +111,19 @@ def main() -> None:
         stale = compute_stale_packages(packages, cache)
 
     if not stale:
-        logging.info("Nothing to regenerate — all packages up to date.")
+        logger.info("Nothing to regenerate — all packages up to date.")
         return
 
-    logging.info("Stale packages (%d): %s", len(stale), ", ".join(sorted(stale)))
+    logger.info("Stale packages (%d): %s", len(stale), ", ".join(sorted(stale)))
 
     updated = generate_package_docs(
         packages, cache, stale, repo_root, model=args.model, summary_model=args.summary_model, dry_run=args.dry_run
     )
-    generate_map(None, cache, updated, repo_root, model=args.model, dry_run=args.dry_run)
+    generate_map(cache, updated, repo_root, model=args.model, dry_run=args.dry_run)
 
     if not args.dry_run:
         save_cache(cache, repo_root)
-        logging.info("Done. Updated %d package docs.", len(updated))
+        logger.info("Done. Updated %d package docs.", len(updated))
 
 
 if __name__ == "__main__":

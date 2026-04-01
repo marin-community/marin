@@ -9,8 +9,6 @@ Two-phase architecture for large packages:
 2. Package aggregation: file summaries are combined into the final doc
 
 Small packages (under MAX_SOURCE_DIRECT chars) skip phase 1 and go direct.
-
-Also supports legacy module-level docs via generate_module_docs.
 """
 
 from __future__ import annotations
@@ -20,9 +18,9 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-from agent_docs.cache import DocCache, _combined_source_hash, hash_text
+from agent_docs.cache import DocCache, hash_text
 from agent_docs.claude_cli import generate
-from agent_docs.graph import ClassInfo, FunctionInfo, ModuleInfo, RepoGraph
+from agent_docs.graph import ClassInfo, FunctionInfo
 from agent_docs.packages import PackageInfo, _package_source_hash
 from agent_docs.prompts import FILE_SUMMARY_PROMPT, PACKAGE_PROMPT
 
@@ -266,139 +264,21 @@ def generate_package_docs(
 
         callee_context = _get_callee_context_for_package(pkg, existing_docs)
 
-        try:
-            response = _generate_doc(pkg_name, pkg, callee_context, model, summary_model)
-            md_path = output_dir / f"{pkg_name}.md"
-            md_path.write_text(response.rstrip() + "\n")
+        response = _generate_doc(pkg_name, pkg, callee_context, model, summary_model)
+        md_path = output_dir / f"{pkg_name}.md"
+        md_path.write_text(response.rstrip() + "\n")
 
-            existing_docs[pkg_name] = response
-            updated.add(pkg_name)
+        existing_docs[pkg_name] = response
+        updated.add(pkg_name)
 
-            source_hash = _package_source_hash(pkg)
-            doc_hash = hash_text(response)
-            cache.update(pkg_name, source_hash, doc_hash, tier=2)
+        source_hash = _package_source_hash(pkg)
+        doc_hash = hash_text(response)
+        cache.update(pkg_name, source_hash, doc_hash, tier=2)
 
-            pkg_elapsed = time.monotonic() - pkg_t0
-            logger.info("[%d/%d] %s done (%.1fs, %d chars)", idx, total_stale, pkg_name, pkg_elapsed, len(response))
-
-        except Exception:
-            pkg_elapsed = time.monotonic() - pkg_t0
-            logger.error("[%d/%d] %s FAILED after %.1fs", idx, total_stale, pkg_name, pkg_elapsed, exc_info=True)
+        pkg_elapsed = time.monotonic() - pkg_t0
+        logger.info("[%d/%d] %s done (%.1fs, %d chars)", idx, total_stale, pkg_name, pkg_elapsed, len(response))
 
     total_elapsed = time.monotonic() - pipeline_t0
     logger.info("Pipeline complete: %d/%d packages updated in %.1fs", len(updated), total_stale, total_elapsed)
-
-    return updated
-
-
-# ---------------------------------------------------------------------------
-# Legacy module-level API (kept for backward compatibility with experiments)
-# ---------------------------------------------------------------------------
-
-
-def _get_callee_context(mod: ModuleInfo, existing_docs: dict[str, str]) -> str:
-    """Build callee context from already-generated docs of imported modules."""
-    context_parts: list[str] = []
-    for dep_mod_name in sorted(mod.imports_from):
-        if dep_mod_name in existing_docs:
-            doc = existing_docs[dep_mod_name]
-            if len(doc) > 2000:
-                doc = doc[:2000] + "\n... (truncated)"
-            context_parts.append(f"### {dep_mod_name}\n{doc}")
-
-    if not context_parts:
-        return ""
-
-    return "## Context from imported modules:\n\n" + "\n\n".join(context_parts)
-
-
-def _generate_legacy_doc(
-    name: str,
-    public_items: list[FunctionInfo | ClassInfo],
-    callee_context: str,
-    model: str,
-) -> str:
-    """Generate a doc for the legacy module-level path (direct only)."""
-    sources = _format_sources(public_items)
-    prompt = PACKAGE_PROMPT.format(
-        package_name=name,
-        input_description=f"Given the source code below for package `{name}`,",
-        callee_context=callee_context,
-        input_section_header=f"Source code for package `{name}`",
-        sources=sources,
-    )
-    return generate(prompt, model=model)
-
-
-def generate_module_docs(
-    graph: RepoGraph,
-    cache: DocCache,
-    stale_modules: set[str],
-    repo_root: Path,
-    *,
-    model: str = "sonnet",
-    dry_run: bool = False,
-) -> set[str]:
-    """Legacy: generate module docs using depth-2 grouping from RepoGraph."""
-    output_dir = repo_root / OUTPUT_DIR
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    visited: set[str] = set()
-    order: list[str] = []
-
-    def visit(name: str) -> None:
-        if name in visited:
-            return
-        visited.add(name)
-        mod = graph.modules.get(name)
-        if mod is None:
-            return
-        for dep in mod.imports_from:
-            for mod_name in graph.modules:
-                if mod_name == dep or mod_name.startswith(f"{dep}."):
-                    visit(mod_name)
-        order.append(name)
-
-    for name in graph.modules:
-        visit(name)
-
-    existing_docs: dict[str, str] = {}
-    for mod_name in order:
-        if mod_name not in stale_modules:
-            md_path = output_dir / f"{mod_name}.md"
-            if md_path.exists():
-                existing_docs[mod_name] = md_path.read_text()
-
-    updated: set[str] = set()
-
-    for mod_name in order:
-        mod = graph.modules[mod_name]
-        if mod_name not in stale_modules:
-            continue
-
-        public_items: list[FunctionInfo | ClassInfo] = [f for f in mod.functions if f.is_public] + [
-            c for c in mod.classes if c.is_public
-        ]
-
-        if not public_items:
-            continue
-
-        if dry_run:
-            logger.info("[dry-run] Would generate doc for %s (%d items)", mod_name, len(public_items))
-            continue
-
-        logger.info("Generating doc for %s (%d items)", mod_name, len(public_items))
-        callee_context = _get_callee_context(mod, existing_docs)
-
-        try:
-            response = _generate_legacy_doc(mod_name, public_items, callee_context, model)
-            md_path = output_dir / f"{mod_name}.md"
-            md_path.write_text(response.rstrip() + "\n")
-            existing_docs[mod_name] = response
-            updated.add(mod_name)
-            combined_hash = _combined_source_hash(public_items)
-            cache.update(mod_name, combined_hash, hash_text(response), tier=2)
-        except Exception:
-            logger.error("Failed to generate doc for %s", mod_name, exc_info=True)
 
     return updated
