@@ -263,3 +263,99 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
+
+
+@pytest.mark.parametrize(
+    "variant",
+    _discover_grug_variants_with_model_and_train(),
+)
+def test_grug_variant_activation_metrics_on_watch_step(variant: str):
+    """Activation metrics appear in output when compute_watch=True and vanish when False.
+
+    Validates the full first-cut metric set from the spec: per-layer histograms for
+    attn_in, attn_out, mlp_out, block_out, attn_out_to_in_ratio, mlp_out_to_in_ratio,
+    plus scalar max_abs_attn_logit.
+    """
+    from levanter.callbacks.watch import WatchConfig
+    from levanter.tracker.histogram import Histogram
+
+    train_module = importlib.import_module(_variant_module_name(variant, "train"))
+    model_module = importlib.import_module(_variant_module_name(variant, "model"))
+    model_config_cls = model_module.GrugModelConfig
+    make_train_step = train_module._make_train_step
+    initial_state = train_module.initial_state
+    mesh_fn = model_module.debug_mesh_and_token_pspec
+
+    cfg = _small_model_config(model_config_cls, vocab_size=128, seq_len=16)
+    # MoE has 2 dense initial layers, so we need at least 4 to get MoE blocks.
+    num_layers = max(cfg.num_layers, 4)
+    cfg = dataclasses.replace(cfg, num_layers=num_layers)
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+    watch_config = WatchConfig(watch_targets=["grads"], interval=1)
+    train_step = make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None, watch_config=watch_config)
+    mesh, token_pspec = mesh_fn(num_devices=4)
+    batch = GrugLmExample(
+        tokens=jnp.zeros((8, 16), dtype=jnp.int32),
+        loss_weight=jnp.ones((8, 16), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    def one_step(*, compute_watch: bool):
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        state = initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+        return train_step(state, sharded_batch, compute_watch=compute_watch)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        # Watch disabled: no watch_stats
+        _, _metrics_off, watch_off = eqx.filter_eval_shape(lambda: one_step(compute_watch=False))
+        assert watch_off is None
+
+        # Watch enabled: watch_stats must contain activation metrics
+        _, metrics_on, watch_on = eqx.filter_eval_shape(lambda: one_step(compute_watch=True))
+        assert watch_on is not None
+        # Collect activation keys from watch_stats and (for MoE) from metrics
+        all_activation_sources: dict[str, object] = {}
+        if watch_on is not None:
+            all_activation_sources.update({k: v for k, v in watch_on.items() if k.startswith("activations/")})
+        all_activation_sources.update({k: v for k, v in metrics_on.items() if k.startswith("activations/")})
+
+        activation_keys = list(all_activation_sources.keys())
+
+        # Spec-required per-layer metric names
+        required_per_layer = [
+            "attn_in",
+            "attn_out",
+            "mlp_out",
+            "block_out",
+            "attn_out_to_in_ratio",
+            "mlp_out_to_in_ratio",
+            "max_abs_attn_logit",
+        ]
+        for layer_idx in range(num_layers):
+            for metric_name in required_per_layer:
+                expected_key = f"activations/layer_{layer_idx}/{metric_name}"
+                assert (
+                    expected_key in activation_keys
+                ), f"Missing {expected_key} for variant={variant}; got {sorted(activation_keys)}"
+                value = all_activation_sources[expected_key]
+                # Histogram metrics should be Histogram instances; scalar should be a JAX array
+                if metric_name == "max_abs_attn_logit":
+                    assert not isinstance(value, Histogram), f"{expected_key} should be a scalar, not Histogram"
+                else:
+                    assert isinstance(value, Histogram), f"{expected_key} should be a Histogram, got {type(value)}"
+
+
+def test_histogram_nonzero_count():
+    """Histogram.nonzero_count property works and serializes correctly."""
+    from levanter.tracker.histogram import Histogram
+
+    arr = jnp.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    hist = Histogram.from_array(arr, num_bins=5)
+    nzc = hist.nonzero_count
+    assert nzc > 0
+    assert nzc <= 5

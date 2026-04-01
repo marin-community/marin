@@ -28,6 +28,11 @@ except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
+from experiments.grug.activation_metrics import (
+    block_activation_metrics,
+    flatten_per_layer_metrics,
+    max_abs_attn_logit_from_qk,
+)
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
 from levanter.grug.grug_moe import MoeActivation, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
@@ -134,7 +139,13 @@ class CausalSelfAttention(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        *,
+        return_max_abs_logit: bool = False,
+    ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], jax.Array]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -156,7 +167,10 @@ class CausalSelfAttention(eqx.Module):
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        result = jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        if return_max_abs_logit:
+            return result, max_abs_attn_logit_from_qk(q, k, head_dim)
+        return result
 
 
 class RMSNorm(eqx.Module):
@@ -447,9 +461,18 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        *,
+        return_activation_metrics: bool = False,
+    ) -> (
+        tuple[Float[Array, "B S D"], dict[str, jax.Array]]
+        | tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array | Histogram]]
+    ):
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask)
+        if return_activation_metrics:
+            attn_result, max_abs_logit = self.attn(attn_in, mask, return_max_abs_logit=True)
+        else:
+            attn_result = self.attn(attn_in, mask)
+        x = x + attn_result
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         if self.dense_mlp is not None:
             mlp_out = self.dense_mlp(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -460,6 +483,9 @@ class Block(eqx.Module):
             if self.shared is not None:
                 mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
+        if return_activation_metrics:
+            act_metrics = block_activation_metrics(attn_in, attn_result, mlp_in, mlp_out, x, max_abs_logit)
+            return x, router_stats, act_metrics
         return x, router_stats
 
 
@@ -499,6 +525,8 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        *,
+        return_activation_metrics: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
@@ -513,9 +541,16 @@ class Transformer(eqx.Module):
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
         moe_router_stats: list[dict[str, jax.Array]] = []
+        per_layer_act_metrics: list[dict[str, jax.Array | Histogram]] = []
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            if return_activation_metrics:
+                hidden, router_stats, act_metrics = eqx.filter_checkpoint(block)(
+                    hidden, layer_mask, return_activation_metrics=True
+                )
+                per_layer_act_metrics.append(act_metrics)
+            else:
+                hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
             if router_stats:
                 moe_router_stats.append(router_stats)
 
@@ -527,6 +562,9 @@ class Transformer(eqx.Module):
             "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))
+        if return_activation_metrics:
+            activation_metrics = flatten_per_layer_metrics(per_layer_act_metrics)
+            return hidden, router_metrics | activation_metrics
         return hidden, router_metrics
 
     @named_call
@@ -549,8 +587,9 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
+        return_activation_metrics: bool = False,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | Histogram]]:
-        hidden, router_metrics = self(token_ids, mask=mask)
+        hidden, router_metrics = self(token_ids, mask=mask, return_activation_metrics=return_activation_metrics)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
@@ -568,10 +607,16 @@ class Transformer(eqx.Module):
         rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
         aux_loss = self.config.router_z_loss_coef * rzl
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
-        if return_router_metrics:
-            summarized_metrics = _summarize_router_metrics(router_metrics)
-            summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
-            summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
+        if return_router_metrics or return_activation_metrics:
+            summarized_metrics: dict[str, jax.Array | Histogram] = {}
+            if return_router_metrics:
+                summarized_metrics.update(_summarize_router_metrics(router_metrics))
+                summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
+                summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
+            if return_activation_metrics:
+                # Activation keys (activations/*) are flattened per-layer keys merged
+                # into router_metrics by __call__ via flatten_per_layer_metrics.
+                summarized_metrics.update({k: v for k, v in router_metrics.items() if k.startswith("activations/")})
             return loss, summarized_metrics
         return loss
 

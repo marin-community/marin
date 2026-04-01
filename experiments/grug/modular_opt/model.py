@@ -14,9 +14,15 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
+from experiments.grug.activation_metrics import (
+    block_activation_metrics,
+    flatten_per_layer_metrics,
+    max_abs_attn_logit_from_qk,
+)
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head, Plogits, unshard
+from levanter.tracker.histogram import Histogram
 
 
 @dataclass(frozen=True)
@@ -75,7 +81,13 @@ class CausalSelfAttention(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        *,
+        return_max_abs_logit: bool = False,
+    ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], jax.Array]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
 
@@ -85,7 +97,10 @@ class CausalSelfAttention(eqx.Module):
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         attn_out = attention(q, k, v, mask)
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=Pbatch)
+        result = jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=Pbatch)
+        if return_max_abs_logit:
+            return result, max_abs_attn_logit_from_qk(q, k, head_dim)
+        return result
 
 
 class MLP(eqx.Module):
@@ -143,9 +158,25 @@ class Block(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
-        x = x + self.attn(self.rms_attn(x), mask)
-        x = x + self.mlp(self.rms_mlp(x))
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        *,
+        return_activation_metrics: bool = False,
+    ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], dict[str, jax.Array | Histogram]]:
+        attn_in = self.rms_attn(x)
+        if return_activation_metrics:
+            attn_result, max_abs_logit = self.attn(attn_in, mask, return_max_abs_logit=True)
+        else:
+            attn_result = self.attn(attn_in, mask)
+        x = x + attn_result
+        mlp_in = self.rms_mlp(x)
+        mlp_result = self.mlp(mlp_in)
+        x = x + mlp_result
+        if return_activation_metrics:
+            metrics = block_activation_metrics(attn_in, attn_result, mlp_in, mlp_result, x, max_abs_logit)
+            return x, metrics
         return x
 
 
@@ -178,14 +209,25 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
-    ) -> Float[Array, "B S D"]:
+        *,
+        return_activation_metrics: bool = False,
+    ) -> Float[Array, "B S D"] | tuple[Float[Array, "B S D"], dict[str, jax.Array | Histogram]]:
         if mask is None:
             mask = AttentionMask.causal()
 
         hidden = self.token_embed.at[token_ids].get(out_sharding=Pbatch)
+        per_layer_metrics: list[dict[str, jax.Array | Histogram]] = []
         for block in self.blocks:
-            hidden = eqx.filter_checkpoint(block)(hidden, mask)
-        return self.final_norm(hidden)
+            if return_activation_metrics:
+                hidden, layer_metrics = eqx.filter_checkpoint(block)(hidden, mask, return_activation_metrics=True)
+                per_layer_metrics.append(layer_metrics)
+            else:
+                hidden = eqx.filter_checkpoint(block)(hidden, mask)
+        hidden = self.final_norm(hidden)
+        if return_activation_metrics:
+            activation_metrics = flatten_per_layer_metrics(per_layer_metrics)
+            return hidden, activation_metrics
+        return hidden
 
     @named_call
     def logits(
@@ -205,13 +247,18 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
-    ) -> jax.Array:
+        return_activation_metrics: bool = False,
+    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | Histogram]]:
         """Compute next-token cross-entropy loss for a batch."""
-        hidden = self(token_ids, mask=mask)
+        if return_activation_metrics:
+            hidden, activation_metrics = self(token_ids, mask=mask, return_activation_metrics=True)
+        else:
+            hidden = self(token_ids, mask=mask)
+
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
-        return fused_linear_softmax_cross_entropy_loss(
+        loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
             labels,
@@ -220,6 +267,9 @@ class Transformer(eqx.Module):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
         )
+        if return_activation_metrics:
+            return loss, activation_metrics
+        return loss
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:

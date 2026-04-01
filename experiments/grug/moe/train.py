@@ -297,6 +297,7 @@ def _make_train_step(
                 reduction="mean",
                 logsumexp_weight=z_loss,
                 return_router_metrics=True,
+                return_activation_metrics=compute_watch,
             )
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
@@ -524,6 +525,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                             step=step,
                         )
+
+                    # Log activation metrics from the summarized_metrics dict.
+                    activation_metrics = {key: value for key, value in metrics.items() if key.startswith("activations/")}
+                    if activation_metrics:
+                        levanter.tracker.log(activation_metrics, step=step)
 
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
