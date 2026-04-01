@@ -952,10 +952,6 @@ class GatedDeltaNet(ModuleWithStateDictSerialization, eqx.Module):
 
         conv_w = _get("conv1d.weight").squeeze(1)  # (C, 1, K) → (C, K)
 
-        out_w = _get("out_proj.weight")
-        if out_w.ndim == 2:
-            out_w = out_w.reshape(hidden, cfg.num_v_heads, cfg.head_v_dim)
-
         return {
             "in_proj_qkvz.weight": qkvz_w,
             "in_proj_ba.weight": ba_w,
@@ -963,7 +959,7 @@ class GatedDeltaNet(ModuleWithStateDictSerialization, eqx.Module):
             "A_log": _get("A_log"),
             "dt_bias": _get("dt_bias"),
             "o_norm.weight": _get("norm.weight"),
-            "out_proj.weight": out_w,
+            "out_proj.weight": _get("out_proj.weight"),  # keep as-is; Linear handles reshape
         }
 
     def _repack_packed_to_hf_split(self, prefix: str | None) -> dict[str, np.ndarray]:
@@ -1051,14 +1047,8 @@ class GatedDeltaNet(ModuleWithStateDictSerialization, eqx.Module):
             if onorm_key in state_dict and norm_key not in state_dict:
                 state_dict[norm_key] = state_dict[onorm_key]
 
-        # out_proj.weight: HF stores as 2D (hidden, value_dim), but the Linear child
-        # expects the articulated shape (hidden, v_heads, v_head_dim). Reshape if needed.
-        cfg = self.config
-        out_key = with_prefix(prefix, "out_proj.weight")
-        if out_key in state_dict:
-            out_w = np.asarray(state_dict[out_key])
-            if out_w.ndim == 2:
-                state_dict[out_key] = out_w.reshape(cfg.Embed.size, cfg.num_v_heads, cfg.head_v_dim)
+        # Don't reshape out_proj.weight here — the flatten/unflatten pipeline
+        # (from_torch_compatible_state_dict) handles Linear 2D↔articulated conversion.
 
         # Delegate to default handler which recurses into children
         return default_eqx_module_from_state_dict(self, state_dict, prefix)

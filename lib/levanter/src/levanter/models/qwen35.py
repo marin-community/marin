@@ -666,23 +666,18 @@ class Qwen35LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Qwen35Conf
                 lev_sd[key] = state_dict[key]
 
             if lt == "full_attention":
-                # Attention: reshape flat weights to articulated axes
+                # Attention: copy flat weights as-is. The flatten/unflatten pipeline
+                # (from_torch_compatible_state_dict) handles 2D↔articulated conversion.
                 ap = f"{lp}.self_attn"
-                nh, nkv, hd = config.num_heads, config.num_kv_heads, config.head_dim
-                qhpg = nh // nkv  # q_heads_per_group
-                pd = hd * 2  # packed dim (query + gate)
-
-                # q_proj: (nh*hd*2, hidden) → (nkv, qhpg, pd, hidden)
-                lev_sd[f"{ap}.q_proj.weight"] = state_dict[f"{ap}.q_proj.weight"].reshape(nkv, qhpg, pd, -1)
-                # k_proj: (nkv*hd, hidden) → (nkv, hd, hidden)
-                lev_sd[f"{ap}.k_proj.weight"] = state_dict[f"{ap}.k_proj.weight"].reshape(nkv, hd, -1)
-                # v_proj: (nkv*hd, hidden) → (nkv, hd, hidden)
-                lev_sd[f"{ap}.v_proj.weight"] = state_dict[f"{ap}.v_proj.weight"].reshape(nkv, hd, -1)
-                # o_proj: (hidden, nh*hd) → (hidden, nh, hd)
-                lev_sd[f"{ap}.o_proj.weight"] = state_dict[f"{ap}.o_proj.weight"].reshape(-1, nh, hd)
-                # norms
-                lev_sd[f"{ap}.q_norm.weight"] = state_dict[f"{ap}.q_norm.weight"]
-                lev_sd[f"{ap}.k_norm.weight"] = state_dict[f"{ap}.k_norm.weight"]
+                for suffix in [
+                    "q_proj.weight",
+                    "k_proj.weight",
+                    "v_proj.weight",
+                    "o_proj.weight",
+                    "q_norm.weight",
+                    "k_norm.weight",
+                ]:
+                    lev_sd[f"{ap}.{suffix}"] = state_dict[f"{ap}.{suffix}"]
 
             else:
                 # GDN: use the GDN's repacking to convert split → packed format
@@ -705,8 +700,11 @@ class Qwen35LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Qwen35Conf
                 lm_head_key = "lm_head.weight"
             lev_sd["lm_head.weight"] = state_dict[lm_head_key]
 
-        # Load into model using from_state_dict (no flatten/unflatten needed)
-        return model.from_state_dict(lev_sd)
+        # Use from_torch_compatible_state_dict which handles the
+        # flatten/unflatten pipeline for Linear 2D↔articulated conversion.
+        from haliax.state_dict import from_torch_compatible_state_dict
+
+        return from_torch_compatible_state_dict(model, lev_sd, unflatten=True)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         return {"transformer": "language_model", "embeddings": None}

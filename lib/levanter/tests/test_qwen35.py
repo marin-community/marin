@@ -145,13 +145,17 @@ def test_model_gradient_flow():
 
 
 def test_state_dict_roundtrip():
-    """to_state_dict -> from_state_dict preserves model outputs."""
+    """to/from state dict roundtrip preserves model outputs."""
+    from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
+
     config = _small_config()
     Vocab = Axis("vocab", config.vocab_size)
     model = Qwen35LMHeadModel.init(Vocab, config, key=jax.random.PRNGKey(0))
 
-    sd = model.to_state_dict()
-    model2 = model.from_state_dict(sd)
+    # Use the torch-compatible roundtrip (flatten→save→load→unflatten)
+    # which is the same path HFCheckpointConverter uses.
+    sd = to_torch_compatible_state_dict(model)
+    model2 = from_torch_compatible_state_dict(model, sd, unflatten=True)
 
     Batch = Axis("batch", 1)
     Pos = Axis("position", 8)
