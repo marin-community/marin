@@ -256,6 +256,62 @@ def test_compute_user_spend_only_counts_active_states(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_compute_user_spend_null_resources_proto(tmp_path):
+    """Jobs submitted without a resources field must not crash compute_user_spend.
+
+    Regression: resources_proto is NULL in the DB when the LaunchJobRequest omits
+    the resources field. compute_user_spend must treat that as zero spend.
+    """
+    db = ControllerDB(db_dir=tmp_path)
+    log_store = LogStore(log_dir=tmp_path / "logs")
+    state = ControllerTransitions(db=db, log_store=log_store)
+    try:
+        job_id = JobName.root("carol", "no-resources")
+        # Intentionally omit the `resources` field
+        request = cluster_pb2.Controller.LaunchJobRequest(
+            name=job_id.to_wire(),
+            entrypoint=cluster_pb2.RuntimeEntrypoint(),
+            environment=cluster_pb2.EnvironmentConfig(),
+            replicas=1,
+        )
+        request.entrypoint.run_command.argv[:] = ["echo", "hi"]
+        state.submit_job(job_id, request, Timestamp.now())
+
+        # Register worker and move the task to RUNNING so it counts as active
+        w1 = WorkerId("w1")
+        state.register_or_refresh_worker(
+            worker_id=w1,
+            address="w1:8080",
+            metadata=cluster_pb2.WorkerMetadata(
+                hostname="w1",
+                ip_address="127.0.0.1",
+                cpu_count=8,
+                memory_bytes=16 * GiB,
+                disk_bytes=100 * GiB,
+            ),
+            ts=Timestamp.now(),
+        )
+        from iris.cluster.controller.transitions import Assignment, HeartbeatApplyRequest, TaskUpdate
+
+        task_id = job_id.task(0)
+        state.queue_assignments([Assignment(task_id=task_id, worker_id=w1)])
+        state.apply_task_updates(
+            HeartbeatApplyRequest(
+                worker_id=w1,
+                worker_resource_snapshot=None,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING)],
+            )
+        )
+
+        with db.snapshot() as snap:
+            spend = compute_user_spend(snap)
+        # Zero resources → zero spend, but must not crash
+        assert spend.get("carol", 0) == 0
+    finally:
+        log_store.close()
+        db.close()
+
+
 def test_interleave_by_user_three_users():
     """Three users with different task counts and spend levels."""
     tasks = [

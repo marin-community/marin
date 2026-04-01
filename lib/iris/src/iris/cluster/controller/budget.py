@@ -75,6 +75,8 @@ def compute_user_spend(snapshot: QuerySnapshot) -> dict[str, int]:
     spend: dict[str, int] = defaultdict(int)
     for row in rows:
         user_id = row.job_id.user
+        if row.resources_proto is None:
+            continue
         res = proto_cache.get_or_decode(row.resources_proto, _RESOURCE_SPEC_DECODER)
         accel = get_gpu_count(res.device) + get_tpu_count(res.device)
         value = resource_value(res.cpu_millicores, res.memory_bytes, accel)

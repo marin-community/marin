@@ -2244,7 +2244,7 @@ class ControllerServiceImpl:
             running_protos.append(
                 cluster_pb2.Controller.SchedulerRunningTask(
                     task_id=row.task_id.to_wire(),
-                    job_id=row.task_id.job.to_wire(),
+                    job_id=(row.task_id.parent or row.task_id).to_wire(),
                     user_id=row.task_id.user,
                     worker_id=str(row.worker_id),
                     effective_band=eff_band,
