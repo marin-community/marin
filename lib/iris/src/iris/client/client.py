@@ -790,6 +790,7 @@ class IrisClient:
         substring: str = "",
         attempt_id: int = -1,
         min_level: str = "",
+        tail: bool = False,
     ) -> list[TaskLogEntry]:
         """Fetch logs for a task or job.
 
@@ -801,10 +802,11 @@ class IrisClient:
         Args:
             target: Task ID or Job ID
             start: Only return logs after this timestamp (None = from beginning)
-            max_lines: Maximum number of log lines to return (0 = unlimited)
+            max_lines: Maximum number of log lines to return (0 = server default)
             substring: Substring filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
             min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+            tail: If True, return the most recent lines instead of earliest
 
         Returns:
             List of TaskLogEntry objects, sorted by timestamp
@@ -816,6 +818,7 @@ class IrisClient:
             max_lines=max_lines,
             substring=substring,
             min_level=min_level,
+            tail=tail,
         )
 
         result = [
