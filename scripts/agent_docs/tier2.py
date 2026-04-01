@@ -55,7 +55,7 @@ def _generate_file_summary(
     package_name: str,
     file_path: str,
     items: list[FunctionInfo | ClassInfo],
-    model: str,
+    summary_model: str,
 ) -> str:
     """Generate a concise structured summary for one file's public items."""
     sources = _format_sources(items)
@@ -64,13 +64,13 @@ def _generate_file_summary(
         package_name=package_name,
         sources=sources,
     )
-    return generate(prompt, model=model, max_budget_usd=0.25)
+    return generate(prompt, model=summary_model, max_budget_usd=0.25)
 
 
 def _generate_file_summaries(
     name: str,
     public_items: list[FunctionInfo | ClassInfo],
-    model: str,
+    summary_model: str,
 ) -> str:
     """Phase 1: generate per-file summaries and concatenate them."""
     by_file = _group_items_by_file(public_items)
@@ -83,13 +83,13 @@ def _generate_file_summaries(
         short_path = Path(file_path).name
         logger.info("  [%d/%d] Summarizing %s (%d items)...", i, total_files, short_path, len(items))
         t0 = time.monotonic()
-        summary = _generate_file_summary(name, file_path, items, model)
+        summary = _generate_file_summary(name, file_path, items, summary_model)
         elapsed = time.monotonic() - t0
         logger.info("  [%d/%d] %s done (%.1fs, %d chars)", i, total_files, short_path, elapsed, len(summary))
         summaries.append(summary)
 
     phase_elapsed = time.monotonic() - phase_t0
-    logger.info("  Phase 1 complete: %d files in %.1fs", total_files, phase_elapsed)
+    logger.info("  Phase 1 complete: %d files in %.1fs (model=%s)", total_files, phase_elapsed, summary_model)
 
     return "\n\n---\n\n".join(summaries)
 
@@ -142,6 +142,7 @@ def _generate_doc(
     pkg: PackageInfo,
     callee_context: str,
     model: str,
+    summary_model: str,
 ) -> str:
     """Generate a package doc via file-level summaries or direct generation."""
     public_items = [f for f in pkg.functions if f.is_public] + [c for c in pkg.classes if c.is_public]
@@ -151,7 +152,7 @@ def _generate_doc(
         return _generate_direct(name, public_items, callee_context, model)
 
     logger.info("Package %s is large (%d chars), using file-summary pipeline", name, len(sources))
-    file_summaries = _generate_file_summaries(name, public_items, model)
+    file_summaries = _generate_file_summaries(name, public_items, summary_model)
     return _aggregate_package_doc(name, file_summaries, callee_context, model)
 
 
@@ -200,6 +201,7 @@ def generate_package_docs(
     repo_root: Path,
     *,
     model: str = "sonnet",
+    summary_model: str = "haiku",
     dry_run: bool = False,
 ) -> set[str]:
     """Generate package reference cards for all stale packages.
@@ -265,7 +267,7 @@ def generate_package_docs(
         callee_context = _get_callee_context_for_package(pkg, existing_docs)
 
         try:
-            response = _generate_doc(pkg_name, pkg, callee_context, model)
+            response = _generate_doc(pkg_name, pkg, callee_context, model, summary_model)
             md_path = output_dir / f"{pkg_name}.md"
             md_path.write_text(response.rstrip() + "\n")
 

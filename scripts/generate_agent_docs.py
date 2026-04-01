@@ -72,7 +72,10 @@ def main() -> None:
     parser.add_argument("--full", action="store_true", help="Ignore cache, regenerate everything")
     parser.add_argument("--dry-run", action="store_true", help="Print what would be regenerated")
     parser.add_argument("--package", type=str, help="Regenerate only a specific package")
-    parser.add_argument("--model", type=str, default="sonnet", help="Claude model to use")
+    parser.add_argument("--model", type=str, default="sonnet", help="Model for aggregation and direct generation")
+    parser.add_argument(
+        "--summary-model", type=str, default="haiku", help="Model for per-file summaries (large packages only)"
+    )
     parser.add_argument("--stats", action="store_true", help="Print package stats and exit")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
@@ -111,7 +114,9 @@ def main() -> None:
 
     logging.info("Stale packages (%d): %s", len(stale), ", ".join(sorted(stale)))
 
-    updated = generate_package_docs(packages, cache, stale, repo_root, model=args.model, dry_run=args.dry_run)
+    updated = generate_package_docs(
+        packages, cache, stale, repo_root, model=args.model, summary_model=args.summary_model, dry_run=args.dry_run
+    )
     generate_map(None, cache, updated, repo_root, model=args.model, dry_run=args.dry_run)
 
     if not args.dry_run:
