@@ -246,7 +246,7 @@ class RemoteClusterClient:
             state_name = cluster_pb2.JobState.Name(state)
 
             try:
-                log_response = self.fetch_logs(source, cursor=cursor, min_level=min_level)
+                log_response = self.fetch_logs(source, since_ms=since_ms, cursor=cursor, min_level=min_level)
             except Exception as e:
                 msg = format_connect_error(e) if isinstance(e, ConnectError) else str(e)
                 logger.warning("Failed to fetch logs for %s, will retry: %s", job_id, msg)

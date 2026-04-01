@@ -253,6 +253,7 @@ class Job:
         *,
         raise_on_failure: bool = True,
         stream_logs: bool = False,
+        since_ms: int = 0,
         min_level: str = "",
     ) -> cluster_pb2.JobStatus:
         """Wait for job to complete.
@@ -262,6 +263,7 @@ class Job:
             poll_interval: Maximum time between status checks
             raise_on_failure: If True, raise JobFailedError on any non-SUCCESS terminal state
             stream_logs: If True, stream logs from all tasks interleaved
+            since_ms: Only show logs after this epoch millisecond timestamp
             min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
 
         Returns:
@@ -278,6 +280,7 @@ class Job:
                 self._job_id,
                 timeout=timeout,
                 poll_interval=poll_interval,
+                since_ms=since_ms,
                 min_level=min_level,
             )
 
