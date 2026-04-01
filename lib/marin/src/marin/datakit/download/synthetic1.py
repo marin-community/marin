@@ -1,14 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""PrimeIntellect/SYNTHETIC-1 pretraining dataset.
+"""PrimeIntellect/SYNTHETIC-1 dataset download and transform.
 
-Each row has a prompt, an LLM chain-of-thought rollout, and a real-valued score.
-We concat prompt + score tag + rollout into a single document so the model learns
-to distinguish correct and incorrect reasoning traces.
-
-Usage:
-    uv run lib/marin/src/marin/run/ray_run.py -- python experiments/synthetic1.py
+Downloads raw parquet files from HuggingFace, then transforms each row into a
+single document by concatenating prompt + score tag + response.
 """
 
 import hashlib
@@ -17,10 +13,7 @@ from fray.v2 import ResourceConfig
 from zephyr import Dataset, ZephyrContext, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from marin.processing.tokenize import TokenizeConfig, tokenize
-from experiments.marin_models import marin_tokenizer
 
 HF_DATASET_ID = "PrimeIntellect/SYNTHETIC-1"
 HF_REVISION = "f08fe8c"
@@ -80,14 +73,15 @@ def transform(input_path: str, output_path: str) -> None:
     list(ctx.execute(pipeline))
 
 
-def build_steps() -> list[StepSpec]:
+def download_synthetic1_step() -> StepSpec:
+    """Download and transform PrimeIntellect/SYNTHETIC-1 into JSONL documents."""
     dl = download_hf_step(
         "raw/synthetic-1",
         hf_dataset_id=HF_DATASET_ID,
         revision=HF_REVISION,
     )
 
-    transformed = StepSpec(
+    return StepSpec(
         name="processed/synthetic-1",
         deps=[dl],
         fn=lambda output_path: transform(
@@ -96,21 +90,3 @@ def build_steps() -> list[StepSpec]:
         ),
         hash_attrs={"version": "v1"},
     )
-
-    tokenized = StepSpec(
-        name="tokenized/synthetic-1",
-        deps=[transformed],
-        fn=lambda output_path: tokenize(TokenizeConfig(
-            train_paths=[transformed.output_path],
-            validation_paths=[],
-            cache_path=output_path,
-            tokenizer=marin_tokenizer,
-        )),
-        hash_attrs={"tokenizer": marin_tokenizer},
-    )
-
-    return [dl, transformed, tokenized]
-
-
-if __name__ == "__main__":
-    StepRunner().run(build_steps())
