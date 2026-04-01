@@ -16,6 +16,7 @@ Also supports legacy module-level docs via generate_module_docs.
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -73,12 +74,22 @@ def _generate_file_summaries(
 ) -> str:
     """Phase 1: generate per-file summaries and concatenate them."""
     by_file = _group_items_by_file(public_items)
+    sorted_files = sorted(by_file.items())
+    total_files = len(sorted_files)
     summaries: list[str] = []
+    phase_t0 = time.monotonic()
 
-    for file_path, items in sorted(by_file.items()):
-        logger.info("  Summarizing %s (%d items)", file_path, len(items))
+    for i, (file_path, items) in enumerate(sorted_files, 1):
+        short_path = Path(file_path).name
+        logger.info("  [%d/%d] Summarizing %s (%d items)...", i, total_files, short_path, len(items))
+        t0 = time.monotonic()
         summary = _generate_file_summary(name, file_path, items, model)
+        elapsed = time.monotonic() - t0
+        logger.info("  [%d/%d] %s done (%.1fs, %d chars)", i, total_files, short_path, elapsed, len(summary))
         summaries.append(summary)
+
+    phase_elapsed = time.monotonic() - phase_t0
+    logger.info("  Phase 1 complete: %d files in %.1fs", total_files, phase_elapsed)
 
     return "\n\n---\n\n".join(summaries)
 
@@ -91,6 +102,7 @@ def _generate_direct(
 ) -> str:
     """Small-package path: send raw source directly to the package prompt."""
     sources = _format_sources(public_items)
+    logger.info("  Direct generation (%d chars source)...", len(sources))
     prompt = PACKAGE_PROMPT.format(
         package_name=name,
         input_description=f"Given the source code below for package `{name}`,",
@@ -98,7 +110,10 @@ def _generate_direct(
         input_section_header=f"Source code for package `{name}`",
         sources=sources,
     )
-    return generate(prompt, model=model)
+    t0 = time.monotonic()
+    result = generate(prompt, model=model)
+    logger.info("  Direct generation done (%.1fs, %d chars output)", time.monotonic() - t0, len(result))
+    return result
 
 
 def _aggregate_package_doc(
@@ -108,6 +123,7 @@ def _aggregate_package_doc(
     model: str,
 ) -> str:
     """Phase 2: aggregate file summaries into the final package doc."""
+    logger.info("  Phase 2: aggregating %d chars of file summaries...", len(file_summaries))
     prompt = PACKAGE_PROMPT.format(
         package_name=name,
         input_description=f"Given the file-level summaries below for package `{name}`,",
@@ -115,7 +131,10 @@ def _aggregate_package_doc(
         input_section_header=f"File summaries for package `{name}`",
         sources=file_summaries,
     )
-    return generate(prompt, model=model)
+    t0 = time.monotonic()
+    result = generate(prompt, model=model)
+    logger.info("  Phase 2 done (%.1fs, %d chars output)", time.monotonic() - t0, len(result))
+    return result
 
 
 def _generate_doc(
@@ -203,26 +222,45 @@ def generate_package_docs(
             if md_path.exists():
                 existing_docs[pkg_name] = md_path.read_text()
 
-    updated: set[str] = set()
-
+    stale_with_items = []
     for pkg_name in pkg_order:
         if pkg_name not in stale_packages:
             continue
-
         pkg = packages[pkg_name]
         public_items = [f for f in pkg.functions if f.is_public] + [c for c in pkg.classes if c.is_public]
-
         if not public_items:
             logger.info("Skipping %s (no public items)", pkg_name)
             continue
+        stale_with_items.append((pkg_name, pkg, public_items))
 
+    total_stale = len(stale_with_items)
+    if total_stale == 0:
+        logger.info("No stale packages with public items to generate")
+        return set()
+
+    logger.info("Generating docs for %d package(s)", total_stale)
+
+    updated: set[str] = set()
+    pipeline_t0 = time.monotonic()
+
+    for idx, (pkg_name, pkg, public_items) in enumerate(stale_with_items, 1):
         if dry_run:
             sources = _format_sources(public_items)
             path = "file-summary" if len(sources) > MAX_SOURCE_DIRECT else "direct"
-            logger.info("[dry-run] Would generate doc for %s (%d items, %s path)", pkg_name, len(public_items), path)
+            logger.info(
+                "[dry-run] [%d/%d] Would generate %s (%d items, %s)", idx, total_stale, pkg_name, len(public_items), path
+            )
             continue
 
-        logger.info("Generating doc for %s (%d public items)", pkg_name, len(public_items))
+        logger.info(
+            "[%d/%d] Generating %s (%d public items, %d files)",
+            idx,
+            total_stale,
+            pkg_name,
+            len(public_items),
+            len(pkg.file_paths),
+        )
+        pkg_t0 = time.monotonic()
 
         callee_context = _get_callee_context_for_package(pkg, existing_docs)
 
@@ -238,8 +276,15 @@ def generate_package_docs(
             doc_hash = hash_text(response)
             cache.update(pkg_name, source_hash, doc_hash, tier=2)
 
+            pkg_elapsed = time.monotonic() - pkg_t0
+            logger.info("[%d/%d] %s done (%.1fs, %d chars)", idx, total_stale, pkg_name, pkg_elapsed, len(response))
+
         except Exception:
-            logger.error("Failed to generate doc for %s", pkg_name, exc_info=True)
+            pkg_elapsed = time.monotonic() - pkg_t0
+            logger.error("[%d/%d] %s FAILED after %.1fs", idx, total_stale, pkg_name, pkg_elapsed, exc_info=True)
+
+    total_elapsed = time.monotonic() - pipeline_t0
+    logger.info("Pipeline complete: %d/%d packages updated in %.1fs", len(updated), total_stale, total_elapsed)
 
     return updated
 

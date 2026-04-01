@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import time
 
 logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 2
 
 
 def generate(
@@ -20,7 +23,7 @@ def generate(
 ) -> str:
     """Call claude CLI in non-interactive mode and return the response text.
 
-    Uses --print (non-interactive) and --bare (skip hooks/CLAUDE.md/LSP).
+    Retries up to MAX_RETRIES times on transient failures (empty stderr).
     """
     cmd = [
         "claude",
@@ -32,19 +35,50 @@ def generate(
         "--system-prompt",
         "You are a precise documentation generator. Output only what is requested.",
     ]
-    logger.debug("Running: %s (prompt length: %d chars)", " ".join(cmd), len(prompt))
 
-    result = subprocess.run(
-        cmd,
-        input=prompt,
-        capture_output=True,
-        text=True,
-        timeout=timeout_seconds,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"claude CLI failed (rc={result.returncode}): {result.stderr[:500]}")
+    for attempt in range(1, MAX_RETRIES + 2):
+        t0 = time.monotonic()
+        result = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        elapsed = time.monotonic() - t0
 
-    return strip_markdown_fences(result.stdout)
+        if result.returncode == 0:
+            output = strip_markdown_fences(result.stdout)
+            logger.debug(
+                "claude %s: %.1fs, %d chars prompt → %d chars output",
+                model,
+                elapsed,
+                len(prompt),
+                len(output),
+            )
+            return output
+
+        # Transient failure (empty stderr) — retry
+        if not result.stderr.strip() and attempt <= MAX_RETRIES:
+            logger.warning(
+                "claude CLI returned rc=%d with empty stderr (attempt %d/%d, %.1fs), retrying...",
+                result.returncode,
+                attempt,
+                MAX_RETRIES + 1,
+                elapsed,
+            )
+            time.sleep(2 * attempt)
+            continue
+
+        raise RuntimeError(
+            f"claude CLI failed (rc={result.returncode}) after {attempt} attempt(s):\n"
+            f"  stderr: {result.stderr[:500]}\n"
+            f"  stdout: {result.stdout[:500]}\n"
+            f"  prompt length: {len(prompt)} chars\n"
+            f"  cmd: {' '.join(cmd)}"
+        )
+
+    raise RuntimeError("unreachable")
 
 
 def strip_markdown_fences(text: str) -> str:

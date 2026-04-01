@@ -1,102 +1,137 @@
 ## Overview
 
-`iris.cluster.controller` is the Iris cluster control plane: it schedules tasks onto workers, heartbeats running tasks, autoscales VM slices, and persists state to a WAL-mode SQLite DB with periodic GCS checkpoints. The data flow is: `ControllerDB` (schema + queries) → `ControllerTransitions` (atomic state-machine mutations) → `Controller` (orchestrates scheduling/heartbeat loops) → `ControllerServiceImpl` (gRPC RPC surface). The `Autoscaler` runs a parallel loop: `compute_demand_entries` → `route_demand` → `ScalingGroup.scale_up/down`.
+`iris.cluster.controller` is the Iris cluster control plane: it accepts job submissions, schedules tasks onto workers, drives VM autoscaling, and persists all state in a WAL-mode SQLite database with periodic GCS checkpoints. The data flow is: client → `ControllerServiceImpl` (RPC layer) → `ControllerTransitions` (atomic DB mutations) → `Scheduler` (task-to-worker matching) → `WorkerProvider` (parallel heartbeat dispatch) → `Autoscaler` / `ScalingGroup` (VM lifecycle). The `Controller` class owns three background threads (scheduling, provider, autoscaler) and coordinates them.
 
-Default values encode production operating experience: `heartbeat_failure_threshold=3` before marking a worker dead; `DEFAULT_UNRESOLVABLE_TIMEOUT` before giving up on unrouteable tasks; `DEFAULT_JWT_TTL_SECONDS` balances security and re-login friction. The `max_building_tasks_per_worker` cap prevents thundering-herd task starts on fresh workers. Do not change these without understanding their backoff/cooldown interactions in `ScalingGroup`.
+Default parameter values encode operational experience: `heartbeat_failure_threshold` tolerates transient network blips before evicting a worker; `unresolvable_timeout` absorbs slow cloud provisioning before treating a slice as failed; `DEFAULT_JWT_TTL_SECONDS` balances token freshness against login friction; checkpoint interval defaults to hourly as a recovery-cost/write-cost tradeoff. Change these only with cluster-specific knowledge — they are not arbitrary.
+
+Entry point: `run_controller_serve(cluster_config)` → blocks. For programmatic use: construct `Controller`, call `.start()`, submit via `.launch_job(request)`, poll with `.get_job_status(job_id)`.
 
 ## API
 
 ```python
-from iris.cluster.controller.controller import Controller, ControllerConfig, compute_demand_entries
+from iris.cluster.controller.main import run_controller_serve
 
-@dataclass
-class ControllerConfig:
-    remote_state_dir: str          # required — raises ValueError if empty
-    port: int = 0                  # 0 = OS auto-assign; read actual via Controller.port
-    ...
+def run_controller_serve(
+    cluster_config: config_pb2.IrisClusterConfig,
+    *,
+    host: str = "0.0.0.0",
+    port: int = 10000,
+    checkpoint_path: str | None = None,
+    checkpoint_interval: float | None = None,
+    dry_run: bool = False,
+) -> None: ...
+```
+Daemon entry point; blocks until SIGTERM. `lib/iris/src/iris/cluster/controller/main.py:1`
+
+---
+
+```python
+from iris.cluster.controller.controller import Controller
 
 class Controller:
-    def __init__(self, config: ControllerConfig, provider: TaskProvider,
-                 autoscaler: Autoscaler | None = None,
-                 threads: ThreadContainer | None = None,
-                 db: ControllerDB | None = None): ...
+    def __init__(
+        self,
+        config: ControllerConfig,
+        provider: TaskProvider | K8sTaskProvider,
+        autoscaler: Autoscaler | None = None,
+        threads: ThreadContainer | None = None,
+        db: ControllerDB | None = None,
+    ) -> None: ...
     def start(self) -> None: ...
     def stop(self) -> None: ...
     def launch_job(self, request: LaunchJobRequest) -> LaunchJobResponse: ...
+    def get_job_status(self, job_id: str) -> GetJobStatusResponse: ...
+    def terminate_job(self, job_id: str) -> Empty: ...
     def begin_checkpoint(self) -> tuple[str, CheckpointResult]: ...
+    def wake(self) -> None: ...
 ```
-Top-level controller; call `start()` then interact via RPC or direct methods. `lib/iris/src/iris/cluster/controller/controller.py:1`
+Unified control plane; `launch_job`/`get_job_status` are the primary call sites. `lib/iris/src/iris/cluster/controller/controller.py:1`
+
+---
 
 ```python
-from iris.cluster.controller.autoscaler import Autoscaler, route_demand, DemandEntry
+from iris.cluster.controller.autoscaler import route_demand, Autoscaler
+
+def route_demand(
+    groups: list[ScalingGroup],
+    demand_entries: list[DemandEntry],
+    timestamp: Timestamp | None = None,
+) -> RoutingDecision: ...
+```
+Two-phase priority waterfall; phase 1 uses committed budgets, phase 2 uses full capacity. `lib/iris/src/iris/cluster/controller/autoscaler.py:1`
+
+---
+
+```python
+from iris.cluster.controller.autoscaler import Autoscaler
 
 class Autoscaler:
-    def update(self, demand_entries: list[DemandEntry],
-               timestamp: Timestamp | None = None) -> list[ScalingDecision]: ...
-    def run_once(self, demand_entries, worker_status_map, timestamp) -> list[ScalingDecision]: ...
-
-def route_demand(groups: list[ScalingGroup], demand_entries: list[DemandEntry],
-                 timestamp: Timestamp | None = None) -> RoutingDecision: ...
+    def update(self, demand_entries: list[DemandEntry], timestamp: Timestamp | None) -> list[ScalingDecision]: ...
+    def notify_worker_failed(self, worker_id: str) -> list[str]: ...
+    def restore_from_db(self, db: ControllerDB, platform: WorkerInfraProvider) -> None: ...
+    def shutdown(self) -> None: ...
 ```
-Two-phase priority routing; `update` = evaluate + execute combined. `lib/iris/src/iris/cluster/controller/autoscaler.py:1`
+Orchestrates evaluate/execute/refresh; call `restore_from_db` before starting loop to avoid duplicate VM provisioning. `lib/iris/src/iris/cluster/controller/autoscaler.py:1`
+
+---
 
 ```python
-from iris.cluster.controller.db import ControllerDB, QuerySnapshot
+from iris.cluster.controller.db import ControllerDB
 
 class ControllerDB:
-    def __init__(self, db_dir: Path): ...
+    def __init__(self, db_dir: Path) -> None: ...
     def transaction(self) -> ContextManager[TransactionCursor]: ...
     def read_snapshot(self) -> ContextManager[QuerySnapshot]: ...
+    def snapshot(self) -> QuerySnapshot: ...
+    def backup_to(self, destination: Path) -> None: ...
 ```
-Use `read_snapshot()` for concurrent reads (pooled WAL); `transaction()` for writes. `lib/iris/src/iris/cluster/controller/db.py:1`
+WAL SQLite with 8-connection read pool. `read_snapshot()` is lock-free; `snapshot()` acquires write lock. `lib/iris/src/iris/cluster/controller/db.py:1`
+
+---
 
 ```python
-from iris.cluster.controller.transitions import ControllerTransitions, HeartbeatApplyRequest
+from iris.cluster.controller.transitions import ControllerTransitions
 
 class ControllerTransitions:
-    def __init__(self, db: ControllerDB, log_store: LogStore,
-                 heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD): ...
-    def submit_job(self, job_id: JobName, request: LaunchJobRequest, ts: Timestamp) -> SubmitJobResult: ...
-    def apply_heartbeat(self, req: HeartbeatApplyRequest) -> HeartbeatApplyResult: ...
-    def drain_dispatch(self, worker_id: WorkerId) -> DispatchBatch | None: ...
+    def submit_job(self, job_id, request, ts) -> SubmitJobResult: ...
     def queue_assignments(self, assignments: list[Assignment]) -> AssignmentResult: ...
+    def apply_heartbeat(self, req: HeartbeatApplyRequest) -> HeartbeatApplyResult: ...
+    def drain_dispatch_all(self) -> list[DispatchBatch]: ...
+    def fail_heartbeat_for_worker(self, worker_id, error, snapshot, *, force_remove: bool) -> HeartbeatFailureResult: ...
+    def prune_old_data(self, *, job_retention, worker_retention, log_retention, txn_action_retention, profile_retention, stop_event, pause_between_s) -> PruneResult: ...
 ```
-All SQLite state-machine mutations. `lib/iris/src/iris/cluster/controller/transitions.py:1`
+Sole write path for all state machine transitions. `lib/iris/src/iris/cluster/controller/transitions.py:1`
+
+---
 
 ```python
 from iris.cluster.controller.checkpoint import write_checkpoint, download_checkpoint_to_local
 
 def write_checkpoint(db: ControllerDB, remote_state_dir: str) -> tuple[str, CheckpointResult]: ...
-def download_checkpoint_to_local(remote_state_dir: str, local_db_dir: Path,
-                                  checkpoint_dir: str | None = None) -> bool: ...
+def download_checkpoint_to_local(remote_state_dir: str, local_db_dir: Path, checkpoint_dir: str | None = None) -> bool: ...
 ```
-`write_checkpoint` = backup (under write lock) + compress + upload. Returns `False` if no checkpoint found. `lib/iris/src/iris/cluster/controller/checkpoint.py:1`
+`write_checkpoint` = backup + compress + upload + prune. Returns `False` if no checkpoint found. `lib/iris/src/iris/cluster/controller/checkpoint.py:1`
+
+---
 
 ```python
-from iris.cluster.controller.scheduler import Scheduler, SchedulingContext
+from iris.cluster.controller.scheduler import Scheduler
 
 class Scheduler:
+    def __init__(self, max_building_tasks_per_worker: int = DEFAULT) -> None: ...
     def find_assignments(self, context: SchedulingContext) -> SchedulingResult: ...
-    def get_job_scheduling_diagnostics(self, req, context, schedulable_task_id, num_tasks) -> str: ...
+    def create_scheduling_context(self, workers, building_counts, pending_tasks, jobs, max_building_tasks, max_assignments_per_worker) -> SchedulingContext: ...
 ```
-Pure functional; mutates `SchedulingContext` in-place — do not reuse across cycles. `lib/iris/src/iris/cluster/controller/scheduler.py:1`
+Pure-functional; coscheduled jobs assigned atomically before non-coscheduled. `lib/iris/src/iris/cluster/controller/scheduler.py:1`
 
-```python
-from iris.cluster.controller.main import run_controller_serve
+---
 
-def run_controller_serve(cluster_config: config_pb2.IrisClusterConfig, *,
-                          host: str = "0.0.0.0", port: int = 10000,
-                          checkpoint_path: str | None = None,
-                          checkpoint_interval: float | None = None,
-                          dry_run: bool = False) -> None: ...
-```
-Daemon entry point; blocks until SIGTERM. `lib/iris/src/iris/cluster/controller/main.py:1`
+Omitted: `ActorProxy`, `auth.*`, `dashboard.*`, `pending_diagnostics`, `query`, `schema` row types, `service` helpers, `vm_lifecycle`, `worker_provider` — useful internals but not primary call sites.
 
 ## Gotchas
 
-- **`remote_state_dir` is mandatory** — `Controller.__init__` and `run_controller_serve` both raise `ValueError` if it is empty or absent in config.
-- **`ScalingGroup.scale_up()` does not self-register** — callers must bracket with `begin_scale_up()` / `complete_scale_up()` or `cancel_scale_up()`; omitting these causes phantom capacity in `slice_count()`.
-- **`read_snapshot()` vs `snapshot()`** — `read_snapshot()` uses a pooled read connection (safe for concurrent threads); `snapshot()` acquires the write lock and will deadlock if called from multiple threads simultaneously.
-- **`add_endpoint` returns `False` silently** when the associated task is already terminal — check the return value before assuming registration succeeded.
-- **`begin_checkpoint()` stalls scheduling** — it sets `_checkpoint_in_progress`, causing the scheduling and autoscaler loops to skip work until the checkpoint completes. Do not call it on a hot path.
-- **`sync()` in `WorkerProvider` swallows RPC errors** into the third tuple element (`str | None`); callers must inspect it and call `fail_heartbeat`, not assume success.
+- **`remote_state_dir` is mandatory**: `run_controller_serve` and `Controller` raise immediately if `storage.remote_state_dir` is unset — there is no in-memory-only mode for production.
+- **Write path is `ControllerTransitions` only**: after any transaction that returns `TxResult`, the *caller* must issue kill RPCs for every `task_id` in `TxResult.tasks_to_kill` — the DB commit does not send them.
+- **`backup_databases` requires the write lock; `upload_checkpoint` does not**: calling them in the wrong order (or holding no lock during backup) can produce an inconsistent snapshot.
+- **`read_snapshot()` lags writes**: pooled read connections are not coordinated with the write lock — never use `read_snapshot()` to verify something you just wrote inside a `transaction()`.
+- **`scale_up()` does not self-register**: callers must bracket with `begin_scale_up` / `complete_scale_up` (or `cancel_scale_up`); forgetting leaves the group in a permanently inflated requesting count.
