@@ -986,7 +986,7 @@ class ZephyrWorker:
         self._host_shutdown_event = actor_ctx.shutdown_event
         self._worker_id = f"{actor_ctx.group_name}-{actor_ctx.index}"
 
-        # Register with coordinator - wait is not stricly necessary, but it reduces the complexity
+        # Register with coordinator - wait is not strictly necessary, but it reduces the complexity
         self._coordinator.register_worker.remote(self._worker_id, actor_ctx.handle).result(timeout=60.0)
 
         # Start polling in a background thread
@@ -1148,7 +1148,7 @@ class ZephyrWorker:
             logger.info("[%s] Executing task for shard %d (attempt %d)", self._worker_id, task.shard_idx, attempt)
             try:
                 t_0 = time.monotonic()
-                result = self._execute_shard(task, config)
+                result = self._execute_shard(task, config, attempt)
                 logger.info(
                     "[%s] Task for shard %d completed in %.2f seconds",
                     self._worker_id,
@@ -1177,7 +1177,7 @@ class ZephyrWorker:
                     "".join(traceback.format_exc()),
                 ).result()
 
-    def _execute_shard(self, task: ShardTask, config: dict) -> TaskResult:
+    def _execute_shard(self, task: ShardTask, config: dict, attempt: int = 0) -> TaskResult:
         """Execute a stage's operations on a single shard.
 
         Returns list[TaskResult].
@@ -1208,7 +1208,7 @@ class ZephyrWorker:
         )
 
         stage_dir = f"{self._chunk_prefix}/{self._execution_id}/{task.stage_name}"
-        external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
+        external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}/attempt-{attempt}"
         scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
 
         result = _write_stage_output(
