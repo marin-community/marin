@@ -853,6 +853,13 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
 )
 @click.option("--follow", "-f", is_flag=True, help="Stream logs continuously.")
 @click.option(
+    "--max-lines",
+    type=int,
+    default=0,
+    help="Maximum number of log lines to return (0 = server default, currently 1000).",
+)
+@click.option("--tail", is_flag=True, help="Return the most recent lines instead of the earliest.")
+@click.option(
     "--level",
     type=click.Choice(["debug", "info", "warning", "error", "critical"], case_sensitive=False),
     default=None,
@@ -865,6 +872,8 @@ def logs(
     since_ms: int | None,
     since_seconds: int | None,
     follow: bool,
+    max_lines: int,
+    tail: bool,
     level: str | None,
 ) -> None:
     """Stream task logs for a job using batch log fetching."""
@@ -895,6 +904,8 @@ def logs(
     entries = client.fetch_task_logs(
         job_name,
         start=Timestamp.from_ms(start_since_ms) if start_since_ms > 0 else None,
+        max_lines=max_lines,
+        tail=tail,
         min_level=min_level,
     )
     for entry in entries:
