@@ -15,13 +15,11 @@
 """Generate agent-optimized documentation for Marin.
 
 Produces a two-tier documentation hierarchy in docs/agent/:
-  - MAP.md (package index, ~4KB, auto-loaded via @docs/agent/MAP.md in AGENTS.md)
   - packages/*.md (per-package reference cards, ~2-4KB each, read on demand)
+  - MAP.md (package index, regenerated from package docs)
 
 Packages are grouped by filesystem directory, giving natural sub-package
 boundaries like marin.processing.classification.deduplication.
-
-Agents navigate: MAP.md -> package doc -> source code. Two hops.
 """
 
 import logging
@@ -31,7 +29,7 @@ from pathlib import Path
 import click
 
 # Add scripts/ to path so agent_docs package is importable
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agent_docs.generate_index import generate_map
 from agent_docs.generate_package import generate_package_docs
@@ -79,7 +77,7 @@ def main(
         format="%(levelname)s %(name)s: %(message)s",
     )
 
-    repo_root = Path(__file__).parent.parent
+    repo_root = Path(__file__).parent.parent.parent
     logger.info("Discovering packages...")
     packages = discover_packages(repo_root)
 

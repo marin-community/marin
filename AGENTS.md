@@ -7,7 +7,7 @@ Start with the shared practices below. Consult subproject manuals for directory-
 - `lib/iris/AGENTS.md` — Iris (job orchestration)
 
 For API reference, read package docs on demand: `@docs/agent/packages/<package>.md`.
-Run `./scripts/generate_agent_docs.py --stats` to list all available packages.
+Run `uv run --script scripts/agent_docs/main.py --stats` to list all available packages.
 
 ## Workflow Playbooks
 
