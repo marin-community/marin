@@ -65,6 +65,7 @@ class TokenizeConfigBase(abc.ABC):
     """Base class for tokenize configs."""
 
     max_workers: int = 4096
+    cache_copy_max_workers: int = 128
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
 
     num_shards: int | None = None
@@ -402,7 +403,12 @@ def tokenize(config: TokenizeConfigBase):
 
         consolidate_start = time.monotonic()
         logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")
-        ledger = consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
+        ledger = consolidate_shard_caches(
+            shard_cache_paths=shard_paths,
+            output_path=prefix,
+            exemplar=exemplar,
+            copy_max_workers=config.cache_copy_max_workers,
+        )
         consolidate_elapsed = time.monotonic() - consolidate_start
 
         total_elements = ledger.total_num_rows
