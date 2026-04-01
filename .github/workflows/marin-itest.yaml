@@ -38,7 +38,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra=cpu --extra=dedup --no-default-groups
+        run: uv sync --extra=cpu --extra=cluster --extra=dedup --no-default-groups
 
       - name: Check df -h
         run: df -h

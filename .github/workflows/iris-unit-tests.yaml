@@ -60,7 +60,7 @@ jobs:
         env:
           PYTHONASYNCIODEBUG: "1"
         run: |
-          uv sync --group dev
+          uv sync --extra cluster --group dev
           uv run python -m pytest -n1 --durations=5 --tb=short -m 'not slow and not docker and not e2e' tests/iris/
 
   iris-e2e-smoke:
@@ -97,7 +97,7 @@ jobs:
 
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: uv sync --group dev && uv run playwright install --with-deps chromium
+        run: uv sync --extra cluster --group dev && uv run playwright install --with-deps chromium
 
       - name: Install Playwright system deps
         if: steps.playwright-cache.outputs.cache-hit == 'true'
@@ -109,7 +109,7 @@ jobs:
           PYTHONASYNCIODEBUG: "1"
         run: |
           mkdir -p ${{ github.workspace }}/iris-screenshots
-          uv sync --group dev
+          uv sync --extra cluster --group dev
           uv run python -m pytest \
             tests/iris/e2e/test_smoke.py \
             -m e2e -o "addopts=" --tb=short -v

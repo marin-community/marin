@@ -87,7 +87,7 @@ jobs:
 
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: uv sync --group dev && uv run playwright install --with-deps chromium
+        run: uv sync --extra cluster --group dev && uv run playwright install --with-deps chromium
 
       - name: Install Playwright system deps
         if: steps.playwright-cache.outputs.cache-hit == 'true'
@@ -124,7 +124,7 @@ jobs:
           LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
           MARIN_PREFIX: gs://marin-eu-west4
         run: |
-          uv run --group dev iris -v \
+          uv run --extra cluster --group dev iris -v \
             --config=lib/iris/examples/smoke-gcp.yaml \
             cluster start-smoke \
             --label-prefix "$LABEL_PREFIX" \
@@ -153,7 +153,7 @@ jobs:
           PYTHONASYNCIODEBUG: "1"
         run: |
           mkdir -p ${{ github.workspace }}/iris-cloud-screenshots
-          uv run --group dev python -m pytest \
+          uv run --extra cluster --group dev python -m pytest \
             tests/iris/e2e/test_smoke.py \
             -m e2e \
             --iris-controller-url "$IRIS_CONTROLLER_URL" \
@@ -171,7 +171,7 @@ jobs:
         env:
           LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
         run: |
-          uv run --group dev iris -v \
+          uv run --extra cluster --group dev iris -v \
             --config=lib/iris/examples/smoke-gcp.yaml \
             cluster stop --label "$LABEL_PREFIX" || true
 
@@ -223,7 +223,7 @@ jobs:
 
       - name: Tear down cluster (iris stop)
         run: |
-          uv run --group dev iris -v \
+          uv run --extra cluster --group dev iris -v \
             --config=lib/iris/examples/smoke-gcp.yaml \
             cluster stop --label "$LABEL_PREFIX" || true
 

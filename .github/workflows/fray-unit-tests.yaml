@@ -54,7 +54,7 @@ jobs:
 
       - name: Test fray
         run: |
-          uv sync --group fray-test
+          uv sync --extra cluster --group fray-test
           uv run pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/fray/
 
   fray-tpu-tests:
@@ -101,4 +101,4 @@ jobs:
             -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 590 uv run --group=fray-tpu-test pytest tests/fray/ -v --tb=short -s --log-cli-level=INFO -m tpu_ci"
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 590 uv run --extra=cluster --group=fray-tpu-test pytest tests/fray/ -v --tb=short -s --log-cli-level=INFO -m tpu_ci"

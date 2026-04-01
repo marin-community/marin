@@ -32,69 +32,26 @@ dependencies = [
     "fsspec>=2024.2,<2026",
     "gcsfs>=2024.2,<2026",
     "s3fs>=2024",
-    # --- haliax (named tensors) ---
-    "aqtp>=0.8.2",
-    "equinox>=0.10.6,!=0.12.0",
-    "jax>=0.8.0",
-    "jaxtyping>=0.2.34",
-    "jmp>=0.0.4",
-    "safetensors>=0.4.3",
-    # --- iris (job orchestration) ---
-    "click>=8.3.1",
-    "cloudpickle>=3.1.2",
-    "connect-python>=0.9.0",
-    "grpcio>=1.76.0",
-    "httpx>=0.28.1",
-    "humanfriendly>=10.0",
-    "pydantic>=2.12.5",
-    "PyJWT>=2.8.0",
-    "pyyaml>=6.0",
-    "starlette>=0.50.0",
-    "tabulate>=0.9.0",
-    "typing-extensions>=4.0",
-    "uvicorn[standard]>=0.23.0",
-    "zstandard>=0.22.0",
-    # --- fray (distributed execution) ---
-    "fastapi>=0.100.0",
-    "flask",
-    "mergedeep",
     # --- zephyr (dataset library) ---
     "braceexpand>=0.1.7",
+    "cloudpickle>=3.1.2",
+    "humanfriendly>=10.0",
     "msgspec>=0.18.0",
     "numpy>=2.0",
     "tqdm-loggable>=0.2",
+    "typing-extensions>=4.0",
     "vortex-data>=0.61.0",
-    # --- levanter (training framework) ---
-    "einops",
-    "tokenizers>=0.15.2",
-    "transformers>=4.57.1,<5.0",
-    "optax>=0.1.9",
-    "wandb>=0.17.8",
-    "draccus>=0.11.5",
-    "pyarrow>=22",
-    "datasets>=3.1.0,<5.0",
-    "tensorstore>=0.1.73",
-    "pytimeparse>=1.1.8",
-    "safetensors[numpy]>=0.4.2,<0.7.0",
-    "tblib>=1.7.0,<4.0.0",
-    "dataclasses-json~=0.6.4",
-    "ray[default]==2.53.0",
-    "pydantic<3",
-    "filelock~=3.13",
-    "async-lru~=2.0",
-    "deepdiff",
-    "lenses",
-    "jinja2",
-    "protobuf>=6,<7",
-    "immutabledict",
-    # --- marin (orchestration / pipelines) ---
+    "zstandard>=0.22.0",
+    # --- marin core (data processing, configs, utilities) ---
+    "click>=8.3.1",
     "cryptography>=45",
+    "datasets>=3.1.0,<5.0",
     "ddsketch",
+    "draccus>=0.11.5",
     "floret",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "jaxopt>=0.8.3",
     "lxml[html_clean]",
     "lz4",
     "markdownify==0.12.1",
@@ -102,15 +59,15 @@ dependencies = [
     "openai",
     "pandas>=2.0",
     "plotly",
+    "pyarrow>=22",
+    "pydantic>=2.12.5,<3",
+    "pyyaml>=6.0",
     "regex",
     "requests",
     "resiliparse>=0.17.2",
     "toml",
     "tqdm",
     "warcio",
-    # --- root-level ---
-    "watchdog",
-    "dupekit >= 0.1.0",
 ]
 
 
@@ -123,8 +80,63 @@ zephyr = "zephyr.cli:main"
 
 [project.optional-dependencies]
 
+# --- Dependency tiers ---
+
+# Training: haliax + levanter (JAX/ML training stack)
+training = [
+    "aqtp>=0.8.2",
+    "async-lru~=2.0",
+    "dataclasses-json~=0.6.4",
+    "deepdiff",
+    "einops",
+    "equinox>=0.10.6,!=0.12.0",
+    "filelock~=3.13",
+    "immutabledict",
+    "jax>=0.8.0",
+    "jaxopt>=0.8.3",
+    "jaxtyping>=0.2.34",
+    "jinja2",
+    "jmp>=0.0.4",
+    "lenses",
+    "optax>=0.1.9",
+    "protobuf>=6,<7",
+    "pytimeparse>=1.1.8",
+    "safetensors>=0.4.3",
+    "safetensors[numpy]>=0.4.2,<0.7.0",
+    "tblib>=1.7.0,<4.0.0",
+    "tensorstore>=0.1.73",
+    "tokenizers>=0.15.2",
+    "transformers>=4.57.1,<5.0",
+    "wandb>=0.17.8",
+]
+
+# Cluster: iris + fray + ray (distributed execution)
+cluster = [
+    "connect-python>=0.9.0",
+    "fastapi>=0.100.0",
+    "flask",
+    "grpcio>=1.76.0",
+    "httpx>=0.28.1",
+    "mergedeep",
+    "PyJWT>=2.8.0",
+    "ray[default]==2.53.0",
+    "starlette>=0.50.0",
+    "tabulate>=0.9.0",
+    "uvicorn[standard]>=0.23.0",
+]
+
+# Full: everything needed for internal marin development
+full = [
+    "marin[training,cluster]",
+    "dupekit>=0.1.0",
+    "watchdog",
+]
+
+# --- Hardware variants ---
+
 # GPU: combined from levanter + marin
 gpu = [
+    "marin[training]",
     "jax[cuda12]>=0.8.0",
     "torch==2.9.0",
     "torchvision==0.24.0",
@@ -132,6 +144,7 @@ gpu = [
 
 # TPU: combined from levanter + marin
 tpu = [
+    "marin[training]",
     "jax[tpu]>=0.8.0",
     "torch==2.9.0",
     "torchvision==0.24.0",
@@ -139,6 +152,7 @@ tpu = [
 
 # CPU: from marin
 cpu = [
+    "marin[training]",
     "jax>=0.8.0",
     "torch==2.9.0",
     # Linux x86_64

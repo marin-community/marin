@@ -50,7 +50,7 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --group dev --group test --frozen
+        run: uv sync --extra training --group dev --group test --frozen
       - name: Test with pytest
         run: |
           PYTHONPATH=tests:src:. uv run --frozen --with "jax[cpu]==0.8.0" pytest tests/levanter -m "not entry and not slow and not ray and not tpu" --durations=20
@@ -75,7 +75,7 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --group dev --group test --frozen
+        run: uv sync --extra training --group dev --group test --frozen
       - name: Test with pytest
         run: |
           PYTHONPATH=tests:src:. uv run --frozen pytest tests/levanter -m "ray" --durations=20
@@ -100,7 +100,7 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --group dev --group test --frozen
+        run: uv sync --extra training --group dev --group test --frozen
       - name: Test with pytest
         run: |
           PYTHONPATH=tests:src:. uv run --frozen pytest tests/levanter -m "entry" --durations=20
@@ -126,7 +126,7 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --group dev --group test --frozen --extra torch_test --no-install-package torch
+        run: uv sync --extra training --group dev --group test --frozen --extra torch_test --no-install-package torch
 
       - name: Install locked CPU torch wheel
         run: |
@@ -219,7 +219,7 @@ jobs:
               fi && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
               timeout --kill-after=5 --signal=TERM 890 \
-              uv run --frozen --group test --with 'jax[tpu]==$JAX_VERSION' \
+              uv run --frozen --extra training --group test --with 'jax[tpu]==$JAX_VERSION' \
               pytest tests/levanter \
               -m 'not entry and not ray and not slow and not torch' \
               --ignore=tests/levanter/test_audio.py \

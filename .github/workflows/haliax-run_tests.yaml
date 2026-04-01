@@ -48,7 +48,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install uv
-          uv sync --group dev
+          uv sync --extra training --group dev
       - name: Test with pytest (JAX 0.8.0)
         run: |
           JAX_NUM_CPU_DEVICES=8 PYTHONPATH=tests:src:. uv run --with "jax[cpu]==0.8.0" pytest tests/haliax

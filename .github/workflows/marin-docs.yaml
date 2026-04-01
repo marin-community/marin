@@ -53,7 +53,7 @@ jobs:
         run: uv python install
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --extra full --group dev
 
       - name: Validate docs source links
         run: uv run python infra/check_docs_source_links.py

@@ -57,7 +57,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          uv sync --group test --frozen
+          uv sync --extra cluster --group test --frozen
 
       - name: Test with pytest
         run: |

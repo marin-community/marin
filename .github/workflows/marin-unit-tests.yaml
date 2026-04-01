@@ -60,7 +60,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          uv sync --extra cpu --extra dedup --group test --frozen
+          uv sync --extra cpu --extra cluster --extra dedup --group test --frozen
 
       - name: Test with pytest
         env:

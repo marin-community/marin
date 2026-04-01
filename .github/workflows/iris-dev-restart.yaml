@@ -61,5 +61,5 @@ jobs:
 
       - name: Restart dev controller
         run: |
-          uv run iris --config lib/iris/examples/marin-dev.yaml \
+          uv run --extra cluster iris --config lib/iris/examples/marin-dev.yaml \
             cluster controller restart

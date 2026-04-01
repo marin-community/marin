@@ -102,7 +102,7 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          uv run --group dev iris -v \
+          uv run --extra cluster --group dev iris -v \
             --config=lib/iris/examples/coreweave-ci.yaml \
             cluster start
 
