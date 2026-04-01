@@ -204,8 +204,7 @@ def _streaming_k_way_merge(
 
     sources: list[_RunSource] = []
     for i, path in enumerate(run_paths):
-        fs, _ = fsspec.core.url_to_fs(path)
-        src = _RunSource(idx=i, pf=pq.ParquetFile(path, filesystem=fs), sort_key_columns=sort_key_columns)
+        src = _RunSource(idx=i, pf=pq.ParquetFile(path), sort_key_columns=sort_key_columns)
         if src.advance():
             sources.append(src)
 
@@ -260,20 +259,14 @@ def external_sort_merge(
     """
     from zephyr.writers import ensure_parent_dir
 
-    # Probe chunks to derive budget parameters, skipping empty ones.
-    probed: list[pa.Table] = []
-    probe_bytes = 0
-    for chunk in chunk_tables_gen:
-        probed.append(chunk)
-        if chunk.nbytes > 0:
-            probe_bytes = chunk.nbytes
-            break
-    if not probed:
+    # Probe the first chunk to derive budget parameters.
+    first = next(chunk_tables_gen, None)
+    if first is None:
         return
-    budget = _compute_budget(probe_bytes)
+    budget = _compute_budget(first.nbytes)
 
-    # Chain the probed chunks back so they aren't lost.
-    chunk_tables_gen = itertools.chain(probed, chunk_tables_gen)
+    # Chain the first chunk back so it isn't lost.
+    chunk_tables_gen = itertools.chain([first], chunk_tables_gen)
 
     run_paths: list[str] = []
     batch_idx = 0
@@ -283,9 +276,6 @@ def external_sort_merge(
         if not batch_tables:
             break
         combined = pa.concat_tables([_promote_to_large_string(t) for t in batch_tables], promote_options="default")
-        if len(combined) == 0:
-            del combined
-            continue
         indices = pc.sort_indices(combined, sort_keys=sort_keys)
         sorted_table = combined.take(indices)
 
@@ -307,11 +297,12 @@ def external_sort_merge(
         return
 
     # Pass 2: verify merge memory fits in budget using actual Parquet metadata.
+    # Use pyarrow-native path resolution (no filesystem arg) so reads go through
+    # the same GcsFileSystem that wrote the files, avoiding gcsfs dir-cache staleness.
     num_runs = len(run_paths)
     max_rg_bytes = 0
     for rp in run_paths:
-        fs, _ = fsspec.core.url_to_fs(rp)
-        meta = pq.read_metadata(rp, filesystem=fs)
+        meta = pq.read_metadata(rp)
         for i in range(meta.num_row_groups):
             max_rg_bytes = max(max_rg_bytes, meta.row_group(i).total_byte_size)
     merge_estimate = num_runs * max_rg_bytes
@@ -326,8 +317,7 @@ def external_sort_merge(
 
     try:
         if len(run_paths) == 1:
-            fs, _ = fsspec.core.url_to_fs(run_paths[0])
-            pf = pq.ParquetFile(run_paths[0], filesystem=fs)
+            pf = pq.ParquetFile(run_paths[0])
             for i in range(pf.metadata.num_row_groups):
                 yield pf.read_row_group(i)
         else:

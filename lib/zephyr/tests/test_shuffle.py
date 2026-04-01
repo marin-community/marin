@@ -346,6 +346,89 @@ def test_arrow_merge_produces_same_results(tmp_path):
         assert len(keys_seen) == len(set(keys_seen)), f"duplicate keys in shard {shard_idx}"
 
 
+def test_arrow_external_sort_more_chunks_than_fan_in(tmp_path):
+    """Reproduces production crash: >1000 small chunks forces 2 run files.
+
+    With small chunks, fan_in=1000. When there are >1000 chunks, the sort
+    produces 2 runs. Verifies both runs are written and merged correctly.
+    """
+    from zephyr.external_sort import external_sort_merge
+
+    # 1020 chunks with 1 row each — forces 2 batches (1000 + 20)
+    chunks = [pa.table({"val": [i], _ZEPHYR_SORT_KEY: [i]}) for i in range(1020)]
+    sort_dir = str(tmp_path / "ext_sort")
+
+    result_tables = list(
+        external_sort_merge(
+            iter(chunks),
+            sort_keys=[(_ZEPHYR_SORT_KEY, "ascending")],
+            external_sort_dir=sort_dir,
+        )
+    )
+    combined = pa.concat_tables(result_tables)
+    assert combined.column("val").to_pylist() == list(range(1020))
+
+
+def test_arrow_external_sort_run_files_exist_after_write(tmp_path):
+    """Verify run files are actually created after pass 1.
+
+    Patches _write_spill_file to verify each run file exists immediately
+    after being written — isolates whether the bug is write or read.
+    """
+    import os
+    from unittest.mock import patch
+    from zephyr.external_sort import external_sort_merge, _write_spill_file
+
+    chunks = [pa.table({"val": [i], _ZEPHYR_SORT_KEY: [i]}) for i in range(1020)]
+    sort_dir = str(tmp_path / "ext_sort")
+
+    written_files: list[str] = []
+    original_write = _write_spill_file
+
+    def _tracking_write(table, path):
+        original_write(table, path)
+        assert os.path.exists(path), f"run file not created: {path}"
+        written_files.append(path)
+
+    with patch("zephyr.external_sort._write_spill_file", _tracking_write):
+        result_tables = list(
+            external_sort_merge(
+                iter(chunks),
+                sort_keys=[(_ZEPHYR_SORT_KEY, "ascending")],
+                external_sort_dir=sort_dir,
+            )
+        )
+
+    assert len(written_files) == 2, f"Expected 2 run files, got {len(written_files)}: {written_files}"
+    combined = pa.concat_tables(result_tables)
+    assert combined.column("val").to_pylist() == list(range(1020))
+
+
+def test_arrow_external_sort_gcs_roundtrip():
+    """Reproduce the production bug: write 2 run files to GCS, read back.
+
+    Uses pyarrow ParquetWriter (same as _write_spill_file) and fsspec
+    read_metadata (same as the verification loop).
+    """
+    import uuid
+    from zephyr.external_sort import external_sort_merge
+
+    gcs_dir = f"gs://marin-tmp-eu-west4/ttl=1d/test-external-sort/{uuid.uuid4().hex[:8]}"
+
+    # 1020 chunks → 2 runs (fan_in=1000)
+    chunks = [pa.table({"val": [i], _ZEPHYR_SORT_KEY: [i]}) for i in range(1020)]
+
+    result_tables = list(
+        external_sort_merge(
+            iter(chunks),
+            sort_keys=[(_ZEPHYR_SORT_KEY, "ascending")],
+            external_sort_dir=gcs_dir,
+        )
+    )
+    combined = pa.concat_tables(result_tables)
+    assert combined.column("val").to_pylist() == list(range(1020))
+
+
 def test_arrow_external_sort_roundtrip(tmp_path):
     """Arrow external sort produces correctly sorted output."""
     from zephyr.external_sort import external_sort_merge
