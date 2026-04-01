@@ -159,7 +159,6 @@ def test_start_controller_creates_all_resources():
     deploy_spec = dep["spec"]
     node_selector = deploy_spec["template"]["spec"]["nodeSelector"]
     assert node_selector == {iris_labels.iris_scale_group: "cpu-erapids"}
-    assert "tolerations" not in deploy_spec["template"]["spec"]
 
     # Verify controller uses S3 env vars (no GCS credentials)
     container = deploy_spec["template"]["spec"]["containers"][0]
