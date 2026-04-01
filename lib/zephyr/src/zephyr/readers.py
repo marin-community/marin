@@ -21,6 +21,7 @@ from rigging.filesystem import open_url, url_to_fs
 import msgspec
 import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from zephyr import counters
 from zephyr.expr import Expr
@@ -163,31 +164,45 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
         ... )
         >>> output_files = list(ctx.execute(ds))
     """
-    import pyarrow.dataset as pads
-
     spec = _as_spec(source)
     logger.info("Loading: %s", spec.path)
     columns = spec.columns
 
+    has_filter = spec.filter_expr is not None
+    has_row_range = spec.row_start is not None and spec.row_end is not None
+
+    if not has_filter and not has_row_range:
+        # Fast path: read row-group-by-row-group via ParquetFile.
+        # This avoids the pyarrow.dataset API which loads the entire file
+        # into Arrow's memory pool upfront, causing multi-GB RSS bloat
+        # on large files.
+        pf = pq.ParquetFile(spec.path)
+        for i in range(pf.metadata.num_row_groups):
+            table = pf.read_row_group(i, columns=columns)
+            counters.increment("zephyr/records_in", len(table))
+            yield from table.to_pylist()
+        return
+
+    # Fallback: use pyarrow.dataset for filter pushdown and row-range reads.
+    import pyarrow.dataset as pads
+
     pa_filter = None
-    if spec.filter_expr is not None:
+    if has_filter:
         from zephyr.expr import to_pyarrow_expr
 
         pa_filter = to_pyarrow_expr(spec.filter_expr)
 
     dataset = pads.dataset(spec.path, format="parquet")
 
-    # Handle empty parquet files (no data columns in schema)
     schema_names = dataset.schema.names
     if not schema_names:
         return
 
-    if spec.row_start is not None and spec.row_end is not None:
-        # Row range first: select rows by position, then apply filter
+    if has_row_range:
+        assert spec.row_start is not None and spec.row_end is not None
         cumulative_rows = 0
         for fragment in dataset.get_fragments():
             for rg_fragment in fragment.split_by_row_group():
-                # Get row group size from RowGroupInfo (no data read)
                 assert len(rg_fragment.row_groups) == 1
                 rg_info = rg_fragment.row_groups[0]
                 rg_num_rows = rg_info.num_rows
@@ -198,12 +213,10 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
                     is_interior = rg_start >= spec.row_start and rg_end <= spec.row_end
 
                     if is_interior:
-                        # Entirely within range: push filter down, yield all
                         table = rg_fragment.to_table(columns=columns, filter=pa_filter)
                         counters.increment("zephyr/records_in", len(table))
                         yield from table.to_pylist()
                     else:
-                        # Boundary row group: slice first, then filter
                         table = rg_fragment.to_table(columns=columns)
                         local_start = max(0, spec.row_start - rg_start)
                         local_end = min(rg_num_rows, spec.row_end - rg_start)
@@ -220,14 +233,11 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
                 cumulative_rows = rg_end
                 if cumulative_rows >= spec.row_end:
                     return
-    elif pa_filter is not None:
+    else:
+        # Filter only, no row range
         table = dataset.to_table(columns=columns, filter=pa_filter)
         counters.increment("zephyr/records_in", len(table))
         yield from table.to_pylist()
-    else:
-        for batch in dataset.to_batches(columns=columns):
-            counters.increment("zephyr/records_in", len(batch))
-            yield from batch.to_pylist()
 
 
 def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
