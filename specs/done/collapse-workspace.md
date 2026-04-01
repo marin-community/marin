@@ -1,6 +1,6 @@
 # Collapse workspace to single package
 
-**Status**: Implemented (Option B). See commit `59d30e6d0`.
+**Status**: Implemented (Option B). See commits on `rw/collapse-workspace-impl`.
 
 **Context**: Russell (infra lead) wants to explore collapsing the 7-member uv workspace back into a single `marin` package. The workspace/members structure hasn't been paying for itself.
 
@@ -149,8 +149,52 @@ lib/
 1. **PyPI story for haliax/levanter**: Team is fine abandoning separate PyPI packages. Everything ships as `marin`.
 2. **Approach**: Option B (single pyproject.toml, preserve top-level package names, zero import rewrites).
 
+## Implementation notes
+
+### What was done
+- **944 files changed** (mostly `git mv` renames with 0-byte diffs)
+- Source: `lib/*/src/<pkg>/` → `src/<pkg>/`
+- Tests: `lib/*/tests/` → `tests/<pkg>/` (root `tests/` for marin tests unchanged)
+- All deps merged into single `pyproject.toml` with section comments per origin package
+- `hatch_build.py` (iris protobuf codegen) moved from `lib/iris/` to root
+- 21 CI workflows updated (paths-filters, `--package` removal, test paths)
+- Dockerfiles (iris, levanter TPU) updated for new source locations
+- `uv.lock` regenerated, resolves 593 packages
+
+### What remains under `lib/`
+362 auxiliary files still live under `lib/`: docs, AGENTS.md, Dockerfiles, config files, examples, scripts, license headers. These were intentionally kept — they reference their respective packages and don't need to move to `src/`. `lib/levanter/pyproject.toml` and `lib/haliax/pyproject.toml` were kept for their black formatting configs (different `line-length` from root).
+
+### Package name
+Root package renamed from `marin-root` to `marin`.
+
+## Interaction with [#4271] (marin-as-a-library)
+
+[#4271] wants Bolinas (external project) to `pip install marin` and `import marin` **without** pulling in Iris/Fray/Ray as hard dependencies.
+
+### How collapse helps
+- Single `pyproject.toml` makes it straightforward to restructure deps into core vs optional extras.
+- No workspace resolution needed for external consumers.
+
+### What still needs doing (follow-up work)
+The current collapsed `pyproject.toml` puts all deps (including ray, iris cluster stuff, JAX training deps) in `[project.dependencies]`. To satisfy #4271, split into:
+
+```toml
+[project.dependencies]       # lightweight core: datakit, processing, configs, rigging
+[project.optional-dependencies]
+cluster = ["...iris/fray/ray deps..."]
+training = ["...jax/equinox/levanter deps..."]
+full = ["marin[cluster,training,gpu]"]
+```
+
+This way `pip install marin` gets just data/config, `pip install marin[full]` gets everything.
+
+This restructuring is easier to do in one `pyproject.toml` than across 7 member configs, so the collapse is a prerequisite for clean #4271 resolution.
+
+[#4271]: https://github.com/marin-community/marin/issues/4271
+
 ## Open questions
 
 1. **Does Russell want `experiments/` inside `src/` too?** Currently it's a hatch build target from root.
 2. **Import linting**: worth adding `import-linter` to enforce the dependency DAG without workspace boundaries?
-3. **Extras for selective install**: worth defining `marin[training]`, `marin[data]`, `marin[cluster]` etc. to replace per-package install?
+3. **Remaining `lib/` auxiliary files**: move docs/configs/Dockerfiles elsewhere, or leave as-is?
+4. **Dependency tiering for #4271**: what's the right split between core and optional deps?
