@@ -10,52 +10,72 @@
 #     "pydantic>=2.0",
 # ]
 # ///
-
 """
-Log scanner that uses Gemini to analyze large log files in overlapping chunks,
-processing them in parallel and producing a merged summary.
+Agent-driven log scanner with two composable modes: grep and summarize.
 
 Usage:
-    uv run scripts/logscan.py <logfile> <query>
-        [--chunk-tokens 50000] [--overlap 0.2]
-        [--concurrency 16] [--model gemini-2.5-flash-lite]
+    logscan grep <logfile> <query>          — find matching lines (outputs line-numbered source)
+    logscan summarize <logfile> <query>     — produce a markdown report
+
+All modes support: [--chunk-tokens N] [--concurrency N] [--model M] [-v] [--stdin]
+
+Pipe modes together:
+    logscan grep log.txt "errors" | logscan summarize --stdin "summarize these errors"
 
 Requires GEMINI_API_KEY environment variable.
 """
 
 import argparse
 import json
+import math
 import os
 import sys
 import textwrap
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
+# Token usage tracking
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Usage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def add(self, resp: types.GenerateContentResponse) -> None:
+        meta = resp.usage_metadata
+        if not meta:
+            return
+        with self._lock:
+            self.input_tokens += meta.prompt_token_count or 0
+            self.output_tokens += meta.candidates_token_count or 0
+
+    def report(self) -> str:
+        total = self.input_tokens + self.output_tokens
+        return f"Tokens — input: {self.input_tokens:,}  " f"output: {self.output_tokens:,}  " f"total: {total:,}"
+
+
+# ---------------------------------------------------------------------------
 # Structured output models
 # ---------------------------------------------------------------------------
 
 
-class HighlightedLine(BaseModel):
-    line_number: int
-    text: str
-    reason: str
+class GrepResult(BaseModel):
+    line_numbers: list[int]
 
 
-class ChunkResult(BaseModel):
-    chunk_index: int
+class SummarizeResult(BaseModel):
     summary: str
-    highlighted_lines: list[HighlightedLine]
-
-
-class MergedSummary(BaseModel):
-    summary: str
-    highlighted_lines: list[HighlightedLine]
 
 
 # ---------------------------------------------------------------------------
@@ -73,18 +93,9 @@ class Chunk:
     end_line: int  # inclusive
 
 
-def split_into_chunks(
-    lines: list[str],
-    chunk_tokens: int = 50_000,
-    overlap_fraction: float = 0.2,
-) -> list[Chunk]:
-    """Split lines into overlapping windows of approximately chunk_tokens tokens."""
+def split_into_chunks(lines: list[str], chunk_tokens: int) -> list[Chunk]:
     chunk_chars = chunk_tokens * CHARS_PER_TOKEN
-    overlap_chars = int(chunk_chars * overlap_fraction)
-    stride_chars = chunk_chars - overlap_chars
-
     chunks: list[Chunk] = []
-
     i = 0
     chunk_idx = 0
 
@@ -92,7 +103,6 @@ def split_into_chunks(
         buf: list[str] = []
         char_count = 0
         j = i
-
         while j < len(lines) and char_count < chunk_chars:
             buf.append(lines[j])
             char_count += len(lines[j])
@@ -106,249 +116,321 @@ def split_into_chunks(
                 end_line=j,
             )
         )
-
         chunk_idx += 1
-
-        advance_chars = 0
-        next_i = i
-
-        while next_i < j and advance_chars < stride_chars:
-            advance_chars += len(lines[next_i])
-            next_i += 1
-
-        if next_i == i:
-            next_i += 1
-
-        i = next_i
+        i = j
 
     return chunks
 
 
-# ---------------------------------------------------------------------------
-# Prompts
-# ---------------------------------------------------------------------------
-
-CHUNK_SYSTEM = textwrap.dedent(
-    """\
-You are a log analysis assistant. The user will provide a section of a log
-file (with line numbers) and a query describing what to look for.
-
-Your job is to be SELECTIVE. Do NOT highlight every line that mentions the
-topic — only highlight lines that are genuinely significant:
-- First occurrences of a new error or pattern
-- Lines that show a state *change* (things getting worse, a new failure mode)
-- The most severe instances (not every repeat of the same message)
-- Lines that establish causality or timing between events
-
-If a message repeats 50 times, highlight 1-2 representative instances and
-note the count in your summary — do NOT list all 50.
-
-Keep summaries concise (2-4 sentences). Focus on patterns and counts, not
-individual line descriptions.
-
-If nothing relevant is found, set summary to exactly "No matches." and
-return an empty highlighted_lines list. Do not elaborate or explain why
-nothing was found.
-"""
-)
-
-MERGE_SYSTEM = textwrap.dedent(
-    """\
-You are a log analysis assistant. You will receive per-chunk summaries and
-highlighted lines from scanning a large log file. Produce a single merged
-report.
-
-Rules:
-- Deduplicate lines that appeared in overlapping chunks (same line_number).
-- Order highlighted_lines by line_number ascending.
-- The summary should be a coherent narrative covering: what went wrong,
-  when it started, how it progressed, and what the impact was.
-- Quantify: mention counts of recurring errors, affected servers, time ranges.
-- Keep the summary under ~10 sentences.
-- Keep highlighted_lines to the ~20 most important lines across the entire log.
-"""
-)
-
-
-# ---------------------------------------------------------------------------
-# LLM calls
-# ---------------------------------------------------------------------------
-
-
 def number_lines(text: str, start: int) -> str:
-    """Prefix each line with its original line number."""
     out: list[str] = []
     for i, line in enumerate(text.splitlines(keepends=True)):
         out.append(f"{start + i:>8} | {line}")
     return "".join(out)
 
 
-def analyze_chunk(
+# ---------------------------------------------------------------------------
+# System prompts
+# ---------------------------------------------------------------------------
+
+GREP_SYSTEM = textwrap.dedent(
+    """\
+    You are a log line filter. You receive a section of a log file with line
+    numbers and a query describing what to look for.
+
+    Return ONLY the line numbers of lines that match the query. Be highly
+    selective — only include lines that directly and specifically match what
+    the query asks for. Do not include tangentially related lines.
+
+    If nothing matches, return an empty line_numbers array.
+"""
+)
+
+SUMMARIZE_SYSTEM = textwrap.dedent(
+    """\
+    You are a log summarizer. You receive a section of a log file (or a set of
+    previous summaries) and a query describing what to focus on.
+
+    Produce a concise summary (100-300 words) covering:
+    - Key events and patterns relevant to the query
+    - Counts and frequencies of recurring items
+    - Timestamps and line ranges for important events
+    - Anomalies or state changes
+
+    Be specific: include numbers, timestamps, and identifiers. Do not pad with
+    generic statements.
+"""
+)
+
+SUMMARIZE_REDUCE_SYSTEM = textwrap.dedent(
+    """\
+    You are a log analysis report writer. You receive summaries from multiple
+    sections of a log file and the original query.
+
+    Produce a comprehensive markdown report that:
+    - Synthesizes all summaries into a coherent narrative
+    - Quantifies: counts, time ranges, rates, affected entities
+    - Includes specific line numbers and timestamps for key events
+    - Groups findings by theme or error type
+    - Ends with actionable conclusions
+
+    Use markdown formatting: headers, bullet points, bold for emphasis.
+"""
+)
+
+
+# ---------------------------------------------------------------------------
+# Map functions
+# ---------------------------------------------------------------------------
+
+
+def map_grep(
     client: genai.Client,
     model: str,
     chunk: Chunk,
     query: str,
-) -> ChunkResult:
+    usage: Usage,
+) -> list[int]:
     numbered = number_lines(chunk.text, chunk.start_line)
-
-    prompt = (
-        f"Query: {query}\n\n"
-        f"Chunk index: {chunk.index}\n"
-        f"Lines {chunk.start_line}-{chunk.end_line}:\n\n"
-        f"{numbered}"
-    )
+    prompt = f"Query: {query}\n\nLines {chunk.start_line}\u2013{chunk.end_line}:\n\n{numbered}"
 
     resp = client.models.generate_content(
         model=model,
         contents=prompt,
         config=types.GenerateContentConfig(
-            system_instruction=CHUNK_SYSTEM,
+            system_instruction=GREP_SYSTEM,
             response_mime_type="application/json",
-            response_schema=ChunkResult,
+            response_schema=GrepResult,
             temperature=0.1,
         ),
     )
+    usage.add(resp)
+    return GrepResult.model_validate_json(resp.text).line_numbers
 
-    return ChunkResult.model_validate_json(resp.text)
 
-
-def merge_results(
+def map_summarize(
     client: genai.Client,
     model: str,
-    chunk_results: list[ChunkResult],
+    chunk: Chunk,
     query: str,
-) -> MergedSummary:
-    results_json = json.dumps(
-        [r.model_dump() for r in chunk_results],
-        indent=2,
-    )
-
-    prompt = f"Original query: {query}\n\nPer-chunk results:\n{results_json}"
+    usage: Usage,
+) -> str:
+    numbered = number_lines(chunk.text, chunk.start_line)
+    prompt = f"Query: {query}\n\nLines {chunk.start_line}\u2013{chunk.end_line}:\n\n{numbered}"
 
     resp = client.models.generate_content(
         model=model,
         contents=prompt,
         config=types.GenerateContentConfig(
-            system_instruction=MERGE_SYSTEM,
+            system_instruction=SUMMARIZE_SYSTEM,
             response_mime_type="application/json",
-            response_schema=MergedSummary,
+            response_schema=SummarizeResult,
             temperature=0.2,
         ),
     )
-
-    return MergedSummary.model_validate_json(resp.text)
+    usage.add(resp)
+    return SummarizeResult.model_validate_json(resp.text).summary
 
 
 # ---------------------------------------------------------------------------
-# Output formatting
+# Reduce: summarize (LLM-based hierarchical merge)
 # ---------------------------------------------------------------------------
 
 
-def format_chunk_md(result: ChunkResult) -> str:
-    parts = [f"### Chunk {result.chunk_index}\n", f"{result.summary}\n"]
+def reduce_summaries(
+    client: genai.Client,
+    model: str,
+    summaries: list[str],
+    query: str,
+    usage: Usage,
+    concurrency: int,
+) -> str:
+    if len(summaries) > 20:
+        group_size = max(2, int(math.sqrt(len(summaries))))
+        batches = [summaries[i : i + group_size] for i in range(0, len(summaries), group_size)]
+        print(
+            f"\nCombining {len(summaries)} summaries in {len(batches)} groups ...",
+            file=sys.stderr,
+        )
 
-    if result.highlighted_lines:
-        parts.append("")
-        for hl in result.highlighted_lines:
-            parts.append(f"- **L{hl.line_number}**: `{hl.text.rstrip()}` — {hl.reason}")
-        parts.append("")
+        combined: list[str | None] = [None] * len(batches)
+        completed = 0
 
-    return "\n".join(parts)
+        with ThreadPoolExecutor(max_workers=min(concurrency, len(batches))) as executor:
+            future_to_idx = {
+                executor.submit(
+                    _merge_summary_batch,
+                    client,
+                    model,
+                    batch,
+                    query,
+                    usage,
+                ): bid
+                for bid, batch in enumerate(batches)
+            }
+            for future in as_completed(future_to_idx):
+                bid = future_to_idx[future]
+                combined[bid] = future.result()
+                completed += 1
+                print(f"  [{completed}/{len(batches)}] combine group {bid} done", file=sys.stderr)
+
+        summaries = [s for s in combined if s is not None]
+
+    return _merge_summary_batch(client, model, summaries, query, usage, final=True)
 
 
-def format_merged_md(merged: MergedSummary) -> str:
-    parts = ["---", "## Final Summary\n", merged.summary, ""]
+def _merge_summary_batch(
+    client: genai.Client,
+    model: str,
+    summaries: list[str],
+    query: str,
+    usage: Usage,
+    final: bool = False,
+) -> str:
+    numbered = "\n\n---\n\n".join(f"**Section {i+1}:**\n{s}" for i, s in enumerate(summaries))
+    prompt = f"Original query: {query}\n\n" f"Summaries to merge:\n\n{numbered}"
 
-    if merged.highlighted_lines:
-        parts.append("### Key Lines\n")
-        for hl in merged.highlighted_lines:
-            parts.append(f"- **L{hl.line_number}**: `{hl.text.rstrip()}` — {hl.reason}")
-        parts.append("")
+    system = SUMMARIZE_REDUCE_SYSTEM if final else SUMMARIZE_SYSTEM
 
-    return "\n".join(parts)
+    resp = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            response_mime_type="application/json",
+            response_schema=SummarizeResult,
+            temperature=0.2,
+        ),
+    )
+    usage.add(resp)
+    return SummarizeResult.model_validate_json(resp.text).summary
+
+
+# ---------------------------------------------------------------------------
+# Parallel map executor
+# ---------------------------------------------------------------------------
+
+
+def run_map(
+    client: genai.Client,
+    model: str,
+    chunks: list[Chunk],
+    query: str,
+    usage: Usage,
+    concurrency: int,
+    verbose: bool,
+    map_fn: Any,
+) -> list[Any]:
+    total = len(chunks)
+    results: list[Any | None] = [None] * total
+    completed = 0
+
+    with ThreadPoolExecutor(max_workers=min(concurrency, total)) as executor:
+        future_to_idx = {executor.submit(map_fn, client, model, chunk, query, usage): chunk.index for chunk in chunks}
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            results[idx] = future.result()
+            completed += 1
+            print(f"[{completed}/{total}] chunk {idx} done", file=sys.stderr)
+            if verbose:
+                r = results[idx]
+                print(
+                    json.dumps(r, indent=2) if not isinstance(r, str) else r,
+                    file=sys.stderr,
+                )
+
+    return [r for r in results if r is not None]
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
+DEFAULT_CHUNK_TOKENS = {"grep": 5_000, "summarize": 50_000}
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Scan a log file with Gemini and surface relevant lines.",
+        description="Agent-driven log scanner: grep or summarize.",
     )
-
-    parser.add_argument("logfile", type=Path, help="Path to the log file")
-    parser.add_argument("query", help="What to look for in the logs")
-    parser.add_argument("--chunk-tokens", type=int, default=50_000)
-    parser.add_argument("--overlap", type=float, default=0.2)
+    parser.add_argument("mode", choices=["grep", "summarize"])
+    parser.add_argument("logfile", nargs="?", type=Path)
+    parser.add_argument("query")
+    parser.add_argument("--chunk-tokens", type=int, default=None)
     parser.add_argument("--concurrency", type=int, default=16)
-    parser.add_argument(
-        "--model",
-        default="gemini-2.5-flash-lite",
-        help="Gemini model name (default: gemini-2.5-flash-lite)",
-    )
-
+    parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("--model", default="gemini-2.5-flash-lite")
+    parser.add_argument("--stdin", action="store_true", help="Read input from stdin")
     args = parser.parse_args()
+
+    chunk_tokens = args.chunk_tokens or DEFAULT_CHUNK_TOKENS[args.mode]
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         print("Error: GEMINI_API_KEY environment variable is required.", file=sys.stderr)
         sys.exit(1)
 
-    client = genai.Client(api_key=api_key)
-
-    lines = args.logfile.read_text().splitlines(keepends=True)
-
-    if not lines:
-        print("Empty log file.", file=sys.stderr)
+    if args.stdin:
+        text = sys.stdin.read()
+    elif args.logfile:
+        text = args.logfile.read_text()
+    else:
+        print("Error: provide a logfile or --stdin.", file=sys.stderr)
         sys.exit(1)
 
-    chunks = split_into_chunks(lines, args.chunk_tokens, args.overlap)
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        print("Empty input.", file=sys.stderr)
+        sys.exit(1)
 
-    total = len(chunks)
-    concurrency = min(args.concurrency, total)
-
+    client = genai.Client(api_key=api_key)
+    usage = Usage()
+    chunks = split_into_chunks(lines, chunk_tokens)
     print(
-        f"Scanning {len(lines)} lines in {total} chunks "
-        f"(~{args.chunk_tokens} tokens each, {int(args.overlap * 100)}% overlap, "
-        f"{concurrency} workers)\n",
+        f"{args.mode}: {len(lines)} lines, {len(chunks)} chunks "
+        f"(~{chunk_tokens} tok/chunk, {min(args.concurrency, len(chunks))} workers)",
         file=sys.stderr,
     )
 
-    chunk_results: list[ChunkResult | None] = [None] * total
-
-    completed = 0
-
-    with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        future_to_idx = {
-            executor.submit(analyze_chunk, client, args.model, chunk, args.query): chunk.index for chunk in chunks
-        }
-
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            result = future.result()
-            chunk_results[idx] = result
-
-            completed += 1
-
-            print(f"[{completed}/{total}] chunk {idx} done", file=sys.stderr)
-
-            if result.highlighted_lines:
-                print(format_chunk_md(result))
-
-    results: list[ChunkResult] = [r for r in chunk_results if r is not None]
-
-    if len(results) == 1:
-        merged = MergedSummary(
-            summary=results[0].summary,
-            highlighted_lines=results[0].highlighted_lines,
+    if args.mode == "grep":
+        all_line_nums: list[list[int]] = run_map(
+            client,
+            args.model,
+            chunks,
+            args.query,
+            usage,
+            args.concurrency,
+            args.verbose,
+            map_grep,
         )
-    else:
-        print("\nMerging results ...", file=sys.stderr)
-        merged = merge_results(client, args.model, results, args.query)
+        merged = sorted(set(n for batch in all_line_nums for n in batch))
+        for n in merged:
+            if 1 <= n <= len(lines):
+                print(f"{n}: {lines[n - 1]}", end="")
 
-    print(format_merged_md(merged))
+    elif args.mode == "summarize":
+        summaries: list[str] = run_map(
+            client,
+            args.model,
+            chunks,
+            args.query,
+            usage,
+            args.concurrency,
+            args.verbose,
+            map_summarize,
+        )
+        print("\nReducing ...", file=sys.stderr)
+        report = reduce_summaries(
+            client,
+            args.model,
+            summaries,
+            args.query,
+            usage,
+            args.concurrency,
+        )
+        print(report)
+
+    print(f"\n{usage.report()}", file=sys.stderr)
 
 
 if __name__ == "__main__":
