@@ -1927,7 +1927,6 @@ class ControllerTransitions:
             )
         return TxResult()
 
-<<<<<<< HEAD
     def preempt_task(self, task_id: JobName, reason: str) -> TxResult:
         """Preempt a running task, consuming from preemption retry budget.
 
