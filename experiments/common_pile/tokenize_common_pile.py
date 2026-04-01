@@ -14,45 +14,11 @@ from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_dat
 
 # Common Pile v0.1 filtered dataset download steps — sourced from datakit
 _filtered_steps = {
-    name: download_common_pile_filtered_step(name).as_executor_step()
-    for name in COMMON_PILE_FILTERED_DATASETS
+    name: download_common_pile_filtered_step(name).as_executor_step() for name in COMMON_PILE_FILTERED_DATASETS
 }
 
-# Re-export individual variables for backward compatibility with existing imports
-arxiv_abstracts_filtered = _filtered_steps["arxiv_abstracts"]
-arxiv_papers_filtered = _filtered_steps["arxiv_papers"]
-biodiversity_heritage_library_filtered = _filtered_steps["biodiversity_heritage_library"]
-caselaw_access_project_filtered = _filtered_steps["caselaw_access_project"]
-cccc_filtered = _filtered_steps["cccc"]
-data_provenance_initiative_filtered = _filtered_steps["data_provenance_initiative"]
-doab_filtered = _filtered_steps["doab"]
-foodista_filtered = _filtered_steps["foodista"]
-github_archive_filtered = _filtered_steps["github_archive"]
-library_of_congress_filtered = _filtered_steps["library_of_congress"]
-libretexts_filtered = _filtered_steps["libretexts"]
-news_filtered = _filtered_steps["news"]
-oercommons_filtered = _filtered_steps["oercommons"]
-peS2o_filtered = _filtered_steps["peS2o"]
-pre_1929_books_filtered = _filtered_steps["pre_1929_books"]
-pressbooks_filtered = _filtered_steps["pressbooks"]
-project_gutenberg_filtered = _filtered_steps["project_gutenberg"]
-public_domain_review_filtered = _filtered_steps["public_domain_review"]
-pubmed_filtered = _filtered_steps["pubmed"]
-python_enhancement_proposals_filtered = _filtered_steps["python_enhancement_proposals"]
-regulations_filtered = _filtered_steps["regulations"]
-stackexchange_filtered = _filtered_steps["stackexchange"]
-stackv2_edu_filtered = _filtered_steps["stackv2_edu"]
-stackv2_html_filtered = _filtered_steps["stackv2_html"]
-stackv2 = _filtered_steps["stackv2"]
-ubuntu_irc_filtered = _filtered_steps["ubuntu_irc"]
-uk_hansard_filtered = _filtered_steps["uk_hansard"]
-usgpo_filtered = _filtered_steps["usgpo"]
-uspto_filtered = _filtered_steps["uspto"]
-wikimedia_filtered = _filtered_steps["wikimedia"]
-wikiteam_filtered = _filtered_steps["wikiteam"]
-youtube_filtered = _filtered_steps["youtube"]
-
-# Map dataset names to their corresponding raw download steps
+# Map filtered dataset names to their corresponding download steps.
+# Used by common_pile_tokenized() below for the COMMA llama3 mixture.
 COMMON_PILE_DATASETS: dict[str, TokenizerStep] = _filtered_steps
 
 # Effective token counts for the main training stage (in teratokens)

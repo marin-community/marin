@@ -12,17 +12,20 @@ Example Usage:
 """
 
 import dataclasses
-from collections.abc import Iterator
-
 import json
 import logging
+from collections.abc import Iterator
 
-from experiments.common_pile.tokenize_common_pile import biodiversity_heritage_library_filtered
 from experiments.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
 from fray.cluster import ResourceConfig
+from marin.datakit.download.common_pile import download_common_pile_filtered_step
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from zephyr import Dataset, ZephyrContext
+
+biodiversity_heritage_library_filtered = download_common_pile_filtered_step(
+    "biodiversity_heritage_library"
+).as_executor_step()
 
 logger = logging.getLogger(__name__)
 

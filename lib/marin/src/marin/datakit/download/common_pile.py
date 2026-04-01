@@ -3,9 +3,19 @@
 
 """Common Pile download definitions for HuggingFace-hosted subsets.
 
-Two catalogs:
-- COMMON_PILE_DATASETS: raw (unfiltered) snapshots with explicit URL globs.
-- COMMON_PILE_FILTERED_DATASETS: quality-filtered repos published by common-pile.
+Two catalogs live here:
+
+- COMMON_PILE_DATASETS (raw): Unfiltered source snapshots with explicit URL globs.
+  Use these when you need the original data for a new tokenization/processing
+  pipeline (e.g. experiments/pretraining_datasets/common_pile.py).
+
+- COMMON_PILE_FILTERED_DATASETS (filtered): Quality-filtered repos published by
+  common-pile (e.g. "common-pile/pubmed_filtered"). Use these for the legacy
+  COMMA mixture (experiments/common_pile/tokenize_common_pile.py) or when a
+  subset has no raw download and must be tokenized from filtered output.
+
+Keys overlap between the two catalogs (e.g. "pubmed" appears in both) but point
+to different HF repos and revisions.
 """
 
 from dataclasses import dataclass
@@ -80,19 +90,17 @@ COMMON_PILE_FILTERED_DATASETS: dict[str, CommonPileFilteredDataset] = {
         "raw/common_pile/biodiversity_heritage_library_filtered-0486ed6",
     ),
     "caselaw_access_project": CommonPileFilteredDataset(
-        "common-pile/caselaw_access_project_filtered", "50e1961", "raw/common_pile/caselaw_access_project_filtered-50e1961"
+        "common-pile/caselaw_access_project_filtered",
+        "50e1961",
+        "raw/common_pile/caselaw_access_project_filtered-50e1961",
     ),
-    "cccc": CommonPileFilteredDataset(
-        "common-pile/cccc_filtered", "03a3de5", "raw/common_pile/cccc_filtered-03a3de5"
-    ),
+    "cccc": CommonPileFilteredDataset("common-pile/cccc_filtered", "03a3de5", "raw/common_pile/cccc_filtered-03a3de5"),
     "data_provenance_initiative": CommonPileFilteredDataset(
         "common-pile/data_provenance_initiative_filtered",
         "8f5afcf",
         "raw/common_pile/data_provenance_initiative_filtered-8f5afcf",
     ),
-    "doab": CommonPileFilteredDataset(
-        "common-pile/doab_filtered", "defb24c", "raw/common_pile/doab_filtered-defb24c"
-    ),
+    "doab": CommonPileFilteredDataset("common-pile/doab_filtered", "defb24c", "raw/common_pile/doab_filtered-defb24c"),
     "foodista": CommonPileFilteredDataset(
         "common-pile/foodista_filtered", "bf2c7aa", "raw/common_pile/foodista_filtered-bf2c7aa"
     ),
@@ -105,9 +113,7 @@ COMMON_PILE_FILTERED_DATASETS: dict[str, CommonPileFilteredDataset] = {
     "libretexts": CommonPileFilteredDataset(
         "common-pile/libretexts_filtered", "70388bc", "raw/common_pile/libretexts_filtered-70388bc"
     ),
-    "news": CommonPileFilteredDataset(
-        "common-pile/news_filtered", "59aaa8f", "raw/common_pile/news_filtered-59aaa8f"
-    ),
+    "news": CommonPileFilteredDataset("common-pile/news_filtered", "59aaa8f", "raw/common_pile/news_filtered-59aaa8f"),
     "oercommons": CommonPileFilteredDataset(
         "common-pile/oercommons_filtered", "506b615", "raw/common_pile/oercommons_filtered-506b615"
     ),
@@ -146,9 +152,7 @@ COMMON_PILE_FILTERED_DATASETS: dict[str, CommonPileFilteredDataset] = {
     "stackv2_html": CommonPileFilteredDataset(
         "common-pile/stackv2_html_filtered", "92c9fa8", "raw/common_pile/stackv2_html_filtered-92c9fa8"
     ),
-    "stackv2": CommonPileFilteredDataset(
-        "common-pile/stackv2", "d0e3266", "raw/common_pile/stackv2-d0e3266"
-    ),
+    "stackv2": CommonPileFilteredDataset("common-pile/stackv2", "d0e3266", "raw/common_pile/stackv2-d0e3266"),
     "ubuntu_irc": CommonPileFilteredDataset(
         "common-pile/ubuntu_irc_filtered", "84f88c9", "raw/common_pile/ubuntu_irc_filtered-84f88c9"
     ),

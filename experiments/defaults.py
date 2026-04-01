@@ -244,9 +244,6 @@ def default_tokenize(
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
     else:
-        extra_kwargs = {}
-        if worker_resources is not None:
-            extra_kwargs["worker_resources"] = worker_resources
         config = TokenizeConfig(
             train_paths=[dataset] if not is_validation else [],
             validation_paths=[dataset] if is_validation else [],
@@ -254,8 +251,9 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
-            **extra_kwargs,
         )
+        if worker_resources is not None:
+            config = dataclasses.replace(config, worker_resources=worker_resources)
 
     return ExecutorStep(
         name=os.path.join("tokenized", name),

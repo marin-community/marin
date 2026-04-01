@@ -17,8 +17,6 @@ Example Usage:
 
 import dataclasses
 
-from experiments.defaults import default_tokenize
-from experiments.marin_models import marin_tokenizer
 from fray.cluster import ResourceConfig
 from marin.datakit.download.finetranslations import download_finetranslations_step
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
@@ -66,11 +64,5 @@ finetranslations_prepared = ExecutorStep(
     ),
 )
 
-finetranslations_tokenized = default_tokenize(
-    name="finetranslations_parallel",
-    dataset=finetranslations_prepared,
-    tokenizer=marin_tokenizer,
-)
-
 if __name__ == "__main__":
-    executor_main(steps=[finetranslations_prepared, finetranslations_tokenized])
+    executor_main(steps=[finetranslations_prepared])

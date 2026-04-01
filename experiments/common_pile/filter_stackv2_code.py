@@ -10,14 +10,16 @@ Example Usage:
     uv run python experiments/common_pile/filter_stackv2_code.py
 """
 
-from experiments.common_pile.tokenize_common_pile import stackv2
 from experiments.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
+from marin.datakit.download.common_pile import download_common_pile_filtered_step
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.transform.common_pile.filter_by_extension import (
     FilterByMetadataExtensionConfig,
     filter_dataset_by_metadata_extension,
 )
+
+stackv2 = download_common_pile_filtered_step("stackv2").as_executor_step()
 
 # fmt: off
 STACKV2_CODE_EXTENSIONS = (
