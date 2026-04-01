@@ -227,7 +227,7 @@ class TemporaryVenv:
 
     def _install_packages(self) -> None:
         """Install workspace (editable + extras) and pip packages."""
-        sync_args = ["--all-packages"]
+        sync_args = []
 
         if self._extras:
             sync_args.extend(["--extra=" + ",".join(self._extras)])

@@ -14,7 +14,7 @@ Before you begin, ensure you have the following installed:
 
 1. Install the documentation dependencies:
    ```bash
-   uv sync --package marin --group dev
+   uv sync --group dev
    ```
    Marin's `dev` group includes the docs tooling, and this is the same install
    command used by the docs CI workflow and the general contributor setup.

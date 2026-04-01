@@ -198,7 +198,7 @@ if [ -d "$TEMP_REPO" ]; then
         -e UV_CACHE_DIR=/opt/uv-cache \\
         -e UV_LINK_MODE=copy \\
         -w /workspace \\
-        {config.DOCKER_IMAGE}  uv sync --frozen --all-packages --extra tpu --extra gcp --group test
+        {config.DOCKER_IMAGE}  uv sync --frozen --extra tpu --extra gcp --group test
     rm -rf "$TEMP_REPO"
     echo "uv cache pre-populated"
 else

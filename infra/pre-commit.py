@@ -623,16 +623,15 @@ class PrecommitConfig:
 
 PRECOMMIT_CONFIGS = [
     PrecommitConfig(
-        patterns=["lib/levanter/**/*.py"],
+        patterns=["src/levanter/**/*.py"],
         checks=[
             check_ruff,
             lambda files, fix: check_black(files, fix, config=LEVANTER_BLACK_CONFIG),
             lambda files, fix: check_license_headers(files, fix, LEVANTER_LICENSE),
-            # check_mypy,
         ],
     ),
     PrecommitConfig(
-        patterns=["lib/haliax/**/*.py"],
+        patterns=["src/haliax/**/*.py"],
         checks=[
             check_ruff,
             lambda files, fix: check_black(files, fix, config=HALIAX_BLACK_CONFIG),
@@ -641,7 +640,7 @@ PRECOMMIT_CONFIGS = [
     ),
     PrecommitConfig(
         patterns=["**/*.py"],
-        exclude_patterns=["lib/levanter/**", "lib/haliax/**", "lib/**/vendor/**"],
+        exclude_patterns=["src/levanter/**", "src/haliax/**", "**/vendor/**"],
         checks=[
             check_ruff,
             check_black,
@@ -649,14 +648,7 @@ PRECOMMIT_CONFIGS = [
         ],
     ),
     PrecommitConfig(
-        patterns=[
-            "lib/marin/src/**/*.py",
-            "lib/levanter/src/**/*.py",
-            "lib/haliax/src/**/*.py",
-            "lib/fray/src/**/*.py",
-            "lib/iris/src/**/*.py",
-            "lib/zephyr/src/**/*.py",
-        ],
+        patterns=["src/**/*.py"],
         checks=[
             check_pyrefly,
         ],

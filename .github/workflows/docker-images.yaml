@@ -135,7 +135,7 @@ jobs:
           enable-cache: true
 
       - name: Update Docker image tag in cluster config script
-        run: sed -i -E 's/LATEST = "[a-z0-9]+"/LATEST = "${{ steps.set-tags.outputs.HASH_TAG }}"/' lib/marin/src/marin/cluster/config.py
+        run: sed -i -E 's/LATEST = "[a-z0-9]+"/LATEST = "${{ steps.set-tags.outputs.HASH_TAG }}"/' src/marin/cluster/config.py
 
       - name: Generate cluster configs
         run: uv run scripts/ray/cluster.py update-configs

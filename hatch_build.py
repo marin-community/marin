@@ -111,7 +111,7 @@ class CustomBuildHook(BuildHookInterface):
             logger.info("Protobuf outputs are up-to-date, skipping generation")
             return
 
-        generate_script = root / "scripts" / "generate_protos.py"
+        generate_script = root / "lib" / "iris" / "scripts" / "generate_protos.py"
         if not generate_script.exists():
             if not outputs_complete:
                 raise RuntimeError(

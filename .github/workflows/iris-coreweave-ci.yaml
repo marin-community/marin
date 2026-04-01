@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize]
     paths:
-      - "lib/iris/**"
+      - "src/iris/**"
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -68,7 +68,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "lib/iris/pyproject.toml"
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Write kubeconfig
         run: |
@@ -102,8 +102,8 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          cd lib/iris && uv run --group dev iris -v \
-            --config=examples/coreweave-ci.yaml \
+          uv run --group dev iris -v \
+            --config=lib/iris/examples/coreweave-ci.yaml \
             cluster start
 
       - name: Run integration tests

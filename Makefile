@@ -77,9 +77,9 @@ cluster_docker_build:
 
 cluster_tag:
 	@if [ "$$(uname)" = "Darwin" ]; then \
-		sed -i '' -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" lib/marin/src/marin/cluster/config.py; \
+		sed -i '' -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py; \
 	else \
-		sed -i -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" lib/marin/src/marin/cluster/config.py; \
+		sed -i -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py; \
 	fi
 
 # Target to push the tagged Docker images to their respective Artifact Registries
@@ -108,7 +108,7 @@ cluster_docker_ghcr_push: cluster_docker_build
 cluster_docker: cluster_docker_build cluster_docker_push
 	@echo "Docker image build and push complete."
 
-# Staging/test image flow (does not update lib/marin/src/marin/cluster/config.py)
+# Staging/test image flow (does not update src/marin/cluster/config.py)
 # Used by infra/marin-us-central2-staging.yaml, which points at marin_cluster_test:latest.
 TEST_CLUSTER_REPO ?= us-central2
 TEST_DOCKER_IMAGE_NAME ?= marin_cluster_test

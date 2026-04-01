@@ -19,17 +19,15 @@ from iris.rpc import cluster_pb2
 def _build_uv_sync_flags(extras: Sequence[str]) -> str:
     """Build uv sync flags from extras list.
 
-    Accepts 'extra' or 'package:extra' syntax. The package prefix is stripped
-    since --all-packages syncs every workspace member and --extra applies
-    to whichever package defines that extra name.
+    Accepts 'extra' or 'package:extra' syntax (the package prefix is stripped
+    since there is only a single package).
     """
-    sync_parts = ["--all-packages", "--no-group", "dev"]
+    sync_parts = ["--no-group", "dev"]
     for e in extras:
         if ":" in e:
             _package, extra = e.split(":", 1)
         else:
             extra = e
-        # Quote the extra name to prevent shell injection when building the sync command.
         sync_parts.extend(["--extra", shlex.quote(extra)])
     return " ".join(sync_parts)
 

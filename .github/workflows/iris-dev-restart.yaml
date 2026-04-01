@@ -31,7 +31,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "lib/iris/pyproject.toml"
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2

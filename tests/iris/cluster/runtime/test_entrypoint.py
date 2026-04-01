@@ -37,7 +37,7 @@ def test_build_runtime_entrypoint_includes_extras():
     setup = "\n".join(rt.setup_commands)
     assert "--extra gpu" in setup
     assert "--extra data" in setup
-    assert "--all-packages" in setup
+    assert "--no-group" in setup
 
 
 def test_build_runtime_entrypoint_includes_pip_packages():

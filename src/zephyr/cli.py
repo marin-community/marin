@@ -233,8 +233,7 @@ def run_iris_cluster(
     ]
 
     # Install CPU-only PyTorch on Iris workers (no GPU/TPU accelerators available for CPU tasks)
-    # "marin:cpu" tells the builder to pass --package marin --extra cpu to uv sync
-    iris_cmd += ["--extra", "marin:cpu"]
+    iris_cmd += ["--extra", "cpu"]
 
     # Add resource specs
     # Note: iris_run uses --cpu and --gpu (not --num-cpus/--num-gpus)

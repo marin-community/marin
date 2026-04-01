@@ -3,7 +3,7 @@ name: Iris - Cloud Smoke Test (GCP)
 on:
   pull_request:
     paths:
-      - "lib/iris/**"
+      - "src/iris/**"
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -76,18 +76,18 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "lib/iris/pyproject.toml"
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Cache Playwright browsers
         id: playwright-cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('lib/iris/pyproject.toml') }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
 
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: cd lib/iris && uv run playwright install --with-deps chromium
+        run: uv sync --group dev && uv run playwright install --with-deps chromium
 
       - name: Install Playwright system deps
         if: steps.playwright-cache.outputs.cache-hit == 'true'
@@ -124,8 +124,8 @@ jobs:
           LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
           MARIN_PREFIX: gs://marin-eu-west4
         run: |
-          cd lib/iris && uv run --group dev iris -v \
-            --config=examples/smoke-gcp.yaml \
+          uv run --group dev iris -v \
+            --config=lib/iris/examples/smoke-gcp.yaml \
             cluster start-smoke \
             --label-prefix "$LABEL_PREFIX" \
             --url-file /tmp/iris-controller-url \
@@ -153,8 +153,8 @@ jobs:
           PYTHONASYNCIODEBUG: "1"
         run: |
           mkdir -p ${{ github.workspace }}/iris-cloud-screenshots
-          cd lib/iris && uv run --group dev python -m pytest \
-            tests/e2e/test_smoke.py \
+          uv run --group dev python -m pytest \
+            tests/iris/e2e/test_smoke.py \
             -m e2e \
             --iris-controller-url "$IRIS_CONTROLLER_URL" \
             -o "addopts=" \
@@ -171,8 +171,8 @@ jobs:
         env:
           LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
         run: |
-          cd lib/iris && uv run --group dev iris -v \
-            --config=examples/smoke-gcp.yaml \
+          uv run --group dev iris -v \
+            --config=lib/iris/examples/smoke-gcp.yaml \
             cluster stop --label "$LABEL_PREFIX" || true
 
       - name: Upload screenshots
@@ -209,7 +209,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "lib/iris/pyproject.toml"
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -223,8 +223,8 @@ jobs:
 
       - name: Tear down cluster (iris stop)
         run: |
-          cd lib/iris && uv run --group dev iris -v \
-            --config=examples/smoke-gcp.yaml \
+          uv run --group dev iris -v \
+            --config=lib/iris/examples/smoke-gcp.yaml \
             cluster stop --label "$LABEL_PREFIX" || true
 
       - name: Failsafe GCP resource cleanup
