@@ -28,7 +28,7 @@ from experiments.common_pile.tokenize_common_pile import (
 )
 from experiments.marin_models import marin_tokenizer
 from fray.cluster import ResourceConfig
-from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.common_pile import COMMON_PILE_DATASETS, download_common_pile_step
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
@@ -57,35 +57,8 @@ def _tokenize_step(
     )
 
 
-def _raw_download(name: str, hf_dataset_id: str, revision: str, glob: str) -> ExecutorStep:
-    return download_hf_step(
-        f"raw/common_pile/{name}",
-        hf_dataset_id=hf_dataset_id,
-        revision=revision,
-        hf_urls_glob=[glob],
-    ).as_executor_step()
-
-
 cp_downloads = {
-    "peS2o": _raw_download("peS2o", "common-pile/peS2o", "2caeba1", "v0/documents/*.json.gz"),
-    "pubmed": _raw_download("pubmed", "common-pile/pubmed", "648b8cf", "data/*.jsonl.gz"),
-    "arxiv_papers": _raw_download("arxiv_papers", "common-pile/arxiv_papers", "963fe98", "*.jsonl.gz"),
-    "arxiv_abstracts": _raw_download("arxiv_abstracts", "common-pile/arxiv_abstracts", "828e35d", "*.jsonl.gz"),
-    "caselaw": _raw_download("caselaw_access_project", "common-pile/caselaw_access_project", "3c2cb50", "*.jsonl.gz"),
-    "doab": _raw_download("doab", "common-pile/doab", "89e7a35", "v0/*.json.gz"),
-    "uk_hansard": _raw_download("uk_hansard", "common-pile/uk_hansard", "05eeb43", "uk_hansard/*.jsonl.gz"),
-    "peps": _raw_download(
-        "python_enhancement_proposals",
-        "common-pile/python_enhancement_proposals",
-        "f932757",
-        "raw/documents/*.jsonl.gz",
-    ),
-    "public_domain_review": _raw_download(
-        "public_domain_review",
-        "common-pile/public_domain_review",
-        "e9c7669",
-        "v0/*.jsonl.gz",
-    ),
+    **{name: download_common_pile_step(name).as_executor_step() for name in COMMON_PILE_DATASETS},
     "wikiteam": wikiteam_filtered,
     "pre_1929_books": pre_1929_books_filtered,
     "ubuntu_irc": ubuntu_irc_filtered,

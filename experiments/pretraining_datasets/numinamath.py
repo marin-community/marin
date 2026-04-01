@@ -5,17 +5,14 @@
 
 import dataclasses
 
-from experiments.defaults import default_download, default_tokenize
+from fray.cluster import ResourceConfig
+from experiments.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
+from marin.datakit.download.numinamath import download_numinamath_step
 from marin.execution.executor import ExecutorStep, this_output_path
 from zephyr import Dataset, ZephyrContext, load_parquet
-from fray.cluster import ResourceConfig
 
-numinamath_download = default_download(
-    name="numinamath_1_5",
-    hf_dataset_id="AI-MO/NuminaMath-1.5",
-    revision="1b05109",
-).step
+numinamath_download = download_numinamath_step().as_executor_step()
 
 
 @dataclasses.dataclass(frozen=True)

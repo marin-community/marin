@@ -17,20 +17,14 @@ Example Usage:
 
 import dataclasses
 
-from experiments.defaults import default_download, default_tokenize
+from fray.cluster import ResourceConfig
 from experiments.llama import llama3_tokenizer
+from marin.datakit.download.finetranslations import download_finetranslations_step
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from zephyr import Dataset, ZephyrContext, load_parquet
+from experiments.defaults import default_tokenize
 
-FINETRANSLATIONS_HF_ID = "HuggingFaceFW/finetranslations"
-FINETRANSLATIONS_REVISION = "af3f4ca"
-
-finetranslations_raw = default_download(
-    name="finetranslations",
-    hf_dataset_id=FINETRANSLATIONS_HF_ID,
-    revision=FINETRANSLATIONS_REVISION,
-    hf_urls_glob=["data/**/*.parquet"],  # explicit glob to avoid HfFileSystem.find() truncation
-)
+finetranslations_raw = download_finetranslations_step().as_executor_step().as_input_name()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -56,8 +50,6 @@ def prepare_finetranslations(config: PrepareFinetranslationsConfig):
         .filter(lambda r: r is not None)
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    from fray.cluster import ResourceConfig
-
     ctx = ZephyrContext(
         name="prepare-finetranslations",
         resources=ResourceConfig(cpu=2, ram="16g"),

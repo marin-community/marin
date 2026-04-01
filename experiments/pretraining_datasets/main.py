@@ -56,12 +56,15 @@ def get_steps(dataset_names: list[str], *, download: bool = False, tokenize: boo
             sys.exit(1)
 
         if download:
-            download_fn = dataset_info.get("download_fn")
-            if download_fn is not None:
-                for sub in subsets_to_process:
-                    steps.append(download_fn(sub))
-            else:
-                steps.append(dataset_info["download"])
+            downloads = dataset_info["downloads"]
+            seen_downloads = set()
+            for sub in subsets_to_process:
+                step = downloads[sub]
+                step_id = id(step)
+                if step_id in seen_downloads:
+                    continue
+                seen_downloads.add(step_id)
+                steps.append(step)
 
         if tokenize:
             tokenize_result = dataset_info["tokenize_fn"]()

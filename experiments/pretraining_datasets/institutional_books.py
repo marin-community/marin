@@ -8,13 +8,13 @@ import dataclasses
 from levanter.data.text import TextLmDatasetFormat
 
 from experiments.marin_models import marin_tokenizer
-from experiments.long_context_datasets.institutional_books import institutional_books_raw
 from fray.cluster import ResourceConfig
+from marin.datakit.download.institutional_books import download_institutional_books_step
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from zephyr import Dataset, ZephyrContext, load_parquet
 
-institutional_books_download = institutional_books_raw.step
+institutional_books_download = download_institutional_books_step().as_executor_step()
 
 
 @dataclasses.dataclass(frozen=True)
