@@ -13,8 +13,9 @@ import click
 
 from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
 from rigging.log_setup import configure_logging
-from iris.rpc import config_pb2
+from iris.rpc import cluster_pb2 as _cluster_pb2, config_pb2
 from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
+from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
 logger = _logging_module.getLogger(__name__)
 
@@ -330,6 +331,97 @@ def key_revoke(ctx, key_id: str):
         client.close()
 
     click.echo(f"Revoked key: {key_id}")
+
+
+# ---------------------------------------------------------------------------
+# User budget management
+# ---------------------------------------------------------------------------
+
+
+@iris.group()
+@click.pass_context
+def user(ctx):
+    """User management commands."""
+    pass
+
+
+@user.group()
+@click.pass_context
+def budget(ctx):
+    """Manage user budgets."""
+    pass
+
+
+@budget.command("set")
+@click.argument("user_id")
+@click.option("--limit", "budget_limit", required=True, type=int, help="Budget limit (0 = unlimited)")
+@click.option(
+    "--max-band",
+    required=True,
+    type=click.Choice(PRIORITY_BAND_NAMES),
+    help="Highest priority band this user can submit to",
+)
+@click.pass_context
+def budget_set(ctx, user_id: str, budget_limit: int, max_band: str):
+    """Set budget limit and max band for a user."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    client = _make_authenticated_client(controller_url, token_provider)
+    try:
+        client.set_user_budget(
+            _cluster_pb2.Controller.SetUserBudgetRequest(
+                user_id=user_id,
+                budget_limit=budget_limit,
+                max_band=priority_band_value(max_band),
+            )
+        )
+    finally:
+        client.close()
+
+    click.echo(f"Budget set for {user_id}: limit={budget_limit}, max_band={max_band}")
+
+
+@budget.command("get")
+@click.argument("user_id")
+@click.pass_context
+def budget_get(ctx, user_id: str):
+    """Get budget config and current spend for a user."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    client = _make_authenticated_client(controller_url, token_provider)
+    try:
+        resp = client.get_user_budget(_cluster_pb2.Controller.GetUserBudgetRequest(user_id=user_id))
+    finally:
+        client.close()
+
+    click.echo(f"User:      {resp.user_id}")
+    click.echo(f"Limit:     {resp.budget_limit}")
+    click.echo(f"Spent:     {resp.budget_spent}")
+    click.echo(f"Max band:  {priority_band_name(resp.max_band)}")
+
+
+@budget.command("list")
+@click.pass_context
+def budget_list(ctx):
+    """List all user budgets with current spend."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    client = _make_authenticated_client(controller_url, token_provider)
+    try:
+        resp = client.list_user_budgets(_cluster_pb2.Controller.ListUserBudgetsRequest())
+    finally:
+        client.close()
+
+    if not resp.users:
+        click.echo("No user budgets found.")
+        return
+
+    click.echo(f"{'USER':<30s} {'LIMIT':>10s} {'SPENT':>10s} {'MAX BAND':<15s}")
+    for u in resp.users:
+        click.echo(f"{u.user_id:<30s} {u.budget_limit:>10d} {u.budget_spent:>10d} {priority_band_name(u.max_band):<15s}")
 
 
 # Register subcommand groups — imported at module level to ensure they are

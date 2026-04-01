@@ -118,7 +118,7 @@ def task_is_finished(
         return True
     if state == cluster_pb2.TASK_STATE_FAILED:
         return failure_count > max_retries_failure
-    if state == cluster_pb2.TASK_STATE_WORKER_FAILED:
+    if state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PREEMPTED):
         return preemption_count > max_retries_preemption
     return False
 
@@ -143,7 +143,7 @@ def task_is_retry_exhausted(
 ) -> bool:
     if state == cluster_pb2.TASK_STATE_FAILED:
         return failure_count > max_retries_failure
-    if state == cluster_pb2.TASK_STATE_WORKER_FAILED:
+    if state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PREEMPTED):
         return preemption_count > max_retries_preemption
     return False
 
@@ -188,6 +188,7 @@ TERMINAL_TASK_STATES: frozenset[int] = frozenset(
         cluster_pb2.TASK_STATE_KILLED,
         cluster_pb2.TASK_STATE_UNSCHEDULABLE,
         cluster_pb2.TASK_STATE_WORKER_FAILED,
+        cluster_pb2.TASK_STATE_PREEMPTED,
     }
 )
 
@@ -222,6 +223,7 @@ FAILURE_TASK_STATES: frozenset[int] = frozenset(
     {
         cluster_pb2.TASK_STATE_FAILED,
         cluster_pb2.TASK_STATE_WORKER_FAILED,
+        cluster_pb2.TASK_STATE_PREEMPTED,
     }
 )
 
@@ -254,8 +256,8 @@ def attempt_is_terminal(state: int) -> bool:
 
 
 def attempt_is_worker_failure(state: int) -> bool:
-    """Check if an attempt is a worker failure."""
-    return state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    """Check if an attempt is a worker failure or preemption."""
+    return state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PREEMPTED)
 
 
 @dataclass(frozen=True)
@@ -273,6 +275,14 @@ class TaskJobSummary:
     failure_count: int = 0
     preemption_count: int = 0
     task_state_counts: dict[int, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class UserBudget:
+    user_id: str
+    budget_limit: int
+    max_band: int
+    updated_at: Timestamp
 
 
 @dataclass(frozen=True)
@@ -754,6 +764,52 @@ class ControllerDB:
             return
         placeholders = ",".join("?" for _ in endpoint_ids)
         self.execute(f"DELETE FROM endpoints WHERE endpoint_id IN ({placeholders})", tuple(endpoint_ids))
+
+    # -- User budget accessors --------------------------------------------------
+
+    def set_user_budget(self, user_id: str, budget_limit: int, max_band: int, now: Timestamp) -> None:
+        """Insert or update a user's budget configuration."""
+        self.execute(
+            "INSERT INTO user_budgets(user_id, budget_limit, max_band, updated_at_ms) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET budget_limit=?, max_band=?, updated_at_ms=?",
+            (user_id, budget_limit, max_band, now.epoch_ms(), budget_limit, max_band, now.epoch_ms()),
+        )
+
+    def get_user_budget(self, user_id: str) -> UserBudget | None:
+        """Get budget config for a user. Returns None if user has no budget row."""
+        with self.read_snapshot() as q:
+            row = q.fetchone(
+                "SELECT user_id, budget_limit, max_band, updated_at_ms FROM user_budgets WHERE user_id = ?",
+                (user_id,),
+            )
+        if row is None:
+            return None
+        return UserBudget(
+            user_id=row["user_id"],
+            budget_limit=row["budget_limit"],
+            max_band=row["max_band"],
+            updated_at=Timestamp.from_ms(row["updated_at_ms"]),
+        )
+
+    def list_user_budgets(self) -> list[UserBudget]:
+        """List all user budgets."""
+        with self.read_snapshot() as q:
+            rows = q.fetchall("SELECT user_id, budget_limit, max_band, updated_at_ms FROM user_budgets", ())
+        return [
+            UserBudget(
+                user_id=row["user_id"],
+                budget_limit=row["budget_limit"],
+                max_band=row["max_band"],
+                updated_at=Timestamp.from_ms(row["updated_at_ms"]),
+            )
+            for row in rows
+        ]
+
+    def get_all_user_budget_limits(self) -> dict[str, int]:
+        """Return ``{user_id: budget_limit}`` for every user with a budget row."""
+        rows = self.list_user_budgets()
+        return {row.user_id: row.budget_limit for row in rows}
 
 
 # ---------------------------------------------------------------------------
