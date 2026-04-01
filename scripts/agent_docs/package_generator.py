@@ -245,7 +245,14 @@ def generate_package_docs(
         if dry_run:
             sources = _format_sources(public_items)
             path = "file-summary" if len(sources) > MAX_SOURCE_DIRECT else "direct"
-            logger.info("[dry-run] [%d/%d] Would generate %s (%d items, %s)", idx, total, pkg_name, len(public_items), path)
+            logger.info(
+                "[dry-run] [%d/%d] Would generate %s (%d items, %s)",
+                idx,
+                total,
+                pkg_name,
+                len(public_items),
+                path,
+            )
             continue
 
         logger.info(
