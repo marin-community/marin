@@ -853,13 +853,9 @@ class GatedDeltaNet(ModuleWithStateDictSerialization, eqx.Module):
             new_state = (new_conv_state, S_new)
         return y_out, new_state
 
-    # GDN handles its own serialization via from_state_dict/to_state_dict,
-    # so opt out of the flatten/unflatten pipeline used by from_torch_compatible_state_dict.
-    def flatten_for_export(self) -> "GatedDeltaNet":
-        return self
-
-    def unflatten_from_export(self, template: "GatedDeltaNet") -> "GatedDeltaNet":
-        return self
+    def _state_dict_key_map(self) -> dict[str, str | None]:
+        # Map internal field names to HF checkpoint key names
+        return {"o_norm": "norm"}
 
     def _packed_state_dict(self) -> dict[str, jnp.ndarray]:
         """Return state dict in packed (internal) format."""
@@ -1019,51 +1015,50 @@ class GatedDeltaNet(ModuleWithStateDictSerialization, eqx.Module):
         return self._repack_packed_to_hf_split(prefix)
 
     def from_state_dict(self, state_dict: dict, prefix: str | None = None) -> "GatedDeltaNet":
-        """Load from HF checkpoint format (split projections) or packed format.
+        """Load from HF checkpoint format or packed format.
 
-        Auto-detects the format by checking for the presence of split keys.
+        Transforms HF split keys (in_proj_qkv, in_proj_z, in_proj_a, in_proj_b)
+        into the packed keys that GDN's child modules expect (in_proj_qkvz, in_proj_ba),
+        then delegates to the default handler which recurses into children normally.
+
+        Also handles conv1d.weight → conv_weight rename and squeeze.
         """
-        split_key = with_prefix(prefix, "in_proj_qkv.weight") if prefix else "in_proj_qkv.weight"
-        packed_key = with_prefix(prefix, "in_proj_qkvz.weight") if prefix else "in_proj_qkvz.weight"
+        from haliax._src.state_dict import default_eqx_module_from_state_dict
+
+        split_key = with_prefix(prefix, "in_proj_qkv.weight")
 
         if split_key in state_dict:
+            # HF checkpoint format — repack split projections into packed keys
             packed = self._repack_hf_split_to_packed(state_dict, prefix)
-        elif packed_key in state_dict:
-            # Packed format (from tests or internal use)
-            def _get(key):
-                full_key = with_prefix(prefix, key) if prefix else key
-                return np.asarray(state_dict[full_key], dtype=np.float32)
+            # Write packed values into state dict under the keys children expect.
+            # _state_dict_key_map maps o_norm→norm, so norm.weight is already correct.
+            # The other fields use their field names directly as keys.
+            state_dict[with_prefix(prefix, "in_proj_qkvz.weight")] = packed["in_proj_qkvz.weight"]
+            state_dict[with_prefix(prefix, "in_proj_ba.weight")] = packed["in_proj_ba.weight"]
+            state_dict[with_prefix(prefix, "conv_weight")] = packed["conv_weight"]
+            # norm.weight is already at the right key (via _state_dict_key_map o_norm→norm)
 
-            conv_key = with_prefix(prefix, "conv_weight") if prefix else "conv_weight"
-            conv1d_key = with_prefix(prefix, "conv1d.weight") if prefix else "conv1d.weight"
-            if conv_key in state_dict:
-                conv_w = _get("conv_weight")
-            elif conv1d_key in state_dict:
-                conv_w = _get("conv1d.weight").squeeze(1)
-            else:
-                raise KeyError(f"Neither {conv_key} nor {conv1d_key} found in state dict")
-
-            norm_key = with_prefix(prefix, "o_norm.weight") if prefix else "o_norm.weight"
-            norm_w = _get("o_norm.weight") if norm_key in state_dict else _get("norm.weight")
-
-            out_w = _get("out_proj.weight")
-            cfg = self.config
-            if out_w.ndim == 2:
-                out_w = out_w.reshape(cfg.Embed.size, cfg.num_v_heads, cfg.head_v_dim)
-
-            packed = {
-                "in_proj_qkvz.weight": _get("in_proj_qkvz.weight"),
-                "in_proj_ba.weight": _get("in_proj_ba.weight"),
-                "conv_weight": conv_w,
-                "A_log": _get("A_log"),
-                "dt_bias": _get("dt_bias"),
-                "o_norm.weight": norm_w,
-                "out_proj.weight": out_w,
-            }
         else:
-            raise KeyError(
-                f"State dict missing both {split_key} and {packed_key}. "
-                "Expected either HF checkpoint format (in_proj_qkv) or packed format (in_proj_qkvz)."
-            )
+            # Packed format — normalize key variants
+            conv1d_key = with_prefix(prefix, "conv1d.weight")
+            conv_key = with_prefix(prefix, "conv_weight")
+            if conv1d_key in state_dict and conv_key not in state_dict:
+                state_dict[conv_key] = np.asarray(state_dict[conv1d_key]).squeeze(1)
 
-        return self.load_state_dict(packed)
+            # Handle o_norm.weight vs norm.weight (key_map expects "norm")
+            onorm_key = with_prefix(prefix, "o_norm.weight")
+            norm_key = with_prefix(prefix, "norm.weight")
+            if onorm_key in state_dict and norm_key not in state_dict:
+                state_dict[norm_key] = state_dict[onorm_key]
+
+        # out_proj.weight: HF stores as 2D (hidden, value_dim), but the Linear child
+        # expects the articulated shape (hidden, v_heads, v_head_dim). Reshape if needed.
+        cfg = self.config
+        out_key = with_prefix(prefix, "out_proj.weight")
+        if out_key in state_dict:
+            out_w = np.asarray(state_dict[out_key])
+            if out_w.ndim == 2:
+                state_dict[out_key] = out_w.reshape(cfg.Embed.size, cfg.num_v_heads, cfg.head_v_dim)
+
+        # Delegate to default handler which recurses into children
+        return default_eqx_module_from_state_dict(self, state_dict, prefix)

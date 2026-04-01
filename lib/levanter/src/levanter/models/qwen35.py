@@ -638,11 +638,14 @@ class Qwen35LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Qwen35Conf
             shard_path = hf_hub_download(ref, shard)
             hf_state.update(load_file(shard_path))
 
-        # Strip 'model.' prefix and convert to numpy
+        # Strip 'model.' prefix and convert to numpy.
+        # Also keep top-level keys (e.g. lm_head.weight for non-tied models).
         state_dict = {}
         for k, v in hf_state.items():
             if k.startswith("model."):
                 state_dict[k[len("model.") :]] = v.float().numpy()
+            elif not k.startswith("mtp."):
+                state_dict[k] = v.float().numpy()
 
         # Build Levanter-compatible state dict with proper shapes
         lev_sd: dict = {}
