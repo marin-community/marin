@@ -16,7 +16,7 @@ def generate(
     *,
     model: str = "sonnet",
     max_budget_usd: float = 0.50,
-    timeout_seconds: int = 300,
+    timeout_seconds: int = 600,
 ) -> str:
     """Call claude CLI in non-interactive mode and return the response text.
 

@@ -29,6 +29,86 @@ def _format_sources(items: list[FunctionInfo | ClassInfo]) -> str:
     return "\n".join(parts)
 
 
+MERGE_PROMPT = """\
+You are merging multiple partial module reference cards into one cohesive \
+document for module `{module_name}`. Each partial doc covers a subset of the \
+module's API.
+
+Combine them into a single document with the same sections as the originals \
+(Purpose, Public API, Dependencies, Key Abstractions, Gotchas). Deduplicate \
+and merge — do not repeat entries. Keep total output under 8KB. Preserve all \
+`file_path:line` references exactly.
+
+## Partial docs to merge:
+
+{partial_docs}
+"""
+
+
+def _generate_module_doc(
+    mod_name: str,
+    public_items: list[FunctionInfo | ClassInfo],
+    callee_context: str,
+    model: str,
+) -> str:
+    """Generate a module doc, batching large modules into multiple LLM calls."""
+    sources = _format_sources(public_items)
+
+    if len(sources) <= MAX_SOURCE_PER_BATCH:
+        # Small enough for one call
+        prompt = MODULE_PROMPT.format(
+            module_name=mod_name,
+            callee_context=callee_context,
+            sources=sources,
+        )
+        return generate(prompt, model=model)
+
+    # Large module: split items into batches, generate partial docs, merge
+    logger.info("Module %s is large (%d chars), splitting into batches", mod_name, len(sources))
+    batches = _batch_items(public_items)
+    partial_docs: list[str] = []
+
+    for i, batch in enumerate(batches):
+        batch_sources = _format_sources(batch)
+        prompt = MODULE_PROMPT.format(
+            module_name=mod_name,
+            callee_context=callee_context if i == 0 else "",
+            sources=batch_sources,
+        )
+        logger.info("  Batch %d/%d (%d items, %d chars)", i + 1, len(batches), len(batch), len(batch_sources))
+        partial = generate(prompt, model=model)
+        partial_docs.append(partial)
+
+    if len(partial_docs) == 1:
+        return partial_docs[0]
+
+    # Merge partial docs
+    logger.info("  Merging %d partial docs", len(partial_docs))
+    combined = "\n\n---\n\n".join(f"## Partial {i + 1}\n\n{doc}" for i, doc in enumerate(partial_docs))
+    merge_prompt = MERGE_PROMPT.format(module_name=mod_name, partial_docs=combined)
+    return generate(merge_prompt, model=model)
+
+
+def _batch_items(items: list[FunctionInfo | ClassInfo]) -> list[list[FunctionInfo | ClassInfo]]:
+    """Split items into batches that fit within MAX_SOURCE_PER_BATCH."""
+    batches: list[list[FunctionInfo | ClassInfo]] = []
+    current: list[FunctionInfo | ClassInfo] = []
+    current_size = 0
+
+    for item in items:
+        item_size = len(item.source)
+        if current and current_size + item_size > MAX_SOURCE_PER_BATCH:
+            batches.append(current)
+            current = []
+            current_size = 0
+        current.append(item)
+        current_size += item_size
+
+    if current:
+        batches.append(current)
+    return batches
+
+
 def _get_callee_context(mod: ModuleInfo, existing_docs: dict[str, str]) -> str:
     """Build callee context from already-generated docs of imported modules."""
     context_parts: list[str] = []
@@ -121,22 +201,10 @@ def generate_module_docs(
 
         logger.info("Generating module doc for %s (%d items)", mod_name, len(public_items))
 
-        sources = _format_sources(public_items)
         callee_context = _get_callee_context(mod, existing_docs)
 
-        # If source is too large, truncate (the LLM prompt has limits)
-        if len(sources) > MAX_SOURCE_PER_BATCH:
-            logger.warning("Truncating source for %s (%d chars -> %d)", mod_name, len(sources), MAX_SOURCE_PER_BATCH)
-            sources = sources[:MAX_SOURCE_PER_BATCH] + "\n\n... (source truncated, additional items omitted)"
-
-        prompt = MODULE_PROMPT.format(
-            module_name=mod_name,
-            callee_context=callee_context,
-            sources=sources,
-        )
-
         try:
-            response = generate(prompt, model=model)
+            response = _generate_module_doc(mod_name, public_items, callee_context, model)
             md_path = output_dir / f"{mod_name}.md"
             md_path.write_text(response.rstrip() + "\n")
 

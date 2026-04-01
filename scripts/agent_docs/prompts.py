@@ -17,11 +17,14 @@ document with EXACTLY these sections:
 
 ## Public API
 For each public function/class, one line in this exact format:
-- `name(signature)` — one-sentence description. `file_path:line`
+- `name(signature)` — one-sentence description. Default values matter — \
+include them for key parameters. `file_path:line`
 
 Group logically (e.g., "Configuration", "Execution", "Utilities").
 For classes, list public methods indented under the class entry.
 Skip private/internal items (underscore-prefixed).
+Include default parameter values when they encode important choices \
+(e.g., `num_perms=286`, `ngram_size=5`).
 
 ## Dependencies
 Which other Marin modules this imports from, as a flat list:
@@ -39,12 +42,14 @@ implicit contracts, common mistakes. 2-5 bullet points. Be specific — name \
 the function or parameter that bites you.
 
 Rules:
-- Total output MUST be under 8KB.
+- Total output MUST be under 150 lines. Truncate the API surface to the most \
+important items if the module has too many public symbols.
 - No examples, no code blocks, no tutorials.
 - Be specific and actionable, not vague.
 - Every API entry MUST include `file_path:line_number` so the agent can jump \
 to source.
 - If a function is a thin wrapper, say what it wraps instead of redescribing it.
+- For functions with important default values, include them in the signature.
 
 {callee_context}
 
