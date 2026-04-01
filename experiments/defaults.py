@@ -680,8 +680,20 @@ def default_dpo(
 
     train_length = _validate_train_length(dpo_config.train_seq_len, model_config)
 
+    requested_num_train_steps = dpo_config.num_train_steps
+    auto_num_epochs = None
+    if requested_num_train_steps is None:
+        requested_num_train_steps = 1
+        auto_num_epochs = dpo_config.num_epochs
+
+    requested_steps_per_eval = dpo_config.steps_per_eval
+    auto_validation_runs = None
+    if requested_steps_per_eval is None:
+        requested_steps_per_eval = 1
+        auto_validation_runs = 5
+
     schedule = BatchSchedule(unwrap_versioned_value(dpo_config.train_batch_size))
-    total_examples = schedule.global_data_offset_by_step(dpo_config.num_train_steps)
+    total_examples = schedule.global_data_offset_by_step(requested_num_train_steps)
 
     reference = dpo_config.reference
     if isinstance(reference, SeparateReferenceConfig) and not reference.model_path:
@@ -707,8 +719,8 @@ def default_dpo(
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=dpo_config.train_batch_size,
-            num_train_steps=dpo_config.num_train_steps,
-            steps_per_eval=dpo_config.steps_per_eval,
+            num_train_steps=requested_num_train_steps,
+            steps_per_eval=requested_steps_per_eval,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
                 keep=[dict(every=steps_per_export)],
@@ -755,6 +767,8 @@ def default_dpo(
         train_config=inner_config,
         resources=dpo_config.resources,
         output_path=this_output_path(),
+        auto_num_epochs=auto_num_epochs,
+        auto_validation_runs=auto_validation_runs,
     )
 
     model_config = unwrap_versioned_value(model_config)
@@ -762,11 +776,19 @@ def default_dpo(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a model (tokenizer={dpo_tokenizer_name}) for "
-            f"{dpo_config.num_train_steps} (steps) * "
-            f"{dpo_config.train_batch_size} (batch_size) * "
-            f"{train_length} (train_seq_len) "
-            f"= {total_examples * train_length} tokens."
+            (
+                f"Train a model (tokenizer={dpo_tokenizer_name}) for "
+                f"{requested_num_train_steps} (steps) * "
+                f"{dpo_config.train_batch_size} (batch_size) * "
+                f"{train_length} (train_seq_len) "
+                f"= {total_examples * train_length} tokens."
+            )
+            if auto_num_epochs is None
+            else (
+                f"Train a model (tokenizer={dpo_tokenizer_name}) for "
+                f"{dpo_config.num_epochs:g} epoch(s) with runtime-resolved step count "
+                f"and train_seq_len={train_length}."
+            )
         ),
         fn=run_levanter_train_dpo,
         config=config,

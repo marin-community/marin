@@ -280,6 +280,42 @@ All executor parents RUNNING, train_dpo sub-jobs PENDING (awaiting v5p-8 allocat
 - Failures: 0 on active jobs | Preemptions: 0
 - `--region us-central1` resolved the cross-region GCS error.
 
+#### Checks 52–70 — 2026-03-31T16:20–17:50Z
+- All jobs steady, no failures or preemptions.
+
+#### Check 71 — 2026-03-31T21:20Z — 3 JOBS COMPLETED
+- **lr=5e-6, seed=2** (`112030`): `SUCCEEDED` (executor + train_dpo)
+- **lr=6.25e-6, seed=2** (`104054`): `SUCCEEDED` (executor + train_dpo)
+- **lr=8.75e-6, seed=2** (`110037`): `SUCCEEDED` (executor + train_dpo)
+- **lr=1e-5, seed=2** (`154129`): RUNNING (train_dpo rescheduled at 21:14, likely preempted)
+- **lr=7.5e-6, seed=0** (`154158`): RUNNING (train_dpo rescheduled at 20:33, likely preempted)
+- Failures: 0 | Preemptions: train_dpo rescheduled on 2 remaining jobs (Iris auto-handled)
+- Action: None. 3/5 complete, 2 still running after preemption recovery.
+
+#### Checks 72–78 — 2026-03-31T21:25–22:30Z
+- 2 remaining jobs steady, no failures.
+
+#### Check 79 — 2026-03-31T22:35Z — ALL 5 JOBS COMPLETED
+- **lr=1e-5, seed=2** (`154129`): `SUCCEEDED` (executor + train_dpo)
+- **lr=7.5e-6, seed=0** (`154158`): `SUCCEEDED` (executor + train_dpo)
+- All 5/5 jobs now `SUCCEEDED`. Sweep complete.
+
+### Final Status
+
+| Experiment | Iris Job ID | Status |
+|---|---|---|
+| lr=5e-6, seed=2 | `112030` | SUCCEEDED |
+| lr=6.25e-6, seed=2 | `104054` | SUCCEEDED |
+| lr=8.75e-6, seed=2 | `110037` | SUCCEEDED |
+| lr=1e-5, seed=2 | `154129` | SUCCEEDED |
+| lr=7.5e-6, seed=0 | `154158` | SUCCEEDED |
+
+### Incident Summary
+- 5x executor OOM (1GB default memory) — resolved by re-launching with `--memory 4GB`
+- 1x wrong working directory (launched from main repo, not worktree) — resolved by launching from worktree
+- 2x cross-region GCS ValueError — resolved by pinning `--region us-central1`
+- Multiple preemptions on train_dpo sub-jobs — auto-handled by Iris, no intervention needed
+
 ---
 
 ## PR Goals

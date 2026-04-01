@@ -314,6 +314,8 @@ class TrainDpoConfig:
 
     data_seed: Optional[int] = None
     initialize_from_checkpoint_path: Optional[str] = None
+    scheduled_eval_steps: Optional[list[int]] = None
+    run_initial_eval: bool = False
 
 
 def _derive_training_keys(seed: int) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
@@ -728,9 +730,41 @@ def main(config: TrainDpoConfig):
 
             trainer.add_hook(log_mixture_weights, every=1)
 
+        initial_eval_callbacks: list[Any] = []
         if validation_specs:
             for name, spec in validation_specs.items():
-                trainer.add_eval_hook(spec.dataset, name=name or None)
+                if config.scheduled_eval_steps is None:
+                    trainer.add_eval_hook(spec.dataset, name=name or None)
+                    continue
+
+                eval_loader = trainer.data_loader(spec.dataset, trainer.EvalBatch)
+                if not eval_loader or (
+                    trainer.config.max_eval_batches is not None and trainer.config.max_eval_batches <= 0
+                ):
+                    continue
+
+                @eqx.filter_jit
+                def eval_loss(model, *batch, **batch_kwargs):
+                    model = trainer.mp.cast_to_compute(model)
+                    return trainer.loss_fn(model, *batch, **batch_kwargs, key=None)
+
+                compute_loss = callbacks.compute_validation_loss(
+                    eval_loss,
+                    eval_loader,
+                    max_batches=trainer.config.max_eval_batches,
+                    name=name or None,
+                )
+                initial_eval_callbacks.append(compute_loss)
+
+                scheduled_eval_steps = set(config.scheduled_eval_steps)
+
+                def maybe_run_eval(
+                    step_info, *, force: bool = False, cb=compute_loss, eval_steps=scheduled_eval_steps
+                ):
+                    if force or step_info.step in eval_steps:
+                        cb(step_info)
+
+                trainer.add_hook(maybe_run_eval, every=1)
         else:
             logger.warning("No validation datasets provided.")
 
@@ -766,10 +800,16 @@ def main(config: TrainDpoConfig):
         else:
             train_loader = train_loader.iter_from_step(0)
 
-        last_info = trainer.train(state, train_loader)
+        if config.run_initial_eval and initial_eval_callbacks and state.step == 0:
+            logger.info("Running initial validation before training.")
+            initial_eval_state = dataclasses.replace(state, step=1)
+            initial_eval_info = callbacks.StepInfo(initial_eval_state, 0.0, 0.0)
+            for callback in initial_eval_callbacks:
+                callback(initial_eval_info)
+
+        trainer.train(state, train_loader)
 
         if trainer.config.checkpointer is not None:
-            trainer.run_hooks(last_info, force=True)
             checkpointer = trainer.config.checkpointer.create(trainer.run_id)
             checkpointer.wait_until_finished()
 

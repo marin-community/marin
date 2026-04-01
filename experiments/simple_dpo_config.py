@@ -32,7 +32,9 @@ class SimpleDPOConfig:
     resources: ResourceConfig
 
     train_batch_size: int | IntSchedule = 128
-    num_train_steps: int = 10000
+    num_train_steps: int | None = None
+    num_epochs: float = 1.0
+    """Approximate number of passes over the DPO train set when num_train_steps is unset."""
     learning_rate: float = 1e-6
     wandb_project: str | None = None
 
@@ -60,7 +62,8 @@ class SimpleDPOConfig:
     min_lr_ratio: float = 0.0
     max_grad_norm: float | None = 1
 
-    steps_per_eval: int = 1000
+    steps_per_eval: int | None = None
+    """None auto-schedules validation five times: before training, three interior points, and at the end."""
     steps_per_checkpoint: int = 1000
     steps_per_hf_export: int = 500
     hf_save_dtype: str | None = None
@@ -77,3 +80,11 @@ class SimpleDPOConfig:
 
     allow_partial_checkpoint: bool = False
     int8: bool = False
+
+    def __post_init__(self):
+        if self.num_train_steps is not None and self.num_train_steps <= 0:
+            raise ValueError(f"num_train_steps must be positive, got {self.num_train_steps}")
+        if self.num_epochs <= 0:
+            raise ValueError(f"num_epochs must be positive, got {self.num_epochs}")
+        if self.steps_per_eval is not None and self.steps_per_eval <= 0:
+            raise ValueError(f"steps_per_eval must be positive, got {self.steps_per_eval}")

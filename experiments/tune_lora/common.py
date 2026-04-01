@@ -23,7 +23,7 @@ class LoraTuneSpec:
     seed: int
     beta: float = 0.1
     train_batch_size: int = 64
-    num_train_steps: int = 850
+    num_epochs: float = 1.0
     rank: int = 64
 
 
@@ -32,7 +32,7 @@ def bloom_speceval_v2_lora_config(spec: LoraTuneSpec) -> SimpleDPOConfig:
         resources=ResourceConfig.with_tpu("v5p-8", ram="400g"),
         per_device_eval_parallelism=DPO_EVAL_PARALLELISM["v5p-8"],
         train_batch_size=spec.train_batch_size,
-        num_train_steps=spec.num_train_steps,
+        num_epochs=spec.num_epochs,
         learning_rate=spec.learning_rate,
         lr_schedule="cosine",
         warmup=0.1,
@@ -52,7 +52,6 @@ def bloom_speceval_v2_lora_config(spec: LoraTuneSpec) -> SimpleDPOConfig:
         beta=spec.beta,
         validation_split_fraction=None,
         reference_eval_cache=ReferenceEvalCacheConfig(mode="build_or_load"),
-        steps_per_eval=200,
         steps_per_checkpoint=200,
         steps_per_hf_export=200,
         hf_generation_eos_token_ids=LLAMA3_CHAT_STOP_TOKEN_IDS,
