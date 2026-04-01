@@ -21,7 +21,6 @@ import transformers
 from rigging.filesystem import open_url
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig
-from fray.v2.local_backend import LocalClient
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -333,10 +332,19 @@ def tokenize(config: TokenizeConfigBase):
     def local_preprocess_paths(paths: list[str]) -> list[list[str]]:
         """Scan file sizes locally and bundle into groups for distributed processing."""
         filescan_start = time.monotonic()
-        local_ctx = ZephyrContext(client=LocalClient(), max_workers=8, name="tokenize-filescan")
+        # Sort for deterministic batching, then chunk into groups of 64.
+        paths = sorted(paths)
+        batched_paths = [paths[i : i + 64] for i in range(0, len(paths), 64)]
+        scan_ctx = ZephyrContext(
+            max_workers=32,
+            resources=ResourceConfig(cpu=1, ram="1g"),
+            name="tokenize-filescan",
+        )
         file_stats = list(
-            local_ctx.execute(
-                Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
+            scan_ctx.execute(
+                Dataset.from_list(batched_paths).flat_map(
+                    lambda batch: [{"filename": p, "size": fsspec_size(p)} for p in batch]
+                ),
                 verbose=False,
             )
         )
