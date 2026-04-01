@@ -15,6 +15,7 @@ Start here for any non-trivial Marin-authored text. Keep this file as the common
 - Read [reference-docs.md](reference-docs.md) for precise usage docs aimed at readers who already know Marin.
 - Read [issues.md](issues.md) for standard OSS issues and experiment issues.
 - Read [discord.md](discord.md) for Discord summaries and tactical replies.
+- Read [ai-writing-donts.md](ai-writing-donts.md) for the final prose-only review pass that strips generic AI-writing patterns.
 - Apply this file first, then apply the medium-specific file. If a piece spans multiple media, keep the stricter rule.
 
 ## Hold The Marin Positioning
@@ -85,12 +86,19 @@ deviations and flourishes that do not conflict with the core Marin values.
 - Prefer phrases like `we found`, `this suggests`, `in practice`, and `one limitation is`.
 - Avoid phrases like `clearly`, `obviously`, `groundbreaking`, and `state-of-the-art` unless you define and defend them.
 
+## Review For AI-Writing Tells
+
+Do one editing pass that looks only for generic, over-smoothed, LLM-sounding
+prose. Then apply [ai-writing-donts.md](ai-writing-donts.md) as the detailed
+checklist for what to remove or rewrite.
+
 ## Run A Quick Self-Check
 
 - Did you include concrete evidence?
 - Did you remove hype language?
 - Would this sound normal spoken aloud to a colleague?
 - Did you overstate certainty or scope?
+- Did you remove generic AI-writing templates and filler?
 
 ## Keep The One-Line Summary
 
