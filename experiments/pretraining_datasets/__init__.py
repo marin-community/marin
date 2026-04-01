@@ -49,6 +49,7 @@ __all__ = [
     "DOLMA_OLMO_MIXTURE_WEIGHTS",
     "DOLMINO_DATASETS",
     "DOLMINO_LLAMA3_OVERRIDES",
+    "HPLT_DATASETS",
     "NEMOTRON_DATASETS",
     "NEMOTRON_LLAMA3_OVERRIDES",
     "NEMOTRON_V2_DATASETS",
@@ -64,3 +65,4 @@ __all__ = [
     "tokenize_nemotron_subset",
     "tokenize_nemotron_v2_family",
 ]
+
