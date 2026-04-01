@@ -18,9 +18,9 @@ import json
 import logging
 
 from experiments.common_pile.tokenize_common_pile import biodiversity_heritage_library_filtered
+from experiments.defaults import default_tokenize
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from zephyr import Dataset, ZephyrContext
 
 logger = logging.getLogger(__name__)
@@ -82,8 +82,6 @@ def stitch_bhl_full_books(config: StitchBHLConfig):
         .filter(lambda book: len(book.get("text", "").strip()) > 0)
         .write_jsonl(f"{config.output_path}/books-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    from fray.cluster import ResourceConfig
-
     ctx = ZephyrContext(
         name="stitch-bhl-books",
         resources=ResourceConfig(cpu=2, ram="16g"),
@@ -101,16 +99,11 @@ bhl_full_books = ExecutorStep(
     ),
 )
 
-bhl_full_books_tokenized = ExecutorStep(
-    name="tokenized/common_pile/biodiversity_heritage_library_books",
-    fn=tokenize,
-    config=TokenizeConfig(
-        train_paths=[bhl_full_books / "**/*.jsonl.gz"],
-        validation_paths=versioned([]),
-        cache_path=this_output_path(),
-        tokenizer=versioned("stanford-crfm/marin-tokenizer"),
-        worker_resources=ResourceConfig(ram="20g", disk="10g"),
-    ),
+bhl_full_books_tokenized = default_tokenize(
+    "common_pile/biodiversity_heritage_library_books",
+    bhl_full_books / "**/*.jsonl.gz",
+    tokenizer="stanford-crfm/marin-tokenizer",
+    worker_resources=ResourceConfig(ram="20g", disk="10g"),
 )
 
 if __name__ == "__main__":

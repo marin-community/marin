@@ -3,7 +3,7 @@
 
 """Common Pile dataset definitions for the pretraining dataset CLI."""
 
-from levanter.data.text import TextLmDatasetFormat
+from functools import partial
 
 from experiments.common_pile.filter_stackv2_code import stackv2_code_filtered
 from experiments.common_pile.stitch_bhl_books import bhl_full_books
@@ -26,36 +26,15 @@ from experiments.common_pile.tokenize_common_pile import (
     wikiteam_filtered,
     youtube_filtered,
 )
+from experiments.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
 from fray.cluster import ResourceConfig
 from marin.datakit.download.common_pile import COMMON_PILE_DATASETS, download_common_pile_step
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
 
+_R20 = ResourceConfig(ram="20g", disk="10g")
+_R40 = ResourceConfig(ram="40g", disk="10g")
 
-def _tokenize_step(
-    name: str,
-    train_paths: list,
-    *,
-    worker_ram: str = "10g",
-    text_key: str = "text",
-) -> ExecutorStep:
-    kwargs = {}
-    if worker_ram != "10g":
-        kwargs["worker_resources"] = ResourceConfig(ram=worker_ram, disk="10g")
-    return ExecutorStep(
-        name=f"tokenized/{name}",
-        fn=tokenize,
-        config=TokenizeConfig(
-            train_paths=train_paths,
-            validation_paths=versioned([]),
-            cache_path=this_output_path(),
-            tokenizer=versioned(marin_tokenizer),
-            format=TextLmDatasetFormat(text_key=text_key),
-            **kwargs,
-        ),
-    )
-
+tokenize_cp = partial(default_tokenize, tokenizer=marin_tokenizer)
 
 cp_downloads = {
     **{name: download_common_pile_step(name).as_executor_step() for name in COMMON_PILE_DATASETS},
@@ -82,80 +61,54 @@ cp_downloads = {
 
 
 cp_tokenized = {
-    "cp/peS2o": _tokenize_step("common_pile/peS2o", [cp_downloads["peS2o"] / "v0/documents/*.json.gz"]),
-    "cp/pubmed": _tokenize_step("common_pile/pubmed", [cp_downloads["pubmed"] / "data/*.jsonl.gz"], worker_ram="20g"),
-    "cp/arxiv_papers": _tokenize_step(
-        "common_pile/arxiv_papers",
-        [cp_downloads["arxiv_papers"] / "*.jsonl.gz"],
-        worker_ram="20g",
+    "cp/peS2o": tokenize_cp("common_pile/peS2o", cp_downloads["peS2o"] / "v0/documents/*.json.gz"),
+    "cp/pubmed": tokenize_cp("common_pile/pubmed", cp_downloads["pubmed"] / "data/*.jsonl.gz", worker_resources=_R20),
+    "cp/arxiv_papers": tokenize_cp(
+        "common_pile/arxiv_papers", cp_downloads["arxiv_papers"] / "*.jsonl.gz", worker_resources=_R20
     ),
-    "cp/arxiv_abstracts": _tokenize_step(
-        "common_pile/arxiv_abstracts",
-        [cp_downloads["arxiv_abstracts"] / "*.jsonl.gz"],
+    "cp/arxiv_abstracts": tokenize_cp("common_pile/arxiv_abstracts", cp_downloads["arxiv_abstracts"] / "*.jsonl.gz"),
+    "cp/caselaw": tokenize_cp(
+        "common_pile/caselaw_access_project", cp_downloads["caselaw"] / "*.jsonl.gz", worker_resources=_R20
     ),
-    "cp/caselaw": _tokenize_step(
-        "common_pile/caselaw_access_project",
-        [cp_downloads["caselaw"] / "*.jsonl.gz"],
-        worker_ram="20g",
+    "cp/doab": tokenize_cp("common_pile/doab", cp_downloads["doab"] / "v0/*.json.gz"),
+    "cp/uk_hansard": tokenize_cp(
+        "common_pile/uk_hansard", cp_downloads["uk_hansard"] / "uk_hansard/*.jsonl.gz", worker_resources=_R20
     ),
-    "cp/doab": _tokenize_step("common_pile/doab", [cp_downloads["doab"] / "v0/*.json.gz"]),
-    "cp/uk_hansard": _tokenize_step(
-        "common_pile/uk_hansard",
-        [cp_downloads["uk_hansard"] / "uk_hansard/*.jsonl.gz"],
-        worker_ram="20g",
+    "cp/peps": tokenize_cp(
+        "common_pile/python_enhancement_proposals", cp_downloads["peps"] / "raw/documents/*.jsonl.gz"
     ),
-    "cp/peps": _tokenize_step(
-        "common_pile/python_enhancement_proposals",
-        [cp_downloads["peps"] / "raw/documents/*.jsonl.gz"],
+    "cp/public_domain_review": tokenize_cp(
+        "common_pile/public_domain_review", cp_downloads["public_domain_review"] / "v0/*.jsonl.gz"
     ),
-    "cp/public_domain_review": _tokenize_step(
-        "common_pile/public_domain_review",
-        [cp_downloads["public_domain_review"] / "v0/*.jsonl.gz"],
+    "cp/wikiteam": tokenize_cp("common_pile/wikiteam", wikiteam_filtered / "**/*.json*"),
+    "cp/pre_1929_books": tokenize_cp(
+        "common_pile/pre_1929_books", pre_1929_books_filtered / "**/*.json*", worker_resources=_R40
     ),
-    "cp/wikiteam": _tokenize_step("common_pile/wikiteam", [wikiteam_filtered / "**/*.json*"]),
-    "cp/pre_1929_books": _tokenize_step(
-        "common_pile/pre_1929_books",
-        [pre_1929_books_filtered / "**/*.json*"],
-        worker_ram="40g",
+    "cp/ubuntu_irc": tokenize_cp("common_pile/ubuntu_irc", ubuntu_irc_filtered / "**/*.json*", worker_resources=_R20),
+    "cp/regulations": tokenize_cp("common_pile/regulations", regulations_filtered / "**/*.json*", worker_resources=_R40),
+    "cp/project_gutenberg": tokenize_cp(
+        "common_pile/project_gutenberg", project_gutenberg_filtered / "**/*.json*", worker_resources=_R40
     ),
-    "cp/ubuntu_irc": _tokenize_step("common_pile/ubuntu_irc", [ubuntu_irc_filtered / "**/*.json*"], worker_ram="20g"),
-    "cp/regulations": _tokenize_step(
-        "common_pile/regulations",
-        [regulations_filtered / "**/*.json*"],
-        worker_ram="40g",
+    "cp/data_provenance": tokenize_cp(
+        "common_pile/data_provenance_initiative", data_provenance_initiative_filtered / "**/*.json*"
     ),
-    "cp/project_gutenberg": _tokenize_step(
-        "common_pile/project_gutenberg",
-        [project_gutenberg_filtered / "**/*.json*"],
-        worker_ram="40g",
+    "cp/youtube": tokenize_cp("common_pile/youtube", youtube_filtered / "**/*.json*"),
+    "cp/biodiversity": tokenize_cp(
+        "common_pile/biodiversity_heritage_library_books", bhl_full_books / "**/*.jsonl.gz", worker_resources=_R20
     ),
-    "cp/data_provenance": _tokenize_step(
-        "common_pile/data_provenance_initiative",
-        [data_provenance_initiative_filtered / "**/*.json*"],
+    "cp/library_of_congress": tokenize_cp(
+        "common_pile/library_of_congress", library_of_congress_filtered / "**/*.json*", worker_resources=_R40
     ),
-    "cp/youtube": _tokenize_step("common_pile/youtube", [youtube_filtered / "**/*.json*"]),
-    "cp/biodiversity": _tokenize_step(
-        "common_pile/biodiversity_heritage_library_books",
-        [bhl_full_books / "**/*.jsonl.gz"],
-        worker_ram="20g",
-    ),
-    "cp/library_of_congress": _tokenize_step(
-        "common_pile/library_of_congress",
-        [library_of_congress_filtered / "**/*.json*"],
-        worker_ram="40g",
-    ),
-    "cp/usgpo": _tokenize_step("common_pile/usgpo", [usgpo_filtered / "**/*.json*"], worker_ram="40g"),
-    "cp/pressbooks": _tokenize_step("common_pile/pressbooks", [pressbooks_filtered / "**/*.json*"]),
-    "cp/libretexts": _tokenize_step("common_pile/libretexts", [libretexts_filtered / "**/*.json*"]),
-    "cp/news": _tokenize_step("common_pile/news", [news_filtered / "**/*.json*"]),
-    "cp/foodista": _tokenize_step("common_pile/foodista", [foodista_filtered / "**/*.json*"]),
-    "cp/oercommons": _tokenize_step("common_pile/oercommons", [oercommons_filtered / "**/*.json*"]),
-    "cp/uspto": _tokenize_step("common_pile/uspto", [uspto_filtered / "**/*.json*"], worker_ram="20g"),
-    "cp/stackexchange": _tokenize_step("common_pile/stackexchange", [stackexchange_filtered / "**/*.json*"]),
-    "cp/github_archive": _tokenize_step("common_pile/github_archive", [github_archive_filtered / "**/*.json*"]),
-    "cp/stackv2_code": _tokenize_step(
-        "common_pile/stackv2_code",
-        [stackv2_code_filtered / "**/*.jsonl.gz"],
-        worker_ram="20g",
+    "cp/usgpo": tokenize_cp("common_pile/usgpo", usgpo_filtered / "**/*.json*", worker_resources=_R40),
+    "cp/pressbooks": tokenize_cp("common_pile/pressbooks", pressbooks_filtered / "**/*.json*"),
+    "cp/libretexts": tokenize_cp("common_pile/libretexts", libretexts_filtered / "**/*.json*"),
+    "cp/news": tokenize_cp("common_pile/news", news_filtered / "**/*.json*"),
+    "cp/foodista": tokenize_cp("common_pile/foodista", foodista_filtered / "**/*.json*"),
+    "cp/oercommons": tokenize_cp("common_pile/oercommons", oercommons_filtered / "**/*.json*"),
+    "cp/uspto": tokenize_cp("common_pile/uspto", uspto_filtered / "**/*.json*", worker_resources=_R20),
+    "cp/stackexchange": tokenize_cp("common_pile/stackexchange", stackexchange_filtered / "**/*.json*"),
+    "cp/github_archive": tokenize_cp("common_pile/github_archive", github_archive_filtered / "**/*.json*"),
+    "cp/stackv2_code": tokenize_cp(
+        "common_pile/stackv2_code", stackv2_code_filtered / "**/*.jsonl.gz", worker_resources=_R20
     ),
 }

@@ -5,13 +5,11 @@
 
 import dataclasses
 
-from levanter.data.text import TextLmDatasetFormat
-
+from experiments.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
 from fray.cluster import ResourceConfig
 from marin.datakit.download.institutional_books import download_institutional_books_step
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.execution.executor import ExecutorStep, this_output_path
 from zephyr import Dataset, ZephyrContext, load_parquet
 
 institutional_books_download = download_institutional_books_step().as_executor_step()
@@ -53,15 +51,9 @@ institutional_books_prepared = ExecutorStep(
     ),
 )
 
-institutional_books_tokenized = ExecutorStep(
-    name="tokenized/institutional_books",
-    fn=tokenize,
-    config=TokenizeConfig(
-        train_paths=[institutional_books_prepared / "**/*.jsonl.gz"],
-        validation_paths=versioned([]),
-        cache_path=this_output_path(),
-        tokenizer=versioned(marin_tokenizer),
-        format=TextLmDatasetFormat(),
-        worker_resources=ResourceConfig(ram="40g", disk="10g"),
-    ),
+institutional_books_tokenized = default_tokenize(
+    "institutional_books",
+    institutional_books_prepared / "**/*.jsonl.gz",
+    tokenizer=marin_tokenizer,
+    worker_resources=ResourceConfig(ram="40g", disk="10g"),
 )

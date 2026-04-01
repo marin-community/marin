@@ -17,12 +17,12 @@ Example Usage:
 
 import dataclasses
 
-from fray.cluster import ResourceConfig
+from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
+from fray.cluster import ResourceConfig
 from marin.datakit.download.finetranslations import download_finetranslations_step
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from zephyr import Dataset, ZephyrContext, load_parquet
-from experiments.defaults import default_tokenize
 
 finetranslations_raw = download_finetranslations_step().as_executor_step().as_input_name()
 
