@@ -72,7 +72,12 @@ def atomic_rename(output_path: str) -> Iterable[str]:
         with tempfile.TemporaryDirectory() as local_tmp_dir:
             local_path = os.path.join(local_tmp_dir, "output")
             yield local_path
-            fs.put(local_path, resolved_path, recursive=True)
+            if os.path.isdir(local_path):
+                # Trailing slash prevents fsspec from nesting under an extra
+                # "output/" level when the destination already exists.
+                fs.put(local_path + "/", resolved_path, recursive=True)
+            else:
+                fs.put(local_path, resolved_path)
         return
 
     temp_path = unique_temp_path(output_path)
