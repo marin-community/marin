@@ -175,20 +175,20 @@ Root package renamed from `marin-root` to `marin`.
 - Single `pyproject.toml` makes it straightforward to restructure deps into core vs optional extras.
 - No workspace resolution needed for external consumers.
 
-### What still needs doing (follow-up work)
-The current collapsed `pyproject.toml` puts all deps (including ray, iris cluster stuff, JAX training deps) in `[project.dependencies]`. To satisfy #4271, split into:
+### Dependency tiering (implemented)
 
-```toml
-[project.dependencies]       # lightweight core: datakit, processing, configs, rigging
-[project.optional-dependencies]
-cluster = ["...iris/fray/ray deps..."]
-training = ["...jax/equinox/levanter deps..."]
-full = ["marin[cluster,training,gpu]"]
+Dependencies split into tiers:
+
+```
+pip install marin              # core: ~79 direct deps (data processing, configs, rigging, zephyr)
+pip install marin[training]    # + haliax + levanter (JAX, equinox, wandb, transformers, etc.)
+pip install marin[cluster]     # + iris + fray + ray
+pip install marin[full]        # training + cluster + extras
+pip install marin[gpu]         # training + CUDA JAX + torch
+pip install marin[tpu]         # training + TPU JAX + torch
 ```
 
-This way `pip install marin` gets just data/config, `pip install marin[full]` gets everything.
-
-This restructuring is easier to do in one `pyproject.toml` than across 7 member configs, so the collapse is a prerequisite for clean #4271 resolution.
+Core has zero JAX/ray/equinox/wandb dependencies. All CI workflows updated with appropriate `--extra` flags.
 
 [#4271]: https://github.com/marin-community/marin/issues/4271
 
@@ -197,4 +197,3 @@ This restructuring is easier to do in one `pyproject.toml` than across 7 member 
 1. **Does Russell want `experiments/` inside `src/` too?** Currently it's a hatch build target from root.
 2. **Import linting**: worth adding `import-linter` to enforce the dependency DAG without workspace boundaries?
 3. **Remaining `lib/` auxiliary files**: move docs/configs/Dockerfiles elsewhere, or leave as-is?
-4. **Dependency tiering for #4271**: what's the right split between core and optional deps?
