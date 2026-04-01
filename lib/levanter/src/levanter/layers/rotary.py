@@ -273,6 +273,67 @@ class YarnRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
 RotaryEmbeddingsConfig.register_subclass("yarn", YarnRotaryEmbeddingsConfig)
 
 
+class PartialRotaryEmbeddings(RotaryEmbeddings):
+    """Rotary embeddings applied to only a fraction of the head dimension.
+
+    Used by Qwen3.5 with partial_rotary_factor=0.25: RoPE is applied to the first
+    floor(head_dim * partial_rotary_factor) dimensions; the remaining dimensions
+    pass through unchanged.
+    """
+
+    HeadDim: Axis = eqx.field(static=True)
+    config: "PartialRotaryEmbeddingsConfig" = eqx.field(static=True)
+
+    def __call__(self, q: NamedArray, position_ids: NamedArray) -> NamedArray:
+        rotary_dim = int(self.HeadDim.size * self.config.partial_rotary_factor)
+        RotaryDim = self.HeadDim.resize(rotary_dim)
+
+        q_rot = q[self.HeadDim, :rotary_dim]
+        q_pass = q[self.HeadDim, rotary_dim:]
+
+        with jax.ensure_compile_time_eval():
+            RotHalfSize = RotaryDim.resize(rotary_dim // 2)
+            inv_freq: NamedArray = 1.0 / (self.config.theta ** (hax.arange(RotHalfSize, step=2) / rotary_dim))
+
+        freqs = inv_freq.broadcast_axis(position_ids.axes) * position_ids
+        emb = hax.concatenate(RotaryDim, (freqs, freqs))
+        cos = hax.cos(emb).astype(q.dtype)
+        sin = hax.sin(emb).astype(q.dtype)
+
+        q_rot_emb = q_rot * cos + _rotate_half(q_rot, RotaryDim) * sin
+        return hax.concatenate(self.HeadDim, (q_rot_emb, q_pass))
+
+
+@dataclass(frozen=True)
+class PartialRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
+    """RoPE config that applies rotation to only a fraction of head dimensions.
+
+    Used by Qwen3.5 (partial_rotary_factor=0.25, theta=10M).
+    """
+
+    theta: float = 10_000_000.0
+    partial_rotary_factor: float = 0.25
+
+    def build(self, HeadSize: Axis) -> RotaryEmbeddings:
+        return PartialRotaryEmbeddings(HeadSize, self)
+
+    @classmethod
+    def make_from_hf_config(cls, rope_theta: float, config: dict) -> "PartialRotaryEmbeddingsConfig":
+        return PartialRotaryEmbeddingsConfig(
+            theta=rope_theta,
+            partial_rotary_factor=config.get("partial_rotary_factor", 0.25),
+        )
+
+    def to_hf_config(self) -> tuple[float, dict]:
+        return self.theta, {
+            "rope_type": "default",
+            "partial_rotary_factor": self.partial_rotary_factor,
+        }
+
+
+RotaryEmbeddingsConfig.register_subclass("partial", PartialRotaryEmbeddingsConfig)
+
+
 def rotary_pos_emb(
     HeadSize: Axis, Pos: Axis, theta: float = 10000, scale: float = 1.0
 ) -> Tuple[NamedArray, NamedArray]:

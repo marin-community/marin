@@ -240,7 +240,7 @@ def test_gdn_layer_matches_hf_prefill():
     lev_cfg, _ = _init_small_lev_layer(hidden_size, nk, nv, dk, dv, ksz)
 
     lev_state = _lev_state_from_hf_layer(lev_cfg, hf_layer)
-    lev_layer = GatedDeltaNet.from_state_dict(lev_cfg, lev_state, key=jax.random.PRNGKey(0))
+    lev_layer = GatedDeltaNet.create_from_state_dict(lev_cfg, lev_state, key=jax.random.PRNGKey(0))
 
     # random input
     B, L = 2, 64
@@ -307,7 +307,7 @@ def test_gdn_layer_decode_matches_hf_one_step():
     )
 
     lev_state = _lev_state_from_hf_layer(lev_cfg, hf_layer)
-    lev_layer = GatedDeltaNet.from_state_dict(lev_cfg, lev_state, key=jax.random.PRNGKey(0))
+    lev_layer = GatedDeltaNet.create_from_state_dict(lev_cfg, lev_state, key=jax.random.PRNGKey(0))
 
     B, L = 2, 37
     x_full = jax.random.normal(jax.random.PRNGKey(1), (B, L, hidden_size), dtype=jnp.float32)
@@ -396,7 +396,7 @@ def test_ratio_equal_one_and_greater_than_one():
         )
 
         lev_state = _lev_state_from_hf_layer(lev_cfg, hf_layer)
-        lev_layer = GatedDeltaNet.from_state_dict(lev_cfg, lev_state, key=jax.random.PRNGKey(0))
+        lev_layer = GatedDeltaNet.create_from_state_dict(lev_cfg, lev_state, key=jax.random.PRNGKey(0))
 
         B, L = 2, 64
         x_j = jax.random.normal(jax.random.PRNGKey(0), (B, L, hidden_size), dtype=jnp.float32)
@@ -427,7 +427,7 @@ def test_linear_mask_zeroes_padded_tokens_prefill():
     )
 
     lev_state = _lev_state_from_hf_layer(lev_cfg, hf_layer)
-    lev_layer = GatedDeltaNet.from_state_dict(lev_cfg, lev_state, key=jax.random.PRNGKey(0))
+    lev_layer = GatedDeltaNet.create_from_state_dict(lev_cfg, lev_state, key=jax.random.PRNGKey(0))
 
     B, L_core, L_pad = 2, 16, 8
     x_core = jax.random.normal(jax.random.PRNGKey(0), (B, L_core, hidden_size), dtype=jnp.float32)
