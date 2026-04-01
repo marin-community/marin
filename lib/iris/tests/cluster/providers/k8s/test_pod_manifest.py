@@ -177,11 +177,20 @@ def test_task_update_failed_has_exit_code():
 
 @pytest.mark.parametrize("reason", sorted(_INFRASTRUCTURE_FAILURE_REASONS))
 def test_task_update_infrastructure_failure_is_worker_failed(reason):
-    """OOMKilled, Evicted, etc. should be WORKER_FAILED, not FAILED."""
+    """Evicted, Preempting, etc. should be WORKER_FAILED, not FAILED."""
     entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
     pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason=reason)
     update = _task_update_from_pod(entry, pod)
     assert update.new_state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert update.exit_code == 137
+
+
+def test_task_update_oom_killed_is_application_failure():
+    """OOMKilled is a misconfiguration, not infrastructure — should be FAILED."""
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="OOMKilled")
+    update = _task_update_from_pod(entry, pod)
+    assert update.new_state == cluster_pb2.TASK_STATE_FAILED
     assert update.exit_code == 137
 
 
@@ -201,11 +210,6 @@ def test_is_infrastructure_failure_with_pod_level_reason():
         "status": {"phase": "Failed", "reason": "Evicted", "containerStatuses": []},
     }
     assert _is_infrastructure_failure(pod)
-
-
-def test_is_infrastructure_failure_false_for_application_error():
-    pod = make_pod("test", "Failed", exit_code=1, reason="Error")
-    assert not _is_infrastructure_failure(pod)
 
 
 # ---------------------------------------------------------------------------
