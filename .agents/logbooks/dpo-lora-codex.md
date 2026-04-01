@@ -2096,3 +2096,194 @@ For `reference.type=adapter_base`, reference identity should include the frozen 
 - That includes:
   - [`experiments/dpo_bloom_speceval_v2.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/dpo_bloom_speceval_v2.py)
   - [`experiments/tune_lora/common.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/tune_lora/common.py)
+
+### Current LoRA run behavior
+
+- If a Bloom SpecEval v2 LoRA run is launched now from [`experiments/tune_lora/common.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/tune_lora/common.py):
+  - training uses the existing train preference cache with `108,765` train pairs
+  - validation uses the deduped validation cache with `2,606` validation pairs
+  - `num_epochs=1.0` and batch size `64` resolve to `1,700` train steps
+  - DPO preference eval runs 5 times total:
+    - initial
+    - steps `425`, `850`, `1275`
+    - final
+  - Paloma + Uncheatable LM evals run on that exact same schedule under `lm_eval/...`
+- The branch containing this work was pushed as commit `1e0e5fe9f`:
+  - `[dpo] Add LM eval suites to DPO runs`
+
+## Updated Sweep Plan
+
+### Objective
+
+- Expand the LoRA DPO learning-rate sweep around the current Bloom SpecEval v2 setup.
+- Use **two seeds per hyperparameter combination**.
+- Keep the current executor-native training behavior:
+  - `num_epochs=1.0`
+  - preference eval on the 5-point schedule
+  - Paloma + Uncheatable LM evals via `default_validation_sets()`
+
+### Constraints carried forward
+
+- Keep:
+  - `beta=0.1`
+  - batch size `64`
+  - rank `64`
+  - `alpha=64`
+  - `dropout=0.0`
+  - `reference.type=adapter_base`
+  - `reference_eval_cache.mode=build_or_load`
+  - `train_seq_len=max_seq_len=4096`
+  - `v5p-8`
+- Do **not** reuse the exact same slug string for new combinations.
+- Reuse the existing slug pattern:
+  - `bloom_speceval_v2_marin_instruct_lora_beta0p1_lr{lr}_seed{seed}_b64_v5p8`
+
+### Rationale
+
+- The current scripted sweep is concentrated in the `5e-6` to `1e-5` range.
+- The LoRA DPO best-practices note suggests the most promising regime is often **lower**, roughly `5e-7` to `5e-6`.
+- So the next useful move is not to push higher than `1e-5`, but to add denser lower-LR points while also filling in missing seed coverage.
+
+### Recommended next LR grid
+
+- Keep existing scripted LRs:
+  - `5e-6`
+  - `6.25e-6`
+  - `7.5e-6`
+  - `8.75e-6`
+  - `1e-5`
+- Add lower-LR points:
+  - `1e-6`
+  - `2.5e-6`
+  - `3.75e-6`
+  - `4.5e-6`
+
+### Recommended seed policy
+
+- Run every LR with:
+  - `seed=0`
+  - `seed=2`
+
+### Smallest sensible next expansion
+
+- If we want to stay conservative on job count, the minimum good expansion is:
+  - add `2.5e-6`
+  - add `3.75e-6`
+  - add missing `seed=0` companions for the currently seed-2-only LRs
+- This gives broader LR coverage without exploding the sweep immediately.
+
+### Full suggested new job matrix
+
+- Existing or already represented:
+  - `lr=5e-6`, seeds `0, 2`
+  - `lr=6.25e-6`, seeds `0, 2`
+  - `lr=7.5e-6`, seeds `0, 2`
+  - `lr=8.75e-6`, seeds `0, 2`
+  - `lr=1e-5`, seeds `0, 2`
+- New lower-LR additions:
+  - `lr=1e-6`, seeds `0, 2`
+  - `lr=2.5e-6`, seeds `0, 2`
+  - `lr=3.75e-6`, seeds `0, 2`
+  - `lr=4.5e-6`, seeds `0, 2`
+
+### Example slug names for new lower-LR runs
+
+- `bloom_speceval_v2_marin_instruct_lora_beta0p1_lr1e6_seed0_b64_v5p8`
+- `bloom_speceval_v2_marin_instruct_lora_beta0p1_lr1e6_seed2_b64_v5p8`
+- `bloom_speceval_v2_marin_instruct_lora_beta0p1_lr2p5e6_seed0_b64_v5p8`
+- `bloom_speceval_v2_marin_instruct_lora_beta0p1_lr2p5e6_seed2_b64_v5p8`
+- `bloom_speceval_v2_marin_instruct_lora_beta0p1_lr3p75e6_seed0_b64_v5p8`
+- `bloom_speceval_v2_marin_instruct_lora_beta0p1_lr3p75e6_seed2_b64_v5p8`
+- `bloom_speceval_v2_marin_instruct_lora_beta0p1_lr4p5e6_seed0_b64_v5p8`
+- `bloom_speceval_v2_marin_instruct_lora_beta0p1_lr4p5e6_seed2_b64_v5p8`
+
+### Expected behavior for each new run
+
+- Each run should:
+  - resolve to `1,700` train steps from `num_epochs=1.0`
+  - run DPO preference eval at:
+    - initial
+    - steps `425`, `850`, `1275`
+    - final
+  - run Paloma + Uncheatable LM evals on the same schedule under `lm_eval/...`
+
+### Implemented scripted sweep
+
+- Added full `9 x 2` wrapper coverage in [`experiments/tune_lora/`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/tune_lora):
+  - learning rates:
+    - `1e-6`
+    - `2.5e-6`
+    - `3.75e-6`
+    - `4.5e-6`
+    - `5e-6`
+    - `6.25e-6`
+    - `7.5e-6`
+    - `8.75e-6`
+    - `1e-5`
+  - seeds:
+    - `0`
+    - `2`
+
+## Iris Multi-Region Launch Plan
+
+### Goal
+
+- Launch each LoRA sweep job on Iris with `v5p-8`.
+- Allow Iris to place the job in either:
+  - `us-central1`
+  - `us-east5`
+- We do not care which region wins as long as the job lands on `v5p-8`.
+
+### Syntax
+
+- Use repeated region flags:
+  - `--region us-central1 --region us-east5`
+- Do not use:
+  - `us-east5a`
+- `us-east5` is the region.
+- `us-east5-a` is the zone.
+
+### Cache status as of 2026-04-01
+
+- Train preference cache is present in both regions.
+- Deduped validation preference cache is present in both regions.
+- `default_validation_sets()` is present `23/23` in both regions.
+- That means the current LoRA sweep is safe to launch with dual-region placement.
+
+### Expected runtime behavior per job
+
+- Each LoRA job should:
+  - request `v5p-8`
+  - resolve `num_epochs=1.0` to `1,700` train steps
+  - run DPO preference eval at:
+    - initial
+    - steps `425`, `850`, `1275`
+    - final
+  - run Paloma + Uncheatable LM evals on the same schedule under `lm_eval/...`
+
+### Exact commands to run
+
+Run these from the repo root:
+
+- If launching from this worktree, first make sure local `wandb_claude_data/` and `wandb_data/` are removed, ignored, or moved out of tree; Iris previously rejected a `73MB` source bundle from those directories alone.
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr1e6-seed0-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr1e6_seed0_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr1e6-seed2-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr1e6_seed2_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr2p5e6-seed0-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr2p5e6_seed0_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr2p5e6-seed2-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr2p5e6_seed2_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr3p75e6-seed0-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr3p75e6_seed0_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr3p75e6-seed2-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr3p75e6_seed2_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr4p5e6-seed0-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr4p5e6_seed0_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr4p5e6-seed2-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr4p5e6_seed2_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr5e6-seed0-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr5e6_seed0_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr5e6-seed2-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr5e6_seed2_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr6p25e6-seed0-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr6p25e6_seed0_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr6p25e6-seed2-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr6p25e6_seed2_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr7p5e6-seed0-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr7p5e6_seed0_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr7p5e6-seed2-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr7p5e6_seed2_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr8p75e6-seed0-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr8p75e6_seed0_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr8p75e6-seed2-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr8p75e6_seed2_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr1e5-seed0-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr1e5_seed0_b64.py
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr1e5-seed2-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr1e5_seed2_b64.py
+```
