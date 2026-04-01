@@ -178,7 +178,7 @@ class Qwen35Config(HFCompatConfig):
             reference_checkpoint=self.reference_checkpoint,
             trust_remote_code=True,
             tokenizer=self.tokenizer or self.reference_checkpoint,
-            HfConfigClass=None,  # use AutoConfig
+            HfConfigClass=HfConfig,  # bypass AutoConfig (qwen3_5 not in transformers <5.0)
             ignore_prefix="model",
         )
 
