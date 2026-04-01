@@ -4,26 +4,31 @@
 """Package doc generator: produces per-package markdown reference cards
 directly from source code via the claude CLI.
 
-Supports two modes:
-- Legacy module-level docs via generate_module_docs (depth-2 grouping)
-- New package-level docs via generate_package_docs (directory-based grouping)
+Two-phase architecture for large packages:
+1. Per-file summaries: each file's public items are summarized by an LLM call
+2. Package aggregation: file summaries are combined into the final doc
+
+Small packages (under MAX_SOURCE_DIRECT chars) skip phase 1 and go direct.
+
+Also supports legacy module-level docs via generate_module_docs.
 """
 
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from pathlib import Path
 
 from agent_docs.cache import DocCache, _combined_source_hash, hash_text
 from agent_docs.claude_cli import generate
 from agent_docs.graph import ClassInfo, FunctionInfo, ModuleInfo, RepoGraph
 from agent_docs.packages import PackageInfo, _package_source_hash
-from agent_docs.prompts import MERGE_PROMPT, PACKAGE_PROMPT
+from agent_docs.prompts import FILE_SUMMARY_PROMPT, PACKAGE_PROMPT
 
 logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = "docs/agent/packages"
-MAX_SOURCE_PER_BATCH = 50_000  # chars of source per LLM call
+MAX_SOURCE_DIRECT = 30_000  # chars of formatted source; below this, skip file summaries
 
 
 def _format_sources(items: list[FunctionInfo | ClassInfo]) -> str:
@@ -35,65 +40,100 @@ def _format_sources(items: list[FunctionInfo | ClassInfo]) -> str:
     return "\n".join(parts)
 
 
-def _generate_doc(
+def _group_items_by_file(
+    items: list[FunctionInfo | ClassInfo],
+) -> dict[str, list[FunctionInfo | ClassInfo]]:
+    """Group public items by their source file path."""
+    by_file: dict[str, list[FunctionInfo | ClassInfo]] = defaultdict(list)
+    for item in items:
+        by_file[item.file_path].append(item)
+    return dict(by_file)
+
+
+def _generate_file_summary(
+    package_name: str,
+    file_path: str,
+    items: list[FunctionInfo | ClassInfo],
+    model: str,
+) -> str:
+    """Generate a concise structured summary for one file's public items."""
+    sources = _format_sources(items)
+    prompt = FILE_SUMMARY_PROMPT.format(
+        file_path=file_path,
+        package_name=package_name,
+        sources=sources,
+    )
+    return generate(prompt, model=model, max_budget_usd=0.25)
+
+
+def _generate_file_summaries(
+    name: str,
+    public_items: list[FunctionInfo | ClassInfo],
+    model: str,
+) -> str:
+    """Phase 1: generate per-file summaries and concatenate them."""
+    by_file = _group_items_by_file(public_items)
+    summaries: list[str] = []
+
+    for file_path, items in sorted(by_file.items()):
+        logger.info("  Summarizing %s (%d items)", file_path, len(items))
+        summary = _generate_file_summary(name, file_path, items, model)
+        summaries.append(summary)
+
+    return "\n\n---\n\n".join(summaries)
+
+
+def _generate_direct(
     name: str,
     public_items: list[FunctionInfo | ClassInfo],
     callee_context: str,
     model: str,
 ) -> str:
-    """Generate a package doc, batching large packages into multiple LLM calls."""
+    """Small-package path: send raw source directly to the package prompt."""
+    sources = _format_sources(public_items)
+    prompt = PACKAGE_PROMPT.format(
+        package_name=name,
+        input_description=f"Given the source code below for package `{name}`,",
+        callee_context=callee_context,
+        input_section_header=f"Source code for package `{name}`",
+        sources=sources,
+    )
+    return generate(prompt, model=model)
+
+
+def _aggregate_package_doc(
+    name: str,
+    file_summaries: str,
+    callee_context: str,
+    model: str,
+) -> str:
+    """Phase 2: aggregate file summaries into the final package doc."""
+    prompt = PACKAGE_PROMPT.format(
+        package_name=name,
+        input_description=f"Given the file-level summaries below for package `{name}`,",
+        callee_context=callee_context,
+        input_section_header=f"File summaries for package `{name}`",
+        sources=file_summaries,
+    )
+    return generate(prompt, model=model)
+
+
+def _generate_doc(
+    name: str,
+    pkg: PackageInfo,
+    callee_context: str,
+    model: str,
+) -> str:
+    """Generate a package doc via file-level summaries or direct generation."""
+    public_items = [f for f in pkg.functions if f.is_public] + [c for c in pkg.classes if c.is_public]
     sources = _format_sources(public_items)
 
-    if len(sources) <= MAX_SOURCE_PER_BATCH:
-        prompt = PACKAGE_PROMPT.format(
-            package_name=name,
-            callee_context=callee_context,
-            sources=sources,
-        )
-        return generate(prompt, model=model)
+    if len(sources) <= MAX_SOURCE_DIRECT:
+        return _generate_direct(name, public_items, callee_context, model)
 
-    logger.info("Package %s is large (%d chars), splitting into batches", name, len(sources))
-    batches = _batch_items(public_items)
-    partial_docs: list[str] = []
-
-    for i, batch in enumerate(batches):
-        batch_sources = _format_sources(batch)
-        prompt = PACKAGE_PROMPT.format(
-            package_name=name,
-            callee_context=callee_context if i == 0 else "",
-            sources=batch_sources,
-        )
-        logger.info("  Batch %d/%d (%d items, %d chars)", i + 1, len(batches), len(batch), len(batch_sources))
-        partial = generate(prompt, model=model)
-        partial_docs.append(partial)
-
-    if len(partial_docs) == 1:
-        return partial_docs[0]
-
-    logger.info("  Merging %d partial docs", len(partial_docs))
-    combined = "\n\n---\n\n".join(f"## Partial {i + 1}\n\n{doc}" for i, doc in enumerate(partial_docs))
-    merge_prompt = MERGE_PROMPT.format(package_name=name, partial_docs=combined)
-    return generate(merge_prompt, model=model)
-
-
-def _batch_items(items: list[FunctionInfo | ClassInfo]) -> list[list[FunctionInfo | ClassInfo]]:
-    """Split items into batches that fit within MAX_SOURCE_PER_BATCH."""
-    batches: list[list[FunctionInfo | ClassInfo]] = []
-    current: list[FunctionInfo | ClassInfo] = []
-    current_size = 0
-
-    for item in items:
-        item_size = len(item.source)
-        if current and current_size + item_size > MAX_SOURCE_PER_BATCH:
-            batches.append(current)
-            current = []
-            current_size = 0
-        current.append(item)
-        current_size += item_size
-
-    if current:
-        batches.append(current)
-    return batches
+    logger.info("Package %s is large (%d chars), using file-summary pipeline", name, len(sources))
+    file_summaries = _generate_file_summaries(name, public_items, model)
+    return _aggregate_package_doc(name, file_summaries, callee_context, model)
 
 
 def _get_callee_context_for_package(pkg: PackageInfo, existing_docs: dict[str, str]) -> str:
@@ -170,16 +210,16 @@ def generate_package_docs(
             continue
 
         pkg = packages[pkg_name]
-        public_items: list[FunctionInfo | ClassInfo] = [f for f in pkg.functions if f.is_public] + [
-            c for c in pkg.classes if c.is_public
-        ]
+        public_items = [f for f in pkg.functions if f.is_public] + [c for c in pkg.classes if c.is_public]
 
         if not public_items:
             logger.info("Skipping %s (no public items)", pkg_name)
             continue
 
         if dry_run:
-            logger.info("[dry-run] Would generate doc for %s (%d items)", pkg_name, len(public_items))
+            sources = _format_sources(public_items)
+            path = "file-summary" if len(sources) > MAX_SOURCE_DIRECT else "direct"
+            logger.info("[dry-run] Would generate doc for %s (%d items, %s path)", pkg_name, len(public_items), path)
             continue
 
         logger.info("Generating doc for %s (%d public items)", pkg_name, len(public_items))
@@ -187,7 +227,7 @@ def generate_package_docs(
         callee_context = _get_callee_context_for_package(pkg, existing_docs)
 
         try:
-            response = _generate_doc(pkg_name, public_items, callee_context, model)
+            response = _generate_doc(pkg_name, pkg, callee_context, model)
             md_path = output_dir / f"{pkg_name}.md"
             md_path.write_text(response.rstrip() + "\n")
 
@@ -223,6 +263,24 @@ def _get_callee_context(mod: ModuleInfo, existing_docs: dict[str, str]) -> str:
         return ""
 
     return "## Context from imported modules:\n\n" + "\n\n".join(context_parts)
+
+
+def _generate_legacy_doc(
+    name: str,
+    public_items: list[FunctionInfo | ClassInfo],
+    callee_context: str,
+    model: str,
+) -> str:
+    """Generate a doc for the legacy module-level path (direct only)."""
+    sources = _format_sources(public_items)
+    prompt = PACKAGE_PROMPT.format(
+        package_name=name,
+        input_description=f"Given the source code below for package `{name}`,",
+        callee_context=callee_context,
+        input_section_header=f"Source code for package `{name}`",
+        sources=sources,
+    )
+    return generate(prompt, model=model)
 
 
 def generate_module_docs(
@@ -286,7 +344,7 @@ def generate_module_docs(
         callee_context = _get_callee_context(mod, existing_docs)
 
         try:
-            response = _generate_doc(mod_name, public_items, callee_context, model)
+            response = _generate_legacy_doc(mod_name, public_items, callee_context, model)
             md_path = output_dir / f"{mod_name}.md"
             md_path.write_text(response.rstrip() + "\n")
             existing_docs[mod_name] = response

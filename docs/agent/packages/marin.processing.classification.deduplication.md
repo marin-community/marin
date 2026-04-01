@@ -1,16 +1,10 @@
 ## Overview
 
-This package implements three deduplication modes for large document corpora, all built on the Zephyr distributed dataflow engine. The pipeline always produces **attribute sidecar files** (Vortex format) marking which documents/paragraphs are duplicates — it does **not** filter the source data in place.
+This package implements three dedup strategies—exact-paragraph, exact-document, and fuzzy-document—all sharing a common Zephyr-based distributed pipeline pattern. Each entry point collects input files, assigns integer file indices, runs a Zephyr `Dataset` pipeline to hash/signature documents, groups by hash/bucket, annotates duplicates, then writes **attribute sidecar files** (not filtered corpora) in Vortex format marking which records are duplicates.
 
-**Exact dedup** hashes full document text (`dedup_exact_document`) or individual paragraphs (`dedup_exact_paragraph`) using xxHash-128 and groups identical hashes, keeping the lexicographically first document ID as canonical. **Fuzzy dedup** (`dedup_fuzzy_document`) uses MinHash LSH: documents are shingled into 5-grams (small enough to catch near-duplicates despite minor edits), hashed into 286 permutations split across 26 bands (~11 rows/band). This band/row configuration targets a Jaccard similarity threshold of roughly 0.8 — 26 bands maximizes sensitivity at that threshold given the 286-perm budget. The seed=42 default ensures reproducible signatures. After LSH, `connected_components` runs the Hash-to-Min algorithm (iterative label propagation) to find duplicate clusters; documents whose `component_id != id_norm` are marked as duplicates.
-
-Call `dedup_exact_document` / `dedup_exact_paragraph` / `dedup_fuzzy_document` directly — they are the entry points. Each returns a stats dict. `connected_components` and the helpers (`group_files`, `make_document_dedup_aggregator`, `finalize_dedup`) are building blocks used internally but exposed for custom pipelines.
-
----
+Fuzzy dedup adds a two-phase flow: first compute MinHash LSH buckets (yielding `CCInput` records), then run `connected_components` using the Hash-to-Min algorithm to find near-duplicate clusters. The CC output files are then loaded to annotate `is_dup` where `component_id != id_norm` (i.e., not the canonical node). Default MinHash params (`num_perms=286, num_bands=26, ngram_size=5`) encode a ~0.5 Jaccard similarity threshold with 26 bands of 11 rows each—these are tuned for web-scale text and should not be changed casually. `max_iterations=10` for CC is a safety cap; convergence is typically reached in 3–6 iterations.
 
 ## API
-
-### Entry Points
 
 ```python
 from marin.processing.classification.deduplication.exact import dedup_exact_document
@@ -26,7 +20,7 @@ def dedup_exact_document(
     coordinator_resources: ResourceConfig | None = None,
 ) -> dict: ...
 ```
-Full-document exact dedup via xxHash-128; writes `{output_path}/data/` Vortex sidecars with `dup_doc: True` attributes. `exact.py:186`
+Exact full-document dedup via xxHash3-128; writes `is_dup` attribute sidecars. `exact.py:186`
 
 ```python
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
@@ -42,7 +36,7 @@ def dedup_exact_paragraph(
     coordinator_resources: ResourceConfig | None = None,
 ) -> dict: ...
 ```
-Paragraph-level exact dedup; sidecars carry `dup_spans` lists instead of a boolean flag. `exact.py:50`
+Exact paragraph dedup; writes `dup_spans` attribute sidecars instead of per-doc booleans. `exact.py:50`
 
 ```python
 from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
@@ -62,9 +56,7 @@ def dedup_fuzzy_document(
     coordinator_resources: ResourceConfig | None = None,
 ) -> dict: ...
 ```
-Near-duplicate document dedup via MinHash LSH + connected components; writes CC metadata under `{output_path}/metadata/cc/` and sidecars under `{output_path}/data/`. `fuzzy.py:27`
-
-### Graph / CC Primitives
+MinHash LSH + connected components fuzzy dedup; calls `connected_components` internally. `fuzzy.py:27`
 
 ```python
 from marin.processing.classification.deduplication.connected_components import connected_components
@@ -78,16 +70,14 @@ def connected_components(
     preserve_singletons: bool = True,
 ) -> tuple[bool, Sequence[str]]: ...
 ```
-Hash-to-Min iterative label propagation; returns `(converged, list_of_vortex_paths)`. `connected_components.py:51`
-
-### Shared Utilities
+Iterative Hash-to-Min CC algorithm; returns `(converged, list_of_vortex_paths)`. `connected_components.py:51`
 
 ```python
 from marin.processing.classification.deduplication.dedup_commons import group_files
 
 def group_files(files: list[str], num_groups: int) -> list[list[str]]: ...
 ```
-Deterministic round-robin file bucketing to cap Zephyr shard count. `dedup_commons.py:53`
+Round-robin deterministic file grouping to cap Zephyr shard count. `dedup_commons.py:53`
 
 ```python
 from marin.processing.classification.deduplication.dedup_commons import make_document_dedup_aggregator
@@ -100,21 +90,7 @@ def make_document_dedup_aggregator(
     counter_prefix: str,
 ) -> Callable[[int, Iterator[dict]], dict]: ...
 ```
-Returns a `group_by` reducer closure; shared by exact-doc and fuzzy-doc pipelines. `dedup_commons.py:151`
-
-```python
-from marin.processing.classification.deduplication.dedup_commons import finalize_dedup
-
-def finalize_dedup(
-    shard_results: list[dict],
-    mode: DedupMode,
-    method: str,
-    level: str,
-) -> dict: ...
-```
-Aggregates counters, logs summary, finalizes W&B run, returns stats dict. `dedup_commons.py:203`
-
-### Configuration
+Factory returning a `group_by` reducer shared by exact-doc and fuzzy-doc dedup. `dedup_commons.py:151`
 
 ```python
 from marin.processing.classification.deduplication.dedup_commons import DedupMode
@@ -126,12 +102,10 @@ class DedupMode(StrEnum):
 ```
 `dedup_commons.py:24`
 
----
-
 ## Gotchas
 
-- **`fuzzy_minhash_num_perms` must be divisible by `fuzzy_minhash_num_bands`** — `dedup_fuzzy_document` raises `ValueError` immediately if not. The defaults (286, 26) are not evenly divisible by round numbers; verify before changing either independently.
-- **`max_parallelism` is required (no default)** on all three entry points. Omitting it is a hard `TypeError`; there is no safe fallback.
-- **Output is attribute sidecars, not filtered data.** All three functions write files marking duplicates; they do not produce a deduplicated corpus directly. Downstream steps must read the `dup_doc`/`dup_spans` attributes to filter.
-- **`connected_components` returns `(converged, paths)`, not a dataset.** If `converged=False` the algorithm hit `max_iterations=10` without stabilizing; the output is still usable but may over-retain duplicates in very large or densely connected clusters.
-- **Worker `cpu` sizing for fuzzy dedup**: the `dupekit` MinHash stage spawns a native Rust thread pool. Default `ResourceConfig(cpu=1)` may starve it — set `worker_resources=ResourceConfig(cpu=5, ...)` for throughput-sensitive runs (per `fuzzy.py` docstring).
+- **Output is sidecars, not filtered files.** All three entry points write attribute files marking duplicates; downstream steps must apply these to actually remove records.
+- **`num_perms` must be divisible by `num_bands`** — `dedup_fuzzy_document` raises `ValueError` immediately if not. The default 286/26 satisfies this (26×11=286).
+- **`connected_components` returns paths, not data.** The second element of the tuple is a list of Vortex file paths to load; pass them to `Dataset.from_list(...).load_vortex()`.
+- **Worker RAM default is 32 GB** — appropriate for large batches but may be over-provisioned for small datasets; fuzzy dedup's Rust MinHash thread pool may consume extra CPU beyond the `cpu=1` default, so increase `cpu` (e.g. to 5) if workers are CPU-throttled.
+- **Canonical record selection is the lexicographic minimum `id`** (sort order in `group_by`), not insertion order — ensure document IDs are stable across runs for reproducible dedup.
