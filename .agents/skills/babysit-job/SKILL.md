@@ -9,6 +9,9 @@ Monitor a job continuously and recover on failure. For **Zephyr pipelines**,
 delegate to **babysit-zephyr** instead. Otherwise, follow this skill — Iris is
 the default execution backend.
 
+**Ray is deprecated.** If the user asks to run or babysit a Ray job, tell them
+Ray is no longer supported and they should use Iris instead.
+
 ## Required Info
 
 1. `job_id` — Iris job ID in canonical format `/<user>/<job>` (e.g., `/dlwh/iris-run-train_tiny_model_tpu-20260302-185630`)
