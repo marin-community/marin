@@ -33,6 +33,7 @@ jobs:
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/examples/marin.yaml
+      IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
 
     steps:
       - name: Checkout code
@@ -61,12 +62,21 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Warm up SSH to marin controller
+      - name: Set up OS Login SSH key
         run: |
           mkdir -p ~/.ssh
-          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q
+          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q -C "gha-${{ github.run_id }}-${{ github.run_attempt }}"
+          chmod 600 ~/.ssh/google_compute_engine
+          gcloud compute os-login ssh-keys add \
+            --key-file ~/.ssh/google_compute_engine.pub \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --ttl=6h
+
+      - name: Warm up SSH to marin controller
+        run: |
           gcloud compute ssh iris-controller-marin \
             --zone=us-central1-a --project=${{ secrets.GCP_PROJECT_ID }} \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
             --quiet -- 'echo ok'
 
       - name: Submit canary ferry
@@ -187,3 +197,10 @@ jobs:
           fi
           PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
           curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"
+
+      - name: Remove OS Login SSH key
+        if: always()
+        run: |
+          gcloud compute os-login ssh-keys remove \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --key-file ~/.ssh/google_compute_engine.pub || true

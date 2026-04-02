@@ -45,6 +45,7 @@ IrisClusterConfig = config_pb2.IrisClusterConfig
 DEFAULT_CONFIG = config_pb2.DefaultsConfig(
     ssh=config_pb2.SshConfig(
         user="root",
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_METADATA,
         connect_timeout=duration_to_proto(Duration.from_seconds(30)),
     ),
     autoscaler=config_pb2.AutoscalerConfig(
@@ -312,6 +313,29 @@ def _validate_provider_platform_compat(config: config_pb2.IrisClusterConfig) -> 
         )
 
 
+def _validate_gcp_os_login_service_accounts(config: config_pb2.IrisClusterConfig) -> None:
+    """Require explicit GCP service accounts when OS Login is enabled."""
+    ssh_config = config.defaults.ssh
+    if ssh_config.auth_mode != config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
+        return
+
+    controller_kind = config.controller.WhichOneof("controller")
+    if controller_kind == "gcp" and not config.controller.gcp.service_account:
+        raise ValueError(
+            "controller.gcp.service_account is required when defaults.ssh.auth_mode=SSH_AUTH_MODE_OS_LOGIN."
+        )
+
+    for name, sg_config in config.scale_groups.items():
+        template = sg_config.slice_template
+        if template.WhichOneof("platform") != "gcp":
+            continue
+        if not template.gcp.service_account:
+            raise ValueError(
+                f"Scale group '{name}': slice_template.gcp.service_account is required when "
+                "defaults.ssh.auth_mode=SSH_AUTH_MODE_OS_LOGIN."
+            )
+
+
 def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     """Validate cluster config.
 
@@ -330,6 +354,7 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     _validate_slice_templates(config)
     _validate_worker_settings(config)
     _validate_worker_defaults(config)
+    _validate_gcp_os_login_service_accounts(config)
 
 
 def _validate_worker_defaults(config: config_pb2.IrisClusterConfig) -> None:
@@ -925,6 +950,9 @@ def get_ssh_config(
     user = ssh.user or DEFAULT_CONFIG.ssh.user
     key_file = ssh.key_file or ""
     port = ssh.port if ssh.HasField("port") and ssh.port > 0 else DEFAULT_SSH_PORT
+    auth_mode = ssh.auth_mode if ssh.auth_mode else DEFAULT_CONFIG.ssh.auth_mode
+    os_login_user = ssh.os_login_user or ""
+    impersonate_service_account = ssh.impersonate_service_account or ""
     connect_timeout = (
         ssh.connect_timeout
         if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0
@@ -941,7 +969,14 @@ def get_ssh_config(
             if manual.ssh_key_file:
                 key_file = manual.ssh_key_file
 
-    result = config_pb2.SshConfig(user=user, key_file=key_file, port=port)
+    result = config_pb2.SshConfig(
+        user=user,
+        key_file=key_file,
+        port=port,
+        auth_mode=auth_mode,
+        os_login_user=os_login_user,
+        impersonate_service_account=impersonate_service_account,
+    )
     result.connect_timeout.CopyFrom(connect_timeout)
     return result
 
@@ -1022,6 +1057,7 @@ class IrisConfig:
 
         return create_provider_bundle(
             platform_config=self._proto.platform,
+            cluster_config=self._proto,
             ssh_config=self._proto.defaults.ssh,
         )
 

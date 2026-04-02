@@ -7,6 +7,9 @@ platform:
     project_id: hai-gcp-models
 
 defaults:
+  ssh:
+    auth_mode: SSH_AUTH_MODE_OS_LOGIN
+    impersonate_service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
   autoscaler:
     evaluation_interval:
       milliseconds: 10000
@@ -28,6 +31,7 @@ worker_provider: {}
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   gcp:
+    service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
     zone: europe-west4-b
     machine_type: e2-standard-4
     port: 10000
@@ -49,6 +53,7 @@ scale_groups:
     priority: 1000
     slice_template:
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         mode: GCP_SLICE_MODE_VM
         machine_type: e2-standard-4
 
@@ -68,4 +73,5 @@ scale_groups:
     priority: 100
     slice_template:
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite

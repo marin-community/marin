@@ -74,7 +74,9 @@ class TpuInfo:
     zone: str
     labels: dict[str, str]
     metadata: dict[str, str]
-    network_endpoints: list[str]  # IP addresses
+    service_account: str | None
+    network_endpoints: list[str]  # Internal IP addresses
+    external_network_endpoints: list[str | None]
     created_at: Timestamp
 
 
@@ -89,6 +91,7 @@ class VmInfo:
     external_ip: str | None
     labels: dict[str, str]
     metadata: dict[str, str]
+    service_account: str | None
     created_at: Timestamp
 
 
@@ -281,6 +284,7 @@ def _parse_tpu_info(tpu_data: dict, zone: str) -> TpuInfo:
 
     endpoints = tpu_data.get("networkEndpoints", [])
     ips = [ep.get("ipAddress", "") for ep in endpoints if ep.get("ipAddress")]
+    external_ips = [(ep.get("accessConfig") or {}).get("externalIp") for ep in endpoints]
 
     return TpuInfo(
         name=name,
@@ -289,7 +293,9 @@ def _parse_tpu_info(tpu_data: dict, zone: str) -> TpuInfo:
         zone=zone,
         labels=tpu_data.get("labels", {}),
         metadata=tpu_data.get("metadata", {}),
+        service_account=(tpu_data.get("serviceAccount", {}) or {}).get("email"),
         network_endpoints=ips,
+        external_network_endpoints=external_ips,
         created_at=_parse_tpu_created_at(tpu_data),
     )
 
@@ -315,6 +321,10 @@ def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
         for item in raw_metadata.get("items", []):
             metadata[item["key"]] = item.get("value", "")
 
+    service_accounts = vm_data.get("serviceAccounts") or []
+    first_service_account = service_accounts[0] if service_accounts else None
+    service_account_email = first_service_account.get("email") if isinstance(first_service_account, dict) else None
+
     return VmInfo(
         name=vm_data.get("name", ""),
         status=vm_data.get("status", "UNKNOWN"),
@@ -323,6 +333,7 @@ def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
         external_ip=external_ip,
         labels=vm_data.get("labels", {}),
         metadata=metadata,
+        service_account=service_account_email,
         created_at=_parse_vm_created_at(vm_data),
     )
 

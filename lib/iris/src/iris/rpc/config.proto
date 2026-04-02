@@ -70,6 +70,7 @@ message GcpVmConfig {
   string zone = 1;
   string machine_type = 2;      // Default: "n2-standard-4"
   int32 boot_disk_size_gb = 3;  // Default: 50
+  string service_account = 4;
 }
 
 message ManualVmConfig {
@@ -106,6 +107,7 @@ message GcpSliceConfig {
   reserved 5;  // was: zones (each slice/scaling group operates in a single zone)
   string machine_type = 7;      // Required for mode=GCP_SLICE_MODE_VM
   reserved 8;  // was: boot_disk_size_gb (moved to SliceConfig.disk_size_gb)
+  string service_account = 9;
 }
 
 message CoreweaveSliceConfig {
@@ -274,10 +276,18 @@ message WorkerConfig {
 
 // SSH configuration for manual hosts
 message SshConfig {
+  enum AuthMode {
+    SSH_AUTH_MODE_METADATA = 0;
+    SSH_AUTH_MODE_OS_LOGIN = 1;
+  }
+
   string user = 1;                        // Default: "root"
   string key_file = 2;                    // Path to SSH private key
   int32 port = 3;                         // Default: 22
   iris.time.Duration connect_timeout = 4;  // Default: 30s
+  AuthMode auth_mode = 5;                 // Default: SSH_AUTH_MODE_METADATA
+  string os_login_user = 6;               // Optional explicit POSIX username for OS Login
+  string impersonate_service_account = 7; // Optional SA email for gcloud/OS Login impersonation
 }
 
 // ============================================================================
@@ -302,6 +312,7 @@ message GcpControllerConfig {
   string machine_type = 2;      // Default: "n2-standard-4"
   int32 boot_disk_size_gb = 3;  // Default: 50
   int32 port = 4;               // Default: 10000
+  string service_account = 5;
 }
 
 // Manually-managed controller configuration (SSH bootstrap)

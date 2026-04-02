@@ -36,6 +36,8 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
     outputs:
       label-prefix: ${{ steps.label.outputs.prefix }}
     steps:
@@ -103,11 +105,15 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Write SSH key
+      - name: Set up OS Login SSH key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.MARIN_SSH_KEY }}" > ~/.ssh/marin_ray_cluster.pem
-          chmod 600 ~/.ssh/marin_ray_cluster.pem
+          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q -C "gha-${{ github.run_id }}-${{ github.run_attempt }}"
+          chmod 600 ~/.ssh/google_compute_engine
+          gcloud compute os-login ssh-keys add \
+            --key-file ~/.ssh/google_compute_engine.pub \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --ttl=2h
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -174,6 +180,13 @@ jobs:
           cd lib/iris && uv run --group dev iris -v \
             --config=examples/smoke-gcp.yaml \
             cluster stop --label "$LABEL_PREFIX" || true
+
+      - name: Remove OS Login SSH key
+        if: always()
+        run: |
+          gcloud compute os-login ssh-keys remove \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --key-file ~/.ssh/google_compute_engine.pub || true
 
       - name: Upload screenshots
         if: always()
