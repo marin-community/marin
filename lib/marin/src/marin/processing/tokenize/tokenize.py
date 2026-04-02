@@ -452,7 +452,7 @@ def tokenize(config: TokenizeConfigBase):
         train_groups = local_preprocess_paths(train_paths)
         ctx = ZephyrContext(
             resources=config.worker_resources,
-            max_workers=min(config.max_workers, len(train_groups)),
+            max_workers=min(config.max_workers, len(train_groups), 50),
             name="tokenize-train",
         )
         run_pipeline(ctx, train_groups, "train")
