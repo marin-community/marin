@@ -20,6 +20,7 @@ from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restar
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
+from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account, ssh_key_file
 from iris.cluster.providers.types import (
     Labels,
     default_stop_all,
@@ -161,7 +162,8 @@ def _gcp_tunnel(
     that may be listening on the same port on a different address family (IPv6).
     Picks a free port automatically if none is specified.
     """
-    key_file = ssh_config.key_file if ssh_config and ssh_config.key_file else None
+    effective_service_account = ssh_impersonate_service_account(ssh_config, service_account)
+    key_file = ssh_key_file(ssh_config)
     _check_gcloud_ssh_key(key_file)
 
     if local_port is None:
@@ -179,8 +181,8 @@ def _gcp_tunnel(
         "--format=value(name,zone)",
         "--limit=1",
     ]
-    if service_account:
-        cmd.append(f"--impersonate-service-account={service_account}")
+    if effective_service_account:
+        cmd.append(f"--impersonate-service-account={effective_service_account}")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0 or not result.stdout.strip():
         raise RuntimeError(f"No controller VM found (label={labels.iris_controller}=true, project={project})")
@@ -194,7 +196,7 @@ def _gcp_tunnel(
     target = vm_name
     if ssh_config and ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
         os_login_user = ssh_config.os_login_user or resolve_current_os_login_user(
-            impersonate_service_account=service_account or ssh_config.impersonate_service_account or None
+            impersonate_service_account=effective_service_account
         )
         target = f"{os_login_user}@{vm_name}"
     cmd = [
@@ -205,8 +207,8 @@ def _gcp_tunnel(
         f"--project={project}",
         f"--zone={zone}",
     ]
-    if service_account:
-        cmd.append(f"--impersonate-service-account={service_account}")
+    if effective_service_account:
+        cmd.append(f"--impersonate-service-account={effective_service_account}")
     if key_file:
         cmd.append(f"--ssh-key-file={key_file}")
     cmd.extend(

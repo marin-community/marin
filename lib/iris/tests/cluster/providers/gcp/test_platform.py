@@ -16,9 +16,10 @@ from dataclasses import dataclass
 
 import pytest
 
+from iris.cluster.providers.gcp.controller import GcpControllerProvider
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.handles import GcpVmSliceHandle, _build_gce_resource_name
-from iris.cluster.providers.remote_exec import DirectSshRemoteExec
+from iris.cluster.providers.remote_exec import DirectSshRemoteExec, GceRemoteExec, GcloudRemoteExec
 from iris.cluster.providers.gcp.workers import (
     GcpWorkerProvider,
     _run_vm_slice_bootstrap,
@@ -194,6 +195,86 @@ def test_tunnel_returns_address_directly():
     addr = "http://10.0.0.1:10000"
     with controller.tunnel(addr) as tunneled:
         assert tunneled == addr
+
+
+def test_gcp_tunnel_prefers_ssh_impersonation_config():
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    ssh_config = config_pb2.SshConfig(
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
+        key_file="/tmp/iris-oslogin",
+        impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
+    )
+    worker_provider = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+    controller = GcpControllerProvider(
+        worker_provider=worker_provider,
+        controller_service_account="iris-worker@test-project.iam.gserviceaccount.com",
+    )
+
+    list_result = unittest.mock.Mock(returncode=0, stdout="iris-controller-iris us-central2-b\n", stderr="")
+    ssh_proc = unittest.mock.Mock()
+    ssh_proc.poll.return_value = None
+    ssh_proc.terminate.return_value = None
+    ssh_proc.wait.return_value = 0
+
+    with (
+        unittest.mock.patch("iris.cluster.providers.gcp.controller._check_gcloud_ssh_key"),
+        unittest.mock.patch("iris.cluster.providers.gcp.controller.find_free_port", return_value=10042),
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.resolve_current_os_login_user",
+            return_value="svc-user",
+        ) as resolve_user,
+        unittest.mock.patch("iris.cluster.providers.gcp.controller.wait_for_port"),
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.subprocess.run", return_value=list_result
+        ) as run_mock,
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.subprocess.Popen", return_value=ssh_proc
+        ) as popen_mock,
+    ):
+        with controller.tunnel("unused") as tunneled:
+            assert tunneled == "http://127.0.0.1:10042"
+
+    resolve_user.assert_called_with(impersonate_service_account=ssh_config.impersonate_service_account)
+    list_cmd = run_mock.call_args.args[0]
+    ssh_cmd = popen_mock.call_args.args[0]
+    assert f"--impersonate-service-account={ssh_config.impersonate_service_account}" in list_cmd
+    assert f"--impersonate-service-account={ssh_config.impersonate_service_account}" in ssh_cmd
+
+
+def test_gce_remote_exec_builds_optional_flags_inline():
+    remote_exec = GceRemoteExec(
+        project_id="test-project",
+        zone="us-central1-a",
+        vm_name="vm-1",
+        ssh_key_file="/tmp/test-key",
+        impersonate_service_account="svc@test-project.iam.gserviceaccount.com",
+    )
+
+    cmd = remote_exec._build_cmd("echo ok")
+
+    assert cmd[:4] == ["gcloud", "compute", "ssh", "vm-1"]
+    assert "--ssh-key-file=/tmp/test-key" in cmd
+    assert "--impersonate-service-account=svc@test-project.iam.gserviceaccount.com" in cmd
+    assert cmd[-2:] == ["--command", "echo ok"]
+
+
+def test_gcloud_remote_exec_builds_optional_flags_inline():
+    remote_exec = GcloudRemoteExec(
+        project_id="test-project",
+        _zone="us-west4-a",
+        vm_id="slice-1",
+        worker_index=0,
+        ssh_key_file="/tmp/test-key",
+        impersonate_service_account="svc@test-project.iam.gserviceaccount.com",
+    )
+
+    cmd = remote_exec._build_cmd("echo ok")
+
+    assert cmd[:6] == ["gcloud", "compute", "tpus", "tpu-vm", "ssh", "slice-1"]
+    assert "--ssh-key-file=/tmp/test-key" in cmd
+    assert "--impersonate-service-account=svc@test-project.iam.gserviceaccount.com" in cmd
+    assert cmd[-2:] == ["--command", "echo ok"]
 
 
 # =============================================================================

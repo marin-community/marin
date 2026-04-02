@@ -19,6 +19,7 @@ import sys
 
 logger = logging.getLogger("init-gcp-service-accounts")
 
+# Marin-specific default CI principal used by the repo's Iris GCP workflows.
 DEFAULT_CI_PRINCIPAL = "serviceAccount:iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com"
 DEFAULT_CONTROLLER_SA_ID = "iris-controller"
 DEFAULT_WORKER_SA_ID = "iris-worker"
@@ -29,6 +30,7 @@ REQUIRED_APIS = (
     "tpu.googleapis.com",
 )
 CONTROLLER_PROJECT_ROLES = (
+    "roles/artifactregistry.reader",
     "roles/compute.instanceAdmin.v1",
     "roles/compute.osAdminLogin",
     "roles/logging.logWriter",
@@ -37,6 +39,7 @@ CONTROLLER_PROJECT_ROLES = (
     "roles/tpu.admin",
 )
 WORKER_PROJECT_ROLES = (
+    "roles/artifactregistry.reader",
     "roles/compute.osAdminLogin",
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",

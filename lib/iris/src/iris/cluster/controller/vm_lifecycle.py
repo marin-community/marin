@@ -37,6 +37,7 @@ from iris.cluster.providers.types import (
 from iris.cluster.providers.gcp.bootstrap import (
     build_controller_bootstrap_script_from_config,
 )
+from iris.cluster.providers.gcp.ssh import OS_LOGIN_METADATA
 from iris.rpc import config_pb2
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 
@@ -57,10 +58,6 @@ EARLY_TIMEOUT_SECONDS = 60
 # Backoff parameters for health check polling
 HEALTH_CHECK_BACKOFF_INITIAL = 2.0
 HEALTH_CHECK_BACKOFF_MAX = 10.0
-_OS_LOGIN_METADATA = {
-    "enable-oslogin": "TRUE",
-    "block-project-ssh-keys": "TRUE",
-}
 
 
 @dataclass
@@ -308,7 +305,7 @@ def _build_controller_vm_config(
         vm_config.gcp.boot_disk_size_gb = gcp_ctrl.boot_disk_size_gb or 100
         vm_config.gcp.service_account = gcp_ctrl.service_account
         if config.defaults.ssh.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
-            for key, value in _OS_LOGIN_METADATA.items():
+            for key, value in OS_LOGIN_METADATA.items():
                 vm_config.metadata[key] = value
     elif which == "manual":
         manual_ctrl = config.controller.manual

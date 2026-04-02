@@ -321,6 +321,10 @@ def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
         for item in raw_metadata.get("items", []):
             metadata[item["key"]] = item.get("value", "")
 
+    service_accounts = vm_data.get("serviceAccounts") or []
+    first_service_account = service_accounts[0] if service_accounts else None
+    service_account_email = first_service_account.get("email") if isinstance(first_service_account, dict) else None
+
     return VmInfo(
         name=vm_data.get("name", ""),
         status=vm_data.get("status", "UNKNOWN"),
@@ -329,7 +333,7 @@ def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
         external_ip=external_ip,
         labels=vm_data.get("labels", {}),
         metadata=metadata,
-        service_account=((vm_data.get("serviceAccounts") or [{}])[0] or {}).get("email"),
+        service_account=service_account_email,
         created_at=_parse_vm_created_at(vm_data),
     )
 

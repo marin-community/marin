@@ -11,7 +11,6 @@ and TPU slices via GcpService.
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import threading
 from collections.abc import Callable
@@ -38,6 +37,7 @@ from iris.cluster.providers.gcp.service import (
     TpuCreateRequest,
     VmCreateRequest,
 )
+from iris.cluster.providers.gcp.ssh import OS_LOGIN_METADATA, ssh_impersonate_service_account, ssh_key_file
 from iris.cluster.providers.types import (
     InfraError,
     Labels,
@@ -74,10 +74,6 @@ DEFAULT_MACHINE_TYPE = "n2-standard-4"
 DEFAULT_BOOT_DISK_SIZE_GB = 50
 # pd-ssd provides ~6000 IOPS vs ~38 on pd-standard, critical for controller DB
 DEFAULT_BOOT_DISK_TYPE = "pd-ssd"
-_OS_LOGIN_METADATA = {
-    "enable-oslogin": "TRUE",
-    "block-project-ssh-keys": "TRUE",
-}
 
 
 def _gcp_instance_metadata(
@@ -86,27 +82,8 @@ def _gcp_instance_metadata(
 ) -> dict[str, str]:
     result = dict(metadata or {})
     if ssh_config and ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
-        result.update(_OS_LOGIN_METADATA)
+        result.update(OS_LOGIN_METADATA)
     return result
-
-
-def _ssh_key_file(ssh_config: config_pb2.SshConfig | None) -> str | None:
-    if ssh_config and ssh_config.key_file:
-        return ssh_config.key_file
-    if ssh_config and ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
-        return os.path.expanduser("~/.ssh/google_compute_engine")
-    return None
-
-
-def _impersonate_service_account(
-    ssh_config: config_pb2.SshConfig | None,
-    service_account: str | None = None,
-) -> str | None:
-    if ssh_config and ssh_config.impersonate_service_account:
-        return ssh_config.impersonate_service_account
-    if service_account:
-        return service_account
-    return None
 
 
 def _validate_slice_config(config: config_pb2.SliceConfig) -> None:
@@ -258,8 +235,8 @@ class GcpWorkerProvider:
             project_id=self._project_id,
             zone=zone,
             vm_name=config.name,
-            ssh_key_file=_ssh_key_file(self._ssh_config),
-            impersonate_service_account=_impersonate_service_account(self._ssh_config, request.service_account),
+            ssh_key_file=ssh_key_file(self._ssh_config),
+            impersonate_service_account=ssh_impersonate_service_account(self._ssh_config, request.service_account),
         )
 
         return GcpStandaloneWorkerHandle(
@@ -558,8 +535,8 @@ class GcpWorkerProvider:
                 project_id=self._project_id,
                 zone=vm.zone,
                 vm_name=vm.name,
-                ssh_key_file=_ssh_key_file(self._ssh_config),
-                impersonate_service_account=_impersonate_service_account(self._ssh_config, vm.service_account),
+                ssh_key_file=ssh_key_file(self._ssh_config),
+                impersonate_service_account=ssh_impersonate_service_account(self._ssh_config, vm.service_account),
             )
             handles.append(
                 GcpStandaloneWorkerHandle(

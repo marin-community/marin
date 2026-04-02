@@ -28,6 +28,19 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 logger = logging.getLogger(__name__)
 
 
+def _extend_gcloud_ssh_options(
+    cmd: list[str],
+    *,
+    ssh_key_file: str | None = None,
+    impersonate_service_account: str | None = None,
+) -> list[str]:
+    if ssh_key_file:
+        cmd.append(f"--ssh-key-file={ssh_key_file}")
+    if impersonate_service_account:
+        cmd.append(f"--impersonate-service-account={impersonate_service_account}")
+    return cmd
+
+
 # ============================================================================
 # Protocol
 # ============================================================================
@@ -108,15 +121,20 @@ class GcloudRemoteExec:
             f"--zone={self._zone}",
             f"--project={self.project_id}",
             f"--worker={self.worker_index}",
-            "--quiet",
-            "--ssh-flag=-oBatchMode=yes",
-            "--command",
-            command,
         ]
-        if self.ssh_key_file:
-            cmd.insert(9, f"--ssh-key-file={self.ssh_key_file}")
-        if self.impersonate_service_account:
-            cmd.insert(9, f"--impersonate-service-account={self.impersonate_service_account}")
+        _extend_gcloud_ssh_options(
+            cmd,
+            ssh_key_file=self.ssh_key_file,
+            impersonate_service_account=self.impersonate_service_account,
+        )
+        cmd.extend(
+            [
+                "--quiet",
+                "--ssh-flag=-oBatchMode=yes",
+                "--command",
+                command,
+            ]
+        )
         return cmd
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
@@ -165,15 +183,20 @@ class GceRemoteExec:
             target,
             f"--zone={self.zone}",
             f"--project={self.project_id}",
-            "--quiet",
-            "--ssh-flag=-oBatchMode=yes",
-            "--command",
-            command,
         ]
-        if self.ssh_key_file:
-            cmd.insert(6, f"--ssh-key-file={self.ssh_key_file}")
-        if self.impersonate_service_account:
-            cmd.insert(6, f"--impersonate-service-account={self.impersonate_service_account}")
+        _extend_gcloud_ssh_options(
+            cmd,
+            ssh_key_file=self.ssh_key_file,
+            impersonate_service_account=self.impersonate_service_account,
+        )
+        cmd.extend(
+            [
+                "--quiet",
+                "--ssh-flag=-oBatchMode=yes",
+                "--command",
+                command,
+            ]
+        )
         return cmd
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
