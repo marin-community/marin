@@ -18,6 +18,7 @@ Usage:
 import gc
 import logging
 import os
+import sys
 import tempfile
 import time
 from typing import Any
@@ -301,14 +302,57 @@ def print_results(results: list[dict[str, Any]]) -> None:
     print()
 
 
+def _run_single(mode: str, path: str) -> dict[str, Any]:
+    """Run a single reader in the current process and return its result dict."""
+    result = READERS[mode](path)
+    return result
+
+
+def _run_in_subprocess(mode: str, path: str, script_path: str) -> dict[str, Any]:
+    """Run a single reader in a fresh subprocess for accurate memory measurement."""
+    import json
+    import subprocess
+
+    cmd = [
+        sys.executable,
+        script_path,
+        "--file",
+        path,
+        "--modes",
+        mode,
+        "--json",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if proc.returncode != 0:
+        raise RuntimeError(f"Subprocess for {mode} failed:\n{proc.stderr}")
+    # Parse the last JSON line from stdout
+    for line in reversed(proc.stdout.strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            return json.loads(line)
+    raise RuntimeError(f"No JSON output from subprocess for {mode}:\n{proc.stdout}")
+
+
 @click.command()
 @click.option("--size-gb", default=2.0, help="Target on-disk file size in GB")
 @click.option("--row-group-mb", default=100, help="Approximate row group size in MB")
 @click.option("--modes", default=None, help="Comma-separated reader modes (default: all)")
 @click.option("--keep-file", is_flag=True, help="Don't delete the test file after benchmark")
 @click.option("--file", "file_path", default=None, help="Use an existing Parquet file instead of generating one")
-def main(size_gb: float, row_group_mb: int, modes: str | None, keep_file: bool, file_path: str | None):
-    """Benchmark parquet reading strategies."""
+@click.option("--json", "json_output", is_flag=True, hidden=True, help="Print single result as JSON (internal)")
+def main(
+    size_gb: float,
+    row_group_mb: int,
+    modes: str | None,
+    keep_file: bool,
+    file_path: str | None,
+    json_output: bool,
+):
+    """Benchmark parquet reading strategies.
+
+    Each reader runs in a separate subprocess for accurate, isolated
+    memory measurements.
+    """
     if modes:
         selected = [m.strip() for m in modes.split(",")]
         for m in selected:
@@ -316,6 +360,17 @@ def main(size_gb: float, row_group_mb: int, modes: str | None, keep_file: bool, 
                 raise click.BadParameter(f"Unknown mode: {m}. Available: {', '.join(READERS)}")
     else:
         selected = list(READERS)
+
+    # --json mode: run a single reader in-process and print result as JSON.
+    # Used by the subprocess spawner above.
+    if json_output:
+        assert file_path, "--json requires --file"
+        assert len(selected) == 1, "--json requires exactly one --modes"
+        import json
+
+        result = _run_single(selected[0], file_path)
+        print(json.dumps(result))
+        return
 
     if file_path:
         path = file_path
@@ -326,12 +381,13 @@ def main(size_gb: float, row_group_mb: int, modes: str | None, keep_file: bool, 
         path = os.path.join(tmpdir, "bench.parquet")
         write_test_file(path, int(size_gb * 1e9), row_group_mb=row_group_mb)
 
+    script_path = os.path.abspath(__file__)
+
     try:
         results = []
         for mode in selected:
-            logger.info("Running reader: %s", mode)
-            _reset_memory()
-            result = READERS[mode](path)
+            logger.info("Running reader: %s (subprocess)", mode)
+            result = _run_in_subprocess(mode, path, script_path)
             results.append(result)
             logger.info(
                 "  %s: %d rows in %.2fs, RSS delta %.3f GB, Arrow pool %.1f MB",
