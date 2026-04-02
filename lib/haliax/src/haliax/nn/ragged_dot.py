@@ -51,6 +51,7 @@ def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.A
         interpret=jax.default_backend() == "cpu",
     )
 
+
 def _triton_ragged_dot_kernel(
     a_ref,
     b_ref,
@@ -98,9 +99,7 @@ def _triton_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) 
     cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
 
     return pl.pallas_call(
-        lambda a, b, lo, hi, out: _triton_ragged_dot_kernel(
-            a, b, lo, hi, out, block_m=block_m, block_k=block_k
-        ),
+        lambda a, b, lo, hi, out: _triton_ragged_dot_kernel(a, b, lo, hi, out, block_m=block_m, block_k=block_k),
         out_shape=jax.ShapeDtypeStruct((m, n), lhs.dtype),
         in_specs=[
             pl.no_block_spec,
