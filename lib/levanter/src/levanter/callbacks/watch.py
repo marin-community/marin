@@ -12,7 +12,7 @@ from jaxtyping import PyTree
 import levanter.tracker
 from levanter.analysis.tree_stats import summary_statistics_for_tree
 from levanter.callbacks import JitCallback
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import SummaryStats
 from levanter.trainer_state import InsideJitInfo, TrainerState
 
 
@@ -64,7 +64,7 @@ def compute_watch_stats(
     updates: PyTree | None = None,
     opt_state: PyTree | None = None,
     model_tree_type: type | None = None,
-) -> dict[str, jax.Array | Histogram]:
+) -> dict[str, jax.Array | SummaryStats]:
     """Compute watch metrics for selected training targets.
 
     Args:
@@ -84,7 +84,7 @@ def compute_watch_stats(
     """
     _validate_watch_targets(watch_targets)
 
-    to_log: dict[str, jax.Array | Histogram] = {}
+    to_log: dict[str, jax.Array | SummaryStats] = {}
     tree_targets: dict[Target, tuple[str, PyTree | None]] = {
         "grads": ("grad", grads),
         "params": ("params", params),
@@ -163,7 +163,7 @@ class WatchConfig:
         )
 
 
-class WatchCallback(JitCallback[S, M, dict[str, jax.Array | Histogram]]):
+class WatchCallback(JitCallback[S, M, dict[str, jax.Array | SummaryStats]]):
     """
     A unified callback for watching various aspects of training (gradients, parameters, optimizer state, updates).
     This callback combines the functionality of GradWatchCallback, ParamWatchCallback, OptStateWatchCallback,
@@ -200,7 +200,9 @@ class WatchCallback(JitCallback[S, M, dict[str, jax.Array | Histogram]]):
         # Validate watch targets
         _validate_watch_targets(watch_targets)
 
-    def inside_step(self, state: TrainerState[M], inside_info: InsideJitInfo[M]) -> dict[str, jax.Array | Histogram]:
+    def inside_step(
+        self, state: TrainerState[M], inside_info: InsideJitInfo[M]
+    ) -> dict[str, jax.Array | SummaryStats]:
         return compute_watch_stats(
             watch_targets=self.watch_targets,
             include_norms=self.include_norms,
@@ -214,5 +216,5 @@ class WatchCallback(JitCallback[S, M, dict[str, jax.Array | Histogram]]):
             model_tree_type=type(state.model),
         )
 
-    def on_step(self, step_info: S, cb_info: dict[str, jax.Array | Histogram]):
+    def on_step(self, step_info: S, cb_info: dict[str, jax.Array | SummaryStats]):
         levanter.tracker.log(cb_info, step=int(step_info.step))

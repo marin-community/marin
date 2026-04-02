@@ -8,6 +8,7 @@ import numpy as np
 from jax._src.state.indexing import dslice
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
+from jax.sharding import PartitionSpec as P
 from jaxtyping import ArrayLike, Scalar
 
 import haliax as hax
@@ -17,42 +18,78 @@ from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
 
 class Histogram(equinox.Module):
-    """
-    Has enough information to log to tensorboard and wandb
-    """
+    """Bucket payload for a summary statistic."""
 
-    min: Scalar
-    max: Scalar
-    num: Scalar | int
-    sum: Scalar
-    sum_squares: Scalar
     bucket_limits: jax.Array
     bucket_counts: jax.Array
 
-    @staticmethod
-    def from_array(array: jax.Array, num_bins: int = 31) -> "Histogram":
-        array = array.ravel()
-        min = array.min()
-        max = array.max()
-        num = array.size
-        sum = array.sum()
-        sum_squares = (array**2).sum()
-        counts, edges = jax.numpy.histogram(array, bins=num_bins)
-        return Histogram(min, max, num, sum, sum_squares, edges, counts)
-
-    @staticmethod
-    def from_named_array(array: hax.NamedArray, num_bins: int = 31) -> "Histogram":
-        raw_array = array.array
-        min = raw_array.min()
-        max = raw_array.max()
-        num = array.size
-        sum = raw_array.sum()
-        sum_squares = (raw_array**2).sum()
-        counts, edges = sharded_histogram(array, bins=num_bins)
-        return Histogram(min, max, num, sum, sum_squares, edges, counts)
-
     def to_numpy_histogram(self) -> tuple[np.ndarray, np.ndarray]:
         return np.array(self.bucket_counts), np.array(self.bucket_limits)
+
+
+class SummaryStats(equinox.Module):
+    """Summary statistics for an array, optionally including a histogram."""
+
+    min: Scalar
+    max: Scalar
+    num: Scalar
+    nonzero_count: Scalar
+    sum: Scalar
+    sum_squares: Scalar
+    histogram: Histogram | None = None
+
+    @staticmethod
+    def from_array(
+        array: jax.Array,
+        num_bins: int = 31,
+        *,
+        include_histogram: bool = True,
+        min_value: Scalar | None = None,
+        max_value: Scalar | None = None,
+    ) -> "SummaryStats":
+        return SummaryStats.from_sharded_array(
+            array,
+            num_bins=num_bins,
+            include_histogram=include_histogram,
+            min_value=min_value,
+            max_value=max_value,
+        )
+
+    @staticmethod
+    def from_sharded_array(
+        array: jax.Array,
+        num_bins: int = 31,
+        *,
+        include_histogram: bool = True,
+        min_value: Scalar | None = None,
+        max_value: Scalar | None = None,
+    ) -> "SummaryStats":
+        array = array.ravel()
+        min = array.min() if min_value is None else jnp.asarray(min_value, dtype=array.dtype)
+        max = array.max() if max_value is None else jnp.asarray(max_value, dtype=array.dtype)
+        nonzero_count = jnp.count_nonzero(array)
+        num = jnp.asarray(array.size, dtype=nonzero_count.dtype)
+        sum = array.sum()
+        sum_squares = (array**2).sum()
+        histogram = None
+        if include_histogram:
+            edges = jnp.histogram_bin_edges(jnp.stack([min, max]), bins=num_bins)
+            counts = sharded_histogram_array(array, edges)
+            histogram = Histogram(edges, counts)
+        return SummaryStats(min, max, num, nonzero_count, sum, sum_squares, histogram)
+
+    @staticmethod
+    def from_named_array(
+        array: hax.NamedArray,
+        num_bins: int = 31,
+        *,
+        include_histogram: bool = True,
+    ) -> "SummaryStats":
+        return SummaryStats.from_sharded_array(
+            array.array,
+            num_bins=num_bins,
+            include_histogram=include_histogram,
+        )
 
     @property
     def mean(self) -> Scalar:
@@ -60,15 +97,17 @@ class Histogram(equinox.Module):
 
     @property
     def variance(self) -> Scalar:
-        """
-        Calculate the variance of the histogram.
-        Variance = E[X^2] - (E[X])^2
-        where E[X] is the mean and E[X^2] is the mean of squares.
-        """
-        mean = self.mean
-        mean_of_squares = self.sum_squares / self.num
-        variance = mean_of_squares - (mean**2)
-        return variance
+        """Calculate the variance as E[X^2] - (E[X])^2."""
+        return (self.sum_squares / self.num) - (self.mean**2)
+
+    @property
+    def rms(self) -> Scalar:
+        return jnp.sqrt(self.sum_squares / self.num)
+
+    def to_numpy_histogram(self) -> tuple[np.ndarray, np.ndarray]:
+        if self.histogram is None:
+            raise ValueError("SummaryStats does not include a histogram")
+        return self.histogram.to_numpy_histogram()
 
 
 def sharded_histogram(a: NamedArray, bins: int | ArrayLike = 10) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -84,6 +123,24 @@ def sharded_histogram(a: NamedArray, bins: int | ArrayLike = 10) -> tuple[jnp.nd
     """
     edges = jnp.histogram_bin_edges(a.array, bins=bins)
     return _shardmap_histogram(a, edges), edges
+
+
+def sharded_histogram_array(a: jax.Array, bin_edges: ArrayLike) -> jnp.ndarray:
+    spec = _array_spec(a)
+    flattened_spec = _flattened_spec(spec)
+
+    if len(flattened_spec) == 0:
+        return _single_shard_histogram_array(a, bin_edges, ())
+
+    def _wrapped_hist(arr, edges):
+        return _single_shard_histogram_array(arr, bin_edges=edges, reduce_mesh=flattened_spec)
+
+    return jax.shard_map(
+        _wrapped_hist,
+        in_specs=(spec, P(None)),
+        out_specs=P(None),
+        check_vma=False,
+    )(a, bin_edges)
 
 
 def _single_shard_histogram(a: NamedArray, bin_edges, reduce_mesh):
@@ -119,6 +176,36 @@ def _single_shard_histogram(a: NamedArray, bin_edges, reduce_mesh):
     return counts
 
 
+def _single_shard_histogram_array(a: jax.Array, bin_edges, reduce_mesh):
+    """Histogram counts for one shard with the last bin inclusive."""
+    a = a.flatten()
+    num_bins = bin_edges.shape[0] - 1
+    orig_len = a.shape[0]
+    padded_len = ((orig_len + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
+    pad_len = padded_len - orig_len
+
+    if pad_len > 0:
+        a = jnp.pad(a, (0, pad_len))
+
+    left_edges = bin_edges[:-1][:, None]
+    right_edges = bin_edges[1:][:, None]
+    is_last_bin = (jnp.arange(num_bins) == (num_bins - 1))[:, None]
+
+    def _body(tile_index: int, running_counts: jax.Array) -> jax.Array:
+        start = tile_index * TILE_SIZE
+        tile = jax.lax.dynamic_slice_in_dim(a, start, TILE_SIZE, axis=0)
+        valid = (start + jnp.arange(TILE_SIZE)) < orig_len
+        tile_exp = tile[None, :]
+        in_bin = (tile_exp >= left_edges) & ((tile_exp < right_edges) | (is_last_bin & (tile_exp <= right_edges)))
+        return running_counts + (in_bin & valid[None, :]).sum(axis=1, dtype=jnp.int32)
+
+    counts = jax.lax.fori_loop(0, padded_len // TILE_SIZE, _body, jnp.zeros((num_bins,), dtype=jnp.int32))
+
+    if len(reduce_mesh):
+        counts = jax.lax.psum(counts, axis_name=reduce_mesh)
+    return counts
+
+
 def _shardmap_histogram(a: NamedArray, bins):
     spec = hax.partitioning.pspec_for_axis(a.axes)
     flattened_spec = _flattened_spec(spec)
@@ -146,6 +233,21 @@ def _flattened_spec(spec):
             out.append(s)
 
     return tuple(out)
+
+
+def _array_spec(a: jax.Array) -> P:
+    abstract = jax.typeof(a)
+    sharding = getattr(abstract, "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    if spec is not None:
+        return spec
+
+    sharding = getattr(a, "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    if spec is not None:
+        return spec
+
+    return P(*([None] * a.ndim))
 
 
 TILE_SIZE = 1024  # Can tune based on memory pressure

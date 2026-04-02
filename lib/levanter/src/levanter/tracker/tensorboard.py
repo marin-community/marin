@@ -9,11 +9,11 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import jax
-from rigging.filesystem import url_to_fs
 import numpy as np
+from rigging.filesystem import url_to_fs
 
 from levanter.tracker import Tracker, TrackerConfig
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import SummaryStats
 
 pylogger = logging.getLogger(__name__)
 
@@ -49,21 +49,29 @@ class TensorboardTracker(Tracker):
                     else:
                         value = np.array(value)
 
-                if isinstance(value, Histogram):
-                    num = value.num
-                    if hasattr(num, "item"):
-                        num = num.item()
-                    self.writer.add_histogram_raw(
-                        k,
-                        min=value.min.item(),
-                        max=value.max.item(),
-                        num=num,
-                        sum=value.sum.item(),
-                        sum_squares=value.sum_squares.item(),
-                        bucket_limits=np.array(value.bucket_limits).tolist(),
-                        bucket_counts=np.concatenate([[0], np.array(value.bucket_counts)]).tolist(),
-                        global_step=step,
-                    )
+                if isinstance(value, SummaryStats):
+                    self.writer.add_scalar(f"{k}/min", value.min.item(), global_step=step)
+                    self.writer.add_scalar(f"{k}/max", value.max.item(), global_step=step)
+                    self.writer.add_scalar(f"{k}/num", int(value.num), global_step=step)
+                    self.writer.add_scalar(f"{k}/nonzero_count", int(value.nonzero_count), global_step=step)
+                    self.writer.add_scalar(f"{k}/sum", value.sum.item(), global_step=step)
+                    self.writer.add_scalar(f"{k}/sum_squares", value.sum_squares.item(), global_step=step)
+                    self.writer.add_scalar(f"{k}/mean", value.mean.item(), global_step=step)
+                    self.writer.add_scalar(f"{k}/variance", value.variance.item(), global_step=step)
+                    self.writer.add_scalar(f"{k}/rms", value.rms.item(), global_step=step)
+                    if value.histogram is not None:
+                        counts, limits = value.histogram.to_numpy_histogram()
+                        self.writer.add_histogram_raw(
+                            f"{k}/histogram",
+                            min=value.min.item(),
+                            max=value.max.item(),
+                            num=int(value.num),
+                            sum=value.sum.item(),
+                            sum_squares=value.sum_squares.item(),
+                            bucket_limits=np.array(limits).tolist(),
+                            bucket_counts=np.concatenate([[0], np.array(counts)]).tolist(),
+                            global_step=step,
+                        )
                 elif isinstance(value, str):
                     self.writer.add_text(k, value)
                 elif isinstance(value, np.ndarray):
@@ -88,6 +96,29 @@ class TensorboardTracker(Tracker):
         for k, v in metrics.items():
             if _is_scalar(v):
                 self.writer.add_scalar(k, v, global_step=None)
+            elif isinstance(v, SummaryStats):
+                self.writer.add_scalar(f"{k}/min", v.min.item(), global_step=None)
+                self.writer.add_scalar(f"{k}/max", v.max.item(), global_step=None)
+                self.writer.add_scalar(f"{k}/num", int(v.num), global_step=None)
+                self.writer.add_scalar(f"{k}/nonzero_count", int(v.nonzero_count), global_step=None)
+                self.writer.add_scalar(f"{k}/sum", v.sum.item(), global_step=None)
+                self.writer.add_scalar(f"{k}/sum_squares", v.sum_squares.item(), global_step=None)
+                self.writer.add_scalar(f"{k}/mean", v.mean.item(), global_step=None)
+                self.writer.add_scalar(f"{k}/variance", v.variance.item(), global_step=None)
+                self.writer.add_scalar(f"{k}/rms", v.rms.item(), global_step=None)
+                if v.histogram is not None:
+                    counts, limits = v.histogram.to_numpy_histogram()
+                    self.writer.add_histogram_raw(
+                        f"{k}/histogram",
+                        min=v.min.item(),
+                        max=v.max.item(),
+                        num=int(v.num),
+                        sum=v.sum.item(),
+                        sum_squares=v.sum_squares.item(),
+                        bucket_limits=np.array(limits).tolist(),
+                        bucket_counts=np.concatenate([[0], np.array(counts)]).tolist(),
+                        global_step=None,
+                    )
             elif isinstance(v, str):
                 self.writer.add_text(k, v, global_step=None)
             else:
