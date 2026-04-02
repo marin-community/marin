@@ -1119,6 +1119,8 @@ class ControllerTransitions:
         address: str,
         metadata: cluster_pb2.WorkerMetadata,
         ts: Timestamp,
+        slice_id: str = "",
+        scale_group: str = "",
     ) -> TxResult:
         """Register a new worker or refresh an existing one."""
         attrs: list[tuple[str, str, str | None, int | None, float | None]] = []
@@ -1148,14 +1150,15 @@ class ControllerTransitions:
                 "worker_id, address, metadata_proto, healthy, active, consecutive_failures, last_heartbeat_ms, "
                 "committed_cpu_millicores, committed_mem_bytes, committed_gpu, committed_tpu, resource_snapshot_proto, "
                 "total_cpu_millicores, total_memory_bytes, total_gpu_count, total_tpu_count, "
-                "device_type, device_variant"
-                ") VALUES (?, ?, ?, 1, 1, 0, ?, 0, 0, 0, 0, NULL, ?, ?, ?, ?, ?, ?) "
+                "device_type, device_variant, slice_id, scale_group"
+                ") VALUES (?, ?, ?, 1, 1, 0, ?, 0, 0, 0, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(worker_id) DO UPDATE SET "
                 "address=excluded.address, metadata_proto=excluded.metadata_proto, healthy=1, active=1, "
                 "consecutive_failures=0, last_heartbeat_ms=excluded.last_heartbeat_ms, "
                 "total_cpu_millicores=excluded.total_cpu_millicores, total_memory_bytes=excluded.total_memory_bytes, "
                 "total_gpu_count=excluded.total_gpu_count, total_tpu_count=excluded.total_tpu_count, "
-                "device_type=excluded.device_type, device_variant=excluded.device_variant",
+                "device_type=excluded.device_type, device_variant=excluded.device_variant, "
+                "slice_id=excluded.slice_id, scale_group=excluded.scale_group",
                 (
                     str(worker_id),
                     address,
@@ -1167,6 +1170,8 @@ class ControllerTransitions:
                     tpu_count,
                     device_type,
                     device_variant,
+                    slice_id,
+                    scale_group,
                 ),
             )
             cur.execute("DELETE FROM worker_attributes WHERE worker_id = ?", (str(worker_id),))
@@ -1197,8 +1202,17 @@ class ControllerTransitions:
         address: str,
         metadata: cluster_pb2.WorkerMetadata,
         ts: Timestamp,
+        slice_id: str = "",
+        scale_group: str = "",
     ) -> WorkerRegistrationResult:
-        self.register_or_refresh_worker(worker_id=worker_id, address=address, metadata=metadata, ts=ts)
+        self.register_or_refresh_worker(
+            worker_id=worker_id,
+            address=address,
+            metadata=metadata,
+            ts=ts,
+            slice_id=slice_id,
+            scale_group=scale_group,
+        )
         return WorkerRegistrationResult(worker_id=worker_id)
 
     def queue_assignments(self, assignments: list[Assignment]) -> AssignmentResult:
@@ -2830,7 +2844,6 @@ class ControllerTransitions:
                 ).fetchall()
 
             for row in pending_rows:
-
                 task_id = str(row["task_id"])
                 attempt_id = int(row["current_attempt_id"]) + 1
                 job_req = cluster_pb2.Controller.LaunchJobRequest()
