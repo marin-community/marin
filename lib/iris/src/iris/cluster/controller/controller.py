@@ -88,6 +88,7 @@ from iris.cluster.controller.transitions import (
     Assignment,
     ClusterCapacity,
     ControllerTransitions,
+    DIRECT_PROVIDER_PROMOTION_RATE,
     HeartbeatAction,
     ReservationClaim,
     SchedulingEvent,
@@ -105,7 +106,7 @@ from rigging.log_setup import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2
 from iris.rpc.auth import TokenVerifier
-from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp
+from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp, TokenBucket
 
 logger = logging.getLogger(__name__)
 
@@ -947,6 +948,10 @@ class Controller:
         self._provider: TaskProvider | K8sTaskProvider = provider
         self._provider_scheduling_events: list[SchedulingEvent] = []
         self._provider_capacity: ClusterCapacity | None = None
+        self._promotion_bucket = TokenBucket(
+            capacity=DIRECT_PROVIDER_PROMOTION_RATE,
+            refill_period=Duration.from_minutes(1),
+        )
 
         config.local_state_dir.mkdir(parents=True, exist_ok=True)
         if db is not None:
@@ -1271,11 +1276,14 @@ class Controller:
         assert isinstance(self._provider, K8sTaskProvider)
         provider = self._provider
         with self._heartbeat_lock:
+            max_promotions = self._promotion_bucket.available
             batch = self._transitions.drain_for_direct_provider(
-                capacity=self._provider_capacity,
+                max_promotions=max_promotions,
             )
             if not batch.tasks_to_run and not batch.running_tasks and not batch.tasks_to_kill:
                 return
+            if batch.tasks_to_run:
+                self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
             result = provider.sync(batch)
             tx_result = self._transitions.apply_direct_provider_updates(result.updates)
             self._provider_scheduling_events = list(result.scheduling_events) if result.scheduling_events else []

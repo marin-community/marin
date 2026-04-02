@@ -94,15 +94,13 @@ WORKER_TASK_HISTORY_RETENTION = 500
 WORKER_RESOURCE_HISTORY_RETENTION = 500
 """Maximum worker_resource_history rows retained per worker."""
 
-DIRECT_PROVIDER_BOOTSTRAP_BATCH = 64
-"""Max tasks promoted per sync cycle when no capacity info is available yet."""
+DIRECT_PROVIDER_PROMOTION_RATE = 128
+"""Token bucket capacity for task promotion (pods per minute).
 
-DIRECT_PROVIDER_NODE_OVERCOMMIT = 16
-"""Pods per schedulable node allowed for the direct provider scheduler.
-
-Matches the worker provider's tasks-per-worker ratio so that the direct
-provider can keep a similar number of tasks in-flight relative to cluster size.
-"""
+The direct provider relies on the Kubernetes scheduler (and the cloud
+autoscaler) for placement and capacity management.  Pods that cannot be
+scheduled immediately stay Pending — that signal drives node provisioning.
+This rate limit exists only to bound API server pressure."""
 
 
 @dataclass(frozen=True)
@@ -456,14 +454,6 @@ def _finalize_terminal_job(
         tasks_to_kill.update(child_tasks_to_kill)
         task_kill_workers.update(child_task_kill_workers)
     return tasks_to_kill, task_kill_workers
-
-
-def _compute_max_promotions(capacity: ClusterCapacity | None, active_count: int) -> int:
-    """Max new tasks to promote, given cluster capacity and already-active count."""
-    if capacity is None:
-        return max(DIRECT_PROVIDER_BOOTSTRAP_BATCH - active_count, 0)
-    target = max(capacity.schedulable_nodes * DIRECT_PROVIDER_NODE_OVERCOMMIT, DIRECT_PROVIDER_BOOTSTRAP_BATCH)
-    return max(target - active_count, 0)
 
 
 def _resolve_task_failure_state(
@@ -2545,35 +2535,23 @@ class ControllerTransitions:
 
     def drain_for_direct_provider(
         self,
-        capacity: ClusterCapacity | None = None,
+        max_promotions: int = DIRECT_PROVIDER_PROMOTION_RATE,
     ) -> DirectProviderBatch:
         """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
-        Promotes schedulable PENDING tasks to ASSIGNED (NULL worker_id),
-        builds RunTaskRequest for each, and collects:
+        Promotes up to ``max_promotions`` PENDING tasks to ASSIGNED (NULL
+        worker_id), builds RunTaskRequest for each, and collects:
         - Newly promoted tasks -> tasks_to_run
         - Already ASSIGNED/BUILDING/RUNNING tasks with NULL worker_id -> running_tasks
         - Kill entries with NULL worker_id -> tasks_to_kill (deleted from queue)
-
-        When ``capacity`` is provided, limits promotions to cluster size.
         """
         with self._db.transaction() as cur:
             now_ms = Timestamp.now().epoch_ms()
 
-            active_states = tuple(sorted(ACTIVE_TASK_STATES))
-            active_placeholders = ",".join("?" * len(active_states))
-            (active_count,) = cur.execute(
-                "SELECT COUNT(*) FROM tasks t "
-                f"WHERE t.current_worker_id IS NULL AND t.state IN ({active_placeholders})",
-                active_states,
-            ).fetchone()
-
-            max_promotions = _compute_max_promotions(capacity, active_count)
-
             newly_promoted: set[str] = set()
             tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest] = []
 
-            if max_promotions == 0:
+            if max_promotions <= 0:
                 pending_rows = []
             else:
                 pending_rows = cur.execute(
