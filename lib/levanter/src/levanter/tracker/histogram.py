@@ -12,6 +12,8 @@ from jax.sharding import PartitionSpec as P
 from jaxtyping import ArrayLike, Scalar
 
 import haliax as hax
+from haliax import NamedArray
+from haliax.partitioning import shard_map
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
 
@@ -83,11 +85,18 @@ class SummaryStats(equinox.Module):
         *,
         include_histogram: bool = True,
     ) -> "SummaryStats":
-        return SummaryStats.from_sharded_array(
-            array.array,
-            num_bins=num_bins,
-            include_histogram=include_histogram,
-        )
+        raw_array = array.array
+        min = raw_array.min()
+        max = raw_array.max()
+        nonzero_count = jnp.count_nonzero(raw_array)
+        num = jnp.asarray(array.size, dtype=nonzero_count.dtype)
+        sum = raw_array.sum()
+        sum_squares = (raw_array**2).sum()
+        histogram = None
+        if include_histogram:
+            counts, edges = sharded_histogram(array, bins=num_bins)
+            histogram = Histogram(edges, counts)
+        return SummaryStats(min, max, num, nonzero_count, sum, sum_squares, histogram)
 
     @property
     def mean(self) -> Scalar:
@@ -108,6 +117,12 @@ class SummaryStats(equinox.Module):
         return self.histogram.to_numpy_histogram()
 
 
+def sharded_histogram(a: NamedArray, bins: int | ArrayLike = 10) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Histogram for a NamedArray using its logical axis mapping to pick shard reductions."""
+    edges = jnp.histogram_bin_edges(a.array, bins=bins)
+    return _shardmap_histogram(a, edges), edges
+
+
 def sharded_histogram_array(a: jax.Array, bin_edges: ArrayLike) -> jnp.ndarray:
     spec = _array_spec(a)
     flattened_spec = _flattened_spec(spec)
@@ -124,6 +139,22 @@ def sharded_histogram_array(a: jax.Array, bin_edges: ArrayLike) -> jnp.ndarray:
         out_specs=P(None),
         check_vma=False,
     )(a, bin_edges)
+
+
+def _single_shard_histogram(a: NamedArray, bin_edges, reduce_mesh):
+    """Histogram counts for one NamedArray shard using logical axis mapping."""
+    a_flat = a.array.flatten()
+    left_edges = bin_edges[:-1, None]
+    right_edges = bin_edges[1:, None]
+    is_last_bin = (jnp.arange(bin_edges.shape[0] - 1) == (bin_edges.shape[0] - 2))[:, None]
+
+    a_exp = a_flat[None, :]
+    in_bin = (a_exp >= left_edges) & ((a_exp < right_edges) | (is_last_bin & (a_exp <= right_edges)))
+    counts = in_bin.sum(axis=1, dtype=jnp.int32)
+
+    if len(reduce_mesh):
+        counts = jax.lax.psum(counts, axis_name=reduce_mesh)
+    return counts
 
 
 def _single_shard_histogram_array(a: jax.Array, bin_edges, reduce_mesh):
@@ -154,6 +185,17 @@ def _single_shard_histogram_array(a: jax.Array, bin_edges, reduce_mesh):
     if len(reduce_mesh):
         counts = jax.lax.psum(counts, axis_name=reduce_mesh)
     return counts
+
+
+def _shardmap_histogram(a: NamedArray, bins):
+    spec = hax.partitioning.pspec_for_axis(a.axes)
+    flattened_spec = _flattened_spec(spec)
+
+    def _wrapped_hist(arr):
+        return _single_shard_histogram(arr, bin_edges=bins, reduce_mesh=flattened_spec)
+
+    shard_h = shard_map(_wrapped_hist)
+    return shard_h(a)
 
 
 def _flattened_spec(spec):

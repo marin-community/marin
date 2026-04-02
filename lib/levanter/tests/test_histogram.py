@@ -30,6 +30,21 @@ def test_sharded_histogram_array_matches_jnp_histogram():
         assert jnp.allclose(bin_edges, expected_edges)
 
 
+def test_summary_stats_from_named_array_matches_jnp_histogram():
+    Batch = hax.Axis("batch", 64)
+    Feature = hax.Axis("feature", 128)
+
+    with use_test_mesh(), hax.axis_mapping({Batch.name: ResourceAxis.DATA}):
+        array = hax.shard(hax.random.normal(PRNGKey(3), (Batch, Feature)))
+        stats = SummaryStats.from_named_array(array)
+
+        assert stats.histogram is not None
+        expected_counts, expected_edges = jnp.histogram(array.array, bins=31)
+
+        assert jnp.array_equal(stats.histogram.bucket_counts, expected_counts)
+        assert jnp.allclose(stats.histogram.bucket_limits, expected_edges)
+
+
 def test_sharded_histogram_array_matches_jnp_histogram_under_vmap():
     Layer = hax.Axis("layer", 4)
     Batch = hax.Axis("batch", 16)
