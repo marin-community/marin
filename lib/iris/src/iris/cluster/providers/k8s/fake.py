@@ -60,6 +60,9 @@ _PLURAL_TO_SINGULAR = {
     "jobs": "job",
     "services": "service",
     "nodepools": "nodepool",
+    "poddisruptionbudgets": "poddisruptionbudget",
+    "pdb": "poddisruptionbudget",
+    "pdbs": "poddisruptionbudget",
 }
 
 

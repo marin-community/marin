@@ -804,3 +804,97 @@ def test_configmap_cleaned_up_on_delete(provider, k8s):
 
     assert k8s.get_json("pod", "iris-pod-1") is None
     assert k8s.get_json("configmap", "iris-pod-1-wf") is None
+
+
+# ---------------------------------------------------------------------------
+# PodDisruptionBudget for coordinator tasks
+# ---------------------------------------------------------------------------
+
+
+def test_sync_creates_pdb_for_coordinator_task(provider, k8s):
+    """Coordinator tasks (single-task, no accelerator) get a PDB."""
+    req = make_run_req("/coord-job/0")
+    req.num_tasks = 1
+    batch = make_batch(tasks_to_run=[req])
+
+    provider.sync(batch)
+
+    pdbs = k8s.list_json("poddisruptionbudget")
+    assert len(pdbs) == 1
+    pdb = pdbs[0]
+    assert pdb["spec"]["minAvailable"] == 1
+    assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == _task_hash("/coord-job/0")
+
+
+def test_sync_no_pdb_for_gpu_task(provider, k8s):
+    """GPU tasks do not get a PDB."""
+    req = make_run_req("/gpu-job/0")
+    req.num_tasks = 1
+    req.resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="A100", count=4))
+    batch = make_batch(tasks_to_run=[req])
+
+    provider.sync(batch)
+
+    pdbs = k8s.list_json("poddisruptionbudget")
+    assert len(pdbs) == 0
+
+
+def test_sync_no_pdb_for_multi_task(provider, k8s):
+    """Multi-task jobs do not get a PDB."""
+    req = make_run_req("/worker-job/0")
+    req.num_tasks = 4
+    batch = make_batch(tasks_to_run=[req])
+
+    provider.sync(batch)
+
+    pdbs = k8s.list_json("poddisruptionbudget")
+    assert len(pdbs) == 0
+
+
+def test_bulk_delete_cleans_up_pdbs(provider, k8s):
+    """_bulk_delete_task_pods also deletes associated PDBs."""
+    task_id = "/coord-job/0"
+    task_hash = _task_hash(task_id)
+    labels = {
+        _LABEL_MANAGED: "true",
+        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+        _LABEL_TASK_HASH: task_hash,
+    }
+
+    populate_pod(k8s, "iris-coord-pod", "Running", labels={_LABEL_TASK_HASH: task_hash})
+    pdb = {
+        "kind": "PodDisruptionBudget",
+        "metadata": {"name": "iris-coord-pod-pdb", "labels": labels},
+        "spec": {"minAvailable": 1},
+    }
+    k8s.seed_resource("poddisruptionbudget", "iris-coord-pod-pdb", pdb)
+
+    cached_pods = k8s.list_json("pods", labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
+    provider._bulk_delete_task_pods([task_id], cached_pods)
+
+    assert k8s.get_json("pod", "iris-coord-pod") is None
+    assert k8s.get_json("poddisruptionbudget", "iris-coord-pod-pdb") is None
+
+
+def test_delete_by_task_id_cleans_up_pdbs(provider, k8s):
+    """_delete_pods_by_task_id also deletes associated PDBs."""
+    task_id = "/coord-job/0"
+    task_hash = _task_hash(task_id)
+    labels = {
+        _LABEL_MANAGED: "true",
+        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+        _LABEL_TASK_HASH: task_hash,
+    }
+
+    populate_pod(k8s, "iris-coord-pod", "Running", labels={_LABEL_TASK_HASH: task_hash})
+    pdb = {
+        "kind": "PodDisruptionBudget",
+        "metadata": {"name": "iris-coord-pod-pdb", "labels": labels},
+        "spec": {"minAvailable": 1},
+    }
+    k8s.seed_resource("poddisruptionbudget", "iris-coord-pod-pdb", pdb)
+
+    provider._delete_pods_by_task_id(task_id)
+
+    assert k8s.get_json("pod", "iris-coord-pod") is None
+    assert k8s.get_json("poddisruptionbudget", "iris-coord-pod-pdb") is None

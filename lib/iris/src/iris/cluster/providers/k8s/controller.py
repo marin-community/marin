@@ -486,6 +486,11 @@ class K8sControllerProvider:
                     "resources": ["pods"],
                     "verbs": ["get", "list"],
                 },
+                {
+                    "apiGroups": ["policy"],
+                    "resources": ["poddisruptionbudgets"],
+                    "verbs": ["get", "list", "create", "update", "patch", "delete"],
+                },
             ],
         }
 
