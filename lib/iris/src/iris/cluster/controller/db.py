@@ -850,39 +850,42 @@ class TimedOutTask:
 
 
 def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOutTask]:
-    """Find executing tasks whose runtime exceeds their job's execution timeout.
+    """Find executing tasks whose current attempt has exceeded the job's execution timeout.
 
-    Reads the timeout from the job's request_proto. Checks tasks in BUILDING or
-    RUNNING state whose started_at_ms + timeout is in the past.
+    Reads the timeout from the job's request_proto. Uses the current attempt's
+    started_at_ms so that retried tasks get a fresh timeout budget per attempt.
     """
+    from iris.cluster.controller.schema import proto_cache, proto_decoder
+
+    decoder = proto_decoder(cluster_pb2.Controller.LaunchJobRequest)
     now_ms = now.epoch_ms()
     executing_states = tuple(sorted(EXECUTING_TASK_STATES))
     placeholders = ",".join("?" for _ in executing_states)
     with db.read_snapshot() as q:
         rows = q.raw(
             f"SELECT t.task_id, t.current_worker_id AS worker_id, "
-            f"t.started_at_ms, j.request_proto "
+            f"ta.started_at_ms AS attempt_started_at_ms, j.request_proto "
             f"FROM tasks t "
             f"JOIN jobs j ON j.job_id = t.job_id "
+            f"JOIN task_attempts ta ON ta.task_id = t.task_id AND ta.attempt_id = t.current_attempt_id "
             f"WHERE t.state IN ({placeholders}) "
             f"AND j.request_proto IS NOT NULL "
-            f"AND t.started_at_ms IS NOT NULL",
+            f"AND ta.started_at_ms IS NOT NULL",
             (*executing_states,),
             decoders={
                 "task_id": JobName.from_wire,
                 "worker_id": lambda v: WorkerId(v) if v is not None else None,
-                "started_at_ms": int,
+                "attempt_started_at_ms": int,
                 "request_proto": bytes,
             },
         )
     result: list[TimedOutTask] = []
     for row in rows:
-        request = cluster_pb2.Controller.LaunchJobRequest()
-        request.ParseFromString(row.request_proto)
+        request = proto_cache.get_or_decode(row.request_proto, decoder)
         if not request.HasField("timeout") or request.timeout.milliseconds <= 0:
             continue
         timeout_ms = int(request.timeout.milliseconds)
-        if row.started_at_ms + timeout_ms <= now_ms:
+        if row.attempt_started_at_ms + timeout_ms <= now_ms:
             result.append(TimedOutTask(task_id=row.task_id, worker_id=row.worker_id))
     return result
 

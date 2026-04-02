@@ -1184,10 +1184,7 @@ class Controller:
             if woken:
                 backoff.reset()
 
-            try:
-                self._enforce_execution_timeouts()
-            except Exception:
-                logger.exception("Execution timeout enforcement failed")
+            self._enforce_execution_timeouts()
 
             outcome = self._run_scheduling()
             if outcome == SchedulingOutcome.ASSIGNMENTS_MADE:

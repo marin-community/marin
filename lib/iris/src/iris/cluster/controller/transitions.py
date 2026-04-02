@@ -13,6 +13,7 @@ from collections import defaultdict
 import json
 import logging
 from dataclasses import dataclass, field
+from collections.abc import Iterable
 from typing import Any, NamedTuple
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
@@ -412,56 +413,69 @@ def _cascade_terminal_job(
     return tasks_to_kill, task_kill_workers
 
 
-def _cascade_coscheduled_failure(
+@dataclass(frozen=True, slots=True)
+class _CoscheduledSibling:
+    task_id: str  # wire format
+    attempt_id: int
+    max_retries_preemption: int
+    worker_id: str | None
+
+
+def _find_coscheduled_siblings(
     cur: Any,
     job_id: JobName,
-    failed_task_id: JobName,
+    exclude_task_id: JobName,
     job_req: "cluster_pb2.Controller.LaunchJobRequest",
-    now_ms: int,
-) -> tuple[set[JobName], dict[JobName, WorkerId]]:
-    """Kill active siblings in a coscheduled job when one task fails terminally.
-
-    Each sibling is marked WORKER_FAILED with exhausted preemption count so it
-    will not be retried.  Worker resources are decommitted for worker-backed
-    tasks; direct-provider siblings (NULL worker_id) skip decommit.
-
-    Returns (tasks_to_kill, task_kill_workers) for the caller to issue kill RPCs.
-    """
+) -> list[_CoscheduledSibling]:
+    """Find active siblings in a coscheduled job (read-only)."""
     if not job_req.HasField("coscheduling"):
-        return set(), {}
-
-    sibling_rows = cur.execute(
+        return []
+    rows = cur.execute(
         "SELECT t.task_id, t.current_attempt_id, t.max_retries_preemption, "
         "t.current_worker_id AS worker_id "
         "FROM tasks t "
         "WHERE t.job_id = ? AND t.task_id != ? AND t.state IN (?, ?, ?)",
         (
             job_id.to_wire(),
-            failed_task_id.to_wire(),
+            exclude_task_id.to_wire(),
             cluster_pb2.TASK_STATE_ASSIGNED,
             cluster_pb2.TASK_STATE_BUILDING,
             cluster_pb2.TASK_STATE_RUNNING,
         ),
     ).fetchall()
+    return [
+        _CoscheduledSibling(
+            task_id=str(r["task_id"]),
+            attempt_id=int(r["current_attempt_id"]),
+            max_retries_preemption=int(r["max_retries_preemption"]),
+            worker_id=str(r["worker_id"]) if r["worker_id"] is not None else None,
+        )
+        for r in rows
+    ]
 
+
+def _terminate_coscheduled_siblings(
+    cur: Any,
+    siblings: Iterable[_CoscheduledSibling],
+    failed_task_id: JobName,
+    job_req: "cluster_pb2.Controller.LaunchJobRequest",
+    now_ms: int,
+) -> tuple[set[JobName], dict[JobName, WorkerId]]:
+    """Terminate coscheduled siblings and decommit their resources.
+
+    Each sibling is marked WORKER_FAILED with exhausted preemption count so it
+    will not be retried.
+    """
     tasks_to_kill: set[JobName] = set()
     task_kill_workers: dict[JobName, WorkerId] = {}
     error = f"Coscheduled sibling {failed_task_id.to_wire()} failed"
 
-    for sibling in sibling_rows:
-        sibling_task_id = str(sibling["task_id"])
-        sibling_worker_id = sibling["worker_id"]
+    for sib in siblings:
         cur.execute(
             "UPDATE task_attempts SET state = ?, "
             "finished_at_ms = COALESCE(finished_at_ms, ?), error = ? "
             "WHERE task_id = ? AND attempt_id = ?",
-            (
-                cluster_pb2.TASK_STATE_WORKER_FAILED,
-                now_ms,
-                error,
-                sibling_task_id,
-                int(sibling["current_attempt_id"]),
-            ),
+            (cluster_pb2.TASK_STATE_WORKER_FAILED, now_ms, error, sib.task_id, sib.attempt_id),
         )
         cur.execute(
             "UPDATE tasks SET state = ?, finished_at_ms = ?, preemption_count = ?, error = ?, "
@@ -470,16 +484,16 @@ def _cascade_coscheduled_failure(
             (
                 cluster_pb2.TASK_STATE_WORKER_FAILED,
                 now_ms,
-                int(sibling["max_retries_preemption"]) + 1,
+                sib.max_retries_preemption + 1,
                 error,
-                sibling_task_id,
+                sib.task_id,
             ),
         )
-        if sibling_worker_id is not None:
-            _decommit_worker_resources(cur, str(sibling_worker_id), job_req.resources)
-            task_kill_workers[JobName.from_wire(sibling_task_id)] = WorkerId(str(sibling_worker_id))
-        cur.execute("DELETE FROM endpoints WHERE task_id = ?", (sibling_task_id,))
-        tasks_to_kill.add(JobName.from_wire(sibling_task_id))
+        if sib.worker_id is not None:
+            _decommit_worker_resources(cur, sib.worker_id, job_req.resources)
+            task_kill_workers[JobName.from_wire(sib.task_id)] = WorkerId(sib.worker_id)
+        cur.execute("DELETE FROM endpoints WHERE task_id = ?", (sib.task_id,))
+        tasks_to_kill.add(JobName.from_wire(sib.task_id))
 
     return tasks_to_kill, task_kill_workers
 
@@ -1503,8 +1517,9 @@ class ControllerTransitions:
 
             # Coscheduled jobs: a terminal host failure should cascade to siblings.
             if job_req is not None and task_state in FAILURE_TASK_STATES:
-                cascade_kill, cascade_workers = _cascade_coscheduled_failure(
-                    cur, task.job_id, update.task_id, job_req, now_ms
+                siblings = _find_coscheduled_siblings(cur, task.job_id, update.task_id, job_req)
+                cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
+                    cur, siblings, update.task_id, job_req, now_ms
                 )
                 tasks_to_kill.update(cascade_kill)
                 task_kill_workers.update(cascade_workers)
@@ -2017,7 +2032,10 @@ class ControllerTransitions:
 
         Each task is moved to TASK_STATE_FAILED with the given reason.
         Timeouts are hard failures — retry logic is intentionally bypassed.
-        Coscheduled siblings are cascaded via _cascade_coscheduled_failure.
+
+        Two-phase design: all reads happen before any writes so that
+        coscheduled siblings sharing a job are never double-processed from
+        stale prefetched rows.
         """
         if not task_ids:
             return TxResult()
@@ -2028,22 +2046,56 @@ class ControllerTransitions:
                 f"SELECT t.task_id, t.job_id, t.current_worker_id AS worker_id, t.current_attempt_id, "
                 f"t.failure_count, j.request_proto, j.is_reservation_holder "
                 f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
-                f"WHERE t.task_id IN ({placeholders}) AND t.state IN (?, ?, ?)",
-                (*wires, *ACTIVE_TASK_STATES),
+                f"WHERE t.task_id IN ({placeholders}) AND t.state IN (?, ?)",
+                (*wires, *EXECUTING_TASK_STATES),
             ).fetchall()
-            tasks_to_kill: set[JobName] = set()
-            task_kill_workers: dict[JobName, WorkerId] = {}
+
+            # -- Phase 1: read all state before any mutations. --
             now_ms = Timestamp.now().epoch_ms()
-            jobs_to_update: set[str] = set()
             job_req_cache: dict[str, cluster_pb2.Controller.LaunchJobRequest] = {}
+            # Collect directly-timed-out task wires for dedup against siblings.
+            direct_task_wires: set[str] = set()
+            # Per-job list of siblings to cascade (collected across all timed-out tasks).
+            siblings_by_job: dict[str, list[_CoscheduledSibling]] = {}
+
             for row in rows:
-                tid = JobName.from_wire(str(row["task_id"]))
-                tasks_to_kill.add(tid)
+                task_id_wire = str(row["task_id"])
+                direct_task_wires.add(task_id_wire)
                 job_id_wire = str(row["job_id"])
-                worker_id_str = row["worker_id"]
                 if job_id_wire not in job_req_cache:
                     job_req_cache[job_id_wire] = proto_cache.get_or_decode(row["request_proto"], _LAUNCH_JOB_DECODER)
                 job_req = job_req_cache[job_id_wire]
+                tid = JobName.from_wire(task_id_wire)
+                siblings = _find_coscheduled_siblings(cur, JobName.from_wire(job_id_wire), tid, job_req)
+                if siblings:
+                    existing = siblings_by_job.get(job_id_wire, [])
+                    existing.extend(siblings)
+                    siblings_by_job[job_id_wire] = existing
+
+            # Deduplicate siblings: drop any that will already be terminated
+            # directly as timed-out tasks, and deduplicate across multiple
+            # trigger tasks within the same job.
+            for job_id_wire, siblings in siblings_by_job.items():
+                seen: set[str] = set()
+                deduped: list[_CoscheduledSibling] = []
+                for sib in siblings:
+                    if sib.task_id not in direct_task_wires and sib.task_id not in seen:
+                        seen.add(sib.task_id)
+                        deduped.append(sib)
+                siblings_by_job[job_id_wire] = deduped
+
+            # -- Phase 2: apply all mutations. --
+            tasks_to_kill: set[JobName] = set()
+            task_kill_workers: dict[JobName, WorkerId] = {}
+            jobs_to_update: set[str] = set()
+
+            for row in rows:
+                task_id_wire = str(row["task_id"])
+                tid = JobName.from_wire(task_id_wire)
+                job_id_wire = str(row["job_id"])
+                worker_id_str = row["worker_id"]
+                job_req = job_req_cache[job_id_wire]
+                tasks_to_kill.add(tid)
                 if worker_id_str is not None:
                     task_kill_workers[tid] = WorkerId(str(worker_id_str))
                     if not int(row["is_reservation_holder"]):
@@ -2056,7 +2108,7 @@ class ControllerTransitions:
                         reason,
                         now_ms,
                         int(row["failure_count"]) + 1,
-                        str(row["task_id"]),
+                        task_id_wire,
                     ),
                 )
                 attempt_id = row["current_attempt_id"]
@@ -2064,18 +2116,33 @@ class ControllerTransitions:
                     cur.execute(
                         "UPDATE task_attempts SET state = ?, error = ?, finished_at_ms = COALESCE(finished_at_ms, ?) "
                         "WHERE task_id = ? AND attempt_id = ?",
-                        (cluster_pb2.TASK_STATE_FAILED, reason, now_ms, str(row["task_id"]), int(attempt_id)),
+                        (cluster_pb2.TASK_STATE_FAILED, reason, now_ms, task_id_wire, int(attempt_id)),
                     )
-                cur.execute("DELETE FROM endpoints WHERE task_id = ?", (str(row["task_id"]),))
+                cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id_wire,))
                 jobs_to_update.add(job_id_wire)
-                # Cascade to coscheduled siblings.
-                cascade_kill, cascade_workers = _cascade_coscheduled_failure(
-                    cur, JobName.from_wire(job_id_wire), tid, job_req, now_ms
+
+            # Terminate coscheduled siblings (deduplicated, all reads already done).
+            for job_id_wire, siblings in siblings_by_job.items():
+                if not siblings:
+                    continue
+                job_req = job_req_cache[job_id_wire]
+                # Pick the first direct-timeout task in this job as the "cause" for the error message.
+                cause_tid = next(JobName.from_wire(str(r["task_id"])) for r in rows if str(r["job_id"]) == job_id_wire)
+                cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
+                    cur, siblings, cause_tid, job_req, now_ms
                 )
                 tasks_to_kill.update(cascade_kill)
                 task_kill_workers.update(cascade_workers)
+                jobs_to_update.add(job_id_wire)
+
             for job_wire in jobs_to_update:
-                self._recompute_job_state(cur, JobName.from_wire(job_wire))
+                new_job_state = self._recompute_job_state(cur, JobName.from_wire(job_wire))
+                if new_job_state in TERMINAL_JOB_STATES:
+                    final_kill, final_workers = _finalize_terminal_job(
+                        cur, JobName.from_wire(job_wire), new_job_state, now_ms
+                    )
+                    tasks_to_kill.update(final_kill)
+                    task_kill_workers.update(final_workers)
             self._record_transaction(
                 cur,
                 "cancel_tasks_for_timeout",
@@ -3010,8 +3077,9 @@ class ControllerTransitions:
 
                 # Coscheduled sibling cascade.
                 if job_req is not None and task_state in FAILURE_TASK_STATES:
-                    cascade_kill, cascade_workers = _cascade_coscheduled_failure(
-                        cur, task.job_id, update.task_id, job_req, now_ms
+                    siblings = _find_coscheduled_siblings(cur, task.job_id, update.task_id, job_req)
+                    cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
+                        cur, siblings, update.task_id, job_req, now_ms
                     )
                     tasks_to_kill.update(cascade_kill)
                     task_kill_workers.update(cascade_workers)
