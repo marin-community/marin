@@ -1893,6 +1893,9 @@ class Controller:
                     all_task_kill_workers.update(result.task_kill_workers)
 
             # Handle failures individually (rare, need per-worker side effects).
+            # Phase 3a: Process DB state transitions (fast, serial).
+            # Collect workers that need slice termination for parallel fan-out.
+            pending_terminations: list[tuple[str, str]] = []  # (worker_id, worker_id_str)
             for batch, error in failure_entries:
                 logger.debug("Sync error for %s: %s", batch.worker_id, error)
                 action = self._transitions.fail_heartbeat(batch, error)
@@ -1902,32 +1905,56 @@ class Controller:
                     failed_workers.append(batch.worker_id)
                     self._provider.on_worker_failed(batch.worker_id, batch.worker_address)
                     if self._autoscaler:
-                        # Terminate the slice and get sibling worker IDs.
-                        # All workers on the same slice must be failed immediately
-                        # so their tasks (including reservation holders) are cascaded
-                        # rather than waiting for heartbeat timeouts.
-                        # TODO(#3425): This prunes sibling workers before their in-flight
-                        # results are processed, causing apply_heartbeat() to
-                        # silently drop any logs/states those workers reported this round.
-                        sibling_worker_ids = self._autoscaler.notify_worker_failed(str(batch.worker_id))
-                        if sibling_worker_ids:
-                            sibling_failed = self._transitions.fail_workers_by_ids(
-                                sibling_worker_ids,
-                                reason=f"sibling worker {batch.worker_id} failed, slice terminated",
-                            )
-                            for _wid, addr in sibling_failed:
-                                self._provider.on_worker_failed(_wid, addr)
-                            if sibling_failed:
-                                fail_count += len(sibling_failed)
-                                failed_workers.extend(wid for wid, _ in sibling_failed)
-                                logger.info(
-                                    "Failed %d sibling workers from slice: %s",
-                                    len(sibling_failed),
-                                    [wid for wid, _ in sibling_failed],
-                                )
+                        pending_terminations.append((batch.worker_id, str(batch.worker_id)))
                 elif action == HeartbeatAction.TRANSIENT_FAILURE:
                     fail_count += 1
                     failed_workers.append(batch.worker_id)
+
+            # Phase 3b: Fan out slice terminations in parallel.
+            # notify_worker_failed() calls gcloud subprocess (0.5-2s each);
+            # parallelizing reduces O(N * latency) to O(latency).
+            if pending_terminations:
+                _MAX_TERMINATION_WORKERS = 16
+
+                def _terminate_and_cascade(worker_id: str, worker_id_str: str) -> tuple[int, list[str]]:
+                    # TODO(#3425): This prunes sibling workers before their in-flight
+                    # results are processed, causing apply_heartbeat() to
+                    # silently drop any logs/states those workers reported this round.
+                    sibling_worker_ids = self._autoscaler.notify_worker_failed(worker_id_str)
+                    extra_fail_count = 0
+                    extra_failed: list[str] = []
+                    if sibling_worker_ids:
+                        sibling_failed = self._transitions.fail_workers_by_ids(
+                            sibling_worker_ids,
+                            reason=f"sibling worker {worker_id} failed, slice terminated",
+                        )
+                        for _wid, addr in sibling_failed:
+                            self._provider.on_worker_failed(_wid, addr)
+                        if sibling_failed:
+                            extra_fail_count = len(sibling_failed)
+                            extra_failed = [wid for wid, _ in sibling_failed]
+                            logger.info(
+                                "Failed %d sibling workers from slice: %s",
+                                len(sibling_failed),
+                                extra_failed,
+                            )
+                    return extra_fail_count, extra_failed
+
+                with ThreadPoolExecutor(
+                    max_workers=min(_MAX_TERMINATION_WORKERS, len(pending_terminations)),
+                    thread_name_prefix="fail-terminate",
+                ) as pool:
+                    futures = {
+                        pool.submit(_terminate_and_cascade, wid, wid_str): wid for wid, wid_str in pending_terminations
+                    }
+                    for future in as_completed(futures):
+                        try:
+                            extra_count, extra_workers = future.result()
+                            fail_count += extra_count
+                            failed_workers.extend(extra_workers)
+                        except Exception:
+                            wid = futures[future]
+                            logger.warning("Slice termination failed for worker %s", wid, exc_info=True)
 
             if all_tasks_to_kill:
                 self.kill_tasks_on_workers(all_tasks_to_kill, all_task_kill_workers)

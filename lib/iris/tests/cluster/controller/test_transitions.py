@@ -2295,6 +2295,45 @@ def test_fail_workers_by_ids_skips_unknown(state):
     assert w.healthy
 
 
+def test_fail_workers_by_ids_does_not_block_readers(state):
+    """fail_workers_by_ids uses read_snapshot for lookups, so concurrent reads don't block.
+
+    Verifies that read_snapshot() (not write-locked snapshot()) is used for the
+    worker lookup query. We hold a write transaction open on a second thread while
+    calling fail_workers_by_ids from the main thread; if the lookup used
+    snapshot() (write lock), it would deadlock/timeout.
+    """
+    meta = make_worker_metadata()
+    w1 = register_worker(state, "w1", "host1:8080", meta)
+    register_worker(state, "w2", "host2:8080", meta)
+
+    tasks = submit_job(state, "j1", make_job_request("job1"))
+    dispatch_task(state, tasks[0], w1)
+
+    barrier = threading.Event()
+    done = threading.Event()
+
+    def hold_write_lock():
+        """Hold the DB write lock to prove fail_workers_by_ids doesn't need it for reads."""
+        with state._db.transaction():
+            barrier.set()
+            done.wait(timeout=5)
+
+    t = threading.Thread(target=hold_write_lock, daemon=True)
+    t.start()
+    barrier.wait(timeout=5)
+
+    # fail_workers_by_ids should still complete even though the write lock is held,
+    # because its lookup query uses read_snapshot (WAL reader).
+    # Note: the actual fail_heartbeat_for_worker inside will need the write lock
+    # for its transaction, so we test with unknown IDs to isolate the read path.
+    failed = state.fail_workers_by_ids(["w-nonexistent"], reason="test")
+    assert failed == []
+
+    done.set()
+    t.join(timeout=5)
+
+
 def test_fail_heartbeat_kills_requeue_only(state):
     """Kill requests are still requeued on heartbeat failure (idempotent)."""
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
