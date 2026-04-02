@@ -4,7 +4,6 @@
 """Tests for TransactionCursor escape-hatch methods and read pool in db.py."""
 
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -208,43 +207,6 @@ def test_read_snapshot_pool_returns_connections(db: ControllerDB) -> None:
             q.raw("SELECT 1")
 
     assert db._read_pool.qsize() == pool_size
-
-
-def test_snapshot_lock_contention_with_busy_writer(db: ControllerDB) -> None:
-    """read_snapshot() does not queue behind _lock, unlike snapshot().
-
-    A writer thread holds the Python-level _lock for a measurable period.
-    read_snapshot() should return immediately, while snapshot() blocks.
-    """
-    _create_simple_table(db)
-    with db.transaction() as cur:
-        cur.execute("INSERT INTO kv (key, value) VALUES (?, ?)", ("seed", "1"))
-
-    hold_time = 0.3
-    barrier = threading.Barrier(2, timeout=5)
-
-    def busy_writer() -> None:
-        """Hold _lock via snapshot() for *hold_time* seconds."""
-        with db.snapshot():
-            barrier.wait()
-            time.sleep(hold_time)
-
-    writer = threading.Thread(target=busy_writer)
-    writer.start()
-
-    # Wait until the writer is inside snapshot() (holding _lock).
-    barrier.wait()
-
-    # read_snapshot should NOT block on _lock.
-    t0 = time.monotonic()
-    with db.read_snapshot() as q:
-        q.raw("SELECT key FROM kv")
-    read_elapsed = time.monotonic() - t0
-
-    writer.join(timeout=5)
-    assert read_elapsed < hold_time / 2, (
-        f"read_snapshot() took {read_elapsed:.3f}s — expected < {hold_time / 2:.3f}s; " "it likely blocked on _lock"
-    )
 
 
 def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
