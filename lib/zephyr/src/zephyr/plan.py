@@ -126,6 +126,7 @@ class Reduce:
     """Merge sorted chunks and reduce per key."""
 
     reducer_fn: Callable[[Any, Iterator], Any]
+    max_hot_shard_splits: int = 0
 
 
 @dataclass
@@ -560,7 +561,7 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
                 output_shards=num_shards if num_shards > 0 else None,
             )
             state.end_stage()
-            state.add_op(Reduce(reducer_fn=op.reducer_fn))
+            state.add_op(Reduce(reducer_fn=op.reducer_fn, max_hot_shard_splits=op.max_hot_shard_splits))
 
         elif isinstance(op, ReduceOp):
             state.add_op(Fold(fn=op.local_reducer))
@@ -768,12 +769,16 @@ class StageContext:
         shard_idx: Index of this shard
         total_shards: Total number of shards
         aux_shards: Auxiliary shards for joins, keyed by op index
+        logical_shard_idx: Original shard index before hot-shard splitting (None if unsplit)
+        key_range: Key range filter for hot-shard sub-tasks (None if unsplit)
     """
 
     shard: Iterable[Any]
     shard_idx: int
     total_shards: int
     aux_shards: dict[int, Iterable[Any]] = field(default_factory=dict)
+    logical_shard_idx: int | None = None
+    key_range: Any | None = None
 
     def get_right_shard(self, op_index: int) -> Iterable[Any]:
         """Get right shard for join at given op index.
@@ -877,7 +882,8 @@ def run_stage(
                 # Shard contains a single manifest path — read it to build ScatterShard
                 paths = list(shard)
                 assert len(paths) == 1, f"Expected single scatter manifest path, got {len(paths)}"
-                shard = _build_scatter_shard_from_manifest(paths[0], ctx.shard_idx)
+                target = ctx.logical_shard_idx if ctx.logical_shard_idx is not None else ctx.shard_idx
+                shard = _build_scatter_shard_from_manifest(paths[0], target, key_range=ctx.key_range)
             stream = _arrow_reduce_gen(shard, op.reducer_fn, external_sort_dir=external_sort_dir)
             op_index += 1
 

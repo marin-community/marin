@@ -44,6 +44,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class KeyRange:
+    """Half-open key range [lo, hi) for splitting a shard's key space.
+
+    lo=None means unbounded below; hi=None means unbounded above.
+    Values are compared using the natural ordering of _zephyr_sort_key.
+    """
+
+    lo: Any | None = None
+    hi: Any | None = None
+
+
 @dataclass
 class MemChunk:
     """In-memory chunk."""
@@ -204,6 +216,7 @@ class ScatterParquetIterator:
     chunk_count: int
     is_pickled: bool
     filesystem: pa.fs.FileSystem
+    key_range: KeyRange | None = None
 
     def __iter__(self) -> Iterator:
         for table in self.get_chunk_tables():
@@ -234,9 +247,16 @@ class ScatterParquetIterator:
             columns.append(_ZEPHYR_SORT_SECONDARY)
 
         for chunk_idx in range(self.chunk_count):
+            chunk_filter = (pc.field(_ZEPHYR_SHARD_IDX) == self.shard_idx) & (pc.field(_ZEPHYR_CHUNK_IDX) == chunk_idx)
+            if self.key_range is not None:
+                if self.key_range.lo is not None:
+                    chunk_filter = chunk_filter & (pc.field(_ZEPHYR_SORT_KEY) >= self.key_range.lo)
+                if self.key_range.hi is not None:
+                    chunk_filter = chunk_filter & (pc.field(_ZEPHYR_SORT_KEY) < self.key_range.hi)
+
             scanner = dataset.scanner(
                 columns=columns,
-                filter=((pc.field(_ZEPHYR_SHARD_IDX) == self.shard_idx) & (pc.field(_ZEPHYR_CHUNK_IDX) == chunk_idx)),
+                filter=chunk_filter,
                 batch_size=batch_size,
                 use_threads=False,
             )
@@ -407,7 +427,9 @@ def _read_scatter_manifest(manifest_path: str) -> list[dict]:
     return _scatter_manifest_cache[manifest_path]
 
 
-def _build_scatter_shard_from_manifest(manifest_path: str, target_shard: int) -> ScatterShard:
+def _build_scatter_shard_from_manifest(
+    manifest_path: str, target_shard: int, key_range: KeyRange | None = None
+) -> ScatterShard:
     """Build a ScatterShard for one target shard from a consolidated scatter manifest."""
     entries = _read_scatter_manifest(manifest_path)
     iterators: list[ScatterParquetIterator] = []
@@ -430,6 +452,7 @@ def _build_scatter_shard_from_manifest(manifest_path: str, target_shard: int) ->
                     chunk_count=count,
                     is_pickled=entry.get("is_pickled", False),
                     filesystem=filesystem,
+                    key_range=key_range,
                 )
             )
 
@@ -451,6 +474,88 @@ def _build_scatter_shard_from_manifest(manifest_path: str, target_shard: int) ->
         avg_item_bytes = weighted_bytes / total_chunks_for_avg if total_chunks_for_avg > 0 else 0.0
 
     return ScatterShard(iterators=iterators, max_row_group_rows=max_rg_rows, avg_item_bytes=avg_item_bytes)
+
+
+def _compute_key_range_boundaries(
+    manifest_path: str,
+    target_shard: int,
+    num_splits: int,
+    max_sample_keys: int = 50_000,
+) -> list[KeyRange]:
+    """Sample sort keys from scatter files and compute equi-spaced split boundaries.
+
+    Reads a sample of _zephyr_sort_key values from the scatter files for the
+    target shard, sorts them, and picks split points to divide the key space
+    into num_splits ranges.
+
+    Returns a list of num_splits KeyRange objects covering the full key space.
+    Falls back to fewer ranges if fewer distinct keys are found than num_splits.
+    """
+    entries = _read_scatter_manifest(manifest_path)
+
+    file_entries = [e for e in entries if e["chunk_counts"].get(str(target_shard), 0) > 0]
+    if not file_entries:
+        return [KeyRange()]
+
+    total_chunks = sum(e["chunk_counts"].get(str(target_shard), 0) for e in file_entries)
+    # Sample roughly max_sample_keys keys spread across files proportionally
+    keys_per_chunk = max(1, max_sample_keys // max(total_chunks, 1))
+
+    sample_path = file_entries[0]["path"]
+    filesystem = _get_scatter_read_fs(len(file_entries), sample_path)
+
+    sampled_keys: list = []
+    for entry in file_entries:
+        _, fs_path = url_to_fs(entry["path"])
+        dataset = pad.dataset(fs_path, format="parquet", filesystem=filesystem)
+        shard_filter = pc.field(_ZEPHYR_SHARD_IDX) == target_shard
+        scanner = dataset.scanner(
+            columns=[_ZEPHYR_SORT_KEY],
+            filter=shard_filter,
+            use_threads=False,
+        )
+        for batch in scanner.to_batches():
+            col = batch.column(_ZEPHYR_SORT_KEY)
+            if len(col) <= keys_per_chunk:
+                sampled_keys.extend(col.to_pylist())
+            else:
+                step = max(1, len(col) // keys_per_chunk)
+                sampled_keys.extend(col.to_pylist()[::step])
+            if len(sampled_keys) >= max_sample_keys * 2:
+                break
+        if len(sampled_keys) >= max_sample_keys * 2:
+            break
+
+    if not sampled_keys:
+        return [KeyRange()]
+
+    sampled_keys.sort()
+
+    # Deduplicate to find distinct keys for split points
+    distinct = []
+    prev = object()
+    for k in sampled_keys:
+        if k != prev:
+            distinct.append(k)
+            prev = k
+
+    effective_splits = min(num_splits, len(distinct))
+    if effective_splits <= 1:
+        return [KeyRange()]
+
+    # Pick equi-spaced split points from the sorted distinct keys
+    split_points = []
+    for i in range(1, effective_splits):
+        idx = int(len(distinct) * i / effective_splits)
+        split_points.append(distinct[idx])
+
+    ranges: list[KeyRange] = []
+    for i in range(effective_splits):
+        lo = split_points[i - 1] if i > 0 else None
+        hi = split_points[i] if i < len(split_points) else None
+        ranges.append(KeyRange(lo=lo, hi=hi))
+
+    return ranges
 
 
 # ---------------------------------------------------------------------------

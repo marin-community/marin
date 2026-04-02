@@ -541,3 +541,77 @@ def test_group_by_combiner_integration(integration_ctx):
         {"key": "a", "ids": [1, 2]},
         {"key": "b", "ids": [3, 4]},
     ]
+
+
+# ---------------------------------------------------------------------------
+# Hot shard splitting tests
+# ---------------------------------------------------------------------------
+
+
+def test_hot_shard_split_skewed_data(zephyr_ctx):
+    """Hot shard splitting produces correct results with skewed key distribution.
+
+    90% of items share the same key ("hot"), creating a hot shard.
+    max_hot_shard_splits=4 should split it while producing identical results.
+    """
+    hot_items = [{"key": "hot", "val": i} for i in range(90)]
+    cold_items = [{"key": f"cold_{i}", "val": i} for i in range(10)]
+    data = hot_items + cold_items
+
+    def count_reducer(key, items):
+        vals = sorted(item["val"] for item in items)
+        return {"key": key, "count": len(vals), "vals": vals}
+
+    ds_split = Dataset.from_list(data).group_by(
+        key=lambda x: x["key"],
+        reducer=count_reducer,
+        max_hot_shard_splits=4,
+    )
+    ds_normal = Dataset.from_list(data).group_by(
+        key=lambda x: x["key"],
+        reducer=count_reducer,
+    )
+
+    results_split = sorted(zephyr_ctx.execute(ds_split), key=lambda x: x["key"])
+    results_normal = sorted(zephyr_ctx.execute(ds_normal), key=lambda x: x["key"])
+
+    assert results_split == results_normal
+
+
+def test_hot_shard_split_balanced_data(zephyr_ctx):
+    """When data is balanced, hot shard splitting does not activate."""
+    data = [{"key": f"k{i % 5}", "val": i} for i in range(50)]
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["key"],
+        reducer=lambda key, items: {"key": key, "count": sum(1 for _ in items)},
+        max_hot_shard_splits=4,
+    )
+
+    results = sorted(zephyr_ctx.execute(ds), key=lambda x: x["key"])
+    assert len(results) == 5
+    for r in results:
+        assert r["count"] == 10
+
+
+def test_hot_shard_split_generator_reducer(zephyr_ctx):
+    """Hot shard splitting works with generator reducers (yielding multiple items)."""
+    data = [{"key": "hot", "val": i} for i in range(50)] + [{"key": "cold", "val": i} for i in range(5)]
+
+    def gen_reducer(key, items):
+        for item in items:
+            yield {"key": key, "val": item["val"], "tagged": True}
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["key"],
+        reducer=gen_reducer,
+        max_hot_shard_splits=4,
+    )
+
+    results = zephyr_ctx.execute(ds)
+    assert len(results) == 55
+    assert all(r["tagged"] for r in results)
+    hot_results = [r for r in results if r["key"] == "hot"]
+    cold_results = [r for r in results if r["key"] == "cold"]
+    assert len(hot_results) == 50
+    assert len(cold_results) == 5

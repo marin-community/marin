@@ -233,6 +233,7 @@ class GroupByOp:
     num_output_shards: int | None = None  # None = auto-detect from current shard count
     sort_fn: Callable | None = None  # Optional secondary sort within each group
     combiner_fn: Callable | None = None  # Optional local pre-aggregation during scatter
+    max_hot_shard_splits: int = 0  # 0 = disabled; >0 = max sub-tasks per hot shard
 
     def __repr__(self):
         return f"GroupByOp(key={_get_fn_name(self.key_fn)})"
@@ -757,6 +758,7 @@ class Dataset(Generic[T]):
         sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
+        max_hot_shard_splits: int = 0,
     ) -> Dataset[R]: ...
 
     @overload
@@ -768,6 +770,7 @@ class Dataset(Generic[T]):
         sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
+        max_hot_shard_splits: int = 0,
     ) -> Dataset[R]: ...
 
     def group_by(
@@ -778,6 +781,7 @@ class Dataset(Generic[T]):
         sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
+        max_hot_shard_splits: int = 0,
     ) -> Dataset[R]:
         """Group items by key and apply reducer function.
 
@@ -824,7 +828,17 @@ class Dataset(Generic[T]):
         """
         return Dataset(
             self.source,
-            [*self.operations, GroupByOp(key, reducer, num_output_shards, sort_fn=sort_by, combiner_fn=combiner)],
+            [
+                *self.operations,
+                GroupByOp(
+                    key,
+                    reducer,
+                    num_output_shards,
+                    sort_fn=sort_by,
+                    combiner_fn=combiner,
+                    max_hot_shard_splits=max_hot_shard_splits,
+                ),
+            ],
         )
 
     def deduplicate(self, key: Callable[[T], object], num_output_shards: int | None = None) -> Dataset[T]:

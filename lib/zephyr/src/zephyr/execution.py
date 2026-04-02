@@ -43,6 +43,7 @@ from zephyr.plan import (
     Join,
     PhysicalOp,
     PhysicalPlan,
+    Reduce,
     Scatter,
     Shard,
     SourceItem,
@@ -122,11 +123,14 @@ class ParquetDiskChunk:
 # ---------------------------------------------------------------------------
 
 from zephyr.shuffle import (  # noqa: E402
+    KeyRange,  # noqa: F401 — re-exported for callers
     ListShard,
     MemChunk,
     ScatterParquetIterator,  # noqa: F401 — re-exported for external callers
     ScatterShard,  # noqa: F401 — re-exported for plan.py and external callers
     _build_scatter_shard_from_manifest,  # noqa: F401 — re-exported for plan.py
+    _compute_key_range_boundaries,
+    _read_scatter_manifest,
     make_envelope_batch,
     _write_parquet_scatter,
     _write_scatter_manifest,
@@ -303,6 +307,8 @@ class ShardTask:
     operations: list[PhysicalOp]
     stage_name: str = "output"
     aux_shards: dict[int, Shard] | None = None
+    logical_shard_idx: int | None = None
+    key_range: Any | None = None
 
 
 class ZephyrWorkerError(RuntimeError):
@@ -806,6 +812,8 @@ class ZephyrCoordinator:
                 default=-1,
             )
 
+            last_scatter_manifest: str | None = None
+
             for stage_idx, stage in enumerate(plan.stages):
                 stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"
 
@@ -816,8 +824,24 @@ class ZephyrCoordinator:
                 # Compute aux data for joins
                 aux_per_shard = self._compute_join_aux(stage.operations, shards, stage_idx)
 
-                # Build and submit tasks
-                tasks = _compute_tasks_from_shards(shards, stage, aux_per_shard, stage_name=stage_label)
+                # Check if this reduce stage should use hot shard splitting
+                reduce_op = next((op for op in stage.operations if isinstance(op, Reduce)), None)
+                split_map: dict[int, list[int]] = {}
+                task_to_logical: dict[int, int] = {}
+
+                if reduce_op is not None and reduce_op.max_hot_shard_splits > 0 and last_scatter_manifest is not None:
+                    tasks, split_map = _expand_hot_shard_tasks(
+                        shards,
+                        stage,
+                        stage_label,
+                        last_scatter_manifest,
+                        max_splits=reduce_op.max_hot_shard_splits,
+                        aux_per_shard=aux_per_shard,
+                    )
+                    task_to_logical = {t.shard_idx: t.logical_shard_idx for t in tasks}
+                else:
+                    tasks = _compute_tasks_from_shards(shards, stage, aux_per_shard, stage_name=stage_label)
+
                 output_stage_name = tasks[0].stage_name if tasks else stage_label
                 logger.info("[%s] Starting stage %s with %d tasks", self._execution_id, stage_label, len(tasks))
                 self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
@@ -827,14 +851,26 @@ class ZephyrCoordinator:
 
                 # Collect and regroup results for next stage
                 result_refs = self._collect_results()
+
+                if split_map:
+                    result_refs = _merge_split_results(result_refs, split_map, task_to_logical)
+
                 stage_is_scatter = any(isinstance(op, Scatter) for op in stage.operations)
+                scatter_manifest_dir = f"{self._chunk_prefix}/{self._execution_id}/{output_stage_name}"
                 shards = _regroup_result_refs(
                     result_refs,
                     len(shards),
                     output_shard_count=stage.output_shards,
                     is_scatter=stage_is_scatter,
-                    scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{output_stage_name}",
+                    scatter_manifest_dir=scatter_manifest_dir,
                 )
+
+                # Track manifest path for hot shard detection on the next reduce stage
+                if stage_is_scatter:
+                    manifest_name = _SCATTER_MANIFEST_NAME
+                    last_scatter_manifest = f"{scatter_manifest_dir}/{manifest_name}"
+                else:
+                    last_scatter_manifest = None
 
             # Flatten final results
             flat_result = []
@@ -1205,6 +1241,8 @@ class ZephyrWorker:
             shard_idx=task.shard_idx,
             total_shards=task.total_shards,
             aux_shards=task.aux_shards,
+            logical_shard_idx=task.logical_shard_idx,
+            key_range=task.key_range,
         )
 
         stage_dir = f"{self._chunk_prefix}/{self._execution_id}/{task.stage_name}"
@@ -1265,6 +1303,165 @@ def _regroup_result_refs(
 
     # Non-scatter: each result's shard maps to its own index
     return [result_refs[idx].shard if idx in result_refs else ListShard(refs=[]) for idx in range(num_output)]
+
+
+# ---------------------------------------------------------------------------
+# Hot shard splitting
+# ---------------------------------------------------------------------------
+
+
+def _detect_hot_shards(
+    manifest_path: str,
+    num_output_shards: int,
+    max_splits: int,
+    split_threshold: float = 3.0,
+) -> dict[int, int]:
+    """Detect hot shards from scatter manifest.
+
+    Returns {shard_idx: num_splits} for shards whose total chunk count exceeds
+    split_threshold * median.  Only returns entries where splitting is worthwhile
+    (num_splits >= 2).
+    """
+    entries = _read_scatter_manifest(manifest_path)
+
+    chunk_totals: dict[int, int] = defaultdict(int)
+    for entry in entries:
+        for shard_str, count in entry["chunk_counts"].items():
+            chunk_totals[int(shard_str)] += count
+
+    if not chunk_totals:
+        return {}
+
+    counts = sorted(chunk_totals.values())
+    n = len(counts)
+    median = counts[n // 2] if n % 2 == 1 else (counts[n // 2 - 1] + counts[n // 2]) / 2
+    if median <= 0:
+        median = 1
+
+    threshold = split_threshold * median
+    hot: dict[int, int] = {}
+    for shard_idx, total in chunk_totals.items():
+        if shard_idx >= num_output_shards:
+            continue
+        if total > threshold:
+            splits = min(max_splits, max(2, int(total / median)))
+            hot[shard_idx] = splits
+
+    if hot:
+        logger.info(
+            "Hot shard detection: median_chunks=%.0f, threshold=%.0f, hot_shards=%s",
+            median,
+            threshold,
+            {k: f"{chunk_totals[k]} chunks -> {v} splits" for k, v in hot.items()},
+        )
+    return hot
+
+
+def _expand_hot_shard_tasks(
+    shards: list,
+    stage,
+    stage_label: str,
+    manifest_path: str,
+    max_splits: int,
+    aux_per_shard: list | None = None,
+) -> tuple[list, dict[int, list[int]]]:
+    """Detect hot shards and expand into sub-tasks with key ranges.
+
+    Returns:
+        tasks: expanded ShardTask list
+        split_map: {logical_shard_idx: [task_idx, ...]} for split shards
+    """
+    hot = _detect_hot_shards(manifest_path, len(shards), max_splits)
+
+    if not hot:
+        tasks = _compute_tasks_from_shards(shards, stage, aux_per_shard, stage_name=stage_label)
+        return tasks, {}
+
+    tasks: list[ShardTask] = []
+    split_map: dict[int, list[int]] = {}
+    task_idx = 0
+    raw_name = stage_label or stage.stage_name(max_length=60)
+    output_stage_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", raw_name).strip("-")
+
+    for shard_idx, shard in enumerate(shards):
+        aux_shards = None
+        if aux_per_shard and aux_per_shard[shard_idx]:
+            aux_shards = aux_per_shard[shard_idx]
+
+        if shard_idx not in hot:
+            tasks.append(
+                ShardTask(
+                    shard_idx=task_idx,
+                    total_shards=0,  # patched below
+                    shard=shard,
+                    operations=stage.operations,
+                    stage_name=output_stage_name,
+                    aux_shards=aux_shards,
+                    logical_shard_idx=shard_idx,
+                )
+            )
+            task_idx += 1
+        else:
+            num_splits = hot[shard_idx]
+            key_ranges = _compute_key_range_boundaries(manifest_path, shard_idx, num_splits)
+            sub_task_ids = []
+            for kr in key_ranges:
+                tasks.append(
+                    ShardTask(
+                        shard_idx=task_idx,
+                        total_shards=0,  # patched below
+                        shard=shard,
+                        operations=stage.operations,
+                        stage_name=output_stage_name,
+                        aux_shards=aux_shards,
+                        logical_shard_idx=shard_idx,
+                        key_range=kr,
+                    )
+                )
+                sub_task_ids.append(task_idx)
+                task_idx += 1
+            split_map[shard_idx] = sub_task_ids
+
+    total = len(tasks)
+    for t in tasks:
+        t.total_shards = total
+
+    logger.info(
+        "Hot shard expansion: %d logical shards -> %d tasks (%d shards split)",
+        len(shards),
+        total,
+        len(split_map),
+    )
+    return tasks, split_map
+
+
+def _merge_split_results(
+    result_refs: dict[int, TaskResult],
+    split_map: dict[int, list[int]],
+    task_to_logical: dict[int, int],
+) -> dict[int, TaskResult]:
+    """Merge sub-task results back into logical shard results.
+
+    For each split shard, concatenates the ListShard refs from all sub-tasks.
+    Non-split tasks are re-keyed from their task_idx to their logical shard.
+    """
+    merged: dict[int, TaskResult] = {}
+
+    # Handle split shards
+    for logical_idx, sub_task_ids in split_map.items():
+        combined_refs = []
+        for tid in sub_task_ids:
+            if tid in result_refs:
+                combined_refs.extend(result_refs[tid].shard.refs)
+        merged[logical_idx] = TaskResult(shard=ListShard(refs=combined_refs))
+
+    # Handle non-split tasks
+    for tid, result in result_refs.items():
+        logical = task_to_logical.get(tid)
+        if logical is not None and logical not in split_map:
+            merged[logical] = result
+
+    return merged
 
 
 # ---------------------------------------------------------------------------

@@ -170,11 +170,13 @@ def dedup_exact_paragraph(
                 # NOTE: selecting the canonical record is deterministic via this sort
                 sort_by=lambda record: record["id"],
                 reducer=annotate_dups,
+                max_hot_shard_splits=8,
             )
             .group_by(
                 lambda r: r["file_idx"],
                 sort_by=lambda r: r["id"],
                 reducer=aggregate_and_write_to_corresponding_files,
+                max_hot_shard_splits=8,
             ),
             verbose=True,
         ),
@@ -256,8 +258,14 @@ def dedup_exact_document(
                 # NOTE: selecting the canonical record is deterministic via this sort
                 sort_by=lambda record: record["id"],
                 reducer=annotate_dups,
+                max_hot_shard_splits=8,
             )
-            .group_by(lambda r: r["file_idx"], sort_by=lambda r: r["id"], reducer=aggregate_and_write),
+            .group_by(
+                lambda r: r["file_idx"],
+                sort_by=lambda r: r["id"],
+                reducer=aggregate_and_write,
+                max_hot_shard_splits=8,
+            ),
             verbose=True,
         ),
     )
