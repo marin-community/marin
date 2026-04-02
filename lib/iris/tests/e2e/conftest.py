@@ -15,6 +15,7 @@ autouse fixture.
 import fcntl
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -37,11 +38,12 @@ from iris.cluster.types import (
 )
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 from .chronos import VirtualClock
 
-IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris
+MARIN_ROOT = Path(__file__).resolve().parents[4]  # repo root
+IRIS_ROOT = MARIN_ROOT / "lib" / "iris"
 DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
@@ -77,14 +79,18 @@ def pytest_addoption(parser):
 
 # Cloud mode needs much longer timeouts: GCE provisioning can take 20 minutes,
 # and individual tests need time for remote job execution.
+_LOCAL_E2E_TIMEOUT = 30  # local e2e tests boot clusters + run jobs
 _CLOUD_FIXTURE_TIMEOUT = 1200  # 20 min for cluster provisioning
 _CLOUD_TEST_TIMEOUT = 120  # 2 min per test
 
 
 def pytest_collection_modifyitems(config, items):
-    """Set appropriate timeouts for cloud mode tests."""
-    if config.getoption("--iris-controller-url") is None:
-        return
+    """Set appropriate timeouts for e2e tests.
+
+    Local mode: 30s default (cluster boot + job execution).
+    Cloud mode: 20 min for first smoke test (provisioning), 2 min for the rest.
+    """
+    is_cloud = config.getoption("--iris-controller-url") is not None
 
     import pytest
 
@@ -92,14 +98,17 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if item.get_closest_marker("timeout"):
             continue
-        if "smoke_cluster" in getattr(item, "fixturenames", ()):
-            if first_smoke_test:
-                item.add_marker(pytest.mark.timeout(_CLOUD_FIXTURE_TIMEOUT))
-                first_smoke_test = False
+        if is_cloud:
+            if "smoke_cluster" in getattr(item, "fixturenames", ()):
+                if first_smoke_test:
+                    item.add_marker(pytest.mark.timeout(_CLOUD_FIXTURE_TIMEOUT))
+                    first_smoke_test = False
+                else:
+                    item.add_marker(pytest.mark.timeout(_CLOUD_TEST_TIMEOUT))
             else:
                 item.add_marker(pytest.mark.timeout(_CLOUD_TEST_TIMEOUT))
         else:
-            item.add_marker(pytest.mark.timeout(_CLOUD_TEST_TIMEOUT))
+            item.add_marker(pytest.mark.timeout(_LOCAL_E2E_TIMEOUT))
 
 
 @dataclass
@@ -132,7 +141,7 @@ class IrisTestCluster:
         scheduling_timeout: Duration | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
-        max_retries_preemption: int = 100,
+        max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
         coscheduling: CoschedulingConfig | None = None,
         constraints: list[Constraint] | None = None,
@@ -250,13 +259,9 @@ class IrisTestCluster:
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
         """Fetch log lines for a task."""
         task_id = job.job_id.task(task_index).to_wire()
-        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
-        response = self.controller_client.get_task_logs(request)
-        lines = []
-        for batch in response.task_logs:
-            for entry in batch.logs:
-                lines.append(f"{entry.source}: {entry.data}")
-        return lines
+        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        response = self.controller_client.fetch_logs(request)
+        return [f"{e.source}: {e.data}" for e in response.entries]
 
 
 @dataclass(frozen=True)
@@ -343,7 +348,7 @@ def cluster():
     _add_coscheduling_group(config)
     config = make_local_config(config)
     with connect_cluster(config) as url:
-        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         yield IrisTestCluster(url=url, client=client, controller_client=controller_client)
         controller_client.close()
@@ -376,7 +381,7 @@ def multi_worker_cluster():
     num_workers = 4
     config = _make_multi_worker_config(num_workers)
     with connect_cluster(config) as url:
-        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(num_workers, timeout=60)

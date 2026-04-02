@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from fray.v2.types import ResourceConfig
-from iris.marin_fs import MARIN_CROSS_REGION_OVERRIDE_ENV
+from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV
 
 from marin.execution.artifact import Artifact, PathMetadata
 from marin.execution.executor import _dag_tpu_regions, Executor, ExecutorStep, resolve_executor_step
@@ -208,6 +208,44 @@ def test_resolve_executor_step_preserves_deps():
         deps=[dep1, dep2],
     )
     assert resolved.dep_paths == ["/out/download-abc123", "/out/tokenize-def456"]
+
+
+def test_step_spec_as_executor_step_round_trip():
+    """StepSpec -> ExecutorStep -> StepSpec should preserve identity."""
+    prefix = "gs://test-bucket"
+    dep = StepSpec(
+        name="download",
+        output_path_prefix=prefix,
+        hash_attrs={"source": "web"},
+        fn=lambda output_path: output_path,
+    )
+    step = StepSpec(
+        name="tokenize",
+        output_path_prefix=prefix,
+        hash_attrs={"tokenizer": "llama3"},
+        deps=[dep],
+        fn=lambda output_path: output_path,
+    )
+
+    executor_step = step.as_executor_step()
+    # override_output_path should be the computed path (prefix/name_hash)
+    assert executor_step.override_output_path == step.output_path
+    assert step.output_path.startswith(f"{prefix}/tokenize_")
+
+    dep_spec = StepSpec(name="download", override_output_path=dep.output_path)
+    resolved = resolve_executor_step(
+        executor_step,
+        config={},
+        output_path=step.output_path,
+        deps=[dep_spec],
+    )
+
+    assert resolved.name == step.name
+    assert resolved.hash_attrs == step.hash_attrs
+    assert resolved.fn is step.fn
+    assert resolved.output_path == step.output_path
+    assert resolved.output_path_prefix == prefix
+    assert resolved.dep_paths == [dep.output_path]
 
 
 # ---------------------------------------------------------------------------

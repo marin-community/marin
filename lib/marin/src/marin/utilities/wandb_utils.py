@@ -37,7 +37,8 @@ def init_wandb(
     Returns:
         The wandb run object if initialized, None if WANDB_API_KEY is not set.
     """
-    if "WANDB_API_KEY" not in os.environ:
+    if "WANDB_API_KEY" not in os.environ or not os.environ["WANDB_API_KEY"]:
+        logger.info("WANDB_API_KEY not set, skipping wandb initialization.")
         return None
 
     if not run_name:

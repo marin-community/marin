@@ -11,7 +11,7 @@ from fray.v1.cluster.ray import get_scheduling_strategy
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.utils import remove_tpu_lockfile_on_exit
-from iris.logging import configure_logging as _init_logging
+from rigging.log_setup import configure_logging as _init_logging
 
 
 @dataclass(frozen=True)
@@ -114,7 +114,7 @@ def launch_evaluate_with_ray(
     env_vars: dict[str, str] | None = None,
     configure_logging: bool = True,
     max_retries_failure: int = 0,
-    max_retries_preemption: int = 100,
+    max_retries_preemption: int = 1000,
 ) -> None:
     """Launch an evaluator on the Ray/Fray cluster."""
 

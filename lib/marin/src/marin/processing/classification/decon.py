@@ -20,7 +20,7 @@ import dupekit
 from marin.execution.executor import THIS_OUTPUT_PATH
 import draccus
 import msgspec
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 
 from marin.processing.classification.deduplication.dedup_commons import (
     DEFAULT_FILETYPES,
@@ -30,7 +30,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
 from marin.utils import rebase_file_path
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

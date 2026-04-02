@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useControllerRpc, useWorkerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import type { FetchLogsResponse, GetTaskLogsResponse, LogEntry, TaskAttempt } from '@/types/rpc'
+import type { FetchLogsResponse, LogEntry, TaskAttempt } from '@/types/rpc'
 import { timestampMs, logLevelClass, formatLogTime } from '@/utils/formatting'
 
 const props = withDefaults(defineProps<{
@@ -37,11 +37,17 @@ function levelPriority(lvl: string | undefined): number {
 // Choose the right RPC based on what we're viewing
 const useRpc = props.source === 'worker' ? useWorkerRpc : useControllerRpc
 
+// Task IDs end with a numeric segment (e.g. /alice/job/0), job IDs don't.
+const isTask = props.taskId ? /\/\d+$/.test(props.taskId) : false
+
 const taskLogState = props.taskId
-  ? useRpc<GetTaskLogsResponse>('GetTaskLogs', () => ({
-      id: props.taskId,
-      maxTotalLines: tailLines.value || undefined,
-      attemptId: selectedAttemptId.value >= 0 ? selectedAttemptId.value : -1,
+  ? useRpc<FetchLogsResponse>('FetchLogs', () => ({
+      source: selectedAttemptId.value >= 0
+        ? `${props.taskId}:${selectedAttemptId.value}`
+        : isTask
+          ? `${props.taskId}:.*`
+          : `${props.taskId}/\\d+:.*`,
+      maxLines: tailLines.value || undefined,
       tail: true,
     }))
   : null
@@ -64,13 +70,31 @@ const { active: autoRefreshActive, toggle: toggleAutoRefresh } = useAutoRefresh(
 
 watch(selectedAttemptId, () => doRefresh())
 watch(tailLines, () => doRefresh())
+watch(
+  () => [props.taskId, props.currentAttemptId] as const,
+  ([taskId, currentAttemptId], [previousTaskId, previousCurrentAttemptId]) => {
+    if (taskId !== previousTaskId) {
+      selectedAttemptId.value = -1
+      doRefresh()
+      return
+    }
+    if (taskId === undefined || currentAttemptId === previousCurrentAttemptId) return
+    if (selectedAttemptId.value === -1) {
+      doRefresh()
+      return
+    }
+    if (selectedAttemptId.value === previousCurrentAttemptId) {
+      selectedAttemptId.value = currentAttemptId ?? -1
+    }
+  },
+)
+watch(() => props.workerId, () => doRefresh())
 
 onMounted(doRefresh)
 
 function extractEntries(): LogEntry[] {
   if (taskLogState?.data.value) {
-    const resp = taskLogState.data.value
-    return (resp.taskLogs ?? []).flatMap(batch => batch.logs ?? [])
+    return taskLogState.data.value.entries ?? []
   }
   if (processLogState?.data.value) {
     return processLogState.data.value.entries ?? []

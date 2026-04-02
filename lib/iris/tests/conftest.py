@@ -17,7 +17,7 @@ import pytest
 from iris.cluster.config import load_config, make_local_config
 from iris.rpc import config_pb2
 from iris.test_util import SentinelFile
-from iris.time_utils import Deadline, Duration
+from rigging.timing import Duration, ExponentialBackoff
 
 IRIS_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
@@ -119,16 +119,20 @@ def _thread_cleanup():
     before = {t.ident for t in threading.enumerate()}
     yield
 
-    deadline = Deadline.from_now(Duration.from_seconds(5.0))
-    while not deadline.expired():
-        leaked = [
-            t
+    def _no_leaked_threads() -> bool:
+        return not any(
+            t.is_alive() and not t.daemon and t.name != "MainThread" and t.ident not in before
             for t in threading.enumerate()
-            if t.is_alive() and not t.daemon and t.name != "MainThread" and t.ident not in before
-        ]
-        if not leaked:
-            return
-        time.sleep(0.1)
+        )
+
+    if ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(_no_leaked_threads, timeout=Duration.from_seconds(5.0)):
+        return
+
+    leaked = [
+        t
+        for t in threading.enumerate()
+        if t.is_alive() and not t.daemon and t.name != "MainThread" and t.ident not in before
+    ]
 
     # Generate detailed warning about leaked threads
     thread_info = []

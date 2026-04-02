@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Generic, TypeVar, ParamSpec
 
 import cloudpickle
-from iris.marin_fs import marin_temp_bucket, open_url
+from rigging.filesystem import marin_temp_bucket, open_url
 
 from marin.execution.executor_step_status import (
     StepAlreadyDone,

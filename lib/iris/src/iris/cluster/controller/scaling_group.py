@@ -38,7 +38,8 @@ from iris.cluster.types import (
     get_tpu_count,
 )
 from iris.rpc import cluster_pb2, config_pb2, time_pb2, vm_pb2
-from iris.time_utils import Deadline, Duration, Timestamp, TokenBucket
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Deadline, Duration, Timestamp, TokenBucket
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +98,8 @@ class AvailabilityState:
     until: Timestamp | None = None
 
 
-DEFAULT_SCALE_UP_RATE_LIMIT = 5  # per minute
-DEFAULT_SCALE_DOWN_RATE_LIMIT = 5  # per minute
+DEFAULT_SCALE_UP_RATE_LIMIT = 32  # per minute
+DEFAULT_SCALE_DOWN_RATE_LIMIT = 32  # per minute
 DEFAULT_SCALE_UP_COOLDOWN = Duration.from_minutes(1)
 DEFAULT_BACKOFF_INITIAL = Duration.from_minutes(5)
 DEFAULT_BACKOFF_MAX = Duration.from_minutes(15)
@@ -204,7 +205,7 @@ def slice_state_to_proto(state: SliceState, idle_threshold: Duration | None = No
             for worker_id in state.worker_ids
         ],
         error_message=state.error_message,
-        last_active=state.last_active.to_proto(),
+        last_active=timestamp_to_proto(state.last_active),
         idle=is_idle,
     )
 
@@ -1137,14 +1138,14 @@ class ScalingGroup:
             config=self._config,
             current_demand=self._current_demand,
             peak_demand=self._peak_demand,
-            backoff_until=backoff_ts.to_proto(),
+            backoff_until=timestamp_to_proto(backoff_ts),
             consecutive_failures=self._consecutive_failures,
-            last_scale_up=self._last_scale_up.to_proto(),
-            last_scale_down=self._last_scale_down.to_proto(),
+            last_scale_up=timestamp_to_proto(self._last_scale_up),
+            last_scale_down=timestamp_to_proto(self._last_scale_down),
             availability_status=availability.status.value,
             availability_reason=availability.reason,
-            blocked_until=blocked_until.to_proto(),
-            scale_up_cooldown_until=cooldown_until.to_proto(),
+            blocked_until=timestamp_to_proto(blocked_until),
+            scale_up_cooldown_until=timestamp_to_proto(cooldown_until),
             slices=[slice_state_to_proto(state, idle_threshold=self._idle_threshold) for state in snapshot],
             idle_threshold_ms=self._idle_threshold.to_ms(),
         )

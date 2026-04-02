@@ -21,7 +21,7 @@ from iris.cluster.providers.k8s.types import ExecResult, KubectlError, KubectlLo
 from iris.cluster.providers.k8s.types import parse_k8s_cpu as _parse_k8s_cpu
 from iris.cluster.providers.k8s.types import parse_k8s_memory as _parse_k8s_memory
 from iris.cluster.providers.types import find_free_port
-from iris.time_utils import Deadline, ExponentialBackoff
+from rigging.timing import Deadline, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,7 @@ class K8sService(Protocol):
         resource: str,
         *,
         labels: dict[str, str] | None = None,
+        field_selector: str | None = None,
         cluster_scoped: bool = False,
     ) -> list[dict]: ...
 
@@ -204,13 +205,16 @@ class CloudK8sService:
         resource: str,
         *,
         labels: dict[str, str] | None = None,
+        field_selector: str | None = None,
         cluster_scoped: bool = False,
     ) -> list[dict]:
-        """List Kubernetes resources, optionally filtered by labels."""
+        """List Kubernetes resources, optionally filtered by labels and/or field selectors."""
         args = ["get", resource, "-o", "json"]
         if labels:
             selector = ",".join(f"{k}={v}" for k, v in labels.items())
             args.extend(["-l", selector])
+        if field_selector:
+            args.extend(["--field-selector", field_selector])
         result = self._run(args, namespaced=not cluster_scoped)
         if result.returncode != 0:
             raise KubectlError(f"kubectl get {resource} failed: {result.stderr.strip()}")

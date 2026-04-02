@@ -8,6 +8,7 @@ Docker mode manually wires up Controller + Workers with DockerRuntime, which is
 needed for tests that exercise container-specific behavior (OOM, JAX env vars).
 """
 
+import re
 import tempfile
 import time
 import uuid
@@ -25,7 +26,8 @@ from iris.cluster.worker.env_probe import EnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration
+from iris.time_proto import duration_to_proto
+from rigging.timing import Duration
 
 # Factory type for creating per-worker environment providers.
 # Signature: (worker_id, num_workers) -> EnvironmentProvider
@@ -64,9 +66,9 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     )
     config.scale_groups["local-cpu"].CopyFrom(sg)
 
-    config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
-    config.defaults.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
-    config.defaults.autoscaler.scale_down_delay.CopyFrom(Duration.from_seconds(1).to_proto())
+    config.defaults.autoscaler.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.5)))
+    config.defaults.autoscaler.scale_up_delay.CopyFrom(duration_to_proto(Duration.from_seconds(1)))
+    config.defaults.autoscaler.scale_down_delay.CopyFrom(duration_to_proto(Duration.from_seconds(1)))
 
     return config
 
@@ -303,14 +305,10 @@ class E2ECluster:
         """Fetch container logs for a task."""
         job_id = self._to_job_id_str(job_or_id)
         task_id = JobName.from_wire(job_id).task(task_index).to_wire()
-        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
+        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
         assert self._controller_client is not None
-        response = self._controller_client.get_task_logs(request)
-        lines = []
-        for batch in response.task_logs:
-            for entry in batch.logs:
-                lines.append(f"{entry.source}: {entry.data}")
-        return lines
+        response = self._controller_client.fetch_logs(request)
+        return [f"{e.source}: {e.data}" for e in response.entries]
 
     def kill(self, job_or_id) -> None:
         job_id = self._to_job_id_str(job_or_id)

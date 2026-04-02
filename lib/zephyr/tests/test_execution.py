@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from fray.v2 import ResourceConfig
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext, zephyr_worker_ctx
+from zephyr.execution import CounterSnapshot, ZephyrContext, zephyr_worker_ctx
 
 
 def test_simple_map(zephyr_ctx):
@@ -247,10 +247,10 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
     assert attempt_b == 1
 
     # Worker B reports success
-    coord.report_result("worker-B", 0, attempt_b, TaskResult(shard=ListShard(refs=[])))
+    coord.report_result("worker-B", 0, attempt_b, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     # Worker A's stale result (attempt 0) should be ignored
-    coord.report_result("worker-A", 0, attempt_a, TaskResult(shard=ListShard(refs=[])))
+    coord.report_result("worker-A", 0, attempt_a, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     # Only one completion should be counted
     assert coord._completed_shards == 1
@@ -317,6 +317,7 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
         0,
         attempt_b,
         TaskResult(shard=ListShard(refs=[winner_ref])),
+        CounterSnapshot.empty(),
     )
 
     # Worker A's stale result is rejected
@@ -325,6 +326,7 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
         0,
         attempt_a,
         TaskResult(shard=ListShard(refs=[stale_ref])),
+        CounterSnapshot.empty(),
     )
 
     # Winner's data is directly readable (no rename needed)
@@ -438,7 +440,7 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
         pulled = coord.pull_task("worker-0")
         assert pulled is not None and pulled != "SHUTDOWN"
         _task, attempt, _config = pulled
-        coord.report_result("worker-0", 0, attempt, TaskResult(shard=ListShard(refs=[])))
+        coord.report_result("worker-0", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     t = threading.Thread(target=recover_and_complete)
     t.start()
@@ -586,7 +588,7 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     pulled = coord.pull_task("worker-A")
     assert pulled is not None and pulled != "SHUTDOWN"
     _task, attempt, _config = pulled
-    coord.report_result("worker-A", 0, attempt, TaskResult(shard=ListShard(refs=[])))
+    coord.report_result("worker-A", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     # Queue empty, but not last stage -> None
     result = coord.pull_task("worker-A")
@@ -604,11 +606,49 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     pulled = coord.pull_task("worker-A")
     assert pulled is not None and pulled != "SHUTDOWN"
     _task, attempt, _config = pulled
-    coord.report_result("worker-A", 0, attempt, TaskResult(shard=ListShard(refs=[])))
+    coord.report_result("worker-A", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
-    # Queue empty on last stage -> SHUTDOWN
+    # Queue empty on last stage, nothing in-flight -> SHUTDOWN
     result = coord.pull_task("worker-A")
     assert result == "SHUTDOWN"
+
+
+def test_last_shard_requeued_after_worker_crash(actor_context, tmp_path):
+    """Surviving workers pick up requeued shards after a crash on the last stage. #4200."""
+    from zephyr.execution import ListShard, ShardTask, TaskResult, ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    tasks = [
+        ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test")
+        for i in range(2)
+    ]
+    coord.start_stage("last-stage", tasks, is_last_stage=True)
+
+    coord.heartbeat("worker-A")
+    coord.heartbeat("worker-B")
+    pulled_a = coord.pull_task("worker-A")
+    coord.pull_task("worker-B")  # put shard 1 in-flight
+
+    # Worker A finishes
+    _task_a, attempt_a, _ = pulled_a
+    coord.report_result(
+        "worker-A", _task_a.shard_idx, attempt_a, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+    )
+
+    # Worker B crashes. Freshen worker-A, expire worker-B.
+    coord.heartbeat("worker-A")
+    coord.check_heartbeats(timeout=0)
+
+    # Worker A picks up the requeued shard and completes the pipeline.
+    pulled = coord.pull_task("worker-A")
+    assert pulled not in (None, "SHUTDOWN")
+    _task, attempt, _ = pulled
+    coord.report_result(
+        "worker-A", _task.shard_idx, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+    )
+    assert coord.pull_task("worker-A") == "SHUTDOWN"
 
 
 def test_coordinator_loop_crash_aborts_pipeline(actor_context, tmp_path):

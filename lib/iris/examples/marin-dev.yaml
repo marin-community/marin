@@ -29,13 +29,13 @@ controller:
   image: ghcr.io/marin-community/iris-controller:latest
   gcp:
     zone: us-central1-a
-    machine_type: e2-standard-4
+    machine_type: e2-highmem-4
     boot_disk_size_gb: 100
     port: 10000
 
 scale_groups:
   cpu_vm_e2_highmem_2_ondemand:
-    zones: [us-central1-a, us-east1-b, us-west1-a, europe-west4-a]
+    zones: [us-central1-a, us-central2-b, us-east1-b, us-east1-d, us-east5-a, us-east5-b, us-west1-a, us-west4-a, europe-west4-a, europe-west4-b]
     num_vms: 1
     priority: 1000
     resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, preemptible: false }
@@ -53,7 +53,7 @@ scale_groups:
     priority: 10
     resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-4, device_count: 4, preemptible: true }
     min_slices: 0
-    max_slices: 4
+    max_slices: 1024
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -63,7 +63,7 @@ scale_groups:
     priority: 20
     resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-8, device_count: 8, preemptible: true }
     min_slices: 0
-    max_slices: 4
+    max_slices: 512
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -73,7 +73,7 @@ scale_groups:
     priority: 30
     resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-16, device_count: 4, preemptible: true }
     min_slices: 0
-    max_slices: 4
+    max_slices: 256
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -85,7 +85,7 @@ scale_groups:
     priority: 10
     resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-4, device_count: 4, preemptible: true }
     min_slices: 0
-    max_slices: 4
+    max_slices: 1024
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv6e
@@ -95,7 +95,7 @@ scale_groups:
     priority: 20
     resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-8, device_count: 8, preemptible: true }
     min_slices: 0
-    max_slices: 4
+    max_slices: 512
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv6e
@@ -105,7 +105,7 @@ scale_groups:
     priority: 30
     resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-16, device_count: 4, preemptible: true }
     min_slices: 0
-    max_slices: 4
+    max_slices: 256
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv6e
@@ -117,7 +117,7 @@ scale_groups:
     priority: 20
     resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-8, device_count: 4, preemptible: true }
     min_slices: 0
-    max_slices: 4
+    max_slices: 2048
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5
@@ -127,7 +127,7 @@ scale_groups:
     priority: 30
     resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-16, device_count: 4, preemptible: true }
     min_slices: 0
-    max_slices: 4
+    max_slices: 1024
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5
@@ -139,7 +139,7 @@ scale_groups:
     priority: 20
     resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-8, device_count: 4, preemptible: true }
     min_slices: 0
-    max_slices: 4
+    max_slices: 2048
     slice_template:
       gcp:
         runtime_version: tpu-ubuntu2204-base
@@ -149,7 +149,7 @@ scale_groups:
     priority: 30
     resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-16, device_count: 4, preemptible: true }
     min_slices: 0
-    max_slices: 4
+    max_slices: 1024
     slice_template:
       gcp:
         runtime_version: tpu-ubuntu2204-base

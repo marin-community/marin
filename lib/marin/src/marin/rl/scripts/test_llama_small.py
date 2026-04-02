@@ -29,7 +29,7 @@ from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)

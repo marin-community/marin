@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 
 import humanfriendly
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from jax.random import PRNGKey
 from levanter.data.text import (
     HfDatasetSourceConfig,
@@ -31,7 +31,7 @@ from transformers import AutoTokenizer
 
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

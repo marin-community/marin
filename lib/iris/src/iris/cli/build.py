@@ -207,6 +207,10 @@ def build_image(
     Always tags the image with both the git SHA and "latest" so that
     deployments can pin to a specific version while local workflows
     continue to use "latest".
+
+    When ``push=True``, images are pushed directly via ``docker buildx build --push``
+    and the registry cache is updated in the same operation. The images are NOT
+    loaded into the local Docker daemon (buildx cannot do both simultaneously).
     """
     # Controller and worker images COPY dashboard/dist — ensure it exists.
     if image_type in ("controller", "worker"):
@@ -214,7 +218,14 @@ def build_image(
 
     iris_root = find_iris_root()
     dockerfile_path = iris_root / "Dockerfile"
-    context_path = Path(context) if context else iris_root
+    # Controller/worker Dockerfiles expect the marin repo root as build context
+    # so that lib/rigging (a workspace-local dep) can be COPY'd in.
+    if context:
+        context_path = Path(context)
+    elif image_type in ("controller", "worker"):
+        context_path = find_marin_root()
+    else:
+        context_path = iris_root
 
     if not dockerfile_path.exists():
         raise click.ClickException(f"Dockerfile not found: {dockerfile_path}")
@@ -227,7 +238,18 @@ def build_image(
 
     click.echo(f"Using Dockerfile: {dockerfile_path}")
 
-    all_tags = dict.fromkeys([tag, sha_tag, latest_tag])
+    if push:
+        # Fully-qualified GHCR tags for the registry push
+        all_tags = dict.fromkeys(
+            [
+                f"ghcr.io/{ghcr_org}/{tag}",
+                f"ghcr.io/{ghcr_org}/{sha_tag}",
+                f"ghcr.io/{ghcr_org}/{latest_tag}",
+            ]
+        )
+    else:
+        all_tags = dict.fromkeys([tag, sha_tag, latest_tag])
+
     cmd = ["docker", "buildx", "build", "--platform", platform]
     cmd.extend(["--target", image_type])
     cmd.extend(["--build-arg", f"IRIS_GIT_HASH={git_sha}"])
@@ -235,12 +257,16 @@ def build_image(
         cmd.extend(["-t", t])
     cmd.extend(["-f", str(dockerfile_path)])
 
-    # Use the weekly GHCR image as a build cache source so that cold builds
-    # (new runner, branch switch) only rebuild layers that actually changed.
-    cache_ref = f"ghcr.io/{ghcr_org}/iris-{image_type}:latest"
+    cache_ref = f"ghcr.io/{ghcr_org}/iris-cache:{image_type}"
     cmd.extend(["--cache-from", f"type=registry,ref={cache_ref}"])
 
-    cmd.extend(["--output", f"type=docker,compression=zstd,compression-level=1,name={tag}"])
+    if push:
+        cmd.extend(["--cache-to", f"type=registry,ref={cache_ref},mode=max"])
+        cmd.extend(["--output", "type=image,compression=zstd,compression-level=3,push=true"])
+        cmd.append("--provenance=false")
+    else:
+        cmd.extend(["--output", f"type=docker,compression=zstd,compression-level=1,name={tag}"])
+
     cmd.append(str(context_path))
 
     extra = [t for t in all_tags if t != tag]
@@ -248,6 +274,8 @@ def build_image(
     click.echo(f"Building image: {tag}{extra_msg}")
     click.echo(f"Platform: {platform}")
     click.echo(f"Context: {context_path}")
+    if push:
+        click.echo("Push: enabled (images will be pushed to registry)")
     click.echo()
 
     if verbose:
@@ -263,16 +291,16 @@ def build_image(
                 click.echo(result.stderr, err=True)
         raise SystemExit(1)
 
-    # buildx --output=docker only loads one name; tag the rest manually
-    for t in extra:
-        subprocess.run(["docker", "tag", tag, t], check=True)
+    if not push:
+        # buildx --output=docker only loads one name; tag the rest manually
+        for t in extra:
+            subprocess.run(["docker", "tag", tag, t], check=True)
 
     click.echo("Build successful!")
-    click.echo(f"Image available locally as: {', '.join(all_tags)}")
-
     if push:
-        push_to_ghcr(sha_tag, ghcr_org=ghcr_org, verbose=verbose)
-        push_to_ghcr(latest_tag, ghcr_org=ghcr_org, verbose=verbose)
+        click.echo(f"Images pushed to: {', '.join(all_tags)}")
+    else:
+        click.echo(f"Image available locally as: {', '.join(all_tags)}")
 
 
 def _build_all(

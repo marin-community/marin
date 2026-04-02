@@ -41,13 +41,12 @@ from experiments.evals.task_configs import (
     CORE_TASKS,
     convert_to_levanter_task_config,
 )
-from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from levanter.utils.mesh import MeshConfig
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -63,7 +62,6 @@ from marin.processing.tokenize import (
     TokenizeConfig,
     TokenizerStep,
     add_validation_sets_to_mixture,
-    get_vocab_size_for_tokenizer,
     lm_data_config,
     tokenize,
 )
@@ -357,8 +355,7 @@ def default_train(
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
-    vocab_size = _get_vocab_size(pretraining_data)
-
+    tokenizer_name = unwrap_versioned_value(pretraining_data.tokenizer)
     steps_per_export = train_config.steps_per_export
 
     if wandb_group is None:
@@ -470,6 +467,7 @@ def default_train(
             )
         ),
         hf_save_steps=steps_per_export_hf,
+        hf_generation_eos_token_ids=train_config.hf_generation_eos_token_ids,
         data_seed=train_config.data_seed,
         eval_harness_steps=train_config.steps_per_task_eval or 10000,
         eval_harness=harness_config,
@@ -491,7 +489,7 @@ def default_train(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
+            f"Train a model (tokenizer={tokenizer_name}) for "
             f"{unwrap_versioned_value(train_config.num_train_steps)} (steps) * "
             f"{unwrap_versioned_value(train_config.train_batch_size)} (batch_size) * "
             f"{train_length} (train_seq_len) "
@@ -560,6 +558,7 @@ def default_sft(
         beta2=sft_config.beta2,
         pad_tokenizer_to_match_model=sft_config.pad_tokenizer_to_match_model,
         per_device_parallelism=sft_config.per_device_parallelism,
+        hf_generation_eos_token_ids=sft_config.hf_generation_eos_token_ids,
     )
 
     if sft_config.reinit_tokens:
@@ -613,7 +612,7 @@ def default_dpo(
     pretraining_data = _prepare_data_config(tokenized, use_default_validation=False)
     preference_data = PreferenceLmDataConfig.from_lm_data_config(pretraining_data)
     preference_data = dataclasses.replace(preference_data, permutation_type="feistel")
-    vocab_size = _get_vocab_size(preference_data)
+    dpo_tokenizer_name = unwrap_versioned_value(preference_data.tokenizer)
 
     name = _truncate_wandb_name(name)
 
@@ -675,6 +674,7 @@ def default_dpo(
         validation_split_fraction=dpo_config.validation_split_fraction,
         hf_save_steps=steps_per_export_hf,
         hf_save_dtype=dpo_config.hf_save_dtype,
+        hf_generation_eos_token_ids=dpo_config.hf_generation_eos_token_ids,
         data_seed=dpo_config.seed,
     )
 
@@ -689,7 +689,7 @@ def default_dpo(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
+            f"Train a model (tokenizer={dpo_tokenizer_name}) for "
             f"{dpo_config.num_train_steps} (steps) * "
             f"{dpo_config.train_batch_size} (batch_size) * "
             f"{train_length} (train_seq_len) "
@@ -699,11 +699,6 @@ def default_dpo(
         config=config,
         override_output_path=override_output_path,
     )
-
-
-def _get_vocab_size(pretraining_data):
-    tokenizer = unwrap_versioned_value(pretraining_data.tokenizer)
-    return get_vocab_size_for_tokenizer(tokenizer)
 
 
 def _prepare_data_config(

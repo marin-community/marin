@@ -18,7 +18,7 @@ import levanter
 import levanter.callbacks
 from levanter import callbacks
 from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCompatConfig
+from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
 from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import (
@@ -231,6 +231,7 @@ class TrainDpoConfig:
     hf_upload: Optional[str] = None
     hf_save_steps: int = 10000
     hf_save_dtype: Optional[str] = None
+    hf_generation_eos_token_ids: Optional[list[int]] = None
 
     data_seed: Optional[int] = None
     initialize_from_checkpoint_path: Optional[str] = None
@@ -241,6 +242,8 @@ def main(config: TrainDpoConfig):
         raise ValueError("reference_model_path must be provided for DPO training.")
 
     tokenizer = config.data.the_tokenizer
+
+    _generation_config = build_generation_config(tokenizer, config.hf_generation_eos_token_ids)
 
     if config.initialize_from_hf:
         if config.trainer.initialize_from is not None:
@@ -472,6 +475,7 @@ def main(config: TrainDpoConfig):
                     os.path.join(full_save_path, f"step-{step.step}"),
                     upload_to_hf=upload_to_hf,
                     dtype=save_dtype,
+                    generation_config=_generation_config,
                     **hf_upload_kwargs,
                 )
 

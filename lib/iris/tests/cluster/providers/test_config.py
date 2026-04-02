@@ -15,14 +15,19 @@ import yaml
 
 from iris.cluster.config import (
     config_to_dict,
+    connect_cluster,
     create_autoscaler,
     get_ssh_config,
     load_config,
+    make_local_config,
     validate_config,
 )
 from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.constraints import WellKnownAttribute
-from iris.rpc import config_pb2
+from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.time_proto import duration_to_proto
+from rigging.timing import Duration, ExponentialBackoff
 
 
 class TestConfigRoundTrip:
@@ -463,13 +468,12 @@ class TestSshConfigMerging:
 
     def test_uses_cluster_default_ssh_config(self):
         """get_ssh_config returns cluster defaults when no group override."""
-        from iris.time_utils import Duration
 
         ssh_config_proto = config_pb2.SshConfig(
             user="ubuntu",
             key_file="~/.ssh/cluster_key",
         )
-        ssh_config_proto.connect_timeout.CopyFrom(Duration.from_seconds(60).to_proto())
+        ssh_config_proto.connect_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(60)))
 
         config = config_pb2.IrisClusterConfig()
         config.defaults.ssh.CopyFrom(ssh_config_proto)
@@ -504,12 +508,11 @@ class TestSshConfigMerging:
 
     def test_partial_per_group_overrides_merge_with_defaults(self):
         """Per-group overrides merge with cluster defaults for unset fields."""
-        from iris.time_utils import Duration
 
         config = config_pb2.IrisClusterConfig()
         config.defaults.ssh.user = "ubuntu"
         config.defaults.ssh.key_file = "~/.ssh/cluster_key"
-        config.defaults.ssh.connect_timeout.CopyFrom(Duration.from_seconds(30).to_proto())
+        config.defaults.ssh.connect_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(30)))
 
         manual_config = config_pb2.ScaleGroupConfig(
             name="manual_group",
@@ -1407,3 +1410,30 @@ def test_coreweave_worker_provider_rejected():
     sg.slice_template.coreweave.region = "US-WEST-04A"
     with pytest.raises(ValueError, match="does not support worker_provider"):
         validate_config(config)
+
+
+SMOKE_GCP_CONFIG = Path(__file__).resolve().parents[3] / "examples" / "smoke-gcp.yaml"
+
+
+@pytest.mark.timeout(15)
+def test_smoke_gcp_config_boots_locally():
+    """Load smoke-gcp.yaml, convert to local mode, verify workers join."""
+    config = load_config(SMOKE_GCP_CONFIG)
+    config = make_local_config(config)
+
+    with connect_cluster(config) as url:
+        client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+        # The smoke config has min_slices=1 for tpu_v5e_16 across 2 zones,
+        # each with num_vms=4 → 8 workers total.  We only need one healthy
+        # worker to confirm the config boots.
+
+        def _has_healthy_worker() -> bool:
+            workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
+            return any(w.healthy for w in workers)
+
+        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until_or_raise(
+            _has_healthy_worker,
+            timeout=Duration.from_seconds(15.0),
+            error_message="No healthy workers with smoke-gcp.yaml in local mode",
+        )
+        client.close()

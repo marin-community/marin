@@ -35,6 +35,42 @@ Coordination between multiple pipelines is handled via lease files. This
 prevents duplicate execution if, for example, 2 Executor pipelines share common
 ancestor steps.
 
+## Mirrored inputs
+
+Some datasets live in a specific regional bucket (e.g.
+`gs://marin-us-central2/documents/stackexchange/...`) but experiments may run
+from any region.  The `mirrored()` wrapper marks an input path for
+**cross-region mirroring** so that the executor copies the data to the local
+marin prefix before the step runs.
+
+```python
+from marin.execution.executor import mirrored, versioned
+
+step = ExecutorStep(
+    name="train",
+    fn=my_training_fn,
+    config=TrainConfig(
+        dataset=mirrored(versioned("documents/stackexchange/v1"), budget_gb=50),
+    ),
+)
+```
+
+At config instantiation time, `mirrored()` rewrites the path to use the
+`mirror://` protocol.  When the step's function opens the path via `fsspec`,
+the `MirrorFileSystem` transparently copies data from whichever regional bucket
+has it into the local marin prefix, respecting the per-path transfer budget.
+
+**Key details:**
+
+- `budget_gb` (default 10) caps how much data (in GB) a single step may copy
+  cross-region.  The budget is enforced via the `mirror_budget` context manager
+  from `rigging.filesystem`.
+- Paths that already exist in the local prefix are not re-copied.
+- `mirrored()` can wrap plain strings or `VersionedValue` / `InputName`
+  references.
+- To adjust the global mirror budget default, set the `MARIN_MIRROR_BUDGET_GB`
+  environment variable before the process starts.
+
 ## Ray
 
 Recall that a step's function can either be a normal Python function or in most realistic cases,
@@ -49,7 +85,7 @@ The environment will have the following packages installed:
   [`pyproject.toml`](https://github.com/marin-community/marin/blob/main/pyproject.toml)), which include fsspec, draccus, etc.
 - **Step-specific packages**: remote steps can specify
   `pip_dependency_groups` via the `remote()` wrapper, a list of either (i) a key from
-  `project.optional-dependencies` dictionary (e.g., `rl`), or (2) a
+  `project.optional-dependencies` in [`lib/marin/pyproject.toml`](https://github.com/marin-community/marin/blob/main/lib/marin/pyproject.toml) (e.g., `rl`), or (2) a
   specific pip package.  This allows each step to have its own environment and
   not interfere with other steps.
 
@@ -69,7 +105,7 @@ Finally, to launch an experiment, use [`ray_run.py`](https://github.com/marin-co
 launches jobs to the Ray cluster:
 
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py -- python experiments/hello_world.py
+uv run lib/marin/src/marin/run/ray_run.py -- python experiments/tutorials/hello_world.py
 ```
 
 This script ensure that:

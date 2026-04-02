@@ -3,6 +3,7 @@
 
 """Extracted cluster helper for Iris integration tests."""
 
+import re
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -19,7 +20,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 
 @dataclass
@@ -46,7 +47,7 @@ class IrisIntegrationCluster:
         scheduling_timeout: Duration | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
-        max_retries_preemption: int = 100,
+        max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
         coscheduling: CoschedulingConfig | None = None,
         constraints: list[Constraint] | None = None,
@@ -154,10 +155,6 @@ class IrisIntegrationCluster:
 
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
         task_id = job.job_id.task(task_index).to_wire()
-        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
-        response = self.controller_client.get_task_logs(request)
-        lines = []
-        for batch in response.task_logs:
-            for entry in batch.logs:
-                lines.append(f"{entry.source}: {entry.data}")
-        return lines
+        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        response = self.controller_client.fetch_logs(request)
+        return [f"{e.source}: {e.data}" for e in response.entries]

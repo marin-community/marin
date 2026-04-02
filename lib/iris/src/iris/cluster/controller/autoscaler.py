@@ -47,7 +47,8 @@ from iris.cluster.constraints import (
     soft_constraint_score,
     split_hard_soft,
 )
-from iris.cluster.controller.db import SCALING_GROUPS, SLICES, TRACKED_WORKERS, ControllerDB
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import _decode_json_list, decode_timestamp_ms
 from iris.cluster.types import WorkerStatusMap
 from iris.cluster.controller.scaling_group import (
     GroupAvailability,
@@ -59,7 +60,8 @@ from iris.cluster.controller.scaling_group import (
 )
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_proto import duration_from_proto, timestamp_to_proto
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -827,7 +829,7 @@ class Autoscaler:
         """
         return cls(
             scale_groups=scale_groups,
-            evaluation_interval=Duration.from_proto(config.evaluation_interval),
+            evaluation_interval=duration_from_proto(config.evaluation_interval),
             platform=platform,
             threads=threads,
             base_worker_config=base_worker_config,
@@ -894,7 +896,7 @@ class Autoscaler:
         """
 
         action = vm_pb2.AutoscalerAction(
-            timestamp=Timestamp.now().to_proto(),
+            timestamp=timestamp_to_proto(Timestamp.now()),
             action_type=action_type,
             scale_group=scale_group,
             slice_id=slice_id,
@@ -1248,6 +1250,58 @@ class Autoscaler:
         self.refresh(worker_status_map, timestamp)
         return self.update(demand_entries, timestamp)
 
+    def get_tracked_worker(self, worker_id: str) -> TrackedWorker | None:
+        """Look up a tracked worker by ID."""
+        return self._workers.get(worker_id)
+
+    def restart_worker(self, worker_id: str) -> None:
+        """Restart a worker with a fresh bootstrap script using the latest image.
+
+        Looks up the worker's slice and scale group from the controller DB
+        (the authoritative source — see #4284), gets a live handle via the
+        slice's describe(), builds a bootstrap script with the latest image
+        tag, and runs it on the worker via SSH.
+        """
+        if self._db is None:
+            raise ValueError("No DB configured — cannot look up worker")
+
+        # Look up worker's slice and group from the DB (always up to date)
+        with self._db.snapshot() as snap:
+            rows = snap.raw(
+                "SELECT slice_id, scale_group FROM tracked_workers WHERE worker_id = ?",
+                params=(worker_id,),
+            )
+        if not rows:
+            raise ValueError(f"Worker {worker_id} not found in tracked_workers DB")
+        row = rows[0]
+
+        group = self._groups.get(row.scale_group)
+        if group is None:
+            raise ValueError(f"Scale group {row.scale_group} not found for worker {worker_id}")
+
+        # Get a handle with SSH access to this specific VM. SliceHandle.describe()
+        # returns RemoteWorkerHandles with the right SSH config for each VM.
+        slice_handle = group.get_slice(row.slice_id)
+        if slice_handle is None:
+            raise ValueError(f"Slice {row.slice_id} not found in group {row.scale_group}")
+
+        workers = slice_handle.describe().workers
+        handle = next((w for w in workers if w.worker_id == worker_id), None)
+        if handle is None:
+            raise ValueError(f"Worker {worker_id} not found in slice {row.slice_id}")
+
+        worker_config = self._per_group_worker_config(group)
+        if worker_config is None:
+            raise ValueError("No base worker config — cannot build bootstrap script")
+
+        worker_config.worker_id = worker_id
+        worker_config.slice_id = row.slice_id
+
+        from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
+
+        script = build_worker_bootstrap_script(worker_config)
+        handle.restart_worker(script)
+
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._workers.update(workers)
@@ -1260,38 +1314,30 @@ class Autoscaler:
         tracked workers. Call at startup before loops begin.
         """
         with db.snapshot() as snapshot:
-            scaling_rows = snapshot.select(
-                SCALING_GROUPS,
-                columns=(
-                    SCALING_GROUPS.c.name,
-                    SCALING_GROUPS.c.consecutive_failures,
-                    SCALING_GROUPS.c.backoff_until_ms,
-                    SCALING_GROUPS.c.last_scale_up_ms,
-                    SCALING_GROUPS.c.last_scale_down_ms,
-                    SCALING_GROUPS.c.quota_exceeded_until_ms,
-                    SCALING_GROUPS.c.quota_reason,
-                ),
+            scaling_rows = snapshot.raw(
+                "SELECT name, consecutive_failures, backoff_until_ms, last_scale_up_ms, "
+                "last_scale_down_ms, quota_exceeded_until_ms, quota_reason "
+                "FROM scaling_groups",
+                decoders={
+                    "consecutive_failures": int,
+                    "backoff_until_ms": decode_timestamp_ms,
+                    "last_scale_up_ms": decode_timestamp_ms,
+                    "last_scale_down_ms": decode_timestamp_ms,
+                    "quota_exceeded_until_ms": decode_timestamp_ms,
+                },
             )
-            slice_rows = snapshot.select(
-                SLICES,
-                columns=(
-                    SLICES.c.slice_id,
-                    SLICES.c.scale_group,
-                    SLICES.c.lifecycle,
-                    SLICES.c.worker_ids,
-                    SLICES.c.created_at_ms,
-                    SLICES.c.last_active_ms,
-                    SLICES.c.error_message,
-                ),
+            slice_rows = snapshot.raw(
+                "SELECT slice_id, scale_group, lifecycle, worker_ids, "
+                "created_at_ms, last_active_ms, error_message "
+                "FROM slices",
+                decoders={
+                    "worker_ids": _decode_json_list,
+                    "created_at_ms": decode_timestamp_ms,
+                    "last_active_ms": decode_timestamp_ms,
+                },
             )
-            tracked_rows = snapshot.select(
-                TRACKED_WORKERS,
-                columns=(
-                    TRACKED_WORKERS.c.worker_id,
-                    TRACKED_WORKERS.c.slice_id,
-                    TRACKED_WORKERS.c.scale_group,
-                    TRACKED_WORKERS.c.internal_address,
-                ),
+            tracked_rows = snapshot.raw(
+                "SELECT worker_id, slice_id, scale_group, internal_address FROM tracked_workers",
             )
 
         # Build GroupSnapshot objects from DB rows
@@ -1445,7 +1491,7 @@ class Autoscaler:
         status = vm_pb2.AutoscalerStatus(
             groups=[g.to_status() for g in self._groups.values()],
             current_demand={g.name: g.current_demand for g in self._groups.values()},
-            last_evaluation=self._last_evaluation.to_proto(),
+            last_evaluation=timestamp_to_proto(self._last_evaluation),
             recent_actions=list(self._action_log),
         )
         if self._last_routing_decision is not None:

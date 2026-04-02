@@ -23,7 +23,7 @@ from iris.cluster.providers.types import (
     WorkerStatus,
 )
 from iris.cluster.worker.worker import Worker
-from iris.time_utils import Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +111,9 @@ class _LocalWorkerHandle:
 
     def reboot(self) -> None:
         logger.info("Reboot requested for local VM %s (no-op)", self._vm_id)
+
+    def restart_worker(self, bootstrap_script: str) -> None:
+        logger.info("Worker restart requested for local VM %s (no-op)", self._vm_id)
 
 
 @dataclass

@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)

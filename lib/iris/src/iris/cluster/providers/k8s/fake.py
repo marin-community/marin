@@ -42,6 +42,7 @@ VALID_RESOURCE_TYPES = frozenset(
         "nvidia.com/gpu",
         "google.com/tpu",
         "ephemeral-storage",
+        "rdma/ib",
     }
 )
 
@@ -228,22 +229,38 @@ def _pod_spec(manifest: dict) -> dict | None:
     return None
 
 
-def _matches_field_selector(event: dict, selector: str) -> bool:
-    """Minimal field_selector matching for testing (supports key=value pairs)."""
+def _matches_field_selector(obj: dict, selector: str) -> bool:
+    """Minimal field_selector matching for testing (supports = and != operators)."""
     for part in selector.split(","):
-        if "=" not in part:
+        part = part.strip()
+        if not part:
             continue
-        key, value = part.split("=", 1)
+        if "!=" in part:
+            key, value = part.split("!=", 1)
+            negate = True
+        elif "=" in part:
+            key, value = part.split("=", 1)
+            negate = False
+        else:
+            continue
         segments = key.strip().split(".")
-        obj = event
+        cursor = obj
         for seg in segments:
-            if not isinstance(obj, dict):
+            if not isinstance(cursor, dict):
+                if negate:
+                    break
                 return False
-            obj = obj.get(seg)
-            if obj is None:
+            cursor = cursor.get(seg)
+            if cursor is None:
+                if negate:
+                    break
                 return False
-        if str(obj) != value.strip():
-            return False
+        else:
+            matched = str(cursor) == value.strip()
+            if negate and matched:
+                return False
+            if not negate and not matched:
+                return False
     return True
 
 
@@ -640,6 +657,7 @@ class InMemoryK8sService:
         resource: str,
         *,
         labels: dict[str, str] | None = None,
+        field_selector: str | None = None,
         cluster_scoped: bool = False,
     ) -> list[dict]:
         self._check_failure("list_json")
@@ -674,6 +692,8 @@ class InMemoryK8sService:
                 res_labels = manifest.get("metadata", {}).get("labels", {})
                 if not all(res_labels.get(k) == v for k, v in labels.items()):
                     continue
+            if field_selector and not _matches_field_selector(manifest, field_selector):
+                continue
             results.append(manifest)
         return results
 
