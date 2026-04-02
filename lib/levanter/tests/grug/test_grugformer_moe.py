@@ -349,6 +349,18 @@ def test_compact_and_expand_from_keep_mask_roundtrip():
         rtol=0,
         atol=0,
     )
+    np.testing.assert_allclose(
+        np.asarray(expanded)[np.asarray(keep_mask)],
+        np.asarray(inputs)[np.asarray(keep_mask)],
+        rtol=0,
+        atol=0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(expanded)[~np.asarray(keep_mask)],
+        np.zeros((2, 2), dtype=np.float32),
+        rtol=0,
+        atol=0,
+    )
 
 
 def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
