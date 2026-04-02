@@ -242,6 +242,98 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
     assert f"--impersonate-service-account={ssh_config.impersonate_service_account}" in ssh_cmd
 
 
+def test_gcp_tunnel_retries_metadata_after_os_login_auth_failure():
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    ssh_config = config_pb2.SshConfig(
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
+        key_file="/tmp/iris-oslogin",
+        impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
+    )
+    worker_provider = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+    controller = GcpControllerProvider(
+        worker_provider=worker_provider,
+        controller_service_account="iris-worker@test-project.iam.gserviceaccount.com",
+    )
+
+    list_result = unittest.mock.Mock(returncode=0, stdout="iris-controller-iris us-central2-b\n", stderr="")
+    first_proc = unittest.mock.Mock()
+    first_proc.stderr.read.return_value = b"Permission denied by OS Login profile"
+    first_proc.terminate.return_value = None
+    first_proc.wait.return_value = 0
+    second_proc = unittest.mock.Mock()
+    second_proc.terminate.return_value = None
+    second_proc.wait.return_value = 0
+
+    with (
+        unittest.mock.patch("iris.cluster.providers.gcp.controller._check_gcloud_ssh_key"),
+        unittest.mock.patch("iris.cluster.providers.gcp.controller.find_free_port", return_value=10042),
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.resolve_current_os_login_user",
+            return_value="svc-user",
+        ),
+        unittest.mock.patch("iris.cluster.providers.gcp.controller.subprocess.run", return_value=list_result),
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.subprocess.Popen", side_effect=[first_proc, second_proc]
+        ) as popen_mock,
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.wait_for_port",
+            side_effect=[False, True],
+        ),
+    ):
+        with controller.tunnel("unused") as tunneled:
+            assert tunneled == "http://127.0.0.1:10042"
+
+    first_cmd = popen_mock.call_args_list[0].args[0]
+    second_cmd = popen_mock.call_args_list[1].args[0]
+    assert any(part.startswith("svc-user@") for part in first_cmd)
+    assert "svc-user@iris-controller-iris" not in second_cmd
+    assert "iris-controller-iris" in second_cmd
+
+
+def test_gcp_tunnel_does_not_retry_metadata_on_non_auth_failure():
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    ssh_config = config_pb2.SshConfig(
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
+        key_file="/tmp/iris-oslogin",
+        impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
+    )
+    worker_provider = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+    controller = GcpControllerProvider(
+        worker_provider=worker_provider,
+        controller_service_account="iris-worker@test-project.iam.gserviceaccount.com",
+    )
+
+    list_result = unittest.mock.Mock(returncode=0, stdout="iris-controller-iris us-central2-b\n", stderr="")
+    first_proc = unittest.mock.Mock()
+    first_proc.stderr.read.return_value = b"network unreachable"
+    first_proc.terminate.return_value = None
+    first_proc.wait.return_value = 0
+
+    with (
+        unittest.mock.patch("iris.cluster.providers.gcp.controller._check_gcloud_ssh_key"),
+        unittest.mock.patch("iris.cluster.providers.gcp.controller.find_free_port", return_value=10042),
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.resolve_current_os_login_user",
+            return_value="svc-user",
+        ),
+        unittest.mock.patch("iris.cluster.providers.gcp.controller.subprocess.run", return_value=list_result),
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.subprocess.Popen", return_value=first_proc
+        ) as popen_mock,
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.wait_for_port",
+            return_value=False,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="SSH tunnel failed to establish"):
+            with controller.tunnel("unused"):
+                pass
+
+    assert popen_mock.call_count == 1
+
+
 def test_gce_remote_exec_builds_optional_flags_inline():
     remote_exec = GceRemoteExec(
         project_id="test-project",

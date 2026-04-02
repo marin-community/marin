@@ -8,8 +8,7 @@ platform:
 
 defaults:
   ssh:
-    auth_mode: SSH_AUTH_MODE_OS_LOGIN
-    impersonate_service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+    auth_mode: SSH_AUTH_MODE_METADATA
   autoscaler:
     evaluation_interval:
       milliseconds: 10000
