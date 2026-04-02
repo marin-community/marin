@@ -127,9 +127,7 @@ def _restore_tracked_workers(rows: list[_TrackedWorkerRow]) -> dict[str, Tracked
     """Restore tracked workers from DB rows."""
     workers: dict[str, TrackedWorker] = {}
     for row in rows:
-        # address is "host:port"; extract host for internal_address
-        internal_address = row.address.rsplit(":", 1)[0] if ":" in row.address else row.address
-        handle = _RestoredWorkerHandle(worker_id=row.worker_id, internal_address=internal_address)
+        handle = _RestoredWorkerHandle(worker_id=row.worker_id, internal_address=row.address)
         tw = TrackedWorker(
             worker_id=row.worker_id,
             slice_id=row.slice_id,
