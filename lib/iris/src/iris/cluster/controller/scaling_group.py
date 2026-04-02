@@ -552,24 +552,33 @@ class ScalingGroup:
             slice_id: ID of the slice to terminate
             timestamp: Optional timestamp (for testing)
         """
+        handle = self.detach_slice(slice_id, timestamp=timestamp)
+        if handle is not None:
+            self._terminate_slice_handle(handle, context="cleaning up anyway")
+
+    def detach_slice(self, slice_id: str, timestamp: Timestamp | None = None) -> SliceHandle | None:
+        """Remove a slice from tracking and persistence without terminating it."""
         timestamp = timestamp or Timestamp.now()
         with self._slices_lock:
-            state = self._slices.get(slice_id)
-        if state:
-            try:
-                state.handle.terminate()
-            except Exception:
-                logger.warning(
-                    "Scale group %s: terminate() failed for slice %s, cleaning up anyway",
-                    self.name,
-                    slice_id,
-                    exc_info=True,
-                )
-            with self._slices_lock:
-                self._slices.pop(slice_id, None)
-            self._last_scale_down = timestamp
-            self._db_remove_slice(slice_id)
-            self._db_update_group()
+            state = self._slices.pop(slice_id, None)
+        if state is None:
+            return None
+        self._last_scale_down = timestamp
+        self._db_remove_slice(slice_id)
+        self._db_update_group()
+        return state.handle
+
+    def _terminate_slice_handle(self, handle: SliceHandle, *, context: str) -> None:
+        try:
+            handle.terminate()
+        except Exception:
+            logger.warning(
+                "Scale group %s: terminate() failed for slice %s, %s",
+                self.name,
+                handle.slice_id,
+                context,
+                exc_info=True,
+            )
 
     def slice_handles(self) -> list[SliceHandle]:
         """All slice handles in this scale group."""
