@@ -168,74 +168,46 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
     logger.info("Loading: %s", spec.path)
     columns = spec.columns
 
-    has_filter = spec.filter_expr is not None
-    has_row_range = spec.row_start is not None and spec.row_end is not None
-
-    if not has_filter and not has_row_range:
-        # Fast path: read row-group-by-row-group via ParquetFile.
-        # This avoids the pyarrow.dataset API which loads the entire file
-        # into Arrow's memory pool upfront, causing multi-GB RSS bloat
-        # on large files.
-        pf = pq.ParquetFile(spec.path)
-        for i in range(pf.metadata.num_row_groups):
-            table = pf.read_row_group(i, columns=columns)
-            counters.increment("zephyr/records_in", len(table))
-            yield from table.to_pylist()
-        return
-
-    # Fallback: use pyarrow.dataset for filter pushdown and row-range reads.
-    import pyarrow.dataset as pads
-
     pa_filter = None
-    if has_filter:
+    if spec.filter_expr is not None:
         from zephyr.expr import to_pyarrow_expr
 
         pa_filter = to_pyarrow_expr(spec.filter_expr)
 
-    dataset = pads.dataset(spec.path, format="parquet")
+    # Read row-group-by-row-group via ParquetFile to avoid the
+    # pyarrow.dataset API which loads the entire file into Arrow's memory
+    # pool upfront, causing multi-GB RSS bloat on large files.
+    # See: https://github.com/apache/arrow/issues/39808
+    pf = pq.ParquetFile(spec.path)
+    has_row_range = spec.row_start is not None and spec.row_end is not None
+    cumulative_rows = 0
 
-    schema_names = dataset.schema.names
-    if not schema_names:
-        return
+    for i in range(pf.metadata.num_row_groups):
+        rg_num_rows = pf.metadata.row_group(i).num_rows
+        rg_start = cumulative_rows
+        rg_end = cumulative_rows + rg_num_rows
+        cumulative_rows = rg_end
 
-    if has_row_range:
-        assert spec.row_start is not None and spec.row_end is not None
-        cumulative_rows = 0
-        for fragment in dataset.get_fragments():
-            for rg_fragment in fragment.split_by_row_group():
-                assert len(rg_fragment.row_groups) == 1
-                rg_info = rg_fragment.row_groups[0]
-                rg_num_rows = rg_info.num_rows
-                rg_start = cumulative_rows
-                rg_end = cumulative_rows + rg_num_rows
+        if has_row_range:
+            assert spec.row_start is not None and spec.row_end is not None
+            if rg_end <= spec.row_start:
+                continue
+            if rg_start >= spec.row_end:
+                return
 
-                if rg_end > spec.row_start and rg_start < spec.row_end:
-                    is_interior = rg_start >= spec.row_start and rg_end <= spec.row_end
+        table = pf.read_row_group(i, columns=columns)
 
-                    if is_interior:
-                        table = rg_fragment.to_table(columns=columns, filter=pa_filter)
-                        counters.increment("zephyr/records_in", len(table))
-                        yield from table.to_pylist()
-                    else:
-                        table = rg_fragment.to_table(columns=columns)
-                        local_start = max(0, spec.row_start - rg_start)
-                        local_end = min(rg_num_rows, spec.row_end - rg_start)
-                        sliced = table.slice(local_start, local_end - local_start)
+        if has_row_range:
+            assert spec.row_start is not None and spec.row_end is not None
+            is_interior = rg_start >= spec.row_start and rg_end <= spec.row_end
+            if not is_interior:
+                local_start = max(0, spec.row_start - rg_start)
+                local_end = min(rg_num_rows, spec.row_end - rg_start)
+                table = table.slice(local_start, local_end - local_start)
 
-                        if pa_filter is not None:
-                            filtered = sliced.filter(pa_filter)
-                            counters.increment("zephyr/records_in", len(filtered))
-                            yield from filtered.to_pylist()
-                        else:
-                            counters.increment("zephyr/records_in", len(sliced))
-                            yield from sliced.to_pylist()
+        if pa_filter is not None:
+            table = table.filter(pa_filter)
 
-                cumulative_rows = rg_end
-                if cumulative_rows >= spec.row_end:
-                    return
-    else:
-        # Filter only, no row range
-        table = dataset.to_table(columns=columns, filter=pa_filter)
         counters.increment("zephyr/records_in", len(table))
         yield from table.to_pylist()
 
