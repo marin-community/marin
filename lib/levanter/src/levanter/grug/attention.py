@@ -18,6 +18,7 @@ from haliax.partitioning import _get_mesh
 
 _SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
 _SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
+_MAX_LOGIT_CHUNK_SIZE = 128
 
 
 @dataclass(frozen=True)
@@ -188,6 +189,62 @@ def reference_attention(
     weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
     ctx = jnp.einsum("bhqk,bkhd->bqhd", weights, v)
     return ctx.astype(v.dtype)
+
+
+def max_abs_attention_logit(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+) -> jax.Array:
+    head_dim = q.shape[-1]
+    num_q_heads = q.shape[2]
+    num_kv_heads = k.shape[2]
+
+    if num_q_heads != num_kv_heads:
+        if num_q_heads % num_kv_heads != 0:
+            raise ValueError(f"num_heads ({num_q_heads}) must be divisible by num_kv_heads ({num_kv_heads})")
+        kv_repeat = num_q_heads // num_kv_heads
+    else:
+        kv_repeat = 1
+
+    scale = jnp.asarray(1.0 / math.sqrt(head_dim), dtype=jnp.float32)
+    q32 = _pad_attention_sequence(q.astype(jnp.float32) * scale, axis=1, block_size=_MAX_LOGIT_CHUNK_SIZE)
+    k32 = _pad_attention_sequence(k.astype(jnp.float32), axis=1, block_size=_MAX_LOGIT_CHUNK_SIZE)
+    num_q_chunks = q32.shape[1] // _MAX_LOGIT_CHUNK_SIZE
+    num_k_chunks = k32.shape[1] // _MAX_LOGIT_CHUNK_SIZE
+
+    def _q_body(q_index: int, running_max: jax.Array) -> jax.Array:
+        q_chunk = jax.lax.dynamic_slice_in_dim(
+            q32,
+            q_index * _MAX_LOGIT_CHUNK_SIZE,
+            _MAX_LOGIT_CHUNK_SIZE,
+            axis=1,
+        )
+
+        def _k_body(k_index: int, chunk_max: jax.Array) -> jax.Array:
+            k_chunk = jax.lax.dynamic_slice_in_dim(
+                k32,
+                k_index * _MAX_LOGIT_CHUNK_SIZE,
+                _MAX_LOGIT_CHUNK_SIZE,
+                axis=1,
+            )
+            if kv_repeat != 1:
+                k_chunk = jnp.repeat(k_chunk, kv_repeat, axis=2)
+            scores = jnp.einsum("bqhd,bkhd->bhqk", q_chunk, k_chunk)
+            return jnp.maximum(chunk_max, jnp.max(jnp.abs(scores)))
+
+        return jax.lax.fori_loop(0, num_k_chunks, _k_body, running_max)
+
+    return jax.lax.fori_loop(0, num_q_chunks, _q_body, jnp.array(0.0, dtype=jnp.float32))
+
+
+def _pad_attention_sequence(array: jax.Array, *, axis: int, block_size: int) -> jax.Array:
+    pad = (-array.shape[axis]) % block_size
+    if pad == 0:
+        return array
+
+    pad_width = [(0, 0)] * array.ndim
+    pad_width[axis] = (0, pad)
+    return jnp.pad(array, pad_width)
 
 
 def _spec_shard_factor(entry: str | tuple[str, ...] | None, mesh) -> int:
@@ -394,5 +451,6 @@ __all__ = [
     "RotaryConfig",
     "apply_rotary_embedding",
     "attention",
+    "max_abs_attention_logit",
     "reference_attention",
 ]
