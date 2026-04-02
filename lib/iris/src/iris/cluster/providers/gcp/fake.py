@@ -210,7 +210,9 @@ class InMemoryGcpService:
             zone=request.zone,
             labels=dict(request.labels),
             metadata=dict(request.metadata),
+            service_account=request.service_account,
             network_endpoints=endpoints,
+            external_network_endpoints=[None] * len(endpoints),
             created_at=Timestamp.now(),
         )
         self._tpus[(request.name, request.zone)] = info
@@ -277,6 +279,7 @@ class InMemoryGcpService:
             external_ip=None,
             labels=dict(request.labels),
             metadata=dict(request.metadata),
+            service_account=request.service_account,
             created_at=Timestamp.now(),
         )
         self._vms[(request.name, request.zone)] = info

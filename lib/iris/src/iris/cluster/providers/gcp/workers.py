@@ -37,6 +37,7 @@ from iris.cluster.providers.gcp.service import (
     TpuCreateRequest,
     VmCreateRequest,
 )
+from iris.cluster.providers.gcp.ssh import OS_LOGIN_METADATA, ssh_impersonate_service_account, ssh_key_file
 from iris.cluster.providers.types import (
     InfraError,
     Labels,
@@ -73,6 +74,16 @@ DEFAULT_MACHINE_TYPE = "n2-standard-4"
 DEFAULT_BOOT_DISK_SIZE_GB = 50
 # pd-ssd provides ~6000 IOPS vs ~38 on pd-standard, critical for controller DB
 DEFAULT_BOOT_DISK_TYPE = "pd-ssd"
+
+
+def _gcp_instance_metadata(
+    ssh_config: config_pb2.SshConfig | None,
+    metadata: dict[str, str] | None = None,
+) -> dict[str, str]:
+    result = dict(metadata or {})
+    if ssh_config and ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
+        result.update(OS_LOGIN_METADATA)
+    return result
 
 
 def _validate_slice_config(config: config_pb2.SliceConfig) -> None:
@@ -158,6 +169,10 @@ class GcpWorkerProvider:
     def iris_labels(self) -> Labels:
         return self._iris_labels
 
+    @property
+    def ssh_config(self) -> config_pb2.SshConfig | None:
+        return self._ssh_config
+
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         """Rewrite ``ghcr.io/`` images to the AR remote repo for *zone*'s continent.
 
@@ -201,7 +216,8 @@ class GcpWorkerProvider:
             zone=zone,
             machine_type=machine_type,
             labels=dict(config.labels),
-            metadata=dict(config.metadata),
+            metadata=_gcp_instance_metadata(self._ssh_config, dict(config.metadata)),
+            service_account=config.gcp.service_account or None,
             disk_size_gb=boot_disk_size,
             boot_disk_type=DEFAULT_BOOT_DISK_TYPE,
             image_family="debian-12",
@@ -219,6 +235,8 @@ class GcpWorkerProvider:
             project_id=self._project_id,
             zone=zone,
             vm_name=config.name,
+            ssh_key_file=ssh_key_file(self._ssh_config),
+            impersonate_service_account=ssh_impersonate_service_account(self._ssh_config, request.service_account),
         )
 
         return GcpStandaloneWorkerHandle(
@@ -230,6 +248,7 @@ class GcpWorkerProvider:
             _project_id=self._project_id,
             _gcp_service=self._gcp,
             _remote_exec=remote_exec,
+            _service_account=request.service_account,
         )
 
     def create_slice(
@@ -272,7 +291,7 @@ class GcpWorkerProvider:
         gcp = config.gcp
         slice_id = _build_gce_resource_name(config.name_prefix, generate_slice_suffix())
 
-        metadata: dict[str, str] = {}
+        metadata = _gcp_instance_metadata(self._ssh_config)
         if worker_config:
             worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
             worker_config.slice_id = slice_id
@@ -287,6 +306,7 @@ class GcpWorkerProvider:
             labels=dict(config.labels),
             metadata=metadata,
             preemptible=config.preemptible,
+            service_account=gcp.service_account or None,
         )
 
         logger.info("Creating TPU slice: %s (type=%s, zone=%s)", slice_id, config.accelerator_variant, gcp.zone)
@@ -306,6 +326,7 @@ class GcpWorkerProvider:
             _accelerator_variant=config.accelerator_variant,
             _gcp_service=self._gcp,
             _ssh_config=self._ssh_config,
+            _service_account=request.service_account,
             _bootstrapping=worker_config is not None,
         )
 
@@ -347,6 +368,8 @@ class GcpWorkerProvider:
             zone=gcp.zone,
             machine_type=machine_type,
             labels=labels,
+            metadata=_gcp_instance_metadata(self._ssh_config),
+            service_account=gcp.service_account or None,
             disk_size_gb=boot_disk_size,
             image_family="debian-12",
             image_project="debian-cloud",
@@ -370,6 +393,7 @@ class GcpWorkerProvider:
             _created_at=Timestamp.now(),
             _label_prefix=self._label_prefix,
             _ssh_config=self._ssh_config,
+            _service_account=request.service_account,
             _bootstrapping=worker_config is not None,
         )
 
@@ -408,6 +432,7 @@ class GcpWorkerProvider:
                     _accelerator_variant=tpu.accelerator_type,
                     _gcp_service=self._gcp,
                     _ssh_config=self._ssh_config,
+                    _service_account=tpu.service_account,
                     _state=tpu.state,
                 )
             )
@@ -431,6 +456,7 @@ class GcpWorkerProvider:
                     _created_at=vm.created_at,
                     _label_prefix=self._label_prefix,
                     _ssh_config=self._ssh_config,
+                    _service_account=vm.service_account,
                 )
             )
 
@@ -466,6 +492,7 @@ class GcpWorkerProvider:
                     _accelerator_variant=tpu.accelerator_type,
                     _gcp_service=self._gcp,
                     _ssh_config=self._ssh_config,
+                    _service_account=tpu.service_account,
                     _state=tpu.state,
                 )
             )
@@ -487,6 +514,7 @@ class GcpWorkerProvider:
                     _created_at=vm.created_at,
                     _label_prefix=self._label_prefix,
                     _ssh_config=self._ssh_config,
+                    _service_account=vm.service_account,
                 )
             )
 
@@ -507,6 +535,8 @@ class GcpWorkerProvider:
                 project_id=self._project_id,
                 zone=vm.zone,
                 vm_name=vm.name,
+                ssh_key_file=ssh_key_file(self._ssh_config),
+                impersonate_service_account=ssh_impersonate_service_account(self._ssh_config, vm.service_account),
             )
             handles.append(
                 GcpStandaloneWorkerHandle(
@@ -518,6 +548,7 @@ class GcpWorkerProvider:
                     _project_id=self._project_id,
                     _gcp_service=self._gcp,
                     _remote_exec=remote_exec,
+                    _service_account=vm.service_account,
                 )
             )
         return handles

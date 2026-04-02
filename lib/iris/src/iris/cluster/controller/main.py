@@ -107,6 +107,7 @@ def run_controller_serve(
     elif not isinstance(provider, K8sTaskProvider):
         bundle = create_provider_bundle(
             platform_config=cluster_config.platform,
+            cluster_config=cluster_config,
             ssh_config=cluster_config.defaults.ssh,
         )
         workers = bundle.workers
