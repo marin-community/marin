@@ -308,24 +308,25 @@ def main() -> int:
 
     for service_account in (controller_sa, worker_sa):
         self_member = f"serviceAccount:{service_account}"
-        if self_member not in (controller_policy if service_account == controller_sa else worker_policy).get(
-            "roles/iam.serviceAccountUser", set()
-        ):
-            _bind_service_account_role(
-                service_account,
-                member=self_member,
-                role="roles/iam.serviceAccountUser",
-                dry_run=args.dry_run,
-            )
+        policy = controller_policy if service_account == controller_sa else worker_policy
+        for role in IMPERSONATION_ROLES:
+            if self_member not in policy.get(role, set()):
+                _bind_service_account_role(
+                    service_account,
+                    member=self_member,
+                    role=role,
+                    dry_run=args.dry_run,
+                )
 
     controller_member = f"serviceAccount:{controller_sa}"
-    if controller_member not in worker_policy.get("roles/iam.serviceAccountUser", set()):
-        _bind_service_account_role(
-            worker_sa,
-            member=controller_member,
-            role="roles/iam.serviceAccountUser",
-            dry_run=args.dry_run,
-        )
+    for role in IMPERSONATION_ROLES:
+        if controller_member not in worker_policy.get(role, set()):
+            _bind_service_account_role(
+                worker_sa,
+                member=controller_member,
+                role=role,
+                dry_run=args.dry_run,
+            )
 
     return 0
 

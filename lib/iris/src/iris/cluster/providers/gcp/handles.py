@@ -320,7 +320,10 @@ class GcpSliceHandle:
                 remote_exec = DirectSshRemoteExec(
                     host=direct_host,
                     user=_os_login_user(self._ssh_config, self._service_account),
-                    key_file=ssh_key_file(self._ssh_config),
+                    key_file=ssh_key_file(
+                        self._ssh_config,
+                        ssh_impersonate_service_account(self._ssh_config, self._service_account),
+                    ),
                     connect_timeout=(
                         duration_from_proto(self._ssh_config.connect_timeout)
                         if self._ssh_config and self._ssh_config.HasField("connect_timeout")
@@ -334,7 +337,10 @@ class GcpSliceHandle:
                     vm_id=self._slice_id,
                     worker_index=i,
                     ssh_user=_vm_slice_metadata_user(self._ssh_config),
-                    ssh_key_file=ssh_key_file(self._ssh_config),
+                    ssh_key_file=ssh_key_file(
+                        self._ssh_config,
+                        ssh_impersonate_service_account(self._ssh_config, self._service_account),
+                    ),
                     impersonate_service_account=ssh_impersonate_service_account(
                         self._ssh_config,
                         self._service_account,
@@ -441,7 +447,10 @@ class GcpVmSliceHandle:
             zone=self._zone,
             vm_name=self._vm_name,
             ssh_user=None if uses_os_login(self._ssh_config) else _vm_slice_metadata_user(self._ssh_config),
-            ssh_key_file=ssh_key_file(self._ssh_config),
+            ssh_key_file=ssh_key_file(
+                self._ssh_config,
+                ssh_impersonate_service_account(self._ssh_config, self._service_account),
+            ),
             impersonate_service_account=ssh_impersonate_service_account(
                 self._ssh_config,
                 self._service_account,
