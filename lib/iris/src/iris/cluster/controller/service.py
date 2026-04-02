@@ -1867,7 +1867,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Empty:
         identity = require_identity()
-        with self._db.read_snapshot() as q:
+        with self._db.snapshot() as q:
             key = API_KEY_PROJECTION.decode_one(
                 q.fetchall("SELECT * FROM api_keys ak WHERE ak.key_id = ?", (request.key_id,))
             )
