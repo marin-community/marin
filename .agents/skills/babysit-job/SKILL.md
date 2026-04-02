@@ -27,7 +27,29 @@ practices that both framework skills follow.
   mutate the cluster unless the user gives explicit consent in the current thread.
 - For TPU bad-node errors, escalate to **debug-tpu**.
 
-### Monitoring Ownership and Duration
+### Required Info: Ray Track
+
+1. `job_id` — Ray job ID (e.g., `ray-run-held-isoflop_sweep-20260131-051716`)
+2. `cluster` — cluster name/alias for `scripts/ray/cluster.py` (e.g., `us-east5-a`, `us-central2`)
+3. `experiment` — script path used for resubmission (e.g., `experiments/isoflop_sweep.py`)
+
+### Required Info: Iris Track
+
+1. `job_id` — Iris job ID in canonical format `/<user>/<job>` (e.g., `/dlwh/iris-run-train_tiny_model_tpu-20260302-185630`)
+2. `config` — Iris config path (e.g., `lib/iris/examples/marin.yaml`)
+3. `resubmit_command` — exact Iris submit command for resubmission; must include `--no-wait`
+4. For Marin TPU training jobs, use `--extra marin:tpu` (not `--extra marin:cpu`)
+5. For TPU jobs, the resubmit command must request TPU resources with `--tpu <variant>`.
+   `--reserve <variant>` only holds capacity; it does not attach TPU devices to the task container.
+
+Example Iris resubmit command:
+`uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --extra marin:tpu --tpu v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
+
+Iris `job run --` passes argv literally. Prefer `python -c '...'` for inline Python. Do not use a local heredoc such as `python - <<'PY'` unless you explicitly wrap a remote shell, because the heredoc body is consumed before Iris sees the command.
+
+If any required field is missing, ask for it before proceeding.
+
+## Monitoring Ownership and Duration
 
 - Assign a single monitoring owner when the loop starts.
 - Keep this loop running until one of the following:
