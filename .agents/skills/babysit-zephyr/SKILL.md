@@ -22,7 +22,7 @@ Child job naming: `<hash>-p<pipeline>-a<attempt>-{coord,workers}`.
 ## Iris Config
 
 All Iris commands below use `--config <CONFIG>`. Resolve the cluster name the user
-gives to the matching file under `lib/iris/examples/` (see **babysit-iris-job** for
+gives to the matching file under `lib/iris/examples/` (see **babysit-job** for
 the full mapping). Examples in this skill use `marin.yaml` — substitute the actual
 config (e.g., `marin-dev.yaml`) as needed.
 
