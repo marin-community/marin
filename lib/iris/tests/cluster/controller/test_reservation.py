@@ -26,24 +26,9 @@ from iris.cluster.controller.controller import (
     job_requirements_from_job,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
-import tempfile
-from pathlib import Path
 
-from iris.cluster.controller.db import (
-    ATTEMPTS,
-    ControllerDB,
-    JOBS,
-    TASKS,
-    WORKERS,
-    ACTIVE_TASK_STATES,
-    WORKER_ATTRIBUTES,
-    Job,
-    Task,
-    Worker,
-    _decode_attribute_rows,
-    _tasks_with_attempts,
-)
-from iris.cluster.log_store import LogStore
+from iris.cluster.controller.db import job_is_finished, task_can_be_scheduled
+from iris.cluster.controller.schema import WorkerRow
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
     RESERVATION_HOLDER_JOB_NAME,
@@ -63,78 +48,19 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
-from tests.cluster.controller.conftest import FakeProvider
-
-# =============================================================================
-# Helpers
-# =============================================================================
-
-
-def _make_state(**kwargs) -> ControllerTransitions:
-    """Create a ControllerTransitions with a fresh temp DB and log store."""
-    tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
-    db = ControllerDB(db_dir=tmp)
-    log_store = LogStore(log_dir=tmp / "logs")
-    return ControllerTransitions(db=db, log_store=log_store, **kwargs)
-
-
-def _schedulable_tasks(state: ControllerTransitions):
-    with state._db.snapshot() as q:
-        tasks = q.select(
-            TASKS,
-            where=TASKS.c.state.not_null()
-            & ~TASKS.c.state.in_(
-                [
-                    cluster_pb2.TASK_STATE_SUCCEEDED,
-                    cluster_pb2.TASK_STATE_FAILED,
-                    cluster_pb2.TASK_STATE_KILLED,
-                    cluster_pb2.TASK_STATE_UNSCHEDULABLE,
-                    cluster_pb2.TASK_STATE_WORKER_FAILED,
-                ]
-            ),
-            order_by=(
-                TASKS.c.priority_neg_depth.asc(),
-                TASKS.c.priority_root_submitted_ms.asc(),
-                TASKS.c.submitted_at_ms.asc(),
-                TASKS.c.task_id.asc(),
-            ),
-        )
-    return [task for task in tasks if task.can_be_scheduled()]
-
-
-def _worker_running_tasks(state: ControllerTransitions, worker_id: WorkerId):
-    with state._db.snapshot() as q:
-        rows = q.raw(
-            "SELECT t.task_id FROM tasks t "
-            "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
-            "WHERE a.worker_id = ? AND t.state IN (?, ?, ?)",
-            (str(worker_id), *ACTIVE_TASK_STATES),
-            decoders={"task_id": JobName.from_wire},
-        )
-    return frozenset(row.task_id for row in rows)
-
-
-def _with_attrs(state: ControllerTransitions, workers: list[Worker]) -> list[Worker]:
-    from dataclasses import replace as _replace
-
-    if not workers:
-        return workers
-    with state._db.snapshot() as q:
-        attrs = q.select(
-            WORKER_ATTRIBUTES,
-            columns=(
-                WORKER_ATTRIBUTES.c.worker_id,
-                WORKER_ATTRIBUTES.c.key,
-                WORKER_ATTRIBUTES.c.value_type,
-                WORKER_ATTRIBUTES.c.str_value,
-                WORKER_ATTRIBUTES.c.int_value,
-                WORKER_ATTRIBUTES.c.float_value,
-            ),
-            where=WORKER_ATTRIBUTES.c.worker_id.in_([str(w.worker_id) for w in workers]),
-        )
-    attrs_by_worker = _decode_attribute_rows(attrs)
-    return [_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
+from rigging.timing import Timestamp
+from tests.cluster.controller.conftest import (
+    FakeProvider,
+    hydrate_worker_attributes as _with_attrs,
+    query_job as _query_job,
+    query_job_row as _query_job_row,
+    query_task as _query_task,
+    query_task_with_attempts as _query_task_with_attempts,
+    query_tasks_for_job as _query_tasks_for_job,
+    query_worker as _query_worker,
+    schedulable_tasks as _schedulable_tasks,
+    worker_running_tasks as _worker_running_tasks,
+)
 
 
 def _cpu_device() -> cluster_pb2.DeviceConfig:
@@ -188,25 +114,41 @@ def _make_worker(
     metadata: cluster_pb2.WorkerMetadata | None = None,
     attributes: dict[str, AttributeValue] | None = None,
     healthy: bool = True,
-) -> Worker:
+) -> WorkerRow:
     meta = metadata or _cpu_metadata()
     # Workers always have device attributes from config (Stage 3).
     # Merge explicit attributes on top of the device-derived defaults.
     default_attrs = _default_attributes_for_device(meta.device)
     if attributes:
         default_attrs.update(attributes)
-    return Worker(
+    dt = get_device_type(meta.device)
+    dv = get_device_variant(meta.device) or ""
+    total_cpu = meta.cpu_count * 1000
+    total_mem = meta.memory_bytes
+    total_gpu = meta.gpu_count
+    total_tpu = 1 if meta.tpu_name else 0
+    return WorkerRow(
         worker_id=WorkerId(worker_id),
         address=f"{worker_id}:8080",
-        metadata=meta,
         healthy=healthy,
+        active=True,
         consecutive_failures=0,
         last_heartbeat=Timestamp.now(),
         committed_cpu_millicores=0,
         committed_mem=0,
         committed_gpu=0,
         committed_tpu=0,
+        total_cpu_millicores=total_cpu,
+        total_memory_bytes=total_mem,
+        total_gpu_count=total_gpu,
+        total_tpu_count=total_tpu,
+        device_type=dt,
+        device_variant=dv,
         attributes=default_attrs,
+        available_cpu_millicores=total_cpu,
+        available_memory=total_mem,
+        available_gpus=total_gpu,
+        available_tpus=total_tpu,
     )
 
 
@@ -280,39 +222,6 @@ def _submit_job(
     request.name = jid.to_wire()
     state.submit_job(jid, request, Timestamp.now())
     return jid
-
-
-def _query_job(state: ControllerTransitions, job_id: JobName) -> Job | None:
-    with state._db.snapshot() as q:
-        return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
-
-
-def _query_task(state: ControllerTransitions, task_id: JobName) -> Task | None:
-    with state._db.snapshot() as q:
-        return q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
-
-
-def _query_worker(state: ControllerTransitions, worker_id: WorkerId) -> Worker | None:
-    with state._db.snapshot() as q:
-        return q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
-
-
-def _query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list[Task]:
-    with state._db.snapshot() as q:
-        return q.select(TASKS, where=TASKS.c.job_id == job_id.to_wire())
-
-
-def _query_task_with_attempts(state: ControllerTransitions, task_id: JobName) -> Task | None:
-    wire = task_id.to_wire()
-    with state._db.snapshot() as q:
-        tasks = q.select(TASKS, where=TASKS.c.task_id == wire)
-        attempts = q.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id == wire,
-            order_by=(ATTEMPTS.c.attempt_id.asc(),),
-        )
-    hydrated = _tasks_with_attempts(tasks, attempts)
-    return hydrated[0] if hydrated else None
 
 
 # =============================================================================
@@ -568,7 +477,7 @@ def test_cleanup_removes_finished_job_claims():
     ctrl.state.cancel_job(jid, reason="test")
 
     job = _query_job(ctrl.state, jid)
-    assert job.is_finished()
+    assert job_is_finished(job.state)
 
     ctrl._cleanup_stale_claims()
 
@@ -826,7 +735,7 @@ def test_taint_constraint_preserves_existing_constraints():
 
 
 def _build_context_with_workers(
-    workers: list[Worker],
+    workers: list[WorkerRow],
     pending_tasks: list[JobName],
     jobs: dict[JobName, JobRequirements],
 ) -> SchedulingContext:
@@ -1252,10 +1161,11 @@ def test_taint_exemption_for_children_of_reservation_job():
     jobs: dict[JobName, JobRequirements] = {}
     has_reservation: set[JobName] = set()
     for task in pending:
-        job = _query_job(ctrl.state, task.job_id)
-        if job and not job.is_finished():
-            jobs[task.job_id] = job_requirements_from_job(job)
-            if job.request.HasField("reservation"):
+        job_row = _query_job_row(ctrl.state, task.job_id)
+        job_detail = _query_job(ctrl.state, task.job_id)
+        if job_row and not job_is_finished(job_row.state):
+            jobs[task.job_id] = job_requirements_from_job(job_row)
+            if job_detail and job_detail.request.HasField("reservation"):
                 has_reservation.add(task.job_id)
             elif _find_reservation_ancestor(ctrl._db, task.job_id) is not None:
                 has_reservation.add(task.job_id)
@@ -1265,8 +1175,8 @@ def test_taint_exemption_for_children_of_reservation_job():
     # Track direct reservations
     has_direct_reservation: set[JobName] = set()
     for task in pending:
-        job = _query_job(ctrl.state, task.job_id)
-        if job and not job.is_finished() and job.request.HasField("reservation"):
+        job_detail = _query_job(ctrl.state, task.job_id)
+        if job_detail and not job_is_finished(job_detail.state) and job_detail.request.HasField("reservation"):
             has_direct_reservation.add(task.job_id)
 
     # Child does NOT get NOT_EXISTS constraint (descendant, no constraint at all)
@@ -1361,10 +1271,11 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     jobs: dict[JobName, JobRequirements] = {}
     has_reservation: set[JobName] = set()
     for task in pending:
-        job = _query_job(ctrl.state, task.job_id)
-        if job and not job.is_finished():
-            jobs[task.job_id] = job_requirements_from_job(job)
-            if job.request.HasField("reservation"):
+        job_row = _query_job_row(ctrl.state, task.job_id)
+        job_detail = _query_job(ctrl.state, task.job_id)
+        if job_row and not job_is_finished(job_row.state):
+            jobs[task.job_id] = job_requirements_from_job(job_row)
+            if job_detail and job_detail.request.HasField("reservation"):
                 has_reservation.add(task.job_id)
             elif _find_reservation_ancestor(ctrl._db, task.job_id) is not None:
                 has_reservation.add(task.job_id)
@@ -1376,8 +1287,8 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     # Track direct reservations
     has_direct_reservation: set[JobName] = set()
     for task in pending:
-        job = _query_job(ctrl.state, task.job_id)
-        if job and not job.is_finished() and job.request.HasField("reservation"):
+        job_detail = _query_job(ctrl.state, task.job_id)
+        if job_detail and not job_is_finished(job_detail.state) and job_detail.request.HasField("reservation"):
             has_direct_reservation.add(task.job_id)
 
     # Neither grandchild gets any taint constraint (descendants)
@@ -1479,7 +1390,7 @@ def test_reservation_match_user_variant_override():
 # =============================================================================
 
 
-def test_holder_task_worker_death_no_failure_record():
+def test_holder_task_worker_death_no_failure_record(state):
     """Holder tasks return to PENDING with no WORKER_FAILED record when their worker dies.
 
     Holder tasks are virtual (never dispatched). When a worker dies, they must
@@ -1487,7 +1398,6 @@ def test_holder_task_worker_death_no_failure_record():
     that they can survive an arbitrary number of worker cycles without leaking
     memory or eventually going terminal.
     """
-    state = _make_state()
     request = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_cpu_device())])
     parent_job_id = _submit_job(state, "res-job", request)
     holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
@@ -1505,7 +1415,11 @@ def test_holder_task_worker_death_no_failure_record():
         current_holder = _query_task_with_attempts(state, holder_task.task_id)
         assert current_holder is not None
         assert current_holder.state == cluster_pb2.TASK_STATE_ASSIGNED
-        assert current_holder.active_worker_id == worker_id
+        # active_worker_id: non-None when state is not PENDING
+        assert current_holder.state != cluster_pb2.TASK_STATE_PENDING
+        current_attempt = current_holder.attempts[-1] if current_holder.attempts else None
+        active_wid = current_attempt.worker_id if current_attempt is not None else current_holder.current_worker_id
+        assert active_wid == worker_id
 
         # Kill the worker — holder task must NOT go through WORKER_FAILED.
         batch = state.drain_dispatch(worker_id)
@@ -1524,11 +1438,19 @@ def test_holder_task_worker_death_no_failure_record():
         assert (
             len(holder_task.attempts) == 0
         ), f"cycle {cycle}: attempt list leaked ({len(holder_task.attempts)} entries)"
-        assert holder_task.active_worker_id is None, "no active worker after death"
-        assert holder_task.can_be_scheduled(), "holder task must be schedulable again"
+        # active_worker_id should be None when PENDING
+        assert holder_task.state == cluster_pb2.TASK_STATE_PENDING, "no active worker after death"
+        assert task_can_be_scheduled(
+            holder_task.state,
+            holder_task.current_attempt_id,
+            holder_task.failure_count,
+            holder_task.max_retries_failure,
+            holder_task.preemption_count,
+            holder_task.max_retries_preemption,
+        ), "holder task must be schedulable again"
 
 
-def test_holder_task_removed_from_worker_when_parent_succeeds():
+def test_holder_task_removed_from_worker_when_parent_succeeds(state):
     """Holder task is cleaned from worker.running_tasks when the parent job succeeds.
 
     PATH A (task-driven termination): a parent task succeeds → on_task_transition
@@ -1539,7 +1461,6 @@ def test_holder_task_removed_from_worker_when_parent_succeeds():
     Previously untested; the existing cancel test only covers PATH B
     (explicit JobCancelledEvent), not this completion-driven path.
     """
-    state = _make_state()
     request = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_cpu_device())])
     parent_job_id = _submit_job(state, "res-job", request)
     holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
@@ -1586,7 +1507,7 @@ def test_holder_task_removed_from_worker_when_parent_succeeds():
     assert holder_task.task_id not in _worker_running_tasks(state, wid_holder)
 
 
-def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already_terminal():
+def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already_terminal(state):
     """Holder is cleaned even when JobCancelledEvent arrives after all parent tasks finished.
 
     The gap: _on_job_cancelled's task loop skips all terminal tasks, so
@@ -1596,7 +1517,6 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
     the holder task would stay in worker.running_tasks indefinitely, making the
     worker appear busy and blocking scale-down idle detection.
     """
-    state = _make_state()
     request = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_cpu_device())])
     parent_job_id = _submit_job(state, "res-job", request)
     holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
@@ -1666,14 +1586,13 @@ def _region_constraint(region: str) -> cluster_pb2.Constraint:
     return Constraint(key="region", op=ConstraintOp.EQ, value=region).to_proto()
 
 
-def test_holder_task_gets_device_constraints_from_tpu_entry():
+def test_holder_task_gets_device_constraints_from_tpu_entry(state):
     """Holder task for a TPU reservation entry must have device-type constraints.
 
     When an entry has explicit constraints (e.g. region) but no device-type,
     the holder job must still get auto-injected device constraints from the
     entry's resource spec. Without this, the holder could land on a CPU worker.
     """
-    state = _make_state()
 
     # Entry has TPU resources + region constraint, but NO device-type constraint.
     entry = _make_reservation_entry(
@@ -1697,14 +1616,13 @@ def test_holder_task_gets_device_constraints_from_tpu_entry():
     assert "region" in constraint_keys, "holder job should still have the explicit region constraint"
 
 
-def test_holder_task_not_scheduled_on_wrong_device_type():
+def test_holder_task_not_scheduled_on_wrong_device_type(state):
     """Holder task for a TPU entry must not be assigned to a CPU worker.
 
     End-to-end test: submit a reservation with a TPU entry that has only a
     region constraint (no device-type), register both a TPU and CPU worker,
     and verify the scheduler assigns the holder to the TPU worker only.
     """
-    state = _make_state()
 
     entry = _make_reservation_entry(
         device=_tpu_device("v5p-64", count=4),
@@ -1728,7 +1646,7 @@ def test_holder_task_not_scheduled_on_wrong_device_type():
     cpu_worker = _query_worker(state, cpu_wid)
     tpu_worker = _query_worker(state, tpu_wid)
 
-    holder_job = _query_job(state, holder_job_id)
+    holder_job = _query_job_row(state, holder_job_id)
     assert holder_job is not None
     holder_req = job_requirements_from_job(holder_job)
     context = _build_context_with_workers(

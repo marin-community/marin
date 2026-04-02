@@ -20,7 +20,8 @@ from typing import Protocol
 from iris.cluster.constraints import WellKnownAttribute, accelerator_type_to_string
 from iris.cluster.types import get_tpu_topology
 from iris.rpc import cluster_pb2, config_pb2
-from iris.time_utils import Timestamp
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -462,7 +463,7 @@ class EnvironmentProvider(Protocol):
 
 
 class FixedEnvironmentProvider:
-    """Returns pre-built worker metadata. Used by LocalPlatform and tests."""
+    """Returns pre-built worker metadata. Used by LOCAL mode and tests."""
 
     def __init__(self, metadata: cluster_pb2.WorkerMetadata):
         self._metadata = metadata
@@ -581,7 +582,7 @@ class HostMetricsCollector:
 
     def collect(self) -> cluster_pb2.WorkerResourceSnapshot:
         snapshot = cluster_pb2.WorkerResourceSnapshot()
-        snapshot.timestamp.CopyFrom(Timestamp.now().to_proto())
+        snapshot.timestamp.CopyFrom(timestamp_to_proto(Timestamp.now()))
 
         self._collect_memory(snapshot)
         self._collect_disk(snapshot)

@@ -24,6 +24,7 @@ from iris.cluster.runtime.types import (
     ContainerInfraError,
     ContainerPhase,
     ContainerRuntime,
+    DiscoveredContainer,
     RuntimeLogReader,
     MountKind,
     MountSpec,
@@ -36,11 +37,13 @@ from iris.cluster.types import (
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.log_store import LogCursor, LogStore, task_log_key
-from iris.logging import parse_log_level, str_to_log_level
+from iris.logging import str_to_log_level
+from rigging.log_setup import parse_log_level
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
-from iris.time_utils import Deadline, Duration, Timestamp
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -182,17 +185,20 @@ class TaskAttempt:
     def __init__(
         self,
         config: TaskAttemptConfig,
-        bundle_store: BundleStore,
-        container_runtime: ContainerRuntime,
-        worker_metadata: WorkerMetadata,
+        bundle_store: BundleStore | None,
+        container_runtime: ContainerRuntime | None,
+        worker_metadata: WorkerMetadata | None,
         worker_id: str | None,
         controller_address: str | None,
-        default_task_env: dict[str, str],
+        task_env: dict[str, str] | None,
         default_task_image: str | None,
-        resolve_image: Callable[[str], str],
+        resolve_image: Callable[[str], str] | None,
         port_allocator: PortAllocator,
         log_store: LogStore,
         poll_interval_seconds: float = 5.0,
+        *,
+        container_handle: ContainerHandle | None = None,
+        initial_status: TaskState | None = None,
     ):
         """Initialize a TaskAttempt.
 
@@ -200,29 +206,35 @@ class TaskAttempt:
         that submit_task() can return quickly on the heartbeat thread. Expensive
         setup (port allocation, working directory creation) is deferred to run().
 
+        For adopted tasks (container already running from a previous worker),
+        pass container_handle and initial_status=TASK_STATE_RUNNING. The
+        bundle_store, container_runtime, worker_metadata, task_env, and
+        resolve_image params can be None since the run pipeline is skipped.
+
         Args:
             config: Immutable configuration for this attempt
-            bundle_store: Bundle store for resolving task bundles
-            container_runtime: Runtime for creating and managing containers
-            worker_metadata: Worker's hardware/environment metadata
+            bundle_store: Bundle store for resolving task bundles (None for adopted tasks)
+            container_runtime: Runtime for creating containers (None for adopted tasks)
+            worker_metadata: Worker's hardware/environment metadata (None for adopted tasks)
             worker_id: Worker identifier for env injection
             controller_address: Controller address for env injection
-            default_task_env: Worker-level default env vars injected into task containers
+            task_env: Worker-level default env vars (None for adopted tasks)
             default_task_image: Fully-qualified task container image from cluster config
-            resolve_image: Resolves image tags for the current platform
-                (e.g. GHCR→AR rewriting on GCP). Zone is pre-bound by the worker.
+            resolve_image: Resolves image tags for the current platform (None for adopted tasks)
             port_allocator: Port allocator for releasing ports on cleanup
-            log_store: Shared LogStore for appending and querying task logs.
+            log_store: Shared LogStore for appending and querying task logs
             poll_interval_seconds: How often to poll container status
+            container_handle: Pre-existing container handle for adopted tasks
+            initial_status: Starting status (default PENDING, use RUNNING for adopted tasks)
         """
         self._bundle_store = bundle_store
         self._runtime = container_runtime
-        self._worker_metadata = worker_metadata
+        self._worker_metadata = worker_metadata or cluster_pb2.WorkerMetadata()
         self._worker_id = worker_id
         self._controller_address = controller_address
-        self._default_task_env = default_task_env
+        self._task_env = task_env or {}
         self._default_task_image = default_task_image
-        self._resolve_image_fn = resolve_image
+        self._resolve_image_fn = resolve_image or (lambda x: x)
         self._port_allocator = port_allocator
         self._poll_interval_seconds = poll_interval_seconds
         self._log_store = log_store
@@ -238,7 +250,7 @@ class TaskAttempt:
         self.workdir: Path | None = None
         self._cache_dir: Path = config.cache_dir
         # Task state
-        self.status: TaskState = cluster_pb2.TASK_STATE_PENDING
+        self.status: TaskState = initial_status or cluster_pb2.TASK_STATE_PENDING
         self.exit_code: int | None = None
         self.error: str | None = None
         self.started_at: Timestamp | None = None
@@ -257,13 +269,101 @@ class TaskAttempt:
         self.build_finished: Timestamp | None = None
         self.build_from_cache: bool = False
         self.image_tag: str = ""
+        self._build_phase_start: float = 0.0
 
         # Internals
-        self._container_handle: ContainerHandle | None = None
+        self._container_handle: ContainerHandle | None = container_handle
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
         self._heartbeat_cursor: LogCursor = log_store.cursor(self._log_key)
+
+    @classmethod
+    def adopt(
+        cls,
+        discovered: DiscoveredContainer,
+        container_handle: ContainerHandle,
+        log_store: LogStore,
+        port_allocator: PortAllocator,
+        poll_interval_seconds: float = 5.0,
+    ) -> "TaskAttempt":
+        """Create a TaskAttempt that adopts an already-running container.
+
+        Used after worker restart to resume monitoring a container started by
+        the previous worker process. Calls the normal __init__ with None for
+        run-pipeline-only dependencies (bundle_store, runtime, etc.) and
+        injects the existing container handle.
+        """
+        task_id = JobName.from_wire(discovered.task_id)
+        attempt_id = discovered.attempt_id
+        identity = TaskAttemptIdentity(task_id=task_id, attempt_id=attempt_id)
+
+        request = cluster_pb2.Worker.RunTaskRequest(
+            task_id=discovered.task_id,
+            attempt_id=attempt_id,
+        )
+        config = TaskAttemptConfig(
+            task_attempt=identity,
+            num_tasks=1,
+            request=request,
+            cache_dir=Path(discovered.workdir_host_path).parent.parent if discovered.workdir_host_path else Path("/tmp"),
+        )
+
+        instance = cls(
+            config=config,
+            bundle_store=None,
+            container_runtime=None,
+            worker_metadata=None,
+            worker_id=discovered.worker_id,
+            controller_address=None,
+            task_env=None,
+            default_task_image=None,
+            resolve_image=None,
+            port_allocator=port_allocator,
+            log_store=log_store,
+            poll_interval_seconds=poll_interval_seconds,
+            container_handle=container_handle,
+            initial_status=cluster_pb2.TASK_STATE_RUNNING,
+        )
+        instance.started_at = Timestamp.now()
+        instance.status_message = "adopted"
+        instance.workdir = Path(discovered.workdir_host_path) if discovered.workdir_host_path else None
+        return instance
+
+    def resume_monitoring(self) -> None:
+        """Monitor an adopted container until completion.
+
+        Enters the monitor loop directly, skipping bundle download, image
+        resolve, container create, and build phases. Used after adopt().
+        """
+        assert self._container_handle is not None
+        handle = self._container_handle
+
+        logger.info(
+            "Resuming monitoring for adopted task %s attempt %d (container=%s)",
+            self.task_id,
+            self.attempt_id,
+            self.container_id,
+        )
+
+        try:
+            # Deadline: adopted tasks may have had a timeout, but we don't
+            # have the original timeout value. Monitor without deadline.
+            log_reader = handle.log_reader()
+            self._monitor_loop(handle, log_reader, deadline=None)
+        except Exception as e:
+            error_msg = format_exception_with_traceback(e)
+            self._append_log(source="error", data=f"Monitoring failed:\n{error_msg}")
+            self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
+        finally:
+            self._cleanup()
+            logger.info(
+                "Adopted task finished: task_id=%s attempt=%s state=%s exit_code=%s",
+                self.task_id,
+                self.attempt_id,
+                self.status,
+                self.exit_code,
+            )
 
     @property
     def container_id(self) -> str | None:
@@ -437,14 +537,13 @@ class TaskAttempt:
 
         # Set timestamp fields using proto Timestamp messages
         if self.started_at is not None:
-            proto.started_at.CopyFrom(self.started_at.to_proto())
+            proto.started_at.CopyFrom(timestamp_to_proto(self.started_at))
         if self.finished_at is not None:
-            proto.finished_at.CopyFrom(self.finished_at.to_proto())
+            proto.finished_at.CopyFrom(timestamp_to_proto(self.finished_at))
         if self.build_started is not None:
-            proto.build_metrics.build_started.CopyFrom(self.build_started.to_proto())
+            proto.build_metrics.build_started.CopyFrom(timestamp_to_proto(self.build_started))
         if self.build_finished is not None:
-            proto.build_metrics.build_finished.CopyFrom(self.build_finished.to_proto())
-
+            proto.build_metrics.build_finished.CopyFrom(timestamp_to_proto(self.build_finished))
         return proto
 
     def _check_cancelled(self) -> None:
@@ -484,7 +583,11 @@ class TaskAttempt:
         4. Build phase: run setup_commands (uv sync) - BUILDING state
         5. Run phase: start main command - RUNNING state
         6. Monitor until completion
+
+        Not valid for adopted tasks — use resume_monitoring() instead.
         """
+        if self._bundle_store is None or self._runtime is None:
+            raise RuntimeError("Cannot run() an adopted TaskAttempt — use resume_monitoring()")
         logger.info(
             "TaskAttempt starting: task_id=%s attempt=%s num_tasks=%s",
             self.task_id,
@@ -533,7 +636,7 @@ class TaskAttempt:
         """
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
         self.started_at = Timestamp.now()
-        self._building_start_monotonic = time.monotonic()
+        self._build_phase_start = time.monotonic()
 
         download_start = time.monotonic()
 
@@ -550,10 +653,13 @@ class TaskAttempt:
         # to BundleStore.extract_bundle_to if long downloads become a problem.)
 
         assert self.workdir is not None
+        workdir_files = dict(self.request.entrypoint.workdir_files)
+        for name, blob_id in self.request.entrypoint.workdir_file_refs.items():
+            workdir_files[name] = self._bundle_store.get_or_fetch(blob_id, f"blobs/{blob_id}")
         self._runtime.stage_bundle(
             bundle_id=self.request.bundle_id,
             workdir=self.workdir,
-            workdir_files=dict(self.request.entrypoint.workdir_files),
+            workdir_files=workdir_files,
             bundle_store=self._bundle_store,
         )
 
@@ -596,7 +702,7 @@ class TaskAttempt:
         if region_attr and region_attr.string_value:
             env["IRIS_WORKER_REGION"] = region_attr.string_value
 
-        env.update(self._default_task_env)
+        env.update(self._task_env)
         env.update(dict(self.request.environment.env_vars))
 
         # Get RuntimeEntrypoint proto directly
@@ -629,6 +735,7 @@ class TaskAttempt:
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
             job_id=job_id.to_wire(),
+            worker_id=self._worker_id,
             worker_metadata=self._worker_metadata,
         )
 
@@ -730,7 +837,7 @@ class TaskAttempt:
             status = handle.status()
 
             if self.status == cluster_pb2.TASK_STATE_BUILDING and status.phase == ContainerPhase.RUNNING:
-                building_duration = time.monotonic() - self._building_start_monotonic
+                building_duration = time.monotonic() - self._build_phase_start
                 logger.info("Task %s BUILDING→RUNNING after %.1fs", self.task_id, building_duration)
                 self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
 

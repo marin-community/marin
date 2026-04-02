@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Iterable, Iterator, TypeVar, Union
 
-import iris.logging as iris_logging
+import rigging.log_setup as iris_logging
 import jax
 
 pylogger = pylogging.getLogger(__name__)

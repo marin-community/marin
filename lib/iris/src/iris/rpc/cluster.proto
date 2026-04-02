@@ -94,7 +94,8 @@ message CpuProfile {
     RAW = 3;            // Text output
   }
   Format format = 1;
-  int32 rate_hz = 2;    // Sample rate (default: 100)
+  int32 rate_hz = 2;    // Sample rate (default: 20)
+  bool native = 3;  // Collect native (C/C++) frames via py-spy --native; default true when unset
 }
 
 // Memory profiling configuration (memray)
@@ -141,14 +142,16 @@ message ProfileTaskResponse {
 }
 
 // Unified log fetching request, shared by controller and worker services.
-// The source key identifies the log stream:
-//   /system/process                - local process logs (controller or worker)
-//   /job/name/task/0:0      - task attempt logs (task_wire:attempt_id)
+// The source key identifies the log stream and supports regex patterns:
+//   /system/process                - exact: local process logs (controller or worker)
+//   /user/job/.*                   - pattern: all task logs under a job
+//   /user/job/0:.*                 - pattern: all attempts of a single task
+//   /user/job/0:3                  - exact: specific task attempt
 message FetchLogsRequest {
-  string source = 1;           // Log source key
+  string source = 1;           // Log source key or regex pattern
   int64 since_ms = 2;          // Only return entries after this timestamp (exclusive)
   int64 cursor = 3;            // Autoincrement id cursor (resume after this id)
-  string substring = 4;        // Substring filter on log data (matched via SQL LIKE)
+  string substring = 4;        // Literal substring match on log data
   int32 max_lines = 5;         // Max entries to return (0 = default 1000)
   bool tail = 6;               // Return last N entries instead of first N
   string min_level = 7;        // Minimum log level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
@@ -218,6 +221,7 @@ enum TaskState {
   TASK_STATE_WORKER_FAILED = 7;
   TASK_STATE_UNSCHEDULABLE = 8;
   TASK_STATE_ASSIGNED = 9;
+  TASK_STATE_PREEMPTED = 10;
 }
 
 // Status of a single task within a job
@@ -439,6 +443,10 @@ message RuntimeEntrypoint {
 
   // Files to write to $IRIS_WORKDIR/{key} before execution.
   map<string, bytes> workdir_files = 3;
+
+  // References to externalized workdir files stored in the blob store.
+  // key -> blob_id (SHA-256 hash). Worker resolves these via BundleStore.
+  map<string, string> workdir_file_refs = 4;
 }
 
 // ============================================================================
@@ -486,6 +494,11 @@ message Constraint {
   AttributeValue value = 3; // Value to compare against (ignored for EXISTS/NOT_EXISTS)
   repeated AttributeValue values = 4; // Set of values for IN operator
   ConstraintMode mode = 5;  // Hard (default) or soft
+}
+
+// Wrapper used when constraints need to be serialized as a standalone blob.
+message ConstraintList {
+  repeated Constraint constraints = 1;
 }
 
 // Coscheduling configuration for multi-host jobs.
@@ -557,6 +570,13 @@ enum ExistingJobPolicy {
   EXISTING_JOB_POLICY_RECREATE = 3;
 }
 
+enum PriorityBand {
+  PRIORITY_BAND_UNSPECIFIED = 0;  // defaults to INTERACTIVE
+  PRIORITY_BAND_PRODUCTION = 1;   // admin-only, never preempted
+  PRIORITY_BAND_INTERACTIVE = 2;  // normal work, default
+  PRIORITY_BAND_BATCH = 3;        // opportunistic, preemptible
+}
+
 // ============================================================================
 // CONTROLLER SERVICE MESSAGES
 // ============================================================================
@@ -622,6 +642,7 @@ message Controller {
 
     JobPreemptionPolicy preemption_policy = 31;
     ExistingJobPolicy existing_job_policy = 32;
+    PriorityBand priority_band = 33;
   }
 
   message LaunchJobResponse {
@@ -631,11 +652,22 @@ message Controller {
   message GetJobStatusRequest {
     string job_id = 1;
     reserved 2;  // was include_result (removed: serialized_result no longer exists)
+    reserved 3;  // was include_tasks (all callers use ListTasks for per-task detail)
   }
 
   message GetJobStatusResponse {
     JobStatus job = 1;
     LaunchJobRequest request = 2;  // Original job request for debugging
+  }
+
+  // Lightweight batch state query — returns only the state enum for each job,
+  // avoiding the cost of loading tasks, attempts, and worker addresses.
+  message GetJobStateRequest {
+    repeated string job_ids = 1;
+  }
+
+  message GetJobStateResponse {
+    map<string, JobState> states = 1;
   }
 
   message TerminateJobRequest {
@@ -854,7 +886,7 @@ message Controller {
     bool include_children = 2;       // Include child jobs (only for job IDs)
     int64 since_ms = 3;              // Only return logs after this timestamp (exclusive)
     int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
-    string substring = 5;             // Substring filter (matched via SQL LIKE)
+    string substring = 5;             // Literal substring match on log data
     int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
     string min_level = 7;            // Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
     int64 cursor = 8;               // Autoincrement id cursor for incremental polling
@@ -975,6 +1007,87 @@ message Controller {
     repeated NodePoolStatus node_pools = 8;
   }
 
+  // --- Worker Restart ---
+
+  message RestartWorkerRequest {
+    string worker_id = 1;
+  }
+
+  message RestartWorkerResponse {
+    bool accepted = 1;
+    string error = 2;
+  }
+
+  // --- Budget Management ---
+  message SetUserBudgetRequest {
+    string user_id = 1;
+    int64 budget_limit = 2;      // max budget value (0 = unlimited)
+    PriorityBand max_band = 3;   // highest band this user can submit to (lower number = higher priority)
+  }
+  message SetUserBudgetResponse {}
+
+  message GetUserBudgetRequest {
+    string user_id = 1;
+  }
+  message GetUserBudgetResponse {
+    string user_id = 1;
+    int64 budget_limit = 2;
+    int64 budget_spent = 3;      // current running resource value
+    PriorityBand max_band = 4;
+  }
+
+  message ListUserBudgetsRequest {}
+  message ListUserBudgetsResponse {
+    repeated GetUserBudgetResponse users = 1;
+  }
+
+  // --- Scheduler State ---
+  message GetSchedulerStateRequest {}
+
+  message SchedulerTaskEntry {
+    string task_id = 1;
+    string job_id = 2;
+    string user_id = 3;
+    PriorityBand original_band = 4;
+    PriorityBand effective_band = 5;
+    int32 queue_position = 6;
+    int32 resource_value = 7;
+  }
+
+  message SchedulerBandGroup {
+    PriorityBand band = 1;
+    repeated SchedulerTaskEntry tasks = 2;
+    int32 total_in_band = 3;
+  }
+
+  message SchedulerUserBudget {
+    string user_id = 1;
+    int64 budget_limit = 2;
+    int64 budget_spent = 3;
+    PriorityBand max_band = 4;
+    PriorityBand effective_band = 5;
+    float utilization_percent = 6;
+  }
+
+  message SchedulerRunningTask {
+    string task_id = 1;
+    string job_id = 2;
+    string user_id = 3;
+    string worker_id = 4;
+    PriorityBand effective_band = 5;
+    int32 resource_value = 6;
+    bool preemptible = 7;
+    repeated PriorityBand preemptible_by = 8;
+    bool is_coscheduled = 9;
+  }
+
+  message GetSchedulerStateResponse {
+    repeated SchedulerBandGroup pending_queue = 1;
+    repeated SchedulerUserBudget user_budgets = 2;
+    repeated SchedulerRunningTask running_tasks = 3;
+    int32 total_pending = 4;
+    int32 total_running = 5;
+  }
 }
 
 // ============================================================================
@@ -1075,6 +1188,7 @@ service ControllerService {
   // Job lifecycle
   rpc LaunchJob(Controller.LaunchJobRequest) returns (Controller.LaunchJobResponse);
   rpc GetJobStatus(Controller.GetJobStatusRequest) returns (Controller.GetJobStatusResponse);
+  rpc GetJobState(Controller.GetJobStateRequest) returns (Controller.GetJobStateResponse);
   rpc TerminateJob(Controller.TerminateJobRequest) returns (Empty);
   rpc ListJobs(Controller.ListJobsRequest) returns (Controller.ListJobsResponse);
 
@@ -1098,7 +1212,8 @@ service ControllerService {
 
   rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
 
-  // Task logs (proxied to worker)
+  // DEPRECATED: use FetchLogs with regex patterns instead.
+  // Forwards to FetchLogs internally. Scheduled for removal 2026-05-01.
   rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
 
   // Unified log fetching (process logs, task logs, etc. by key)
@@ -1135,6 +1250,17 @@ service ControllerService {
 
   // Generic query API
   rpc ExecuteRawQuery(RawQueryRequest) returns (RawQueryResponse);
+
+  // Worker lifecycle
+  rpc RestartWorker(Controller.RestartWorkerRequest) returns (Controller.RestartWorkerResponse);
+
+  // Budget management
+  rpc SetUserBudget(Controller.SetUserBudgetRequest) returns (Controller.SetUserBudgetResponse);
+  rpc GetUserBudget(Controller.GetUserBudgetRequest) returns (Controller.GetUserBudgetResponse);
+  rpc ListUserBudgets(Controller.ListUserBudgetsRequest) returns (Controller.ListUserBudgetsResponse);
+
+  // Scheduler state (dashboard)
+  rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
 }
 
 service WorkerService {

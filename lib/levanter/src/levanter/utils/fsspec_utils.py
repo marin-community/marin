@@ -6,7 +6,7 @@ import os
 
 import braceexpand
 import fsspec
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 
 
 def exists(url, **kwargs) -> bool:

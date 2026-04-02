@@ -1,9 +1,9 @@
 # Unified Iris Dockerfile — controller, worker, and task images.
 #
-# Build targets:
-#   docker buildx build --target controller -t iris-controller:latest .
-#   docker buildx build --target worker     -t iris-worker:latest .
-#   docker buildx build --target task -f lib/iris/Dockerfile -t iris-task:latest <marin-root>
+# Build context must be the marin repo root for all targets:
+#   docker buildx build --target controller -f lib/iris/Dockerfile -t iris-controller:latest .
+#   docker buildx build --target worker     -f lib/iris/Dockerfile -t iris-worker:latest .
+#   docker buildx build --target task       -f lib/iris/Dockerfile -t iris-task:latest .
 #
 # The controller and worker share all layers up to and including Python
 # dependencies. The worker adds only the Docker CLI on top.
@@ -52,19 +52,23 @@ FROM base AS deps
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Dependency lock: changes less often than source
-COPY pyproject.toml hatch_build.py ./
-RUN uv sync --no-install-project
+# Rigging is a workspace-local dep not on PyPI with a compatible API.
+# Copy it alongside iris and create a minimal workspace so uv resolves it
+# from source instead of downloading the unrelated "rigging" package from PyPI.
+COPY lib/rigging/ ./lib/rigging/
+COPY lib/iris/pyproject.toml lib/iris/hatch_build.py ./lib/iris/
+RUN printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nrigging = { workspace = true }\n' > pyproject.toml \
+    && uv sync --package iris --no-install-project
 
-# Source + project install
-COPY src/ ./src/
-RUN uv sync
+# Iris source: install the project itself.
+COPY lib/iris/src/ ./lib/iris/src/
+RUN uv sync --package iris
 
 # Profiling tools — installed after uv sync so they aren't pruned by the exact sync.
 RUN uv pip install py-spy memray
 
 # Dashboard assets (pre-built by `iris build dashboard` before docker build)
-COPY dashboard/dist /app/dashboard/dist
+COPY lib/iris/dashboard/dist ./lib/iris/dashboard/dist
 
 RUN mkdir -p /var/cache/iris
 
@@ -74,6 +78,9 @@ ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
 
 # ── Stage: controller ────────────────────────────────────────────────
 FROM deps AS controller
+
+# Controller-only deps: duckdb, pyarrow, zstandard.
+RUN uv sync --extra controller --inexact
 
 LABEL org.opencontainers.image.description="Iris controller image"
 
@@ -137,7 +144,10 @@ ENV PATH="/root/.cargo/bin:$PATH"
 
 ENV UV_CACHE_DIR=/uv/cache
 ENV CARGO_TARGET_DIR=/root/.cargo/target
-ENV PYTHONDONTWRITEBYTECODE=1
+# Only disable bytecode during build to keep image layers clean.
+# At runtime, bytecode compilation is re-enabled so .pyc files accumulate
+# in the persistent uv cache, speeding up repeated imports across pods.
+ARG PYTHONDONTWRITEBYTECODE=1
 
 ARG IRIS_GIT_HASH=unknown
 ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}

@@ -236,7 +236,7 @@ class RayCluster(Cluster):
             remote_fn,
             tpu_type=device.variant,
             num_slices=request.resources.replicas,
-            max_retries_preemption=10000,
+            max_retries_preemption=1000,
             max_retries_failure=1,
             runtime_env=tpu_runtime_env,
         )
@@ -276,8 +276,14 @@ class RayCluster(Cluster):
                 pip_packages=list(environment.pip_packages),
                 env_vars=env_vars,
             )
-            runtime_env["working_dir"] = environment.workspace
-            runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
+            import re
+
+            from iris.cluster.client.bundle import create_workspace_dir  # lazy: avoid PyPI iris conflict on workers
+
+            runtime_env["working_dir"] = create_workspace_dir(
+                environment.workspace,
+                exclude=re.compile(r"^(tests|docs)(/|$)|\.pack$"),
+            )
             runtime_env["config"] = {"setup_timeout_seconds": 1800}
         else:
             # No runtime package installation: rely on the existing environment.

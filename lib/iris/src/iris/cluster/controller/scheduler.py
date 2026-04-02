@@ -62,14 +62,19 @@ class WorkerSnapshot(Protocol):
     """What the scheduler needs from a worker to build a capacity snapshot.
 
     This protocol decouples the scheduler from a concrete worker row type. Any object
-    exposing these fields can be used.
+    exposing these fields can be used.  Fields mirror the DB column names so that
+    projection row classes satisfy this protocol without computed properties.
     """
 
     worker_id: WorkerId
-    available_cpu_millicores: int
-    available_memory: int
-    available_gpus: int
-    available_tpus: int
+    total_cpu_millicores: int
+    committed_cpu_millicores: int
+    total_memory_bytes: int
+    committed_mem: int
+    total_gpu_count: int
+    committed_gpu: int
+    total_tpu_count: int
+    committed_tpu: int
     attributes: dict[str, AttributeValue]
     healthy: bool
 
@@ -168,10 +173,10 @@ class WorkerCapacity:
         """
         return WorkerCapacity(
             worker_id=worker.worker_id,
-            available_cpu_millicores=worker.available_cpu_millicores,
-            available_memory=worker.available_memory,
-            available_gpus=worker.available_gpus,
-            available_tpus=worker.available_tpus,
+            available_cpu_millicores=worker.total_cpu_millicores - worker.committed_cpu_millicores,
+            available_memory=worker.total_memory_bytes - worker.committed_mem,
+            available_gpus=worker.total_gpu_count - worker.committed_gpu,
+            available_tpus=worker.total_tpu_count - worker.committed_tpu,
             attributes=dict(worker.attributes),
             building_task_count=building_count,
             max_building_tasks=max_building_tasks,

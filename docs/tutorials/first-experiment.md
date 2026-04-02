@@ -105,7 +105,7 @@ This class defines basic training configuration that is sufficient for most expe
 
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
-            resources=ResourceConfig.with_gpu(count=1),
+            resources=ResourceConfig.with_gpu("H100", count=1),
             train_batch_size=32,
             num_train_steps=100,
             # set hyperparameters

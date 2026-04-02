@@ -126,7 +126,7 @@ def multi_worker_cluster():
 #### Why the default cluster doesn't use Docker
 
 `connect_cluster()` + `LocalCluster` runs workers as in-process threads via
-`LocalPlatform`. There is no Docker runtime involved — tasks execute as
+`GcpPlatform` in LOCAL mode. There is no Docker runtime involved — tasks execute as
 functions in the worker thread. This is intentional: it's fast (~2s boot), needs
 no Docker daemon, and exercises the same controller/scheduler/RPC code paths
 that production uses.

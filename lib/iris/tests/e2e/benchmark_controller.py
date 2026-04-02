@@ -43,7 +43,7 @@ import psutil
 from iris.client.client import IrisClient, Job, ResourceSpec
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.types import Entrypoint, EnvironmentSpec, get_tpu_topology, tpu_device
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
@@ -237,7 +237,6 @@ def _wait_for_job(job: Job, timeout: float) -> JobResult:
             poll_interval=2.0,
             raise_on_failure=False,
             stream_logs=True,
-            include_children=True,
         )
         state_name = cluster_pb2.JobState.Name(status.state)
         return JobResult(job=job, state_name=state_name, elapsed=time.monotonic() - start)

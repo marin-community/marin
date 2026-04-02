@@ -3,7 +3,10 @@
 
 """Tests for worker environment probing."""
 
+import sys
 import time
+
+import pytest
 
 import iris.cluster.worker.env_probe as env_probe
 from iris.cluster.constraints import WellKnownAttribute
@@ -315,14 +318,11 @@ def test_worker_id_explicit_config_overrides_slice_id(tmp_path, monkeypatch):
 # --- Network metrics ---
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux-only")
 def test_read_net_dev_bytes_returns_nonzero_on_linux():
-    """On Linux, /proc/net/dev should be readable and return non-negative values."""
-    try:
-        recv, sent = _read_net_dev_bytes()
-        assert recv >= 0
-        assert sent >= 0
-    except OSError:
-        pass
+    recv, sent = _read_net_dev_bytes()
+    assert recv >= 0
+    assert sent >= 0
 
 
 def test_host_metrics_collector_network_first_call_returns_zero():

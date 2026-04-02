@@ -241,6 +241,7 @@ members = [
     "levanter",
     "marin",
     "marin-root",
+    "rigging",
     "zephyr",
 ]
 overrides = [
@@ -1646,10 +1647,13 @@ wheels = [
 [[package]]
 name = "dupekit"
 version = "0.1.0"
-source = { registry = "https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-41b51df" }
-sdist = { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-41b51df/dupekit-0.1.0.tar.gz" }
+source = { registry = "https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-40ac799" }
+sdist = { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0.tar.gz" }
 wheels = [
-    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-41b51df/dupekit-0.1.0-cp311-abi3-manylinux_2_34_x86_64.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0-cp311-abi3-manylinux_2_28_aarch64.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0-cp311-abi3-macosx_10_12_x86_64.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/dupekit-0.1.0-40ac799/dupekit-0.1.0-cp311-abi3-macosx_11_0_arm64.whl" },
 ]
 
 [[package]]
@@ -2350,6 +2354,7 @@ dependencies = [
     { name = "iris" },
     { name = "mergedeep" },
     { name = "pyyaml" },
+    { name = "rigging" },
     { name = "tabulate" },
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },
@@ -2398,6 +2403,7 @@ requires-dist = [
     { name = "mergedeep" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ray", marker = "extra == 'ray'", specifier = "==2.53.0" },
+    { name = "rigging", editable = "lib/rigging" },
     { name = "tabulate", specifier = ">=0.9.0" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
@@ -3570,31 +3576,39 @@ dependencies = [
     { name = "click" },
     { name = "cloudpickle" },
     { name = "connect-python" },
-    { name = "duckdb" },
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "grpcio" },
     { name = "httpx" },
     { name = "humanfriendly" },
-    { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pyjwt" },
     { name = "pyyaml" },
+    { name = "rigging" },
     { name = "s3fs" },
     { name = "starlette" },
     { name = "tabulate" },
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "zstandard" },
+]
+
+[package.optional-dependencies]
+controller = [
+    { name = "duckdb" },
+    { name = "pyarrow" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "duckdb" },
     { name = "ipykernel" },
     { name = "jupyter" },
     { name = "nbconvert" },
     { name = "nbformat" },
     { name = "pillow" },
     { name = "playwright" },
+    { name = "pyarrow" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-flakefinder" },
@@ -3614,31 +3628,36 @@ requires-dist = [
     { name = "click", specifier = ">=8.3.1" },
     { name = "cloudpickle", specifier = ">=3.1.2" },
     { name = "connect-python", specifier = ">=0.9.0" },
-    { name = "duckdb", specifier = ">=1.0.0" },
+    { name = "duckdb", marker = "extra == 'controller'", specifier = ">=1.0.0" },
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "grpcio", specifier = ">=1.76.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "humanfriendly", specifier = ">=10.0" },
-    { name = "pyarrow", specifier = ">=19.0.0" },
+    { name = "pyarrow", marker = "extra == 'controller'", specifier = ">=19.0.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyjwt", specifier = ">=2.8.0" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "rigging", editable = "lib/rigging" },
     { name = "s3fs", specifier = ">=2024.0.0" },
     { name = "starlette", specifier = ">=0.50.0" },
     { name = "tabulate", specifier = ">=0.9.0" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
+    { name = "zstandard", specifier = ">=0.22.0" },
 ]
+provides-extras = ["controller"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "duckdb", specifier = ">=1.0.0" },
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "nbconvert", specifier = ">=7.16.6" },
     { name = "nbformat", specifier = ">=5.10.4" },
     { name = "pillow", specifier = ">=10.0.0" },
     { name = "playwright", specifier = ">=1.49.0" },
+    { name = "pyarrow", specifier = ">=19.0.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
     { name = "pytest-flakefinder", specifier = ">=1.1.0" },
@@ -4341,6 +4360,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pytimeparse" },
     { name = "ray", extra = ["default"] },
+    { name = "rigging" },
     { name = "safetensors", extra = ["numpy"] },
     { name = "tblib" },
     { name = "tensorstore" },
@@ -4461,6 +4481,7 @@ requires-dist = [
     { name = "pydantic", specifier = "<3" },
     { name = "pytimeparse", specifier = ">=1.1.8" },
     { name = "ray", extras = ["default"], specifier = "==2.53.0" },
+    { name = "rigging", editable = "lib/rigging" },
     { name = "safetensors", extras = ["numpy"], specifier = ">=0.4.2,<0.7.0" },
     { name = "tblib", specifier = ">=1.7.0,<4.0.0" },
     { name = "tensorboard", marker = "extra == 'profiling'", specifier = ">=2.16" },
@@ -5082,6 +5103,7 @@ dependencies = [
     { name = "regex" },
     { name = "requests" },
     { name = "resiliparse" },
+    { name = "rigging" },
     { name = "s3fs" },
     { name = "toml" },
     { name = "tqdm" },
@@ -5267,6 +5289,7 @@ requires-dist = [
     { name = "regex" },
     { name = "requests" },
     { name = "resiliparse", specifier = ">=0.17.2", index = "https://marin-community.github.io/chatnoir-resiliparse/simple" },
+    { name = "rigging", editable = "lib/rigging" },
     { name = "s3fs", specifier = ">=2024" },
     { name = "sqlalchemy", marker = "extra == 'evalchemy'" },
     { name = "sympy", marker = "extra == 'evalchemy'", specifier = ">=1.12.1,<1.14" },
@@ -5375,6 +5398,7 @@ dependencies = [
     { name = "iris" },
     { name = "levanter" },
     { name = "marin" },
+    { name = "rigging" },
     { name = "watchdog" },
     { name = "zephyr" },
 ]
@@ -5387,6 +5411,7 @@ requires-dist = [
     { name = "iris", editable = "lib/iris" },
     { name = "levanter", editable = "lib/levanter" },
     { name = "marin", editable = "lib/marin" },
+    { name = "rigging", editable = "lib/rigging" },
     { name = "watchdog" },
     { name = "zephyr", editable = "lib/zephyr" },
 ]
@@ -9032,6 +9057,35 @@ wheels = [
 ]
 
 [[package]]
+name = "rigging"
+version = "0.1.0"
+source = { editable = "lib/rigging" }
+dependencies = [
+    { name = "fsspec" },
+    { name = "gcsfs" },
+    { name = "s3fs" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fsspec", specifier = ">=2024.0.0" },
+    { name = "gcsfs", specifier = ">=2024.0.0" },
+    { name = "s3fs", specifier = ">=2024.0.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+]
+
+[[package]]
 name = "rignore"
 version = "0.7.6"
 source = { registry = "https://pypi.org/simple" }
@@ -12278,6 +12332,7 @@ dependencies = [
     { name = "iris" },
     { name = "msgspec" },
     { name = "numpy" },
+    { name = "rigging" },
     { name = "tqdm-loggable" },
     { name = "typing-extensions" },
     { name = "vortex-data" },
@@ -12309,6 +12364,7 @@ requires-dist = [
     { name = "iris", editable = "lib/iris" },
     { name = "msgspec", specifier = ">=0.18.0" },
     { name = "numpy", specifier = ">=2.0" },
+    { name = "rigging", editable = "lib/rigging" },
     { name = "tqdm-loggable", specifier = ">=0.2" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "vortex-data", specifier = ">=0.61.0" },

@@ -12,7 +12,7 @@ from typing import Optional, Sequence
 
 import equinox as eqx
 import haliax as hax
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 import haliax.haxtyping as ht
 import jax
 import jax.numpy as jnp

@@ -24,8 +24,8 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.log_store import LogStore
-from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token
-from iris.time_utils import Timestamp
+from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token, resolve_auth
+from rigging.timing import Timestamp
 
 _TEST_TOKEN = "valid-test-token"
 _TEST_USER = "test-user"
@@ -323,3 +323,160 @@ def test_revoke_login_keys(db: ControllerDB):
 
     revoked_ids = revoke_login_keys_for_user(db, "carol", now)
     assert set(revoked_ids) == {"k-login-1", "k-login-2"}
+
+
+# -- Optional auth (gradual adoption) -----------------------------------------
+
+
+@pytest.fixture
+def optional_auth_client(service, verifier):
+    """Dashboard with auth configured but optional — tokens verified if present, anonymous fallback."""
+    dashboard = ControllerDashboard(service, auth_verifier=verifier, auth_provider="static", auth_optional=True)
+    return TestClient(dashboard.app)
+
+
+def test_optional_auth_allows_unauthenticated_rpc(optional_auth_client):
+    """RPCs succeed without a token, falling back to anonymous/admin identity."""
+    resp = optional_auth_client.post(
+        "/iris.cluster.ControllerService/ListJobs",
+        json={},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+
+
+def test_optional_auth_uses_token_when_present(optional_auth_client):
+    """When a valid token is supplied, the authenticated identity is used."""
+    resp = optional_auth_client.post(
+        "/iris.cluster.ControllerService/GetAuthInfo",
+        json={},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {_TEST_TOKEN}"},
+    )
+    assert resp.status_code == 200
+
+
+def test_optional_auth_rejects_invalid_token(optional_auth_client):
+    """An invalid token is rejected — optional mode still enforces token validity."""
+    resp = optional_auth_client.post(
+        "/iris.cluster.ControllerService/ListJobs",
+        json={},
+        headers={"Content-Type": "application/json", "Authorization": "Bearer bad-token"},
+    )
+    assert resp.status_code == 401
+
+
+def test_optional_auth_dashboard_accessible(optional_auth_client):
+    """Dashboard pages are accessible without auth in optional mode."""
+    for path in ["/", "/job/123", "/worker/456", "/health"]:
+        assert optional_auth_client.get(path).status_code == 200
+
+
+def test_optional_auth_config_reports_optional(optional_auth_client):
+    """The /auth/config endpoint reports optional=true."""
+    data = optional_auth_client.get("/auth/config").json()
+    assert data["auth_enabled"] is True
+    assert data["optional"] is True
+    assert data["provider"] == "static"
+
+
+def test_auth_config_reports_not_optional(authed_client):
+    """Non-optional auth reports optional=false."""
+    data = authed_client.get("/auth/config").json()
+    assert data["optional"] is False
+
+
+# -- resolve_auth parity: gRPC and HTTP agree on allow/deny ----------------
+
+
+@pytest.mark.parametrize(
+    "token, optional, should_succeed",
+    [
+        (None, False, False),
+        (None, True, True),
+        (_TEST_TOKEN, False, True),
+        (_TEST_TOKEN, True, True),
+        ("bad-token", False, False),
+        ("bad-token", True, False),
+    ],
+    ids=[
+        "no-token-required",
+        "no-token-optional",
+        "valid-required",
+        "valid-optional",
+        "invalid-required",
+        "invalid-optional",
+    ],
+)
+def test_resolve_auth_policy(verifier, token, optional, should_succeed):
+    """resolve_auth encodes the single auth policy used by both gRPC and HTTP."""
+    if should_succeed:
+        identity = resolve_auth(token, verifier, optional)
+        if token == _TEST_TOKEN:
+            assert identity is not None
+            assert identity.user_id == _TEST_USER
+        else:
+            assert identity is None
+    else:
+        with pytest.raises(ValueError):
+            resolve_auth(token, verifier, optional)
+
+
+@pytest.mark.parametrize(
+    "token, optional, should_allow",
+    [
+        (None, False, False),
+        (None, True, True),
+        (_TEST_TOKEN, False, True),
+        (_TEST_TOKEN, True, True),
+        ("bad-token", False, False),
+        ("bad-token", True, False),
+    ],
+    ids=[
+        "no-token-required",
+        "no-token-optional",
+        "valid-required",
+        "valid-optional",
+        "invalid-required",
+        "invalid-optional",
+    ],
+)
+def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optional, should_allow):
+    """_RouteAuthMiddleware applies the same resolve_auth policy as the gRPC interceptor.
+
+    We build a dashboard with a @requires_auth route injected and verify it
+    agrees with resolve_auth for every (token, optional) combination.
+    """
+    from iris.cluster.controller.dashboard import ControllerDashboard, requires_auth
+
+    from iris.cluster.controller.dashboard import _RouteAuthMiddleware
+    from starlette.routing import Route
+    from starlette.responses import JSONResponse as _J
+
+    @requires_auth
+    def _protected(_request):
+        return _J({"ok": True})
+
+    dashboard = ControllerDashboard(
+        service,
+        auth_verifier=verifier,
+        auth_provider="static",
+        auth_optional=optional,
+    )
+    # Inject a @requires_auth route. The app may be wrapped in _RouteAuthMiddleware,
+    # so reach through to the inner Starlette app to add the route.
+    inner_app = dashboard.app
+    if isinstance(inner_app, _RouteAuthMiddleware):
+        inner_app._router.routes.insert(0, Route("/test-protected", _protected))
+    else:
+        inner_app.router.routes.insert(0, Route("/test-protected", _protected))
+
+    client = TestClient(dashboard.app)
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    resp = client.get("/test-protected", headers=headers)
+    if should_allow:
+        assert resp.status_code == 200, f"Expected 200 but got {resp.status_code}"
+    else:
+        assert resp.status_code == 401, f"Expected 401 but got {resp.status_code}"

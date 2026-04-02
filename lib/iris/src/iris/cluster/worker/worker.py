@@ -15,7 +15,7 @@ import uvicorn
 from iris.chaos import chaos
 from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.cluster.runtime.types import ContainerRuntime
+from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
 from iris.cluster.types import JobName, TaskAttempt as TaskAttemptId
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.dashboard import WorkerDashboard
@@ -33,12 +33,13 @@ from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
-from iris.logging import slow_log
+from rigging.log_setup import slow_log
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class WorkerConfig:
     worker_id: str | None = None
     slice_id: str | None = None
     worker_attributes: dict[str, str] = field(default_factory=dict)
-    default_task_env: dict[str, str] = field(default_factory=dict)
+    task_env: dict[str, str] = field(default_factory=dict)
     default_task_image: str | None = None
     resolve_image: Callable[[str], str] = field(default_factory=lambda: lambda image: image)
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
@@ -94,7 +95,7 @@ def worker_config_from_proto(
         worker_id=proto.worker_id or None,
         slice_id=proto.slice_id or None,
         worker_attributes=dict(proto.worker_attributes),
-        default_task_env=dict(proto.default_task_env),
+        task_env=dict(proto.task_env),
         default_task_image=proto.default_task_image or None,
         resolve_image=resolve_image or (lambda image: image),
         poll_interval=(
@@ -200,8 +201,11 @@ class Worker:
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
 
     def start(self) -> None:
-        # Clean up any orphaned containers from previous runs
-        self._cleanup_all_iris_containers()
+        # Try to adopt running containers from a previous worker process.
+        # If adoption succeeds, skip the destructive cleanup that would kill them.
+        adopted = self.adopt_running_containers()
+        if adopted == 0:
+            self._cleanup_all_iris_containers()
 
         # Start HTTP server
         # timeout_keep_alive=120: default 5s races with controller heartbeat intervals,
@@ -247,14 +251,109 @@ class Worker:
         if removed > 0:
             logger.info("Startup cleanup: removed %d iris containers", removed)
 
+    def adopt_running_containers(self) -> int:
+        """Discover and adopt running containers from a previous worker process.
+
+        Inspects Docker containers labeled with iris metadata. Running containers
+        whose worker_id matches this worker are adopted — a TaskAttempt is created
+        in RUNNING state and a monitoring thread is spawned. Non-adoptable
+        containers (build-phase, exited, wrong worker_id) are removed.
+
+        Returns the count of successfully adopted containers.
+        """
+        discovered = self._runtime.discover_containers()
+        if not discovered:
+            return 0
+
+        adopted = 0
+        to_remove: list[str] = []
+
+        for container in discovered:
+            if container.phase != ExecutionStage.RUN or not container.running:
+                to_remove.append(container.container_id)
+                continue
+
+            # Only adopt containers from this worker. Containers with no worker_id
+            # label (pre-adoption-era or unset) are adopted by any worker — this is
+            # intentional for backward compatibility with containers created before
+            # the worker_id label was added.
+            if self._worker_id and container.worker_id and container.worker_id != self._worker_id:
+                to_remove.append(container.container_id)
+                continue
+
+            # Create a handle wrapping the existing container
+            try:
+                handle = self._runtime.adopt_container(container.container_id)
+            except NotImplementedError:
+                logger.warning("Container adoption not supported by this runtime")
+                continue
+            attempt = TaskAttempt.adopt(
+                discovered=container,
+                container_handle=handle,
+                log_store=self._log_store,
+                port_allocator=self._port_allocator,
+                poll_interval_seconds=self._config.poll_interval.to_seconds(),
+            )
+
+            key = (container.task_id, container.attempt_id)
+            with self._lock:
+                self._tasks[key] = attempt
+
+            # Spawn monitoring thread
+            def _run_adopted(stop_event: threading.Event, a: TaskAttempt = attempt) -> None:
+                a.resume_monitoring()
+
+            def _stop_adopted(a: TaskAttempt = attempt) -> None:
+                try:
+                    a.stop(force=True)
+                except RuntimeError:
+                    pass
+
+            self._task_threads.spawn(
+                target=_run_adopted,
+                name=f"adopted-{container.task_id}",
+                on_stop=_stop_adopted,
+            )
+
+            adopted += 1
+            logger.info(
+                "Adopted container %s for task %s attempt %d",
+                container.container_id[:12],
+                container.task_id,
+                container.attempt_id,
+            )
+
+        # Clean up non-adoptable containers
+        if to_remove:
+            removed = self._runtime.remove_containers(to_remove)
+            logger.info("Cleaned up %d non-adoptable containers", removed)
+
+        if adopted > 0:
+            logger.info("Adopted %d running containers from previous worker process", adopted)
+
+        return adopted
+
     def wait(self) -> None:
         self._threads.wait()
 
-    def stop(self) -> None:
-        # Stop task threads first so running tasks exit before infrastructure
-        # tears down. ThreadContainer.stop() signals each thread's stop_event,
-        # which the _run_task watcher bridges to attempt.should_stop + container kill.
-        self._task_threads.stop()
+    def stop(self, preserve_containers: bool = False) -> None:
+        """Stop the worker.
+
+        Args:
+            preserve_containers: When True, stop the worker process but leave
+                Docker containers running so a new worker can adopt them.
+                Used during rolling restarts.
+        """
+        if not preserve_containers:
+            # Stop task threads first so running tasks exit before infrastructure
+            # tears down. ThreadContainer.stop() signals each thread's stop_event,
+            # which the _run_task watcher bridges to attempt.should_stop + container kill.
+            self._task_threads.stop()
+        else:
+            logger.info("Preserving %d running containers for adoption by new worker", len(self._tasks))
+            # Detach task threads from the parent so _threads.stop() won't
+            # cascade into _task_threads and trigger on_stop container kills.
+            self._threads.detach_child(self._task_threads)
 
         if self._server:
             self._server.should_exit = True
@@ -274,10 +373,20 @@ class Worker:
         2. Register with controller (retry until accepted)
         3. Serve (wait for heartbeats from controller)
         4. If heartbeat timeout expires, return to step 1
+
+        On the first iteration after a restart with adopted containers,
+        step 1 is skipped to preserve the running tasks.
         """
+        first_iteration = True
         try:
             while not stop_event.is_set():
-                self._reset_worker_state()
+                # Skip reset on the first iteration if we adopted containers,
+                # to avoid killing the tasks we just took over.
+                if first_iteration and self._tasks:
+                    logger.info("Skipping reset: %d adopted tasks present", len(self._tasks))
+                else:
+                    self._reset_worker_state()
+                first_iteration = False
                 worker_id = self._register(stop_event)
                 if worker_id is None:
                     # Shutdown requested during registration
@@ -472,7 +581,7 @@ class Worker:
             worker_metadata=self._worker_metadata,
             worker_id=self._worker_id,
             controller_address=self._config.controller_address,
-            default_task_env=self._config.default_task_env,
+            task_env=self._config.task_env,
             default_task_image=self._config.default_task_image,
             resolve_image=self._config.resolve_image,
             port_allocator=self._port_allocator,
@@ -600,7 +709,7 @@ class Worker:
                                     state=cluster_pb2.TASK_STATE_WORKER_FAILED,
                                     exit_code=0,
                                     error="Task not found on worker",
-                                    finished_at=Timestamp.now().to_proto(),
+                                    finished_at=timestamp_to_proto(Timestamp.now()),
                                 )
                             )
                         else:

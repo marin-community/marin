@@ -7,53 +7,24 @@ These tests verify the RPC contract (input -> output) of the ControllerServiceIm
 State changes are verified via RPC calls rather than internal state inspection.
 """
 
-from unittest.mock import Mock
-
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.db import JOBS, TASKS, ATTEMPTS, ControllerDB, _tasks_with_attempts
-from iris.cluster.log_store import LogStore
+from iris.cluster.constraints import WellKnownAttribute, device_variant_constraint
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
-from iris.cluster.constraints import device_variant_constraint
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 
-
-def _query_job(state: ControllerTransitions, job_id: JobName):
-    """Read a single job from state DB."""
-    with state._db.snapshot() as q:
-        return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
-
-
-def _query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName):
-    """Read tasks with attempts for a job."""
-    with state._db.snapshot() as q:
-        tasks = q.select(
-            TASKS,
-            where=TASKS.c.job_id == job_id.to_wire(),
-            order_by=(TASKS.c.task_index.asc(),),
-        )
-        if not tasks:
-            return []
-        attempts = q.select(
-            ATTEMPTS,
-            where=ATTEMPTS.c.task_id.in_([t.task_id.to_wire() for t in tasks]),
-            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
-        )
-    return _tasks_with_attempts(tasks, attempts)
-
-
-def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    """Create a minimal RuntimeEntrypoint proto for testing."""
-    entrypoint = cluster_pb2.RuntimeEntrypoint()
-    entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    return entrypoint
-
+from .conftest import (
+    make_job_request,
+    make_test_entrypoint,
+    make_worker_metadata,
+    query_job as _query_job,
+    query_tasks_with_attempts as _query_tasks_with_attempts,
+)
 
 # =============================================================================
 # Test Helpers
@@ -110,95 +81,8 @@ def _assign_and_transition(
 
 
 @pytest.fixture
-def job_request():
-    """Create a minimal LaunchJobRequest for testing."""
-
-    def _make(
-        name: str = "test-job",
-        replicas: int = 1,
-        max_retries_failure: int = 0,
-        max_retries_preemption: int = 0,  # Default to 0 for tests (no implicit retries)
-    ) -> cluster_pb2.Controller.LaunchJobRequest:
-        job_name = JobName.from_string(name) if name.startswith("/") else JobName.root("test-user", name)
-        return cluster_pb2.Controller.LaunchJobRequest(
-            name=job_name.to_wire(),
-            entrypoint=_make_test_entrypoint(),
-            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-            environment=cluster_pb2.EnvironmentConfig(),
-            max_retries_failure=max_retries_failure,
-            max_retries_preemption=max_retries_preemption,
-            replicas=replicas,
-        )
-
-    return _make
-
-
-@pytest.fixture
-def worker_metadata():
-    """Create WorkerMetadata for testing."""
-
-    def _make(
-        cpu: int = 10,
-        memory_bytes: int = 10 * 1024**3,
-        disk_bytes: int = 10 * 1024**3,
-    ) -> cluster_pb2.WorkerMetadata:
-        device = cluster_pb2.DeviceConfig()
-        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
-
-        return cluster_pb2.WorkerMetadata(
-            hostname="test-worker",
-            ip_address="127.0.0.1",
-            cpu_count=cpu,
-            memory_bytes=memory_bytes,
-            disk_bytes=disk_bytes,
-            device=device,
-        )
-
-    return _make
-
-
-@pytest.fixture
-def state(tmp_path):
-    """Create a fresh ControllerTransitions for each test."""
-    db = ControllerDB(db_dir=tmp_path)
-    log_store = LogStore(log_dir=tmp_path / "logs")
-    s = ControllerTransitions(db=db, log_store=log_store)
-    yield s
-    log_store.close()
-    db.close()
-
-
-class MockSchedulerWake:
-    """Mock object that tracks controller protocol calls."""
-
-    def __init__(self):
-        self.wake = Mock()
-        self.kill_tasks_on_workers = Mock()
-        self.create_scheduling_context = Mock(return_value=Mock())
-        self.get_job_scheduling_diagnostics = Mock(return_value=None)
-        self.autoscaler = None
-        self.provider = Mock()
-        self.has_direct_provider = False
-
-
-@pytest.fixture
-def mock_scheduler():
-    """Create a mock scheduler with wake() method."""
-    return MockSchedulerWake()
-
-
-@pytest.fixture
-def service(state, mock_scheduler, tmp_path):
-    """Create a ControllerServiceImpl for testing."""
-    from iris.cluster.bundle import BundleStore
-
-    return ControllerServiceImpl(
-        state,
-        state._db,
-        controller=mock_scheduler,
-        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
-    )
+def service(controller_service):
+    return controller_service
 
 
 # =============================================================================
@@ -206,9 +90,9 @@ def service(state, mock_scheduler, tmp_path):
 # =============================================================================
 
 
-def test_launch_job_returns_job_id(service, job_request):
+def test_launch_job_returns_job_id(service):
     """Verify launch_job returns a job_id and job can be queried via RPC."""
-    request = job_request("test-job")
+    request = make_job_request("test-job")
 
     response = service.launch_job(request, None)
 
@@ -222,8 +106,8 @@ def test_launch_job_returns_job_id(service, job_request):
     assert status_response.job.state == cluster_pb2.JOB_STATE_PENDING
 
 
-def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state, job_request):
-    request = job_request("bundle-job")
+def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state):
+    request = make_job_request("bundle-job")
     request.bundle_blob = b"bundle-bytes"
     service.launch_job(request, None)
 
@@ -233,9 +117,9 @@ def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state,
     assert len(job.request.bundle_id) == 64
 
 
-def test_launch_job_rejects_duplicate_name(service, job_request):
+def test_launch_job_rejects_duplicate_name(service):
     """Verify launch_job rejects duplicate job names for running jobs."""
-    request = job_request("duplicate-job")
+    request = make_job_request("duplicate-job")
 
     response = service.launch_job(request, None)
     assert response.job_id == JobName.root("test-user", "duplicate-job").to_wire()
@@ -247,9 +131,9 @@ def test_launch_job_rejects_duplicate_name(service, job_request):
     assert "still running" in exc_info.value.message
 
 
-def test_launch_job_replaces_finished_job_by_default(service, state, job_request):
+def test_launch_job_replaces_finished_job_by_default(service, state):
     """Verify launch_job replaces finished jobs by default."""
-    request = job_request("replaceable-job")
+    request = make_job_request("replaceable-job")
     job_id = JobName.root("test-user", "replaceable-job")
 
     # Submit initial job
@@ -276,9 +160,9 @@ def test_launch_job_replaces_finished_job_by_default(service, state, job_request
     assert job.state == cluster_pb2.JOB_STATE_PENDING
 
 
-def test_launch_job_error_policy_prevents_replacement(service, state, job_request):
+def test_launch_job_error_policy_prevents_replacement(service, state):
     """Verify EXISTING_JOB_POLICY_ERROR prevents replacing finished jobs."""
-    request = job_request("no-replace-job")
+    request = make_job_request("no-replace-job")
     job_id = JobName.root("test-user", "no-replace-job")
 
     # Submit initial job
@@ -294,7 +178,7 @@ def test_launch_job_error_policy_prevents_replacement(service, state, job_reques
     assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Submit again with ERROR policy - should fail
-    request_no_replace = job_request("no-replace-job")
+    request_no_replace = make_job_request("no-replace-job")
     request_no_replace.existing_job_policy = cluster_pb2.EXISTING_JOB_POLICY_ERROR
 
     with pytest.raises(ConnectError) as exc_info:
@@ -304,15 +188,15 @@ def test_launch_job_error_policy_prevents_replacement(service, state, job_reques
     assert "SUCCEEDED" in exc_info.value.message
 
 
-def test_existing_job_policy_keep_running(service, state, job_request):
+def test_existing_job_policy_keep_running(service, state):
     """KEEP policy on a running job returns the existing handle without re-creating."""
-    request = job_request("keep-job")
+    request = make_job_request("keep-job")
     job_id = JobName.root("test-user", "keep-job")
 
     service.launch_job(request, None)
 
     # Job is still running (PENDING). Submit again with KEEP policy.
-    request_keep = job_request("keep-job")
+    request_keep = make_job_request("keep-job")
     request_keep.existing_job_policy = cluster_pb2.EXISTING_JOB_POLICY_KEEP
     response = service.launch_job(request_keep, None)
 
@@ -322,9 +206,9 @@ def test_existing_job_policy_keep_running(service, state, job_request):
     assert job.state == cluster_pb2.JOB_STATE_PENDING
 
 
-def test_existing_job_policy_recreate_running(service, state, job_request):
+def test_existing_job_policy_recreate_running(service, state):
     """RECREATE policy cancels a running job and replaces it."""
-    request = job_request("recreate-job")
+    request = make_job_request("recreate-job")
     job_id = JobName.root("test-user", "recreate-job")
 
     service.launch_job(request, None)
@@ -332,7 +216,7 @@ def test_existing_job_policy_recreate_running(service, state, job_request):
     job = _query_job(state, job_id)
     assert job.state == cluster_pb2.JOB_STATE_PENDING
 
-    request_recreate = job_request("recreate-job")
+    request_recreate = make_job_request("recreate-job")
     request_recreate.existing_job_policy = cluster_pb2.EXISTING_JOB_POLICY_RECREATE
     response = service.launch_job(request_recreate, None)
 
@@ -342,15 +226,15 @@ def test_existing_job_policy_recreate_running(service, state, job_request):
     assert job.state == cluster_pb2.JOB_STATE_PENDING
 
 
-def test_existing_job_policy_error_any_state(service, state, job_request):
+def test_existing_job_policy_error_any_state(service, state):
     """ERROR policy rejects submission regardless of job state."""
-    request = job_request("error-policy-job")
+    request = make_job_request("error-policy-job")
     job_id = JobName.root("test-user", "error-policy-job")
 
     service.launch_job(request, None)
 
     # Running job with ERROR policy -> error
-    request_err = job_request("error-policy-job")
+    request_err = make_job_request("error-policy-job")
     request_err.existing_job_policy = cluster_pb2.EXISTING_JOB_POLICY_ERROR
     with pytest.raises(ConnectError) as exc_info:
         service.launch_job(request_err, None)
@@ -363,9 +247,9 @@ def test_existing_job_policy_error_any_state(service, state, job_request):
     assert exc_info.value.code == Code.ALREADY_EXISTS
 
 
-def test_existing_job_policy_unspecified_preserves_current_behavior(service, state, job_request):
+def test_existing_job_policy_unspecified_preserves_current_behavior(service, state):
     """Default (UNSPECIFIED) policy replaces finished jobs and errors on running ones."""
-    request = job_request("default-policy-job")
+    request = make_job_request("default-policy-job")
     job_id = JobName.root("test-user", "default-policy-job")
 
     service.launch_job(request, None)
@@ -388,7 +272,7 @@ def test_launch_job_rejects_empty_name(service, state):
     """Verify launch_job rejects empty job names."""
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
     )
@@ -404,9 +288,9 @@ def test_launch_job_rejects_empty_name(service, state):
 # =============================================================================
 
 
-def test_get_job_status_returns_status(service, job_request):
+def test_get_job_status_returns_status(service):
     """Verify get_job_status returns correct status for launched job."""
-    service.launch_job(job_request("test-job"), None)
+    service.launch_job(make_job_request("test-job"), None)
 
     request = cluster_pb2.Controller.GetJobStatusRequest(job_id=JobName.root("test-user", "test-job").to_wire())
     response = service.get_job_status(request, None)
@@ -432,7 +316,7 @@ def test_redact_request_env_vars_does_not_mutate_original():
 
     original = cluster_pb2.Controller.LaunchJobRequest(
         name="/test-user/job",
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         environment=cluster_pb2.EnvironmentConfig(env_vars={"WANDB_API_KEY": "secret", "SAFE": "ok"}),
     )
     redacted = redact_request_env_vars(original)
@@ -449,7 +333,7 @@ def test_get_job_status_redacts_sensitive_env_vars(service):
     job_name = JobName.root("test-user", "redact-test")
     launch_req = cluster_pb2.Controller.LaunchJobRequest(
         name=job_name.to_wire(),
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(
             env_vars={
@@ -476,14 +360,27 @@ def test_get_job_status_redacts_sensitive_env_vars(service):
     assert env["NUM_WORKERS"] == "4"
 
 
+def test_get_job_status_omits_per_task_detail(service):
+    """GetJobStatus never populates per-task detail (callers use ListTasks)."""
+    service.launch_job(make_job_request("task-test"), None)
+    job_id = JobName.root("test-user", "task-test")
+
+    request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
+    response = service.get_job_status(request, None)
+
+    assert response.job.state == cluster_pb2.JOB_STATE_PENDING
+    assert len(response.job.tasks) == 0
+    assert response.job.task_count == 1
+
+
 # =============================================================================
 # Job Termination Tests
 # =============================================================================
 
 
-def test_terminate_job_marks_as_killed(service, job_request):
+def test_terminate_job_marks_as_killed(service):
     """Verify terminate_job sets job state to KILLED via get_job_status."""
-    service.launch_job(job_request("test-job"), None)
+    service.launch_job(make_job_request("test-job"), None)
 
     request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-user", "test-job").to_wire())
     response = service.terminate_job(request, None)
@@ -509,9 +406,9 @@ def test_terminate_job_not_found(service):
     assert "nonexistent" in exc_info.value.message
 
 
-def test_terminate_pending_job(service, job_request):
+def test_terminate_pending_job(service):
     """Verify terminate_job works on pending jobs (not just running)."""
-    service.launch_job(job_request("test-job"), None)
+    service.launch_job(make_job_request("test-job"), None)
 
     request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-user", "test-job").to_wire())
     service.terminate_job(request, None)
@@ -524,11 +421,11 @@ def test_terminate_pending_job(service, job_request):
     assert status_response.job.finished_at.epoch_ms > 0
 
 
-def test_terminate_job_cascades_to_children(service, job_request):
+def test_terminate_job_cascades_to_children(service):
     """Verify terminate_job terminates all children when parent is terminated."""
-    service.launch_job(job_request("parent"), None)
-    service.launch_job(job_request("/test-user/parent/child1"), None)
-    service.launch_job(job_request("/test-user/parent/child2"), None)
+    service.launch_job(make_job_request("parent"), None)
+    service.launch_job(make_job_request("/test-user/parent/child1"), None)
+    service.launch_job(make_job_request("/test-user/parent/child2"), None)
 
     request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-user", "parent").to_wire())
     service.terminate_job(request, None)
@@ -543,11 +440,11 @@ def test_terminate_job_cascades_to_children(service, job_request):
         assert status.job.state == cluster_pb2.JOB_STATE_KILLED, f"Job {job_name} should be KILLED"
 
 
-def test_terminate_job_only_affects_descendants(service, job_request):
+def test_terminate_job_only_affects_descendants(service):
     """Verify terminate_job does not affect sibling jobs."""
-    service.launch_job(job_request("parent"), None)
-    service.launch_job(job_request("/test-user/parent/child1"), None)
-    service.launch_job(job_request("/test-user/parent/child2"), None)
+    service.launch_job(make_job_request("parent"), None)
+    service.launch_job(make_job_request("/test-user/parent/child1"), None)
+    service.launch_job(make_job_request("/test-user/parent/child2"), None)
 
     # Terminate only child1
     request = cluster_pb2.Controller.TerminateJobRequest(
@@ -574,13 +471,13 @@ def test_terminate_job_only_affects_descendants(service, job_request):
     assert parent_status.job.state == cluster_pb2.JOB_STATE_PENDING
 
 
-def test_terminate_job_skips_already_finished_children(service, state, job_request):
+def test_terminate_job_skips_already_finished_children(service, state):
     """Verify terminate_job skips children already in terminal state."""
     # Launch parent via RPC
-    service.launch_job(job_request("parent"), None)
+    service.launch_job(make_job_request("parent"), None)
 
     # Create child and transition it to SUCCEEDED.
-    service.launch_job(job_request("/test-user/parent/child-succeeded"), None)
+    service.launch_job(make_job_request("/test-user/parent/child-succeeded"), None)
     child_succeeded_job = JobName.from_string("/test-user/parent/child-succeeded")
     child_task = _query_tasks_with_attempts(state, child_succeeded_job)[0]
     done_worker = WorkerId("w-child-succeeded")
@@ -588,7 +485,7 @@ def test_terminate_job_skips_already_finished_children(service, state, job_reque
     _assign_and_transition(state, child_task.task_id, done_worker, cluster_pb2.TASK_STATE_SUCCEEDED)
 
     # Launch running child via RPC
-    service.launch_job(job_request("/test-user/parent/child-running"), None)
+    service.launch_job(make_job_request("/test-user/parent/child-running"), None)
 
     # Terminate parent
     request = cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-user", "parent").to_wire())
@@ -623,11 +520,11 @@ def test_terminate_job_skips_already_finished_children(service, state, job_reque
 # =============================================================================
 
 
-def test_terminate_job_allowed_by_owner(service, job_request):
+def test_terminate_job_allowed_by_owner(service):
     """Job owner can terminate their own job."""
     from iris.rpc.auth import _verified_identity, VerifiedIdentity
 
-    service.launch_job(job_request("/alice/my-job"), None)
+    service.launch_job(make_job_request("/alice/my-job"), None)
 
     token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
     try:
@@ -640,7 +537,7 @@ def test_terminate_job_allowed_by_owner(service, job_request):
     assert status.job.state == cluster_pb2.JOB_STATE_KILLED
 
 
-def test_terminate_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, job_request):
+def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
@@ -649,13 +546,13 @@ def test_terminate_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, j
     auth_service = ControllerServiceImpl(
         state,
         state._db,
-        controller=mock_scheduler,
+        controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_store=state._log_store,
         auth=ControllerAuth(provider="static"),
     )
 
-    auth_service.launch_job(job_request("/alice/my-job"), None)
+    auth_service.launch_job(make_job_request("/alice/my-job"), None)
 
     token = _verified_identity.set(VerifiedIdentity(user_id="bob", role="user"))
     try:
@@ -671,7 +568,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, j
     assert status.job.state == cluster_pb2.JOB_STATE_PENDING
 
 
-def test_launch_child_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, job_request):
+def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_path):
     """Cannot submit a child job under another user's hierarchy."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
@@ -680,26 +577,26 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_scheduler, tmp_path
     auth_service = ControllerServiceImpl(
         state,
         state._db,
-        controller=mock_scheduler,
+        controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_store=state._log_store,
         auth=ControllerAuth(provider="static"),
     )
 
-    auth_service.launch_job(job_request("/alice/parent-job"), None)
+    auth_service.launch_job(make_job_request("/alice/parent-job"), None)
 
     token = _verified_identity.set(VerifiedIdentity(user_id="bob", role="user"))
     try:
         with pytest.raises(ConnectError) as exc_info:
-            auth_service.launch_job(job_request("/alice/parent-job/sneaky-child"), None)
+            auth_service.launch_job(make_job_request("/alice/parent-job/sneaky-child"), None)
         assert exc_info.value.code == Code.PERMISSION_DENIED
     finally:
         _verified_identity.reset(token)
 
 
-def test_terminate_job_allowed_when_auth_disabled(service, job_request):
+def test_terminate_job_allowed_when_auth_disabled(service):
     """When auth is disabled (no verified user), anyone can terminate."""
-    service.launch_job(job_request("/alice/my-job"), None)
+    service.launch_job(make_job_request("/alice/my-job"), None)
 
     # No _verified_identity set => auth disabled
     request = cluster_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job")
@@ -709,12 +606,12 @@ def test_terminate_job_allowed_when_auth_disabled(service, job_request):
     assert status.job.state == cluster_pb2.JOB_STATE_KILLED
 
 
-def test_parent_job_failure_cascades_to_children(service, state, job_request):
+def test_parent_job_failure_cascades_to_children(service, state):
     """Verify when a parent job fails, all children are automatically cancelled."""
     # Launch parent and children via RPC
-    service.launch_job(job_request("parent"), None)
-    service.launch_job(job_request("/test-user/parent/child1"), None)
-    service.launch_job(job_request("/test-user/parent/child2"), None)
+    service.launch_job(make_job_request("parent"), None)
+    service.launch_job(make_job_request("/test-user/parent/child1"), None)
+    service.launch_job(make_job_request("/test-user/parent/child2"), None)
 
     # Get parent task and mark it as failed
     parent_job = _query_job(state, JobName.root("test-user", "parent"))
@@ -748,10 +645,10 @@ def test_parent_job_failure_cascades_to_children(service, state, job_request):
     assert child2_status.job.state == cluster_pb2.JOB_STATE_KILLED, "Child 2 should be killed when parent fails"
 
 
-def test_launch_job_rejects_child_of_failed_parent(service, state, job_request):
+def test_launch_job_rejects_child_of_failed_parent(service, state):
     """Verify launch_job rejects submissions to a failed parent's namespace."""
     # Launch and fail parent
-    service.launch_job(job_request("failed-parent"), None)
+    service.launch_job(make_job_request("failed-parent"), None)
     parent_job = _query_job(state, JobName.root("test-user", "failed-parent"))
     parent_task = _query_tasks_with_attempts(state, parent_job.job_id)[0]
     worker_id = WorkerId("w-failed-parent")
@@ -766,7 +663,7 @@ def test_launch_job_rejects_child_of_failed_parent(service, state, job_request):
 
     # Try to submit a child job - should fail
     with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(job_request("/test-user/failed-parent/new-child"), None)
+        service.launch_job(make_job_request("/test-user/failed-parent/new-child"), None)
 
     assert exc_info.value.code == Code.FAILED_PRECONDITION
     assert "terminated" in exc_info.value.message.lower() or "failed" in exc_info.value.message.lower()
@@ -777,11 +674,11 @@ def test_launch_job_rejects_child_of_failed_parent(service, state, job_request):
 # =============================================================================
 
 
-def test_list_jobs_returns_all_jobs(service, job_request):
+def test_list_jobs_returns_all_jobs(service):
     """Verify list_jobs returns all jobs launched via RPC."""
-    service.launch_job(job_request("job-1"), None)
-    service.launch_job(job_request("job-2"), None)
-    service.launch_job(job_request("job-3"), None)
+    service.launch_job(make_job_request("job-1"), None)
+    service.launch_job(make_job_request("job-2"), None)
+    service.launch_job(make_job_request("job-3"), None)
 
     # Terminate one to get different state
     service.terminate_job(
@@ -805,10 +702,10 @@ def test_list_jobs_returns_all_jobs(service, job_request):
     assert states_by_id[JobName.root("test-user", "job-3").to_wire()] == cluster_pb2.JOB_STATE_KILLED
 
 
-def test_list_jobs_sql_pagination(service, job_request):
+def test_list_jobs_sql_pagination(service):
     """SQL-level pagination returns correct page when sorting by date."""
     for i in range(5):
-        service.launch_job(job_request(f"job-{i}"), None)
+        service.launch_job(make_job_request(f"job-{i}"), None)
 
     # Request page of 2
     request = cluster_pb2.Controller.ListJobsRequest(offset=0, limit=2)
@@ -839,10 +736,10 @@ def test_list_jobs_sql_pagination(service, job_request):
     assert response3.has_more is False
 
 
-def test_list_jobs_state_filter(service, job_request):
+def test_list_jobs_state_filter(service):
     """SQL pagination respects state_filter."""
-    service.launch_job(job_request("job-a"), None)
-    service.launch_job(job_request("job-b"), None)
+    service.launch_job(make_job_request("job-a"), None)
+    service.launch_job(make_job_request("job-b"), None)
     service.terminate_job(
         cluster_pb2.Controller.TerminateJobRequest(job_id=JobName.root("test-user", "job-b").to_wire()), None
     )
@@ -855,10 +752,10 @@ def test_list_jobs_state_filter(service, job_request):
     assert response.jobs[0].state == cluster_pb2.JOB_STATE_KILLED
 
 
-def test_list_jobs_name_filter(service, job_request):
+def test_list_jobs_name_filter(service):
     """Name filter returns only matching jobs."""
-    service.launch_job(job_request("alpha-job"), None)
-    service.launch_job(job_request("beta-job"), None)
+    service.launch_job(make_job_request("alpha-job"), None)
+    service.launch_job(make_job_request("beta-job"), None)
 
     request = cluster_pb2.Controller.ListJobsRequest(name_filter="alpha")
     response = service.list_jobs(request, None)
@@ -867,9 +764,9 @@ def test_list_jobs_name_filter(service, job_request):
     assert "alpha" in response.jobs[0].name.lower()
 
 
-def test_list_jobs_includes_descendants(service, state, job_request):
+def test_list_jobs_includes_descendants(service, state):
     """list_jobs returns top-level jobs plus their descendants for tree display."""
-    service.launch_job(job_request("parent-job"), None)
+    service.launch_job(make_job_request("parent-job"), None)
     # Submit child job directly via transitions
     parent_id = JobName.root("test-user", "parent-job")
     child_id = JobName.from_wire(parent_id.to_wire() + "/child")
@@ -897,12 +794,12 @@ def test_list_jobs_includes_descendants(service, state, job_request):
 # =============================================================================
 
 
-def test_task_summaries_sql_group_by(state, service, job_request):
+def test_task_summaries_sql_group_by(state, service):
     """_task_summaries_for_jobs SQL GROUP BY produces correct aggregates."""
     from iris.cluster.controller.service import _task_summaries_for_jobs
 
     # Launch a job with 3 replicas
-    service.launch_job(job_request("multi-task", replicas=3), None)
+    service.launch_job(make_job_request("multi-task", replicas=3), None)
 
     job_id = JobName.root("test-user", "multi-task")
     summaries = _task_summaries_for_jobs(state._db, {job_id})
@@ -917,12 +814,12 @@ def test_task_summaries_sql_group_by(state, service, job_request):
     assert s.preemption_count == 0
 
 
-def test_live_user_stats_sql_aggregation(state, service, job_request):
+def test_live_user_stats_sql_aggregation(state, service):
     """_live_user_stats SQL GROUP BY produces correct per-user counts."""
     from iris.cluster.controller.service import _live_user_stats
 
-    service.launch_job(job_request("job-x", replicas=2), None)
-    service.launch_job(job_request("job-y"), None)
+    service.launch_job(make_job_request("job-x", replicas=2), None)
+    service.launch_job(make_job_request("job-y"), None)
 
     stats_list = _live_user_stats(state._db)
     assert len(stats_list) >= 1
@@ -940,7 +837,7 @@ def test_live_user_stats_sql_aggregation(state, service, job_request):
     assert total_tasks == 3
 
 
-def test_worker_addresses_for_tasks(state, service, job_request):
+def test_worker_addresses_for_tasks(state, service):
     """_worker_addresses_for_tasks fetches only referenced workers."""
     from iris.cluster.controller.service import _worker_addresses_for_tasks
 
@@ -950,7 +847,7 @@ def test_worker_addresses_for_tasks(state, service, job_request):
     _register_worker(state, WorkerId("w-3"))
 
     # Launch job and assign one task to w-1
-    service.launch_job(job_request("assigned-job"), None)
+    service.launch_job(make_job_request("assigned-job"), None)
     job_id = JobName.root("test-user", "assigned-job")
     task_id = JobName.from_wire(job_id.to_wire() + "/0")
     state.queue_assignments([Assignment(task_id=task_id, worker_id=WorkerId("w-1"))])
@@ -969,7 +866,7 @@ def test_worker_addresses_for_tasks(state, service, job_request):
 # =============================================================================
 
 
-def test_list_workers_returns_all(service, state, worker_metadata):
+def test_list_workers_returns_all(service, state):
     """Verify list_workers returns all registered workers."""
     from iris.rpc.auth import _verified_identity, VerifiedIdentity
 
@@ -980,7 +877,7 @@ def test_list_workers_returns_all(service, state, worker_metadata):
         for i in range(3):
             request = cluster_pb2.Controller.RegisterRequest(
                 address=f"host{i}:8080",
-                metadata=worker_metadata(),
+                metadata=make_worker_metadata(),
                 worker_id=f"worker-{i}",
             )
             service.register(request, None)
@@ -1006,7 +903,7 @@ def test_launch_job_injects_device_constraints_from_tpu_resource(service, state)
     """Job with TPU resource spec gets auto-injected device-type and device-variant constraints."""
     request = cluster_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-user", "tpu-job").to_wire(),
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
     )
@@ -1032,7 +929,7 @@ def test_launch_job_user_constraints_override_auto(service, state):
 
     request = cluster_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-user", "multi-variant-job").to_wire(),
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
     )
@@ -1059,7 +956,7 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
     """CPU-only jobs get no auto-injected device constraints."""
     request = cluster_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-user", "cpu-job").to_wire(),
-        entrypoint=_make_test_entrypoint(),
+        entrypoint=make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
     )
@@ -1075,7 +972,7 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
 # =============================================================================
 
 
-def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_metadata):
+def test_register_requires_worker_role(state, mock_controller, tmp_path):
     """Non-worker user gets PERMISSION_DENIED on register()."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
@@ -1089,7 +986,7 @@ def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_m
     service = ControllerServiceImpl(
         state,
         db,
-        controller=mock_scheduler,
+        controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
         auth=auth,
@@ -1102,7 +999,7 @@ def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_m
                 cluster_pb2.Controller.RegisterRequest(
                     worker_id="w-1",
                     address="localhost:8080",
-                    metadata=worker_metadata(),
+                    metadata=make_worker_metadata(),
                 ),
                 None,
             )
@@ -1111,7 +1008,7 @@ def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_m
         _verified_identity.reset(token)
 
 
-def test_register_allows_worker_role(state, mock_scheduler, tmp_path, worker_metadata):
+def test_register_allows_worker_role(state, mock_controller, tmp_path):
     """Worker-role user can call register()."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
@@ -1125,7 +1022,7 @@ def test_register_allows_worker_role(state, mock_scheduler, tmp_path, worker_met
     service = ControllerServiceImpl(
         state,
         db,
-        controller=mock_scheduler,
+        controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_store=state._log_store,
         auth=auth,
@@ -1137,10 +1034,57 @@ def test_register_allows_worker_role(state, mock_scheduler, tmp_path, worker_met
             cluster_pb2.Controller.RegisterRequest(
                 worker_id="w-1",
                 address="localhost:8080",
-                metadata=worker_metadata(),
+                metadata=make_worker_metadata(),
             ),
             None,
         )
         assert resp.accepted
+    finally:
+        _verified_identity.reset(token)
+
+
+def test_get_scheduler_state_with_running_task(controller_service, state):
+    """get_scheduler_state must not crash when there are running tasks.
+
+    Regression: JobName has no `.job` attribute — the code must use `.parent`.
+    """
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
+
+    # Submit a job and move a task to RUNNING
+    job_id = JobName.root("alice", "sched-test")
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name=job_id.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    state.submit_job(job_id, request, Timestamp.now())
+
+    w1 = WorkerId("w1")
+    state.register_or_refresh_worker(
+        worker_id=w1,
+        address="w1:8080",
+        metadata=cluster_pb2.WorkerMetadata(
+            hostname="w1",
+            ip_address="127.0.0.1",
+            cpu_count=8,
+            memory_bytes=16 * 1024**3,
+            disk_bytes=100 * 1024**3,
+        ),
+        ts=Timestamp.now(),
+    )
+    task_id = job_id.task(0)
+    _assign_and_transition(state, task_id, w1, cluster_pb2.TASK_STATE_RUNNING)
+
+    token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
+    try:
+        resp = controller_service.get_scheduler_state(
+            cluster_pb2.Controller.GetSchedulerStateRequest(),
+            None,
+        )
+        assert resp.total_running == 1
+        assert resp.running_tasks[0].job_id == job_id.to_wire()
+        assert resp.running_tasks[0].user_id == "alice"
     finally:
         _verified_identity.reset(token)

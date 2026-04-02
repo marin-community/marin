@@ -361,14 +361,11 @@ def test_group_by_non_vortex_serializable(zephyr_ctx):
     assert results[1] == {"key": "b", "value": frozenset([2])}
 
 
-def test_parquet_disk_chunk_pickle_roundtrip(tmp_path):
-    """ParquetDiskChunk with is_pickled=True round-trips non-Arrow-serializable items."""
+def test_scatter_parquet_iterator_pickle_roundtrip(tmp_path):
+    """ScatterParquetIterator with is_pickled=True round-trips non-Arrow-serializable items."""
     import pyarrow.parquet as pq
 
-    from zephyr.execution import (
-        ParquetDiskChunk,
-        _make_pickle_envelope,
-    )
+    from zephyr.shuffle import ScatterParquetIterator, _make_pickle_envelope
 
     items = [frozenset([1, 2]), frozenset([3, 4, 5])]
     envelope = _make_pickle_envelope(items, target_shard=0, chunk_idx=0)
@@ -377,9 +374,16 @@ def test_parquet_disk_chunk_pickle_roundtrip(tmp_path):
     path = str(tmp_path / "test.parquet")
     pq.write_table(pa.Table.from_batches([batch]), path)
 
-    chunk = ParquetDiskChunk(path=path, filter_shard=0, filter_chunk=0, count=2, is_pickled=True)
-    result = chunk.read()
-    assert result == items
+    it = ScatterParquetIterator(
+        path=path,
+        shard_idx=0,
+        chunk_count=1,
+        is_pickled=True,
+        filesystem=pa.fs.LocalFileSystem(),
+    )
+    chunks = [list(chunk_iter) for chunk_iter in it.get_chunk_iterators()]
+    assert len(chunks) == 1
+    assert chunks[0] == items
 
 
 def test_group_by_schema_evolution(zephyr_ctx):

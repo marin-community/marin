@@ -6,17 +6,16 @@
 Defines the ``iris`` Click group and registers all subcommands.
 """
 
-import json
 import logging as _logging_module
-import os
 import sys
 
 import click
 
 from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
-from iris.logging import configure_logging
-from iris.rpc import config_pb2
+from rigging.log_setup import configure_logging
+from iris.rpc import cluster_pb2 as _cluster_pb2, config_pb2
 from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
+from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
 logger = _logging_module.getLogger(__name__)
 
@@ -66,46 +65,10 @@ def create_client_token_provider(
 
 
 def _configure_client_s3(config) -> None:
-    """Configure S3 env vars for fsspec access (e.g. bundle downloads).
+    """Configure S3 env vars for fsspec access. Delegates to the canonical implementation."""
+    from iris.cluster.providers.k8s.controller import configure_client_s3
 
-    fsspec needs AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (mapped from
-    R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY), AWS_ENDPOINT_URL, and FSSPEC_S3
-    with the correct endpoint.
-    """
-    from iris.cluster.platform.coreweave import _needs_virtual_host_addressing
-
-    endpoint = config.platform.coreweave.object_storage_endpoint
-    if not endpoint:
-        return
-
-    r2_key = os.environ.get("R2_ACCESS_KEY_ID", "")
-    r2_secret = os.environ.get("R2_SECRET_ACCESS_KEY", "")
-    if r2_key and r2_secret:
-        os.environ.setdefault("AWS_ACCESS_KEY_ID", r2_key)
-        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", r2_secret)
-
-    os.environ.setdefault("AWS_ENDPOINT_URL", endpoint)
-
-    if "FSSPEC_S3" not in os.environ:
-        fsspec_conf: dict = {"endpoint_url": endpoint}
-        if _needs_virtual_host_addressing(endpoint):
-            fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
-        if ".r2.cloudflarestorage.com" in endpoint:
-            fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
-        os.environ["FSSPEC_S3"] = json.dumps(fsspec_conf)
-
-    # Flush fsspec/s3fs cached instances so they pick up the new config.
-    # Without this, any S3FileSystem created before this point (e.g. at import
-    # time) will ignore FSSPEC_S3.
-    import fsspec.config
-
-    fsspec.config.set_conf_env(fsspec.config.conf)
-    try:
-        import s3fs
-
-        s3fs.S3FileSystem.clear_instance_cache()
-    except ImportError:
-        pass
+    configure_client_s3(config)
 
 
 def require_controller_url(ctx: click.Context) -> str:
@@ -125,11 +88,11 @@ def require_controller_url(ctx: click.Context) -> str:
         from iris.cluster.config import IrisConfig
 
         iris_config = IrisConfig(config)
-        platform = iris_config.platform()
-        ctx.obj["platform"] = platform
+        bundle = iris_config.provider_bundle()
+        ctx.obj["provider_bundle"] = bundle
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.local_cluster import LocalCluster
+            from iris.cluster.providers.local.cluster import LocalCluster
 
             cluster = LocalCluster(iris_config.proto)
             controller_address = cluster.start()
@@ -137,12 +100,12 @@ def require_controller_url(ctx: click.Context) -> str:
         else:
             controller_address = iris_config.controller_address()
             if not controller_address:
-                controller_address = platform.discover_controller(iris_config.proto.controller)
+                controller_address = bundle.controller.discover_controller(iris_config.proto.controller)
 
         # Establish tunnel and keep it alive for command duration
         try:
             logger.info("Establishing tunnel to controller...")
-            tunnel_cm = platform.tunnel(address=controller_address)
+            tunnel_cm = bundle.controller.tunnel(address=controller_address)
             tunnel_url = tunnel_cm.__enter__()
             ctx.obj["controller_url"] = tunnel_url
             # Clean up tunnel when context closes
@@ -370,16 +333,109 @@ def key_revoke(ctx, key_id: str):
     click.echo(f"Revoked key: {key_id}")
 
 
+# ---------------------------------------------------------------------------
+# User budget management
+# ---------------------------------------------------------------------------
+
+
+@iris.group()
+@click.pass_context
+def user(ctx):
+    """User management commands."""
+    pass
+
+
+@user.group()
+@click.pass_context
+def budget(ctx):
+    """Manage user budgets."""
+    pass
+
+
+@budget.command("set")
+@click.argument("user_id")
+@click.option("--limit", "budget_limit", required=True, type=int, help="Budget limit (0 = unlimited)")
+@click.option(
+    "--max-band",
+    required=True,
+    type=click.Choice(PRIORITY_BAND_NAMES),
+    help="Highest priority band this user can submit to",
+)
+@click.pass_context
+def budget_set(ctx, user_id: str, budget_limit: int, max_band: str):
+    """Set budget limit and max band for a user."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    client = _make_authenticated_client(controller_url, token_provider)
+    try:
+        client.set_user_budget(
+            _cluster_pb2.Controller.SetUserBudgetRequest(
+                user_id=user_id,
+                budget_limit=budget_limit,
+                max_band=priority_band_value(max_band),
+            )
+        )
+    finally:
+        client.close()
+
+    click.echo(f"Budget set for {user_id}: limit={budget_limit}, max_band={max_band}")
+
+
+@budget.command("get")
+@click.argument("user_id")
+@click.pass_context
+def budget_get(ctx, user_id: str):
+    """Get budget config and current spend for a user."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    client = _make_authenticated_client(controller_url, token_provider)
+    try:
+        resp = client.get_user_budget(_cluster_pb2.Controller.GetUserBudgetRequest(user_id=user_id))
+    finally:
+        client.close()
+
+    click.echo(f"User:      {resp.user_id}")
+    click.echo(f"Limit:     {resp.budget_limit}")
+    click.echo(f"Spent:     {resp.budget_spent}")
+    click.echo(f"Max band:  {priority_band_name(resp.max_band)}")
+
+
+@budget.command("list")
+@click.pass_context
+def budget_list(ctx):
+    """List all user budgets with current spend."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    client = _make_authenticated_client(controller_url, token_provider)
+    try:
+        resp = client.list_user_budgets(_cluster_pb2.Controller.ListUserBudgetsRequest())
+    finally:
+        client.close()
+
+    if not resp.users:
+        click.echo("No user budgets found.")
+        return
+
+    click.echo(f"{'USER':<30s} {'LIMIT':>10s} {'SPENT':>10s} {'MAX BAND':<15s}")
+    for u in resp.users:
+        click.echo(f"{u.user_id:<30s} {u.budget_limit:>10d} {u.budget_spent:>10d} {priority_band_name(u.max_band):<15s}")
+
+
 # Register subcommand groups — imported at module level to ensure they are
 # always available when the ``iris`` group is used.
 from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
 from iris.cli.job import job  # noqa: E402
+from iris.cli.actor import actor as actor_cmd  # noqa: E402
 from iris.cli.process_status import register_process_status_commands  # noqa: E402
 from iris.cli.query import query_cmd  # noqa: E402
 from iris.cli.rpc import register_rpc_commands  # noqa: E402
 from iris.cli.task import task  # noqa: E402
 
+iris.add_command(actor_cmd)
 iris.add_command(cluster)
 iris.add_command(build)
 iris.add_command(job)

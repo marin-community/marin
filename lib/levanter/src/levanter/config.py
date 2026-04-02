@@ -16,7 +16,7 @@ import draccus
 import jmp
 from draccus import parse
 from fsspec import AbstractFileSystem
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 
 from levanter.utils.datetime_utils import encode_timedelta, parse_timedelta
 

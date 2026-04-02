@@ -44,9 +44,10 @@ Before opening a pull request:
 2. Run `uv run pytest -m 'not slow'` for the files or packages you changed.
 3. If your change adds, removes, renames, or rewires docs pages or docs-owned links, run `uv run python infra/check_docs_source_links.py`.
 4. If your change is docs-heavy, run `uv run mkdocs build --strict`.
-5. Keep the PR description concise and plain text because it becomes the squash-merge commit message. The `.github/PULL_REQUEST_TEMPLATE.md` file shows the expected style.
-6. Make sure the PR body references an issue with `Fixes #NNNN` or `Part of #NNNN`.
-7. After pushing, verify the relevant GitHub CI checks pass before considering the PR ready for review.
+5. If your change adds or rewrites substantial prose, do a final prose-only review using `./.agents/skills/writing-style/SKILL.md`. Remove generic significance framing, stock AI-writing templates, and polished filler that does not add information.
+6. Keep the PR description concise and plain text because it becomes the squash-merge commit message. The `.github/PULL_REQUEST_TEMPLATE.md` file shows the expected style.
+7. Make sure the PR body references an issue with `Fixes #NNNN` or `Part of #NNNN`.
+8. After pushing, verify the relevant GitHub CI checks pass before considering the PR ready for review.
 
 For the end-to-end branch and fork workflow, follow the PR steps in [Submitting to the Marin Speedrun](../tutorials/submitting-speedrun.md#submit). The same GitHub push and PR process applies to non-speedrun changes.
 

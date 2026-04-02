@@ -54,7 +54,7 @@ Before starting a generic debug session, check if a specialized skill fits:
 | Symptom | Skill |
 |---|---|
 | TPU errors (`No accelerator found`, `FAILED_PRECONDITION`, `Device or resource busy`) | **debug-tpu** |
-| Zephyr pipeline issues (stuck stages, stragglers, idle workers) | **debug-zephyr** |
+| Zephyr pipeline issues (stuck stages, stragglers, idle workers) | **debug-zephyr-job** |
 | Iris controller issues (stuck jobs, resource leaks, scheduling failures) | **debug-iris-controller** |
 
 Use this generic debugger for code-level bugs that don't fall into the categories above.

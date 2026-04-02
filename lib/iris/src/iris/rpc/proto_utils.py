@@ -65,3 +65,27 @@ def format_accelerator_display(accel_type: int, variant: str = "") -> str:
     if variant:
         return f"{friendly} ({variant})"
     return friendly
+
+
+# ---------------------------------------------------------------------------
+# PriorityBand helpers
+# ---------------------------------------------------------------------------
+
+
+def priority_band_name(band: int) -> str:
+    """Human-friendly lowercase name for a PriorityBand proto value."""
+    return cluster_pb2.PriorityBand.Name(band).removeprefix("PRIORITY_BAND_").lower()
+
+
+def priority_band_value(name: str) -> int:
+    """Proto int value from a human-friendly band name like 'interactive'."""
+    return cluster_pb2.PriorityBand.Value(f"PRIORITY_BAND_{name.upper()}")
+
+
+PRIORITY_BAND_VALUES: list[int] = [
+    cluster_pb2.PRIORITY_BAND_PRODUCTION,
+    cluster_pb2.PRIORITY_BAND_INTERACTIVE,
+    cluster_pb2.PRIORITY_BAND_BATCH,
+]
+
+PRIORITY_BAND_NAMES: list[str] = [priority_band_name(b) for b in PRIORITY_BAND_VALUES]

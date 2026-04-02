@@ -13,6 +13,7 @@ const providerKind = ref<'worker' | 'kubernetes'>('worker')
 const WORKER_TABS: Tab[] = [
   { key: 'jobs', label: 'Jobs', to: '/' },
   { key: 'users', label: 'Users', to: '/users' },
+  { key: 'scheduler', label: 'Scheduler', to: '/scheduler' },
   { key: 'fleet', label: 'Workers', to: '/fleet' },
   { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
   { key: 'autoscaler', label: 'Autoscaler', to: '/autoscaler' },
@@ -24,6 +25,7 @@ const WORKER_TABS: Tab[] = [
 const KUBERNETES_TABS: Tab[] = [
   { key: 'jobs', label: 'Jobs', to: '/' },
   { key: 'users', label: 'Users', to: '/users' },
+  { key: 'scheduler', label: 'Scheduler', to: '/scheduler' },
   { key: 'cluster', label: 'Cluster', to: '/cluster' },
   { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
   { key: 'transactions', label: 'Transactions', to: '/transactions' },
@@ -38,6 +40,7 @@ const TABS = computed<Tab[]>(() =>
 const PATH_TO_TAB: Record<string, string> = {
   '/': 'jobs',
   '/users': 'users',
+  '/scheduler': 'scheduler',
   '/fleet': 'fleet',
   '/cluster': 'cluster',
   '/endpoints': 'endpoints',
@@ -75,19 +78,21 @@ onMounted(async () => {
   window.addEventListener('iris-auth-required', onAuthRequired)
 
   let hasSession = false
+  let authOptional = false
   try {
     const resp = await fetch('/auth/config')
     if (resp.ok) {
       const config = await resp.json()
       authEnabled.value = config.auth_enabled ?? false
       hasSession = config.has_session ?? false
+      authOptional = config.optional ?? false
       providerKind.value = config.provider_kind === 'kubernetes' ? 'kubernetes' : 'worker'
     }
   } catch {
     // Auth config endpoint unavailable — assume no auth
   }
 
-  if (authEnabled.value && !hasSession && route.path !== '/login') {
+  if (authEnabled.value && !authOptional && !hasSession && route.path !== '/login') {
     router.push('/login')
   }
 })

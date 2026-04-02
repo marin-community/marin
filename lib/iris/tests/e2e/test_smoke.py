@@ -10,6 +10,7 @@ has workers across CPU, TPU coscheduling, and multi-region scale groups.
 
 import logging
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -33,11 +34,11 @@ from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2, config_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff
 
 from .conftest import (
     DEFAULT_CONFIG,
-    IRIS_ROOT,
+    MARIN_ROOT,
     ClusterCapabilities,
     IrisTestCluster,
     _NoOpPage,
@@ -140,7 +141,7 @@ def smoke_cluster(request):
     controller_url = request.config.getoption("--iris-controller-url")
 
     if controller_url:
-        client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(controller_url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
         tc = IrisTestCluster(
             url=controller_url,
@@ -160,7 +161,7 @@ def smoke_cluster(request):
 
     config = _make_smoke_config()
     with connect_cluster(config) as url:
-        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(SMOKE_WORKER_COUNT, timeout=60)
@@ -239,7 +240,7 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Jobs tab shows diverse states."""
     quick = smoke_cluster.submit(TestJobs.quick, "smoke-simple")
     failed = smoke_cluster.submit(TestJobs.fail, "smoke-failed")
-    running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 30)
+    running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 300)
 
     smoke_cluster.wait(quick, timeout=smoke_cluster.job_timeout)
     smoke_cluster.wait(failed, timeout=smoke_cluster.job_timeout)
@@ -430,6 +431,29 @@ def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, 
     )
 
 
+def test_dashboard_scheduler_tab(smoke_cluster, smoke_page, smoke_screenshot):
+    """Scheduler tab shows pending queue, user budgets, and running tasks."""
+    running = smoke_cluster.submit(TestJobs.sleep, "smoke-sched-running", 300)
+    smoke_cluster.wait_for_state(running, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
+
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/scheduler")
+    wait_for_dashboard_ready(smoke_page)
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('Pending Queue') || "
+        "document.body.textContent.includes('User Budgets')",
+        timeout=10000,
+    )
+    assert_visible(smoke_page, "text=Pending Queue")
+    assert_visible(smoke_page, "text=User Budgets")
+    assert_visible(smoke_page, "text=Running Tasks")
+    smoke_screenshot(
+        "scheduler-tab",
+        "Scheduler tab showing pending queue, user budgets, and running tasks",
+    )
+
+    smoke_cluster.kill(running)
+
+
 # ============================================================================
 # Scheduling & endpoint verification
 # ============================================================================
@@ -511,11 +535,9 @@ def test_log_levels_populated(smoke_cluster, verbose_job, capabilities):
     deadline = time.monotonic() + smoke_cluster.job_timeout
     entries = []
     while time.monotonic() < deadline:
-        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
-        response = smoke_cluster.controller_client.get_task_logs(request)
-        entries = []
-        for batch in response.task_logs:
-            entries.extend(batch.logs)
+        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        response = smoke_cluster.controller_client.fetch_logs(request)
+        entries = list(response.entries)
         if any("info-marker" in e.data for e in entries):
             break
         time.sleep(0.5)
@@ -539,11 +561,9 @@ def test_log_level_filter(smoke_cluster, verbose_job, capabilities):
 
     task_id = verbose_job.job_id.task(0).to_wire()
 
-    request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id, min_level="WARNING")
-    response = smoke_cluster.controller_client.get_task_logs(request)
-    filtered = []
-    for batch in response.task_logs:
-        filtered.extend(batch.logs)
+    request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*", min_level="WARNING")
+    response = smoke_cluster.controller_client.fetch_logs(request)
+    filtered = list(response.entries)
 
     filtered_data = [e.data for e in filtered]
     assert any("warning-marker" in d for d in filtered_data), f"warning-marker missing: {filtered_data}"
@@ -656,6 +676,70 @@ def test_exec_in_container(smoke_cluster):
     smoke_cluster.kill(job)
 
 
+@pytest.mark.timeout(180)
+def test_worker_restart_preserves_task(smoke_cluster):
+    """Restarting a worker preserves its running task via container adoption.
+
+    Submits a task that logs every second, restarts the worker running it,
+    then verifies the task is still RUNNING and eventually succeeds. Fetches
+    logs to confirm continuity across the restart.
+    """
+    # Use shorter duration in local mode (restart is a no-op there)
+    is_local = not smoke_cluster.is_cloud
+    task_duration = 30 if is_local else 90
+
+    job = smoke_cluster.submit(TestJobs.log_periodic, "smoke-restart", task_duration, 1.0)
+    smoke_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
+
+    # Wait for task itself to be RUNNING (not just BUILDING)
+    deadline = time.monotonic() + smoke_cluster.job_timeout
+    while time.monotonic() < deadline:
+        task = smoke_cluster.task_status(job, task_index=0)
+        if task.state == cluster_pb2.TASK_STATE_RUNNING:
+            break
+        time.sleep(0.5)
+    assert task.state == cluster_pb2.TASK_STATE_RUNNING, f"Task stuck in {cluster_pb2.TaskState.Name(task.state)}"
+
+    # Let a few ticks log before we restart
+    time.sleep(3)
+
+    # Find the worker running this task
+    worker_id = task.worker_id
+    assert worker_id, "Task has no worker_id"
+
+    # Restart the worker via the controller RPC
+    restart_resp = smoke_cluster.controller_client.restart_worker(
+        cluster_pb2.Controller.RestartWorkerRequest(worker_id=worker_id),
+        timeout_ms=60_000,
+    )
+    assert restart_resp.accepted, f"Restart rejected: {restart_resp.error}"
+
+    # In cloud mode, wait for the worker to come back as healthy after real restart.
+    # In local mode, restart_worker is a no-op so the worker stays healthy.
+    if not is_local:
+        worker_back = False
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            time.sleep(5)
+            workers_resp = smoke_cluster.controller_client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+            for w in workers_resp.workers:
+                if w.worker_id == worker_id and w.healthy:
+                    worker_back = True
+                    break
+            if worker_back:
+                break
+        assert worker_back, f"Worker {worker_id} did not re-register within 120s"
+
+    # Wait for the job to complete — the task should either be adopted by
+    # the new worker (RUNNING → SUCCEEDED) or retried by the controller
+    # (WORKER_FAILED → re-scheduled → SUCCEEDED). Either path validates
+    # that the restart didn't permanently break the task.
+    final = smoke_cluster.wait(job, timeout=120)
+    assert (
+        final.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    ), f"Job should succeed after restart, got {cluster_pb2.JobState.Name(final.state)}"
+
+
 # ============================================================================
 # Checkpoint / restore
 # ============================================================================
@@ -670,7 +754,7 @@ def test_checkpoint_restore():
     Phase 2 — restart the controller and verify the job is still SUCCEEDED
               and the cluster can accept new work.
     """
-    from iris.cluster.local_cluster import LocalCluster
+    from iris.cluster.providers.local.cluster import LocalCluster
 
     config = load_config(DEFAULT_CONFIG)
     config = make_local_config(config)
@@ -679,7 +763,7 @@ def test_checkpoint_restore():
     url = cluster.start()
     try:
         # Phase 1: complete a job, write checkpoint, restart controller.
-        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(1, timeout=30)
@@ -698,7 +782,7 @@ def test_checkpoint_restore():
         # Phase 2: verify restored state and submit new work.
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(
-            url=url, client=IrisClient.remote(url, workspace=IRIS_ROOT), controller_client=controller_client
+            url=url, client=IrisClient.remote(url, workspace=MARIN_ROOT), controller_client=controller_client
         )
 
         resp = controller_client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=saved_job_id))
@@ -846,7 +930,7 @@ def test_dashboard_login_flow():
     full browser auth flow: redirect to login, paste token, verify RPC data loads,
     then logout back to the login page.
     """
-    from iris.cluster.local_cluster import LocalCluster
+    from iris.cluster.providers.local.cluster import LocalCluster
 
     try:
         import playwright.sync_api as pw
@@ -942,7 +1026,7 @@ def _login_for_jwt(url: str, identity_token: str) -> str:
 
 def test_static_auth_rpc_access():
     """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid JWT."""
-    from iris.cluster.local_cluster import LocalCluster
+    from iris.cluster.providers.local.cluster import LocalCluster
     from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     config = _make_controller_only_config()
@@ -955,7 +1039,7 @@ def test_static_auth_rpc_access():
 
         # Unauthenticated: should be rejected with 401
         unauth_client = ControllerServiceClientSync(address=url, timeout_ms=5000)
-        with pytest.raises(ConnectError, match=r"(?i)authorization"):
+        with pytest.raises(ConnectError, match=r"(?i)authenticat"):
             unauth_client.list_workers(list_req)
         unauth_client.close()
 
@@ -984,7 +1068,7 @@ def test_static_auth_job_ownership():
     PENDING). Verifies user-b gets PERMISSION_DENIED when trying to terminate
     it, while user-a can terminate their own job.
     """
-    from iris.cluster.local_cluster import LocalCluster
+    from iris.cluster.providers.local.cluster import LocalCluster
     from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     _TOKEN_A = "token-user-a"

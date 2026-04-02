@@ -88,12 +88,14 @@ class AuthzAction(StrEnum):
 
     REGISTER_WORKER = "register_worker"
     MANAGE_OTHER_KEYS = "manage_other_keys"
+    MANAGE_BUDGETS = "manage_budgets"
 
 
 # Action → frozenset of roles allowed. Admin is implicitly always allowed.
 POLICY: dict[AuthzAction, frozenset[str]] = {
     AuthzAction.REGISTER_WORKER: frozenset({"worker"}),
     AuthzAction.MANAGE_OTHER_KEYS: frozenset(),  # admin only
+    AuthzAction.MANAGE_BUDGETS: frozenset(),  # admin only
 }
 
 
@@ -215,6 +217,23 @@ class CompositeTokenVerifier:
             except ValueError as exc:
                 errors.append(str(exc))
         raise ValueError(f"All verifiers failed: {'; '.join(errors)}")
+
+
+def resolve_auth(
+    token: str | None,
+    verifier: TokenVerifier,
+    optional: bool,
+) -> VerifiedIdentity | None:
+    """Shared auth policy for gRPC interceptors and HTTP middleware.
+
+    Returns VerifiedIdentity on success, None for anonymous passthrough.
+    Raises ValueError on rejected tokens (invalid token, or missing when required).
+    """
+    if token is None:
+        if optional:
+            return None
+        raise ValueError("Missing authentication")
+    return verifier.verify(token)
 
 
 class AuthInterceptor:
