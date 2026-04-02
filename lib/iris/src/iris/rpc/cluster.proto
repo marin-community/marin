@@ -792,6 +792,11 @@ message Controller {
     // When set, the controller uses this as the canonical worker identity
     // instead of deriving it from vm_address.
     string worker_id = 3;
+    // Infrastructure identity from WorkerConfig, set by the autoscaler at
+    // bootstrap. Stored in the workers table so restart_worker() can look
+    // up the worker's slice without waiting for the autoscaler refresh cycle.
+    string slice_id = 4;
+    string scale_group = 5;
   }
 
   message RegisterResponse {
