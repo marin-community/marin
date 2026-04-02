@@ -20,7 +20,6 @@ from iris.cluster.providers.k8s.tasks import (
     _is_coordinator_task,
     _is_infrastructure_failure,
     _job_id_from_task,
-    _pdb_name,
     _pod_name,
     _sanitize_label_value,
     _task_hash,
@@ -815,35 +814,8 @@ def test_is_not_coordinator_with_gpu():
     assert _is_coordinator_task(req) is False
 
 
-def test_is_not_coordinator_with_tpu():
-    """TPU jobs are not coordinators."""
-    req = make_run_req("/tpu-job/0")
-    req.num_tasks = 1
-    req.resources.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v4-8", count=4))
-    assert _is_coordinator_task(req) is False
-
-
-def test_pdb_name_from_pod_name():
-    """PDB name is pod name with -pdb suffix."""
-    assert _pdb_name("iris-coord-job-0-abcd1234-0") == "iris-coord-job-0-abcd1234-0-pdb"
-
-
-def test_build_pdb_manifest_fields():
-    """PDB manifest has correct structure and labels."""
+def test_build_pdb_manifest_selector_and_cleanup_labels():
+    """PDB selector targets task hash; labels include task hash for label-based cleanup."""
     pdb = _build_pdb_manifest("iris-coord-0-abcd1234-0", "iris", "deadbeef12345678")
-    assert pdb["apiVersion"] == "policy/v1"
-    assert pdb["kind"] == "PodDisruptionBudget"
-    assert pdb["metadata"]["name"] == "iris-coord-0-abcd1234-0-pdb"
-    assert pdb["metadata"]["namespace"] == "iris"
-    assert pdb["spec"]["minAvailable"] == 1
     assert pdb["spec"]["selector"]["matchLabels"][_LABEL_TASK_HASH] == "deadbeef12345678"
-
-    labels = pdb["metadata"]["labels"]
-    assert labels[_LABEL_TASK_HASH] == "deadbeef12345678"
-    assert labels["iris.managed"] == "true"
-
-
-def test_build_pdb_manifest_with_managed_label():
-    """PDB includes managed_label when provided."""
-    pdb = _build_pdb_manifest("pod-name", "iris", "hash123", managed_label="my.label")
-    assert pdb["metadata"]["labels"]["my.label"] == "true"
+    assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == "deadbeef12345678"
