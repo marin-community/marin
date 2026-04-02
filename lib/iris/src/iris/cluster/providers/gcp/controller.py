@@ -26,6 +26,7 @@ from iris.cluster.providers.types import (
     find_free_port,
     wait_for_port,
 )
+from iris.cluster.providers.remote_exec import resolve_current_os_login_user
 from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2
 
@@ -37,6 +38,7 @@ class GcpControllerProvider:
     """Controller lifecycle for GCP (and LOCAL mode), wrapping a GcpWorkerProvider."""
 
     worker_provider: GcpWorkerProvider
+    controller_service_account: str | None = None
 
     def discover_controller(self, controller_config: config_pb2.ControllerVmConfig) -> str:
         """Discover controller by querying GCP for labeled controller VM.
@@ -104,6 +106,8 @@ class GcpControllerProvider:
         return _gcp_tunnel(
             project=self.worker_provider.project_id,
             label_prefix=self.worker_provider.label_prefix,
+            ssh_config=self.worker_provider.ssh_config,
+            service_account=self.controller_service_account,
             local_port=local_port,
         )
 
@@ -122,14 +126,14 @@ class GcpControllerProvider:
 # ============================================================================
 
 
-def _check_gcloud_ssh_key() -> None:
+def _check_gcloud_ssh_key(key_file: str | None = None) -> None:
     """Verify that the gcloud compute SSH key exists.
 
-    ``gcloud compute ssh`` expects ``~/.ssh/google_compute_engine``.  When the
+    ``gcloud compute ssh`` expects an SSH key file. When the default key is
     key is missing, gcloud tries to generate one interactively — which hangs
     indefinitely in a non-interactive subprocess.
     """
-    key_path = os.path.expanduser("~/.ssh/google_compute_engine")
+    key_path = os.path.expanduser(key_file or "~/.ssh/google_compute_engine")
     if not os.path.exists(key_path):
         raise RuntimeError(
             f"SSH key not found at {key_path}. "
@@ -146,6 +150,8 @@ def _check_gcloud_ssh_key() -> None:
 def _gcp_tunnel(
     project: str,
     label_prefix: str,
+    ssh_config: config_pb2.SshConfig | None,
+    service_account: str | None = None,
     local_port: int | None = None,
     timeout: float = 60.0,
 ) -> Iterator[str]:
@@ -155,7 +161,8 @@ def _gcp_tunnel(
     that may be listening on the same port on a different address family (IPv6).
     Picks a free port automatically if none is specified.
     """
-    _check_gcloud_ssh_key()
+    key_file = ssh_config.key_file if ssh_config and ssh_config.key_file else None
+    _check_gcloud_ssh_key(key_file)
 
     if local_port is None:
         local_port = find_free_port(start=10000)
@@ -172,6 +179,8 @@ def _gcp_tunnel(
         "--format=value(name,zone)",
         "--limit=1",
     ]
+    if service_account:
+        cmd.append(f"--impersonate-service-account={service_account}")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0 or not result.stdout.strip():
         raise RuntimeError(f"No controller VM found (label={labels.iris_controller}=true, project={project})")
@@ -182,14 +191,26 @@ def _gcp_tunnel(
 
     logger.info("Establishing SSH tunnel to %s (zone=%s)...", vm_name, zone)
 
-    proc = subprocess.Popen(
+    target = vm_name
+    if ssh_config and ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
+        os_login_user = ssh_config.os_login_user or resolve_current_os_login_user(
+            impersonate_service_account=service_account or ssh_config.impersonate_service_account or None
+        )
+        target = f"{os_login_user}@{vm_name}"
+    cmd = [
+        "gcloud",
+        "compute",
+        "ssh",
+        target,
+        f"--project={project}",
+        f"--zone={zone}",
+    ]
+    if service_account:
+        cmd.append(f"--impersonate-service-account={service_account}")
+    if key_file:
+        cmd.append(f"--ssh-key-file={key_file}")
+    cmd.extend(
         [
-            "gcloud",
-            "compute",
-            "ssh",
-            vm_name,
-            f"--project={project}",
-            f"--zone={zone}",
             "--",
             "-L",
             f"127.0.0.1:{local_port}:localhost:10000",
@@ -206,7 +227,11 @@ def _gcp_tunnel(
             "ServerAliveInterval=60",
             "-o",
             "ServerAliveCountMax=3",
-        ],
+        ]
+    )
+
+    proc = subprocess.Popen(
+        cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         start_new_session=True,

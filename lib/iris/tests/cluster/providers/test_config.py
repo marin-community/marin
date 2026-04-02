@@ -472,6 +472,9 @@ class TestSshConfigMerging:
         ssh_config_proto = config_pb2.SshConfig(
             user="ubuntu",
             key_file="~/.ssh/cluster_key",
+            auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
+            os_login_user="ubuntu_oslogin",
+            impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
         )
         ssh_config_proto.connect_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(60)))
 
@@ -483,6 +486,9 @@ class TestSshConfigMerging:
         assert ssh_config.user == "ubuntu"
         assert ssh_config.key_file == "~/.ssh/cluster_key"
         assert ssh_config.port == 22  # DEFAULT_SSH_PORT
+        assert ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
+        assert ssh_config.os_login_user == "ubuntu_oslogin"
+        assert ssh_config.impersonate_service_account == "iris-controller@test-project.iam.gserviceaccount.com"
         assert ssh_config.connect_timeout.milliseconds == 60_000
 
     def test_applies_per_group_ssh_overrides(self):
@@ -490,6 +496,8 @@ class TestSshConfigMerging:
         config = config_pb2.IrisClusterConfig()
         config.defaults.ssh.user = "ubuntu"
         config.defaults.ssh.key_file = "~/.ssh/cluster_key"
+        config.defaults.ssh.auth_mode = config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
+        config.defaults.ssh.os_login_user = "ubuntu_oslogin"
 
         manual_config = config_pb2.ScaleGroupConfig(
             name="manual_group",
@@ -505,6 +513,8 @@ class TestSshConfigMerging:
         assert ssh_config.user == "admin"
         assert ssh_config.key_file == "~/.ssh/group_key"
         assert ssh_config.port == 22
+        assert ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
+        assert ssh_config.os_login_user == "ubuntu_oslogin"
 
     def test_partial_per_group_overrides_merge_with_defaults(self):
         """Per-group overrides merge with cluster defaults for unset fields."""
@@ -512,6 +522,8 @@ class TestSshConfigMerging:
         config = config_pb2.IrisClusterConfig()
         config.defaults.ssh.user = "ubuntu"
         config.defaults.ssh.key_file = "~/.ssh/cluster_key"
+        config.defaults.ssh.auth_mode = config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
+        config.defaults.ssh.os_login_user = "ubuntu_oslogin"
         config.defaults.ssh.connect_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(30)))
 
         manual_config = config_pb2.ScaleGroupConfig(
@@ -527,6 +539,8 @@ class TestSshConfigMerging:
         assert ssh_config.user == "admin"  # Overridden
         assert ssh_config.key_file == "~/.ssh/cluster_key"  # From default
         assert ssh_config.port == 22  # From default
+        assert ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
+        assert ssh_config.os_login_user == "ubuntu_oslogin"
         assert ssh_config.connect_timeout.milliseconds == 30_000  # From default
 
     def test_uses_defaults_when_cluster_ssh_config_empty(self):
@@ -539,7 +553,28 @@ class TestSshConfigMerging:
         assert ssh_config.user == "root"
         assert ssh_config.key_file == ""
         assert ssh_config.port == 22
+        assert ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_METADATA
+        assert ssh_config.os_login_user == ""
+        assert ssh_config.impersonate_service_account == ""
         assert ssh_config.connect_timeout.milliseconds == 30_000
+
+    def test_validate_config_requires_gcp_service_accounts_for_os_login(self):
+        config = config_pb2.IrisClusterConfig()
+        config.platform.gcp.project_id = "test-project"
+        config.controller.gcp.zone = "us-central1-a"
+        config.defaults.ssh.auth_mode = config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
+        config.defaults.worker.docker_image = "ghcr.io/marin-community/iris-worker:latest"
+
+        group = config.scale_groups["tpu"]
+        group.name = "tpu"
+        group.num_vms = 1
+        group.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
+        group.resources.device_variant = "v5litepod-4"
+        group.slice_template.gcp.zone = "us-central1-a"
+        group.slice_template.gcp.runtime_version = "tpu-ubuntu2204-base"
+
+        with pytest.raises(ValueError, match=r"controller\.gcp\.service_account"):
+            validate_config(config)
 
 
 class TestLocalConfigTransformation:

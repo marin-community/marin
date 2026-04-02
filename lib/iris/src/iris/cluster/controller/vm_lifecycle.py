@@ -57,6 +57,10 @@ EARLY_TIMEOUT_SECONDS = 60
 # Backoff parameters for health check polling
 HEALTH_CHECK_BACKOFF_INITIAL = 2.0
 HEALTH_CHECK_BACKOFF_MAX = 10.0
+_OS_LOGIN_METADATA = {
+    "enable-oslogin": "TRUE",
+    "block-project-ssh-keys": "TRUE",
+}
 
 
 @dataclass
@@ -302,6 +306,10 @@ def _build_controller_vm_config(
         vm_config.gcp.zone = zone
         vm_config.gcp.machine_type = gcp_ctrl.machine_type or "n2-standard-4"
         vm_config.gcp.boot_disk_size_gb = gcp_ctrl.boot_disk_size_gb or 100
+        vm_config.gcp.service_account = gcp_ctrl.service_account
+        if config.defaults.ssh.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
+            for key, value in _OS_LOGIN_METADATA.items():
+                vm_config.metadata[key] = value
     elif which == "manual":
         manual_ctrl = config.controller.manual
         if not manual_ctrl.host:

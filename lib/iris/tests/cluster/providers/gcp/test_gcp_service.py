@@ -201,6 +201,19 @@ def test_vm_quota_freed_after_delete(svc: InMemoryGcpService) -> None:
     assert info.name == "vm-b"
 
 
+def test_service_account_is_preserved_on_created_resources(svc: InMemoryGcpService) -> None:
+    tpu_request = _tpu_request(name="tpu-sa", labels={"env": "test"})
+    tpu_request.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
+    tpu_info = svc.tpu_create(tpu_request)
+
+    vm_request = _vm_request(name="vm-sa", labels={"env": "test"})
+    vm_request.service_account = "iris-controller@test-project.iam.gserviceaccount.com"
+    vm_info = svc.vm_create(vm_request)
+
+    assert tpu_info.service_account == "iris-worker@test-project.iam.gserviceaccount.com"
+    assert vm_info.service_account == "iris-controller@test-project.iam.gserviceaccount.com"
+
+
 # ========================================================================
 # Failure injection
 # ========================================================================

@@ -29,12 +29,15 @@ class ProviderBundle:
 
 def create_provider_bundle(
     platform_config: config_pb2.PlatformConfig,
+    cluster_config: config_pb2.IrisClusterConfig | None = None,
     ssh_config: config_pb2.SshConfig | None = None,
 ) -> ProviderBundle:
     """Create a ControllerProvider + WorkerInfraProvider bundle from configuration.
 
     Args:
         platform_config: Provider type and provider-specific settings.
+        cluster_config: Full cluster configuration when provider-specific defaults
+            need controller/worker settings beyond platform_config.
         ssh_config: SSH settings (used by GCP and manual providers).
 
     Raises:
@@ -55,7 +58,14 @@ def create_provider_bundle(
             ssh_config=ssh_config,
         )
         return ProviderBundle(
-            controller=GcpControllerProvider(worker_provider=worker_provider),
+            controller=GcpControllerProvider(
+                worker_provider=worker_provider,
+                controller_service_account=(
+                    cluster_config.controller.gcp.service_account
+                    if cluster_config and cluster_config.controller.WhichOneof("controller") == "gcp"
+                    else None
+                ),
+            ),
             workers=worker_provider,
         )
 

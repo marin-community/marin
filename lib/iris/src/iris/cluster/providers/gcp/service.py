@@ -74,7 +74,9 @@ class TpuInfo:
     zone: str
     labels: dict[str, str]
     metadata: dict[str, str]
-    network_endpoints: list[str]  # IP addresses
+    service_account: str | None
+    network_endpoints: list[str]  # Internal IP addresses
+    external_network_endpoints: list[str | None]
     created_at: Timestamp
 
 
@@ -89,6 +91,7 @@ class VmInfo:
     external_ip: str | None
     labels: dict[str, str]
     metadata: dict[str, str]
+    service_account: str | None
     created_at: Timestamp
 
 
@@ -281,6 +284,7 @@ def _parse_tpu_info(tpu_data: dict, zone: str) -> TpuInfo:
 
     endpoints = tpu_data.get("networkEndpoints", [])
     ips = [ep.get("ipAddress", "") for ep in endpoints if ep.get("ipAddress")]
+    external_ips = [(ep.get("accessConfig") or {}).get("externalIp") for ep in endpoints]
 
     return TpuInfo(
         name=name,
@@ -289,7 +293,9 @@ def _parse_tpu_info(tpu_data: dict, zone: str) -> TpuInfo:
         zone=zone,
         labels=tpu_data.get("labels", {}),
         metadata=tpu_data.get("metadata", {}),
+        service_account=(tpu_data.get("serviceAccount", {}) or {}).get("email"),
         network_endpoints=ips,
+        external_network_endpoints=external_ips,
         created_at=_parse_tpu_created_at(tpu_data),
     )
 
@@ -323,6 +329,7 @@ def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
         external_ip=external_ip,
         labels=vm_data.get("labels", {}),
         metadata=metadata,
+        service_account=((vm_data.get("serviceAccounts") or [{}])[0] or {}).get("email"),
         created_at=_parse_vm_created_at(vm_data),
     )
 

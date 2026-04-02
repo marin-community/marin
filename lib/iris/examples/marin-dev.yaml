@@ -8,6 +8,9 @@ platform:
     project_id: hai-gcp-models
 
 defaults:
+  ssh:
+    auth_mode: SSH_AUTH_MODE_OS_LOGIN
+    impersonate_service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
   autoscaler:
     evaluation_interval:
       milliseconds: 10000
@@ -28,6 +31,7 @@ worker_provider: {}
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   gcp:
+    service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
     zone: us-central1-a
     machine_type: e2-highmem-4
     boot_disk_size_gb: 100
@@ -43,6 +47,7 @@ scale_groups:
     max_slices: 1
     slice_template:
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         mode: GCP_SLICE_MODE_VM
         machine_type: e2-highmem-2
 
@@ -56,6 +61,7 @@ scale_groups:
     max_slices: 1024
     slice_template:
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
   tpu_v5e_8:
     zones: [europe-west4-b, us-west4-a]
@@ -66,6 +72,7 @@ scale_groups:
     max_slices: 512
     slice_template:
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
   tpu_v5e_16:
     zones: [europe-west4-b, us-west4-a]
@@ -76,6 +83,7 @@ scale_groups:
     max_slices: 256
     slice_template:
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
 
   # v6e — capped at 4 slices per group
@@ -88,6 +96,7 @@ scale_groups:
     max_slices: 1024
     slice_template:
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv6e
   tpu_v6e_8:
     zones: [europe-west4-a, us-east1-d, us-east5-b]
@@ -98,6 +107,7 @@ scale_groups:
     max_slices: 512
     slice_template:
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv6e
   tpu_v6e_16:
     zones: [europe-west4-a, us-east1-d, us-east5-b]
@@ -108,6 +118,7 @@ scale_groups:
     max_slices: 256
     slice_template:
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv6e
 
   # v5p — capped at 4 slices per group
@@ -120,6 +131,7 @@ scale_groups:
     max_slices: 2048
     slice_template:
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5
   tpu_v5p_16:
     zones: [us-central1-a, us-east5-a]
@@ -130,6 +142,7 @@ scale_groups:
     max_slices: 1024
     slice_template:
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5
 
   # v4 — capped at 4 slices per group
@@ -142,6 +155,7 @@ scale_groups:
     max_slices: 2048
     slice_template:
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: tpu-ubuntu2204-base
   tpu_v4_16:
     zones: [us-central2-b]
@@ -152,4 +166,5 @@ scale_groups:
     max_slices: 1024
     slice_template:
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: tpu-ubuntu2204-base
