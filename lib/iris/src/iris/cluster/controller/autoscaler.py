@@ -115,19 +115,19 @@ class _RestoredWorkerHandle:
 
 @dataclass(frozen=True)
 class _TrackedWorkerRow:
-    """Lightweight record for a tracked worker read from the DB."""
+    """Lightweight record for a tracked worker read from the workers table."""
 
     worker_id: str
     slice_id: str
     scale_group: str
-    internal_address: str
+    address: str
 
 
 def _restore_tracked_workers(rows: list[_TrackedWorkerRow]) -> dict[str, TrackedWorker]:
     """Restore tracked workers from DB rows."""
     workers: dict[str, TrackedWorker] = {}
     for row in rows:
-        handle = _RestoredWorkerHandle(worker_id=row.worker_id, internal_address=row.internal_address)
+        handle = _RestoredWorkerHandle(worker_id=row.worker_id, internal_address=row.address)
         tw = TrackedWorker(
             worker_id=row.worker_id,
             slice_id=row.slice_id,
@@ -1126,7 +1126,13 @@ class Autoscaler:
         return wc
 
     def _register_slice_workers(self, workers: list[RemoteWorkerHandle], slice_id: str, scale_group: str) -> None:
-        """Register all workers from a slice into the worker registry."""
+        """Register all workers from a slice into the in-memory handle cache.
+
+        The worker→slice mapping is stored in the workers table at Register
+        RPC time (see transitions.register_or_refresh_worker). This method
+        only caches the live RemoteWorkerHandle for SSH access and status
+        polling.
+        """
         for worker in workers:
             self._workers[worker.worker_id] = TrackedWorker(
                 worker_id=worker.worker_id,
@@ -1135,16 +1141,13 @@ class Autoscaler:
                 handle=worker,
                 bootstrap_log=worker.bootstrap_log,
             )
-            if self._db is not None:
-                with self._db.transaction() as cur:
-                    cur.execute(
-                        "INSERT OR REPLACE INTO tracked_workers(worker_id, slice_id, scale_group, internal_address) "
-                        "VALUES (?, ?, ?, ?)",
-                        (worker.worker_id, slice_id, scale_group, worker.internal_address),
-                    )
 
     def _unregister_slice_workers(self, slice_id: str, worker_ids: Sequence[str] | None = None) -> None:
-        """Remove all TrackedWorker entries belonging to a slice."""
+        """Remove TrackedWorker entries belonging to a slice from the handle cache.
+
+        Workers in the workers table are cleaned up by the heartbeat failure
+        cascade (marked unhealthy/inactive). No explicit DB cleanup needed.
+        """
         to_remove = (
             list(worker_ids)
             if worker_ids is not None
@@ -1152,10 +1155,6 @@ class Autoscaler:
         )
         for wid in to_remove:
             self._workers.pop(wid, None)
-        if self._db is not None and to_remove:
-            placeholders = ",".join("?" for _ in to_remove)
-            with self._db.transaction() as cur:
-                cur.execute(f"DELETE FROM tracked_workers WHERE worker_id IN ({placeholders})", tuple(to_remove))
 
     def refresh(self, worker_status_map: WorkerStatusMap, timestamp: Timestamp | None = None) -> None:
         """State-read phase: scale down idle slices from currently tracked state."""
@@ -1261,22 +1260,21 @@ class Autoscaler:
     def restart_worker(self, worker_id: str) -> None:
         """Restart a worker with a fresh bootstrap script using the latest image.
 
-        Looks up the worker's slice and scale group from the controller DB
-        (the authoritative source — see #4284), gets a live handle via the
-        slice's describe(), builds a bootstrap script with the latest image
-        tag, and runs it on the worker via SSH.
+        Looks up the worker's slice and scale group from the workers table
+        (populated at Register RPC time — no autoscaler refresh delay), gets
+        a live handle via the slice's describe(), builds a bootstrap script
+        with the latest image tag, and runs it on the worker via SSH.
         """
         if self._db is None:
             raise ValueError("No DB configured — cannot look up worker")
 
-        # Look up worker's slice and group from the DB (always up to date)
         with self._db.read_snapshot() as snap:
             rows = snap.raw(
-                "SELECT slice_id, scale_group FROM tracked_workers WHERE worker_id = ?",
+                "SELECT slice_id, scale_group FROM workers WHERE worker_id = ? AND slice_id != ''",
                 params=(worker_id,),
             )
         if not rows:
-            raise ValueError(f"Worker {worker_id} not found in tracked_workers DB")
+            raise ValueError(f"Worker {worker_id} not found in workers table (or has no slice_id)")
         row = rows[0]
 
         group = self._groups.get(row.scale_group)
@@ -1341,7 +1339,7 @@ class Autoscaler:
                 },
             )
             tracked_rows = snapshot.raw(
-                "SELECT worker_id, slice_id, scale_group, internal_address FROM tracked_workers",
+                "SELECT worker_id, slice_id, scale_group, address FROM workers " "WHERE slice_id != '' AND active = 1",
             )
 
         # Build GroupSnapshot objects from DB rows
@@ -1377,7 +1375,7 @@ class Autoscaler:
                 worker_id=row.worker_id,
                 slice_id=row.slice_id,
                 scale_group=row.scale_group,
-                internal_address=row.internal_address,
+                address=row.address,
             )
             for row in tracked_rows
         ]
