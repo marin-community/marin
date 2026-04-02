@@ -60,7 +60,7 @@ def create_api_key(
 
 def lookup_api_key_by_hash(db: ControllerDB, key_hash: str) -> ApiKeyRow | None:
     """Find an API key by its SHA-256 hash."""
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         return API_KEY_PROJECTION.decode_one(
             q.fetchall(f"SELECT * FROM {db.api_keys_table} WHERE key_hash = ? LIMIT 1", (key_hash,))
         )
@@ -86,7 +86,7 @@ def revoke_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> bool:
 
 def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list[ApiKeyRow]:
     """List API keys, optionally filtered by user."""
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         if user_id:
             return API_KEY_PROJECTION.decode(
                 q.fetchall(f"SELECT * FROM {db.api_keys_table} WHERE user_id = ?", (user_id,))
@@ -97,7 +97,7 @@ def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list[ApiKeyRo
 def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -> list[str]:
     """Revoke all active login keys for a user. Returns list of revoked key_ids."""
     table = db.api_keys_table
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         active_login_keys = q.raw(
             f"SELECT key_id FROM {table} WHERE user_id = ? AND name LIKE 'login-%' AND revoked_at_ms IS NULL",
             (user_id,),
@@ -122,7 +122,7 @@ def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -
 def _get_or_create_signing_key(db: ControllerDB) -> str:
     """Load the HMAC signing key from DB, or create one on first run."""
     table = db.secrets_table
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         rows = q.raw(
             f"SELECT value FROM {table} WHERE key = ?",
             ("jwt_signing_key",),
@@ -138,7 +138,7 @@ def _get_or_create_signing_key(db: ControllerDB) -> str:
         ("jwt_signing_key", new_key, now.epoch_ms()),
     )
     # Re-read in case of concurrent insert (INSERT OR IGNORE)
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         rows = q.raw(
             f"SELECT value FROM {table} WHERE key = ?",
             ("jwt_signing_key",),
@@ -236,7 +236,7 @@ class JwtTokenManager:
         """
         now_ms = int(time.time() * 1000)
         table = db.api_keys_table
-        with db.snapshot() as q:
+        with db.read_snapshot() as q:
             rows = q.raw(
                 f"SELECT key_id FROM {table}"
                 " WHERE revoked_at_ms IS NOT NULL"
