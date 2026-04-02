@@ -4,15 +4,15 @@
 
 """Benchmark parquet reading: pyarrow.dataset vs iter_parquet_row_groups.
 
-Compares memory usage (RSS, Arrow pool) and wall-time for reading
-large Parquet files via the old pyarrow.dataset API and the new
-row-group-by-row-group reader.
+Tests two scenarios that match real zephyr workloads:
+
+1. **Full scan** — read every row (ETL pipelines: load_parquet).
+2. **Scatter read** — select one (shard_idx, chunk_idx) out of many
+   row groups, each containing exactly one pair (the real scatter layout).
 
 Usage:
-    uv run python tests/benchmark_parquet_reader.py                     # defaults: 2 GB, all modes
-    uv run python tests/benchmark_parquet_reader.py --size-gb 4         # 4 GB file
-    uv run python tests/benchmark_parquet_reader.py --modes dataset     # only dataset API
-    uv run python tests/benchmark_parquet_reader.py --keep-file         # don't delete the test file
+    uv run python tests/benchmark_parquet_reader.py --size-gb 1
+    uv run python tests/benchmark_parquet_reader.py --size-gb 1 --modes dataset,iter_row_groups
 """
 
 import gc
@@ -31,334 +31,262 @@ import pyarrow.parquet as pq
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-# Number of string columns with random-ish text to inflate row size
 _NUM_TEXT_COLS = 5
+_NUM_SHARDS = 10
+_CHUNKS_PER_SHARD = 3  # each source shard writes 3 sorted chunks
 
 
-def _generate_batch(
-    batch_idx: int,
-    rows_per_batch: int,
-    shard_idx: int = 0,
-    chunk_idx: int = 0,
-) -> pa.RecordBatch:
-    """Generate a single Arrow RecordBatch of synthetic data.
+# ---------------------------------------------------------------------------
+# Data generation
+# ---------------------------------------------------------------------------
 
-    Uses os.urandom for text columns so Parquet/Snappy cannot compress
-    them away — on-disk size closely tracks uncompressed size.
 
-    ``shard_idx`` and ``chunk_idx`` are constant for the entire batch,
-    mimicking scatter files where each row group belongs to exactly one
-    (shard, chunk) pair.
+def _generate_batch(rows: int, shard_idx: int, chunk_idx: int, offset: int = 0) -> pa.RecordBatch:
+    """One batch = one row group = one (shard_idx, chunk_idx) pair.
+
+    Uses os.urandom text so Parquet compression can't hide the real size.
     """
     import base64
     import random
 
-    base = batch_idx * rows_per_batch
-    ids = list(range(base, base + rows_per_batch))
-    scores = [random.random() * 100 for _ in range(rows_per_batch)]
-
+    ids = list(range(offset, offset + rows))
+    scores = [random.random() * 100 for _ in range(rows)]
     arrays: dict[str, Any] = {
+        "shard_idx": pa.array([shard_idx] * rows, type=pa.int32()),
+        "chunk_idx": pa.array([chunk_idx] * rows, type=pa.int32()),
+        "item": pa.array(
+            [base64.b85encode(os.urandom(150)).decode("ascii") for _ in range(rows)],
+            type=pa.string(),
+        ),
         "id": pa.array(ids, type=pa.int64()),
-        "shard_idx": pa.array([shard_idx] * rows_per_batch, type=pa.int32()),
-        "chunk_idx": pa.array([chunk_idx] * rows_per_batch, type=pa.int32()),
         "score": pa.array(scores, type=pa.float64()),
     }
     for col_idx in range(_NUM_TEXT_COLS):
-        # ~200 bytes of base64-encoded random data per cell — incompressible
-        texts = [base64.b85encode(os.urandom(150)).decode("ascii") for _ in range(rows_per_batch)]
-        arrays[f"text_{col_idx}"] = pa.array(texts, type=pa.string())
-
+        arrays[f"text_{col_idx}"] = pa.array(
+            [base64.b85encode(os.urandom(150)).decode("ascii") for _ in range(rows)],
+            type=pa.string(),
+        )
     return pa.RecordBatch.from_pydict(arrays)
 
 
-# Scatter-style layout: single shard_idx per file, N chunks per row group
-_SHARD_IDX = 0
-_CHUNKS_PER_ROW_GROUP = 3
+def write_test_file(path: str, target_bytes: int, row_group_mb: int = 100) -> dict[str, int]:
+    """Write a scatter-style Parquet file.
 
+    Layout: ``_NUM_SHARDS`` shards x ``_CHUNKS_PER_SHARD`` chunks.
+    Each row group has exactly one ``(shard_idx, chunk_idx)`` — statistics
+    are exact (min == max) for both columns, just like the real scatter writer.
 
-def write_test_file(path: str, target_bytes: int, row_group_mb: int = 100) -> int:
-    """Write a scatter-style Parquet file of approximately target_bytes.
-
-    Layout mirrors zephyr scatter files:
-    - Single ``shard_idx`` (= 0) for the whole file.
-    - Each row group contains ``_CHUNKS_PER_ROW_GROUP`` consecutive
-      ``chunk_idx`` values, each written as a separate batch (so Parquet
-      statistics for chunk_idx span a small range per row group).
-
-    Args:
-        path: Output file path.
-        target_bytes: Target on-disk file size in bytes.
-        row_group_mb: Approximate size per row group in MB.
+    Returns dict with file metadata for the benchmark harness.
     """
-    logger.info("Generating test file: %s (target %.1f GB, row_group ~%d MB)", path, target_bytes / 1e9, row_group_mb)
+    logger.info("Generating scatter file: %s (target %.1f GB, rg ~%d MB)", path, target_bytes / 1e9, row_group_mb)
 
-    # Estimate rows needed from a sample batch written to disk
-    sample = _generate_batch(0, 1000)
+    # Calibrate rows per row group from a sample
+    sample = _generate_batch(1000, 0, 0)
     sample_table = pa.Table.from_batches([sample])
-
     import tempfile as _tf
 
     with _tf.NamedTemporaryFile(suffix=".parquet") as tmp:
         pq.write_table(sample_table, tmp.name)
         disk_bytes_per_row = os.path.getsize(tmp.name) / len(sample_table)
 
-    estimated_rows = int(target_bytes / disk_bytes_per_row)
-    row_group_rows = max(1000, int(row_group_mb * 1e6 / disk_bytes_per_row))
-    rows_per_chunk = row_group_rows // _CHUNKS_PER_ROW_GROUP
-    total_chunks = max(1, estimated_rows // rows_per_chunk)
+    total_row_groups = _NUM_SHARDS * _CHUNKS_PER_SHARD
+    rows_per_rg = max(1000, int(row_group_mb * 1e6 / disk_bytes_per_row))
+
+    # Adjust rows_per_rg so total ≈ target_bytes
+    total_rows_target = int(target_bytes / disk_bytes_per_row)
+    rows_per_rg = max(1000, total_rows_target // total_row_groups)
 
     logger.info(
-        "Disk bytes/row: %.0f, total rows: %d, rows/row_group: %d, "
-        "chunks/row_group: %d, rows/chunk: %d, total chunks: %d",
+        "disk bytes/row: %.0f, rows/rg: %d, row_groups: %d (%d shards x %d chunks), total rows: %d",
         disk_bytes_per_row,
-        estimated_rows,
-        row_group_rows,
-        _CHUNKS_PER_ROW_GROUP,
-        rows_per_chunk,
-        total_chunks,
+        rows_per_rg,
+        total_row_groups,
+        _NUM_SHARDS,
+        _CHUNKS_PER_SHARD,
+        rows_per_rg * total_row_groups,
     )
 
-    total_rows = 0
     writer = pq.ParquetWriter(path, sample.schema)
-    batch_idx = 0
-
-    # Write _CHUNKS_PER_ROW_GROUP chunk batches as one row group (via write_table).
-    # Each row group thus has chunk_idx values [base, base+1, base+2], and
-    # Parquet statistics for chunk_idx span that small range.
-    rg_batches: list[pa.RecordBatch] = []
-    for chunk_idx in range(total_chunks):
-        batch = _generate_batch(batch_idx, rows_per_chunk, shard_idx=_SHARD_IDX, chunk_idx=chunk_idx)
-        rg_batches.append(batch)
-        batch_idx += 1
-        if len(rg_batches) == _CHUNKS_PER_ROW_GROUP:
-            table = pa.Table.from_batches(rg_batches)
-            writer.write_table(table)
-            total_rows += len(table)
-            rg_batches = []
-            if batch_idx % 10 == 0:
-                logger.info(
-                    "  wrote %d / %d rows (%.0f%%)", total_rows, estimated_rows, 100 * total_rows / estimated_rows
-                )
-    if rg_batches:
-        table = pa.Table.from_batches(rg_batches)
-        writer.write_table(table)
-        total_rows += len(table)
+    total_rows = 0
+    offset = 0
+    for shard_idx in range(_NUM_SHARDS):
+        for chunk_idx in range(_CHUNKS_PER_SHARD):
+            batch = _generate_batch(rows_per_rg, shard_idx, chunk_idx, offset)
+            writer.write_table(pa.Table.from_batches([batch]))
+            total_rows += rows_per_rg
+            offset += rows_per_rg
+            if (shard_idx * _CHUNKS_PER_SHARD + chunk_idx + 1) % 5 == 0:
+                logger.info("  wrote %d / %d rows", total_rows, rows_per_rg * total_row_groups)
 
     writer.close()
     file_size = os.path.getsize(path)
     pf = pq.ParquetFile(path)
     logger.info(
-        "Wrote %s: %d rows, %d row groups, %d total chunks, %.2f GB on disk",
+        "Wrote %s: %d rows, %d row groups, %.2f GB on disk",
         path,
         total_rows,
         pf.metadata.num_row_groups,
-        total_chunks,
         file_size / 1e9,
     )
-    return total_rows
+    return {
+        "total_rows": total_rows,
+        "num_row_groups": pf.metadata.num_row_groups,
+        "rows_per_rg": rows_per_rg,
+    }
 
 
-def _get_memory_stats() -> dict[str, float]:
-    proc = psutil.Process()
-    rss_gb = proc.memory_info().rss / 1e9
-    arrow_mb = pa.default_memory_pool().bytes_allocated() / 1e6
-    return {"rss_gb": rss_gb, "arrow_pool_mb": arrow_mb}
+# ---------------------------------------------------------------------------
+# Measurement helpers
+# ---------------------------------------------------------------------------
 
 
-def _reset_memory():
+def _measure(fn) -> dict[str, Any]:
     gc.collect()
     pa.default_memory_pool().release_unused()
+    mem_before = _mem()
+    t0 = time.monotonic()
+    count = fn()
+    elapsed = time.monotonic() - t0
+    mem_after = _mem()
+    return {
+        "rows": count,
+        "wall_sec": elapsed,
+        "rss_delta_gb": mem_after["rss"] - mem_before["rss"],
+        "arrow_pool_mb": mem_after["arrow"],
+    }
+
+
+def _mem() -> dict[str, float]:
+    return {
+        "rss": psutil.Process().memory_info().rss / 1e9,
+        "arrow": pa.default_memory_pool().bytes_allocated() / 1e6,
+    }
 
 
 # ---------------------------------------------------------------------------
-# Reader implementations
+# Readers
 # ---------------------------------------------------------------------------
 
+# -- Full scan (load_parquet path) -----------------------------------------
 
-def read_dataset_api(path: str, limit: int | None = None) -> dict[str, Any]:
-    """Read via pyarrow.dataset.to_batches (the old approach)."""
+
+def read_dataset_full(path: str, limit: int | None = None) -> dict[str, Any]:
+    """Full scan via pyarrow.dataset.to_batches."""
     import pyarrow.dataset as pads
 
-    _reset_memory()
-    mem_before = _get_memory_stats()
-    t0 = time.monotonic()
+    def run():
+        ds = pads.dataset(path, format="parquet")
+        n = 0
+        for batch in ds.to_batches():
+            n += len(batch)
+        return n
 
-    dataset = pads.dataset(path, format="parquet")
-    count = 0
-    for batch in dataset.to_batches():
-        count += len(batch)
-        if limit and count >= limit:
-            break
-
-    elapsed = time.monotonic() - t0
-    mem_after = _get_memory_stats()
-    return {
-        "reader": "dataset",
-        "rows": count,
-        "wall_sec": elapsed,
-        "rss_before_gb": mem_before["rss_gb"],
-        "rss_after_gb": mem_after["rss_gb"],
-        "rss_delta_gb": mem_after["rss_gb"] - mem_before["rss_gb"],
-        "arrow_pool_before_mb": mem_before["arrow_pool_mb"],
-        "arrow_pool_after_mb": mem_after["arrow_pool_mb"],
-    }
+    return {"reader": "dataset_full", **_measure(run)}
 
 
-def read_parquet_file_api(path: str, limit: int | None = None) -> dict[str, Any]:
-    """Read via pq.ParquetFile.read_row_group (the new approach)."""
-    _reset_memory()
-    mem_before = _get_memory_stats()
-    t0 = time.monotonic()
-
-    pf = pq.ParquetFile(path)
-    count = 0
-    for i in range(pf.metadata.num_row_groups):
-        table = pf.read_row_group(i)
-        count += len(table)
-        del table
-        if limit and count >= limit:
-            break
-
-    elapsed = time.monotonic() - t0
-    mem_after = _get_memory_stats()
-    return {
-        "reader": "parquet_file",
-        "rows": count,
-        "wall_sec": elapsed,
-        "rss_before_gb": mem_before["rss_gb"],
-        "rss_after_gb": mem_after["rss_gb"],
-        "rss_delta_gb": mem_after["rss_gb"] - mem_before["rss_gb"],
-        "arrow_pool_before_mb": mem_before["arrow_pool_mb"],
-        "arrow_pool_after_mb": mem_after["arrow_pool_mb"],
-    }
-
-
-def read_iter_row_groups(path: str, limit: int | None = None) -> dict[str, Any]:
-    """Read via iter_parquet_row_groups (the shared utility)."""
+def read_rowgroups_full(path: str, limit: int | None = None) -> dict[str, Any]:
+    """Full scan via iter_parquet_row_groups."""
     from zephyr.readers import iter_parquet_row_groups
 
-    _reset_memory()
-    mem_before = _get_memory_stats()
-    t0 = time.monotonic()
+    def run():
+        n = 0
+        for table in iter_parquet_row_groups(path):
+            n += len(table)
+            del table
+        return n
 
-    count = 0
-    for table in iter_parquet_row_groups(path):
-        count += len(table)
-        del table
-        if limit and count >= limit:
-            break
-
-    elapsed = time.monotonic() - t0
-    mem_after = _get_memory_stats()
-    return {
-        "reader": "iter_row_groups",
-        "rows": count,
-        "wall_sec": elapsed,
-        "rss_before_gb": mem_before["rss_gb"],
-        "rss_after_gb": mem_after["rss_gb"],
-        "rss_delta_gb": mem_after["rss_gb"] - mem_before["rss_gb"],
-        "arrow_pool_before_mb": mem_before["arrow_pool_mb"],
-        "arrow_pool_after_mb": mem_after["arrow_pool_mb"],
-    }
+    return {"reader": "rowgroups_full", **_measure(run)}
 
 
-def _pick_target_chunk(path: str) -> int:
-    """Pick a chunk_idx near the middle of the file for a representative read."""
-    pf = pq.ParquetFile(path)
-    # Read chunk_idx stats from the middle row group
-    mid = pf.metadata.num_row_groups // 2
-    rg = pf.metadata.row_group(mid)
-    for col_idx in range(rg.num_columns):
-        if rg.column(col_idx).path_in_schema == "chunk_idx":
-            return rg.column(col_idx).statistics.min
-    return 0
+# -- Scatter read (ScatterParquetIterator path) ----------------------------
 
 
 def read_dataset_scatter(path: str, limit: int | None = None) -> dict[str, Any]:
-    """Read one (shard_idx, chunk_idx) via pyarrow.dataset Scanner — the old scatter path."""
+    """Read one (shard, chunk) via dataset Scanner — the old scatter reader."""
     import pyarrow.compute as pc
     import pyarrow.dataset as pads
 
-    target_chunk = _pick_target_chunk(path)
+    target_shard = _NUM_SHARDS // 2
+    target_chunk = _CHUNKS_PER_SHARD // 2
 
-    _reset_memory()
-    mem_before = _get_memory_stats()
-    t0 = time.monotonic()
+    def run():
+        ds = pads.dataset(path, format="parquet")
+        scanner = ds.scanner(
+            columns=["item"],
+            filter=(pc.field("shard_idx") == target_shard) & (pc.field("chunk_idx") == target_chunk),
+            use_threads=False,
+        )
+        n = 0
+        for batch in scanner.to_batches():
+            n += len(batch)
+        return n
 
-    dataset = pads.dataset(path, format="parquet")
-    scanner = dataset.scanner(
-        columns=["id", "score"],
-        filter=(pc.field("shard_idx") == _SHARD_IDX) & (pc.field("chunk_idx") == target_chunk),
-        use_threads=False,
-    )
-    count = 0
-    for batch in scanner.to_batches():
-        count += len(batch)
-        if limit and count >= limit:
-            break
-
-    elapsed = time.monotonic() - t0
-    mem_after = _get_memory_stats()
-    return {
-        "reader": "dataset+scatter",
-        "rows": count,
-        "wall_sec": elapsed,
-        "rss_before_gb": mem_before["rss_gb"],
-        "rss_after_gb": mem_after["rss_gb"],
-        "rss_delta_gb": mem_after["rss_gb"] - mem_before["rss_gb"],
-        "arrow_pool_before_mb": mem_before["arrow_pool_mb"],
-        "arrow_pool_after_mb": mem_after["arrow_pool_mb"],
-    }
+    return {"reader": "dataset_scatter", **_measure(run)}
 
 
-def read_row_groups_scatter(path: str, limit: int | None = None) -> dict[str, Any]:
-    """Read one (shard_idx, chunk_idx) via iter_parquet_row_groups with equality_predicates."""
+def read_rowgroups_scatter(path: str, limit: int | None = None) -> dict[str, Any]:
+    """Read one (shard, chunk) via iter_parquet_row_groups — the new scatter reader.
+
+    Uses equality_predicates for row-group-level skipping via statistics.
+    No row_filter needed because each row group has exactly one (shard, chunk)
+    pair — statistics are exact (min == max), so every row in a matching row
+    group is a hit.
+    """
+    from zephyr.readers import iter_parquet_row_groups
+
+    target_shard = _NUM_SHARDS // 2
+    target_chunk = _CHUNKS_PER_SHARD // 2
+
+    def run():
+        n = 0
+        for table in iter_parquet_row_groups(
+            path,
+            columns=["item"],
+            equality_predicates={"shard_idx": target_shard, "chunk_idx": target_chunk},
+        ):
+            n += len(table)
+            del table
+        return n
+
+    return {"reader": "rowgroups_scatter", **_measure(run)}
+
+
+def read_rowgroups_scatter_no_skip(path: str, limit: int | None = None) -> dict[str, Any]:
+    """Read one (shard, chunk) via iter_parquet_row_groups WITHOUT statistics skipping.
+
+    Reads every row group and filters post-hoc. Shows the cost of not having
+    row-group-level predicate pushdown.
+    """
     import pyarrow.compute as pc
 
     from zephyr.readers import iter_parquet_row_groups
 
-    target_chunk = _pick_target_chunk(path)
+    target_shard = _NUM_SHARDS // 2
+    target_chunk = _CHUNKS_PER_SHARD // 2
 
-    _reset_memory()
-    mem_before = _get_memory_stats()
-    t0 = time.monotonic()
+    def run():
+        filt = (pc.field("shard_idx") == target_shard) & (pc.field("chunk_idx") == target_chunk)
+        n = 0
+        for table in iter_parquet_row_groups(path, columns=["item"], row_filter=filt):
+            n += len(table)
+            del table
+        return n
 
-    # equality_predicates skips non-matching row groups via statistics.
-    # row_filter does the row-level filtering within qualifying row groups
-    # (needed when multiple chunk_idx values share a row group).
-    count = 0
-    for table in iter_parquet_row_groups(
-        path,
-        columns=["id", "score"],
-        equality_predicates={"shard_idx": _SHARD_IDX, "chunk_idx": target_chunk},
-        row_filter=(pc.field("shard_idx") == _SHARD_IDX) & (pc.field("chunk_idx") == target_chunk),
-    ):
-        count += len(table)
-        del table
-        if limit and count >= limit:
-            break
-
-    elapsed = time.monotonic() - t0
-    mem_after = _get_memory_stats()
-    return {
-        "reader": "row_groups+scatter",
-        "rows": count,
-        "wall_sec": elapsed,
-        "rss_before_gb": mem_before["rss_gb"],
-        "rss_after_gb": mem_after["rss_gb"],
-        "rss_delta_gb": mem_after["rss_gb"] - mem_before["rss_gb"],
-        "arrow_pool_before_mb": mem_before["arrow_pool_mb"],
-        "arrow_pool_after_mb": mem_after["arrow_pool_mb"],
-    }
+    return {"reader": "rowgroups_no_skip", **_measure(run)}
 
 
 READERS = {
-    "dataset": read_dataset_api,
-    "parquet_file": read_parquet_file_api,
-    "iter_row_groups": read_iter_row_groups,
-    "dataset+scatter": read_dataset_scatter,
-    "row_groups+scatter": read_row_groups_scatter,
+    "dataset_full": read_dataset_full,
+    "rowgroups_full": read_rowgroups_full,
+    "dataset_scatter": read_dataset_scatter,
+    "rowgroups_scatter": read_rowgroups_scatter,
+    "rowgroups_no_skip": read_rowgroups_scatter_no_skip,
 }
+
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
 
 
 def print_results(results: list[dict[str, Any]]) -> None:
@@ -369,35 +297,24 @@ def print_results(results: list[dict[str, Any]]) -> None:
     for r in results:
         print(
             f"{r['reader']:<22} {r['rows']:>12,} {r['wall_sec']:>10.2f} "
-            f"{r['rss_delta_gb']:>15.3f} {r['arrow_pool_after_mb']:>16.1f}"
+            f"{r['rss_delta_gb']:>15.3f} {r['arrow_pool_mb']:>16.1f}"
         )
     print()
 
 
-def _run_single(mode: str, path: str) -> dict[str, Any]:
-    """Run a single reader in the current process and return its result dict."""
-    result = READERS[mode](path)
-    return result
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 
 def _run_in_subprocess(mode: str, path: str, script_path: str) -> dict[str, Any]:
-    """Run a single reader in a fresh subprocess for accurate memory measurement."""
     import json
     import subprocess
 
-    cmd = [
-        sys.executable,
-        script_path,
-        "--file",
-        path,
-        "--modes",
-        mode,
-        "--json",
-    ]
+    cmd = [sys.executable, script_path, "--file", path, "--modes", mode, "--json"]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if proc.returncode != 0:
         raise RuntimeError(f"Subprocess for {mode} failed:\n{proc.stderr}")
-    # Parse the last JSON line from stdout
     for line in reversed(proc.stdout.strip().splitlines()):
         line = line.strip()
         if line.startswith("{"):
@@ -410,8 +327,8 @@ def _run_in_subprocess(mode: str, path: str, script_path: str) -> dict[str, Any]
 @click.option("--row-group-mb", default=100, help="Approximate row group size in MB")
 @click.option("--modes", default=None, help="Comma-separated reader modes (default: all)")
 @click.option("--keep-file", is_flag=True, help="Don't delete the test file after benchmark")
-@click.option("--file", "file_path", default=None, help="Use an existing Parquet file instead of generating one")
-@click.option("--json", "json_output", is_flag=True, hidden=True, help="Print single result as JSON (internal)")
+@click.option("--file", "file_path", default=None, help="Use an existing Parquet file")
+@click.option("--json", "json_output", is_flag=True, hidden=True)
 def main(
     size_gb: float,
     row_group_mb: int,
@@ -422,8 +339,7 @@ def main(
 ):
     """Benchmark parquet reading strategies.
 
-    Each reader runs in a separate subprocess for accurate, isolated
-    memory measurements.
+    Each reader runs in a separate subprocess for isolated memory measurement.
     """
     if modes:
         selected = [m.strip() for m in modes.split(",")]
@@ -433,14 +349,11 @@ def main(
     else:
         selected = list(READERS)
 
-    # --json mode: run a single reader in-process and print result as JSON.
-    # Used by the subprocess spawner above.
     if json_output:
-        assert file_path, "--json requires --file"
-        assert len(selected) == 1, "--json requires exactly one --modes"
+        assert file_path and len(selected) == 1
         import json
 
-        result = _run_single(selected[0], file_path)
+        result = READERS[selected[0]](file_path)
         print(json.dumps(result))
         return
 
@@ -458,7 +371,7 @@ def main(
     try:
         results = []
         for mode in selected:
-            logger.info("Running reader: %s (subprocess)", mode)
+            logger.info("Running: %s (subprocess)", mode)
             result = _run_in_subprocess(mode, path, script_path)
             results.append(result)
             logger.info(
@@ -467,9 +380,8 @@ def main(
                 result["rows"],
                 result["wall_sec"],
                 result["rss_delta_gb"],
-                result["arrow_pool_after_mb"],
+                result["arrow_pool_mb"],
             )
-
         print_results(results)
     finally:
         if tmpdir and not keep_file:
