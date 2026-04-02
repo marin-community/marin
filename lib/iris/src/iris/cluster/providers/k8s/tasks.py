@@ -19,7 +19,7 @@ import threading
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
@@ -591,7 +591,7 @@ class _LogPod:
     pod_name: str
     task_id: JobName
     attempt_id: int
-    byte_offset: int = 0
+    last_timestamp: datetime | None = None
 
 
 class LogCollector:
@@ -652,14 +652,14 @@ class LogCollector:
             pod_lock.release()
 
     def _fetch_and_store(self, pod: _LogPod) -> None:
-        """Fetch logs from current byte_offset and advance. Must be called under pod lock."""
+        """Fetch logs since last timestamp and advance. Must be called under pod lock."""
         try:
-            result = self._kubectl.stream_logs(pod.pod_name, container="task", byte_offset=pod.byte_offset)
+            result = self._kubectl.stream_logs(pod.pod_name, container="task", since_time=pod.last_timestamp)
             if result.lines:
                 entries = [_kubectl_log_line_to_log_entry(kll, pod.attempt_id) for kll in result.lines]
                 key = task_log_key(TaskAttempt(task_id=pod.task_id, attempt_id=pod.attempt_id))
                 self._log_store.append_batch([(key, entries)])
-            pod.byte_offset = result.byte_offset
+            pod.last_timestamp = result.last_timestamp
         except Exception as e:
             logger.debug("LogCollector: failed for pod %s: %s", pod.pod_name, e)
 
@@ -835,23 +835,16 @@ class K8sTaskProvider:
     ) -> tuple[list[logging_pb2.LogEntry], int]:
         """Fetch live logs from a task pod.
 
-        Cursor semantics:
-        - Primary path (running pod): cursor is a byte offset into the stdout
-          stream, returned as the next cursor.
-        - Fallback path (terminated pod): all logs are replayed from the start
-          regardless of cursor, because byte offsets cannot map to line indices.
-          Returns len(lines) as the next cursor so subsequent calls are no-ops.
+        Cursor semantics: cursor is epoch-microseconds encoding the last seen
+        timestamp. 0 means "from the beginning".
         """
+        since_time = datetime.fromtimestamp(cursor / 1_000_000, tz=UTC) if cursor > 0 else None
         pod_name = _pod_name(JobName.from_wire(task_id), attempt_id)
-        result = self.kubectl.stream_logs(pod_name, container="task", byte_offset=cursor)
+        result = self.kubectl.stream_logs(pod_name, container="task", since_time=since_time)
         entries = [_kubectl_log_line_to_log_entry(kll, attempt_id) for kll in result.lines]
 
         if not entries:
             # Pod may have terminated; try fetching the complete logs.
-            # The primary path cursor is a byte offset that cannot be reliably
-            # mapped to a line index, so we always replay all terminated-pod
-            # logs from the start. The returned cursor equals len(lines) so
-            # subsequent calls return nothing.
             raw = self.kubectl.logs(pod_name, container="task", previous=True, tail=-1)
             if raw:
                 lines = raw.splitlines()
@@ -862,12 +855,13 @@ class K8sTaskProvider:
                     entry = logging_pb2.LogEntry(source="stdout", data=line, attempt_id=attempt_id)
                     entry.timestamp.CopyFrom(timestamp_to_proto(now_ts))
                     fallback_entries.append(entry)
-                return fallback_entries, len(lines)
+                return fallback_entries, now_ts.epoch_ms() * 1_000
 
         if max_lines > 0:
             entries = entries[:max_lines]
 
-        return entries, result.byte_offset
+        next_cursor = int(result.last_timestamp.timestamp() * 1_000_000) if result.last_timestamp else cursor
+        return entries, next_cursor
 
     def profile_task(
         self,

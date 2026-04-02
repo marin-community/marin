@@ -266,16 +266,20 @@ def test_fetch_live_logs_falls_back_to_previous_when_empty(provider, k8s):
 
 
 def test_fetch_live_logs_fallback_replays_all_with_nonzero_cursor(provider, k8s):
-    """With a nonzero cursor beyond log length, fallback replays from logs(previous=True)."""
+    """When stream_logs returns nothing (all consumed), fall back to logs(previous=True)."""
     pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
     k8s.set_logs(pod_name, "line a\nline b\nline c\n")
 
-    # Cursor beyond log bytes: stream_logs returns empty, falls back to logs(previous=True)
-    entries, next_cursor = provider.fetch_live_logs("/job/0", 0, cursor=1024, max_lines=100)
+    # First call consumes all content
+    entries_first, next_cursor = provider.fetch_live_logs("/job/0", 0, cursor=0, max_lines=100)
+    assert len(entries_first) == 3
+    assert next_cursor > 0
 
+    # No new content: stream_logs returns empty → falls back to logs(previous=True)
+    entries, next_cursor2 = provider.fetch_live_logs("/job/0", 0, cursor=next_cursor, max_lines=100)
     assert len(entries) == 3
     assert entries[0].data == "line a"
-    assert next_cursor == 3
+    assert next_cursor2 > 0
 
 
 # ---------------------------------------------------------------------------
