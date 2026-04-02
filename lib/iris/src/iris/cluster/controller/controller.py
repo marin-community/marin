@@ -43,6 +43,7 @@ from iris.cluster.controller.db import (
     job_scheduling_deadline,
     running_tasks_by_worker,
     task_row_can_be_scheduled,
+    timed_out_executing_tasks,
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
@@ -1015,6 +1016,7 @@ class Controller:
         self._autoscaler: Autoscaler | None = autoscaler
 
         self._heartbeat_iteration = 0
+        self._last_timeout_check_ms: int = 0
 
         # Cached scheduling diagnostics: populated each scheduling cycle for
         # pending jobs that could not be assigned.  Keyed by job wire ID.
@@ -1181,6 +1183,8 @@ class Controller:
 
             if woken:
                 backoff.reset()
+
+            self._enforce_execution_timeouts()
 
             outcome = self._run_scheduling()
             if outcome == SchedulingOutcome.ASSIGNMENTS_MADE:
@@ -1749,6 +1753,32 @@ class Controller:
         result = self._transitions.queue_assignments(command)
         if result.has_real_dispatch:
             self._heartbeat_event.set()
+
+    _TIMEOUT_CHECK_INTERVAL_MS = 60_000  # Check at most once per minute.
+
+    def _enforce_execution_timeouts(self) -> None:
+        """Kill executing tasks that have exceeded their job's execution timeout.
+
+        Throttled to run at most once per minute. Queries for tasks in
+        BUILDING/RUNNING state whose started_at_ms + timeout is in the past,
+        then cancels them via the same kill path used for job cancellation.
+        """
+        if self._config.dry_run:
+            return
+        now = Timestamp.now()
+        now_ms = now.epoch_ms()
+        if now_ms - self._last_timeout_check_ms < self._TIMEOUT_CHECK_INTERVAL_MS:
+            return
+        self._last_timeout_check_ms = now_ms
+        timed_out = timed_out_executing_tasks(self._db, now)
+        if not timed_out:
+            return
+        for task in timed_out:
+            logger.warning("Task %s exceeded execution timeout, killing", task.task_id)
+        task_ids = {t.task_id for t in timed_out}
+        result = self._transitions.cancel_tasks_for_timeout(task_ids, reason="Execution timeout exceeded")
+        if result.tasks_to_kill:
+            self.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
 
     def _mark_task_unschedulable(self, task: TaskRow) -> None:
         """Mark a task as unschedulable due to timeout."""

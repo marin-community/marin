@@ -1220,6 +1220,8 @@ class ControllerServiceImpl:
             address=request.address,
             metadata=request.metadata,
             ts=Timestamp.now(),
+            slice_id=request.slice_id,
+            scale_group=request.scale_group,
         )
 
         logger.info("Worker registered: %s at %s", worker_id, request.address)

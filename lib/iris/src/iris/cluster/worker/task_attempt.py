@@ -43,7 +43,7 @@ from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
 from iris.time_proto import timestamp_to_proto
-from rigging.timing import Deadline, Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -347,10 +347,8 @@ class TaskAttempt:
         )
 
         try:
-            # Deadline: adopted tasks may have had a timeout, but we don't
-            # have the original timeout value. Monitor without deadline.
             log_reader = handle.log_reader()
-            self._monitor_loop(handle, log_reader, deadline=None)
+            self._monitor_loop(handle, log_reader)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
             self._append_log(source="error", data=f"Monitoring failed:\n{error_msg}")
@@ -779,33 +777,27 @@ class TaskAttempt:
         )
 
     def _monitor(self) -> None:
-        """Monitor task execution: check status, collect stats, stream logs, handle timeouts.
+        """Monitor task execution: check status, collect stats, stream logs.
 
         Polls container status at regular intervals until the container stops.
         Streams logs incrementally into task.logs (single source of truth).
-        Collects runtime statistics (CPU, memory, disk) and handles timeout enforcement.
+        Collects runtime statistics (CPU, memory, disk).
         Updates task state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
 
+        Execution timeouts are enforced by the controller, not the worker.
         Profiling is handled centrally by the controller's profile loop thread.
         """
         assert self._container_handle is not None
         assert self.workdir is not None
         handle = self._container_handle
 
-        # Create deadline from timeout if specified (0 or unset means no timeout)
-        deadline = None
-        if self.request.HasField("timeout") and self.request.timeout.milliseconds > 0:
-            timeout_seconds = self.request.timeout.milliseconds / 1000
-            deadline = Deadline.from_seconds(timeout_seconds)
-
         log_reader = handle.log_reader()
-        self._monitor_loop(handle, log_reader, deadline)
+        self._monitor_loop(handle, log_reader)
 
     def _monitor_loop(
         self,
         handle: ContainerHandle,
         log_reader: RuntimeLogReader,
-        deadline: Deadline | None,
     ) -> None:
         last_disk_check = 0.0
         while True:
@@ -820,17 +812,6 @@ class TaskAttempt:
                 logger.info("Task %s requested stop; killing container %s", self.task_id, self.container_id)
                 self._stream_logs(log_reader)  # Capture final logs
                 self.transition_to(cluster_pb2.TASK_STATE_KILLED)
-                break
-
-            # Check timeout
-            if deadline and deadline.expired():
-                handle.stop(force=True)
-                self._stream_logs(log_reader)  # Capture final logs
-                self.transition_to(
-                    cluster_pb2.TASK_STATE_FAILED,
-                    error="Timeout exceeded",
-                    exit_code=-1,
-                )
                 break
 
             # Check container status

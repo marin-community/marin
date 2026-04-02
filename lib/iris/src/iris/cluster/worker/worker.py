@@ -423,6 +423,8 @@ class Worker:
                         address=address,
                         metadata=metadata,
                         worker_id=self._worker_id or "",
+                        slice_id=self._config.slice_id or "",
+                        scale_group=self._config.worker_attributes.get("scale-group", ""),
                     )
                 )
                 if response.accepted:
