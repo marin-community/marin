@@ -3,7 +3,7 @@
 
 """Controller state machine: all DB-mutating transitions live here.
 
-Read-only queries do NOT belong here — callers use db.snapshot() directly.
+Read-only queries do NOT belong here — callers use db.read_snapshot() directly.
 """
 
 import enum
@@ -567,7 +567,7 @@ class ControllerTransitions:
 
     All methods that mutate DB state live here. Each is a single atomic
     transaction. Read-only queries do NOT belong here — callers use
-    db.snapshot() directly.
+    db.read_snapshot() directly.
 
     SQLite is the sole source of truth. Any in-memory values are transient
     helpers and must never be required for correctness across restarts.
@@ -1779,7 +1779,7 @@ class ControllerTransitions:
             drained_dispatch=snapshot,
             force_remove=force_remove,
         )
-        with self._db.snapshot() as snap:
+        with self._db.read_snapshot() as snap:
             worker_removed = snap.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", (str(worker_id),)) is None
         action = HeartbeatAction.WORKER_FAILED if worker_removed else HeartbeatAction.TRANSIENT_FAILURE
         return HeartbeatFailureResult(tasks_to_kill=result.tasks_to_kill, worker_removed=worker_removed, action=action)
@@ -2429,7 +2429,7 @@ class ControllerTransitions:
         if not worker_ids:
             return []
         target_set = set(worker_ids)
-        with self._db.snapshot() as snap:
+        with self._db.read_snapshot() as snap:
             all_workers = WORKER_DETAIL_PROJECTION.decode(snap.fetchall("SELECT * FROM workers WHERE active = 1"))
         candidates: list[tuple[WorkerId, str]] = []
         for w in all_workers:
