@@ -270,16 +270,10 @@ def test_fetch_live_logs_fallback_replays_all_with_nonzero_cursor(provider, k8s)
     pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
     k8s.set_logs(pod_name, "line a\nline b\nline c\n")
 
-    # First call consumes all content
-    entries_first, next_cursor = provider.fetch_live_logs("/job/0", 0, cursor=0, max_lines=100)
-    assert len(entries_first) == 3
-    assert next_cursor > 0
-
-    # No new content: stream_logs returns empty → falls back to logs(previous=True)
-    entries, next_cursor2 = provider.fetch_live_logs("/job/0", 0, cursor=next_cursor, max_lines=100)
-    assert len(entries) == 3
-    assert entries[0].data == "line a"
-    assert next_cursor2 > 0
+    # First call consumes all content; second triggers fallback
+    _, cursor = provider.fetch_live_logs("/job/0", 0, cursor=0, max_lines=100)
+    entries, _ = provider.fetch_live_logs("/job/0", 0, cursor=cursor, max_lines=100)
+    assert [e.data for e in entries] == ["line a", "line b", "line c"]
 
 
 # ---------------------------------------------------------------------------

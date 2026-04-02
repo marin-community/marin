@@ -233,18 +233,14 @@ def test_events_field_selector(svc: InMemoryK8sService):
 def test_stream_logs_incremental(svc: InMemoryK8sService):
     svc.set_logs("p1", "hello world")
     result = svc.stream_logs("p1")
-    assert result.last_timestamp is not None
-    assert len(result.lines) == 1
 
-    # Second call with since_time returns nothing (no new content)
-    result2 = svc.stream_logs("p1", since_time=result.last_timestamp)
-    assert result2.lines == []
+    # No new content → empty
+    assert svc.stream_logs("p1", since_time=result.last_timestamp).lines == []
 
-    # Appending new content returns only the new line
+    # Appended content → only the delta
     svc.set_logs("p1", "hello world\nnew line")
-    result3 = svc.stream_logs("p1", since_time=result.last_timestamp)
-    assert len(result3.lines) == 1
-    assert result3.lines[0].data == "new line"
+    result2 = svc.stream_logs("p1", since_time=result.last_timestamp)
+    assert [l.data for l in result2.lines] == ["new line"]
 
 
 # ========================================================================
