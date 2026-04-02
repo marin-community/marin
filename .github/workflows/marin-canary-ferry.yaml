@@ -32,7 +32,7 @@ jobs:
       CANARY_MAX_WALL_CLOCK: "7200"
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
-      IRIS_CONFIG: lib/iris/examples/marin.yaml
+      IRIS_CONFIG: lib/iris/examples/marin-dev.yaml
       IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
 
     steps:
@@ -71,13 +71,6 @@ jobs:
             --key-file ~/.ssh/google_compute_engine.pub \
             --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
             --ttl=6h
-
-      - name: Warm up SSH to marin controller
-        run: |
-          gcloud compute ssh iris-controller-marin \
-            --zone=us-central1-a --project=${{ secrets.GCP_PROJECT_ID }} \
-            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
-            --quiet -- 'echo ok'
 
       - name: Submit canary ferry
         id: submit
