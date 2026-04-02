@@ -14,11 +14,11 @@
 #      `iris cluster start` creates a K8s Secret from these env vars automatically.
 #
 #   2. Start the cluster (creates RBAC, shared NodePools, ConfigMap, Deployment, Service):
-#        iris --config=lib/iris/examples/coreweave-romain-nt.yaml cluster start
+#        iris --config=lib/iris/examples/coreweave-rav-nt.yaml cluster start
 #
 #   3. Use the Iris CLI:
-#        iris --config=lib/iris/examples/coreweave-romain-nt.yaml cluster status
-#        iris --config=lib/iris/examples/coreweave-romain-nt.yaml cluster dashboard
+#        iris --config=lib/iris/examples/coreweave-rav-nt.yaml cluster status
+#        iris --config=lib/iris/examples/coreweave-rav-nt.yaml cluster dashboard
 #
 # This config file is used by:
 #   - The CLI on the operator's laptop (for `cluster start`, `cluster status`, job submission)
@@ -29,22 +29,22 @@
 #   export KUBECONFIG=~/.kube/coreweave-iris
 
 platform:
-  label_prefix: iris-romain-nt
+  label_prefix: iris-rav-nt
   coreweave:
     region: US-WEST-04A
-    namespace: iris-romain-nt
+    namespace: iris-rav-nt
     kubeconfig_path: ~/.kube/coreweave-iris
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
 
 storage:
-  remote_state_dir: s3://marin-na/iris/state/romain-nt
+  remote_state_dir: s3://marin-na/iris/state/rav-nt
 
 kubernetes_provider:
-  namespace: iris-romain-nt
+  namespace: iris-rav-nt
   default_image: ghcr.io/marin-community/iris-task:latest
   host_network: true              # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal GPU nodes
-  controller_address: http://iris-controller-svc.iris-romain-nt.svc.cluster.local:10000
+  controller_address: http://iris-controller-svc.iris-rav-nt.svc.cluster.local:10000
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
@@ -78,7 +78,7 @@ scale_groups:
       ram: 256GB
       disk: 1TB
       device_type: cpu
-      preemptible: false
+      capacity_type: on-demand
     worker:
       attributes:
         region: US-WEST-04A
