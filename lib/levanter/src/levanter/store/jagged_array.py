@@ -19,23 +19,6 @@ from levanter.utils.thread_utils import future_from_value
 
 CACHE_BYTES_LIMIT = int(os.getenv("LEVANTER_TS_CACHE_LIMIT", "1000000000"))
 
-
-def _parse_recheck_cached_data(value: str) -> ts.RecheckCacheOption:
-    normalized = value.strip().lower()
-    if normalized in {"true", "false"}:
-        return normalized == "true"
-    if normalized == "open":
-        return "open"
-    try:
-        return float(normalized)
-    except ValueError as exc:
-        raise ValueError(
-            "LEVANTER_TS_RECHECK_CACHED_DATA must be true, false, open, or a float value in seconds"
-        ) from exc
-
-
-RECHECK_CACHED_DATA = _parse_recheck_cached_data(os.getenv("LEVANTER_TS_RECHECK_CACHED_DATA", "open"))
-
 # zarr suggests 1MB chunk size
 # at 4 bytes this is 256k elements
 DEFAULT_CHUNK_SIZE = 256 * 1024
@@ -581,7 +564,7 @@ def _ts_open_kwargs(mode: str) -> dict:
     if mode == "r":
         return {
             "context": _read_context(),
-            "recheck_cached_data": RECHECK_CACHED_DATA,
+            "recheck_cached_data": False,
         }
     return {"context": ts.Context({"cache_pool": {}})}
 
