@@ -95,7 +95,11 @@ def dedup_fuzzy_document(
             doc_id_val = doc_id.as_py()
             for b in doc_buckets.as_py():
                 counters.increment("minhash/buckets")
-                yield {"bucket": str(b), "id": doc_id_val}
+                # Reinterpret u64 as signed int64 so Arrow infers int64 instead of
+                # failing on values >= 2^63. The bucket is only a grouping key so
+                # the sign bit doesn't matter.
+                bucket = b if b < (1 << 63) else b - (1 << 64)
+                yield {"bucket": bucket, "id": doc_id_val}
 
     ctx = ZephyrContext(
         name="fuzzy-dedup",

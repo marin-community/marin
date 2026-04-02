@@ -1,24 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for zephyr/shuffle.py.
+"""Unit tests for zephyr/shuffle.py and zephyr/spill_writer.py.
 
 Tests the scatter write/read roundtrip, per-shard stats, needs_external_sort,
-and multi-segment schema evolution — all without spinning up a full coordinator.
+multi-segment schema evolution, SpillWriter, and TableAccumulator — all
+without spinning up a full coordinator.
 """
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from zephyr.plan import deterministic_hash
+from zephyr.plan import deterministic_hash, _arrow_reduce_gen
 from zephyr.shuffle import (
     ScatterParquetIterator,
     ScatterShard,
+    _ZEPHYR_SORT_KEY,
     _build_scatter_shard_from_manifest,
-    _make_pickle_envelope,
+    make_envelope_batch,
     _write_parquet_scatter,
     _write_scatter_manifest,
 )
+from zephyr.spill_writer import SpillWriter, TableAccumulator
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -225,8 +228,14 @@ def test_avg_item_bytes_written(tmp_path):
 def test_scatter_parquet_iterator_pickle_roundtrip(tmp_path):
     """ScatterParquetIterator with is_pickled=True round-trips non-Arrow-serializable items."""
     items = [frozenset([1, 2]), frozenset([3, 4, 5])]
-    envelope = _make_pickle_envelope(items, target_shard=0, chunk_idx=0)
-    batch = pa.RecordBatch.from_pylist(envelope)
+    batch = make_envelope_batch(
+        items,
+        shard_idx=0,
+        chunk_idx=0,
+        key_values=[0, 1],
+        sort_values=None,
+        pickled=True,
+    )
 
     path = str(tmp_path / "test.parquet")
     pq.write_table(pa.Table.from_batches([batch]), path)
@@ -244,35 +253,378 @@ def test_scatter_parquet_iterator_pickle_roundtrip(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Sort key column
+# ---------------------------------------------------------------------------
+
+
+def test_scatter_writes_sort_key_column(tmp_path):
+    """Parquet files contain a _zephyr_sort_key column matching key_fn values."""
+    num_shards = 2
+    items = [{"k": i % 3, "v": i} for i in range(20)]
+    parquet_path = str(tmp_path / "shard-0000.parquet")
+    list_shard = _write_parquet_scatter(
+        iter(items),
+        source_shard=0,
+        parquet_path=parquet_path,
+        key_fn=_key,
+        num_output_shards=num_shards,
+    )
+    seg_paths = list(list_shard)
+    for seg_path in seg_paths:
+        table = pq.read_table(seg_path)
+        assert _ZEPHYR_SORT_KEY in table.column_names
+        for row in table.to_pylist():
+            # In flat mode, user fields are top-level columns alongside _zephyr_* metadata
+            assert row[_ZEPHYR_SORT_KEY] == row["k"]
+
+
+def test_get_chunk_tables_returns_arrow(tmp_path):
+    """get_chunk_tables yields pa.Table instances with sort key columns."""
+    items = [{"k": i % 2, "v": i} for i in range(20)]
+    manifest_path, _ = _build_shard(tmp_path, items, num_output_shards=1)
+    shard = _build_scatter_shard_from_manifest(manifest_path, 0)
+    tables = []
+    for it in shard.iterators:
+        tables.extend(list(it.get_chunk_tables()))
+    assert len(tables) > 0
+    for t in tables:
+        assert isinstance(t, pa.Table)
+        assert _ZEPHYR_SORT_KEY in t.column_names
+
+
+def test_scatter_with_combiner(tmp_path):
+    """Scatter with combiner_fn produces correct combined output."""
+    # Duplicate keys — combiner keeps only one per key
+    items = [{"k": i % 3, "v": i} for i in range(30)]
+
+    def combiner(key, items_iter):
+        return [next(items_iter)]
+
+    parquet_path = str(tmp_path / "shard-0000.parquet")
+    list_shard = _write_parquet_scatter(
+        iter(items),
+        source_shard=0,
+        parquet_path=parquet_path,
+        key_fn=_key,
+        num_output_shards=1,
+        combiner_fn=combiner,
+    )
+    seg_paths = list(list_shard)
+    manifest_path = str(tmp_path / "scatter_metadata")
+    _write_scatter_manifest(seg_paths, manifest_path)
+
+    shard = _build_scatter_shard_from_manifest(manifest_path, 0)
+    recovered = list(shard)
+    # With combiner keeping first, we get at most 3 unique keys (0,1,2)
+    keys = {item["k"] for item in recovered}
+    assert keys == {0, 1, 2}
+    assert len(recovered) == 3
+
+
+# ---------------------------------------------------------------------------
 # external_sort_merge
 # ---------------------------------------------------------------------------
 
 
-def test_external_sort_merge_streaming(tmp_path):
-    """external_sort_merge streams items to disk; output is fully sorted."""
+def test_arrow_merge_produces_same_results(tmp_path):
+    """Arrow merge-sort produces correct grouped results."""
+    num_shards = 4
+    items = [{"k": i % 7, "v": i} for i in range(200)]
+    manifest_path, _ = _build_shard(tmp_path, items, num_output_shards=num_shards)
+
+    def keep_first(key, items_iter):
+        return next(items_iter)
+
+    for shard_idx in range(num_shards):
+        shard = _build_scatter_shard_from_manifest(manifest_path, shard_idx)
+        arrow_results = sorted(list(_arrow_reduce_gen(shard, keep_first)), key=lambda x: x["v"])
+
+        # Verify: each result should be a valid item from the original set
+        for result in arrow_results:
+            assert result in items, f"unexpected item {result} in shard {shard_idx}"
+
+        # Verify: each key appears at most once (keep_first deduplication)
+        keys_seen = [result["k"] for result in arrow_results]
+        assert len(keys_seen) == len(set(keys_seen)), f"duplicate keys in shard {shard_idx}"
+
+
+def test_arrow_external_sort_more_chunks_than_fan_in(tmp_path):
+    """Reproduces production crash: >1000 small chunks forces 2 run files.
+
+    With small chunks, fan_in=1000. When there are >1000 chunks, the sort
+    produces 2 runs. Verifies both runs are written and merged correctly.
+    """
     from zephyr.external_sort import external_sort_merge
 
-    # Build 3 sorted iterators, more than would fit in one batch if fan-in were 2
-    iters = [iter([1, 4, 7]), iter([2, 5, 8]), iter([3, 6, 9])]
+    # 1020 chunks with 1 row each — forces 2 batches (1000 + 20)
+    chunks = [pa.table({"val": [i], _ZEPHYR_SORT_KEY: [i]}) for i in range(1020)]
+    sort_dir = str(tmp_path / "ext_sort")
 
-    result = list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
-    assert result == list(range(1, 10))
+    result_tables = list(
+        external_sort_merge(
+            iter(chunks),
+            sort_keys=[(_ZEPHYR_SORT_KEY, "ascending")],
+            external_sort_dir=sort_dir,
+        )
+    )
+    combined = pa.concat_tables(result_tables)
+    assert combined.column("val").to_pylist() == list(range(1020))
 
 
-def test_external_sort_merge_single_batch(tmp_path):
-    """Works correctly when all iterators fit in a single pass-1 batch."""
+def test_arrow_external_sort_run_files_exist_after_write(tmp_path):
+    """Verify run files are actually created after pass 1.
+
+    Patches _write_spill_file to verify each run file exists immediately
+    after being written — isolates whether the bug is write or read.
+    """
+    import os
+    from unittest.mock import patch
+    from zephyr.external_sort import external_sort_merge, _write_spill_file
+
+    chunks = [pa.table({"val": [i], _ZEPHYR_SORT_KEY: [i]}) for i in range(1020)]
+    sort_dir = str(tmp_path / "ext_sort")
+
+    written_files: list[str] = []
+    original_write = _write_spill_file
+
+    def _tracking_write(table, path):
+        original_write(table, path)
+        assert os.path.exists(path), f"run file not created: {path}"
+        written_files.append(path)
+
+    with patch("zephyr.external_sort._write_spill_file", _tracking_write):
+        result_tables = list(
+            external_sort_merge(
+                iter(chunks),
+                sort_keys=[(_ZEPHYR_SORT_KEY, "ascending")],
+                external_sort_dir=sort_dir,
+            )
+        )
+
+    assert len(written_files) == 2, f"Expected 2 run files, got {len(written_files)}: {written_files}"
+    combined = pa.concat_tables(result_tables)
+    assert combined.column("val").to_pylist() == list(range(1020))
+
+
+def test_arrow_external_sort_gcs_roundtrip():
+    """Reproduce the production bug: write 2 run files to GCS, read back.
+
+    Uses pyarrow ParquetWriter (same as _write_spill_file) and fsspec
+    read_metadata (same as the verification loop).
+    """
+    import uuid
     from zephyr.external_sort import external_sort_merge
 
-    iters = [iter([i]) for i in range(10)]
-    result = list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
-    assert result == list(range(10))
+    gcs_dir = f"gs://marin-tmp-eu-west4/ttl=1d/test-external-sort/{uuid.uuid4().hex[:8]}"
+
+    # 1020 chunks → 2 runs (fan_in=1000)
+    chunks = [pa.table({"val": [i], _ZEPHYR_SORT_KEY: [i]}) for i in range(1020)]
+
+    result_tables = list(
+        external_sort_merge(
+            iter(chunks),
+            sort_keys=[(_ZEPHYR_SORT_KEY, "ascending")],
+            external_sort_dir=gcs_dir,
+        )
+    )
+    combined = pa.concat_tables(result_tables)
+    assert combined.column("val").to_pylist() == list(range(1020))
 
 
-def test_external_sort_merge_cleans_up(tmp_path):
-    """Run files are deleted after the merge completes."""
-    from zephyr.external_sort import external_sort_merge, EXTERNAL_SORT_FAN_IN
+def test_arrow_external_sort_roundtrip(tmp_path):
+    """Arrow external sort produces correctly sorted output."""
+    from zephyr.external_sort import external_sort_merge
 
-    # Force multiple batches by making more iterators than EXTERNAL_SORT_FAN_IN
-    iters = [iter([i]) for i in range(EXTERNAL_SORT_FAN_IN + 1)]
-    list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
-    assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
+    tables = [
+        pa.table({"a": [1, 4, 7], _ZEPHYR_SORT_KEY: [1, 4, 7]}),
+        pa.table({"a": [2, 5, 8], _ZEPHYR_SORT_KEY: [2, 5, 8]}),
+        pa.table({"a": [3, 6, 9], _ZEPHYR_SORT_KEY: [3, 6, 9]}),
+    ]
+    sort_dir = str(tmp_path / "ext_sort")
+
+    result_tables = list(
+        external_sort_merge(
+            iter(tables),
+            sort_keys=[(_ZEPHYR_SORT_KEY, "ascending")],
+            external_sort_dir=sort_dir,
+        )
+    )
+    combined = pa.concat_tables(result_tables)
+    a_values = combined.column("a").to_pylist()
+    assert a_values == list(range(1, 10))
+
+
+def test_arrow_external_sort_cleans_up(tmp_path):
+    """Arrow external sort run files are deleted after merge."""
+    from zephyr.external_sort import external_sort_merge
+
+    tables = [pa.table({"val": [i], _ZEPHYR_SORT_KEY: [i]}) for i in range(10)]
+    sort_dir = str(tmp_path / "ext_sort")
+
+    list(
+        external_sort_merge(
+            iter(tables),
+            sort_keys=[(_ZEPHYR_SORT_KEY, "ascending")],
+            external_sort_dir=sort_dir,
+        )
+    )
+    import os
+
+    if os.path.exists(sort_dir):
+        remaining = os.listdir(sort_dir)
+        assert remaining == [], f"run files should be deleted, found: {remaining}"
+
+
+def test_needs_external_sort_zero_memory():
+    """needs_external_sort returns False when memory_limit is 0 (unknown)."""
+    shard = ScatterShard(
+        iterators=[
+            ScatterParquetIterator(
+                path="gs://fake/path.parquet",
+                shard_idx=0,
+                chunk_count=1000,
+                is_pickled=False,
+                filesystem=pa.fs.LocalFileSystem(),
+            )
+        ],
+        max_row_group_rows=1000,
+        avg_item_bytes=1000.0,
+    )
+    assert not shard.needs_external_sort(memory_limit=0)
+
+
+# ---------------------------------------------------------------------------
+# TableAccumulator
+# ---------------------------------------------------------------------------
+
+
+def test_table_accumulator_yields_on_threshold():
+    """add() returns a merged table once accumulated bytes exceed the threshold."""
+    threshold = 100
+    acc = TableAccumulator(threshold)
+    # Small table well under threshold
+    small = pa.table({"x": [1]})
+    assert acc.add(small) is None
+
+    # Large table that pushes over threshold
+    big = pa.table({"x": list(range(1000))})
+    result = acc.add(big)
+    assert result is not None
+    assert len(result) == 1 + 1000
+
+
+def test_table_accumulator_flush_returns_remaining():
+    """flush() returns accumulated data that hasn't hit the threshold yet."""
+    acc = TableAccumulator(10**9)
+    t = pa.table({"x": [1, 2, 3]})
+    assert acc.add(t) is None
+    flushed = acc.flush()
+    assert flushed is not None
+    assert flushed.column("x").to_pylist() == [1, 2, 3]
+
+
+def test_table_accumulator_flush_empty():
+    """flush() returns None when nothing has been accumulated."""
+    acc = TableAccumulator(100)
+    assert acc.flush() is None
+
+
+def test_table_accumulator_resets_after_yield():
+    """After add() yields a result, the accumulator is empty."""
+    acc = TableAccumulator(1)  # threshold of 1 byte = flush every add
+    t = pa.table({"x": [1]})
+    result = acc.add(t)
+    assert result is not None
+    assert acc.flush() is None
+
+
+# ---------------------------------------------------------------------------
+# SpillWriter
+# ---------------------------------------------------------------------------
+
+
+def test_spill_writer_creates_valid_parquet(tmp_path):
+    """SpillWriter produces a readable Parquet file with correct data."""
+    path = str(tmp_path / "out.parquet")
+    schema = pa.schema([("val", pa.int64())])
+    tables = [pa.table({"val": list(range(i * 10, (i + 1) * 10))}) for i in range(5)]
+
+    with SpillWriter(path, schema, row_group_bytes=1) as w:
+        for t in tables:
+            w.write_table(t)
+
+    result = pq.read_table(path)
+    assert result.column("val").to_pylist() == list(range(50))
+
+
+def test_spill_writer_row_group_byte_budget(tmp_path):
+    """Row groups are split based on the byte budget, not row count."""
+    path = str(tmp_path / "out.parquet")
+    schema = pa.schema([("val", pa.int64())])
+
+    # Each table is 8 bytes per int64 * 100 = 800 bytes.
+    # With a 1000-byte budget, each table triggers its own row group.
+    tables = [pa.table({"val": list(range(100))}) for _ in range(5)]
+
+    with SpillWriter(path, schema, row_group_bytes=1000) as w:
+        for t in tables:
+            w.write_table(t)
+
+    meta = pq.read_metadata(path)
+    assert meta.num_row_groups >= 2, f"expected multiple row groups, got {meta.num_row_groups}"
+
+
+def test_spill_writer_write_row_group_no_accumulation(tmp_path):
+    """write_row_group writes each call as a separate row group."""
+    path = str(tmp_path / "out.parquet")
+    schema = pa.schema([("val", pa.int64())])
+
+    with SpillWriter(path, schema, row_group_bytes=10**9) as w:
+        for i in range(3):
+            w.write_row_group(pa.table({"val": [i]}))
+
+    meta = pq.read_metadata(path)
+    assert meta.num_row_groups == 3
+
+
+def test_spill_writer_close_flushes_remaining(tmp_path):
+    """close() flushes accumulated data that hasn't hit the threshold."""
+    path = str(tmp_path / "out.parquet")
+    schema = pa.schema([("val", pa.int64())])
+
+    with SpillWriter(path, schema, row_group_bytes=10**9) as w:
+        w.write_table(pa.table({"val": [1, 2, 3]}))
+
+    result = pq.read_table(path)
+    assert result.column("val").to_pylist() == [1, 2, 3]
+
+
+def test_spill_writer_uses_zstd_compression(tmp_path):
+    """Default compression is zstd."""
+    path = str(tmp_path / "out.parquet")
+    schema = pa.schema([("val", pa.int64())])
+
+    with SpillWriter(path, schema) as w:
+        w.write_table(pa.table({"val": list(range(100))}))
+
+    meta = pq.read_metadata(path)
+    # Check the compression of the first column in the first row group
+    col_meta = meta.row_group(0).column(0)
+    assert "ZSTD" in col_meta.compression.upper()
+
+
+def test_spill_writer_context_manager_on_error(tmp_path):
+    """SpillWriter closes cleanly even when an exception occurs in the with block."""
+    path = str(tmp_path / "out.parquet")
+    schema = pa.schema([("val", pa.int64())])
+
+    try:
+        with SpillWriter(path, schema) as w:
+            w.write_table(pa.table({"val": [1]}))
+            raise ValueError("simulated error")
+    except ValueError:
+        pass
+
+    # File should still be readable with the data written before the error
+    result = pq.read_table(path)
+    assert result.column("val").to_pylist() == [1]

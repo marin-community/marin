@@ -22,10 +22,12 @@ from itertools import groupby, islice
 from typing import Any, Protocol
 
 import msgspec
+import pyarrow as pa
+import pyarrow.compute as pc
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
 
-from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
+from zephyr.external_sort import _promote_to_large_string, external_sort_merge
 
 from zephyr.dataset import (
     Dataset,
@@ -123,9 +125,7 @@ class Scatter:
 class Reduce:
     """Merge sorted chunks and reduce per key."""
 
-    key_fn: Callable[[Any], Any]
     reducer_fn: Callable[[Any, Iterator], Any]
-    sort_fn: Callable[[Any], Any] | None = None  # Must match Scatter's sort_fn
 
 
 @dataclass
@@ -176,19 +176,142 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
         yield from fn(item)
 
 
-def _reduce_gen(
+def _find_group_boundaries(key_col: pa.ChunkedArray) -> Iterator[tuple[int, int, Any]]:
+    """Yield (start, end, key_value) for each contiguous group in a sorted key column.
+
+    Uses Arrow compute to find boundaries vectorized instead of per-element
+    Python scalar extraction, which matters for high-cardinality keys.
+    """
+    arr = key_col.combine_chunks()
+    n = len(arr)
+    if n == 0:
+        return
+    if n == 1:
+        yield (0, 1, arr[0].as_py())
+        return
+
+    # Vectorized boundary detection: compare adjacent elements
+    ne_mask = pc.not_equal(arr[:-1], arr[1:])
+    boundary_indices = pc.add(pc.indices_nonzero(ne_mask), 1).to_pylist()
+
+    prev = 0
+    for idx in boundary_indices:
+        yield (prev, idx, arr[prev].as_py())
+        prev = idx
+    yield (prev, n, arr[prev].as_py())
+
+
+def _arrow_merge_sorted_chunks(shard: Any) -> pa.Table:
+    """Concatenate all chunks and sort in Arrow. Returns sorted table."""
+    from zephyr.shuffle import _ZEPHYR_SORT_KEY, _ZEPHYR_SORT_SECONDARY
+
+    all_tables: list[pa.Table] = []
+    for it in shard.iterators:
+        for table in it.get_chunk_tables():
+            all_tables.append(table)
+    if not all_tables:
+        return pa.table({})
+    combined = pa.concat_tables([_promote_to_large_string(t) for t in all_tables], promote_options="default")
+    sort_keys: list[tuple[str, str]] = [(_ZEPHYR_SORT_KEY, "ascending")]
+    if _ZEPHYR_SORT_SECONDARY in combined.column_names:
+        sort_keys.append((_ZEPHYR_SORT_SECONDARY, "ascending"))
+    indices = pc.sort_indices(combined, sort_keys=sort_keys)
+    return combined.take(indices)
+
+
+def _arrow_reduce_gen(
     shard: Any,
-    key_fn: Callable,
     reducer_fn: Callable,
-    sort_fn: Callable | None = None,
     external_sort_dir: str | None = None,
 ) -> Iterator:
+    """Arrow-native reduce: sort in Arrow, group by sort key, unwrap items for reducer_fn.
+
+    Handles both flat (dict) and pickled envelope formats via unwrap_items / is_zephyr_column.
+    """
+    from zephyr.shuffle import (
+        ScatterShard,
+        _ZEPHYR_PAYLOAD,
+        _ZEPHYR_SORT_KEY,
+        _ZEPHYR_SORT_SECONDARY,
+        unwrap_items,
+    )
+
+    force_external = os.environ.get("ZEPHYR_FORCE_EXTERNAL_MERGE", "").lower() in ("1", "true", "yes")
+    use_external = (
+        external_sort_dir is not None
+        and isinstance(shard, ScatterShard)
+        and (force_external or shard.needs_external_sort(_TaskResources.from_environment().memory_bytes))
+    )
+
+    if use_external:
+        sort_keys: list[tuple[str, str]] = [(_ZEPHYR_SORT_KEY, "ascending")]
+        first_tables = list(islice((t for it in shard.iterators for t in it.get_chunk_tables()), 1))
+        if first_tables and _ZEPHYR_SORT_SECONDARY in first_tables[0].column_names:
+            sort_keys.append((_ZEPHYR_SORT_SECONDARY, "ascending"))
+
+        logger.info(
+            "Arrow external sort triggered for shard with %d iterators, spilling to %s",
+            sum(it.chunk_count for it in shard.iterators),
+            external_sort_dir,
+        )
+
+        def _chunk_tables() -> Iterator[pa.Table]:
+            for it in shard.iterators:
+                yield from it.get_chunk_tables()
+
+        # Stream through the merge, grouping by sort key across batch boundaries.
+        # Only one batch + one group's accumulated rows are in memory at a time.
+        is_gen = inspect.isgeneratorfunction(reducer_fn)
+        current_key = None
+        current_group_tables: list[pa.Table] = []
+
+        for batch_table in external_sort_merge(_chunk_tables(), sort_keys, external_sort_dir):
+            pickled = _ZEPHYR_PAYLOAD in batch_table.column_names
+            key_col = batch_table.column(_ZEPHYR_SORT_KEY)
+
+            for start, end, key_value in _find_group_boundaries(key_col):
+                group_slice = batch_table.slice(start, end - start)
+
+                if current_key is None:
+                    current_key = key_value
+                    current_group_tables = [group_slice]
+                elif key_value == current_key:
+                    current_group_tables.append(group_slice)
+                else:
+                    group_table = pa.concat_tables(current_group_tables, promote_options="default")
+                    group_items = unwrap_items(group_table, pickled)
+                    if is_gen:
+                        yield from reducer_fn(current_key, iter(group_items))
+                    else:
+                        yield reducer_fn(current_key, iter(group_items))
+                    current_key = key_value
+                    current_group_tables = [group_slice]
+
+        if current_group_tables:
+            group_table = pa.concat_tables(current_group_tables, promote_options="default")
+            pickled = _ZEPHYR_PAYLOAD in group_table.column_names
+            group_items = unwrap_items(group_table, pickled)
+            if is_gen:
+                yield from reducer_fn(current_key, iter(group_items))
+            else:
+                yield reducer_fn(current_key, iter(group_items))
+        return
+
+    sorted_table = _arrow_merge_sorted_chunks(shard)
+    if len(sorted_table) == 0:
+        return
+
+    key_col = sorted_table.column(_ZEPHYR_SORT_KEY)
+    pickled = _ZEPHYR_PAYLOAD in sorted_table.column_names
+
     is_gen = inspect.isgeneratorfunction(reducer_fn)
-    for key, items_iter in _merge_sorted_chunks(shard, key_fn, sort_fn, external_sort_dir=external_sort_dir):
+    for start, end, key_value in _find_group_boundaries(key_col):
+        group_table = sorted_table.slice(start, end - start)
+        group_items = unwrap_items(group_table, pickled)
         if is_gen:
-            yield from reducer_fn(key, items_iter)
+            yield from reducer_fn(key_value, iter(group_items))
         else:
-            yield reducer_fn(key, items_iter)
+            yield reducer_fn(key_value, iter(group_items))
 
 
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
@@ -437,7 +560,7 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
                 output_shards=num_shards if num_shards > 0 else None,
             )
             state.end_stage()
-            state.add_op(Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn, sort_fn=op.sort_fn))
+            state.add_op(Reduce(reducer_fn=op.reducer_fn))
 
         elif isinstance(op, ReduceOp):
             state.add_op(Fold(fn=op.local_reducer))
@@ -582,64 +705,6 @@ def make_windows(
 
     if window:
         yield window
-
-
-def _merge_sorted_chunks(
-    shard: Shard, key_fn: Callable, sort_fn: Callable | None = None, external_sort_dir: str | None = None
-) -> Iterator[tuple[object, Iterator]]:
-    """Merge sorted chunks using k-way merge, yielding (key, items_iterator) groups.
-
-    Each chunk is assumed to be sorted by key (and optionally by sort_fn within key).
-    This function performs a k-way merge across all chunks and groups consecutive
-    items with the same key.
-
-    Args:
-        shard: Shard containing sorted chunks (iterable of chunk lists)
-        key_fn: Function to extract grouping key from item
-        sort_fn: Optional secondary sort key. When provided, the merge uses
-            (key_fn, sort_fn) for ordering but still groups by key_fn alone.
-
-    Yields:
-        Tuples of (key, iterator_of_items) for each unique key
-    """
-    # Merge by composite key when sort_fn is provided, but group by key_fn only.
-    # Rebind to captured_sort_fn so pyrefly narrows the type inside the closure.
-    if sort_fn is not None:
-        captured_sort_fn = sort_fn
-
-        def merge_key(item):
-            return (key_fn(item), captured_sort_fn(item))
-
-    else:
-        merge_key = key_fn
-
-    # Check if external sort is needed BEFORE materializing all iterators.
-    # ScatterShard can decide using manifest stats (no file opens needed).
-    from zephyr.shuffle import ScatterShard
-
-    use_external = (
-        external_sort_dir is not None
-        and isinstance(shard, ScatterShard)
-        and shard.needs_external_sort(_TaskResources.from_environment().memory_bytes)
-    )
-
-    if use_external:
-        logger.info(
-            "External sort triggered for shard with %d iterators, spilling to %s",
-            sum(it.chunk_count for it in shard.iterators),
-            external_sort_dir,
-        )
-        # Pass lazy generator — external_sort_merge consumes in batches without opening all files
-        merged_stream = external_sort_merge(shard.get_iterators(), merge_key, external_sort_dir)
-    else:
-        chunk_iterators = list(shard.get_iterators())
-        logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
-        if external_sort_dir is not None and len(chunk_iterators) > EXTERNAL_SORT_FAN_IN:
-            # Fallback: stats unavailable, use fan_in threshold
-            merged_stream = external_sort_merge(iter(chunk_iterators), merge_key, external_sort_dir)
-        else:
-            merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
-    yield from groupby(merged_stream, key=key_fn)
 
 
 def _sorted_merge_join(
@@ -813,9 +878,7 @@ def run_stage(
                 paths = list(shard)
                 assert len(paths) == 1, f"Expected single scatter manifest path, got {len(paths)}"
                 shard = _build_scatter_shard_from_manifest(paths[0], ctx.shard_idx)
-            stream = _reduce_gen(
-                shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn, external_sort_dir=external_sort_dir
-            )
+            stream = _arrow_reduce_gen(shard, op.reducer_fn, external_sort_dir=external_sort_dir)
             op_index += 1
 
         elif isinstance(op, Fold):
