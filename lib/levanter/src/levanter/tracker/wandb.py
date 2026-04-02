@@ -187,15 +187,15 @@ def _convert_summary_stats_to_loggable(prefix: str, value: SummaryStats, *, incl
 
     out: dict[str, Any] = {}
     base = f"{prefix}/" if include_prefix and prefix else ""
-    out[f"{base}min"] = value.min
-    out[f"{base}max"] = value.max
-    out[f"{base}num"] = value.num
-    out[f"{base}nonzero_count"] = value.nonzero_count
-    out[f"{base}sum"] = value.sum
-    out[f"{base}sum_squares"] = value.sum_squares
-    out[f"{base}mean"] = value.mean
-    out[f"{base}variance"] = value.variance
-    out[f"{base}rms"] = value.rms
+    out[f"{base}min"] = _convert_value_to_loggable_rec(value.min)
+    out[f"{base}max"] = _convert_value_to_loggable_rec(value.max)
+    out[f"{base}num"] = _convert_value_to_loggable_rec(value.num)
+    out[f"{base}nonzero_count"] = _convert_value_to_loggable_rec(value.nonzero_count)
+    out[f"{base}sum"] = _convert_value_to_loggable_rec(value.sum)
+    out[f"{base}sum_squares"] = _convert_value_to_loggable_rec(value.sum_squares)
+    out[f"{base}mean"] = _convert_value_to_loggable_rec(value.mean)
+    out[f"{base}variance"] = _convert_value_to_loggable_rec(value.variance)
+    out[f"{base}rms"] = _convert_value_to_loggable_rec(value.rms)
     if value.histogram is not None:
         counts, limits = value.histogram.to_numpy_histogram()
         out[f"{base}histogram"] = wandb.Histogram(np_histogram=(counts.tolist(), limits.tolist()))
