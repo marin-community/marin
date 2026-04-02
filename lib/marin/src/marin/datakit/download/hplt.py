@@ -14,6 +14,7 @@ import requests
 import urllib3
 import zstandard
 from rigging.filesystem import open_url
+from zephyr import counters
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_exists
 from requests.adapters import HTTPAdapter
@@ -181,25 +182,19 @@ def _download_shard_attempt(tier: int, shard: int, url: str, output_file_path: s
                 print(json.dumps(dolma_record), file=out)
                 num_kept += 1
 
-    metrics = {
-        "shard": f"{tier}_{shard}",
-        "url": url,
-        "output_file": output_file_path,
-        "num_input": num_input,
-        "num_non_cc": num_non_cc,
-        "num_kept": num_kept,
-    }
-    logger.info(f"Shard {tier}_{shard}: {num_input} input -> {num_non_cc} non-CC -> {num_kept} kept")
-    return metrics
+    counters.increment("hplt/input", num_input)
+    counters.increment("hplt/non_cc", num_non_cc)
+    counters.increment("hplt/kept", num_kept)
 
 
-def download_single_hplt_shard(tier: int, shard: int, url: str, output_file_path: str) -> dict:
+def download_single_hplt_shard(tier: int, shard: int, url: str, output_file_path: str) -> None:
     """Stream an HPLT shard with retries for transient network errors."""
     session = _make_session()
     for attempt in range(MAX_SHARD_RETRIES):
         try:
             logger.info(f"Processing HPLT shard {tier}_{shard} (attempt {attempt + 1}/{MAX_SHARD_RETRIES})")
-            return _download_shard_attempt(tier, shard, url, output_file_path, session)
+            _download_shard_attempt(tier, shard, url, output_file_path, session)
+            return
         except (
             requests.exceptions.ConnectionError,
             requests.exceptions.ChunkedEncodingError,
@@ -226,7 +221,6 @@ def download_hplt_v3(output_path: str) -> None:
         Dataset.from_list(all_shards)
         .filter(lambda info: not fsspec_exists(_shard_output_path(output_path, info[0], info[1])))
         .map(lambda info: download_single_hplt_shard(info[0], info[1], info[2], _shard_output_path(output_path, info[0], info[1])))
-        .write_jsonl(os.path.join(output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
     )
 
     ctx = ZephyrContext(name="download-hplt-v3", max_workers=32)
