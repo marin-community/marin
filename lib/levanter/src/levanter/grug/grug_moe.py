@@ -267,6 +267,7 @@ def _clip_receiver_group_sizes(
         remaining = accepted_totals
         accepted_rows: list[jax.Array] = []
         for sender_index in range(num_senders):
+            # Greedy first-sender-wins: earlier senders consume capacity before later ones.
             accepted = jnp.minimum(receiver_counts[sender_index], remaining)
             accepted_rows.append(accepted)
             remaining = remaining - accepted
@@ -285,8 +286,11 @@ def _expert_prefix_keep_mask(
     segment_starts = jnp.concatenate((jnp.array([0], dtype=segment_ends.dtype), segment_ends[:-1]))
     positions = jnp.arange(total_size, dtype=jnp.int32)
     expert_index = jnp.searchsorted(segment_ends, positions, side="right")
-    local_rank = positions - jnp.take(segment_starts, expert_index, axis=0)
-    accepted = jnp.take(accepted_group_sizes, expert_index, axis=0)
+    # Explicitly clip overflow positions to the last segment rather than
+    # depending on implicit out-of-bounds `jnp.take` behavior.
+    expert_index = jnp.minimum(expert_index, group_sizes.shape[0] - 1)
+    local_rank = positions - segment_starts[expert_index]
+    accepted = accepted_group_sizes[expert_index]
     return local_rank < accepted
 
 
