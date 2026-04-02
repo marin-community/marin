@@ -9,6 +9,7 @@ import jax.numpy as jnp
 from jax._src import config as jax_config
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
+import levanter.grug.grug_moe as grug_moe
 from levanter.grug.grug_moe import MoeImplementation, _shard_a2a_params, moe_mlp
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -298,7 +299,7 @@ def test_functional_moe_mlp_accepts_enum_and_callable_activation():
     np.testing.assert_allclose(np.asarray(y_callable), np.asarray(y_enum), rtol=1e-5, atol=1e-5)
 
 
-def test_moe_mlp_reports_positive_drop_count_in_ep_when_over_capacity():
+def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
         pytest.skip("requires an even number of >=2 devices")
@@ -333,6 +334,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ep_when_over_capacity():
             combine_weights,
             w_up_gate,
             w_down,
+            implementation="ring",
             mesh=None,
             report_capacity_overflow=True,
         )
@@ -340,3 +342,31 @@ def test_moe_mlp_reports_positive_drop_count_in_ep_when_over_capacity():
     assert out.shape == (tokens, hidden_dim)
     assert dropped.shape == ()
     assert int(dropped) > 0
+
+
+def test_ragged_a2a_receiver_clipping_respects_capacity():
+    group_sizes = jnp.array(
+        [
+            [3, 1, 0, 0],
+            [2, 0, 4, 1],
+        ],
+        dtype=jnp.int32,
+    )
+
+    clipped = grug_moe._clip_receiver_group_sizes(
+        group_sizes,
+        local_expert_size=2,
+        receiver_capacity=3,
+    )
+
+    np.testing.assert_array_equal(
+        np.asarray(clipped),
+        np.asarray(
+            [
+                [3, 0, 0, 0],
+                [0, 0, 3, 0],
+            ],
+            dtype=np.int32,
+        ),
+    )
+    assert int(jnp.sum(clipped)) < int(jnp.sum(group_sizes))
