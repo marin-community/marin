@@ -156,7 +156,6 @@ def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
         labels={"iris.pool": "h100-8x"},
         taints=[
             {"key": "nvidia.com/gpu", "effect": "NoSchedule", "operator": "Exists"},
-            {"key": "qos.coreweave.cloud/interruptable", "effect": "NoExecute", "operator": "Exists"},
         ],
         resources=FakeNodeResources(
             cpu_millicores=128_000,
@@ -362,7 +361,7 @@ def test_gpu_pod_attributes_with_in_memory_k8s(tmp_path: Path) -> None:
         assert gpu_limits["nvidia.com/gpu"] == "8"
         assert gpu_limits["rdma/ib"] == "8"
         assert "nvidia.com/gpu" in gpu_toleration_keys
-        assert "qos.coreweave.cloud/interruptable" in gpu_toleration_keys
+        assert "qos.coreweave.cloud/interruptable" not in gpu_toleration_keys
         assert "h100-8x" in gpu_pods[0]["spec"].get("nodeName", "")
         assert "cpu-erapids" in cpu_pods[0]["spec"].get("nodeName", "")
     finally:
@@ -430,5 +429,5 @@ def test_gpu_pod_attributes_with_kind(tmp_path: Path, kind_cluster) -> None:
 
         assert gpu_limits["nvidia.com/gpu"] == "8"
         assert "nvidia.com/gpu" in gpu_toleration_keys
-        assert "qos.coreweave.cloud/interruptable" in gpu_toleration_keys
+        assert "qos.coreweave.cloud/interruptable" not in gpu_toleration_keys
         assert "nvidia.com/gpu" not in cpu_toleration_keys

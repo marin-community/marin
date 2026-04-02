@@ -25,7 +25,7 @@ from pathlib import Path
 from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
 from iris.cluster.log_store._types import LogStoreProtocol, TaskAttempt, task_log_key
-from iris.cluster.providers.k8s.constants import CW_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
@@ -430,12 +430,7 @@ def _build_pod_manifest(
         spec["nodeSelector"] = node_selector
 
     if gpu_count > 0:
-        spec.setdefault("tolerations", []).extend(
-            [
-                CW_INTERRUPTABLE_TOLERATION,
-                NVIDIA_GPU_TOLERATION,
-            ]
-        )
+        spec.setdefault("tolerations", []).append(NVIDIA_GPU_TOLERATION)
 
     if service_account:
         spec["serviceAccountName"] = service_account
