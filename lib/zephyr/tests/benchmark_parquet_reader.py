@@ -32,11 +32,15 @@ logger = logging.getLogger(__name__)
 
 # Number of string columns with random-ish text to inflate row size
 _NUM_TEXT_COLS = 5
-_TEXT_TEMPLATE = "word{i:08d}_" * 20  # ~200 bytes per text column
 
 
 def _generate_batch(batch_idx: int, rows_per_batch: int) -> pa.RecordBatch:
-    """Generate a single Arrow RecordBatch of synthetic data."""
+    """Generate a single Arrow RecordBatch of synthetic data.
+
+    Uses os.urandom for text columns so Parquet/Snappy cannot compress
+    them away — on-disk size closely tracks uncompressed size.
+    """
+    import base64
     import random
 
     base = batch_idx * rows_per_batch
@@ -50,26 +54,46 @@ def _generate_batch(batch_idx: int, rows_per_batch: int) -> pa.RecordBatch:
         "category": pa.array(category, type=pa.string()),
     }
     for col_idx in range(_NUM_TEXT_COLS):
-        texts = [_TEXT_TEMPLATE.format(i=base + row) for row in range(rows_per_batch)]
+        # ~200 bytes of base64-encoded random data per cell — incompressible
+        texts = [base64.b85encode(os.urandom(150)).decode("ascii") for _ in range(rows_per_batch)]
         arrays[f"text_{col_idx}"] = pa.array(texts, type=pa.string())
 
     return pa.RecordBatch.from_pydict(arrays)
 
 
-def write_test_file(path: str, target_bytes: int, row_group_size: int = 100_000) -> int:
-    """Write a Parquet file of approximately target_bytes. Returns actual row count."""
-    logger.info("Generating test file: %s (target %.1f GB)", path, target_bytes / 1e9)
+def write_test_file(path: str, target_bytes: int, row_group_mb: int = 100) -> int:
+    """Write a Parquet file of approximately target_bytes. Returns actual row count.
 
-    # Estimate rows needed from a sample batch
+    Args:
+        path: Output file path.
+        target_bytes: Target on-disk file size in bytes.
+        row_group_mb: Approximate size per row group in MB.
+    """
+    logger.info("Generating test file: %s (target %.1f GB, row_group ~%d MB)", path, target_bytes / 1e9, row_group_mb)
+
+    # Estimate rows needed from a sample batch written to disk
     sample = _generate_batch(0, 1000)
     sample_table = pa.Table.from_batches([sample])
-    bytes_per_row = sample_table.nbytes / len(sample_table)
-    estimated_rows = int(target_bytes / bytes_per_row)
-    logger.info("Estimated bytes/row: %.0f, total rows: %d", bytes_per_row, estimated_rows)
+
+    # Write sample to a temp file to measure actual on-disk bytes per row
+    import tempfile as _tf
+
+    with _tf.NamedTemporaryFile(suffix=".parquet") as tmp:
+        pq.write_table(sample_table, tmp.name)
+        disk_bytes_per_row = os.path.getsize(tmp.name) / len(sample_table)
+
+    estimated_rows = int(target_bytes / disk_bytes_per_row)
+    row_group_rows = max(1000, int(row_group_mb * 1e6 / disk_bytes_per_row))
+    logger.info(
+        "Disk bytes/row: %.0f, total rows: %d, rows/row_group: %d",
+        disk_bytes_per_row,
+        estimated_rows,
+        row_group_rows,
+    )
 
     total_rows = 0
     writer = pq.ParquetWriter(path, sample.schema)
-    batch_size = min(row_group_size, 50_000)
+    batch_size = min(row_group_rows, 50_000)
     batch_idx = 0
 
     while total_rows < estimated_rows:
@@ -278,11 +302,12 @@ def print_results(results: list[dict[str, Any]]) -> None:
 
 
 @click.command()
-@click.option("--size-gb", default=2.0, help="Target test file size in GB")
+@click.option("--size-gb", default=2.0, help="Target on-disk file size in GB")
+@click.option("--row-group-mb", default=100, help="Approximate row group size in MB")
 @click.option("--modes", default=None, help="Comma-separated reader modes (default: all)")
 @click.option("--keep-file", is_flag=True, help="Don't delete the test file after benchmark")
 @click.option("--file", "file_path", default=None, help="Use an existing Parquet file instead of generating one")
-def main(size_gb: float, modes: str | None, keep_file: bool, file_path: str | None):
+def main(size_gb: float, row_group_mb: int, modes: str | None, keep_file: bool, file_path: str | None):
     """Benchmark parquet reading strategies."""
     if modes:
         selected = [m.strip() for m in modes.split(",")]
@@ -299,7 +324,7 @@ def main(size_gb: float, modes: str | None, keep_file: bool, file_path: str | No
     else:
         tmpdir = tempfile.mkdtemp(prefix="bench_parquet_")
         path = os.path.join(tmpdir, "bench.parquet")
-        write_test_file(path, int(size_gb * 1e9))
+        write_test_file(path, int(size_gb * 1e9), row_group_mb=row_group_mb)
 
     try:
         results = []
