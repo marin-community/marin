@@ -8,15 +8,11 @@ description: Monitor/babysit a job continuously and recover on failure. Use when
 Generic job babysitting practices. Delegates to framework-specific skills:
 
 - **Iris jobs** -> invoke **babysit-iris-job**
-- **Ray jobs** -> invoke **babysit-ray-job**
 - **Zephyr pipelines** -> invoke **babysit-zephyr**
 
-If the user doesn't specify, ask:
-
-> "Should I `ray` or `iris` cluster?
-
-Then invoke the appropriate skill. The rest of this document defines shared
-practices that both framework skills follow.
+If the user says to babysit a job without specifying, assume **Iris** and invoke
+**babysit-iris-job**. The rest of this document defines shared practices that
+framework-specific skills follow.
 
 ## Shared Practices
 
