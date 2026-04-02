@@ -23,7 +23,7 @@ import difflib
 import logging
 import math
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from dataclasses import dataclass
 from enum import Enum
@@ -1143,15 +1143,19 @@ class Autoscaler:
                         (worker.worker_id, slice_id, scale_group, worker.internal_address),
                     )
 
-    def _unregister_slice_workers(self, slice_id: str) -> None:
+    def _unregister_slice_workers(self, slice_id: str, worker_ids: Sequence[str] | None = None) -> None:
         """Remove all TrackedWorker entries belonging to a slice."""
-        to_remove = [wid for wid, tw in self._workers.items() if tw.slice_id == slice_id]
+        to_remove = (
+            list(worker_ids)
+            if worker_ids is not None
+            else [wid for wid, tw in self._workers.items() if tw.slice_id == slice_id]
+        )
         for wid in to_remove:
-            del self._workers[wid]
+            self._workers.pop(wid, None)
         if self._db is not None and to_remove:
+            placeholders = ",".join("?" for _ in to_remove)
             with self._db.transaction() as cur:
-                for wid in to_remove:
-                    cur.execute("DELETE FROM tracked_workers WHERE worker_id = ?", (wid,))
+                cur.execute(f"DELETE FROM tracked_workers WHERE worker_id IN ({placeholders})", tuple(to_remove))
 
     def refresh(self, worker_status_map: WorkerStatusMap, timestamp: Timestamp | None = None) -> None:
         """State-read phase: scale down idle slices from currently tracked state."""
@@ -1266,7 +1270,7 @@ class Autoscaler:
             raise ValueError("No DB configured — cannot look up worker")
 
         # Look up worker's slice and group from the DB (always up to date)
-        with self._db.snapshot() as snap:
+        with self._db.read_snapshot() as snap:
             rows = snap.raw(
                 "SELECT slice_id, scale_group FROM tracked_workers WHERE worker_id = ?",
                 params=(worker_id,),
@@ -1313,7 +1317,7 @@ class Autoscaler:
         reconciles each group against the cloud in parallel, and restores
         tracked workers. Call at startup before loops begin.
         """
-        with db.snapshot() as snapshot:
+        with db.read_snapshot() as snapshot:
             scaling_rows = snapshot.raw(
                 "SELECT name, consecutive_failures, backoff_until_ms, last_scale_up_ms, "
                 "last_scale_down_ms, quota_exceeded_until_ms, quota_reason "
@@ -1561,45 +1565,69 @@ class Autoscaler:
         """All scale groups."""
         return self._groups
 
-    def notify_worker_failed(self, worker_id: str) -> list[str]:
-        """Called by controller when a worker fails. Terminates the containing slice.
+    def terminate_slices_for_workers(self, worker_ids: Sequence[str]) -> list[str]:
+        """Terminate the unique slices containing the given workers.
 
-        This integrates with the existing controller failure cascade:
-        1. Controller detects worker timeout/failure
-        2. Controller emits WorkerFailedEvent (cascades to tasks)
-        3. Controller calls this method (with the failed worker's ID)
-        4. Autoscaler terminates the slice containing the failed worker
-
-        If the slice was short-lived (died soon after creation), applies backoff
-        to the scale group to prevent thrashing on bad zones/preemption.
-
-        Returns:
-            List of sibling worker IDs from the same slice (excluding the
-            originally failed worker). The controller uses these to immediately
-            fail sibling workers, since the entire slice is being terminated.
+        Returns sibling worker IDs that should be failed immediately because
+        their slices are being torn down.
         """
-        slice_id, group = self._find_slice_for_worker(worker_id)
-        if not slice_id or not group:
-            logger.debug("Worker %s not found in any managed slice", worker_id)
+        if not worker_ids:
             return []
 
-        sibling_worker_ids = [wid for wid in group.get_slice_worker_ids(slice_id) if wid != worker_id]
+        primary_workers = set(worker_ids)
+        sibling_worker_ids: set[str] = set()
+        termination_jobs: list[tuple[str, ScalingGroup, SliceHandle]] = []
+        slices_seen: set[str] = set()
 
-        logger.info("Worker %s failed, terminating slice %s", worker_id, slice_id)
-        self._log_action(
-            "worker_failed",
-            group.name,
-            slice_id=slice_id,
-            reason=f"worker {worker_id} failed",
-        )
+        for worker_id in primary_workers:
+            slice_id, group = self._find_slice_for_worker(worker_id)
+            if not slice_id or group is None:
+                logger.debug("Worker %s not found in any managed slice", worker_id)
+                continue
+            if slice_id in slices_seen:
+                continue
+            slices_seen.add(slice_id)
 
-        # Check if this was a short-lived slice (preemption detection)
-        self._record_slice_failure(slice_id, group)
+            slice_worker_ids = group.get_slice_worker_ids(slice_id)
+            sibling_worker_ids.update(wid for wid in slice_worker_ids if wid not in primary_workers)
 
-        group.scale_down(slice_id)
-        self._unregister_slice_workers(slice_id)
+            logger.info(
+                "Workers %s triggered slice termination for %s",
+                sorted(primary_workers & set(slice_worker_ids)),
+                slice_id,
+            )
+            self._log_action(
+                "worker_failed",
+                group.name,
+                slice_id=slice_id,
+                reason=f"workers failed: {', '.join(sorted(primary_workers & set(slice_worker_ids)))}",
+            )
+            self._record_slice_failure(slice_id, group)
+            handle = group.detach_slice(slice_id)
+            self._unregister_slice_workers(slice_id, worker_ids=slice_worker_ids)
+            if handle is not None:
+                termination_jobs.append((slice_id, group, handle))
 
-        return sibling_worker_ids
+        for slice_id, group, handle in termination_jobs:
+
+            def _terminate(
+                stop_event,
+                target_group: ScalingGroup = group,
+                target_slice_id: str = slice_id,
+                target_handle: SliceHandle = handle,
+            ) -> None:
+                del stop_event
+                self._terminate_slice_handle(target_group, target_slice_id, target_handle)
+
+            self._threads.spawn(
+                target=_terminate,
+                name=f"slice-terminate-{slice_id}",
+            )
+
+        return sorted(sibling_worker_ids)
+
+    def _terminate_slice_handle(self, group: ScalingGroup, slice_id: str, handle: SliceHandle) -> None:
+        group._terminate_slice_handle(handle, context="cleaning up anyway")
 
     def _find_slice_for_worker(self, worker_id: str) -> tuple[str | None, ScalingGroup | None]:
         """Find the slice and group containing a worker by worker ID."""
