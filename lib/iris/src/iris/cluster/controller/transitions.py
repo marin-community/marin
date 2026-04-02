@@ -1834,7 +1834,12 @@ class ControllerTransitions:
             self._db.remove_worker_from_attr_cache(worker_id)
         return result
 
-    def fail_heartbeats_batch(self, failures: list[tuple[DispatchBatch, str]]) -> WorkerFailureBatchResult:
+    def fail_heartbeats_batch(
+        self,
+        failures: list[tuple[DispatchBatch, str]],
+        *,
+        force_remove: bool = False,
+    ) -> WorkerFailureBatchResult:
         """Apply a batch of heartbeat RPC failures in one transaction."""
         if not failures:
             return WorkerFailureBatchResult()
@@ -1853,6 +1858,7 @@ class ControllerTransitions:
                     snapshot.worker_id,
                     error,
                     snapshot,
+                    force_remove=force_remove,
                     now_ms=now_ms,
                 )
                 results.append(result)
@@ -2536,7 +2542,7 @@ class ControllerTransitions:
         ]
         if not failures:
             return WorkerFailureBatchResult()
-        results = self.fail_heartbeats_batch(failures)
+        results = self.fail_heartbeats_batch(failures, force_remove=True)
         return WorkerFailureBatchResult(
             tasks_to_kill=results.tasks_to_kill,
             task_kill_workers=results.task_kill_workers,

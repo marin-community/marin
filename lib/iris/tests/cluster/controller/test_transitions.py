@@ -34,6 +34,7 @@ from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
     HEARTBEAT_FAILURE_THRESHOLD,
+    HeartbeatAction,
     HeartbeatApplyRequest,
     MAX_REPLICAS_PER_JOB,
     PruneResult,
@@ -2273,6 +2274,8 @@ def test_fail_workers_by_ids_cascades_tasks(state):
     assert len(result.removed_workers) == 1
     assert result.removed_workers[0][0] == w2
     assert result.removed_workers[0][1] == "host2:8080"
+    assert len(result.results) == 1
+    assert result.results[0].action == HeartbeatAction.WORKER_FAILED
 
     t2 = _query_task(state, tasks2[0].task_id)
     assert t2.state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PENDING)
@@ -2293,6 +2296,18 @@ def test_fail_workers_batch_skips_unknown(state):
     w = _query_worker(state, WorkerId("w1"))
     assert w is not None
     assert w.healthy
+
+
+def test_fail_workers_batch_force_removes_without_threshold(state):
+    """fail_workers_batch removes targets immediately instead of incrementing failures."""
+    meta = make_worker_metadata()
+    worker_id = register_worker(state, "w1", "host1:8080", meta)
+
+    result = state.fail_workers_batch(["w1"], reason="slice terminated")
+
+    assert len(result.results) == 1
+    assert result.results[0].action == HeartbeatAction.WORKER_FAILED
+    assert _query_worker(state, worker_id) is None
 
 
 def test_fail_workers_batch_does_not_block_readers(state):
