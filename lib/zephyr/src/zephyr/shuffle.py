@@ -83,8 +83,6 @@ _SCATTER_MANIFEST_NAME = "scatter_metadata"
 _SCATTER_META_READ_CONCURRENCY = 256
 # Number of items sampled from the first flush to estimate avg_item_bytes at scatter-write time
 _SCATTER_SAMPLE_SIZE = 100
-# Conservative item-bytes fallback when avg_item_bytes is not in the manifest
-_ITEM_BYTES_FALLBACK = 500.0
 # Fraction of total memory limit to budget for scatter read buffers
 _SCATTER_READ_BUFFER_FRACTION = 0.25
 
@@ -216,8 +214,12 @@ class ScatterShard:
         total_chunks = sum(it.chunk_count for it in self.iterators)
         if total_chunks == 0:
             return False
-        item_bytes = self.avg_item_bytes if self.avg_item_bytes > 0 else _ITEM_BYTES_FALLBACK
-        estimated = total_chunks * self.max_row_group_rows * item_bytes
+        if self.avg_item_bytes <= 0:
+            raise ValueError(
+                "avg_item_bytes not available in scatter manifest. "
+                "Re-run the scatter stage with a version that records avg_item_bytes."
+            )
+        estimated = total_chunks * self.max_row_group_rows * self.avg_item_bytes
         return estimated > memory_limit * memory_fraction
 
     def _compute_batch_size(self) -> int:
@@ -231,7 +233,12 @@ class ScatterShard:
         total_chunks = sum(it.chunk_count for it in self.iterators)
         if total_chunks == 0:
             return 1024
-        bytes_per_item = self.avg_item_bytes if self.avg_item_bytes > 0 else _ITEM_BYTES_FALLBACK
+        if self.avg_item_bytes <= 0:
+            raise ValueError(
+                "avg_item_bytes not available in scatter manifest. "
+                "Re-run the scatter stage with a version that records avg_item_bytes."
+            )
+        bytes_per_item = self.avg_item_bytes
         memory_limit = _TaskResources.from_environment().memory_bytes
         buffer_budget = int(memory_limit * _SCATTER_READ_BUFFER_FRACTION)
         safe = max(1, int(buffer_budget // (total_chunks * bytes_per_item)))
