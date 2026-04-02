@@ -478,10 +478,30 @@ def tokenize(config: TokenizeConfigBase):
             verbose=False,
         ).results[0]
 
+        # Separate shards into those with data (have shard_ledger.json) and those that
+        # were explicitly empty (have .success but no shard_ledger.json). Shards missing
+        # both are genuine failures and should raise.
+        nonempty_shard_paths = []
+        empty_count = 0
+        for p in shard_paths:
+            has_ledger = fsspec_exists(os.path.join(p, "shard_ledger.json"))
+            has_success = fsspec_exists(os.path.join(p, ".success"))
+            if has_ledger:
+                nonempty_shard_paths.append(p)
+            elif has_success:
+                empty_count += 1
+            else:
+                raise FileNotFoundError(
+                    f"Shard {p} has neither shard_ledger.json nor .success — " "it was not processed successfully."
+                )
+        logger.info(
+            f"Consolidating {len(nonempty_shard_paths)} shards into {prefix} "
+            f"({empty_count} empty shards skipped, {len(shard_paths)} total)"
+        )
+
         consolidate_start = time.monotonic()
-        logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")
         ledger = consolidate_shard_caches(
-            shard_cache_paths=shard_paths,
+            shard_cache_paths=nonempty_shard_paths,
             output_path=prefix,
             exemplar=exemplar,
             copy_max_workers=config.cache_copy_max_workers,

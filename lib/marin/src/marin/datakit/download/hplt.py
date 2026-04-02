@@ -13,14 +13,11 @@ from contextlib import closing
 import requests
 import urllib3
 import zstandard
-from rigging.filesystem import open_url
 from zephyr import counters
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_exists
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext
-from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
 
@@ -143,57 +140,53 @@ def _make_session() -> requests.Session:
 MAX_SHARD_RETRIES = 3
 
 
-def _download_shard_attempt(tier: int, shard: int, url: str, output_file_path: str, session: requests.Session) -> dict:
-    """Single attempt to stream and filter an HPLT shard."""
-    response = session.get(url, headers={"user-agent": "marin-hplt-ingress/1.0"}, stream=True)
-    response.raise_for_status()
-
-    num_input = 0
-    num_kept = 0
-    num_non_cc = 0
-
-    with closing(response), atomic_rename(output_file_path) as temp_path:
-        with open_url(temp_path, "w", compression="zstd") as out:
-            for record in _iter_jsonl_from_zstd_stream(response.raw):
-                num_input += 1
-                crawl_id = record.get("crawl_id", "")
-
-                if not _is_non_cc_source(crawl_id):
-                    continue
-                num_non_cc += 1
-
-                if not passes_quality_filter(record, tier):
-                    continue
-
-                dolma_record = {
-                    "id": record.get("id", ""),
-                    "text": record.get("text", ""),
-                    "source": f"hplt_v3_{crawl_id}",
-                    "format": "text",
-                    "metadata": {
-                        "hplt_wds_tier": tier,
-                        "hplt_crawl_id": crawl_id,
-                        "hplt_url": record.get("u", ""),
-                        "hplt_timestamp": record.get("ts", ""),
-                        "hplt_web_register": record.get("web-register", {}),
-                        "hplt_doc_scores": record.get("doc_scores", []),
-                    },
-                }
-                print(json.dumps(dolma_record), file=out)
-                num_kept += 1
-
-    counters.increment("hplt/input", num_input)
-    counters.increment("hplt/non_cc", num_non_cc)
-    counters.increment("hplt/kept", num_kept)
-
-
-def download_single_hplt_shard(tier: int, shard: int, url: str, output_file_path: str) -> None:
-    """Stream an HPLT shard with retries for transient network errors."""
+def _download_and_filter_shard(tier: int, shard: int, url: str) -> Iterator[dict]:
+    """Download an HPLT shard, filter, and yield dolma-format records with retries."""
     session = _make_session()
     for attempt in range(MAX_SHARD_RETRIES):
         try:
             logger.info(f"Processing HPLT shard {tier}_{shard} (attempt {attempt + 1}/{MAX_SHARD_RETRIES})")
-            _download_shard_attempt(tier, shard, url, output_file_path, session)
+            response = session.get(url, headers={"user-agent": "marin-hplt-ingress/1.0"}, stream=True)
+            response.raise_for_status()
+
+            num_input = 0
+            num_non_cc = 0
+            num_kept = 0
+            filtered_records = []
+            with closing(response):
+                for record in _iter_jsonl_from_zstd_stream(response.raw):
+                    num_input += 1
+                    crawl_id = record.get("crawl_id", "")
+
+                    if not _is_non_cc_source(crawl_id):
+                        continue
+                    num_non_cc += 1
+
+                    if not passes_quality_filter(record, tier):
+                        continue
+
+                    num_kept += 1
+                    filtered_records.append(
+                        {
+                            "id": record.get("id", ""),
+                            "text": record.get("text", ""),
+                            "source": f"hplt_v3_{crawl_id}",
+                            "format": "text",
+                            "metadata": {
+                                "hplt_wds_tier": tier,
+                                "hplt_crawl_id": crawl_id,
+                                "hplt_url": record.get("u", ""),
+                                "hplt_timestamp": record.get("ts", ""),
+                                "hplt_web_register": record.get("web-register", {}),
+                                "hplt_doc_scores": record.get("doc_scores", []),
+                            },
+                        }
+                    )
+
+            counters.increment("hplt/input", num_input)
+            counters.increment("hplt/non_cc", num_non_cc)
+            counters.increment("hplt/kept", num_kept)
+            yield from filtered_records
             return
         except (
             requests.exceptions.ConnectionError,
@@ -208,10 +201,6 @@ def download_single_hplt_shard(tier: int, shard: int, url: str, output_file_path
     raise RuntimeError(f"unreachable: retry loop for shard {tier}_{shard} exited without return or raise")
 
 
-def _shard_output_path(output_path: str, tier: int, shard: int) -> str:
-    return os.path.join(output_path, f"{tier}_{shard}.jsonl.zst")
-
-
 def download_hplt_v3(output_path: str) -> None:
     """Download and filter HPLT v3.0 English dataset, keeping only non-CC sources."""
     all_shards = _get_all_shard_urls()
@@ -219,14 +208,15 @@ def download_hplt_v3(output_path: str) -> None:
 
     pipeline = (
         Dataset.from_list(all_shards)
-        .filter(lambda info: not fsspec_exists(_shard_output_path(output_path, info[0], info[1])))
-        .map(lambda info: download_single_hplt_shard(info[0], info[1], info[2], _shard_output_path(output_path, info[0], info[1])))
+        .flat_map(lambda info: _download_and_filter_shard(info[0], info[1], info[2]))
+        .write_parquet(os.path.join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
     )
 
     ctx = ZephyrContext(name="download-hplt-v3", max_workers=32)
     ctx.execute(pipeline)
 
     logger.info(f"Downloaded HPLT v3 files to {output_path}")
+
 
 
 def download_hplt_v3_step() -> StepSpec:
