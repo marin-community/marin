@@ -477,6 +477,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
+                    levanter.tracker.log(metrics, step=step)
                     state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
                     last_loss = metrics["train/loss"]
                     last_step_duration = duration
