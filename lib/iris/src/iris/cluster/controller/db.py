@@ -649,7 +649,7 @@ class ControllerDB:
 
     def get_user_role(self, user_id: str) -> str:
         """Get a user's role. Returns 'user' if not found."""
-        with self.snapshot() as q:
+        with self.read_snapshot() as q:
             rows = q.raw(
                 "SELECT role FROM users WHERE user_id = ?",
                 (user_id,),
@@ -841,6 +841,55 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
     return running
 
 
+@dataclass(frozen=True, slots=True)
+class TimedOutTask:
+    """A running task that has exceeded its execution timeout."""
+
+    task_id: JobName
+    worker_id: WorkerId | None
+
+
+def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOutTask]:
+    """Find executing tasks whose current attempt has exceeded the job's execution timeout.
+
+    Reads the timeout from the job's request_proto. Uses the current attempt's
+    started_at_ms so that retried tasks get a fresh timeout budget per attempt.
+    """
+    from iris.cluster.controller.schema import proto_cache, proto_decoder
+
+    decoder = proto_decoder(cluster_pb2.Controller.LaunchJobRequest)
+    now_ms = now.epoch_ms()
+    executing_states = tuple(sorted(EXECUTING_TASK_STATES))
+    placeholders = ",".join("?" for _ in executing_states)
+    with db.read_snapshot() as q:
+        rows = q.raw(
+            f"SELECT t.task_id, t.current_worker_id AS worker_id, "
+            f"ta.started_at_ms AS attempt_started_at_ms, j.request_proto "
+            f"FROM tasks t "
+            f"JOIN jobs j ON j.job_id = t.job_id "
+            f"JOIN task_attempts ta ON ta.task_id = t.task_id AND ta.attempt_id = t.current_attempt_id "
+            f"WHERE t.state IN ({placeholders}) "
+            f"AND j.request_proto IS NOT NULL "
+            f"AND ta.started_at_ms IS NOT NULL",
+            (*executing_states,),
+            decoders={
+                "task_id": JobName.from_wire,
+                "worker_id": lambda v: WorkerId(v) if v is not None else None,
+                "attempt_started_at_ms": int,
+                "request_proto": bytes,
+            },
+        )
+    result: list[TimedOutTask] = []
+    for row in rows:
+        request = proto_cache.get_or_decode(row.request_proto, decoder)
+        if not request.HasField("timeout") or request.timeout.milliseconds <= 0:
+            continue
+        timeout_ms = int(request.timeout.milliseconds)
+        if row.attempt_started_at_ms + timeout_ms <= now_ms:
+            result.append(TimedOutTask(task_id=row.task_id, worker_id=row.worker_id))
+    return result
+
+
 def tasks_for_job_with_attempts(db: ControllerDB, job_id: JobName) -> list:
     """Fetch all tasks for a job with their attempt history."""
     from iris.cluster.controller.schema import ATTEMPT_PROJECTION, TASK_DETAIL_PROJECTION, tasks_with_attempts
@@ -933,6 +982,6 @@ def get_task_profiles(
             "SELECT profile_data, captured_at_ms, profile_kind FROM task_profiles" " WHERE task_id = ? ORDER BY id DESC"
         )
         params = (task_id,)
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         rows = q.raw(query, params, decoders={"captured_at_ms": decode_timestamp_ms})
     return [(row.profile_data, row.captured_at_ms, row.profile_kind) for row in rows]

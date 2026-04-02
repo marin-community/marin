@@ -43,6 +43,7 @@ from iris.cluster.controller.db import (
     job_scheduling_deadline,
     running_tasks_by_worker,
     task_row_can_be_scheduled,
+    timed_out_executing_tasks,
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
@@ -1015,6 +1016,7 @@ class Controller:
         self._autoscaler: Autoscaler | None = autoscaler
 
         self._heartbeat_iteration = 0
+        self._last_timeout_check_ms: int = 0
 
         # Cached scheduling diagnostics: populated each scheduling cycle for
         # pending jobs that could not be assigned.  Keyed by job wire ID.
@@ -1181,6 +1183,8 @@ class Controller:
 
             if woken:
                 backoff.reset()
+
+            self._enforce_execution_timeouts()
 
             outcome = self._run_scheduling()
             if outcome == SchedulingOutcome.ASSIGNMENTS_MADE:
@@ -1750,6 +1754,32 @@ class Controller:
         if result.has_real_dispatch:
             self._heartbeat_event.set()
 
+    _TIMEOUT_CHECK_INTERVAL_MS = 60_000  # Check at most once per minute.
+
+    def _enforce_execution_timeouts(self) -> None:
+        """Kill executing tasks that have exceeded their job's execution timeout.
+
+        Throttled to run at most once per minute. Queries for tasks in
+        BUILDING/RUNNING state whose started_at_ms + timeout is in the past,
+        then cancels them via the same kill path used for job cancellation.
+        """
+        if self._config.dry_run:
+            return
+        now = Timestamp.now()
+        now_ms = now.epoch_ms()
+        if now_ms - self._last_timeout_check_ms < self._TIMEOUT_CHECK_INTERVAL_MS:
+            return
+        self._last_timeout_check_ms = now_ms
+        timed_out = timed_out_executing_tasks(self._db, now)
+        if not timed_out:
+            return
+        for task in timed_out:
+            logger.warning("Task %s exceeded execution timeout, killing", task.task_id)
+        task_ids = {t.task_id for t in timed_out}
+        result = self._transitions.cancel_tasks_for_timeout(task_ids, reason="Execution timeout exceeded")
+        if result.tasks_to_kill:
+            self.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
+
     def _mark_task_unschedulable(self, task: TaskRow) -> None:
         """Mark a task as unschedulable due to timeout."""
         if self._config.dry_run:
@@ -1841,14 +1871,26 @@ class Controller:
             HEARTBEAT_STALENESS_THRESHOLD.to_seconds(),
             [str(w.worker_id) for w in stale[:10]],
         )
-        removed = self._transitions.fail_workers_by_ids(
+        failure_result = self._transitions.fail_workers_batch(
             [str(w.worker_id) for w in stale],
             reason=f"heartbeat stale (>{int(HEARTBEAT_STALENESS_THRESHOLD.to_seconds())}s since last heartbeat)",
         )
-        for wid, addr in removed:
+        for wid, addr in failure_result.removed_workers:
             self._provider.on_worker_failed(wid, addr)
-            if self._autoscaler:
-                self._autoscaler.notify_worker_failed(str(wid))
+        if self._autoscaler:
+            sibling_worker_ids = self._autoscaler.terminate_slices_for_workers(
+                [str(wid) for wid, _ in failure_result.removed_workers]
+            )
+            sibling_failures = self._transitions.fail_workers_batch(
+                sibling_worker_ids,
+                reason="stale worker failed, slice terminated",
+            )
+            for wid, addr in sibling_failures.removed_workers:
+                self._provider.on_worker_failed(wid, addr)
+            failure_result.tasks_to_kill.update(sibling_failures.tasks_to_kill)
+            failure_result.task_kill_workers.update(sibling_failures.task_kill_workers)
+        if failure_result.tasks_to_kill:
+            self.kill_tasks_on_workers(failure_result.tasks_to_kill, failure_result.task_kill_workers)
 
     def _sync_all_execution_units(self) -> None:
         if self._config.dry_run:
@@ -1892,42 +1934,43 @@ class Controller:
                     all_tasks_to_kill.update(result.tasks_to_kill)
                     all_task_kill_workers.update(result.task_kill_workers)
 
-            # Handle failures individually (rare, need per-worker side effects).
-            for batch, error in failure_entries:
-                logger.debug("Sync error for %s: %s", batch.worker_id, error)
-                action = self._transitions.fail_heartbeat(batch, error)
+            failure_result = self._transitions.fail_heartbeats_batch(failure_entries)
+            all_tasks_to_kill.update(failure_result.tasks_to_kill)
+            all_task_kill_workers.update(failure_result.task_kill_workers)
 
-                if action == HeartbeatAction.WORKER_FAILED:
+            primary_failed_workers: list[str] = []
+            for (batch, error), result in zip(failure_entries, failure_result.results, strict=False):
+                logger.debug("Sync error for %s: %s", batch.worker_id, error)
+                if result.action == HeartbeatAction.WORKER_FAILED:
                     fail_count += 1
                     failed_workers.append(batch.worker_id)
                     self._provider.on_worker_failed(batch.worker_id, batch.worker_address)
-                    if self._autoscaler:
-                        # Terminate the slice and get sibling worker IDs.
-                        # All workers on the same slice must be failed immediately
-                        # so their tasks (including reservation holders) are cascaded
-                        # rather than waiting for heartbeat timeouts.
-                        # TODO(#3425): This prunes sibling workers before their in-flight
-                        # results are processed, causing apply_heartbeat() to
-                        # silently drop any logs/states those workers reported this round.
-                        sibling_worker_ids = self._autoscaler.notify_worker_failed(str(batch.worker_id))
-                        if sibling_worker_ids:
-                            sibling_failed = self._transitions.fail_workers_by_ids(
-                                sibling_worker_ids,
-                                reason=f"sibling worker {batch.worker_id} failed, slice terminated",
-                            )
-                            for _wid, addr in sibling_failed:
-                                self._provider.on_worker_failed(_wid, addr)
-                            if sibling_failed:
-                                fail_count += len(sibling_failed)
-                                failed_workers.extend(wid for wid, _ in sibling_failed)
-                                logger.info(
-                                    "Failed %d sibling workers from slice: %s",
-                                    len(sibling_failed),
-                                    [wid for wid, _ in sibling_failed],
-                                )
-                elif action == HeartbeatAction.TRANSIENT_FAILURE:
+                    primary_failed_workers.append(str(batch.worker_id))
+                elif result.action == HeartbeatAction.TRANSIENT_FAILURE:
                     fail_count += 1
                     failed_workers.append(batch.worker_id)
+
+            if self._autoscaler and primary_failed_workers:
+                sibling_worker_ids = self._autoscaler.terminate_slices_for_workers(primary_failed_workers)
+                # TODO(#3425): This prunes sibling workers before their in-flight
+                # results are processed, causing apply_heartbeat() to
+                # silently drop any logs/states those workers reported this round.
+                sibling_failures = self._transitions.fail_workers_batch(
+                    sibling_worker_ids,
+                    reason="sibling worker failed, slice terminated",
+                )
+                all_tasks_to_kill.update(sibling_failures.tasks_to_kill)
+                all_task_kill_workers.update(sibling_failures.task_kill_workers)
+                for wid, addr in sibling_failures.removed_workers:
+                    self._provider.on_worker_failed(wid, addr)
+                if sibling_failures.removed_workers:
+                    fail_count += len(sibling_failures.removed_workers)
+                    failed_workers.extend(wid for wid, _ in sibling_failures.removed_workers)
+                    logger.info(
+                        "Failed %d sibling workers from slices: %s",
+                        len(sibling_failures.removed_workers),
+                        [wid for wid, _ in sibling_failures.removed_workers],
+                    )
 
             if all_tasks_to_kill:
                 self.kill_tasks_on_workers(all_tasks_to_kill, all_task_kill_workers)

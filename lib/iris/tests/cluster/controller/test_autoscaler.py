@@ -469,8 +469,8 @@ class TestAutoscalerExecution:
 class TestAutoscalerWorkerFailure:
     """Tests for worker failure handling."""
 
-    def test_notify_worker_failed_terminates_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """notify_worker_failed() terminates the slice containing the worker."""
+    def test_terminate_slices_for_workers_terminates_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """terminate_slices_for_workers() terminates the slice containing the worker."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
@@ -479,24 +479,26 @@ class TestAutoscalerWorkerFailure:
         _mark_discovered_ready(group, [mock_handle])
 
         failed_worker_id = "slice-001-vm-0"
-        autoscaler.notify_worker_failed(failed_worker_id)
+        autoscaler.terminate_slices_for_workers([failed_worker_id])
 
         assert group.slice_count() == 0
 
-    def test_notify_worker_failed_unknown_worker_is_noop(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """notify_worker_failed() does nothing for unknown workers."""
+    def test_terminate_slices_for_workers_unknown_worker_is_noop(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """terminate_slices_for_workers() does nothing for unknown workers."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
-        autoscaler.notify_worker_failed("unknown-worker-99")
+        autoscaler.terminate_slices_for_workers(["unknown-worker-99"])
 
         assert group.slice_count() == 1
 
-    def test_notify_worker_failed_returns_sibling_worker_ids(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """notify_worker_failed() returns sibling worker IDs for multi-VM slices."""
+    def test_terminate_slices_for_workers_returns_sibling_worker_ids(
+        self, scale_group_config: config_pb2.ScaleGroupConfig
+    ):
+        """terminate_slices_for_workers() returns sibling worker IDs for multi-VM slices."""
         # Create a slice with 4 VMs
         mock_handle = make_mock_slice_handle(
             "slice-001",
@@ -511,13 +513,13 @@ class TestAutoscalerWorkerFailure:
 
         # Fail the first worker -- should return 3 sibling worker IDs
         failed_worker_id = "slice-001-vm-0"
-        siblings = autoscaler.notify_worker_failed(failed_worker_id)
+        siblings = autoscaler.terminate_slices_for_workers([failed_worker_id])
 
         expected_siblings = [f"slice-001-vm-{i}" for i in range(1, 4)]
         assert sorted(siblings) == sorted(expected_siblings)
         assert group.slice_count() == 0
 
-    def test_notify_worker_failed_returns_empty_for_single_vm_slice(
+    def test_terminate_slices_for_workers_returns_empty_for_single_vm_slice(
         self, scale_group_config: config_pb2.ScaleGroupConfig
     ):
         """Single-VM slices return no siblings."""
@@ -529,14 +531,32 @@ class TestAutoscalerWorkerFailure:
         _mark_discovered_ready(group, [mock_handle])
 
         failed_worker_id = "slice-001-vm-0"
-        siblings = autoscaler.notify_worker_failed(failed_worker_id)
+        siblings = autoscaler.terminate_slices_for_workers([failed_worker_id])
 
         assert siblings == []
 
-    def test_notify_worker_failed_cleans_up_even_if_terminate_fails(
+    def test_terminate_slices_for_workers_dedupes_by_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """Workers from the same slice trigger one slice termination."""
+        mock_handle = make_mock_slice_handle(
+            "slice-001",
+            all_ready=True,
+            vm_states=[vm_pb2.VM_STATE_READY] * 4,
+        )
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        autoscaler = make_autoscaler({"test-group": group})
+        _mark_discovered_ready(group, [mock_handle])
+
+        siblings = autoscaler.terminate_slices_for_workers(["slice-001-vm-0", "slice-001-vm-1"])
+
+        assert siblings == ["slice-001-vm-2", "slice-001-vm-3"]
+        assert group.slice_count() == 0
+
+    def test_terminate_slices_for_workers_cleans_up_even_if_terminate_fails(
         self, scale_group_config: config_pb2.ScaleGroupConfig
     ):
-        """notify_worker_failed() removes the slice even if terminate() raises."""
+        """terminate_slices_for_workers() removes the slice even if terminate() raises."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         mock_handle.terminate_error = RuntimeError("resource not found")
         platform = make_mock_platform(slices_to_discover=[mock_handle])
@@ -546,7 +566,7 @@ class TestAutoscalerWorkerFailure:
         _mark_discovered_ready(group, [mock_handle])
 
         failed_worker_id = "slice-001-vm-0"
-        siblings = autoscaler.notify_worker_failed(failed_worker_id)
+        siblings = autoscaler.terminate_slices_for_workers([failed_worker_id])
 
         # Slice should be removed despite terminate() failure
         assert group.slice_count() == 0
@@ -814,7 +834,7 @@ class TestAutoscalerActionLogging:
         _mark_discovered_ready(group, [mock_handle])
 
         failed_worker_id = "slice-001-vm-0"
-        autoscaler.notify_worker_failed(failed_worker_id)
+        autoscaler.terminate_slices_for_workers([failed_worker_id])
 
         status = autoscaler.get_status()
         actions_by_type = {a.action_type: a for a in status.recent_actions}

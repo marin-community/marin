@@ -889,6 +889,9 @@ WORKERS = Table(
         Column("total_tpu_count", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("device_type", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
         Column("device_variant", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        # Migration 0022
+        Column("slice_id", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("scale_group", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
     ),
     indexes=(
         # Migration 0004_worker_indexes
@@ -1136,17 +1139,6 @@ SLICES = Table(
     indexes=("CREATE INDEX IF NOT EXISTS idx_slices_scale_group ON slices(scale_group)",),
 )
 
-TRACKED_WORKERS = Table(
-    "tracked_workers",
-    "tw",
-    columns=(
-        Column("worker_id", "TEXT", "PRIMARY KEY", python_type=WorkerId, decoder=decode_worker_id),
-        Column("slice_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("scale_group", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("internal_address", "TEXT", "NOT NULL", python_type=str, decoder=str),
-    ),
-)
-
 RESERVATION_CLAIMS = Table(
     "reservation_claims",
     "rc",
@@ -1325,7 +1317,6 @@ MAIN_TABLES: tuple[Table, ...] = (
     TXN_ACTIONS,
     SCALING_GROUPS,
     SLICES,
-    TRACKED_WORKERS,
     RESERVATION_CLAIMS,
     LOGS,
     TASK_PROFILES,

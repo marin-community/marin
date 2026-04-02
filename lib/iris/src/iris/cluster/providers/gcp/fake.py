@@ -462,6 +462,8 @@ class InMemoryGcpService:
                 cache_dir=self._cache_path / worker_id,
                 controller_address=self._controller_address,
                 worker_id=worker_id,
+                slice_id=slice_id,
+                worker_attributes=dict(extra_attrs),
                 default_task_image="process-runtime-unused",
                 poll_interval=Duration.from_seconds(0.1),
                 storage_prefix=self._storage_prefix,

@@ -324,6 +324,8 @@ def register_worker(
     address: str,
     metadata: cluster_pb2.WorkerMetadata,
     healthy: bool = True,
+    slice_id: str = "",
+    scale_group: str = "",
 ) -> WorkerId:
     wid = WorkerId(worker_id)
     state.register_or_refresh_worker(
@@ -331,6 +333,8 @@ def register_worker(
         address=address,
         metadata=metadata,
         ts=Timestamp.now(),
+        slice_id=slice_id,
+        scale_group=scale_group,
     )
     if not healthy:
         state._db.execute("UPDATE workers SET healthy = 0 WHERE worker_id = ?", (str(wid),))

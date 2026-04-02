@@ -34,6 +34,7 @@ from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
     HEARTBEAT_FAILURE_THRESHOLD,
+    HeartbeatAction,
     HeartbeatApplyRequest,
     MAX_REPLICAS_PER_JOB,
     PruneResult,
@@ -2268,11 +2269,13 @@ def test_fail_workers_by_ids_cascades_tasks(state):
     assert _query_task(state, tasks1[0].task_id).state == cluster_pb2.TASK_STATE_RUNNING
     assert _query_task(state, tasks2[0].task_id).state == cluster_pb2.TASK_STATE_RUNNING
 
-    failed = state.fail_workers_by_ids(["w2"], reason="slice terminated")
+    result = state.fail_workers_batch(["w2"], reason="slice terminated")
 
-    assert len(failed) == 1
-    assert failed[0][0] == w2
-    assert failed[0][1] == "host2:8080"
+    assert len(result.removed_workers) == 1
+    assert result.removed_workers[0][0] == w2
+    assert result.removed_workers[0][1] == "host2:8080"
+    assert len(result.results) == 1
+    assert result.results[0].action == HeartbeatAction.WORKER_FAILED
 
     t2 = _query_task(state, tasks2[0].task_id)
     assert t2.state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PENDING)
@@ -2282,17 +2285,68 @@ def test_fail_workers_by_ids_cascades_tasks(state):
     assert _query_worker(state, w2) is None
 
 
-def test_fail_workers_by_ids_skips_unknown(state):
-    """fail_workers_by_ids returns empty for unknown worker IDs."""
+def test_fail_workers_batch_skips_unknown(state):
+    """fail_workers_batch returns empty for unknown worker IDs."""
     meta = make_worker_metadata()
     register_worker(state, "w1", "host1:8080", meta)
 
-    failed = state.fail_workers_by_ids(["w-unknown"], reason="unknown")
-    assert failed == []
+    result = state.fail_workers_batch(["w-unknown"], reason="unknown")
+    assert result.removed_workers == []
 
     w = _query_worker(state, WorkerId("w1"))
     assert w is not None
     assert w.healthy
+
+
+def test_fail_workers_batch_force_removes_without_threshold(state):
+    """fail_workers_batch removes targets immediately instead of incrementing failures."""
+    meta = make_worker_metadata()
+    worker_id = register_worker(state, "w1", "host1:8080", meta)
+
+    result = state.fail_workers_batch(["w1"], reason="slice terminated")
+
+    assert len(result.results) == 1
+    assert result.results[0].action == HeartbeatAction.WORKER_FAILED
+    assert _query_worker(state, worker_id) is None
+
+
+def test_fail_workers_batch_does_not_block_readers(state):
+    """fail_workers_batch uses read_snapshot for lookups, so concurrent reads don't block.
+
+    Verifies that read_snapshot() (not write-locked snapshot()) is used for the
+    worker lookup query. We hold a write transaction open on a second thread while
+    calling fail_workers_batch from the main thread; if the lookup used
+    snapshot() (write lock), it would deadlock/timeout.
+    """
+    meta = make_worker_metadata()
+    w1 = register_worker(state, "w1", "host1:8080", meta)
+    register_worker(state, "w2", "host2:8080", meta)
+
+    tasks = submit_job(state, "j1", make_job_request("job1"))
+    dispatch_task(state, tasks[0], w1)
+
+    barrier = threading.Event()
+    done = threading.Event()
+
+    def hold_write_lock():
+        """Hold the DB write lock to prove fail_workers_batch doesn't need it for reads."""
+        with state._db.transaction():
+            barrier.set()
+            done.wait(timeout=5)
+
+    t = threading.Thread(target=hold_write_lock, daemon=True)
+    t.start()
+    barrier.wait(timeout=5)
+
+    # fail_workers_batch should still complete even though the write lock is held,
+    # because its lookup query uses read_snapshot (WAL reader).
+    # Note: the actual fail_heartbeat_for_worker inside will need the write lock
+    # for its transaction, so we test with unknown IDs to isolate the read path.
+    result = state.fail_workers_batch(["w-nonexistent"], reason="test")
+    assert result.removed_workers == []
+
+    done.set()
+    t.join(timeout=5)
 
 
 def test_fail_heartbeat_kills_requeue_only(state):
