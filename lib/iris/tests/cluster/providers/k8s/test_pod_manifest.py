@@ -313,7 +313,7 @@ def test_build_pod_manifest_no_gpu_no_toleration():
 
 
 def test_nvidia_gpu_toleration_added():
-    """GPU pods get both CW interruptable and NVIDIA GPU tolerations."""
+    """GPU pods get NVIDIA GPU toleration."""
     req = make_run_req("/my-job/task-0")
     req.resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="A100", count=4))
 
@@ -321,7 +321,7 @@ def test_nvidia_gpu_toleration_added():
     tolerations = manifest["spec"].get("tolerations", [])
     toleration_keys = {t.get("key") for t in tolerations}
     assert "nvidia.com/gpu" in toleration_keys
-    assert "qos.coreweave.cloud/interruptable" in toleration_keys
+    assert "qos.coreweave.cloud/interruptable" not in toleration_keys
 
 
 def test_coreweave_constraints_end_to_end():
@@ -336,7 +336,7 @@ def test_coreweave_constraints_end_to_end():
 
     assert spec["nodeSelector"]["iris.pool"] == "h100-8x"
     assert spec["nodeSelector"]["iris.region"] == "US-WEST-04A"
-    assert any(t.get("key") == "qos.coreweave.cloud/interruptable" for t in spec["tolerations"])
+    assert not any(t.get("key") == "qos.coreweave.cloud/interruptable" for t in spec["tolerations"])
 
 
 # ---------------------------------------------------------------------------
