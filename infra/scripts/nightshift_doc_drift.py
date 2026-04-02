@@ -34,7 +34,7 @@ Check for:
    CLI flags that have been renamed or deleted.
 2. **Wrong examples**: code snippets in docs that no longer work
    (wrong imports, changed APIs, renamed parameters).
-3. **Missing docs**: public modules in `lib/*/src/` with no corresponding
+3. **Missing docs**: public modules in `src/` with no corresponding
    documentation page.
 4. **Broken links**: internal markdown links pointing to non-existent files.
 5. **Config drift**: documented config options that don't match the actual

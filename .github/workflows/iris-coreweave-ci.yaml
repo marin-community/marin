@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize]
     paths:
-      - "lib/iris/**"
+      - "src/iris/**"
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -68,7 +68,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "lib/iris/pyproject.toml"
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Write kubeconfig
         run: |
@@ -97,13 +97,16 @@ jobs:
       # idempotent on K8s: it applies namespace/RBAC/ConfigMap/Deployment/Service
       # and triggers a rollout restart, so both cold starts and warm restarts
       # work without needing to tunnel to an existing controller first.
+      - name: Install dependencies
+        run: uv sync --no-editable --extra cluster --group dev --no-default-groups
+
       - name: Start controller
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          cd lib/iris && uv run --group dev iris -v \
-            --config=examples/coreweave-ci.yaml \
+          .venv/bin/iris -v \
+            --config=lib/iris/examples/coreweave-ci.yaml \
             cluster start
 
       - name: Run integration tests
@@ -145,7 +148,7 @@ jobs:
             exit 1
           fi
 
-          uv run pytest tests/integration/iris/ \
+          .venv/bin/pytest tests/integration/iris/ \
             --controller-url "$IRIS_CONTROLLER_URL" \
             -v --tb=short --timeout=600 \
             -o "addopts=" \
@@ -163,7 +166,7 @@ jobs:
           FSSPEC_S3: '{"endpoint_url": "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"}'
         run: |
           IRIS_CONTROLLER_URL="http://localhost:10000"
-          timeout 600 uv run tests/integration/iris/run_iris_full_integration.py \
+          timeout 600 .venv/bin/python tests/integration/iris/run_iris_full_integration.py \
             --controller-url "$IRIS_CONTROLLER_URL"
 
       - name: Stop port-forward

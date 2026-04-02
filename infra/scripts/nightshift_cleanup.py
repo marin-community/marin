@@ -7,7 +7,7 @@ import datetime
 import secrets
 import subprocess
 
-SUBPROJECTS = ["lib/marin/src/marin", "lib/iris/src/iris", "lib/zephyr/src/zephyr", "lib/levanter/src/levanter"]
+SUBPROJECTS = ["src/marin", "src/iris", "src/zephyr", "src/levanter"]
 
 CLEANUP_PROMPT = """\
 You are the Nightshift Cleanup Agent.

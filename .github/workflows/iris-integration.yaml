@@ -39,11 +39,11 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --all-packages --extra=cpu --extra=dedup --no-default-groups --group dev
+        run: uv sync --no-editable --extra=cpu --extra=cluster --extra=dedup --no-default-groups --group dev
 
       - name: Start local Iris cluster
         run: |
-          uv run iris --config lib/iris/examples/test.yaml \
+          .venv/bin/iris --config lib/iris/examples/test.yaml \
             cluster start --local > /tmp/iris-cluster.log 2>&1 &
           CLUSTER_PID=$!
           echo "CLUSTER_PID=$CLUSTER_PID" >> "$GITHUB_ENV"
@@ -67,7 +67,7 @@ jobs:
 
       - name: Run integration tests
         run: |
-          uv run pytest tests/integration/iris/ \
+          .venv/bin/pytest tests/integration/iris/ \
             --controller-url "$IRIS_CONTROLLER_URL" \
             -v -s --log-cli-level=INFO --tb=short --timeout=600 \
             -o "addopts=" \
@@ -79,7 +79,7 @@ jobs:
 
       - name: Run full integration pipeline
         run: |
-          timeout 600 uv run tests/integration/iris/run_iris_full_integration.py \
+          timeout 600 .venv/bin/python tests/integration/iris/run_iris_full_integration.py \
             --controller-url "$IRIS_CONTROLLER_URL"
         env:
           WANDB_MODE: disabled

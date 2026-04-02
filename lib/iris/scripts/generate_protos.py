@@ -53,7 +53,8 @@ def run_buf_generate(root_dir: Path) -> None:
 
 def main():
     """Generate protobuf files and fix imports."""
-    root_dir = Path(__file__).parent.parent
+    # Walk up from lib/iris/scripts/ to repo root
+    root_dir = Path(__file__).parent.parent.parent.parent
     rpc_dir = root_dir / "src" / "iris" / "rpc"
 
     # Run buf generate

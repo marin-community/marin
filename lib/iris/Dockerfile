@@ -52,17 +52,11 @@ FROM base AS deps
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Rigging is a workspace-local dep not on PyPI with a compatible API.
-# Copy it alongside iris and create a minimal workspace so uv resolves it
-# from source instead of downloading the unrelated "rigging" package from PyPI.
-COPY lib/rigging/ ./lib/rigging/
-COPY lib/iris/pyproject.toml lib/iris/hatch_build.py ./lib/iris/
-RUN printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nrigging = { workspace = true }\n' > pyproject.toml \
-    && uv sync --package iris --no-install-project
-
-# Iris source: install the project itself.
-COPY lib/iris/src/ ./lib/iris/src/
-RUN uv sync --package iris
+# Copy the unified pyproject.toml, lock file, and sources needed for iris.
+COPY pyproject.toml uv.lock hatch_build.py ./
+COPY src/rigging/ ./src/rigging/
+COPY src/iris/ ./src/iris/
+RUN uv sync --frozen --no-default-groups
 
 # Profiling tools — installed after uv sync so they aren't pruned by the exact sync.
 RUN uv pip install py-spy memray
@@ -80,7 +74,7 @@ ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
 FROM deps AS controller
 
 # Controller-only deps: duckdb, pyarrow, zstandard.
-RUN uv sync --extra controller --inexact
+RUN uv sync --frozen --extra controller --inexact --no-default-groups
 
 LABEL org.opencontainers.image.description="Iris controller image"
 

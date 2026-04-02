@@ -29,7 +29,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --all-packages --no-default-groups
+        run: uv sync --no-editable --extra=cluster --no-default-groups
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -42,4 +42,4 @@ jobs:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Cleanup preempted and terminated TPUs
-        run: uv run python scripts/ray/cleanup_workers.py --threshold=0
+        run: .venv/bin/python scripts/ray/cleanup_workers.py --threshold=0

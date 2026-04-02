@@ -24,7 +24,7 @@ jobs:
         with:
           filters: |
             relevant:
-              - 'lib/fray/**'
+              - 'src/fray/**'
               - 'uv.lock'
               - '.github/workflows/fray-unit-tests.yaml'
 
@@ -42,6 +42,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
@@ -49,8 +54,8 @@ jobs:
 
       - name: Test fray
         run: |
-          # NOTE: do not use frozen here because it makes ray sad when it sets up venvs with uv
-          cd lib/fray && uv run --group=fray-test pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/
+          uv sync --no-editable --extra cluster --group fray-test
+          .venv/bin/pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/fray/
 
   fray-tpu-tests:
     needs: changes
@@ -96,4 +101,4 @@ jobs:
             -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace/lib/fray && timeout --kill-after=5 --signal=TERM 590 uv run --group=fray-tpu-test pytest tests/ -v --tb=short -s --log-cli-level=INFO -m tpu_ci"
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 590 uv run --extra=cluster --group=fray-tpu-test pytest tests/fray/ -v --tb=short -s --log-cli-level=INFO -m tpu_ci"

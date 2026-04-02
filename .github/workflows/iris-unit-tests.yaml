@@ -27,7 +27,7 @@ jobs:
         with:
           filters: |
             relevant:
-              - 'lib/iris/**'
+              - 'src/iris/**'
               - 'uv.lock'
               - '.github/workflows/iris-unit-tests.yaml'
 
@@ -54,13 +54,14 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "lib/iris/pyproject.toml"
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Test iris
         env:
           PYTHONASYNCIODEBUG: "1"
         run: |
-          cd lib/iris && uv run --group dev python -m pytest -n1 --durations=5 --tb=short -m 'not slow and not docker and not e2e' tests/
+          uv sync --no-editable --extra cluster --group dev
+          .venv/bin/python -m pytest -n1 --durations=5 --tb=short -m 'not slow and not docker and not e2e' tests/iris/
 
   iris-e2e-smoke:
     needs: changes
@@ -85,18 +86,18 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "lib/iris/pyproject.toml"
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Cache Playwright browsers
         id: playwright-cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('lib/iris/pyproject.toml') }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
 
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: cd lib/iris && uv run playwright install --with-deps chromium
+        run: uv sync --no-editable --extra cluster --group dev && .venv/bin/playwright install --with-deps chromium
 
       - name: Install Playwright system deps
         if: steps.playwright-cache.outputs.cache-hit == 'true'
@@ -108,8 +109,9 @@ jobs:
           PYTHONASYNCIODEBUG: "1"
         run: |
           mkdir -p ${{ github.workspace }}/iris-screenshots
-          cd lib/iris && uv run --group dev python -m pytest \
-            tests/e2e/test_smoke.py \
+          uv sync --no-editable --extra cluster --group dev
+          .venv/bin/python -m pytest \
+            tests/iris/e2e/test_smoke.py \
             -m e2e -o "addopts=" --tb=short -v
 
       - name: Verify screenshots with Claude

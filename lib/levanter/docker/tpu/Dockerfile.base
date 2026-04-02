@@ -5,17 +5,13 @@ RUN pip install virtualenv
 # venv binaries encode their directory, so we need to setup the venv in the final location
 RUN pip install uv
 
-# Install package dependencies to make incremental builds faster, using the monorepo workspace.
+# Install package dependencies to make incremental builds faster.
 WORKDIR /opt/marin
-# Resolve only the Levanter package (with TPU/serve extras) to avoid pulling root-only deps like torch.
+# With the collapsed single-package layout, we only need the root pyproject.toml and lock file.
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=lib/levanter/pyproject.toml,target=lib/levanter/pyproject.toml \
-    --mount=type=bind,source=lib/haliax/pyproject.toml,target=lib/haliax/pyproject.toml \
-    --mount=type=bind,source=lib/fray/pyproject.toml,target=lib/fray/pyproject.toml \
-    --mount=type=bind,source=lib/zephyr/pyproject.toml,target=lib/zephyr/pyproject.toml \
-    uv sync --frozen --no-install-workspace --package levanter --extra serve --extra tpu
+    uv sync --frozen --no-install-project --extra serve --extra tpu --no-default-groups
 
 FROM python:3.11
 

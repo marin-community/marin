@@ -24,9 +24,8 @@ jobs:
         with:
           filters: |
             relevant:
-              - 'lib/zephyr/**'
-              # Iris is being actively developed, to avoid bugs sneaking into zephyr, we trigger zephyr tests on iris change
-              - 'lib/iris/**'
+              - 'src/zephyr/**'
+              - 'src/iris/**'
               - 'uv.lock'
               - '.github/workflows/zephyr-unit-tests.yaml'
 
@@ -58,9 +57,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          uv sync --package zephyr --group test --frozen
+          uv sync --no-editable --extra cluster --group test --frozen
 
       - name: Test with pytest
         run: |
-          # important: don't cd into lib/zephyr so that ray uv integration doesn't freak out
-          uv run --package zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/
+          .venv/bin/pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/zephyr/
