@@ -21,12 +21,117 @@ from rigging.filesystem import open_url, url_to_fs
 import msgspec
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from zephyr import counters
 from zephyr.expr import Expr
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Shared Parquet row-group reader
+# ---------------------------------------------------------------------------
+
+
+def _check_row_group_statistics(
+    rg_meta: pq.RowGroupMetaData,
+    equality_predicates: dict[str, object],
+) -> bool:
+    """Return False if row group min/max statistics prove no rows can match."""
+    for col_idx in range(rg_meta.num_columns):
+        col_meta = rg_meta.column(col_idx)
+        name = col_meta.path_in_schema
+        if name not in equality_predicates:
+            continue
+        stats = col_meta.statistics
+        if stats is None or not stats.has_min_max:
+            continue  # no stats — assume it could match
+        value = equality_predicates[name]
+        if value < stats.min or value > stats.max:
+            return False
+    return True
+
+
+def iter_parquet_row_groups(
+    source: str | pq.ParquetFile,
+    *,
+    columns: list[str] | None = None,
+    row_filter: pc.Expression | None = None,
+    row_start: int | None = None,
+    row_end: int | None = None,
+    equality_predicates: dict[str, object] | None = None,
+) -> Iterator[pa.Table]:
+    """Yield one ``pa.Table`` per qualifying row group with O(row_group) memory.
+
+    Uses ``pq.ParquetFile`` instead of ``pyarrow.dataset`` to avoid the
+    upstream memory leak (https://github.com/apache/arrow/issues/39808).
+
+    Args:
+        source: Path to parquet file or an already-open ``pq.ParquetFile``.
+        columns: Columns to read (``None`` for all).
+        row_filter: PyArrow compute expression applied after reading.
+            When ``columns`` is specified, any additional columns needed by the
+            filter are read automatically and stripped after filtering.
+        row_start: First row to include (inclusive, before filtering).
+        row_end: Last row to include (exclusive, before filtering).
+        equality_predicates: Column-value pairs for statistics-based row group
+            skipping.  Row groups whose min/max statistics exclude the target
+            value are not read at all.
+    """
+    pf = pq.ParquetFile(source) if isinstance(source, str) else source
+    has_row_range = row_start is not None and row_end is not None
+
+    # When both columns and row_filter are set, the filter may reference
+    # columns not in the projection.  Read the union and project after.
+    read_columns = columns
+    need_project = False
+    if columns is not None and row_filter is not None:
+        all_schema_names = {pf.schema_arrow.field(i).name for i in range(len(pf.schema_arrow))}
+        filter_cols = {name for name in all_schema_names if name in str(row_filter)} - set(columns)
+        if filter_cols:
+            read_columns = list(columns) + sorted(filter_cols)
+            need_project = True
+
+    cumulative_rows = 0
+
+    for i in range(pf.metadata.num_row_groups):
+        rg_meta = pf.metadata.row_group(i)
+        rg_num_rows = rg_meta.num_rows
+        rg_start = cumulative_rows
+        rg_end = cumulative_rows + rg_num_rows
+        cumulative_rows = rg_end
+
+        if equality_predicates and not _check_row_group_statistics(rg_meta, equality_predicates):
+            continue
+
+        if has_row_range:
+            assert row_start is not None and row_end is not None
+            if rg_end <= row_start:
+                continue
+            if rg_start >= row_end:
+                return
+
+        table = pf.read_row_group(i, columns=read_columns)
+
+        if has_row_range:
+            assert row_start is not None and row_end is not None
+            is_interior = rg_start >= row_start and rg_end <= row_end
+            if not is_interior:
+                local_start = max(0, row_start - rg_start)
+                local_end = min(rg_num_rows, row_end - rg_start)
+                table = table.slice(local_start, local_end - local_start)
+
+        if row_filter is not None:
+            table = table.filter(row_filter)
+
+        if need_project:
+            table = table.select(columns)
+
+        if len(table) > 0:
+            yield table
+
 
 # 16 MB read blocks with background prefetch for S3/remote reads.
 _READ_BLOCK_SIZE = 16_000_000
@@ -166,7 +271,6 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
     """
     spec = _as_spec(source)
     logger.info("Loading: %s", spec.path)
-    columns = spec.columns
 
     pa_filter = None
     if spec.filter_expr is not None:
@@ -174,40 +278,13 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
 
         pa_filter = to_pyarrow_expr(spec.filter_expr)
 
-    # Read row-group-by-row-group via ParquetFile to avoid the
-    # pyarrow.dataset API which loads the entire file into Arrow's memory
-    # pool upfront, causing multi-GB RSS bloat on large files.
-    # See: https://github.com/apache/arrow/issues/39808
-    pf = pq.ParquetFile(spec.path)
-    has_row_range = spec.row_start is not None and spec.row_end is not None
-    cumulative_rows = 0
-
-    for i in range(pf.metadata.num_row_groups):
-        rg_num_rows = pf.metadata.row_group(i).num_rows
-        rg_start = cumulative_rows
-        rg_end = cumulative_rows + rg_num_rows
-        cumulative_rows = rg_end
-
-        if has_row_range:
-            assert spec.row_start is not None and spec.row_end is not None
-            if rg_end <= spec.row_start:
-                continue
-            if rg_start >= spec.row_end:
-                return
-
-        table = pf.read_row_group(i, columns=columns)
-
-        if has_row_range:
-            assert spec.row_start is not None and spec.row_end is not None
-            is_interior = rg_start >= spec.row_start and rg_end <= spec.row_end
-            if not is_interior:
-                local_start = max(0, spec.row_start - rg_start)
-                local_end = min(rg_num_rows, spec.row_end - rg_start)
-                table = table.slice(local_start, local_end - local_start)
-
-        if pa_filter is not None:
-            table = table.filter(pa_filter)
-
+    for table in iter_parquet_row_groups(
+        spec.path,
+        columns=spec.columns,
+        row_filter=pa_filter,
+        row_start=spec.row_start,
+        row_end=spec.row_end,
+    ):
         counters.increment("zephyr/records_in", len(table))
         yield from table.to_pylist()
 
