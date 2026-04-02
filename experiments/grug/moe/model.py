@@ -28,7 +28,7 @@ except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
-from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
+from levanter.grug.attention import AttentionMask, RotaryConfig, align_kv_heads, apply_rotary_embedding, attention
 from levanter.grug.grug_moe import MoeActivation, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
@@ -147,11 +147,12 @@ class CausalSelfAttention(eqx.Module):
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
+        aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
-        dot = jnp.sum(attn_out * v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(v * v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * v
+        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
+        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
