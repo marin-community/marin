@@ -179,7 +179,7 @@ def _build_tunnel_ssh_cmd(
 ) -> list[str]:
     auth_mode = _ssh_auth_mode(ssh_config)
     use_os_login = auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN and not force_metadata
-    key_file = ssh_key_file(ssh_config)
+    key_file = ssh_key_file(ssh_config, effective_service_account)
 
     target = vm_name
     if use_os_login:
@@ -239,7 +239,7 @@ def _gcp_tunnel(
     Picks a free port automatically if none is specified.
     """
     effective_service_account = ssh_impersonate_service_account(ssh_config, service_account)
-    key_file = ssh_key_file(ssh_config)
+    key_file = ssh_key_file(ssh_config, effective_service_account)
     _check_gcloud_ssh_key(key_file)
 
     if local_port is None:
