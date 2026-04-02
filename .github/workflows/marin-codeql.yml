@@ -32,7 +32,7 @@ jobs:
         build-mode: ${{ matrix.build-mode }}
         config: |
           paths:
-            - lib/marin/src
+            - src/marin
           paths-ignore:
             - tests/**
 

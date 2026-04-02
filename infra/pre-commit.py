@@ -578,7 +578,7 @@ def _ensure_iris_protos() -> None:
     """
     import shutil
 
-    rpc_dir = ROOT_DIR / "lib" / "iris" / "src" / "iris" / "rpc"
+    rpc_dir = ROOT_DIR / "src" / "iris" / "rpc"
     # Check if any pb2 file exists already
     if list(rpc_dir.glob("*_pb2.py")):
         return
@@ -594,7 +594,7 @@ def _ensure_iris_protos() -> None:
     print("  Generating iris protobuf files for type checking...")
     result = subprocess.run(
         [sys.executable, str(generate_script)],
-        cwd=ROOT_DIR / "lib" / "iris",
+        cwd=ROOT_DIR,
         capture_output=True,
         text=True,
     )
@@ -623,16 +623,15 @@ class PrecommitConfig:
 
 PRECOMMIT_CONFIGS = [
     PrecommitConfig(
-        patterns=["lib/levanter/**/*.py"],
+        patterns=["src/levanter/**/*.py", "lib/levanter/**/*.py", "tests/levanter/**/*.py"],
         checks=[
             check_ruff,
             lambda files, fix: check_black(files, fix, config=LEVANTER_BLACK_CONFIG),
             lambda files, fix: check_license_headers(files, fix, LEVANTER_LICENSE),
-            # check_mypy,
         ],
     ),
     PrecommitConfig(
-        patterns=["lib/haliax/**/*.py"],
+        patterns=["src/haliax/**/*.py", "lib/haliax/**/*.py", "tests/haliax/**/*.py"],
         checks=[
             check_ruff,
             lambda files, fix: check_black(files, fix, config=HALIAX_BLACK_CONFIG),
@@ -641,7 +640,15 @@ PRECOMMIT_CONFIGS = [
     ),
     PrecommitConfig(
         patterns=["**/*.py"],
-        exclude_patterns=["lib/levanter/**", "lib/haliax/**", "lib/**/vendor/**"],
+        exclude_patterns=[
+            "src/levanter/**",
+            "src/haliax/**",
+            "lib/levanter/**",
+            "lib/haliax/**",
+            "tests/levanter/**",
+            "tests/haliax/**",
+            "**/vendor/**",
+        ],
         checks=[
             check_ruff,
             check_black,
@@ -649,14 +656,7 @@ PRECOMMIT_CONFIGS = [
         ],
     ),
     PrecommitConfig(
-        patterns=[
-            "lib/marin/src/**/*.py",
-            "lib/levanter/src/**/*.py",
-            "lib/haliax/src/**/*.py",
-            "lib/fray/src/**/*.py",
-            "lib/iris/src/**/*.py",
-            "lib/zephyr/src/**/*.py",
-        ],
+        patterns=["src/**/*.py"],
         checks=[
             check_pyrefly,
         ],

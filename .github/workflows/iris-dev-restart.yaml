@@ -33,7 +33,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "lib/iris/pyproject.toml"
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -65,9 +65,12 @@ jobs:
             --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
             --ttl=2h
 
+      - name: Install dependencies
+        run: uv sync --no-editable --extra cluster --group dev --no-default-groups
+
       - name: Restart dev controller
         run: |
-          uv run iris --config lib/iris/examples/marin-dev.yaml \
+          .venv/bin/iris --config lib/iris/examples/marin-dev.yaml \
             cluster controller restart
 
       - name: Remove OS Login SSH key

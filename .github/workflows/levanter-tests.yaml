@@ -25,8 +25,8 @@ jobs:
         with:
           filters: |
             relevant:
-              - 'lib/levanter/**'
-              - 'lib/haliax/**'
+              - 'src/levanter/**'
+              - 'src/haliax/**'
               - 'uv.lock'
               - '.github/workflows/levanter-tests.yaml'
 
@@ -34,9 +34,6 @@ jobs:
     needs: changes
     if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: lib/levanter
 
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +43,6 @@ jobs:
           version: "0.7.20"
           python-version: "3.11"
           enable-cache: true
-          working-directory: lib/levanter
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -54,19 +50,15 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --group test --frozen
+        run: uv sync --no-editable --extra training --extra cluster --group dev --group test --frozen
       - name: Test with pytest
         run: |
-          # Test with specific JAX version, excluding TPU tests
-          PYTHONPATH=tests:src:. uv run --package levanter --frozen --with "jax[cpu]==0.8.0" pytest tests -m "not entry and not slow and not ray and not tpu" --durations=20
+          .venv/bin/pytest tests/levanter -m "not entry and not slow and not ray and not tpu" --durations=20
 
   levanter-ray-tests:
     needs: changes
     if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: lib/levanter
 
     steps:
       - uses: actions/checkout@v4
@@ -76,7 +68,6 @@ jobs:
           version: "0.7.20"
           python-version: "3.11"
           enable-cache: true
-          working-directory: lib/levanter
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -84,18 +75,15 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --group test --frozen
+        run: uv sync --no-editable --extra training --extra cluster --group dev --group test --frozen
       - name: Test with pytest
         run: |
-          PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "ray" --durations=20
+          .venv/bin/pytest tests/levanter -m "ray" --durations=20
 
   levanter-entry-tests:
     needs: changes
     if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: lib/levanter
 
     steps:
       - uses: actions/checkout@v4
@@ -105,7 +93,6 @@ jobs:
           version: "0.7.20"
           python-version: "3.11"
           enable-cache: true
-          working-directory: lib/levanter
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -113,19 +100,16 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --group test --frozen
+        run: uv sync --no-editable --extra training --extra cluster --group dev --group test --frozen
       - name: Test with pytest
         run: |
-          PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "entry" --durations=20
+          .venv/bin/pytest tests/levanter -m "entry" --durations=20
 
   levanter-torch-tests:
     needs: changes
     if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: lib/levanter
 
     steps:
       - uses: actions/checkout@v4
@@ -135,7 +119,6 @@ jobs:
           version: "0.7.20"
           python-version: "3.11"
           enable-cache: true
-          working-directory: lib/levanter
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -143,7 +126,7 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --group test --frozen --extra torch_test --no-install-package torch
+        run: uv sync --no-editable --extra training --extra cluster --group dev --group test --frozen --extra torch_test --no-install-package torch
 
       - name: Install locked CPU torch wheel
         run: |
@@ -151,7 +134,7 @@ jobs:
           import tomllib
           from pathlib import Path
 
-          lock = tomllib.loads(Path("../../uv.lock").read_text())
+          lock = tomllib.loads(Path("uv.lock").read_text())
           versions = {
               package["version"]
               for package in lock.get("package", [])
@@ -176,9 +159,7 @@ jobs:
 
       - name: Test torch-marked suite
         run: |
-          # run directly on CPU to avoid GPU dependency issues
-          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. ../../.venv/bin/python -m pytest tests -m "torch" --durations=20
-#          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test pytest tests -m "torch" --durations=20
+          CUDA_VISIBLE_DEVICES="" .venv/bin/pytest tests/levanter -m "torch" --durations=20
 
   levanter-tpu-tests:
     needs: changes
@@ -238,12 +219,12 @@ jobs:
               fi && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
               timeout --kill-after=5 --signal=TERM 890 \
-              uv run --package levanter --frozen --group test --with 'jax[tpu]==$JAX_VERSION' \
-              pytest lib/levanter/tests \
+              uv run --frozen --extra training --group test --with 'jax[tpu]==$JAX_VERSION' \
+              pytest tests/levanter \
               -m 'not entry and not ray and not slow and not torch' \
-              --ignore=lib/levanter/tests/test_audio.py \
-              --ignore=lib/levanter/tests/test_new_cache.py \
-              --ignore=lib/levanter/tests/test_hf_checkpoints.py \
-              --ignore=lib/levanter/tests/test_hf_gpt2_serialize.py \
-              --ignore=lib/levanter/tests/test_gdn_layer.py \
+              --ignore=tests/levanter/test_audio.py \
+              --ignore=tests/levanter/test_new_cache.py \
+              --ignore=tests/levanter/test_hf_checkpoints.py \
+              --ignore=tests/levanter/test_hf_gpt2_serialize.py \
+              --ignore=tests/levanter/test_gdn_layer.py \
               -v --tb=short --log-cli-level=WARNING --durations=20"

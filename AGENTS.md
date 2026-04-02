@@ -2,9 +2,9 @@
 
 Start with the shared practices below. Consult subproject manuals for directory-specific guidance:
 
-- `lib/levanter/AGENTS.md` — Levanter (JAX training library)
-- `lib/marin/AGENTS.md` — Marin (pipeline framework)
-- `lib/iris/AGENTS.md` — Iris (job orchestration)
+- `lib/levanter/AGENTS.md` — Levanter (JAX training library); source at `src/levanter/`
+- `lib/marin/AGENTS.md` — Marin (pipeline framework); source at `src/marin/`
+- `lib/iris/AGENTS.md` — Iris (job orchestration); source at `src/iris/`
 
 ## Workflow Playbooks
 
@@ -123,12 +123,12 @@ Watch for and eliminate these patterns in generated code:
 
 Before writing any utility function, helper, or data structure:
 1. Search the codebase for existing implementations
-2. Check subproject utils: `lib/marin/src/marin/`, `lib/iris/src/iris/`, `lib/levanter/`
+2. Check subproject utils: `src/marin/`, `src/iris/`, `src/levanter/`
 3. Check `pyproject.toml` for available third-party packages before adding new ones
 
 If a suitable implementation exists, use it. Do not create parallel implementations.
 
-Dependency direction: {`iris`, `haliax`} → {`levanter`, `zephyr`} → `marin`. Each layer may only import from layers to its left. Never introduce reverse dependencies (e.g., levanter importing from marin).
+Dependency direction: {`iris`, `haliax`} → {`levanter`, `zephyr`} → `marin`. Each layer may only import from layers to its left. Never introduce reverse dependencies (e.g., levanter importing from marin). Source lives in `src/<pkg>/`; this is a convention-only boundary now (no longer enforced by separate pyproject.toml files).
 
 ## Testing
 

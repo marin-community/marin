@@ -53,11 +53,11 @@ jobs:
         run: uv python install
 
       - name: Install dependencies
-        run: uv sync --package marin --group dev
+        run: uv sync --no-editable --extra full --group dev
 
       - name: Validate docs source links
-        run: uv run python infra/check_docs_source_links.py
+        run: .venv/bin/python infra/check_docs_source_links.py
 
       - name: Build documentation
         run: |
-          uv run mkdocs build --strict
+          .venv/bin/mkdocs build --strict

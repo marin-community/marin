@@ -30,17 +30,13 @@ WORKDIR /opt/marin
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=lib/levanter/pyproject.toml,target=lib/levanter/pyproject.toml \
-    --mount=type=bind,source=lib/haliax/pyproject.toml,target=lib/haliax/pyproject.toml \
-    --mount=type=bind,source=lib/fray/pyproject.toml,target=lib/fray/pyproject.toml \
-    --mount=type=bind,source=lib/zephyr/pyproject.toml,target=lib/zephyr/pyproject.toml \
-    uv sync --frozen --no-install-workspace --package levanter --extra serve --extra tpu
+    uv sync --frozen --no-install-project --extra serve --extra tpu --no-default-groups
 
 ADD . /opt/marin
 
 # Make python -m levanter.main.train_lm work:
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --package levanter --extra serve --extra tpu
+    uv sync --frozen --extra serve --extra tpu --no-default-groups
 
 
-WORKDIR /opt/marin/lib/levanter
+WORKDIR /opt/marin

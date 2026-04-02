@@ -25,7 +25,7 @@ jobs:
         with:
           filters: |
             relevant:
-              - 'lib/haliax/**'
+              - 'src/haliax/**'
               - 'uv.lock'
               - '.github/workflows/haliax-*.yaml'
 
@@ -35,21 +35,20 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: lib/haliax
-
     steps:
       - uses: actions/checkout@v3
       - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Install dependencies
         run: |
           python -m pip install uv
-          uv sync --package haliax --dev
+          uv sync --no-editable --extra training --group dev
       - name: Test with pytest (JAX 0.8.0)
         run: |
-          # Test with specific JAX version
-          JAX_NUM_CPU_DEVICES=8 PYTHONPATH=tests:src:. uv run --package haliax --with "jax[cpu]==0.8.0" pytest -c pyproject.toml tests
+          JAX_NUM_CPU_DEVICES=8 .venv/bin/pytest tests/haliax
