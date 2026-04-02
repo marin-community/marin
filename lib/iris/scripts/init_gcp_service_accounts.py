@@ -50,6 +50,10 @@ IMPERSONATION_ROLES = (
     "roles/iam.serviceAccountTokenCreator",
     "roles/iam.serviceAccountUser",
 )
+PROJECT_USER_IMPERSONATION_ROLES = (
+    "roles/iam.serviceAccountTokenCreator",
+    "roles/iam.serviceAccountUser",
+)
 
 
 def _principal_member(principal: str) -> str:
@@ -111,6 +115,45 @@ def _service_account_exists(project: str, email: str) -> bool:
         capture_output=True,
     )
     return result.returncode == 0
+
+
+def _project_user_members(project: str) -> list[str]:
+    result = _run(
+        [
+            "gcloud",
+            "projects",
+            "get-iam-policy",
+            project,
+            "--format=json",
+        ],
+        capture_output=True,
+    )
+    policy = json.loads(result.stdout)
+    users = {
+        member
+        for binding in policy.get("bindings", [])
+        for member in binding.get("members", [])
+        if member.startswith("user:")
+    }
+    return sorted(users)
+
+
+def _service_account_policy(service_account: str) -> dict[str, set[str]]:
+    result = _run(
+        [
+            "gcloud",
+            "iam",
+            "service-accounts",
+            "get-iam-policy",
+            service_account,
+            "--format=json",
+        ],
+        capture_output=True,
+    )
+    policy = json.loads(result.stdout)
+    return {
+        binding["role"]: set(binding.get("members", [])) for binding in policy.get("bindings", []) if "role" in binding
+    }
 
 
 def _ensure_service_account(project: str, sa_id: str, display_name: str, *, dry_run: bool) -> str:
@@ -215,6 +258,9 @@ def main() -> int:
         "Iris worker service account",
         dry_run=args.dry_run,
     )
+    project_user_members = _project_user_members(args.project)
+    controller_policy = {} if args.dry_run else _service_account_policy(controller_sa)
+    worker_policy = {} if args.dry_run else _service_account_policy(worker_sa)
 
     summary = {
         "project": args.project,
@@ -223,9 +269,12 @@ def main() -> int:
         "worker_service_account": worker_sa,
         "operator_principal": operator_member,
         "ci_principal": ci_member,
+        "project_user_count": len(project_user_members),
+        "project_user_members": project_user_members,
         "controller_project_roles": list(CONTROLLER_PROJECT_ROLES),
         "worker_project_roles": list(WORKER_PROJECT_ROLES),
         "impersonation_roles": list(IMPERSONATION_ROLES),
+        "project_user_impersonation_roles": list(PROJECT_USER_IMPERSONATION_ROLES),
     }
     _print_summary(summary)
 
@@ -247,23 +296,36 @@ def main() -> int:
 
     for principal in (operator_member, ci_member):
         for role in IMPERSONATION_ROLES:
-            _bind_service_account_role(controller_sa, member=principal, role=role, dry_run=args.dry_run)
-            _bind_service_account_role(worker_sa, member=principal, role=role, dry_run=args.dry_run)
+            if principal not in controller_policy.get(role, set()):
+                _bind_service_account_role(controller_sa, member=principal, role=role, dry_run=args.dry_run)
+            if principal not in worker_policy.get(role, set()):
+                _bind_service_account_role(worker_sa, member=principal, role=role, dry_run=args.dry_run)
+
+    for principal in project_user_members:
+        for role in PROJECT_USER_IMPERSONATION_ROLES:
+            if principal not in controller_policy.get(role, set()):
+                _bind_service_account_role(controller_sa, member=principal, role=role, dry_run=args.dry_run)
 
     for service_account in (controller_sa, worker_sa):
+        self_member = f"serviceAccount:{service_account}"
+        if self_member not in (controller_policy if service_account == controller_sa else worker_policy).get(
+            "roles/iam.serviceAccountUser", set()
+        ):
+            _bind_service_account_role(
+                service_account,
+                member=self_member,
+                role="roles/iam.serviceAccountUser",
+                dry_run=args.dry_run,
+            )
+
+    controller_member = f"serviceAccount:{controller_sa}"
+    if controller_member not in worker_policy.get("roles/iam.serviceAccountUser", set()):
         _bind_service_account_role(
-            service_account,
-            member=f"serviceAccount:{service_account}",
+            worker_sa,
+            member=controller_member,
             role="roles/iam.serviceAccountUser",
             dry_run=args.dry_run,
         )
-
-    _bind_service_account_role(
-        worker_sa,
-        member=f"serviceAccount:{controller_sa}",
-        role="roles/iam.serviceAccountUser",
-        dry_run=args.dry_run,
-    )
 
     return 0
 
