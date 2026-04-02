@@ -279,6 +279,7 @@ class PhysicalStage:
     operations: list[PhysicalOp] = field(default_factory=list)
     stage_type: StageType = StageType.WORKER
     output_shards: int | None = None
+    is_reduce_stage: bool = False
 
     def stage_name(self, max_length: int | None = None) -> str:
         """Generate a descriptive name from operations.
@@ -374,11 +375,13 @@ class FusionState:
         """Flush pending ops and close current stage."""
         self.flush_pending()
         if self.current_ops:
+            is_reduce = any(isinstance(op, (Reduce, Fold)) for op in self.current_ops)
             self.stages.append(
                 PhysicalStage(
                     operations=self.current_ops[:],
                     stage_type=self.stage_type,
                     output_shards=self.output_shards,
+                    is_reduce_stage=is_reduce,
                 )
             )
             self.current_ops = []

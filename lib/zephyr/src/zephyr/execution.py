@@ -386,6 +386,16 @@ class ZephyrCoordinator:
         self._initialized: bool = False
         self._pipeline_running: bool = False
 
+        # On-demand worker lifecycle management (set via initialize)
+        self._client: Any = None
+        self._max_workers: int = 128
+        self._worker_resources: ResourceConfig = ResourceConfig(cpu=1, ram="1g")
+        self._reducer_resources: ResourceConfig | None = None
+        self._pipeline_name: str = ""
+        self._pipeline_id: int = 0
+        self._attempt_id: int = 0
+        self._batch_counter: int = 0
+
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
 
@@ -397,20 +407,43 @@ class ZephyrCoordinator:
         chunk_prefix: str,
         coordinator_handle: ActorHandle,
         no_workers_timeout: float = 60.0,
+        max_workers: int = 128,
+        worker_resources: ResourceConfig | None = None,
+        reducer_resources: ResourceConfig | None = None,
+        pipeline_name: str = "",
+        pipeline_id: int = 0,
+        attempt_id: int = 0,
     ) -> None:
         """Initialize coordinator for push-based worker registration.
 
         Workers register themselves by calling register_worker() when they start.
-        This eliminates polling overhead and log spam from discover_new() calls.
+        Workers are created on-demand per stage via _spawn_worker_batch().
 
         Args:
             chunk_prefix: Storage prefix for intermediate chunks
             coordinator_handle: Handle to this coordinator actor (passed from context)
             no_workers_timeout: Seconds to wait for at least one worker before failing.
+            max_workers: Upper bound on concurrent workers per batch.
+            worker_resources: Default (mapper) resource config per worker.
+            reducer_resources: Resource config for reduce stages. Falls back to
+                worker_resources when None.
+            pipeline_name: Name for worker group naming.
+            pipeline_id: Pipeline ID for worker group naming.
+            attempt_id: Attempt ID for worker group naming.
         """
+        from fray.v2.client import current_client
+
         self._chunk_prefix = chunk_prefix
         self._self_handle = coordinator_handle
         self._no_workers_timeout = no_workers_timeout
+        self._max_workers = max_workers
+        if worker_resources is not None:
+            self._worker_resources = worker_resources
+        self._reducer_resources = reducer_resources
+        self._pipeline_name = pipeline_name
+        self._pipeline_id = pipeline_id
+        self._attempt_id = attempt_id
+        self._client = current_client()
 
         logger.info("Coordinator initialized")
 
@@ -448,6 +481,12 @@ class ZephyrCoordinator:
             self._last_seen[worker_id] = time.monotonic()
 
             logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
+
+    def deregister_worker(self, worker_id: str) -> None:
+        """Called by a worker when it has finished its task and is exiting."""
+        with self._lock:
+            self._worker_states[worker_id] = WorkerState.DEAD
+            self._last_seen[worker_id] = time.monotonic()
 
     def _coordinator_loop(self) -> None:
         """Background loop for heartbeat checking and worker job monitoring."""
@@ -712,8 +751,17 @@ class ZephyrCoordinator:
             # accumulate across stages for full pipeline visibility.
             self._worker_counters = {}
 
-    def _wait_for_stage(self) -> None:
-        """Block until current stage completes or error occurs."""
+    def _wait_for_stage(
+        self,
+        spawn_fn: Callable[[int], None] | None = None,
+    ) -> None:
+        """Block until current stage completes or error occurs.
+
+        Args:
+            spawn_fn: If provided, called with queue_depth when workers need to
+                be spawned (tasks are queued but no workers are alive). Used for
+                on-demand worker creation.
+        """
         backoff = ExponentialBackoff(initial=0.1, maximum=1.0)
         last_log_completed = -1
         start_time = time.monotonic()
@@ -732,31 +780,40 @@ class ZephyrCoordinator:
                 if completed >= total:
                     return
 
+                queue_depth = len(self._task_queue)
+
                 # Count alive workers (READY or BUSY), not just total registered.
                 # Dead/failed workers stay in _worker_handles but can't make progress.
                 alive_workers = sum(
                     1 for s in self._worker_states.values() if s in {WorkerState.READY, WorkerState.BUSY}
                 )
 
-                if alive_workers == 0:
-                    now = time.monotonic()
-                    elapsed = now - start_time
-
-                    if all_dead_since is None:
-                        all_dead_since = now
-                        logger.warning("All workers are dead/failed. Waiting for workers to recover...")
-
-                    dead_duration = now - all_dead_since
-                    if dead_duration > no_workers_timeout:
-                        raise ZephyrWorkerError(
-                            f"No alive workers for {dead_duration:.1f}s "
-                            f"(total elapsed {elapsed:.1f}s). "
-                            f"All {len(self._worker_handles)} registered workers are dead/failed. "
-                            "Check cluster resources and worker group configuration."
-                        )
-                else:
-                    # Workers are alive — reset the dead timer
+            if alive_workers == 0:
+                if queue_depth > 0 and spawn_fn is not None:
+                    # Tasks waiting but no workers — spawn a batch
+                    spawn_fn(queue_depth)
                     all_dead_since = None
+                    backoff.reset()
+                    continue
+
+                now = time.monotonic()
+                elapsed = now - start_time
+
+                if all_dead_since is None:
+                    all_dead_since = now
+                    logger.warning("All workers are dead/failed. Waiting for workers to recover...")
+
+                dead_duration = now - all_dead_since
+                if dead_duration > no_workers_timeout:
+                    raise ZephyrWorkerError(
+                        f"No alive workers for {dead_duration:.1f}s "
+                        f"(total elapsed {elapsed:.1f}s). "
+                        f"All {len(self._worker_handles)} registered workers are dead/failed. "
+                        "Check cluster resources and worker group configuration."
+                    )
+            else:
+                # Workers are alive — reset the dead timer
+                all_dead_since = None
 
             if completed != last_log_completed:
                 logger.info("[%s] %d/%d tasks completed", self._stage_name, completed, total)
@@ -769,6 +826,64 @@ class ZephyrCoordinator:
         """Return results for the completed stage."""
         with self._lock:
             return dict(self._results)
+
+    def _spawn_worker_batch(self, count: int, resources: ResourceConfig) -> Any:
+        """Create a batch of single-task workers.
+
+        Each worker pulls one task, executes it, reports the result, and exits.
+        Returns the ActorGroup for lifecycle management.
+        """
+        batch_id = self._batch_counter
+        self._batch_counter += 1
+        name = f"zephyr-{self._pipeline_name}-p{self._pipeline_id}-a{self._attempt_id}-b{batch_id}"
+        logger.info("Creating worker batch %s: %d workers, resources=%s", name, count, resources)
+        group = self._client.create_actor_group(
+            ZephyrWorker,
+            self._self_handle,
+            name=name,
+            count=count,
+            resources=resources,
+            actor_config=ActorConfig(max_task_retries=10),
+        )
+        group.wait_ready(count=1, timeout=3600.0)
+        return group
+
+    def _stage_resources(self, stage: Any) -> ResourceConfig:
+        """Return the resource config for a stage."""
+        if stage.is_reduce_stage and self._reducer_resources is not None:
+            return self._reducer_resources
+        return self._worker_resources
+
+    def _run_stage_with_workers(
+        self,
+        stage_label: str,
+        tasks: list[ShardTask],
+        resources: ResourceConfig,
+        is_last_stage: bool,
+    ) -> None:
+        """Load tasks, spawn workers on-demand, and wait until all tasks complete.
+
+        Workers are created in batches. Each worker executes a single task and
+        exits. When all workers in a batch finish and tasks remain (from the
+        initial queue or from failure requeues), a new batch is spawned.
+        """
+        self._start_stage(stage_label, tasks, is_last_stage=is_last_stage)
+        if not tasks:
+            return
+
+        worker_groups: list = []
+
+        def spawn_fn(queue_depth: int) -> None:
+            batch_size = min(self._max_workers, queue_depth)
+            group = self._spawn_worker_batch(batch_size, resources)
+            worker_groups.append(group)
+
+        try:
+            self._wait_for_stage(spawn_fn=spawn_fn)
+        finally:
+            for group in worker_groups:
+                with suppress(Exception):
+                    group.shutdown()
 
     def run_pipeline(
         self,
@@ -811,10 +926,15 @@ class ZephyrCoordinator:
                 tasks = _compute_tasks_from_shards(shards, stage, aux_per_shard, stage_name=stage_label)
                 output_stage_name = tasks[0].stage_name if tasks else stage_label
                 logger.info("[%s] Starting stage %s with %d tasks", self._execution_id, stage_label, len(tasks))
-                self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
 
-                # Wait for stage completion
-                self._wait_for_stage()
+                # Create workers on-demand for this stage with appropriate resources
+                stage_resources = self._stage_resources(stage)
+                self._run_stage_with_workers(
+                    stage_label,
+                    tasks,
+                    stage_resources,
+                    is_last_stage=(stage_idx == last_worker_stage_idx),
+                )
 
                 # Collect and regroup results for next stage
                 result_refs = self._collect_results()
@@ -870,8 +990,13 @@ class ZephyrCoordinator:
                 join_stage_label = f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}"
                 right_tasks = _compute_tasks_from_shards(right_refs, right_stage, stage_name=join_stage_label)
                 join_output_stage_name = right_tasks[0].stage_name if right_tasks else join_stage_label
-                self._start_stage(join_stage_label, right_tasks)
-                self._wait_for_stage()
+                join_resources = self._stage_resources(right_stage)
+                self._run_stage_with_workers(
+                    join_stage_label,
+                    right_tasks,
+                    join_resources,
+                    is_last_stage=False,
+                )
                 raw = self._collect_results()
                 right_is_scatter = any(isinstance(op, Scatter) for op in right_stage.operations)
                 right_refs = _regroup_result_refs(
@@ -1096,24 +1221,24 @@ class ZephyrWorker:
         logger.debug("[%s] Heartbeat loop exiting after %d beats", self._worker_id, heartbeat_count)
 
     def _poll_loop(self, coordinator: ActorHandle) -> None:
-        """Pure polling loop. Exits on SHUTDOWN signal, coordinator death, or shutdown event."""
-        task_count = 0
-        backoff = ExponentialBackoff(initial=0.1, maximum=1.0)
+        """Pull a single task, execute it, and exit.
+
+        Each worker is a single-task actor: it pulls one task from the
+        coordinator, executes it, reports the result, deregisters, and exits.
+        The coordinator spawns new worker batches as needed.
+        """
+        import traceback as tb_mod
 
         future: ActorFuture | None = None
         future_start = 0.0
         warned = False
 
         while not self._shutdown_event.is_set():
-            # Create a pull_task future if we don't have one in flight
             if future is None:
                 future = coordinator.pull_task.remote(self._worker_id)
                 future_start = time.monotonic()
                 warned = False
 
-            # Poll with a short timeout so we stay responsive to shutdown
-            # without killing the worker (and its heartbeat thread) on slow
-            # deserialization.
             try:
                 response = future.result(timeout=0.5)
             except TimeoutError:
@@ -1126,21 +1251,17 @@ class ZephyrWorker:
                 logger.info("[%s] pull_task failed (coordinator may be dead): %s", self._worker_id, e)
                 break
 
-            future = None  # consumed; next iteration will create a new one
+            future = None
 
-            # SHUTDOWN signal - exit cleanly
             if response == "SHUTDOWN":
                 logger.info("[%s] Received SHUTDOWN", self._worker_id)
                 break
 
-            # No task available - backoff and retry
+            # No task available — exit (coordinator will spawn more workers if needed)
             if response is None:
-                time.sleep(backoff.next_interval())
-                continue
+                logger.info("[%s] No task available, exiting", self._worker_id)
+                break
 
-            backoff.reset()
-
-            # Unpack task and config
             task, attempt, config = response
 
             logger.info("[%s] Executing task for shard %d (attempt %d)", self._worker_id, task.shard_idx, attempt)
@@ -1153,10 +1274,6 @@ class ZephyrWorker:
                     task.shard_idx,
                     time.monotonic() - t_0,
                 )
-                # Block until coordinator records the result. This ensures
-                # report_result is fully processed before the next pull_task,
-                # preventing _in_flight tracking races.  Send the final counter
-                # snapshot so no increments are lost between heartbeats.
                 coordinator.report_result.remote(
                     self._worker_id,
                     task.shard_idx,
@@ -1164,16 +1281,18 @@ class ZephyrWorker:
                     result,
                     self.get_counter_snapshot(),
                 ).result()
-                task_count += 1
             except Exception as e:
                 logger.error("Worker %s error on shard %d: %s", self._worker_id, task.shard_idx, e)
-                import traceback
-
                 coordinator.report_error.remote(
                     self._worker_id,
                     task.shard_idx,
-                    "".join(traceback.format_exc()),
+                    "".join(tb_mod.format_exc()),
                 ).result()
+
+            # Single-task worker: deregister and exit after one task
+            with suppress(Exception):
+                coordinator.deregister_worker.remote(self._worker_id).result(timeout=5.0)
+            break
 
     def _execute_shard(self, task: ShardTask, config: dict) -> TaskResult:
         """Execute a stage's operations on a single shard.
@@ -1280,6 +1399,7 @@ class _CoordinatorJobConfig:
     no_workers_timeout: float
     max_workers: int
     worker_resources: ResourceConfig
+    reducer_resources: ResourceConfig | None
     name: str
     pipeline_id: int
 
@@ -1287,10 +1407,9 @@ class _CoordinatorJobConfig:
 def _run_coordinator_job(config_path: str, result_path: str) -> None:
     """Entrypoint for the coordinator job.
 
-    Hosts the coordinator actor in-process via host_actor(), creates
-    worker actors as child jobs, runs the pipeline, and writes results
-    to disk. The coordinator monitors worker job health directly in its
-    maintenance loop (no separate watchdog thread).
+    Hosts the coordinator actor in-process via host_actor(). Workers are
+    created on-demand by the coordinator during run_pipeline(), not upfront.
+    Each worker executes a single task and exits.
     """
     from fray.v2.client import current_client
     from iris.cluster.client.job_info import get_job_info
@@ -1324,31 +1443,15 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
         config.chunk_storage_prefix,
         coordinator,
         config.no_workers_timeout,
+        max_workers=config.max_workers,
+        worker_resources=config.worker_resources,
+        reducer_resources=config.reducer_resources,
+        pipeline_name=config.name,
+        pipeline_id=config.pipeline_id,
+        attempt_id=attempt_id,
     ).result()
 
-    # Create workers (child jobs)
-    num_shards = config.plan.num_shards
-    actual_workers = min(config.max_workers, num_shards) if num_shards > 0 else 0
-    worker_group = None
-
-    if actual_workers > 0:
-        # Worker name includes attempt ID so that if a stale coordinator
-        # process from a previous attempt is still running, its shutdown
-        # targets the old name and cannot kill this attempt's workers.
-        worker_name = f"zephyr-{config.name}-p{config.pipeline_id}-workers-a{attempt_id}"
-        logger.info("Starting %d workers (max=%d, shards=%d)", actual_workers, config.max_workers, num_shards)
-        worker_group = client.create_actor_group(
-            ZephyrWorker,
-            coordinator,
-            name=worker_name,
-            count=actual_workers,
-            resources=config.worker_resources,
-            actor_config=ActorConfig(max_task_retries=10),
-        )
-        worker_group.wait_ready(count=1, timeout=3600.0)
-
-        # Let the coordinator poll worker job health in its maintenance loop
-        coordinator.set_worker_group.remote(worker_group).result()
+    # Workers are created on-demand by the coordinator during run_pipeline()
 
     try:
         results = coordinator.run_pipeline.submit(config.plan, config.execution_id).result()
@@ -1365,14 +1468,8 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
                 f.write(cloudpickle.dumps(e))
         raise
     finally:
-        # Signal coordinator shutdown first so workers receive SHUTDOWN from
-        # pull_task and self-terminate via shutdown_event → exit_actor()
-        # before worker_group.shutdown() sends __ray_terminate__.
         with suppress(Exception):
             coordinator.shutdown.remote().result(timeout=10.0)
-        if worker_group is not None:
-            with suppress(Exception):
-                worker_group.shutdown()
         with suppress(Exception):
             hosted.shutdown()
 
@@ -1410,7 +1507,9 @@ class ZephyrContext:
         max_workers: Upper bound on worker count. The actual count is
             min(max_workers, num_shards), computed at first execute(). If None,
             defaults to os.cpu_count() for LocalClient, or 128 for distributed clients.
-        resources: Resource config per worker.
+        resources: Resource config per worker (used for mapper/non-reduce stages).
+        reducer_resources: Resource config for reduce stages (group_by, reduce).
+            When None, all stages use ``resources``.
         coordinator_resources: Resource config for the coordinator job. The coordinator
             accumulates scatter manifests for all shards in memory; increase ram for
             large pipelines (many shards). Defaults to 5 GB.
@@ -1428,6 +1527,7 @@ class ZephyrContext:
     client: Client | None = None
     max_workers: int | None = None
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
+    reducer_resources: ResourceConfig | None = None
     coordinator_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="5g"))
     chunk_storage_prefix: str | None = None
     name: str = ""
@@ -1543,6 +1643,7 @@ class ZephyrContext:
                     no_workers_timeout=self.no_workers_timeout,
                     max_workers=self.max_workers,
                     worker_resources=self.resources,
+                    reducer_resources=self.reducer_resources,
                     name=self.name,
                     pipeline_id=self._pipeline_id,
                 )

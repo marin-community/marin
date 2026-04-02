@@ -694,12 +694,12 @@ def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
     first_entered = threading.Event()
     original_wait = coord._wait_for_stage
 
-    def blocking_wait():
+    def blocking_wait(**kwargs):
         first_entered.set()
         time.sleep(0.1)
         coord._fatal_error = "test: forced exit"
         try:
-            original_wait()
+            original_wait(**kwargs)
         except Exception:
             pass
 
@@ -832,3 +832,98 @@ def test_simple_map_integration(integration_ctx):
 def test_multi_stage_integration(integration_ctx):
     ds = Dataset.from_list([1, 2, 3, 4, 5]).map(lambda x: x * 2).filter(lambda x: x > 5)
     assert sorted(integration_ctx.execute(ds)) == [6, 8, 10]
+
+
+# --- On-demand worker tests ---
+
+
+def test_deregister_worker(actor_context, tmp_path):
+    """Workers deregister after completing their task, marking themselves DEAD."""
+    from unittest.mock import MagicMock
+
+    from zephyr.execution import ListShard, ShardTask, TaskResult, WorkerState, ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    task = ShardTask(shard_idx=0, total_shards=1, shard=ListShard(refs=[]), operations=[], stage_name="test")
+    coord.start_stage("test", [task])
+
+    coord.register_worker("worker-0", MagicMock())
+    assert coord._worker_states["worker-0"] == WorkerState.READY
+
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    _task, attempt, _ = pulled
+    assert coord._worker_states["worker-0"] == WorkerState.BUSY
+
+    coord.report_result("worker-0", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
+    assert coord._worker_states["worker-0"] == WorkerState.READY
+
+    coord.deregister_worker("worker-0")
+    assert coord._worker_states["worker-0"] == WorkerState.DEAD
+
+
+def test_reduce_stage_detection():
+    """PhysicalStage.is_reduce_stage is set for stages containing Reduce/Fold ops."""
+    from zephyr.dataset import GroupByOp, MapOp
+    from zephyr.plan import StageType, _fuse_operations
+
+    # GroupByOp produces: Scatter stage (mapper) + Reduce stage (reducer)
+    operations = [
+        MapOp(fn=lambda x: x),
+        GroupByOp(
+            key_fn=lambda x: x["key"],
+            reducer_fn=lambda k, items: {"key": k, "total": sum(i["val"] for i in items)},
+            num_output_shards=2,
+        ),
+    ]
+    stages = _fuse_operations(operations)
+    worker_stages = [s for s in stages if s.stage_type == StageType.WORKER]
+    assert len(worker_stages) == 2
+    # First worker stage: Map + Scatter (mapper) — not a reduce stage
+    assert not worker_stages[0].is_reduce_stage
+    # Second worker stage: Reduce (reducer) — is a reduce stage
+    assert worker_stages[1].is_reduce_stage
+
+
+def test_more_tasks_than_workers(local_client, tmp_path):
+    """On-demand batching handles more tasks than max_workers correctly."""
+    ctx = ZephyrContext(
+        client=local_client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"test-batch-{uuid.uuid4().hex[:8]}",
+    )
+    # 6 tasks with max_workers=2: needs multiple worker batches
+    ds = Dataset.from_list([1, 2, 3, 4, 5, 6]).map(lambda x: x * 3)
+    results = sorted(list(ctx.execute(ds)))
+    assert results == [3, 6, 9, 12, 15, 18]
+
+
+def test_on_demand_workers_with_reducer_resources(local_client, tmp_path):
+    """Pipeline with group_by uses reducer_resources for reduce stages."""
+    ctx = ZephyrContext(
+        client=local_client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        reducer_resources=ResourceConfig(cpu=1, ram="1g"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"test-reducer-res-{uuid.uuid4().hex[:8]}",
+    )
+    ds = Dataset.from_list(
+        [
+            {"key": "a", "val": 1},
+            {"key": "b", "val": 2},
+            {"key": "a", "val": 3},
+        ]
+    ).group_by(
+        lambda x: x["key"],
+        reducer=lambda key, items: {"key": key, "total": sum(i["val"] for i in items)},
+        num_output_shards=2,
+    )
+    results = sorted(list(ctx.execute(ds)), key=lambda x: x["key"])
+    assert len(results) == 2
+    assert results[0] == {"key": "a", "total": 4}
+    assert results[1] == {"key": "b", "total": 2}
