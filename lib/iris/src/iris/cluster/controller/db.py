@@ -649,7 +649,7 @@ class ControllerDB:
 
     def get_user_role(self, user_id: str) -> str:
         """Get a user's role. Returns 'user' if not found."""
-        with self.snapshot() as q:
+        with self.read_snapshot() as q:
             rows = q.raw(
                 "SELECT role FROM users WHERE user_id = ?",
                 (user_id,),
@@ -933,6 +933,6 @@ def get_task_profiles(
             "SELECT profile_data, captured_at_ms, profile_kind FROM task_profiles" " WHERE task_id = ? ORDER BY id DESC"
         )
         params = (task_id,)
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         rows = q.raw(query, params, decoders={"captured_at_ms": decode_timestamp_ms})
     return [(row.profile_data, row.captured_at_ms, row.profile_kind) for row in rows]

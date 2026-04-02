@@ -1266,7 +1266,7 @@ class Autoscaler:
             raise ValueError("No DB configured — cannot look up worker")
 
         # Look up worker's slice and group from the DB (always up to date)
-        with self._db.snapshot() as snap:
+        with self._db.read_snapshot() as snap:
             rows = snap.raw(
                 "SELECT slice_id, scale_group FROM tracked_workers WHERE worker_id = ?",
                 params=(worker_id,),
@@ -1313,7 +1313,7 @@ class Autoscaler:
         reconciles each group against the cloud in parallel, and restores
         tracked workers. Call at startup before loops begin.
         """
-        with db.snapshot() as snapshot:
+        with db.read_snapshot() as snapshot:
             scaling_rows = snapshot.raw(
                 "SELECT name, consecutive_failures, backoff_until_ms, last_scale_up_ms, "
                 "last_scale_down_ms, quota_exceeded_until_ms, quota_reason "
