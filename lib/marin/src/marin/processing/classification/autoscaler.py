@@ -373,22 +373,6 @@ class AutoscalingActorPool:
             logger.debug(f"Assigning to actor: {actor} for task: {task}")
             return future
 
-    def _cleanup_completed_futures(self):
-        """Remove completed futures from tracking."""
-        with self.actor_task_metadata_lock:
-            for actor in self.actors:
-                if actor in self.actor_futures:
-                    # Filter out completed futures
-                    pending = []
-                    for future in self.actor_futures[actor]:
-                        ready, _ = ray.wait([future], timeout=0)
-                        if not ready:
-                            pending.append(future)
-                        else:
-                            self.future_to_actor.pop(future, None)
-                            self.future_to_task.pop(future, None)
-                    self.actor_futures[actor] = pending
-
     def shutdown(self):
         """Shutdown the actor pool and clean up resources."""
         logger.info("Shutting down actor pool...")
