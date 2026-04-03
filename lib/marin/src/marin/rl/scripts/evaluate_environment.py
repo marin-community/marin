@@ -95,7 +95,7 @@ class EnvironmentEvalConfig:
 
     vocab_size: int | None = None
     """Vocab size for model construction. Should match the checkpoint's vocab dimension.
-    If None, falls back to len(tokenizer)."""
+    If None, falls back to tokenizer.vocab_size."""
 
 
 def _run_evaluation(config: EnvironmentEvalConfig) -> None:
@@ -153,7 +153,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
             logger.info(f"Model config: {model_config}")
 
             key = jrandom.PRNGKey(42)
-            vocab_size = config.vocab_size if config.vocab_size is not None else len(tokenizer)
+            vocab_size = config.vocab_size if config.vocab_size is not None else tokenizer.vocab_size
             Vocab = hax.Axis("vocab", vocab_size)
             logger.info(f"Vocab size: {vocab_size}")
 

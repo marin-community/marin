@@ -104,7 +104,7 @@ class RLJobConfig:
 
     vocab_size: int | None = None
     """Vocab size for model construction. Should match the checkpoint's vocab dimension.
-    If None, falls back to len(tokenizer)."""
+    If None, falls back to tokenizer.vocab_size."""
 
     # Model & initialization (with defaults)
     initial_checkpoint: str | None = None

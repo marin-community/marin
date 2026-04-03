@@ -19,11 +19,11 @@ import functools
 import json
 import os
 from enum import StrEnum
-from multiprocessing import Pool
 from typing import Any, Protocol, runtime_checkable
 
 import jinja2
 from huggingface_hub import hf_hub_download
+from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
 from tokenizers import Tokenizer as HfBaseTokenizer
 
 
@@ -73,7 +73,7 @@ class MarinTokenizer(Protocol):
 
 @dataclasses.dataclass(frozen=True)
 class HfMarinTokenizer:
-    """MarinTokenizer backed by HF tokenizers library with process isolation for large batches."""
+    """MarinTokenizer backed by the HF tokenizers (Rust) library."""
 
     _tokenizer: HfBaseTokenizer
     _name_or_path: str
@@ -84,7 +84,6 @@ class HfMarinTokenizer:
     _eos_token: str | None
     _chat_template: str | None
     _vocab_size: int
-    _maxtasksperchild: int = 500
 
     @property
     def name_or_path(self) -> str:
@@ -125,12 +124,11 @@ class HfMarinTokenizer:
         return self._tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
 
     def encode_batch(self, texts: list[str], *, add_special_tokens: bool = False) -> list[list[int]]:
-        if len(texts) <= 16:
-            encodings = self._tokenizer.encode_batch(texts, add_special_tokens=add_special_tokens)
-            return [enc.ids for enc in encodings]
-
-        with Pool(processes=1, maxtasksperchild=self._maxtasksperchild) as pool:
-            return pool.apply(_encode_batch_in_worker, (self._name_or_path, texts, add_special_tokens))
+        # Copy strings to release references to potentially large source buffers,
+        # mitigating memory retention from sliced strings.
+        texts = ["".join(s) for s in texts]
+        encodings = self._tokenizer.encode_batch(texts, add_special_tokens=add_special_tokens)
+        return [enc.ids for enc in encodings]
 
     def get_vocab(self) -> dict[str, int]:
         return self._tokenizer.get_vocab()
@@ -157,13 +155,6 @@ class HfMarinTokenizer:
         if tokenize:
             return self.encode(rendered, add_special_tokens=False)
         return rendered
-
-
-def _encode_batch_in_worker(name_or_path: str, texts: list[str], add_special_tokens: bool) -> list[list[int]]:
-    """Runs in a subprocess. Loads the tokenizer fresh per worker lifetime."""
-    tok = HfBaseTokenizer.from_pretrained(name_or_path)
-    encodings = tok.encode_batch(texts, add_special_tokens=add_special_tokens)
-    return [enc.ids for enc in encodings]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -288,12 +279,16 @@ def load_tokenizer(
     raise ValueError(f"Unknown backend: {backend}")
 
 
+def _load_hf_base_tokenizer(name_or_path: str) -> HfBaseTokenizer:
+    """Load an HfBaseTokenizer, handling both local paths and HF hub names."""
+    local_path = os.path.join(name_or_path, "tokenizer.json")
+    if os.path.isfile(local_path):
+        return HfBaseTokenizer.from_file(local_path)
+    return HfBaseTokenizer.from_pretrained(name_or_path)
+
+
 def _load_hf_tokenizer(name_or_path: str) -> HfMarinTokenizer:
-    local_tokenizer_json = os.path.join(name_or_path, "tokenizer.json")
-    if os.path.isfile(local_tokenizer_json):
-        tok = HfBaseTokenizer.from_file(local_tokenizer_json)
-    else:
-        tok = HfBaseTokenizer.from_pretrained(name_or_path)
+    tok = _load_hf_base_tokenizer(name_or_path)
     config = _load_tokenizer_config(name_or_path)
 
     bos_token = _resolve_special_token(config, "bos_token")
@@ -340,7 +335,7 @@ def _load_tokenizer_config(name_or_path: str) -> dict:
 
     try:
         path = hf_hub_download(name_or_path, "tokenizer_config.json")
-    except Exception:
+    except (EntryNotFoundError, RepositoryNotFoundError):
         return {}
 
     with open(path) as f:

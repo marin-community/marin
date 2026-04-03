@@ -84,7 +84,9 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
             encoding["attention_mask"] = [[1] * len(ids) for ids in encoded]
 
         if self.padding is not False and self.max_length is not None:
-            encoding = _apply_padding_and_truncation(encoding, self.max_length, self.padding)
+            encoding = _apply_padding_and_truncation(
+                encoding, self.max_length, self.padding, pad_token_id=self.tokenizer.pad_token_id or 0
+            )
 
         if needs_merge:
             encoding = self._merge_split_encodings(batch_text, encoding, needs_merge)
@@ -173,10 +175,9 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
 
 
 def _apply_padding_and_truncation(
-    encoding: dict[str, list[list[int]]], max_length: int, padding
+    encoding: dict[str, list[list[int]]], max_length: int, padding, pad_token_id: int = 0
 ) -> dict[str, list[list[int]]]:
     """Truncate sequences to max_length and optionally pad to uniform length."""
-    # Truncate
     for k in encoding:
         encoding[k] = [seq[:max_length] for seq in encoding[k]]
 
@@ -190,7 +191,7 @@ def _apply_padding_and_truncation(
         target_len = max(len(seq) for seq in encoding["input_ids"]) if encoding["input_ids"] else 0
 
     for k in encoding:
-        pad_value = 0
+        pad_value = pad_token_id if k == "input_ids" else 0
         encoding[k] = [seq + [pad_value] * (target_len - len(seq)) for seq in encoding[k]]
 
     return encoding

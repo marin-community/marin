@@ -10,7 +10,12 @@ import numpy as np
 from draccus import ChoiceRegistry
 
 from levanter.data._preprocessor import BatchProcessor
-from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
+from levanter.tokenizers import (
+    HfMarinTokenizer,
+    MarinTokenizer,
+    TokieMarinTokenizer,
+    load_tokenizer as load_marin_tokenizer,
+)
 from levanter.utils.hf_utils import HfTokenizer, num_cpus_used_by_tokenizer
 
 from ._batch_tokenizer import BatchTokenizer
@@ -64,6 +69,14 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
     def build_preprocessor(
         self, tokenizer: AnyTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
+        # ChatProcessor uses HF-specific apply_chat_template kwargs
+        # (return_assistant_tokens_mask, return_dict) that MarinTokenizer does not support.
+        if isinstance(tokenizer, MarinTokenizer) and not _is_hf_tokenizer(tokenizer):
+            raise TypeError(
+                "ChatLmDatasetFormat requires an HF transformers tokenizer, not a MarinTokenizer. "
+                "The chat path uses apply_chat_template with return_assistant_tokens_mask=True "
+                "which is only supported by HF tokenizers."
+            )
         return ChatProcessor(
             tokenizer,
             messages_field=self.messages_field,
@@ -278,7 +291,7 @@ class ChatProcessor(BatchProcessor[dict, dict]):
     def metadata(self) -> dict[str, Any]:
         return {
             "tokenizer": self.tokenizer.name_or_path,
-            "vocab_size": len(self.tokenizer),
+            "vocab_size": self.tokenizer.vocab_size,
             "chat_template": self.chat_template,
             "messages_field": self.messages_field,
             "system_prompt_field": self.system_prompt_field,
@@ -290,6 +303,11 @@ def preprocessor_for_format(
     format: LmDatasetFormatBase, tokenizer: AnyTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
 ) -> BatchProcessor[dict, dict]:
     return format.build_preprocessor(tokenizer, enforce_eos=enforce_eos, enforce_bos=enforce_bos)
+
+
+def _is_hf_tokenizer(tokenizer: AnyTokenizer) -> bool:
+    """Check if this is an HF transformers tokenizer (not a MarinTokenizer implementation)."""
+    return not isinstance(tokenizer, (HfMarinTokenizer, TokieMarinTokenizer))
 
 
 def _ensure_marin_tokenizer(tokenizer: AnyTokenizer) -> MarinTokenizer:
