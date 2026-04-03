@@ -25,7 +25,7 @@ Write the block as normal Markdown in this shape:
 
 ```md
 <!-- experiment-tldr:start -->
-## Summary
+## 🤖 Summary
 
 One short newcomer-friendly summary paragraph.
 
@@ -40,6 +40,7 @@ One short newcomer-friendly summary paragraph.
 - State the current conclusion, recommendation, or unresolved blocker in concrete language.
 - Improve existing managed summaries whenever they are inaccurate, stale, vague, or miss the real conclusion.
 - Improve unmanaged summaries too when the issue still lacks the `tldr` label and the current body is not adequate.
+- Keep the heading exactly as `## 🤖 Summary` so readers can recognize bot-managed content at a glance.
 - Treat `250` words as a soft cap for the summary section, not a target.
 
 ## Helpful Links Guidance
