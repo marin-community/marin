@@ -970,7 +970,8 @@ class ScalingGroup:
         if self._config.HasField("resources") and self._config.resources.device_variant:
             attrs[WellKnownAttribute.DEVICE_VARIANT] = AttributeValue(self._config.resources.device_variant.lower())
         if self._config.HasField("resources"):
-            attrs[WellKnownAttribute.PREEMPTIBLE] = AttributeValue(str(self._config.resources.preemptible).lower())
+            is_preemptible = self._config.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+            attrs[WellKnownAttribute.PREEMPTIBLE] = AttributeValue(str(is_preemptible).lower())
         region = self.region
         if region:
             attrs[WellKnownAttribute.REGION] = AttributeValue(region)

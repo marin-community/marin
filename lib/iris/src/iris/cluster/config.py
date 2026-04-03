@@ -68,6 +68,20 @@ _ACCELERATOR_TYPE_MAP = {
     "tpu": "ACCELERATOR_TYPE_TPU",
 }
 
+_CAPACITY_TYPE_MAP = {
+    "preemptible": "CAPACITY_TYPE_PREEMPTIBLE",
+    "on_demand": "CAPACITY_TYPE_ON_DEMAND",
+    "on-demand": "CAPACITY_TYPE_ON_DEMAND",
+    "reserved": "CAPACITY_TYPE_RESERVED",
+}
+
+# Reverse mapping for YAML serialization: proto enum name → friendly YAML name
+_CAPACITY_TYPE_REVERSE_MAP = {
+    "CAPACITY_TYPE_PREEMPTIBLE": "preemptible",
+    "CAPACITY_TYPE_ON_DEMAND": "on-demand",
+    "CAPACITY_TYPE_RESERVED": "reserved",
+}
+
 _COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
     "backend.coreweave.cloud/",
     "ib.coreweave.cloud/",
@@ -130,6 +144,11 @@ def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> Non
             raise ValueError(f"Scale group '{name}' has invalid disk_bytes={resources.disk_bytes}.")
         if resources.device_count < 0:
             raise ValueError(f"Scale group '{name}' has invalid device_count={resources.device_count}.")
+        if resources.capacity_type == config_pb2.CAPACITY_TYPE_UNSPECIFIED:
+            raise ValueError(
+                f"Scale group '{name}': resources.capacity_type is required "
+                "(one of: preemptible, on-demand, reserved)."
+            )
 
 
 def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
@@ -155,8 +174,8 @@ def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
             resources = sg_config.resources
             gcp_mode = template.gcp.mode
             if gcp_mode == config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM:
-                if resources.preemptible:
-                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices do not support preemptible instances.")
+                if resources.capacity_type != config_pb2.CAPACITY_TYPE_ON_DEMAND:
+                    raise ValueError(f"Scale group '{name}': VM-backed GCP slices only support capacity_type on-demand.")
                 if sg_config.num_vms != 1:
                     raise ValueError(f"Scale group '{name}': VM-backed GCP slices require num_vms=1.")
                 if resources.device_type != config_pb2.ACCELERATOR_TYPE_CPU:
@@ -197,7 +216,7 @@ def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
 def _validate_worker_settings(config: config_pb2.IrisClusterConfig) -> None:
     """Validate optional per-scale-group worker settings.
 
-    Well-known attributes (preemptible, device-type, device-variant) are now
+    Well-known attributes (device-type, device-variant, preemptible) are now
     auto-derived from resources, so we reject them in worker.attributes to
     prevent conflicting declarations.
     """
@@ -265,7 +284,7 @@ def _derive_slice_config_from_resources(config: config_pb2.IrisClusterConfig) ->
     """Derive SliceConfig fields from ScaleGroupResources.
 
     Provider modules (gcp.py, local.py) read accelerator_type, accelerator_variant,
-    preemptible, and gpu_count from SliceConfig when calling cloud APIs. These fields
+    capacity_type, and gpu_count from SliceConfig when calling cloud APIs. These fields
     are now the canonical source in resources; this function populates SliceConfig
     so provider modules continue to work without modification.
 
@@ -281,7 +300,7 @@ def _derive_slice_config_from_resources(config: config_pb2.IrisClusterConfig) ->
         template.accelerator_type = resources.device_type
         if resources.device_variant:
             template.accelerator_variant = resources.device_variant
-        template.preemptible = resources.preemptible
+        template.capacity_type = resources.capacity_type
 
         if resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and resources.device_count > 0:
             template.gpu_count = resources.device_count
@@ -863,24 +882,24 @@ def _normalize_scale_group_resources(data: dict) -> None:
         if device_count is not None:
             normalized["device_count"] = int(device_count)
 
-        preemptible = resources.get("preemptible")
-        if preemptible is not None:
-            if isinstance(preemptible, bool):
-                normalized["preemptible"] = preemptible
-            elif isinstance(preemptible, str):
-                lower = preemptible.strip().lower()
-                if lower == "true":
-                    normalized["preemptible"] = True
-                elif lower == "false":
-                    normalized["preemptible"] = False
-                else:
+        capacity_type = resources.get("capacity_type")
+        if capacity_type is not None:
+            if isinstance(capacity_type, str):
+                key = capacity_type.strip().lower().replace("-", "_")
+                mapped = _CAPACITY_TYPE_MAP.get(key)
+                if mapped is None:
+                    allowed = ", ".join(sorted(_CAPACITY_TYPE_MAP.keys()))
                     raise ValueError(
-                        f"scale_groups.{name}.resources.preemptible must be true or false, got {preemptible!r}"
+                        f"scale_groups.{name}.resources.capacity_type must be one of "
+                        f"{allowed}, got {capacity_type!r}"
                     )
+                normalized["capacity_type"] = mapped
+            elif isinstance(capacity_type, int):
+                normalized["capacity_type"] = capacity_type
             else:
                 raise ValueError(
-                    f"scale_groups.{name}.resources.preemptible must be bool or string,"
-                    f" got {type(preemptible).__name__}"
+                    f"scale_groups.{name}.resources.capacity_type must be a string, "
+                    f"got {type(capacity_type).__name__}"
                 )
 
         sg["resources"] = normalized
@@ -918,8 +937,9 @@ def config_to_dict(config: config_pb2.IrisClusterConfig) -> dict:
                 normalized["device_variant"] = resources["device_variant"]
             if "device_count" in resources:
                 normalized["device_count"] = resources["device_count"]
-            if "preemptible" in resources:
-                normalized["preemptible"] = resources["preemptible"]
+            if "capacity_type" in resources:
+                raw_ct = resources["capacity_type"]
+                normalized["capacity_type"] = _CAPACITY_TYPE_REVERSE_MAP.get(raw_ct, raw_ct)
             sg["resources"] = normalized
     return data
 

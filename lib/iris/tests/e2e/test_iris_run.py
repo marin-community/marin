@@ -48,7 +48,7 @@ def local_cluster_and_config(tmp_path_factory):
                                 "disk": 0,
                                 "device_type": "cpu",
                                 "device_count": 0,
-                                "preemptible": False,
+                                "capacity_type": "on_demand",
                             },
                         }
                     },

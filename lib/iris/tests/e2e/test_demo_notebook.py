@@ -29,6 +29,7 @@ def _make_demo_config() -> config_pb2.IrisClusterConfig:
     cpu_sg.resources.disk_bytes = 0
     cpu_sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
     cpu_sg.resources.device_count = 0
+    cpu_sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
     return IrisConfig(config).as_local().proto
 
 
