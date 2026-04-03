@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for GCPApi — HTTP client for GCP REST APIs.
+"""Tests for CloudGcpService REST API integration.
 
 Uses httpx.MockTransport to verify URL construction, error mapping,
-pagination, and auth header injection without hitting real GCP.
+pagination, operation waiting, and auth header injection without hitting real GCP.
 """
 
 from __future__ import annotations
@@ -16,17 +16,16 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from iris.cluster.providers.gcp.api import (
-    COMPUTE_BASE,
-    LOGGING_BASE,
-    TPU_BASE,
-    GCPApi,
+from iris.cluster.providers.gcp.service import (
+    CloudGcpService,
+    TpuCreateRequest,
+    VmCreateRequest,
 )
 from iris.cluster.providers.types import (
     InfraError,
     QuotaExhaustedError,
-    ResourceNotFoundError,
 )
+from iris.rpc import config_pb2
 
 PROJECT = "test-project"
 ZONE = "us-central1-a"
@@ -43,17 +42,16 @@ def _mock_credentials():
             "refresh": lambda self, req: None,
         },
     )()
-    return patch("iris.cluster.providers.gcp.api.google.auth.default", return_value=(cred, PROJECT))
+    return patch("iris.cluster.providers.gcp.service.google.auth.default", return_value=(cred, PROJECT))
 
 
-def _make_api(handler: Callable[[httpx.Request], httpx.Response]) -> GCPApi:
-    """Create a GCPApi with a mock HTTP transport and fake credentials."""
-    api = GCPApi(PROJECT)
-    api._client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10)
-    # Inject fake token so _refresh_token isn't called
-    api._token = "fake-token"
-    api._expires_at = float("inf")
-    return api
+def _make_svc(handler: Callable[[httpx.Request], httpx.Response]) -> CloudGcpService:
+    """Create a CloudGcpService with a mock HTTP transport and fake credentials."""
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10)
+    svc = CloudGcpService(PROJECT, http_client=client)
+    svc._token = "fake-token"
+    svc._expires_at = float("inf")
+    return svc
 
 
 def _json_response(body: dict, status: int = 200) -> httpx.Response:
@@ -69,10 +67,9 @@ def test_404_raises_resource_not_found():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"error": {"code": 404, "message": "Not found", "status": "NOT_FOUND"}})
 
-    api = _make_api(handler)
-    with pytest.raises(ResourceNotFoundError, match="Not found"):
-        api.tpu_get("no-such-tpu", ZONE)
-    api.close()
+    svc = _make_svc(handler)
+    assert svc.tpu_describe("no-such-tpu", ZONE) is None
+    svc.shutdown()
 
 
 def test_429_raises_quota_exhausted():
@@ -81,30 +78,20 @@ def test_429_raises_quota_exhausted():
             429, json={"error": {"code": 429, "message": "Quota exceeded", "status": "RESOURCE_EXHAUSTED"}}
         )
 
-    api = _make_api(handler)
+    svc = _make_svc(handler)
     with pytest.raises(QuotaExhaustedError, match="Quota exceeded"):
-        api.tpu_get("some-tpu", ZONE)
-    api.close()
+        svc.vm_reset("some-vm", ZONE)
+    svc.shutdown()
 
 
 def test_500_raises_infra_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"error": {"code": 500, "message": "Internal error"}})
 
-    api = _make_api(handler)
+    svc = _make_svc(handler)
     with pytest.raises(InfraError, match="Internal error"):
-        api.tpu_get("some-tpu", ZONE)
-    api.close()
-
-
-def test_non_json_error_body():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(502, text="Bad Gateway")
-
-    api = _make_api(handler)
-    with pytest.raises(InfraError, match="Bad Gateway"):
-        api.tpu_get("some-tpu", ZONE)
-    api.close()
+        svc.vm_reset("some-vm", ZONE)
+    svc.shutdown()
 
 
 # ========================================================================
@@ -119,341 +106,50 @@ def test_auth_header_injected():
         requests_seen.append(request)
         return _json_response({"name": "test", "state": "READY"})
 
-    api = _make_api(handler)
-    api.tpu_get("my-tpu", ZONE)
-    api.close()
+    svc = _make_svc(handler)
+    svc.tpu_describe("my-tpu", ZONE)
+    svc.shutdown()
 
     assert len(requests_seen) == 1
     assert requests_seen[0].headers["authorization"] == "Bearer fake-token"
 
 
 def test_token_refresh_on_expiry():
-    """When token is expired, _refresh_token is called."""
     with _mock_credentials():
 
         def handler(request: httpx.Request) -> httpx.Response:
             return _json_response({"name": "test", "state": "READY"})
 
-        api = _make_api(handler)
-        api._token = None  # Force refresh
-        api._expires_at = 0.0
-        api.tpu_get("my-tpu", ZONE)
-        assert api._token == "fake-token"
-        api.close()
+        svc = _make_svc(handler)
+        svc._token = None
+        svc._expires_at = 0.0
+        svc.tpu_describe("my-tpu", ZONE)
+        assert svc._token == "fake-token"
+        svc.shutdown()
 
 
 # ========================================================================
-# TPU operations — URL construction
-# ========================================================================
-
-
-def test_tpu_create_url_and_params():
-    requests_seen: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests_seen.append(request)
-        return _json_response({"name": "operations/op-123"})
-
-    api = _make_api(handler)
-    api.tpu_create("my-tpu", ZONE, {"acceleratorType": "v4-8"})
-    api.close()
-
-    req = requests_seen[0]
-    assert req.method == "POST"
-    assert f"{TPU_BASE}/projects/{PROJECT}/locations/{ZONE}/nodes" in str(req.url)
-    assert "nodeId=my-tpu" in str(req.url)
-
-
-def test_tpu_get_url():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return _json_response({"name": f"projects/{PROJECT}/locations/{ZONE}/nodes/my-tpu", "state": "READY"})
-
-    api = _make_api(handler)
-    result = api.tpu_get("my-tpu", ZONE)
-    api.close()
-
-    assert result["state"] == "READY"
-
-
-def test_tpu_delete_ignores_404():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(404, json={"error": {"code": 404, "message": "Not found"}})
-
-    api = _make_api(handler)
-    api.tpu_delete("gone-tpu", ZONE)  # should not raise
-    api.close()
-
-
-def test_tpu_list_with_pagination():
-    call_count = 0
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return _json_response(
-                {
-                    "nodes": [{"name": "tpu-1", "state": "READY"}],
-                    "nextPageToken": "page2",
-                }
-            )
-        return _json_response(
-            {
-                "nodes": [{"name": "tpu-2", "state": "READY"}],
-            }
-        )
-
-    api = _make_api(handler)
-    results = api.tpu_list(ZONE)
-    api.close()
-
-    assert len(results) == 2
-    assert results[0]["name"] == "tpu-1"
-    assert results[1]["name"] == "tpu-2"
-    assert call_count == 2
-
-
-# ========================================================================
-# Queued resource operations
-# ========================================================================
-
-
-def test_queued_resource_create_url():
-    requests_seen: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests_seen.append(request)
-        return _json_response({"name": "operations/op-456"})
-
-    api = _make_api(handler)
-    api.queued_resource_create("my-qr", ZONE, {"tpu": {"nodeSpec": []}})
-    api.close()
-
-    req = requests_seen[0]
-    assert req.method == "POST"
-    assert "/queuedResources" in str(req.url)
-    assert "queuedResourceId=my-qr" in str(req.url)
-
-
-def test_queued_resource_delete_ignores_404():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(404, json={"error": {"code": 404, "message": "Not found"}})
-
-    api = _make_api(handler)
-    api.queued_resource_delete("gone-qr", ZONE)  # should not raise
-    api.close()
-
-
-def test_queued_resource_delete_passes_force():
-    requests_seen: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests_seen.append(request)
-        return _json_response({"name": "operations/op-789"})
-
-    api = _make_api(handler)
-    api.queued_resource_delete("my-qr", ZONE)
-    api.close()
-
-    assert "force=true" in str(requests_seen[0].url)
-
-
-# ========================================================================
-# Compute operations
-# ========================================================================
-
-
-def test_instance_insert_url():
-    requests_seen: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests_seen.append(request)
-        return _json_response({"name": "operations/op-vm"})
-
-    api = _make_api(handler)
-    api.instance_insert(ZONE, {"name": "my-vm", "machineType": "n1-standard-4"})
-    api.close()
-
-    req = requests_seen[0]
-    assert req.method == "POST"
-    assert f"{COMPUTE_BASE}/projects/{PROJECT}/zones/{ZONE}/instances" in str(req.url)
-
-
-def test_instance_delete_ignores_404():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(404, json={"error": {"code": 404, "message": "Not found"}})
-
-    api = _make_api(handler)
-    api.instance_delete("gone-vm", ZONE)  # should not raise
-    api.close()
-
-
-def test_instance_reset_url():
-    requests_seen: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests_seen.append(request)
-        return _json_response({"name": "operations/reset"})
-
-    api = _make_api(handler)
-    api.instance_reset("my-vm", ZONE)
-    api.close()
-
-    assert "/my-vm/reset" in str(requests_seen[0].url)
-
-
-def test_instance_set_labels_url_and_body():
-    requests_seen: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests_seen.append(request)
-        return _json_response({"name": "operations/labels"})
-
-    api = _make_api(handler)
-    api.instance_set_labels("my-vm", ZONE, {"env": "test"}, "abc123")
-    api.close()
-
-    req = requests_seen[0]
-    assert "/my-vm/setLabels" in str(req.url)
-    body = json.loads(req.content)
-    assert body["labels"] == {"env": "test"}
-    assert body["labelFingerprint"] == "abc123"
-
-
-def test_instance_get_serial_port_output():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return _json_response({"contents": "serial output here", "next": 42})
-
-    api = _make_api(handler)
-    result = api.instance_get_serial_port_output("my-vm", ZONE, start=10)
-    api.close()
-
-    assert result["contents"] == "serial output here"
-
-
-def test_instance_list_project_wide():
-    """Project-wide list uses aggregatedList and flattens across zones."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return _json_response(
-            {
-                "items": {
-                    "zones/us-central1-a": {
-                        "instances": [{"name": "vm-1", "status": "RUNNING"}],
-                    },
-                    "zones/us-east1-b": {
-                        "instances": [{"name": "vm-2", "status": "RUNNING"}],
-                    },
-                    "zones/us-west1-a": {
-                        "warning": {"code": "NO_RESULTS_ON_PAGE"},
-                    },
-                }
-            }
-        )
-
-    api = _make_api(handler)
-    results = api.instance_list(zone=None)
-    api.close()
-
-    names = {r["name"] for r in results}
-    assert names == {"vm-1", "vm-2"}
-
-
-def test_instance_list_with_zone():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return _json_response(
-            {
-                "items": [{"name": "vm-1", "status": "RUNNING"}],
-            }
-        )
-
-    api = _make_api(handler)
-    results = api.instance_list(zone=ZONE)
-    api.close()
-
-    assert len(results) == 1
-    assert results[0]["name"] == "vm-1"
-
-
-def test_instance_list_with_filter():
-    requests_seen: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests_seen.append(request)
-        return _json_response({"items": []})
-
-    api = _make_api(handler)
-    api.instance_list(zone=ZONE, filter_str="labels.env=test")
-    api.close()
-
-    assert "filter=labels.env%3Dtest" in str(requests_seen[0].url)
-
-
-# ========================================================================
-# Cloud Logging
-# ========================================================================
-
-
-def test_logging_list_entries():
-    requests_seen: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests_seen.append(request)
-        return _json_response(
-            {
-                "entries": [
-                    {"textPayload": "line 1"},
-                    {"textPayload": "line 2"},
-                ]
-            }
-        )
-
-    api = _make_api(handler)
-    entries = api.logging_list_entries("some filter", limit=50)
-    api.close()
-
-    assert len(entries) == 2
-    req = requests_seen[0]
-    assert req.method == "POST"
-    assert f"{LOGGING_BASE}/entries:list" in str(req.url)
-    body = json.loads(req.content)
-    assert body["filter"] == "some filter"
-    assert body["pageSize"] == 50
-
-
-# ========================================================================
-# Operation waiting — vm_create / tpu_create must wait for async operations
+# VM create waits for operation before describing
 # ========================================================================
 
 
 def test_vm_create_waits_for_operation():
-    """vm_create must wait for the insert operation before describing the VM.
-
-    This is the core regression from replacing `gcloud compute instances create`
-    (which blocks until RUNNING) with the REST API (which returns immediately).
-    The mock simulates real GCP behavior: instance_get returns 404 until the
-    zone operation reaches DONE.
-    """
-    from iris.cluster.providers.gcp.service import CloudGcpService, VmCreateRequest
-
+    """vm_create must wait for the insert operation before describing the VM."""
     operation_done = False
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal operation_done
         url = str(request.url)
 
-        # POST instances — create (returns operation)
         if request.method == "POST" and url.endswith(f"/zones/{ZONE}/instances"):
             return _json_response(
                 {"name": "op-vm-1", "status": "RUNNING", "zone": f"zones/{ZONE}", "kind": "compute#operation"}
             )
 
-        # GET operation poll — marks operation as done
         if "/operations/op-vm-1" in url and request.method == "GET":
             operation_done = True
             return _json_response({"name": "op-vm-1", "status": "DONE"})
 
-        # GET instance — only succeeds after operation completed (real GCP behavior)
         if request.method == "GET" and url.endswith(f"/zones/{ZONE}/instances/test-vm"):
             if not operation_done:
                 return httpx.Response(404, json={"error": {"code": 404, "message": "Not found", "status": "NOT_FOUND"}})
@@ -471,10 +167,9 @@ def test_vm_create_waits_for_operation():
 
         return httpx.Response(404, json={"error": {"code": 404, "message": "Not found"}})
 
-    api = _make_api(handler)
-    svc = CloudGcpService(PROJECT, api=api)
+    svc = _make_svc(handler)
     info = svc.vm_create(VmCreateRequest(name="test-vm", zone=ZONE, machine_type="n1-standard-4", labels={}))
-    api.close()
+    svc.shutdown()
 
     assert info.name == "test-vm"
     assert info.internal_ip == "10.0.0.1"
@@ -482,30 +177,20 @@ def test_vm_create_waits_for_operation():
 
 
 def test_tpu_create_waits_for_operation():
-    """tpu_create must wait for the LRO before describing the TPU.
-
-    Same race condition as vm_create: the REST API create returns an LRO,
-    and the TPU node may not be visible via tpu_get until the operation completes.
-    """
-    from iris.cluster.providers.gcp.service import CloudGcpService, TpuCreateRequest
-    from iris.rpc import config_pb2
-
+    """tpu_create must wait for the LRO before describing the TPU."""
     operation_done = False
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal operation_done
         url = str(request.url)
 
-        # POST nodes — create (returns LRO)
         if request.method == "POST" and "/nodes" in url and "nodeId=test-tpu" in url:
             return _json_response({"name": f"projects/{PROJECT}/locations/{ZONE}/operations/op-tpu-1", "done": False})
 
-        # GET operation poll (TPU LRO) — marks operation as done
         if "/operations/op-tpu-1" in url and request.method == "GET":
             operation_done = True
             return _json_response({"name": f"projects/{PROJECT}/locations/{ZONE}/operations/op-tpu-1", "done": True})
 
-        # GET node — only succeeds after operation completed
         if request.method == "GET" and url.endswith("/nodes/test-tpu"):
             if not operation_done:
                 return httpx.Response(404, json={"error": {"code": 404, "message": "Not found", "status": "NOT_FOUND"}})
@@ -523,8 +208,7 @@ def test_tpu_create_waits_for_operation():
 
         return httpx.Response(404, json={"error": {"code": 404, "message": "Not found"}})
 
-    api = _make_api(handler)
-    svc = CloudGcpService(PROJECT, api=api)
+    svc = _make_svc(handler)
     info = svc.tpu_create(
         TpuCreateRequest(
             name="test-tpu",
@@ -535,19 +219,212 @@ def test_tpu_create_waits_for_operation():
             labels={},
         )
     )
-    api.close()
+    svc.shutdown()
 
     assert info.name == "test-tpu"
     assert info.state == "READY"
     assert operation_done, "tpu_create must poll the operation before describing"
 
 
-def test_logging_list_entries_empty():
+# ========================================================================
+# TPU list — only queries requested zones
+# ========================================================================
+
+
+def test_tpu_list_queries_only_requested_zones():
+    zones_queried: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "/locations/" in url and "/nodes" in url:
+            zone = url.split("/locations/")[1].split("/nodes")[0]
+            zones_queried.append(zone)
+        return _json_response({"nodes": []})
+
+    svc = _make_svc(handler)
+    svc.tpu_list(zones=["europe-west4-b", "us-west4-a"])
+    svc.shutdown()
+
+    assert sorted(zones_queried) == ["europe-west4-b", "us-west4-a"]
+
+
+def test_tpu_list_label_filtering():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _json_response(
+            {
+                "nodes": [
+                    {
+                        "name": f"projects/{PROJECT}/locations/{ZONE}/nodes/tpu-match",
+                        "state": "READY",
+                        "acceleratorType": "v4-8",
+                        "labels": {"env": "test", "managed": "true"},
+                    },
+                    {
+                        "name": f"projects/{PROJECT}/locations/{ZONE}/nodes/tpu-nomatch",
+                        "state": "READY",
+                        "acceleratorType": "v4-8",
+                        "labels": {"env": "prod"},
+                    },
+                ]
+            }
+        )
+
+    svc = _make_svc(handler)
+    results = svc.tpu_list(zones=[ZONE], labels={"env": "test"})
+    svc.shutdown()
+
+    assert len(results) == 1
+    assert results[0].name == "tpu-match"
+
+
+# ========================================================================
+# VM list
+# ========================================================================
+
+
+def test_vm_list_project_wide_uses_aggregated_list():
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return _json_response(
+            {
+                "items": {
+                    "zones/us-central1-a": {
+                        "instances": [
+                            {"name": "vm-1", "status": "RUNNING", "zone": f"projects/{PROJECT}/zones/us-central1-a"}
+                        ],
+                    },
+                    "zones/us-west1-a": {
+                        "warning": {"code": "NO_RESULTS_ON_PAGE"},
+                    },
+                }
+            }
+        )
+
+    svc = _make_svc(handler)
+    results = svc.vm_list(zones=[])
+    svc.shutdown()
+
+    assert len(results) == 1
+    assert results[0].name == "vm-1"
+    assert "/aggregated/instances" in str(requests_seen[0].url)
+
+
+def test_vm_list_with_labels_passes_filter():
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return _json_response({"items": []})
+
+    svc = _make_svc(handler)
+    svc.vm_list(zones=[ZONE], labels={"env": "test"})
+    svc.shutdown()
+
+    assert "filter=labels.env%3Dtest" in str(requests_seen[0].url)
+
+
+# ========================================================================
+# Pagination
+# ========================================================================
+
+
+def test_tpu_list_with_pagination():
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _json_response(
+                {
+                    "nodes": [{"name": "tpu-1", "state": "READY"}],
+                    "nextPageToken": "page2",
+                }
+            )
+        return _json_response({"nodes": [{"name": "tpu-2", "state": "READY"}]})
+
+    svc = _make_svc(handler)
+    results = svc.tpu_list(zones=[ZONE])
+    svc.shutdown()
+
+    assert len(results) == 2
+    assert call_count == 2
+
+
+# ========================================================================
+# Cloud Logging
+# ========================================================================
+
+
+def test_logging_read():
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return _json_response({"entries": [{"textPayload": "line 1"}, {"textPayload": "line 2"}]})
+
+    svc = _make_svc(handler)
+    entries = svc.logging_read("some filter", limit=50)
+    svc.shutdown()
+
+    assert entries == ["line 1", "line 2"]
+    body = json.loads(requests_seen[0].content)
+    assert body["filter"] == "some filter"
+    assert body["pageSize"] == 50
+
+
+def test_logging_read_empty():
     def handler(request: httpx.Request) -> httpx.Response:
         return _json_response({})
 
-    api = _make_api(handler)
-    entries = api.logging_list_entries("no match")
-    api.close()
+    svc = _make_svc(handler)
+    assert svc.logging_read("no match") == []
+    svc.shutdown()
 
-    assert entries == []
+
+# ========================================================================
+# Delete operations ignore 404
+# ========================================================================
+
+
+def test_tpu_delete_ignores_404():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": {"code": 404, "message": "Not found"}})
+
+    svc = _make_svc(handler)
+    svc.tpu_delete("gone-tpu", ZONE)
+    svc.shutdown()
+
+
+def test_vm_delete_ignores_404():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": {"code": 404, "message": "Not found"}})
+
+    svc = _make_svc(handler)
+    svc.vm_delete("gone-vm", ZONE)
+    svc.shutdown()
+
+
+def test_queued_resource_delete_ignores_404():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": {"code": 404, "message": "Not found"}})
+
+    svc = _make_svc(handler)
+    svc.queued_resource_delete("gone-qr", ZONE)
+    svc.shutdown()
+
+
+def test_queued_resource_delete_passes_force():
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return _json_response({"name": "operations/op-789"})
+
+    svc = _make_svc(handler)
+    svc.queued_resource_delete("my-qr", ZONE)
+    svc.shutdown()
+
+    assert "force=true" in str(requests_seen[0].url)

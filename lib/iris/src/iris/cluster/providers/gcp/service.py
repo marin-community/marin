@@ -3,15 +3,22 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
-from iris.cluster.providers.gcp.api import GCPApi
+import google.auth
+import google.auth.credentials
+import google.auth.transport.requests
+import httpx
+
 from iris.cluster.providers.types import (
     InfraError,
+    QuotaExhaustedError,
     ResourceNotFoundError,
 )
 from iris.cluster.providers.gcp.local import LocalSliceHandle
@@ -57,6 +64,17 @@ MAX_RESOURCE_NAME_LENGTH = 63
 # GCP label key/value used to tag reserved (queued-resource) TPUs for rediscovery.
 CAPACITY_TYPE_LABEL = "capacity-type"
 CAPACITY_TYPE_RESERVED_VALUE = "reserved"
+
+# REST API base URLs
+_TPU_BASE = "https://tpu.googleapis.com/v2"
+_COMPUTE_BASE = "https://compute.googleapis.com/compute/v1"
+_LOGGING_BASE = "https://logging.googleapis.com/v2"
+
+# HTTP/auth constants
+_REFRESH_MARGIN = 300  # seconds before expiry to refresh token
+_DEFAULT_TIMEOUT = 120  # seconds
+_OPERATION_POLL_INTERVAL = 2  # seconds between operation status polls
+_OPERATION_TIMEOUT = 600  # seconds to wait for an operation to complete
 
 
 # ============================================================================
@@ -245,7 +263,7 @@ class GcpService(Protocol):
 
 
 # ============================================================================
-# CloudGcpService — REST API implementation via GCPApi
+# CloudGcpService — REST API implementation
 # ============================================================================
 
 
@@ -353,11 +371,14 @@ def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
 
 
 class CloudGcpService:
-    """GcpService backed by GCP REST APIs via GCPApi. Used in CLOUD mode."""
+    """GcpService backed by GCP REST APIs. Used in CLOUD mode."""
 
-    def __init__(self, project_id: str, api: GCPApi | None = None) -> None:
+    def __init__(self, project_id: str, http_client: httpx.Client | None = None) -> None:
         self._project_id = project_id
-        self._api = api if api is not None else GCPApi(project_id)
+        self._client = http_client if http_client is not None else httpx.Client(timeout=_DEFAULT_TIMEOUT)
+        self._creds: google.auth.credentials.Credentials | None = None
+        self._token: str | None = None
+        self._expires_at: float = 0.0
         self._valid_zones: set[str] = set(KNOWN_GCP_ZONES)
         self._valid_accelerator_types: set[str] = set(KNOWN_TPU_TYPES)
 
@@ -369,9 +390,123 @@ class CloudGcpService:
     def project_id(self) -> str:
         return self._project_id
 
-    @property
-    def api(self) -> GCPApi:
-        return self._api
+    # ========================================================================
+    # HTTP helpers (auth, errors, pagination, operation polling)
+    # ========================================================================
+
+    def _headers(self) -> dict[str, str]:
+        if self._token is None or time.monotonic() >= self._expires_at:
+            self._refresh_token()
+        return {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json",
+        }
+
+    def _refresh_token(self) -> None:
+        if self._creds is None:
+            self._creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        self._creds.refresh(google.auth.transport.requests.Request())
+        self._token = self._creds.token
+        now = time.monotonic()
+        if self._creds.expiry is not None:
+            self._expires_at = now + (self._creds.expiry.timestamp() - time.time()) - _REFRESH_MARGIN
+        else:
+            self._expires_at = now + _REFRESH_MARGIN
+
+    def _classify_response(self, resp: httpx.Response) -> None:
+        if resp.status_code < 400:
+            return
+        try:
+            body = resp.json()
+            error = body.get("error", {})
+            message = error.get("message", resp.text)
+            status = error.get("status", "")
+            code = error.get("code", resp.status_code)
+        except (json.JSONDecodeError, AttributeError):
+            message = resp.text
+            status = ""
+            code = resp.status_code
+
+        if code == 404 or status == "NOT_FOUND":
+            raise ResourceNotFoundError(message)
+        if code == 429 or status in ("RESOURCE_EXHAUSTED", "QUOTA_EXCEEDED"):
+            raise QuotaExhaustedError(message)
+        raise InfraError(f"GCP API error {code}: {message}")
+
+    def _paginate(self, url: str, items_key: str, params: dict[str, str] | None = None) -> list[dict]:
+        results: list[dict] = []
+        p = dict(params or {})
+        while True:
+            resp = self._client.get(url, headers=self._headers(), params=p)
+            self._classify_response(resp)
+            data = resp.json()
+            results.extend(data.get(items_key, []))
+            token = data.get("nextPageToken")
+            if not token:
+                break
+            p["pageToken"] = token
+        return results
+
+    def _paginate_raw(self, url: str, params: dict[str, str] | None = None) -> list[dict]:
+        pages: list[dict] = []
+        p = dict(params or {})
+        while True:
+            resp = self._client.get(url, headers=self._headers(), params=p)
+            self._classify_response(resp)
+            data = resp.json()
+            pages.append(data)
+            token = data.get("nextPageToken")
+            if not token:
+                break
+            p["pageToken"] = token
+        return pages
+
+    def _wait_zone_operation(self, zone: str, operation_name: str, timeout: float = _OPERATION_TIMEOUT) -> dict:
+        url = f"{_COMPUTE_BASE}/projects/{self._project_id}/zones/{zone}/operations/{operation_name}"
+        deadline = time.monotonic() + timeout
+        while True:
+            resp = self._client.get(url, headers=self._headers())
+            self._classify_response(resp)
+            data = resp.json()
+            if data.get("status") == "DONE":
+                if "error" in data:
+                    errors = data["error"].get("errors", [])
+                    msg = "; ".join(e.get("message", str(e)) for e in errors)
+                    raise InfraError(f"Operation {operation_name} failed: {msg}")
+                return data
+            if time.monotonic() >= deadline:
+                raise InfraError(f"Operation {operation_name} timed out after {timeout}s")
+            time.sleep(_OPERATION_POLL_INTERVAL)
+
+    def _wait_tpu_operation(self, operation_name: str, timeout: float = _OPERATION_TIMEOUT) -> dict:
+        url = f"{_TPU_BASE}/{operation_name}"
+        deadline = time.monotonic() + timeout
+        while True:
+            resp = self._client.get(url, headers=self._headers())
+            self._classify_response(resp)
+            data = resp.json()
+            if data.get("done"):
+                if "error" in data:
+                    error = data["error"]
+                    msg = error.get("message", str(error))
+                    raise InfraError(f"TPU operation failed: {msg}")
+                return data
+            if time.monotonic() >= deadline:
+                raise InfraError(f"TPU operation {operation_name} timed out after {timeout}s")
+            time.sleep(_OPERATION_POLL_INTERVAL)
+
+    # ========================================================================
+    # Low-level REST helpers
+    # ========================================================================
+
+    def _tpu_parent(self, zone: str) -> str:
+        return f"projects/{self._project_id}/locations/{zone}"
+
+    def _instance_url(self, zone: str, name: str = "") -> str:
+        path = f"{_COMPUTE_BASE}/projects/{self._project_id}/zones/{zone}/instances"
+        if name:
+            path += f"/{name}"
+        return path
 
     # ========================================================================
     # TPU operations
@@ -401,16 +536,35 @@ class CloudGcpService:
             body["networkConfig"] = network_config
 
         logger.info("Creating TPU: %s (type=%s, zone=%s)", request.name, request.accelerator_type, request.zone)
-        tpu_data = self._api.tpu_create_wait(request.name, request.zone, body)
+
+        # POST to create, wait for LRO, then GET the final node state
+        url = f"{_TPU_BASE}/{self._tpu_parent(request.zone)}/nodes"
+        resp = self._client.post(url, params={"nodeId": request.name}, headers=self._headers(), json=body)
+        self._classify_response(resp)
+        data = resp.json()
+        op_name = data.get("name", "")
+        if op_name and "/operations/" in op_name:
+            self._wait_tpu_operation(op_name)
+
+        tpu_data = self._tpu_get(request.name, request.zone)
         return _parse_tpu_info(tpu_data, request.zone)
 
     def tpu_delete(self, name: str, zone: str) -> None:
         logger.info("Deleting TPU (async): %s", name)
-        self._api.tpu_delete(name, zone)
+        url = f"{_TPU_BASE}/{self._tpu_parent(zone)}/nodes/{name}"
+        resp = self._client.delete(url, headers=self._headers())
+        if resp.status_code != 404:
+            self._classify_response(resp)
+
+    def _tpu_get(self, name: str, zone: str) -> dict:
+        url = f"{_TPU_BASE}/{self._tpu_parent(zone)}/nodes/{name}"
+        resp = self._client.get(url, headers=self._headers())
+        self._classify_response(resp)
+        return resp.json()
 
     def tpu_describe(self, name: str, zone: str) -> TpuInfo | None:
         try:
-            tpu_data = self._api.tpu_get(name, zone)
+            tpu_data = self._tpu_get(name, zone)
         except ResourceNotFoundError:
             return None
         except InfraError:
@@ -420,12 +574,13 @@ class CloudGcpService:
 
     def tpu_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[TpuInfo]:
         results: list[TpuInfo] = []
-        # TPU v2 API requires a real zone; empty zones = scan all known zones.
+        # TPU v2 API requires a specific zone per request.
+        # When no zones specified, only scan the caller's zones (not all known zones).
         zone_list = zones if zones else list(self._valid_zones)
 
         for zone in zone_list:
             try:
-                items = self._api.tpu_list(zone)
+                items = self._paginate(f"{_TPU_BASE}/{self._tpu_parent(zone)}/nodes", "nodes")
             except InfraError:
                 logger.warning("Failed to list TPUs in zone %s", zone, exc_info=True)
                 continue
@@ -480,11 +635,21 @@ class CloudGcpService:
             request.accelerator_type,
             request.zone,
         )
-        self._api.queued_resource_create(request.name, request.zone, body)
+        url = f"{_TPU_BASE}/{self._tpu_parent(request.zone)}/queuedResources"
+        resp = self._client.post(
+            url,
+            params={"queuedResourceId": request.name},
+            headers=self._headers(),
+            json=body,
+        )
+        self._classify_response(resp)
 
     def queued_resource_describe(self, name: str, zone: str) -> QueuedResourceInfo | None:
         try:
-            data = self._api.queued_resource_get(name, zone)
+            url = f"{_TPU_BASE}/{self._tpu_parent(zone)}/queuedResources/{name}"
+            resp = self._client.get(url, headers=self._headers())
+            self._classify_response(resp)
+            data = resp.json()
         except ResourceNotFoundError:
             return None
         state = data.get("state", {}).get("state", "UNKNOWN")
@@ -492,14 +657,20 @@ class CloudGcpService:
 
     def queued_resource_delete(self, name: str, zone: str) -> None:
         logger.info("Deleting queued resource (force): %s", name)
-        self._api.queued_resource_delete(name, zone)
+        url = f"{_TPU_BASE}/{self._tpu_parent(zone)}/queuedResources/{name}"
+        resp = self._client.delete(url, params={"force": "true"}, headers=self._headers())
+        if resp.status_code != 404:
+            self._classify_response(resp)
 
     def queued_resource_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[QueuedResourceInfo]:
         zone_list = zones if zones else list(self._valid_zones)
         results: list[QueuedResourceInfo] = []
         for zone in zone_list:
             try:
-                items = self._api.queued_resource_list(zone)
+                items = self._paginate(
+                    f"{_TPU_BASE}/{self._tpu_parent(zone)}/queuedResources",
+                    "queuedResources",
+                )
             except InfraError:
                 logger.warning("Failed to list queued resources in %s", zone, exc_info=True)
                 continue
@@ -552,7 +723,14 @@ class CloudGcpService:
 
         logger.info("Creating VM: %s (zone=%s, type=%s)", request.name, request.zone, request.machine_type)
         try:
-            self._api.instance_insert_wait(request.zone, body)
+            # POST to insert, wait for zone operation
+            url = self._instance_url(request.zone)
+            resp = self._client.post(url, headers=self._headers(), json=body)
+            self._classify_response(resp)
+            data = resp.json()
+            op_name = data.get("name", "")
+            if op_name:
+                self._wait_zone_operation(request.zone, op_name)
         except InfraError as e:
             if "already exists" not in str(e).lower():
                 raise
@@ -564,15 +742,26 @@ class CloudGcpService:
 
     def vm_delete(self, name: str, zone: str) -> None:
         logger.info("Deleting VM: %s", name)
-        self._api.instance_delete(name, zone)
+        url = self._instance_url(zone, name)
+        resp = self._client.delete(url, headers=self._headers())
+        if resp.status_code != 404:
+            self._classify_response(resp)
 
     def vm_reset(self, name: str, zone: str) -> None:
         logger.info("Resetting VM: %s", name)
-        self._api.instance_reset(name, zone)
+        url = self._instance_url(zone, name) + "/reset"
+        resp = self._client.post(url, headers=self._headers())
+        self._classify_response(resp)
+
+    def _instance_get(self, name: str, zone: str) -> dict:
+        url = self._instance_url(zone, name)
+        resp = self._client.get(url, headers=self._headers())
+        self._classify_response(resp)
+        return resp.json()
 
     def vm_describe(self, name: str, zone: str) -> VmInfo | None:
         try:
-            data = self._api.instance_get(name, zone)
+            data = self._instance_get(name, zone)
         except ResourceNotFoundError:
             return None
         except InfraError:
@@ -585,18 +774,27 @@ class CloudGcpService:
         filter_str = _build_label_filter(labels) if labels else ""
 
         if not zones:
+            # Project-wide: aggregatedList, flatten across zones
+            url = f"{_COMPUTE_BASE}/projects/{self._project_id}/aggregated/instances"
+            params: dict[str, str] = {}
+            if filter_str:
+                params["filter"] = filter_str
             try:
-                items = self._api.instance_list(zone=None, filter_str=filter_str)
+                for page in self._paginate_raw(url, params):
+                    for scope in page.get("items", {}).values():
+                        for vm_data in scope.get("instances", []):
+                            results.append(_parse_vm_info(vm_data))
             except InfraError:
                 logger.warning("Failed to list instances", exc_info=True)
                 return []
-            for vm_data in items:
-                results.append(_parse_vm_info(vm_data))
             return results
 
         for zone in zones:
+            params = {}
+            if filter_str:
+                params["filter"] = filter_str
             try:
-                items = self._api.instance_list(zone=zone, filter_str=filter_str)
+                items = self._paginate(self._instance_url(zone), "items", params)
             except InfraError:
                 logger.warning("Failed to list instances in zone %s", zone, exc_info=True)
                 continue
@@ -608,17 +806,21 @@ class CloudGcpService:
     def vm_update_labels(self, name: str, zone: str, labels: dict[str, str]) -> None:
         validate_labels(labels)
         logger.info("Updating labels on VM %s", name)
-        # Read-modify-write: GET the current labelFingerprint, merge, then POST.
-        data = self._api.instance_get(name, zone)
+        data = self._instance_get(name, zone)
         current_labels = data.get("labels", {})
         current_labels.update(labels)
         fingerprint = data.get("labelFingerprint", "")
-        self._api.instance_set_labels(name, zone, current_labels, fingerprint)
+        url = self._instance_url(zone, name) + "/setLabels"
+        resp = self._client.post(
+            url,
+            headers=self._headers(),
+            json={"labels": current_labels, "labelFingerprint": fingerprint},
+        )
+        self._classify_response(resp)
 
     def vm_set_metadata(self, name: str, zone: str, metadata: dict[str, str]) -> None:
         logger.info("Setting metadata on VM %s", name)
-        # Read-modify-write: GET current metadata with fingerprint, merge items, POST.
-        data = self._api.instance_get(name, zone)
+        data = self._instance_get(name, zone)
         raw_metadata = data.get("metadata", {})
         fingerprint = raw_metadata.get("fingerprint", "")
         existing_items: dict[str, str] = {}
@@ -629,11 +831,16 @@ class CloudGcpService:
             "fingerprint": fingerprint,
             "items": [{"key": k, "value": v} for k, v in existing_items.items()],
         }
-        self._api.instance_set_metadata(name, zone, body)
+        url = self._instance_url(zone, name) + "/setMetadata"
+        resp = self._client.post(url, headers=self._headers(), json=body)
+        self._classify_response(resp)
 
     def vm_get_serial_port_output(self, name: str, zone: str, start: int = 0) -> str:
         try:
-            data = self._api.instance_get_serial_port_output(name, zone, start=start)
+            url = self._instance_url(zone, name) + "/serialPort"
+            resp = self._client.get(url, headers=self._headers(), params={"start": str(start)})
+            self._classify_response(resp)
+            data = resp.json()
         except InfraError:
             logger.warning("Failed to get serial port output for %s", name, exc_info=True)
             return ""
@@ -641,7 +848,16 @@ class CloudGcpService:
 
     def logging_read(self, filter_str: str, limit: int = 200) -> list[str]:
         try:
-            entries = self._api.logging_list_entries(filter_str, limit=limit)
+            url = f"{_LOGGING_BASE}/entries:list"
+            body = {
+                "resourceNames": [f"projects/{self._project_id}"],
+                "filter": filter_str,
+                "pageSize": min(limit, 1000),
+                "orderBy": "timestamp desc",
+            }
+            resp = self._client.post(url, headers=self._headers(), json=body, timeout=30)
+            self._classify_response(resp)
+            entries = resp.json().get("entries", [])
         except InfraError:
             logger.warning("Cloud Logging query failed", exc_info=True)
             return []
@@ -659,4 +875,4 @@ class CloudGcpService:
         raise RuntimeError("get_local_slices is not supported in CLOUD mode")
 
     def shutdown(self) -> None:
-        self._api.close()
+        self._client.close()
