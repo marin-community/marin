@@ -236,6 +236,4 @@ scr/*
 .entire
 
 # Generated protobuf and Connect RPC files (rebuilt by hatch build hook)
-lib/iris/src/iris/rpc/*_pb2.py
-lib/iris/src/iris/rpc/*_pb2.pyi
-lib/iris/src/iris/rpc/*_connect.py
+# Excluded via .git/info/exclude instead of here, so Ray job submission includes them.
