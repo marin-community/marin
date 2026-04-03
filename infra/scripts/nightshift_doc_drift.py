@@ -71,14 +71,15 @@ If meaningful drift is found:
      ```
      gh pr merge --auto --squash <PR_NUMBER>
      ```
-  4. Pick a reviewer by finding who has recently touched the files you changed:
+  4. Pick a reviewer by finding who has recently touched the files you changed.
+     Use GitHub login names (NOT emails):
      ```
-     git log --format='%ae' -20 -- <changed_files> | sort | uniq -c | sort -rn | head -5
+     gh api '/repos/{owner}/{repo}/commits?path=<changed_file>&per_page=20' \
+       --jq '.[].author.login' | grep -v '\\[bot\\]' | sort | uniq -c | sort -rn | head -5
      ```
-     Pick the top contributor who is NOT `github-actions[bot]` or `noreply`.
-     Request their review:
+     Pick the top human contributor and request their review:
      ```
-     gh pr edit <PR_NUMBER> --add-reviewer <username>
+     gh pr edit <PR_NUMBER> --add-reviewer <login>
      ```
 
 If nothing is found, exit cleanly.

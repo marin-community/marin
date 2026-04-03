@@ -7,6 +7,7 @@ import datetime
 import json
 import logging
 import secrets
+import shutil
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -122,13 +123,15 @@ The scout worktrees with their commits are at these paths:
    gh pr merge --auto --squash <PR_NUMBER>
    ```
 
-6. Pick a reviewer by finding who recently touched the changed files:
+6. Pick a reviewer by finding who recently touched the changed files. Use
+   GitHub login names (NOT emails):
    ```
-   git log --format='%ae' -20 -- <changed_files> | sort | uniq -c | sort -rn | head -5
+   gh api '/repos/{{owner}}/{{repo}}/commits?path=<changed_file>&per_page=20' \\
+     --jq '.[].author.login' | grep -v '\\[bot\\]' | sort | uniq -c | sort -rn | head -5
    ```
-   Pick the top contributor who is NOT `github-actions[bot]` or `noreply`.
+   Pick the top human contributor and request their review:
    ```
-   gh pr edit <PR_NUMBER> --add-reviewer <username>
+   gh pr edit <PR_NUMBER> --add-reviewer <login>
    ```
 
 If no scouts produced changes, exit cleanly — no branch, no PR.
@@ -145,15 +148,15 @@ def run_scout(subproject: str, date: str, repo_root: Path) -> tuple[str, dict, s
     subprocess.run(["git", "worktree", "remove", "--force", str(worktree_path)], capture_output=True, cwd=repo_root)
     subprocess.run(["git", "branch", "-D", branch_name], capture_output=True, cwd=repo_root)
 
-    # Create worktree on a fresh branch from origin/main
-    subprocess.run(["git", "fetch", "origin", "main"], check=True, cwd=repo_root, capture_output=True)
+    # Create worktree on a fresh branch (origin/main already fetched by main())
     subprocess.run(
         ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "origin/main"],
         check=True,
         cwd=repo_root,
     )
 
-    result_file = tempfile.mktemp(suffix=".json", prefix=f"nightshift-{worktree_name}-")
+    with tempfile.NamedTemporaryFile(suffix=".json", prefix=f"nightshift-{worktree_name}-", delete=False) as f:
+        result_file = f.name
     haiku_seed = secrets.token_hex(4)
 
     prompt = SCOUT_PROMPT.format(
@@ -177,12 +180,15 @@ def run_scout(subproject: str, date: str, repo_root: Path) -> tuple[str, dict, s
             "--",
             prompt,
         ],
-        check=False,  # Don't fail the whole run if one scout errors
+        check=False,
     )
 
     result = {"subproject": subproject, "status": "error", "summary": "Scout did not produce a result file"}
     if Path(result_file).exists():
-        result = json.loads(Path(result_file).read_text())
+        try:
+            result = json.loads(Path(result_file).read_text())
+        except json.JSONDecodeError:
+            result = {"subproject": subproject, "status": "error", "summary": "Scout produced invalid JSON"}
         Path(result_file).unlink()
 
     return subproject, result, str(worktree_path)
@@ -221,10 +227,13 @@ def run_merge(date: str, haiku_seed: str, scout_results: list[dict], worktree_in
 def cleanup_worktrees(repo_root: Path) -> None:
     """Remove all nightshift scout worktrees."""
     worktrees_dir = repo_root / ".nightshift-worktrees"
+    if not worktrees_dir.exists():
+        return
+    for child in worktrees_dir.iterdir():
+        subprocess.run(["git", "worktree", "remove", "--force", str(child)], capture_output=True, cwd=repo_root)
+    # Fall back to shutil.rmtree if git worktree remove left anything behind
     if worktrees_dir.exists():
-        for child in worktrees_dir.iterdir():
-            subprocess.run(["git", "worktree", "remove", "--force", str(child)], capture_output=True, cwd=repo_root)
-        worktrees_dir.rmdir()
+        shutil.rmtree(worktrees_dir, ignore_errors=True)
 
 
 def main() -> None:
@@ -232,20 +241,26 @@ def main() -> None:
     date = datetime.date.today().strftime("%Y%m%d")
     repo_root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
 
-    # Create the merge branch
+    # Fetch once — scouts reuse this ref
     subprocess.run(["git", "fetch", "origin", "main"], check=True, cwd=repo_root, capture_output=True)
+
     merge_branch = f"nightshift/cleanup-{date}"
     subprocess.run(["git", "branch", "-D", merge_branch], capture_output=True, cwd=repo_root)
     subprocess.run(["git", "checkout", "-b", merge_branch, "origin/main"], check=True, cwd=repo_root)
 
-    # Run scouts in parallel
     scout_results: list[dict] = []
     worktree_info: list[tuple[str, str]] = []
 
     with ThreadPoolExecutor(max_workers=len(SUBPROJECTS)) as pool:
         futures = {pool.submit(run_scout, sp, date, repo_root): sp for sp in SUBPROJECTS}
         for future in as_completed(futures):
-            subproject, result, worktree_path = future.result()
+            sp = futures[future]
+            try:
+                subproject, result, worktree_path = future.result()
+            except Exception:
+                logger.exception("Scout %s failed", sp)
+                scout_results.append({"subproject": sp, "status": "error", "summary": "Scout raised an exception"})
+                continue
             scout_results.append(result)
             if result.get("status") == "changed":
                 worktree_info.append((subproject, worktree_path))
@@ -257,7 +272,6 @@ def main() -> None:
         cleanup_worktrees(repo_root)
         return
 
-    # Run merge agent to cherry-pick, verify, and open PR
     haiku_seed = secrets.token_hex(4)
     try:
         run_merge(date, haiku_seed, scout_results, worktree_info)
