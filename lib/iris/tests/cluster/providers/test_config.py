@@ -216,9 +216,9 @@ scale_groups:
         original_config = load_config(config_path)
 
         # After expansion, zone-specific groups should exist
-        assert "tpu_v5e_16-europe-west4-b" in original_config.scale_groups
+        assert "tpu_v5e-preemptible_16-europe-west4-b" in original_config.scale_groups
         assert (
-            original_config.scale_groups["tpu_v5e_16-europe-west4-b"].resources.device_type
+            original_config.scale_groups["tpu_v5e-preemptible_16-europe-west4-b"].resources.device_type
             == config_pb2.ACCELERATOR_TYPE_TPU
         )
 
@@ -230,7 +230,7 @@ scale_groups:
         loaded_config = load_config(round_trip_path)
 
         assert (
-            loaded_config.scale_groups["tpu_v5e_16-europe-west4-b"].resources.device_type
+            loaded_config.scale_groups["tpu_v5e-preemptible_16-europe-west4-b"].resources.device_type
             == config_pb2.ACCELERATOR_TYPE_TPU
         )
 
@@ -1467,6 +1467,295 @@ scale_groups:
             load_config(p)
 
 
+class TestTpuPoolExpansion:
+    """Tests for tpu_pools-based scale group expansion."""
+
+    _BASE = """\
+platform:
+  gcp:
+    project_id: test
+
+defaults:
+  worker:
+    docker_image: ghcr.io/test/iris-worker:latest
+
+tpu_pools:
+  {pool_yaml}
+"""
+
+    def test_expands_sizes_and_zones(self, tmp_path: Path):
+        pool_yaml = """\
+v5e-preempt:
+    family: v5e
+    zones: [europe-west4-b, us-west4-a]
+    base_priority: 10
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: test@test.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv5-lite
+    sizes:
+      4:  { min_slices: 3, max_slices: 1024 }
+      16: { max_slices: 256 }"""
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        config = load_config(p)
+
+        # 2 sizes x 2 zones = 4 groups
+        pool_groups = [n for n in config.scale_groups if n.startswith("tpu_v5e-preempt_")]
+        assert len(pool_groups) == 4
+
+        # Check v5e-4 in europe-west4-b
+        g4eu = config.scale_groups["tpu_v5e-preempt_4-europe-west4-b"]
+        assert g4eu.resources.device_variant == "v5litepod-4"
+        assert g4eu.resources.device_count == 4
+        assert g4eu.num_vms == 1
+        assert g4eu.priority == 10  # base_priority + 0*10
+        assert g4eu.quota_pool == "v5e-preempt/europe-west4-b"
+        assert g4eu.allocation_tier == 1
+        assert g4eu.min_slices == 3
+        assert g4eu.max_slices == 1024
+        assert g4eu.slice_template.gcp.zone == "europe-west4-b"
+        assert g4eu.worker.attributes["zone"] == "europe-west4-b"
+        assert g4eu.worker.attributes["region"] == "europe-west4"
+        assert g4eu.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+
+        # Check v5e-16 in us-west4-a (tier 2)
+        g16us = config.scale_groups["tpu_v5e-preempt_16-us-west4-a"]
+        assert g16us.resources.device_variant == "v5litepod-16"
+        assert g16us.resources.device_count == 4
+        assert g16us.num_vms == 4
+        assert g16us.priority == 20  # base_priority + 1*10
+        assert g16us.allocation_tier == 2
+        assert g16us.min_slices == 0  # default
+        assert g16us.max_slices == 256
+
+    def test_priority_override_per_size(self, tmp_path: Path):
+        pool_yaml = """\
+v6e-pool:
+    family: v6e
+    zones: [us-east5-b]
+    base_priority: 10
+    resources: { cpu: 180, ram: 720GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv6e
+    sizes:
+      4:  { max_slices: 100 }
+      16: { max_slices: 50, priority: 99 }"""
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        config = load_config(p)
+
+        g4 = config.scale_groups["tpu_v6e-pool_4-us-east5-b"]
+        assert g4.priority == 10
+
+        g16 = config.scale_groups["tpu_v6e-pool_16-us-east5-b"]
+        assert g16.priority == 99  # overridden
+
+    def test_zones_merged_into_platform(self, tmp_path: Path):
+        pool_yaml = """\
+v4-pool:
+    family: v4
+    zones: [us-central2-b]
+    resources: { cpu: 240, ram: 400GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        runtime_version: tpu-ubuntu2204-base
+    sizes:
+      8: { max_slices: 10 }"""
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        config = load_config(p)
+        assert "us-central2-b" in list(config.platform.gcp.zones)
+
+    def test_unknown_family_rejected(self, tmp_path: Path):
+        pool_yaml = """\
+bad-pool:
+    family: v99z
+    zones: [us-central1-a]
+    resources: { cpu: 8, ram: 16GB, disk: 50GB }
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha
+    sizes:
+      8: { max_slices: 10 }"""
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        with pytest.raises(ValueError, match="family"):
+            load_config(p)
+
+    def test_unknown_size_rejected(self, tmp_path: Path):
+        pool_yaml = """\
+bad-size:
+    family: v5p
+    zones: [us-central1-a]
+    resources: { cpu: 208, ram: 448GB, disk: 100GB }
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv5
+    sizes:
+      7: { max_slices: 10 }"""
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        with pytest.raises(ValueError, match="unknown TPU topology"):
+            load_config(p)
+
+    def test_empty_sizes_rejected(self, tmp_path: Path):
+        pool_yaml = """\
+empty:
+    family: v5e
+    zones: [us-west4-a]
+    resources: { cpu: 112, ram: 192GB, disk: 100GB }
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+    sizes: {}"""
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        with pytest.raises(ValueError, match=r"sizes.*non-empty"):
+            load_config(p)
+
+    def test_duplicate_zones_rejected(self, tmp_path: Path):
+        pool_yaml = """\
+dupes:
+    family: v5e
+    zones: [us-west4-a, us-west4-a]
+    resources: { cpu: 112, ram: 192GB, disk: 100GB }
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+    sizes:
+      4: { max_slices: 10 }"""
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        with pytest.raises(ValueError, match="duplicates"):
+            load_config(p)
+
+    def test_coexists_with_manual_scale_groups(self, tmp_path: Path):
+        """TPU pools and manual scale_groups can coexist."""
+        config_content = """\
+platform:
+  gcp:
+    project_id: test
+    zones: [us-central1-a]
+
+defaults:
+  worker:
+    docker_image: ghcr.io/test/iris-worker:latest
+
+tpu_pools:
+  v5p-pool:
+    family: v5p
+    zones: [us-central1-a]
+    resources: { cpu: 208, ram: 448GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv5
+    sizes:
+      8: { max_slices: 10 }
+
+scale_groups:
+  cpu_fallback:
+    num_vms: 1
+    resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
+    slice_template:
+      gcp:
+        zone: us-central1-a
+        mode: GCP_SLICE_MODE_VM
+        machine_type: e2-highmem-2
+"""
+        p = tmp_path / "config.yaml"
+        p.write_text(config_content)
+        config = load_config(p)
+
+        assert "tpu_v5p-pool_8-us-central1-a" in config.scale_groups
+        assert "cpu_fallback" in config.scale_groups
+
+    def test_multiple_pools_same_family(self, tmp_path: Path):
+        """Multiple pools for the same TPU family with different configs."""
+        config_content = """\
+platform:
+  gcp:
+    project_id: test
+
+defaults:
+  worker:
+    docker_image: ghcr.io/test/iris-worker:latest
+
+tpu_pools:
+  v5e-preempt:
+    family: v5e
+    zones: [europe-west4-b]
+    base_priority: 10
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+    sizes:
+      4: { max_slices: 100 }
+
+  v5e-reserved:
+    family: v5e
+    zones: [us-east5-a]
+    base_priority: 5
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: reserved }
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv5-lite
+    sizes:
+      128: { min_slices: 1, max_slices: 4 }
+"""
+        p = tmp_path / "config.yaml"
+        p.write_text(config_content)
+        config = load_config(p)
+
+        g_preempt = config.scale_groups["tpu_v5e-preempt_4-europe-west4-b"]
+        assert g_preempt.quota_pool == "v5e-preempt/europe-west4-b"
+        assert g_preempt.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+
+        g_reserved = config.scale_groups["tpu_v5e-reserved_128-us-east5-a"]
+        assert g_reserved.quota_pool == "v5e-reserved/us-east5-a"
+        assert g_reserved.resources.capacity_type == config_pb2.CAPACITY_TYPE_RESERVED
+        assert g_reserved.allocation_tier == 1
+
+    def test_name_collision_rejected(self, tmp_path: Path):
+        config_content = """\
+platform:
+  gcp:
+    project_id: test
+    zones: [us-central1-a]
+
+defaults:
+  worker:
+    docker_image: ghcr.io/test/iris-worker:latest
+
+tpu_pools:
+  v5p-pool:
+    family: v5p
+    zones: [us-central1-a]
+    resources: { cpu: 208, ram: 448GB, disk: 100GB }
+    slice_template:
+      gcp:
+        runtime_version: v2-alpha-tpuv5
+    sizes:
+      8: { max_slices: 10 }
+
+scale_groups:
+  tpu_v5p-pool_8-us-central1-a:
+    num_vms: 1
+    resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-8, device_count: 4 }
+    slice_template:
+      gcp:
+        zone: us-central1-a
+        runtime_version: v2-alpha-tpuv5
+"""
+        p = tmp_path / "config.yaml"
+        p.write_text(config_content)
+        with pytest.raises(ValueError, match="collides"):
+            load_config(p)
+
+
 class TestCapacityTypeNormalization:
     """Tests for capacity_type field parsing during config normalization."""
 
@@ -1596,7 +1885,7 @@ def test_smoke_gcp_config_boots_locally():
 
     with connect_cluster(config) as url:
         client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        # The smoke config has min_slices=1 for tpu_v5e_16 across 2 zones,
+        # The smoke config has min_slices=1 for v5e-smoke/16 across 2 zones,
         # each with num_vms=4 → 8 workers total.  We only need one healthy
         # worker to confirm the config boots.
 
