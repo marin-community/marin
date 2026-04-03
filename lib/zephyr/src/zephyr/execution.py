@@ -1559,7 +1559,7 @@ class ZephyrContext:
                 backoff.reset()
                 logger.info("Coordinator job submitted: %s (job_id=%s)", job_name, self._coordinator_job.job_id)
 
-                self._coordinator_job.wait(timeout=float("inf"), raise_on_failure=True)
+                self._coordinator_job.wait(timeout=None, raise_on_failure=True)
 
                 # Read results written by the coordinator job.
                 # This must succeed — the job completed successfully.

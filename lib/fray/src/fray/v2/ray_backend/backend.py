@@ -106,10 +106,8 @@ class RayJobHandle:
         return self._wait_submission(timeout, raise_on_failure)
 
     def _wait_ref(self, timeout: float | None, raise_on_failure: bool) -> JobStatus:
-        # ray.get() cannot handle float("inf"); pass None (wait indefinitely).
-        effective_timeout = None if timeout is not None and timeout == float("inf") else timeout
         try:
-            ray.get(self._ref, timeout=effective_timeout)
+            ray.get(self._ref, timeout=timeout)
         except Exception:
             if raise_on_failure:
                 raise
