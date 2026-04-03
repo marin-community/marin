@@ -33,7 +33,7 @@ from marin.rl.weight_transfer import WeightTransferConfig
 from marin.training.training import _add_run_env_variables
 from marin.utilities.json_encoder import CustomJsonEncoder
 from marin.utils import remove_tpu_lockfile_on_exit
-from transformers import AutoTokenizer, PreTrainedTokenizer
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -82,9 +82,9 @@ class TrainParams:
     )
 
 
-def make_tokenizer(tokenizer: str | PreTrainedTokenizer) -> PreTrainedTokenizer:
+def make_tokenizer(tokenizer: str | MarinTokenizer) -> MarinTokenizer:
     if isinstance(tokenizer, str):
-        return AutoTokenizer.from_pretrained(tokenizer)
+        return load_tokenizer(tokenizer)
     return tokenizer
 
 
@@ -96,7 +96,7 @@ class RLJobConfig:
     trainer: TrainerConfig
     train_params: TrainParams
     curriculum: CurriculumConfig
-    tokenizer: str | PreTrainedTokenizer
+    tokenizer: str | MarinTokenizer
 
     inference_type: Literal["levanter", "vllm"]
 

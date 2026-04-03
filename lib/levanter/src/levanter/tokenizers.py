@@ -289,7 +289,11 @@ def load_tokenizer(
 
 
 def _load_hf_tokenizer(name_or_path: str) -> HfMarinTokenizer:
-    tok = HfBaseTokenizer.from_pretrained(name_or_path)
+    local_tokenizer_json = os.path.join(name_or_path, "tokenizer.json")
+    if os.path.isfile(local_tokenizer_json):
+        tok = HfBaseTokenizer.from_file(local_tokenizer_json)
+    else:
+        tok = HfBaseTokenizer.from_pretrained(name_or_path)
     config = _load_tokenizer_config(name_or_path)
 
     bos_token = _resolve_special_token(config, "bos_token")

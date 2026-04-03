@@ -20,7 +20,8 @@ from levanter.inference.openai import InferenceServerConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from transformers import AutoConfig, AutoTokenizer
+from levanter.tokenizers import load_tokenizer
+from transformers import AutoConfig
 
 from marin.rl.environments import EnvConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
@@ -55,7 +56,7 @@ MAX_OUTPUT_TOKENS = 32
 
 
 def stop_tokens(model_name: str):
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = load_tokenizer(model_name)
     stop_tokens = tokenizer.eos_token_id
     print("STOP", tokenizer.eos_token, stop_tokens)
     return [stop_tokens]
@@ -147,7 +148,7 @@ def llama_small_training_worker_config(output_dir: str, run_id: str) -> TrainWor
 
 
 def llama_small_rollout_worker_config(output_dir: str, run_id: str) -> RolloutWorkerConfig:
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_TOKENIZER)
+    tokenizer = load_tokenizer(MODEL_TOKENIZER)
 
     rollout_storage = RolloutStorageConfig(
         storage_type=StorageType.FILE,

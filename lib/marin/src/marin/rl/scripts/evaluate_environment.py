@@ -39,7 +39,7 @@ from marin.rl.rollout_worker import create_inference_context
 from marin.rl.types import RolloutGroup
 from marin.training.training import _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
-from transformers import AutoTokenizer
+from levanter.tokenizers import load_tokenizer
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -127,7 +127,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
 
     def _run_inference():
         logger.info("Loading tokenizer for evaluation")
-        tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
+        tokenizer = load_tokenizer(checkpoint_path)
 
         with remove_tpu_lockfile_on_exit():
 

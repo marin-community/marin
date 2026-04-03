@@ -30,7 +30,7 @@ from levanter.inference.openai import InferenceServer
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
-from transformers import PreTrainedTokenizer
+from levanter.tokenizers import MarinTokenizer
 from typing import Literal
 
 from levanter.utils.mesh import MeshConfig
@@ -118,7 +118,7 @@ class RolloutWorkerConfig:
     curriculum_config: CurriculumConfig
     rollout_storage: RolloutStorageConfig
     weight_transfer: WeightTransferConfig
-    tokenizer: PreTrainedTokenizer
+    tokenizer: MarinTokenizer
     run_id: str
     trainer: TrainerConfig
     model: LmConfig
@@ -272,7 +272,7 @@ class RolloutWorker:
     _policy_model: Any
     _transfer_client: WeightTransferClient
     _rollout_writer: RolloutWriter
-    _tokenizer: PreTrainedTokenizer
+    _tokenizer: MarinTokenizer
     _environments: dict[str, MarinEnv]
     tracker: Any  # levanter.Tracker or RolloutTracker
 

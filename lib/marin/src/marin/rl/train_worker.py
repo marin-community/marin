@@ -25,7 +25,7 @@ from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SI
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
-from transformers import PreTrainedTokenizer
+from levanter.tokenizers import MarinTokenizer
 
 from marin.rl import weight_transfer
 from fray.v1.job import get_default_job_ctx
@@ -53,7 +53,7 @@ class TrainWorkerConfig:
     weight_transfer: WeightTransferConfig
     curriculum_config: CurriculumConfig
     loss: RLLossModule
-    tokenizer: PreTrainedTokenizer
+    tokenizer: MarinTokenizer
     run_id: str
 
     initial_checkpoint: str | None = None
@@ -164,7 +164,7 @@ class TrainWorker:
     replay_buffer: ReplayBuffer
     replay_loader: ReplayDataLoader
     transfer_server: weight_transfer.WeightTransferServer
-    tokenizer: PreTrainedTokenizer
+    tokenizer: MarinTokenizer
     loss_module: RLLossModule
 
     def __init__(
