@@ -236,7 +236,7 @@ class GcpWorkerProvider:
             zone=zone,
             vm_name=config.name,
             ssh_key_file=ssh_key_file(self._ssh_config),
-            impersonate_service_account=ssh_impersonate_service_account(self._ssh_config, request.service_account),
+            impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
         )
 
         return GcpStandaloneWorkerHandle(
@@ -536,7 +536,7 @@ class GcpWorkerProvider:
                 zone=vm.zone,
                 vm_name=vm.name,
                 ssh_key_file=ssh_key_file(self._ssh_config),
-                impersonate_service_account=ssh_impersonate_service_account(self._ssh_config, vm.service_account),
+                impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
             )
             handles.append(
                 GcpStandaloneWorkerHandle(
