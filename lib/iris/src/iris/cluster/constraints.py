@@ -1103,5 +1103,6 @@ def worker_attributes_from_resources(resources: config_pb2.ScaleGroupResources) 
     attrs[WellKnownAttribute.DEVICE_TYPE] = accelerator_type_to_string(resources.device_type)
     if resources.device_variant:
         attrs[WellKnownAttribute.DEVICE_VARIANT] = resources.device_variant.lower()
-    attrs[WellKnownAttribute.PREEMPTIBLE] = str(resources.preemptible).lower()
+    is_preemptible = resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+    attrs[WellKnownAttribute.PREEMPTIBLE] = str(is_preemptible).lower()
     return attrs

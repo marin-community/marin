@@ -27,6 +27,7 @@ from iris.cluster.providers.types import (
 from iris.cluster.providers.gcp.service import (
     KNOWN_GCP_ZONES,
     KNOWN_TPU_TYPES,
+    QueuedResourceInfo,
     TpuCreateRequest,
     TpuInfo,
     VmCreateRequest,
@@ -247,6 +248,28 @@ class InMemoryGcpService:
         return results
 
     # ========================================================================
+    # Queued resource operations (for reserved TPUs)
+    # ========================================================================
+
+    def queued_resource_create(self, request: TpuCreateRequest) -> None:
+        self._check_injected_failure("queued_resource_create")
+        # In DRY_RUN/LOCAL mode, simulate immediate provisioning by creating
+        # the TPU directly (as if the queued resource instantly became ACTIVE).
+        self.tpu_create(request)
+
+    def queued_resource_describe(self, name: str, zone: str) -> QueuedResourceInfo | None:
+        self._check_injected_failure("queued_resource_describe")
+        # If the TPU exists, the queued resource is ACTIVE
+        if (name, zone) in self._tpus:
+            return QueuedResourceInfo(name=name, state="ACTIVE")
+        return None
+
+    def queued_resource_delete(self, name: str, zone: str) -> None:
+        self._check_injected_failure("queued_resource_delete")
+        # Delete the underlying TPU
+        self.tpu_delete(name, zone)
+
+    # ========================================================================
     # VM operations
     # ========================================================================
 
@@ -423,7 +446,16 @@ class InMemoryGcpService:
                     extra_attrs.setdefault(k, v)
 
             extra_attrs.setdefault("region", "local")
-            preemptible = extra_attrs.pop("preemptible", "false").lower() == "true"
+            # Derive capacity_type from worker attributes or slice config
+            capacity_type_str = extra_attrs.pop("capacity-type", "")
+            if capacity_type_str == "preemptible":
+                capacity_type_val = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+            elif capacity_type_str == "reserved":
+                capacity_type_val = config_pb2.CAPACITY_TYPE_RESERVED
+            else:
+                capacity_type_val = config_pb2.CAPACITY_TYPE_ON_DEMAND
+            # Also remove legacy preemptible attr if present
+            extra_attrs.pop("preemptible", None)
 
             gpu_count = 0
             if is_gpu:
@@ -450,7 +482,7 @@ class InMemoryGcpService:
                 accelerator_type=config.accelerator_type,
                 accelerator_variant=config.accelerator_variant,
                 gpu_count_override=gpu_count,
-                preemptible=preemptible,
+                capacity_type=capacity_type_val,
                 worker_attributes=extra_attrs,
             )
 

@@ -37,7 +37,7 @@ controller:
     port: 10000
 
 scale_groups:
-  # Low-priority fallback CPU VM group for non-preemptible scheduling tests.
+  # Low-priority fallback CPU VM group for on-demand scheduling tests.
   # Intentionally not default: selected only when jobs constrain preemptible=false.
   cpu_vm_e2_standard_4_ondemand:
     zones: [europe-west4-b]
@@ -47,7 +47,7 @@ scale_groups:
       ram: 16GB
       disk: 100GB
       device_type: cpu
-      preemptible: false
+      capacity_type: on-demand
     min_slices: 0
     max_slices: 2
     priority: 1000
@@ -67,7 +67,7 @@ scale_groups:
       device_type: tpu
       device_variant: v5litepod-16
       device_count: 4
-      preemptible: true
+      capacity_type: preemptible
     min_slices: 1
     max_slices: 4
     priority: 100

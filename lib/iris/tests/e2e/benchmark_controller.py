@@ -133,7 +133,7 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
         sg.resources.device_count = tpu_count
         sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
         sg.resources.device_variant = variant
-        sg.slice_template.preemptible = True
+        sg.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
         sg.slice_template.num_vms = num_vms
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
         sg.slice_template.accelerator_variant = variant

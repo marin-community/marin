@@ -103,12 +103,20 @@ class TpuCreateRequest:
     zone: str
     accelerator_type: str
     runtime_version: str
+    capacity_type: int  # config_pb2.CapacityType enum value
     labels: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, str] = field(default_factory=dict)
-    preemptible: bool = False
     service_account: str | None = None
     network: str | None = None
     subnetwork: str | None = None
+
+
+@dataclass
+class QueuedResourceInfo:
+    """Status of a GCP queued resource."""
+
+    name: str
+    state: str  # QUEUED, PROVISIONING, ACTIVE, FAILED, SUSPENDED
 
 
 @dataclass
@@ -195,6 +203,10 @@ class GcpService(Protocol):
     def tpu_delete(self, name: str, zone: str) -> None: ...
     def tpu_describe(self, name: str, zone: str) -> TpuInfo | None: ...
     def tpu_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[TpuInfo]: ...
+
+    def queued_resource_create(self, request: TpuCreateRequest) -> None: ...
+    def queued_resource_describe(self, name: str, zone: str) -> QueuedResourceInfo | None: ...
+    def queued_resource_delete(self, name: str, zone: str) -> None: ...
 
     def vm_create(self, request: VmCreateRequest) -> VmInfo: ...
     def vm_delete(self, name: str, zone: str) -> None: ...
@@ -377,7 +389,7 @@ class CloudGcpService:
 
         if request.labels:
             cmd.extend(["--labels", _format_labels(request.labels)])
-        if request.preemptible:
+        if request.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE:
             cmd.append("--preemptible")
         if request.service_account:
             cmd.append(f"--service-account={request.service_account}")
@@ -505,6 +517,120 @@ class CloudGcpService:
                 results.append(_parse_tpu_info(tpu_data, tpu_zone))
 
         return results
+
+    # ========================================================================
+    # Queued resource operations (for reserved TPUs)
+    # ========================================================================
+
+    def queued_resource_create(self, request: TpuCreateRequest) -> None:
+        validate_tpu_create(request, self._valid_zones, self._valid_accelerator_types)
+
+        cmd = [
+            "gcloud",
+            "alpha",
+            "compute",
+            "tpus",
+            "queued-resources",
+            "create",
+            request.name,
+            f"--zone={request.zone}",
+            f"--project={self._project_id}",
+            f"--accelerator-type={request.accelerator_type}",
+            f"--runtime-version={request.runtime_version}",
+            f"--node-id={request.name}",
+            "--reserved",
+            "--quiet",
+        ]
+
+        if request.labels:
+            cmd.extend(["--labels", _format_labels(request.labels)])
+        if request.service_account:
+            cmd.append(f"--service-account={request.service_account}")
+        if request.network:
+            cmd.append(f"--network={request.network}")
+        if request.subnetwork:
+            cmd.append(f"--subnetwork={request.subnetwork}")
+
+        # Queued resources don't support --metadata directly; metadata is
+        # applied to the TPU node via --metadata/--metadata-from-file.
+        metadata_files: dict[str, str] = {}
+        inline_metadata: dict[str, str] = {}
+        for k, v in request.metadata.items():
+            if len(v) > 256:
+                f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+                f.write(v)
+                f.close()
+                metadata_files[k] = f.name
+            else:
+                inline_metadata[k] = v
+
+        if inline_metadata:
+            metadata_str = ",".join(f"{k}={v}" for k, v in inline_metadata.items())
+            cmd.append(f"--metadata={metadata_str}")
+        if metadata_files:
+            file_str = ",".join(f"{k}={path}" for k, path in metadata_files.items())
+            cmd.append(f"--metadata-from-file={file_str}")
+
+        logger.info(
+            "Creating queued resource: %s (type=%s, zone=%s)",
+            request.name,
+            request.accelerator_type,
+            request.zone,
+        )
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        finally:
+            for path in metadata_files.values():
+                os.unlink(path)
+        if result.returncode != 0:
+            raise _classify_gcloud_error(result.stderr.strip())
+
+    def queued_resource_describe(self, name: str, zone: str) -> QueuedResourceInfo | None:
+        cmd = [
+            "gcloud",
+            "alpha",
+            "compute",
+            "tpus",
+            "queued-resources",
+            "describe",
+            name,
+            f"--zone={zone}",
+            f"--project={self._project_id}",
+            "--format=json",
+            "--quiet",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            error = result.stderr.strip().lower()
+            if "not found" in error or "could not be found" in error:
+                return None
+            logger.warning("Failed to describe queued resource %s: %s", name, result.stderr.strip())
+            return None
+
+        data = json.loads(result.stdout)
+        state = data.get("state", {}).get("state", "UNKNOWN")
+        return QueuedResourceInfo(name=name, state=state)
+
+    def queued_resource_delete(self, name: str, zone: str) -> None:
+        cmd = [
+            "gcloud",
+            "alpha",
+            "compute",
+            "tpus",
+            "queued-resources",
+            "delete",
+            name,
+            f"--zone={zone}",
+            f"--project={self._project_id}",
+            "--force",
+            "--quiet",
+        ]
+        logger.info("Deleting queued resource (force): %s", name)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            error = result.stderr.strip()
+            if "not found" not in error.lower():
+                raise _classify_gcloud_error(error)
 
     # ========================================================================
     # VM operations
