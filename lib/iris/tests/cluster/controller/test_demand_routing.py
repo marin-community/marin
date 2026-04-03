@@ -1422,3 +1422,21 @@ class TestAllocationTierBlocking:
         result = route_demand([g1, g2], entries, timestamp=Timestamp.from_ms(1100))
         # g2 is also at tier 1 which is >= the blocked tier 1, so it's blocked too
         assert len(result.unmet_entries) == 1
+
+    def test_tier_blocked_reason_distinguishes_from_no_match(self):
+        """When tier blocking removes all candidates, the reason says tier_blocked, not no_matching_group."""
+        groups = self._make_pool_groups("pool", tiers=[1, 2])
+        ts = Timestamp.from_ms(1000)
+
+        # Fail tier 1 → blocks tier 1 and tier 2
+        try:
+            groups[0].scale_up(timestamp=ts)
+        except Exception:
+            pass
+        groups[0].cancel_scale_up()
+        groups[0].record_quota_exceeded("quota exhausted", ts)
+
+        entries = make_demand_entries(1, device_variant="v5p-16")
+        result = route_demand(groups, entries, timestamp=Timestamp.from_ms(1100))
+        assert len(result.unmet_entries) == 1
+        assert "tier_blocked" in result.unmet_entries[0].reason

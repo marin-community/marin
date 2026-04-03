@@ -697,11 +697,16 @@ def route_demand(
         matching_groups = [g for g in sorted_groups if g.name in matching_names]
 
         # Filter out groups blocked by allocation tier monotonicity
+        pre_tier_count = len(matching_groups)
         if pool_blocked:
             matching_groups = [g for g in matching_groups if not _is_tier_blocked(g, pool_blocked)]
 
         if not matching_groups:
-            unmet.append(UnmetDemand(entry=entry, reason=_diagnose_no_matching_group(entry, sorted_groups)))
+            if pre_tier_count > 0:
+                reason = f"tier_blocked: {pre_tier_count} matching group(s) blocked by quota-pool tier monotonicity"
+            else:
+                reason = _diagnose_no_matching_group(entry, sorted_groups)
+            unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
 
         # When soft routing constraints exist, re-sort matching groups so that
