@@ -315,8 +315,138 @@ def create_lr_grid_sweep() -> list[ExecutorStep]:
 lr_grid_steps = create_lr_grid_sweep()
 
 
+# ============================================================
+# Crashed run reruns with hardcoded hashes
+# (run_id, original_hash_or_none, group, dim, tok_ratio, adam_lr, batch_size, total_steps)
+# ============================================================
+
+CRASHED_RUNS = [
+    # v10 crashed
+    ("isoflop-moe-v10-d1024-t22x-adam0.0024", "ced800", "isoflop-moe-v10", 1024, 22.0, 0.0024, 128, 17624),
+    ("isoflop-moe-v10-d1024-t22x-adam0.008", "88dcfa", "isoflop-moe-v10", 1024, 22.0, 0.008, 128, 17624),
+    ("isoflop-moe-v10-d1024-t50x-adam0.0008", "4a79f5", "isoflop-moe-v10", 1024, 50.0, 0.0008, 128, 40054),
+    ("isoflop-moe-v10-d1024-t50x-adam0.0024", "5e9d13", "isoflop-moe-v10", 1024, 50.0, 0.0024, 128, 40054),
+    ("isoflop-moe-v10-d1024-t50x-adam0.0048", "f1356f", "isoflop-moe-v10", 1024, 50.0, 0.0048, 128, 40054),
+    ("isoflop-moe-v10-d1024-t50x-adam0.0064", "728168", "isoflop-moe-v10", 1024, 50.0, 0.0064, 128, 40054),
+    ("isoflop-moe-v10-d1024-t50x-adam0.008", "681a9f", "isoflop-moe-v10", 1024, 50.0, 0.008, 128, 40054),
+    ("isoflop-moe-v10-d512-t50x-adam0.0004", None, "isoflop-moe-v10", 512, 50.0, 0.0004, 32, 58746),
+    ("isoflop-moe-v10-d512-t50x-adam0.0012", None, "isoflop-moe-v10", 512, 50.0, 0.0012, 32, 58746),
+    ("isoflop-moe-v10-d512-t50x-adam0.0024", None, "isoflop-moe-v10", 512, 50.0, 0.0024, 32, 58746),
+    ("isoflop-moe-v10-d512-t50x-adam0.0032", None, "isoflop-moe-v10", 512, 50.0, 0.0032, 32, 58746),
+    ("isoflop-moe-v10-d512-t50x-adam0.004", None, "isoflop-moe-v10", 512, 50.0, 0.004, 32, 58746),
+    ("isoflop-moe-v10-d768-t22x-adam0.00339", "8959a9", "isoflop-moe-v10", 768, 22.0, 0.00339, 64, 21988),
+    ("isoflop-moe-v10-d768-t4.5x-adam0.00057", None, "isoflop-moe-v10", 768, 4.5, 0.00057, 64, 4498),
+    ("isoflop-moe-v10-d768-t4.5x-adam0.0017", None, "isoflop-moe-v10", 768, 4.5, 0.0017, 64, 4498),
+    ("isoflop-moe-v10-d768-t50x-adam0.0017", "4f9620", "isoflop-moe-v10", 768, 50.0, 0.0017, 64, 49973),
+    # v11 crashed (non-done)
+    ("isoflop-moe-v11-d1024-t10x-adam0.0056", None, "isoflop-moe-v11", 1024, 10.0, 0.0056, 128, 8011),
+    ("isoflop-moe-v11-d1024-t10x-adam0.0072", "09093d", "isoflop-moe-v11", 1024, 10.0, 0.0072, 128, 8011),
+    ("isoflop-moe-v11-d1024-t22x-adam0.0016", "29e80d", "isoflop-moe-v11", 1024, 22.0, 0.0016, 128, 17624),
+    ("isoflop-moe-v11-d1024-t22x-adam0.0032", "83c2ae", "isoflop-moe-v11", 1024, 22.0, 0.0032, 128, 17624),
+    ("isoflop-moe-v11-d1024-t22x-adam0.0056", "5582f6", "isoflop-moe-v11", 1024, 22.0, 0.0056, 128, 17624),
+    ("isoflop-moe-v11-d1024-t22x-adam0.0072", "d8e669", "isoflop-moe-v11", 1024, 22.0, 0.0072, 128, 17624),
+    ("isoflop-moe-v11-d1024-t22x-adam0.0088", "5190c2", "isoflop-moe-v11", 1024, 22.0, 0.0088, 128, 17624),
+    ("isoflop-moe-v11-d1024-t4.5x-adam0.0056", "885bad", "isoflop-moe-v11", 1024, 4.5, 0.0056, 128, 3605),
+    ("isoflop-moe-v11-d1024-t50x-adam0.0016", "01290f", "isoflop-moe-v11", 1024, 50.0, 0.0016, 128, 40054),
+    ("isoflop-moe-v11-d1024-t50x-adam0.0032", "3a91c7", "isoflop-moe-v11", 1024, 50.0, 0.0032, 128, 40054),
+    ("isoflop-moe-v11-d1024-t50x-adam0.0056", "071155", "isoflop-moe-v11", 1024, 50.0, 0.0056, 128, 40054),
+    ("isoflop-moe-v11-d1024-t50x-adam0.0072", "17a23d", "isoflop-moe-v11", 1024, 50.0, 0.0072, 128, 40054),
+    ("isoflop-moe-v11-d1024-t50x-adam0.0088", "989d56", "isoflop-moe-v11", 1024, 50.0, 0.0088, 128, 40054),
+    ("isoflop-moe-v11-d1280-t10x-adam0.0016", "7d88ff", "isoflop-moe-v11", 1280, 10.0, 0.0016, 128, 8411),
+    ("isoflop-moe-v11-d1280-t10x-adam0.0032", "afbec5", "isoflop-moe-v11", 1280, 10.0, 0.0032, 128, 8411),
+    ("isoflop-moe-v11-d1280-t2x-adam0.0088", "38f51c", "isoflop-moe-v11", 1280, 2.0, 0.0088, 128, 1682),
+    ("isoflop-moe-v11-d1280-t50x-adam0.0016", "9fdae0", "isoflop-moe-v11", 1280, 50.0, 0.0016, 128, 42057),
+    ("isoflop-moe-v11-d1280-t50x-adam0.0032", "1711f9", "isoflop-moe-v11", 1280, 50.0, 0.0032, 128, 42057),
+    ("isoflop-moe-v11-d1280-t50x-adam0.0056", "1bd62b", "isoflop-moe-v11", 1280, 50.0, 0.0056, 128, 42057),
+    ("isoflop-moe-v11-d1280-t50x-adam0.0072", "3f1c4e", "isoflop-moe-v11", 1280, 50.0, 0.0072, 128, 42057),
+    ("isoflop-moe-v11-d1280-t50x-adam0.0088", "1f4d5b", "isoflop-moe-v11", 1280, 50.0, 0.0088, 128, 42057),
+    ("isoflop-moe-v11-d512-t22x-adam0.0016", "5d42ed", "isoflop-moe-v11", 512, 22.0, 0.0016, 32, 25848),
+    ("isoflop-moe-v11-d512-t50x-adam0.0028", "7dc89f", "isoflop-moe-v11", 512, 50.0, 0.0028, 32, 58746),
+    ("isoflop-moe-v11-d768-t50x-adam0.00509", "05bcbc", "isoflop-moe-v11", 768, 50.0, 0.00509, 64, 49973),
+]
+
+
+def create_crashed_rerun_steps() -> list[ExecutorStep]:
+    """Create steps for all crashed v10/v11 runs with hardcoded output paths."""
+    ratio = 13 / 3
+    steps = []
+
+    for run_id, orig_hash, group, dim, tok_ratio, adam_lr, batch_size, train_steps in CRASHED_RUNS:
+        model_cfg = HEURISTIC.build_model_config(dim)
+        fpt = _compute_flops_per_token(model_cfg)
+        tokens = tok_ratio * {512: 154e6, 768: 262e6, 1024: 420e6, 1280: 441e6}[dim]
+        adamh_lr = round(adam_lr * ratio, 5)
+        optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, fpt)
+        optimizer = dataclasses.replace(optimizer, learning_rate=adamh_lr, adam_lr=adam_lr)
+
+        version_tag = group.split("-")[-1]
+        eval_bs = 64 if dim >= 2048 else 512
+        eval_batches = 64 if dim >= 2048 else 8
+
+        config = GrugMoeLaunchConfig(
+            model=versioned(model_cfg),
+            data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+            output_path=this_output_path(),
+            run_id=run_id,
+            resources=versioned(ResourceConfig.with_tpu("v4-32")),
+            steps=versioned(train_steps),
+            batch_size=versioned(batch_size),
+            seed=versioned(0),
+            mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+            tracker=WandbConfig(
+                project="dial_moe",
+                tags=[
+                    "grug",
+                    "moe-core",
+                    "isoflop",
+                    version_tag,
+                    f"d={dim}",
+                    f"tok_ratio={tok_ratio}",
+                    f"adam_lr={adam_lr}",
+                    f"adamh_lr={adamh_lr}",
+                    f"bs={batch_size}",
+                    "decayNone",
+                    "warmup=0.1",
+                ],
+                group=group,
+                name=run_id,
+            ),
+            optimizer=versioned(optimizer),
+            grug_trainer=versioned(
+                GrugTrainerConfig(
+                    z_loss_weight=HEURISTIC.z_loss_weight,
+                    ema_beta=None,
+                    log_every=1,
+                )
+            ),
+            eval=versioned(
+                GrugEvalConfig(
+                    eval_batch_size=eval_bs,
+                    steps_per_eval=1000,
+                    max_eval_batches=eval_batches,
+                    eval_current=True,
+                    eval_ema=False,
+                )
+            ),
+        )
+
+        override = f"grug/{run_id}-{orig_hash}" if orig_hash else None
+        step = ExecutorStep(
+            name=f"grug/{run_id}",
+            fn=run_grug_moe_trial,
+            config=config,
+            override_output_path=override,
+        )
+        steps.append(step)
+
+    return steps
+
+
+crashed_rerun_steps = create_crashed_rerun_steps()
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=moe_isoflop_steps,
-        description="v13: isoflop sweep 1e18-1e20, 8 dims, compute-scaled LR",
+        steps=crashed_rerun_steps[:1],
+        description="Test: first crashed run only",
     )
