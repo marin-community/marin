@@ -70,6 +70,7 @@ class Checkpointer:
         save_interval: Optional[datetime.timedelta],
         step_policies: Sequence[CheckpointInterval],
         *,
+        temporary_base_path: Optional[PathLike] = None,
         keep_params: PyTree[FilterSpec] = True,
         dt_now_injection: Optional[Callable[[], datetime.datetime]] = None,
         delete_old_temp_checkpoints: bool = True,
@@ -86,11 +87,15 @@ class Checkpointer:
             base_path: the base path to save checkpoints to. may be gcs, local, or anything that tensorstore supports
             save_interval: the minimum amount of time between checkpoints (for time)
             step_policies: the step policies to use
+            temporary_base_path: separate base path for time-policy (temporary) checkpoints. When set,
+                temporary checkpoints are written here instead of base_path. Permanent (step-policy)
+                checkpoints always go to base_path. If None, all checkpoints go to base_path.
             keep_params: a PyTree of FilterSpecs that specifies which parameters to keep in the checkpoint
             dt_now_injection: a function that returns the current time. useful for testing
             delete_old_temp_checkpoints: if True, delete old checkpoints when saving a new one
         """
         self.base_path = str(base_path)
+        self.temporary_base_path = str(temporary_base_path) if temporary_base_path is not None else None
         self.save_interval = save_interval
         self.step_policies = list(step_policies)
         self.keep_params = keep_params
@@ -124,15 +129,21 @@ class Checkpointer:
 
         # discover latest checkpoint and see if it's temporary
         self._last_temporary_checkpoint = None
-        latest_checkpoint = discover_latest_checkpoint(self.base_path)
-        if latest_checkpoint is not None and delete_old_temp_checkpoints:
-            metadata = _load_metadata(latest_checkpoint)
-            if metadata.get("is_temporary", False):
-                logger.info(
-                    f"Found prior temporary checkpoint {latest_checkpoint}. We will delete it after"
-                    " saving a new checkpoint."
-                )
-                self._last_temporary_checkpoint = latest_checkpoint
+        # Check both base_path and temporary_base_path for prior temporary checkpoints
+        search_paths = [self.base_path]
+        if self.temporary_base_path is not None:
+            search_paths.append(self.temporary_base_path)
+        for search_path in search_paths:
+            latest_checkpoint = discover_latest_checkpoint(search_path)
+            if latest_checkpoint is not None and delete_old_temp_checkpoints:
+                metadata = _load_metadata(latest_checkpoint)
+                if metadata.get("is_temporary", False):
+                    logger.info(
+                        f"Found prior temporary checkpoint {latest_checkpoint}. We will delete it after"
+                        " saving a new checkpoint."
+                    )
+                    self._last_temporary_checkpoint = latest_checkpoint
+                    break
 
     def load_checkpoint(
         self,
@@ -144,6 +155,12 @@ class Checkpointer:
         mesh: Optional[haliax.partitioning.Mesh] = None,
     ) -> Optional[M]:
         if path is None:
+            # When temporary_base_path is set, discover the newest checkpoint across both roots
+            if discover_latest and self.temporary_base_path is not None:
+                latest = discover_latest_checkpoint(self.base_path, self.temporary_base_path)
+                if latest is not None:
+                    return load_checkpoint(state, latest, discover_latest=False, axis_mapping=axis_mapping, mesh=mesh)
+                return None
             path = self.base_path
         return load_checkpoint(state, path, discover_latest=discover_latest, axis_mapping=axis_mapping, mesh=mesh)
 
@@ -216,8 +233,14 @@ class Checkpointer:
             last_checkpoint = self._last_temporary_checkpoint
             destination = f"step-{step}"
 
+            # Route temporary checkpoints to temporary_base_path when configured
+            if not save_permanent_ckpt and self.temporary_base_path is not None:
+                save_base_path = self.temporary_base_path
+            else:
+                save_base_path = self.base_path
+
             if not save_permanent_ckpt:
-                self._last_temporary_checkpoint = os.path.join(self.base_path, destination)
+                self._last_temporary_checkpoint = os.path.join(save_base_path, destination)
             else:
                 self._last_temporary_checkpoint = None
 
@@ -248,6 +271,7 @@ class Checkpointer:
                 destination=destination,
                 commit_callback=callback,
                 is_temporary=not save_permanent_ckpt,
+                base_path_override=save_base_path,
             )
 
     def _get_current_step_save_interval(self, step):
@@ -290,8 +314,10 @@ class Checkpointer:
         commit_callback: Optional[Callable[[], None]] = None,
         *,
         is_temporary: bool = False,
+        base_path_override: Optional[str] = None,
     ):
-        path = os.path.join(self.base_path, destination)
+        base = base_path_override if base_path_override is not None else self.base_path
+        path = os.path.join(base, destination)
         logger.info(f"Saving checkpoint at step {step} to {path}")
 
         save_checkpoint(
@@ -539,12 +565,39 @@ def _load_metadata(checkpoint_path, fs=None):
     return metadata
 
 
-def discover_latest_checkpoint(checkpoint_path: PathLike) -> Optional[str]:
+def discover_latest_checkpoint(checkpoint_path: PathLike, *additional_paths: PathLike) -> Optional[str]:
     """
-    Discover the latest checkpoint in a given path.
+    Discover the latest checkpoint across one or more root paths.
+
+    When additional_paths are provided, all roots are searched and the newest
+    valid checkpoint (by timestamp then step) across all roots is returned.
     """
-    checkpoint_path = str(checkpoint_path)
-    # need to use fsspec for this, as glob.glob doesn't work on gs://
+    all_paths = [str(checkpoint_path)] + [str(p) for p in additional_paths]
+    best: Optional[str] = None
+    best_key: Optional[tuple] = None
+
+    for cp_path in all_paths:
+        found = _discover_latest_checkpoint_single(cp_path)
+        if found is None:
+            continue
+        try:
+            metadata = _load_metadata(found)
+            key = (datetime.datetime.fromisoformat(metadata["timestamp"]), metadata["step"])
+        except Exception:
+            continue
+        if best_key is None or key > best_key:
+            best = found
+            best_key = key
+
+    if best is not None:
+        logger.info(f"Discovered latest checkpoint at {best}")
+    else:
+        logger.warning(f"No checkpoints found in {all_paths}")
+    return best
+
+
+def _discover_latest_checkpoint_single(checkpoint_path: str) -> Optional[str]:
+    """Discover the latest checkpoint in a single root path."""
     fs: AbstractFileSystem
     fs, _ = _get_fs_and_plain_path(checkpoint_path)
 
@@ -567,10 +620,8 @@ def discover_latest_checkpoint(checkpoint_path: PathLike) -> Optional[str]:
 
     if len(ckpt_dirs) > 0:
         out = max(ckpt_dirs, key=checkpoint_sort_key)
-        logger.info(f"Discovered latest checkpoint from {checkpoint_path} at {out}")
         return out
     else:
-        logger.warning(f"No checkpoints found in {checkpoint_path}")
         return None
 
 
@@ -585,6 +636,10 @@ def _get_fs_and_plain_path(path, fs=None):
 @dataclass
 class CheckpointerConfig:
     base_path: str = "checkpoints/"
+    temporary_base_path: Optional[str] = None
+    """Separate base path for temporary (time-policy) checkpoints. When set, temporary checkpoints
+    are written here instead of base_path, allowing use of region-local storage with lifecycle TTL."""
+
     save_interval: timedelta = timedelta(minutes=15)
     # TODO: I'd like to write this, but it's not supported by draccus
     # keep: List[CheckpointInterval] = field(default_factory=lambda: [CheckpointInterval(every=1000)])
@@ -605,12 +660,20 @@ class CheckpointerConfig:
             return os.path.expanduser(os.path.join(self.base_path, run_id))
         return os.path.expanduser(self.base_path)
 
+    def expanded_temporary_path(self, run_id) -> Optional[str]:
+        if self.temporary_base_path is None:
+            return None
+        if self.append_run_id_to_base_path:
+            return os.path.expanduser(os.path.join(self.temporary_base_path, run_id))
+        return os.path.expanduser(self.temporary_base_path)
+
     def create(self, run_id) -> Checkpointer:
         keeps = [CheckpointInterval(**k) for k in self.keep]
         return Checkpointer(
             base_path=self.expanded_path(run_id),
             save_interval=self.save_interval,
             step_policies=keeps,
+            temporary_base_path=self.expanded_temporary_path(run_id),
             delete_old_temp_checkpoints=self.delete_old_temp_checkpoints,
         )
 
@@ -618,6 +681,8 @@ class CheckpointerConfig:
         # Workaround for Executor using placeholder types.
         if isinstance(self.base_path, str):
             self.base_path = os.path.expanduser(self.base_path)
+        if isinstance(self.temporary_base_path, str):
+            self.temporary_base_path = os.path.expanduser(self.temporary_base_path)
 
         # validate the checkpoint intervals.
         # we want to make sure that the intervals are monotonic. only the last one can be None

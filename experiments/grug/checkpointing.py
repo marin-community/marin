@@ -26,9 +26,25 @@ def _get_fs_and_plain_path(path: str) -> tuple[AbstractFileSystem, str]:
     return fs, plain_path
 
 
-def _checkpoint_candidates(checkpoint_path: str) -> list[str]:
-    fs, plain_path = _get_fs_and_plain_path(checkpoint_path)
-    base_path_protocol = urllib.parse.urlparse(checkpoint_path).scheme
+def _checkpoint_candidates(checkpoint_path: str, *, additional_paths: list[str] | None = None) -> list[str]:
+    all_roots = [checkpoint_path] + (additional_paths or [])
+
+    candidates: list[tuple[int, str, str]] = []
+    for root in all_roots:
+        candidates.extend(_scan_checkpoint_root(root))
+
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    ordered_candidates = [candidate for _, _, candidate in candidates]
+    if checkpoint_path not in ordered_candidates:
+        ordered_candidates.append(checkpoint_path)
+
+    return ordered_candidates
+
+
+def _scan_checkpoint_root(root_path: str) -> list[tuple[int, str, str]]:
+    """Scan a single root path and return (step, timestamp, path) tuples."""
+    fs, plain_path = _get_fs_and_plain_path(root_path)
+    base_path_protocol = urllib.parse.urlparse(root_path).scheme
 
     def maybe_unstrip_protocol(path: str) -> str:
         if base_path_protocol != "" and urllib.parse.urlparse(path).scheme == "":
@@ -36,9 +52,9 @@ def _checkpoint_candidates(checkpoint_path: str) -> list[str]:
         return path
 
     checkpoint_dirs = [maybe_unstrip_protocol(d) for d in fs.glob(os.path.join(plain_path, "*")) if fs.isdir(d)]
-    checkpoint_dirs.append(checkpoint_path)
+    checkpoint_dirs.append(root_path)
 
-    candidates: list[tuple[int, str, str]] = []
+    results: list[tuple[int, str, str]] = []
     for candidate in checkpoint_dirs:
         metadata_path = os.path.join(candidate, "metadata.json")
         if not fs.exists(metadata_path):
@@ -59,14 +75,9 @@ def _checkpoint_candidates(checkpoint_path: str) -> list[str]:
 
         timestamp = metadata.get("timestamp")
         timestamp_key = str(timestamp) if timestamp is not None else ""
-        candidates.append((step_num, timestamp_key, candidate))
+        results.append((step_num, timestamp_key, candidate))
 
-    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    ordered_candidates = [candidate for _, _, candidate in candidates]
-    if checkpoint_path not in ordered_candidates:
-        ordered_candidates.append(checkpoint_path)
-
-    return ordered_candidates
+    return results
 
 
 def restore_grug_state_from_checkpoint(
@@ -76,6 +87,7 @@ def restore_grug_state_from_checkpoint(
     load_checkpoint_setting: bool | None,
     mesh: jax.sharding.Mesh | None,
     allow_partial: bool,
+    additional_checkpoint_paths: list[str] | None = None,
     _load_fn: Callable[..., StateT] = load_checkpoint,
 ) -> StateT:
     if checkpoint_path is None:
@@ -86,7 +98,7 @@ def restore_grug_state_from_checkpoint(
     if load_checkpoint_setting is False:
         return state
 
-    candidates = _checkpoint_candidates(checkpoint_path)
+    candidates = _checkpoint_candidates(checkpoint_path, additional_paths=additional_checkpoint_paths or [])
     last_error: FileNotFoundError | None = None
 
     for candidate in candidates:

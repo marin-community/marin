@@ -94,6 +94,63 @@ def test_restore_raises_when_required_and_no_checkpoint_loads(tmp_path: Path):
         )
 
 
+def test_restore_discovers_candidates_across_additional_paths(tmp_path: Path):
+    permanent_root = tmp_path / "checkpoints"
+    temp_root = tmp_path / "checkpoints-temp"
+
+    _write_checkpoint_metadata(permanent_root / "step-100", step=100, timestamp="2026-03-17T00:00:00")
+    _write_checkpoint_metadata(temp_root / "step-150", step=150, timestamp="2026-03-17T06:00:00")
+
+    attempted: list[str] = []
+
+    def fake_load(state, path, *, discover_latest, axis_mapping, mesh, allow_partial):
+        attempted.append(path)
+        return {"loaded_from": path}
+
+    loaded = restore_grug_state_from_checkpoint(
+        {"state": "init"},
+        checkpoint_path=str(permanent_root),
+        load_checkpoint_setting=True,
+        mesh=None,
+        allow_partial=False,
+        additional_checkpoint_paths=[str(temp_root)],
+        _load_fn=fake_load,
+    )
+
+    # step-150 from temp root should be preferred (highest step)
+    assert attempted == [str(temp_root / "step-150")]
+    assert loaded == {"loaded_from": str(temp_root / "step-150")}
+
+
+def test_restore_falls_back_from_temp_to_permanent(tmp_path: Path):
+    permanent_root = tmp_path / "checkpoints"
+    temp_root = tmp_path / "checkpoints-temp"
+
+    _write_checkpoint_metadata(permanent_root / "step-100", step=100, timestamp="2026-03-17T00:00:00")
+    _write_checkpoint_metadata(temp_root / "step-150", step=150, timestamp="2026-03-17T06:00:00")
+
+    attempted: list[str] = []
+
+    def fake_load(state, path, *, discover_latest, axis_mapping, mesh, allow_partial):
+        attempted.append(path)
+        if "step-150" in path:
+            raise FileNotFoundError(path)
+        return {"loaded_from": path}
+
+    loaded = restore_grug_state_from_checkpoint(
+        {"state": "init"},
+        checkpoint_path=str(permanent_root),
+        load_checkpoint_setting=None,
+        mesh=None,
+        allow_partial=False,
+        additional_checkpoint_paths=[str(temp_root)],
+        _load_fn=fake_load,
+    )
+
+    # Should fall back to step-100 from permanent root
+    assert loaded == {"loaded_from": str(permanent_root / "step-100")}
+
+
 def test_restore_supports_legacy_wrapped_and_current_checkpoint_formats(tmp_path: Path):
     checkpoint_root = tmp_path / "checkpoints"
 
