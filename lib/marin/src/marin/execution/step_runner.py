@@ -110,7 +110,7 @@ class StepRunner:
         buffered until they complete. Raises if the iterable is exhausted and
         buffered steps still have unsatisfied dependencies.
         """
-        max_workers = max_concurrent or 8
+        max_workers = max_concurrent or 50
         if max_workers < 1:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
 

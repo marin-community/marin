@@ -526,6 +526,6 @@ v12_almost_done_steps = _create_v12_steps_from_list(V12_ALMOST_DONE)
 
 if __name__ == "__main__":
     executor_main(
-        steps=v12_almost_done_steps,
-        description="v12-retry: 10 almost-done runs that missed final eval",
+        steps=v12_rerun_steps + v12_almost_done_steps,
+        description="v12-retry: all 50 runs (40 crashed + 10 almost-done)",
     )
