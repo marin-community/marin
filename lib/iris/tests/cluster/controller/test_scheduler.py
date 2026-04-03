@@ -1992,7 +1992,7 @@ def _register_worker_with_probed_attributes(state, worker_id, address, metadata)
     attrs = _build_worker_attributes(
         accelerator_type=accel_type,
         accelerator_variant=accel_variant,
-        preemptible=False,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
         tpu_name=metadata.tpu_name,
         tpu_worker_id=str(0),
         device=metadata.device,

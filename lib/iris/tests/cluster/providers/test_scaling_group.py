@@ -1063,15 +1063,15 @@ class TestPrepareSliceConfigPreemptible:
         parent = config_pb2.ScaleGroupConfig(
             name="test-group",
         )
-        parent.slice_template.preemptible = True
+        parent.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
         parent.slice_template.gcp.zone = "us-central1-a"
         parent.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
 
         result = prepare_slice_config(parent.slice_template, parent, "iris")
-        assert result.preemptible is True
+        assert result.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
 
     def test_preemptible_false_by_default(self):
-        """preemptible defaults to False when not set on template."""
+        """capacity_type defaults to CAPACITY_TYPE_UNSPECIFIED when not set on template."""
         from iris.cluster.controller.scaling_group import prepare_slice_config
 
         parent = config_pb2.ScaleGroupConfig(
@@ -1081,7 +1081,7 @@ class TestPrepareSliceConfigPreemptible:
         parent.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
 
         result = prepare_slice_config(parent.slice_template, parent, "iris")
-        assert result.preemptible is False
+        assert result.capacity_type == config_pb2.CAPACITY_TYPE_UNSPECIFIED
 
 
 class TestPrepareSliceConfigGpuCount:

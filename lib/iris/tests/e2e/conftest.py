@@ -333,8 +333,8 @@ def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
     sg.resources.disk_bytes = 1024 * 1024 * 1024 * 1024
     sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
     sg.resources.device_variant = "v5litepod-16"
-    sg.resources.preemptible = True
-    sg.slice_template.preemptible = True
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+    sg.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
     sg.slice_template.num_vms = 2
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
     sg.slice_template.accelerator_variant = "v5litepod-16"
@@ -367,6 +367,7 @@ def _make_multi_worker_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     sg.resources.memory_bytes = 16 * 1024**3
     sg.resources.disk_bytes = 50 * 1024**3
     sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
     sg.slice_template.local.SetInParent()
     return make_local_config(config)
 

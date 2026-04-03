@@ -64,7 +64,7 @@ class WorkerConfig:
     accelerator_type: int = 0
     accelerator_variant: str = ""
     gpu_count: int = 0
-    preemptible: bool = False
+    capacity_type: int = 0
     storage_prefix: str = ""
     auth_token: str = ""
 
@@ -111,7 +111,7 @@ def worker_config_from_proto(
         accelerator_type=proto.accelerator_type,
         accelerator_variant=proto.accelerator_variant,
         gpu_count=proto.gpu_count,
-        preemptible=proto.preemptible,
+        capacity_type=proto.capacity_type,
         storage_prefix=proto.storage_prefix,
         auth_token=proto.auth_token,
     )
@@ -159,7 +159,7 @@ class Worker:
                 accelerator_type=config.accelerator_type,
                 accelerator_variant=config.accelerator_variant,
                 gpu_count_override=config.gpu_count,
-                preemptible=config.preemptible,
+                capacity_type=config.capacity_type,
                 worker_attributes=config.worker_attributes,
             )
 
