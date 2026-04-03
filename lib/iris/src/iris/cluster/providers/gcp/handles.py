@@ -240,7 +240,7 @@ class GcpSliceHandle:
         self._ssh_config = _ssh_config
         self._service_account = _service_account
         self._state = _state
-        self._is_queued_resource = _is_queued_resource
+        self.is_queued_resource: bool = _is_queued_resource
         self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
         self._bootstrap_lock = threading.Lock()
 
@@ -290,7 +290,7 @@ class GcpSliceHandle:
         """Query raw TPU state and VM endpoints via GcpService."""
         tpu_info = self._gcp_service.tpu_describe(self._slice_id, self._zone)
         if tpu_info is None:
-            if self._is_queued_resource:
+            if self.is_queued_resource:
                 return self._describe_queued_resource()
             logger.warning("Failed to describe TPU %s", self._slice_id)
             return SliceStatus(state=CloudSliceState.UNKNOWN, worker_count=0)
@@ -373,7 +373,7 @@ class GcpSliceHandle:
         return SliceStatus(state=CloudSliceState.CREATING, worker_count=0)
 
     def terminate(self) -> None:
-        if self._is_queued_resource:
+        if self.is_queued_resource:
             logger.info("Terminating queued resource (force): %s", self._slice_id)
             self._gcp_service.queued_resource_delete(self._slice_id, self._zone)
         else:
