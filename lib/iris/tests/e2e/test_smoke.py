@@ -606,6 +606,35 @@ def test_region_constrained_routing(smoke_cluster, capabilities):
         assert region_attr.string_value == target_region, f"Expected {target_region}, got {region_attr.string_value}"
 
 
+def test_capacity_type_propagates_to_worker_attributes(smoke_cluster):
+    """Workers from preemptible groups register preemptible=true, on-demand groups false.
+
+    Catches regressions where config.capacity_type gets lost on the way to
+    worker metadata (e.g. LOCAL-mode fake deriving it from the wrong source).
+    """
+    request = cluster_pb2.Controller.ListWorkersRequest()
+    response = smoke_cluster.controller_client.list_workers(request)
+    assert response.workers, "Expected registered workers"
+
+    for w in response.workers:
+        attrs = w.metadata.attributes
+        preemptible_attr = attrs.get(WellKnownAttribute.PREEMPTIBLE)
+        assert preemptible_attr is not None, f"Worker {w.worker_id} missing preemptible attribute"
+
+        device_attr = attrs.get(WellKnownAttribute.DEVICE_TYPE)
+        device_type = device_attr.string_value if device_attr else "cpu"
+
+        # Smoke cluster: TPU groups are preemptible, CPU groups are on-demand
+        if device_type == "tpu":
+            assert (
+                preemptible_attr.string_value == "true"
+            ), f"TPU worker {w.worker_id} should be preemptible=true, got {preemptible_attr.string_value}"
+        else:
+            assert (
+                preemptible_attr.string_value == "false"
+            ), f"CPU worker {w.worker_id} should be preemptible=false, got {preemptible_attr.string_value}"
+
+
 # ============================================================================
 # Profiling
 # ============================================================================
