@@ -58,6 +58,10 @@ _LABEL_VALUE_RE = re.compile(r"^[a-z0-9_-]{0,63}$")
 _RESOURCE_NAME_RE = re.compile(r"^[a-z]([a-z0-9-]*[a-z0-9])?$")
 MAX_RESOURCE_NAME_LENGTH = 63
 
+# GCP label key/value used to tag reserved (queued-resource) TPUs for rediscovery.
+CAPACITY_TYPE_LABEL = "capacity-type"
+CAPACITY_TYPE_RESERVED_VALUE = "reserved"
+
 
 # ============================================================================
 # Data types
@@ -117,6 +121,8 @@ class QueuedResourceInfo:
 
     name: str
     state: str  # QUEUED, PROVISIONING, ACTIVE, FAILED, SUSPENDED
+    zone: str = ""
+    labels: dict[str, str] | None = None
 
 
 @dataclass
@@ -207,6 +213,9 @@ class GcpService(Protocol):
     def queued_resource_create(self, request: TpuCreateRequest) -> None: ...
     def queued_resource_describe(self, name: str, zone: str) -> QueuedResourceInfo | None: ...
     def queued_resource_delete(self, name: str, zone: str) -> None: ...
+    def queued_resource_list(
+        self, zones: list[str], labels: dict[str, str] | None = None
+    ) -> list[QueuedResourceInfo]: ...
 
     def vm_create(self, request: VmCreateRequest) -> VmInfo: ...
     def vm_delete(self, name: str, zone: str) -> None: ...
@@ -604,12 +613,11 @@ class CloudGcpService:
             error = result.stderr.strip().lower()
             if "not found" in error or "could not be found" in error:
                 return None
-            logger.warning("Failed to describe queued resource %s: %s", name, result.stderr.strip())
-            return None
+            raise _classify_gcloud_error(result.stderr.strip())
 
         data = json.loads(result.stdout)
         state = data.get("state", {}).get("state", "UNKNOWN")
-        return QueuedResourceInfo(name=name, state=state)
+        return QueuedResourceInfo(name=name, state=state, zone=zone)
 
     def queued_resource_delete(self, name: str, zone: str) -> None:
         cmd = [
@@ -631,6 +639,37 @@ class CloudGcpService:
             error = result.stderr.strip()
             if "not found" not in error.lower():
                 raise _classify_gcloud_error(error)
+
+    def queued_resource_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[QueuedResourceInfo]:
+        # Empty zones = project-wide search using --zone=-
+        zone_list = zones if zones else ["-"]
+        results: list[QueuedResourceInfo] = []
+        for zone in zone_list:
+            cmd = [
+                "gcloud",
+                "alpha",
+                "compute",
+                "tpus",
+                "queued-resources",
+                "list",
+                f"--zone={zone}",
+                f"--project={self._project_id}",
+                "--format=json",
+                "--quiet",
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.warning("Failed to list queued resources in %s: %s", zone, result.stderr.strip())
+                continue
+            data = json.loads(result.stdout or "[]")
+            for item in data:
+                name = item.get("name", "").rsplit("/", 1)[-1]
+                state = item.get("state", {}).get("state", "UNKNOWN")
+                item_labels = item.get("tpu", {}).get("nodeSpec", [{}])[0].get("node", {}).get("labels", {})
+                if labels and not all(item_labels.get(k) == v for k, v in labels.items()):
+                    continue
+                results.append(QueuedResourceInfo(name=name, state=state, zone=zone, labels=item_labels))
+        return results
 
     # ========================================================================
     # VM operations

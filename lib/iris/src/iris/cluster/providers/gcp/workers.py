@@ -32,6 +32,8 @@ from iris.cluster.providers.gcp.handles import (
     _build_gce_resource_name,
 )
 from iris.cluster.providers.gcp.service import (
+    CAPACITY_TYPE_LABEL,
+    CAPACITY_TYPE_RESERVED_VALUE,
     CloudGcpService,
     GcpService,
     TpuCreateRequest,
@@ -358,7 +360,7 @@ class GcpWorkerProvider:
 
         # Add capacity-type label for slice rediscovery on controller restart
         labels = dict(config.labels)
-        labels["capacity-type"] = "reserved"
+        labels[CAPACITY_TYPE_LABEL] = CAPACITY_TYPE_RESERVED_VALUE
 
         metadata = _gcp_instance_metadata(self._ssh_config)
         if worker_config:
@@ -577,7 +579,33 @@ class GcpWorkerProvider:
                     _ssh_config=self._ssh_config,
                     _service_account=tpu.service_account,
                     _state=tpu.state,
-                    _is_queued_resource=tpu.labels.get("capacity-type") == "reserved",
+                    _is_queued_resource=tpu.labels.get(CAPACITY_TYPE_LABEL) == CAPACITY_TYPE_RESERVED_VALUE,
+                )
+            )
+
+        # Discover queued resources (reserved TPUs) not yet visible as TPU VMs.
+        # These are in QUEUED/PROVISIONING/WAITING_FOR_RESOURCES and need handles
+        # so the controller doesn't orphan them on restart.
+        tpu_names = {h.slice_id for h in handles}
+        qr_infos = self._gcp.queued_resource_list(zones=[], labels=managed_labels)
+        for qr in qr_infos:
+            if qr.name in tpu_names:
+                continue
+            if qr.state in ("FAILED", "SUSPENDED", "DELETING"):
+                continue
+            handles.append(
+                GcpSliceHandle(
+                    _slice_id=qr.name,
+                    _zone=qr.zone,
+                    _project_id=self._project_id,
+                    _labels=qr.labels
+                    or {CAPACITY_TYPE_LABEL: CAPACITY_TYPE_RESERVED_VALUE, self._iris_labels.iris_managed: "true"},
+                    _created_at=Timestamp.now(),
+                    _label_prefix=self._label_prefix,
+                    _accelerator_variant="",
+                    _gcp_service=self._gcp,
+                    _ssh_config=self._ssh_config,
+                    _is_queued_resource=True,
                 )
             )
 
@@ -663,12 +691,14 @@ def _run_tpu_bootstrap(
     Phase 2: Poll worker health endpoints until all respond healthy.
     On timeout: query Cloud Logging for [iris-init] entries for diagnostics.
     """
+    # Single deadline covers Phase 0 (queued resource wait) + Phase 1 (cloud READY).
+    cloud_deadline = Deadline.from_now(Duration.from_seconds(cloud_ready_timeout))
+
     # Phase 0: If this is a queued resource (reserved TPU), wait for ACTIVE
     # before polling the TPU VM state. The queued resource may sit in QUEUED
     # or PROVISIONING for an extended period.
-    if handle._is_queued_resource:
-        qr_deadline = Deadline.from_now(Duration.from_seconds(cloud_ready_timeout))
-        while not qr_deadline.expired():
+    if handle.is_queued_resource:
+        while not cloud_deadline.expired():
             qr = gcp_service.queued_resource_describe(handle.slice_id, handle.zone)
             if qr is None:
                 raise InfraError(f"Queued resource {handle.slice_id} not found")
@@ -684,8 +714,7 @@ def _run_tpu_bootstrap(
                 f"Queued resource {handle.slice_id} did not become ACTIVE " f"within {cloud_ready_timeout}s"
             )
 
-    deadline = Deadline.from_now(Duration.from_seconds(cloud_ready_timeout))
-    while not deadline.expired():
+    while not cloud_deadline.expired():
         cloud_status = handle._describe_cloud()
         if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
             raise InfraError(f"Slice {handle.slice_id} entered {cloud_status.state} while waiting for cloud READY")

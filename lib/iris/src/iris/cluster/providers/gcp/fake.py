@@ -25,6 +25,7 @@ from iris.cluster.providers.types import (
     find_free_port,
 )
 from iris.cluster.providers.gcp.service import (
+    CAPACITY_TYPE_LABEL,
     KNOWN_GCP_ZONES,
     KNOWN_TPU_TYPES,
     QueuedResourceInfo,
@@ -86,6 +87,7 @@ class InMemoryGcpService:
         # In-memory state for DRY_RUN/LOCAL modes
         self._tpus: dict[tuple[str, str], TpuInfo] = {}
         self._vms: dict[tuple[str, str], VmInfo] = {}
+        self._queued_resources: set[tuple[str, str]] = set()  # TPUs created via queued_resource_create
 
         # Failure injection (DRY_RUN/LOCAL only)
         self._injected_failures: dict[str, InfraError] = {}
@@ -256,18 +258,33 @@ class InMemoryGcpService:
         # In DRY_RUN/LOCAL mode, simulate immediate provisioning by creating
         # the TPU directly (as if the queued resource instantly became ACTIVE).
         self.tpu_create(request)
+        self._queued_resources.add((request.name, request.zone))
 
     def queued_resource_describe(self, name: str, zone: str) -> QueuedResourceInfo | None:
         self._check_injected_failure("queued_resource_describe")
-        # If the TPU exists, the queued resource is ACTIVE
-        if (name, zone) in self._tpus:
-            return QueuedResourceInfo(name=name, state="ACTIVE")
-        return None
+        if (name, zone) not in self._queued_resources:
+            return None
+        state = "ACTIVE" if (name, zone) in self._tpus else "PROVISIONING"
+        return QueuedResourceInfo(name=name, state=state, zone=zone)
 
     def queued_resource_delete(self, name: str, zone: str) -> None:
         self._check_injected_failure("queued_resource_delete")
-        # Delete the underlying TPU
+        self._queued_resources.discard((name, zone))
         self.tpu_delete(name, zone)
+
+    def queued_resource_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[QueuedResourceInfo]:
+        self._check_injected_failure("queued_resource_list")
+        results: list[QueuedResourceInfo] = []
+        for name, zone in self._queued_resources:
+            if zones and zone not in zones:
+                continue
+            tpu_info = self._tpus.get((name, zone))
+            tpu_labels = tpu_info.labels if tpu_info else {}
+            if labels and not all(tpu_labels.get(k) == v for k, v in labels.items()):
+                continue
+            state = "ACTIVE" if tpu_info else "PROVISIONING"
+            results.append(QueuedResourceInfo(name=name, state=state, zone=zone, labels=tpu_labels))
+        return results
 
     # ========================================================================
     # VM operations
@@ -447,15 +464,13 @@ class InMemoryGcpService:
 
             extra_attrs.setdefault("region", "local")
             # Derive capacity_type from worker attributes or slice config
-            capacity_type_str = extra_attrs.pop("capacity-type", "")
+            capacity_type_str = extra_attrs.pop(CAPACITY_TYPE_LABEL, "")
             if capacity_type_str == "preemptible":
                 capacity_type_val = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
             elif capacity_type_str == "reserved":
                 capacity_type_val = config_pb2.CAPACITY_TYPE_RESERVED
             else:
                 capacity_type_val = config_pb2.CAPACITY_TYPE_ON_DEMAND
-            # Also remove legacy preemptible attr if present
-            extra_attrs.pop("preemptible", None)
 
             gpu_count = 0
             if is_gpu:
