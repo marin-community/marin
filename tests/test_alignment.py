@@ -50,7 +50,7 @@ from marin.alignment.inference_config import OpenAIConfig, VLLMConfig
 from marin.alignment.judge import (
     PreferencePairFilterConfig,
     JudgeConfig,
-    _parse_judge_response,
+    parse_judge_response,
     build_preference_pairs,
     judge_responses,
 )
@@ -1055,23 +1055,23 @@ class TestResponseHelpers:
 class TestJudgeParsing:
     def test_parse_json_in_code_block(self):
         content = '```json\n{"score": 8, "confidence": 0.9, "explanation": "Good", "highlights": []}\n```'
-        result = _parse_judge_response(content)
+        result = parse_judge_response(content)
         assert result["score"] == 8
         assert result["confidence"] == 0.9
 
     def test_parse_raw_json(self):
         content = '{"score": 3, "confidence": 0.5, "explanation": "Bad"}'
-        result = _parse_judge_response(content)
+        result = parse_judge_response(content)
         assert result["score"] == 3
 
     def test_parse_json_with_surrounding_text(self):
         content = 'Here is my judgment:\n{"score": 7, "confidence": 0.8, "explanation": "OK"}\nThat is all.'
-        result = _parse_judge_response(content)
+        result = parse_judge_response(content)
         assert result["score"] == 7
 
     def test_parse_invalid_json_raises(self):
         with pytest.raises((json.JSONDecodeError, ValueError)):
-            _parse_judge_response("not json at all")
+            parse_judge_response("not json at all")
 
 
 class TestAlignResponseOrchestration:

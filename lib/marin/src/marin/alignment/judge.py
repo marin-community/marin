@@ -78,7 +78,7 @@ class JudgePairConfig:
 
 
 @dataclass(frozen=True)
-class _JudgeRequest:
+class JudgeRequest:
     prompt_id: str
     bucket: str
     response_index: int
@@ -94,7 +94,7 @@ def _load_responses(path: str) -> dict[str, dict[str, Any]]:
     return {record.get("prompt_id", ""): record for record in records}
 
 
-def _parse_judge_response(content: str) -> dict[str, Any]:
+def parse_judge_response(content: str) -> dict[str, Any]:
     """Parse the JSON judgment from the judge response."""
     json_match = re.search(r"```json\s*(.*?)\s*```", content, re.DOTALL)
     if json_match:
@@ -107,7 +107,7 @@ def _parse_judge_response(content: str) -> dict[str, Any]:
     return json.loads(content)
 
 
-def _build_judge_messages(
+def build_judge_messages(
     statement: Statement,
     user_message: str,
     model_response: str,
@@ -127,9 +127,9 @@ def _build_judge_messages(
     ]
 
 
-def _parse_compliance_result(content: str) -> ComplianceResult:
+def parse_compliance_result(content: str) -> ComplianceResult:
     try:
-        parsed = _parse_judge_response(content)
+        parsed = parse_judge_response(content)
         return ComplianceResult.from_judge_output(parsed, raw_response=content)
     except (json.JSONDecodeError, KeyError) as exc:
         logger.warning("Failed to parse judge response: %s", exc)
@@ -142,7 +142,7 @@ def _parse_compliance_result(content: str) -> ComplianceResult:
         )
 
 
-def _judge_response(
+def judge_response(
     statement: Statement,
     user_message: str,
     model_response: str,
@@ -152,15 +152,15 @@ def _judge_response(
 ) -> ComplianceResult:
     response = llm_chat_single(
         config=judge_model,
-        messages=_build_judge_messages(statement, user_message, model_response, rubric),
+        messages=build_judge_messages(statement, user_message, model_response, rubric),
         max_tokens=max_tokens,
         temperature=0.0,
     )
-    return _parse_compliance_result(response.content)
+    return parse_compliance_result(response.content)
 
 
-def _judge_responses_local_batch(
-    requests: list[_JudgeRequest],
+def judge_responses_local_batch(
+    requests: list[JudgeRequest],
     *,
     session: BatchedVllmServeSession,
     max_tokens: int,
@@ -170,7 +170,7 @@ def _judge_responses_local_batch(
 
     logger.info("Scoring %d responses via local batched judge", len(requests))
     message_batches = [
-        _build_judge_messages(
+        build_judge_messages(
             request.statement,
             request.user_message,
             request.response_text,
@@ -188,12 +188,12 @@ def _judge_responses_local_batch(
     results: list[ComplianceResult] = []
     for output in outputs:
         raw_response = output[0] if output else ""
-        results.append(_parse_compliance_result(raw_response))
+        results.append(parse_compliance_result(raw_response))
     return results
 
 
-def _judge_responses_api_batch(
-    requests: list[_JudgeRequest],
+def judge_responses_api_batch(
+    requests: list[JudgeRequest],
     *,
     judge_model: InferenceConfig | str,
     max_tokens: int,
@@ -207,7 +207,7 @@ def _judge_responses_api_batch(
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         future_map = {
             pool.submit(
-                _judge_response,
+                judge_response,
                 request.statement,
                 request.user_message,
                 request.response_text,
@@ -247,7 +247,7 @@ def _statement_record(statement: Statement) -> dict[str, Any]:
     }
 
 
-def _compliance_result_record(result: ComplianceResult) -> dict[str, Any]:
+def compliance_result_record(result: ComplianceResult) -> dict[str, Any]:
     return {
         "score": result.score,
         "compliant": result.compliant,
@@ -267,7 +267,7 @@ def _judged_candidate_record(
     return {
         "response_index": response_index,
         "response_text": response_text,
-        "judgment": _compliance_result_record(result),
+        "judgment": compliance_result_record(result),
     }
 
 
@@ -334,7 +334,7 @@ def _judgment_record(
     }
 
 
-def _write_json(path: str, payload: dict[str, Any]) -> None:
+def write_json(path: str, payload: dict[str, Any]) -> None:
     fs, fs_path = url_to_fs(path)
     parent = fs_path.rsplit("/", 1)[0] if "/" in fs_path else ""
     if parent:
@@ -394,7 +394,7 @@ def judge_responses(config: JudgeConfig) -> None:
         processed_prompt_pairs = 0
         for start in range(0, len(common_ids), config.batch_size):
             batch_ids = common_ids[start : start + config.batch_size]
-            requests: list[_JudgeRequest] = []
+            requests: list[JudgeRequest] = []
             prompt_contexts: dict[str, dict[str, Any]] = {}
 
             for prompt_id in batch_ids:
@@ -461,7 +461,7 @@ def judge_responses(config: JudgeConfig) -> None:
                 }
                 for candidate in chosen_candidates:
                     requests.append(
-                        _JudgeRequest(
+                        JudgeRequest(
                             prompt_id=prompt_id,
                             bucket="chosen",
                             response_index=candidate["response_index"],
@@ -473,7 +473,7 @@ def judge_responses(config: JudgeConfig) -> None:
                     )
                 for candidate in rejected_candidates:
                     requests.append(
-                        _JudgeRequest(
+                        JudgeRequest(
                             prompt_id=prompt_id,
                             bucket="rejected",
                             response_index=candidate["response_index"],
@@ -492,13 +492,13 @@ def judge_responses(config: JudgeConfig) -> None:
             try:
                 if is_local:
                     assert session is not None
-                    results = _judge_responses_local_batch(
+                    results = judge_responses_local_batch(
                         requests,
                         session=session,
                         max_tokens=config.judge_max_tokens,
                     )
                 else:
-                    results = _judge_responses_api_batch(
+                    results = judge_responses_api_batch(
                         requests,
                         judge_model=config.judge_model,
                         max_tokens=config.judge_max_tokens,
@@ -579,7 +579,7 @@ def judge_responses(config: JudgeConfig) -> None:
         judgments=judgments,
         failure_messages=failure_messages,
     )
-    _write_json(f"{config.output_path}/summary.json", summary)
+    write_json(f"{config.output_path}/summary.json", summary)
     if session_metrics is not None:
         write_vllm_metrics_artifact(
             f"{config.output_path}/artifacts/vllm_metrics.json",
@@ -697,7 +697,7 @@ def build_preference_pairs(config: PreferencePairFilterConfig) -> None:
 
     write_sharded_jsonl_gz(pairs, config.output_path, shard_size=5000)
     write_sharded_jsonl_gz(decision_records, f"{config.output_path}/artifacts/filter_decisions", shard_size=5000)
-    _write_json(
+    write_json(
         f"{config.output_path}/artifacts/filter_summary.json",
         {
             "judgment_record_count": len(judgments),

@@ -16,6 +16,15 @@ Usage:
         align_config=AlignConfig(...),
     )
     executor_main(steps=[some_checkpoint_step, *aligned_steps])
+
+    # Post-training evaluation:
+    eval_steps = evaluate(
+        name="my_eval",
+        target_model=VLLMConfig(model="meta-llama/Llama-3.1-8B-Instruct", ...),
+        prompts_step=aligned_steps[1],  # prompts step
+        spec="path/to/spec.jsonl",
+        eval_config=EvalConfig(),
+    )
 """
 
 from __future__ import annotations
@@ -31,6 +40,13 @@ from fray.v2.types import ResourceConfig
 from rigging.filesystem import url_to_fs
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat
 
+from marin.alignment.evaluate import (
+    EvalInferenceConfig,
+    EvalJudgeConfig,
+    PromptFormat,
+    run_eval_inference,
+    run_eval_judge,
+)
 from marin.alignment.generate_prompts import PromptGenConfig, generate_prompts_from_spec
 from marin.alignment.generate_responses import (
     RejectedPromptStrategy,
@@ -63,6 +79,7 @@ def _llm_env_vars() -> dict[str, str]:
     env_vars: dict[str, str] = {}
     for key in (
         "OPENAI_API_KEY",
+        "HF_TOKEN",
         "HF_HOME",
         "HF_HUB_CACHE",
         "HUGGINGFACE_HUB_CACHE",
@@ -555,3 +572,105 @@ def align(
         steps.extend([tokenized, trained])
 
     return steps
+
+
+@dataclass(frozen=True)
+class EvalConfig:
+    """Configuration for post-training alignment evaluation."""
+
+    prompt_format: PromptFormat = PromptFormat.MARIN
+    temperature: float = 0.7
+    max_tokens: int = 1500
+    n: int = 1
+    inference_batch_size: int = 8
+    judge_workers: int = 64
+    judge_batch_size: int = 8
+    judge_max_tokens: int = 1000
+    statement_ids: list[str] | None = None
+
+
+def evaluate(
+    name: str,
+    target_model: InferenceConfig,
+    prompts: ExecutorStep | str,
+    spec: ExecutorStep | str,
+    eval_config: EvalConfig,
+    judge_model: InferenceConfig | str = "gpt-4.1",
+    dependency: ExecutorStep | None = None,
+) -> list[ExecutorStep]:
+    """Create evaluation steps for an aligned (or any) model.
+
+    Args:
+        name: Name for this evaluation run.
+        target_model: The model to evaluate (typically VLLMConfig).
+        prompts: ExecutorStep whose output contains eval prompts, or a
+            GCS/local path to a prompts directory (Bloom or Marin format).
+        spec: Path to spec JSONL or an ExecutorStep that produces one.
+        eval_config: Evaluation configuration.
+        judge_model: Model for compliance scoring.
+        dependency: Optional step that must complete before eval starts
+            (e.g., the DPO training step whose checkpoint is being evaluated).
+
+    Returns:
+        List of [inference_step, judge_step] ExecutorSteps.
+    """
+    if isinstance(spec, ExecutorStep):
+        spec_gcs_path = output_path_of(spec) / "spec.jsonl"
+    else:
+        spec_gcs_path = spec
+
+    prompts_path = output_path_of(prompts) if isinstance(prompts, ExecutorStep) else prompts
+    dependency_path = output_path_of(dependency) if dependency is not None else None
+
+    eval_inference_step = ExecutorStep(
+        name=f"eval/{name}/inference",
+        description=f"Run eval inference on {_model_name(target_model)}",
+        fn=remote(
+            run_eval_inference,
+            resources=target_model.resources,
+            pip_dependency_groups=_inference_dependency_groups(target_model),
+            pip_packages=target_model.pip_packages,
+            env_vars=_llm_env_vars(),
+        ),
+        config=EvalInferenceConfig(
+            prompts_path=prompts_path,
+            spec_path=spec_gcs_path,
+            output_path=this_output_path(),
+            model_config=_serialize_inference_config(target_model),
+            prompt_format=eval_config.prompt_format,
+            temperature=eval_config.temperature,
+            max_tokens=versioned(eval_config.max_tokens),
+            n=versioned(eval_config.n),
+            batch_size=eval_config.inference_batch_size,
+            statement_ids=versioned(eval_config.statement_ids),
+            dependency_path=dependency_path,
+        ),
+    )
+
+    judge_is_local = isinstance(judge_model, VLLMConfig)
+    judge_resources = judge_model.resources if judge_is_local else ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g")
+    judge_dep_groups = judge_model.pip_dependency_groups if judge_is_local else ["cpu"]
+    judge_pip_packages = judge_model.pip_packages if judge_is_local else []
+
+    eval_judge_step = ExecutorStep(
+        name=f"eval/{name}/judge",
+        description=f"Judge eval responses via {_model_name(judge_model)}",
+        fn=remote(
+            run_eval_judge,
+            resources=judge_resources,
+            pip_dependency_groups=judge_dep_groups,
+            pip_packages=judge_pip_packages,
+            env_vars=_llm_env_vars(),
+        ),
+        config=EvalJudgeConfig(
+            eval_responses_path=output_path_of(eval_inference_step),
+            spec_path=spec_gcs_path,
+            output_path=this_output_path(),
+            judge_model=judge_model,
+            workers=eval_config.judge_workers,
+            batch_size=eval_config.judge_batch_size,
+            judge_max_tokens=eval_config.judge_max_tokens,
+        ),
+    )
+
+    return [eval_inference_step, eval_judge_step]
