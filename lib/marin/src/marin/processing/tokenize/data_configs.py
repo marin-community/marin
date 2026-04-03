@@ -8,13 +8,12 @@ from functools import lru_cache
 
 import numpy
 
-import transformers
 from levanter.data.text import BlockShuffleConfig, DatasetComponent, LmDataConfig
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
 from marin.execution import unwrap_versioned_value
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
-from marin.utils import load_tokenizer_with_backoff
 
 TokenizerStep = ExecutorStep[TokenizeConfig]
 
@@ -322,10 +321,12 @@ def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LmDataConfig:
     )
 
 
-@lru_cache(maxsize=32)
-def _load_tokenizer(tokenizer_name: str) -> transformers.PreTrainedTokenizer:
-    """Load and cache a tokenizer by name"""
-    return load_tokenizer_with_backoff(tokenizer_name)
+def _load_tokenizer(tokenizer_name: str) -> MarinTokenizer:
+    """Load and cache a tokenizer by name.
+
+    Delegates to levanter.tokenizers.load_tokenizer which is already lru_cached.
+    """
+    return load_tokenizer(tokenizer_name)
 
 
 @lru_cache(maxsize=128)
@@ -348,7 +349,7 @@ def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
         resolved_name,
     )
     tokenizer = _load_tokenizer(resolved_name)
-    return len(tokenizer)
+    return tokenizer.vocab_size
 
 
 def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
@@ -381,7 +382,7 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
         if vocab2[token] != id1:
             return False
 
-    if getattr(t1, "chat_template", None) is not None and getattr(t2, "chat_template", None) is not None:
+    if t1.chat_template is not None and t2.chat_template is not None:
         if t1.chat_template != t2.chat_template:
             return False
 

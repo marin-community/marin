@@ -58,6 +58,9 @@ class MarinTokenizer(Protocol):
 
     def get_vocab(self) -> dict[str, int]: ...
 
+    @property
+    def chat_template(self) -> str | None: ...
+
     def apply_chat_template(
         self,
         conversation: list[dict[str, str]],
@@ -110,6 +113,10 @@ class HfMarinTokenizer:
     @property
     def eos_token(self) -> str | None:
         return self._eos_token
+
+    @property
+    def chat_template(self) -> str | None:
+        return self._chat_template
 
     def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
         return self._tokenizer.encode(text, add_special_tokens=add_special_tokens).ids
@@ -210,6 +217,10 @@ class TokieMarinTokenizer:
     @property
     def eos_token(self) -> str | None:
         return self._eos_token
+
+    @property
+    def chat_template(self) -> str | None:
+        return self._chat_template
 
     def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
         return self._tokenizer.encode(text, add_special_tokens=add_special_tokens).ids

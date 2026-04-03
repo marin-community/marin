@@ -96,7 +96,7 @@ def test_load_tokenizer_tokie():
 def test_chat_template_no_template():
     # Llama 3.1 base model has no chat template
     tok = load_tokenizer(MODEL_NAME)
-    if tok._chat_template is None:
+    if tok.chat_template is None:
         with pytest.raises(ValueError, match="no chat template"):
             tok.apply_chat_template([{"role": "user", "content": "hi"}])
 

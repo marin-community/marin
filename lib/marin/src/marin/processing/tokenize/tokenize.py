@@ -17,7 +17,6 @@ import time
 from collections.abc import Iterator, Sequence
 
 import draccus
-import transformers
 from rigging.filesystem import open_url
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig
@@ -29,6 +28,7 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
     preprocessor_for_format,
 )
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.store.cache import consolidate_shard_caches
 from levanter.store.tree_store import TreeStore
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
@@ -258,7 +258,7 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[Sequence[dict]]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    tokenizer: transformers.PreTrainedTokenizer = zephyr_worker_ctx().get_shared("tokenizer")
+    tokenizer: MarinTokenizer = zephyr_worker_ctx().get_shared("tokenizer")
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     batch_count = 0
@@ -394,7 +394,7 @@ def tokenize(config: TokenizeConfigBase):
         )
 
         # Broadcast the tokenizer to all workers via ZephyrContext
-        ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
+        ctx.put("tokenizer", load_tokenizer(config.tokenizer))
 
         tokenize_start = time.monotonic()
         shard_paths = ctx.execute(temp_shards)
