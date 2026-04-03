@@ -76,7 +76,9 @@ class OsLoginKeyProvisioner:
         if impersonate_sa:
             cmd.append(f"--impersonate-service-account={impersonate_sa}")
         logger.info("Registering SSH key with OS Login (ttl=%ds, sa=%s)", self._TTL, impersonate_sa)
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to register SSH key with OS Login: {result.stderr.strip()}")
         self._registration_expiry = time.monotonic() + self._TTL - self._REFRESH_MARGIN
 
 
@@ -91,7 +93,8 @@ def ssh_key_file(
         return ssh_config.key_file
     if uses_os_login(ssh_config):
         path = os.path.expanduser("~/.ssh/google_compute_engine")
-        _os_login_key_provisioner.ensure_key(path, impersonate_service_account)
+        effective_sa = impersonate_service_account or ssh_impersonate_service_account(ssh_config)
+        _os_login_key_provisioner.ensure_key(path, effective_sa)
         return path
     return None
 

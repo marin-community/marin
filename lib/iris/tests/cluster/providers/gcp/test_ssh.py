@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import threading
 from unittest.mock import patch
 
@@ -50,7 +51,7 @@ def provisioner():
     return OsLoginKeyProvisioner()
 
 
-@patch("iris.cluster.providers.gcp.ssh.subprocess.run")
+@patch("iris.cluster.providers.gcp.ssh.subprocess.run", return_value=subprocess.CompletedProcess([], 0))
 @patch("iris.cluster.providers.gcp.ssh.os.path.exists", return_value=False)
 @patch("iris.cluster.providers.gcp.ssh.os.makedirs")
 def test_ensure_key_generates_and_registers(mock_makedirs, mock_exists, mock_run, provisioner):
@@ -77,7 +78,7 @@ def test_ensure_key_skips_when_valid(mock_exists, mock_run, provisioner):
     mock_run.assert_not_called()
 
 
-@patch("iris.cluster.providers.gcp.ssh.subprocess.run")
+@patch("iris.cluster.providers.gcp.ssh.subprocess.run", return_value=subprocess.CompletedProcess([], 0))
 @patch("iris.cluster.providers.gcp.ssh.os.path.exists", return_value=True)
 @patch("iris.cluster.providers.gcp.ssh.time.monotonic", return_value=100000.0)
 def test_ensure_key_reregisters_on_expiry(mock_monotonic, mock_exists, mock_run, provisioner):
@@ -91,7 +92,7 @@ def test_ensure_key_reregisters_on_expiry(mock_monotonic, mock_exists, mock_run,
     assert "os-login" in mock_run.call_args.args[0]
 
 
-@patch("iris.cluster.providers.gcp.ssh.subprocess.run")
+@patch("iris.cluster.providers.gcp.ssh.subprocess.run", return_value=subprocess.CompletedProcess([], 0))
 @patch("iris.cluster.providers.gcp.ssh.os.path.exists", return_value=False)
 @patch("iris.cluster.providers.gcp.ssh.os.makedirs")
 def test_ensure_key_no_impersonate_sa(mock_makedirs, mock_exists, mock_run, provisioner):
@@ -102,7 +103,7 @@ def test_ensure_key_no_impersonate_sa(mock_makedirs, mock_exists, mock_run, prov
     assert not any("--impersonate-service-account" in arg for arg in cmd)
 
 
-@patch("iris.cluster.providers.gcp.ssh.subprocess.run")
+@patch("iris.cluster.providers.gcp.ssh.subprocess.run", return_value=subprocess.CompletedProcess([], 0))
 @patch("iris.cluster.providers.gcp.ssh.os.path.exists", return_value=False)
 @patch("iris.cluster.providers.gcp.ssh.os.makedirs")
 def test_ensure_key_thread_safety(mock_makedirs, mock_exists, mock_run, provisioner):
@@ -153,6 +154,18 @@ def test_ssh_key_file_os_login_provisions(mock_provisioner):
     mock_provisioner.ensure_key.assert_called_once()
     call_args = mock_provisioner.ensure_key.call_args
     assert call_args.args[1] == "sa@test.iam.gserviceaccount.com"
+
+
+@patch("iris.cluster.providers.gcp.ssh._os_login_key_provisioner")
+def test_ssh_key_file_os_login_uses_config_sa_as_fallback(mock_provisioner):
+    """When no explicit SA is passed, ssh_key_file falls back to the config's impersonate_service_account."""
+    cfg = _os_login_config()
+    cfg.impersonate_service_account = "sa-from-config@project.iam.gserviceaccount.com"
+    result = ssh_key_file(cfg)
+    assert result is not None
+    mock_provisioner.ensure_key.assert_called_once()
+    call_args = mock_provisioner.ensure_key.call_args
+    assert call_args.args[1] == "sa-from-config@project.iam.gserviceaccount.com"
 
 
 @patch("iris.cluster.providers.gcp.ssh._os_login_key_provisioner")
