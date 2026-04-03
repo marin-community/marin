@@ -267,7 +267,8 @@ def read_rowgroups_scatter_no_skip(path: str, limit: int | None = None) -> dict[
     def run():
         filt = (pc.field("shard_idx") == target_shard) & (pc.field("chunk_idx") == target_chunk)
         n = 0
-        for table in iter_parquet_row_groups(path, columns=["item"], row_filter=filt):
+        for table in iter_parquet_row_groups(path):
+            table = table.filter(filt).select(["item"])
             n += len(table)
             del table
         return n
