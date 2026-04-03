@@ -50,6 +50,7 @@ from levanter.store.cache import CacheOptions, TreeCache
 from levanter.store.jagged_array import JaggedArrayStore
 from levanter.store.tree_store import TreeStore
 from levanter.utils import fsspec_utils
+from levanter.tokenizers import MarinTokenizer
 from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.jax_utils import key_iterator
 from levanter.compat.hf_checkpoints import load_tokenizer
@@ -631,7 +632,7 @@ class LmDataConfig:
             ), "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
 
     @cached_property
-    def the_tokenizer(self) -> HfTokenizer:
+    def the_tokenizer(self) -> HfTokenizer | MarinTokenizer:
         if self.tokenizer == "passthrough":
             return PassthroughTokenizer(self.vocab_size)
         else:

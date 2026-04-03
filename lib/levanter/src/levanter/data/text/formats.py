@@ -12,7 +12,12 @@ from draccus import ChoiceRegistry
 from levanter.data._preprocessor import BatchProcessor
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.utils.hf_utils import HfTokenizer, num_cpus_used_by_tokenizer
+
 from ._batch_tokenizer import BatchTokenizer
+
+# Type alias for callers migrating from HfTokenizer to MarinTokenizer.
+# Accepts both during the transition period.
+AnyTokenizer = HfTokenizer | MarinTokenizer
 
 
 class LmDatasetFormatBase(ChoiceRegistry):
@@ -25,7 +30,7 @@ class LmDatasetFormatBase(ChoiceRegistry):
         return "input_ids"
 
     def build_preprocessor(
-        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+        self, tokenizer: AnyTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
         raise ValueError(f"Unknown format {self}")
 
@@ -38,7 +43,7 @@ class TextLmDatasetFormat(LmDatasetFormatBase):
     text_key: str = "text"  # key for the text field in the jsonl file
 
     def build_preprocessor(
-        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+        self, tokenizer: AnyTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
         marin_tok = _ensure_marin_tokenizer(tokenizer)
         return BatchTokenizer(marin_tok, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=self.text_key)
@@ -57,7 +62,7 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
     mask_user_turns: bool = True
 
     def build_preprocessor(
-        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+        self, tokenizer: AnyTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
         return ChatProcessor(
             tokenizer,
@@ -89,7 +94,7 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
         return self.input_ids_key
 
     def build_preprocessor(
-        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+        self, tokenizer: AnyTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
         del tokenizer, enforce_eos, enforce_bos
         return PrebuiltCacheProcessor(self.input_ids_key, self.loss_weights_key)
@@ -282,12 +287,12 @@ class ChatProcessor(BatchProcessor[dict, dict]):
 
 
 def preprocessor_for_format(
-    format: LmDatasetFormatBase, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    format: LmDatasetFormatBase, tokenizer: AnyTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
 ) -> BatchProcessor[dict, dict]:
     return format.build_preprocessor(tokenizer, enforce_eos=enforce_eos, enforce_bos=enforce_bos)
 
 
-def _ensure_marin_tokenizer(tokenizer: HfTokenizer) -> MarinTokenizer:
+def _ensure_marin_tokenizer(tokenizer: AnyTokenizer) -> MarinTokenizer:
     """Convert an HF tokenizer to MarinTokenizer if needed.
 
     During the migration from HfTokenizer to MarinTokenizer, callers may still
