@@ -235,7 +235,6 @@ scr/*
 .claude
 !.claude/skills
 .agents/tmp/
-.nightshift-worktrees/
 .codex
 .entire
 

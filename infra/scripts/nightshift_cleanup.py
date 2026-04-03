@@ -141,7 +141,7 @@ If no scouts produced changes, exit cleanly — no branch, no PR.
 def run_scout(subproject: str, date: str, repo_root: Path) -> tuple[str, dict, str]:
     """Run a single scout agent in a git worktree. Returns (subproject, result_dict, worktree_path)."""
     worktree_name = f"nightshift-scout-{subproject.replace('/', '-')}"
-    worktree_path = repo_root / ".nightshift-worktrees" / worktree_name
+    worktree_path = repo_root / ".claude" / "nightshift-worktrees" / worktree_name
     branch_name = f"nightshift/scout-{subproject.replace('/', '-')}-{date}"
 
     # Clean up any stale worktree
@@ -226,7 +226,7 @@ def run_merge(date: str, haiku_seed: str, scout_results: list[dict], worktree_in
 
 def cleanup_worktrees(repo_root: Path) -> None:
     """Remove all nightshift scout worktrees."""
-    worktrees_dir = repo_root / ".nightshift-worktrees"
+    worktrees_dir = repo_root / ".claude" / "nightshift-worktrees"
     if not worktrees_dir.exists():
         return
     for child in worktrees_dir.iterdir():
