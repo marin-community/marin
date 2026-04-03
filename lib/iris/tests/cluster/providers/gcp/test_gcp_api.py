@@ -421,6 +421,177 @@ def test_logging_list_entries():
     assert body["pageSize"] == 50
 
 
+# ========================================================================
+# Operation waiting — vm_create / tpu_create must wait for async operations
+# ========================================================================
+
+
+def test_instance_insert_wait_polls_until_done():
+    """instance_insert_wait should poll the zone operation until DONE."""
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        # POST to create the instance
+        if request.method == "POST" and "/instances" in str(request.url) and "/operations/" not in str(request.url):
+            return _json_response(
+                {"name": "op-123", "status": "RUNNING", "zone": f"zones/{ZONE}", "kind": "compute#operation"}
+            )
+        # GET to poll the operation
+        if "/operations/op-123" in str(request.url):
+            call_count += 1
+            if call_count < 2:
+                return _json_response({"name": "op-123", "status": "RUNNING"})
+            return _json_response({"name": "op-123", "status": "DONE"})
+        return httpx.Response(404, json={"error": {"code": 404, "message": "Not found"}})
+
+    api = _make_api(handler)
+    api.instance_insert_wait(ZONE, {"name": "my-vm"})
+    api.close()
+
+    assert call_count == 2, "Must poll operation until DONE"
+
+
+def test_instance_insert_wait_raises_on_operation_error():
+    """If the operation completes with an error, raise InfraError."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and "/instances" in str(request.url) and "/operations/" not in str(request.url):
+            return _json_response(
+                {"name": "op-err", "status": "RUNNING", "zone": f"zones/{ZONE}", "kind": "compute#operation"}
+            )
+        if "/operations/op-err" in str(request.url):
+            return _json_response(
+                {
+                    "name": "op-err",
+                    "status": "DONE",
+                    "error": {"errors": [{"code": "QUOTA_EXCEEDED", "message": "Insufficient quota"}]},
+                }
+            )
+        return httpx.Response(404, json={"error": {"code": 404, "message": "Not found"}})
+
+    api = _make_api(handler)
+    with pytest.raises(InfraError, match="Insufficient quota"):
+        api.instance_insert_wait(ZONE, {"name": "my-vm"})
+    api.close()
+
+
+def test_vm_create_waits_for_operation():
+    """vm_create must wait for the insert operation before describing the VM.
+
+    This is the core regression from replacing `gcloud compute instances create`
+    (which blocks until RUNNING) with the REST API (which returns immediately).
+    The mock simulates real GCP behavior: instance_get returns 404 until the
+    zone operation reaches DONE.
+    """
+    from iris.cluster.providers.gcp.service import CloudGcpService, VmCreateRequest
+
+    operation_done = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal operation_done
+        url = str(request.url)
+
+        # POST instances — create (returns operation)
+        if request.method == "POST" and url.endswith(f"/zones/{ZONE}/instances"):
+            return _json_response(
+                {"name": "op-vm-1", "status": "RUNNING", "zone": f"zones/{ZONE}", "kind": "compute#operation"}
+            )
+
+        # GET operation poll — marks operation as done
+        if "/operations/op-vm-1" in url and request.method == "GET":
+            operation_done = True
+            return _json_response({"name": "op-vm-1", "status": "DONE"})
+
+        # GET instance — only succeeds after operation completed (real GCP behavior)
+        if request.method == "GET" and url.endswith(f"/zones/{ZONE}/instances/test-vm"):
+            if not operation_done:
+                return httpx.Response(404, json={"error": {"code": 404, "message": "Not found", "status": "NOT_FOUND"}})
+            return _json_response(
+                {
+                    "name": "test-vm",
+                    "status": "RUNNING",
+                    "zone": f"projects/{PROJECT}/zones/{ZONE}",
+                    "networkInterfaces": [{"networkIP": "10.0.0.1", "accessConfigs": [{"natIP": "34.1.2.3"}]}],
+                    "metadata": {},
+                    "serviceAccounts": [{"email": "sa@test.iam.gserviceaccount.com"}],
+                    "creationTimestamp": "2026-01-01T00:00:00Z",
+                }
+            )
+
+        return httpx.Response(404, json={"error": {"code": 404, "message": "Not found"}})
+
+    api = _make_api(handler)
+    svc = CloudGcpService(PROJECT, api=api)
+    info = svc.vm_create(VmCreateRequest(name="test-vm", zone=ZONE, machine_type="n1-standard-4", labels={}))
+    api.close()
+
+    assert info.name == "test-vm"
+    assert info.internal_ip == "10.0.0.1"
+    assert operation_done, "vm_create must poll the operation before describing"
+
+
+def test_tpu_create_waits_for_operation():
+    """tpu_create must wait for the LRO before describing the TPU.
+
+    Same race condition as vm_create: the REST API create returns an LRO,
+    and the TPU node may not be visible via tpu_get until the operation completes.
+    """
+    from iris.cluster.providers.gcp.service import CloudGcpService, TpuCreateRequest
+    from iris.rpc import config_pb2
+
+    operation_done = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal operation_done
+        url = str(request.url)
+
+        # POST nodes — create (returns LRO)
+        if request.method == "POST" and "/nodes" in url and "nodeId=test-tpu" in url:
+            return _json_response({"name": f"projects/{PROJECT}/locations/{ZONE}/operations/op-tpu-1", "done": False})
+
+        # GET operation poll (TPU LRO) — marks operation as done
+        if "/operations/op-tpu-1" in url and request.method == "GET":
+            operation_done = True
+            return _json_response({"name": f"projects/{PROJECT}/locations/{ZONE}/operations/op-tpu-1", "done": True})
+
+        # GET node — only succeeds after operation completed
+        if request.method == "GET" and url.endswith("/nodes/test-tpu"):
+            if not operation_done:
+                return httpx.Response(404, json={"error": {"code": 404, "message": "Not found", "status": "NOT_FOUND"}})
+            return _json_response(
+                {
+                    "name": f"projects/{PROJECT}/locations/{ZONE}/nodes/test-tpu",
+                    "state": "READY",
+                    "acceleratorType": "v4-8",
+                    "networkEndpoints": [{"ipAddress": "10.0.0.2"}],
+                    "labels": {},
+                    "metadata": {},
+                    "createTime": "2026-01-01T00:00:00Z",
+                }
+            )
+
+        return httpx.Response(404, json={"error": {"code": 404, "message": "Not found"}})
+
+    api = _make_api(handler)
+    svc = CloudGcpService(PROJECT, api=api)
+    info = svc.tpu_create(
+        TpuCreateRequest(
+            name="test-tpu",
+            zone=ZONE,
+            accelerator_type="v4-8",
+            runtime_version="tpu-ubuntu2204-base",
+            capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
+            labels={},
+        )
+    )
+    api.close()
+
+    assert info.name == "test-tpu"
+    assert info.state == "READY"
+    assert operation_done, "tpu_create must poll the operation before describing"
+
+
 def test_logging_list_entries_empty():
     def handler(request: httpx.Request) -> httpx.Response:
         return _json_response({})

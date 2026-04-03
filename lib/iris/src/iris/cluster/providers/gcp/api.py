@@ -33,6 +33,8 @@ LOGGING_BASE = "https://logging.googleapis.com/v2"
 
 _REFRESH_MARGIN = 300  # seconds before expiry to refresh token
 _DEFAULT_TIMEOUT = 120  # seconds
+_OPERATION_POLL_INTERVAL = 2  # seconds between operation status polls
+_OPERATION_TIMEOUT = 600  # seconds to wait for an operation to complete
 
 
 class GCPApi:
@@ -123,6 +125,44 @@ class GCPApi:
             p["pageToken"] = token
         return pages
 
+    # -- Operation polling ----------------------------------------------------
+
+    def _wait_zone_operation(self, zone: str, operation_name: str, timeout: float = _OPERATION_TIMEOUT) -> dict:
+        """Poll a Compute Engine zone operation until status is DONE."""
+        url = f"{COMPUTE_BASE}/projects/{self._project_id}/zones/{zone}/operations/{operation_name}"
+        deadline = time.monotonic() + timeout
+        while True:
+            resp = self._client.get(url, headers=self._headers())
+            self._classify_response(resp)
+            data = resp.json()
+            if data.get("status") == "DONE":
+                if "error" in data:
+                    errors = data["error"].get("errors", [])
+                    msg = "; ".join(e.get("message", str(e)) for e in errors)
+                    raise InfraError(f"Operation {operation_name} failed: {msg}")
+                return data
+            if time.monotonic() >= deadline:
+                raise InfraError(f"Operation {operation_name} timed out after {timeout}s")
+            time.sleep(_OPERATION_POLL_INTERVAL)
+
+    def _wait_tpu_operation(self, operation_name: str, timeout: float = _OPERATION_TIMEOUT) -> dict:
+        """Poll a TPU v2 long-running operation until done."""
+        url = f"{TPU_BASE}/{operation_name}"
+        deadline = time.monotonic() + timeout
+        while True:
+            resp = self._client.get(url, headers=self._headers())
+            self._classify_response(resp)
+            data = resp.json()
+            if data.get("done"):
+                if "error" in data:
+                    error = data["error"]
+                    msg = error.get("message", str(error))
+                    raise InfraError(f"TPU operation failed: {msg}")
+                return data
+            if time.monotonic() >= deadline:
+                raise InfraError(f"TPU operation {operation_name} timed out after {timeout}s")
+            time.sleep(_OPERATION_POLL_INTERVAL)
+
     # ======================================================================
     # TPU v2
     # ======================================================================
@@ -130,13 +170,20 @@ class GCPApi:
     def _tpu_parent(self, zone: str) -> str:
         return f"projects/{self._project_id}/locations/{zone}"
 
-    def tpu_create(self, name: str, zone: str, body: dict) -> dict | None:
+    def tpu_create(self, name: str, zone: str, body: dict) -> dict:
+        """Start TPU creation and return the raw LRO response."""
         url = f"{TPU_BASE}/{self._tpu_parent(zone)}/nodes"
         resp = self._client.post(url, params={"nodeId": name}, headers=self._headers(), json=body)
         self._classify_response(resp)
-        data = resp.json()
-        # REST create returns a long-running operation, not the node itself.
-        return data if data.get("name", "").endswith(f"/nodes/{name}") else None
+        return resp.json()
+
+    def tpu_create_wait(self, name: str, zone: str, body: dict) -> dict:
+        """Create a TPU and wait for the LRO to complete, then return the node."""
+        data = self.tpu_create(name, zone, body)
+        op_name = data.get("name", "")
+        if op_name and "/operations/" in op_name:
+            self._wait_tpu_operation(op_name)
+        return self.tpu_get(name, zone)
 
     def tpu_get(self, name: str, zone: str) -> dict:
         url = f"{TPU_BASE}/{self._tpu_parent(zone)}/nodes/{name}"
@@ -200,6 +247,14 @@ class GCPApi:
         resp = self._client.post(url, headers=self._headers(), json=body)
         self._classify_response(resp)
         return resp.json()
+
+    def instance_insert_wait(self, zone: str, body: dict) -> dict:
+        """Insert a VM and wait for the zone operation to complete."""
+        data = self.instance_insert(zone, body)
+        op_name = data.get("name", "")
+        if op_name:
+            self._wait_zone_operation(zone, op_name)
+        return data
 
     def instance_get(self, name: str, zone: str) -> dict:
         url = self._instance_url(zone, name)

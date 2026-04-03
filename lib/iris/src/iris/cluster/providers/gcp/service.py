@@ -401,13 +401,8 @@ class CloudGcpService:
             body["networkConfig"] = network_config
 
         logger.info("Creating TPU: %s (type=%s, zone=%s)", request.name, request.accelerator_type, request.zone)
-        self._api.tpu_create(request.name, request.zone, body)
-
-        # REST create returns an operation, not the node — fetch it explicitly.
-        info = self.tpu_describe(request.name, request.zone)
-        if info is None:
-            raise InfraError(f"TPU {request.name} created but could not be described")
-        return info
+        tpu_data = self._api.tpu_create_wait(request.name, request.zone, body)
+        return _parse_tpu_info(tpu_data, request.zone)
 
     def tpu_delete(self, name: str, zone: str) -> None:
         logger.info("Deleting TPU (async): %s", name)
@@ -557,7 +552,7 @@ class CloudGcpService:
 
         logger.info("Creating VM: %s (zone=%s, type=%s)", request.name, request.zone, request.machine_type)
         try:
-            self._api.instance_insert(request.zone, body)
+            self._api.instance_insert_wait(request.zone, body)
         except InfraError as e:
             if "already exists" not in str(e).lower():
                 raise

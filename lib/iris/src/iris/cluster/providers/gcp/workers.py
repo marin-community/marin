@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 import time
 import urllib.error
 import urllib.request
@@ -774,11 +775,13 @@ def _run_tpu_bootstrap(
 
 def _fetch_bootstrap_logs(gcp_service: GcpService, handle: GcpSliceHandle) -> None:
     """Fetch [iris-init] log entries from Cloud Logging for diagnostics."""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+    cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
     log_filter = (
         f'resource.type="gce_instance" '
         f'textPayload:"[iris-init]" '
         f'labels."compute.googleapis.com/resource_name":"{handle._slice_id}" '
-        f'timestamp>="-PT30M"'
+        f'timestamp>="{cutoff_str}"'
     )
     texts = gcp_service.logging_read(log_filter, limit=200)
     if texts:
