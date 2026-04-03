@@ -33,7 +33,7 @@ import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
-from levanter.data.text import LmDataConfig, LMMixtureDatasetConfig
+from levanter.data.text import DatasetComponent, LmDataConfig, LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
@@ -75,7 +75,10 @@ class SaveLogprobsOnPodConfig:
 
 
 def _force_pack_data(data: LmDataConfig) -> LmDataConfig:
-    packed_components = {name: replace(component, pack=True) for name, component in data.components.items()}
+    packed_components = {
+        name: replace(component, pack=True) if isinstance(component, DatasetComponent) else component
+        for name, component in data.components.items()
+    }
     packed_data = replace(data, components=packed_components, block_cross_document_attention=True)
     return packed_data
 
