@@ -133,6 +133,7 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
         sg.resources.device_count = tpu_count
         sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
         sg.resources.device_variant = variant
+        sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
         sg.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
         sg.slice_template.num_vms = num_vms
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
@@ -371,6 +372,7 @@ def _make_single_worker_config() -> config_pb2.IrisClusterConfig:
     sg.resources.memory_bytes = 256 * 1024**3
     sg.resources.disk_bytes = 500 * 1024**3
     sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
     sg.slice_template.local.SetInParent()
 
     return make_local_config(config)
