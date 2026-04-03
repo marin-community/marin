@@ -25,7 +25,6 @@ from iris.cluster.providers.types import (
     find_free_port,
 )
 from iris.cluster.providers.gcp.service import (
-    CAPACITY_TYPE_LABEL,
     KNOWN_GCP_ZONES,
     KNOWN_TPU_TYPES,
     QueuedResourceInfo,
@@ -463,14 +462,8 @@ class InMemoryGcpService:
                     extra_attrs.setdefault(k, v)
 
             extra_attrs.setdefault("region", "local")
-            # Derive capacity_type from worker attributes or slice config
-            capacity_type_str = extra_attrs.pop(CAPACITY_TYPE_LABEL, "")
-            if capacity_type_str == "preemptible":
-                capacity_type_val = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
-            elif capacity_type_str == "reserved":
-                capacity_type_val = config_pb2.CAPACITY_TYPE_RESERVED
-            else:
-                capacity_type_val = config_pb2.CAPACITY_TYPE_ON_DEMAND
+            # Use the canonical capacity_type from the slice config proto.
+            capacity_type_val = config.capacity_type or config_pb2.CAPACITY_TYPE_ON_DEMAND
 
             gpu_count = 0
             if is_gpu:
