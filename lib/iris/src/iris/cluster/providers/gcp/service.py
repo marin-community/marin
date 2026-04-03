@@ -527,13 +527,12 @@ class CloudGcpService:
             body["schedulingConfig"] = {"preemptible": True}
         if request.service_account:
             body["serviceAccount"] = {"email": request.service_account}
-        if request.network or request.subnetwork:
-            network_config: dict = {}
-            if request.network:
-                network_config["network"] = request.network
-            if request.subnetwork:
-                network_config["subnetwork"] = request.subnetwork
-            body["networkConfig"] = network_config
+        network_config: dict = {"enableExternalIps": True}
+        if request.network:
+            network_config["network"] = request.network
+        if request.subnetwork:
+            network_config["subnetwork"] = request.subnetwork
+        body["networkConfig"] = network_config
 
         logger.info("Creating TPU: %s (type=%s, zone=%s)", request.name, request.accelerator_type, request.zone)
 
@@ -614,13 +613,12 @@ class CloudGcpService:
         }
         if request.service_account:
             node_spec["node"]["serviceAccount"] = {"email": request.service_account}
-        if request.network or request.subnetwork:
-            network_config: dict = {}
-            if request.network:
-                network_config["network"] = request.network
-            if request.subnetwork:
-                network_config["subnetwork"] = request.subnetwork
-            node_spec["node"]["networkConfig"] = network_config
+        qr_network_config: dict = {"enableExternalIps": True}
+        if request.network:
+            qr_network_config["network"] = request.network
+        if request.subnetwork:
+            qr_network_config["subnetwork"] = request.subnetwork
+        node_spec["node"]["networkConfig"] = qr_network_config
 
         body = {
             "tpu": {"nodeSpec": [node_spec]},

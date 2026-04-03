@@ -379,6 +379,7 @@ def test_tpu_full_lifecycle(svc: CloudGcpService, backend: GcpFakeBackend):
     assert create_req.request_body["metadata"] == {"startup-script": "#!/bin/bash\necho bootstrap"}
     assert create_req.request_body["schedulingConfig"] == {"preemptible": True}
     assert create_req.request_body["serviceAccount"] == {"email": "worker@test.iam.gserviceaccount.com"}
+    assert create_req.request_body["networkConfig"]["enableExternalIps"] is True
 
     # Describe should return the same TPU
     described = svc.tpu_describe("test-slice", ZONE_EU)
