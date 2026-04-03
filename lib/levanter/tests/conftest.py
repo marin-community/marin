@@ -8,9 +8,8 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from transformers import AutoTokenizer
 
-from levanter.tokenizers import HfMarinTokenizer
+from levanter.tokenizers import HfMarinTokenizer, load_tokenizer
 
 pytest_plugins = ["tests.test_utils"]
 
@@ -27,9 +26,9 @@ def _gpt2_tokenizer_dir(tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def local_gpt2_tokenizer(tmp_path_factory):
-    """Load a GPT2 tokenizer from a local JSON file to avoid network downloads."""
+    """Load a GPT2 MarinTokenizer from a local directory to avoid network downloads."""
     tmpdir = _gpt2_tokenizer_dir(tmp_path_factory)
-    return AutoTokenizer.from_pretrained(str(tmpdir))
+    return load_tokenizer(str(tmpdir))
 
 
 @pytest.fixture(scope="session")

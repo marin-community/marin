@@ -17,7 +17,8 @@ from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
-from transformers import AutoConfig, AutoTokenizer
+from levanter.tokenizers import load_tokenizer
+from transformers import AutoConfig
 
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
@@ -40,7 +41,7 @@ MAX_TOKENS = 16
 
 def get_stop_tokens(tokenizer_name: str):
     """Get stop tokens from tokenizer."""
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    tokenizer = load_tokenizer(tokenizer_name)
     return [tokenizer.eos_token_id]
 
 
