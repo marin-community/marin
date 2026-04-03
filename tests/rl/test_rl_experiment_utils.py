@@ -164,6 +164,38 @@ def test_launcher_region_uses_gpu_rollout_region_when_it_matches_tpu_capacity(mo
     assert launcher_region_for_rl_experiment(config) == "us-east5"
 
 
+def test_zone_pinned_tpu_resources_use_zone_region_for_launcher_and_prefix(monkeypatch):
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    monkeypatch.setattr(
+        "marin.rl.placement.infer_tpu_variant_regions_from_iris",
+        lambda variants: ["us-central1", "us-east5"],
+    )
+
+    config = _test_config(
+        train_resources=ResourceConfig.with_tpu("v5p-8", zone="us-east5-d"),
+        rollout_resources=ResourceConfig.with_tpu("v5p-8", zone="us-east5-d"),
+    )
+
+    assert launcher_region_for_rl_experiment(config) == "us-east5"
+    assert executor_main_config_for_rl_experiment(config).prefix == "gs://marin-us-east5"
+
+
+def test_launcher_region_rejects_conflicting_zone_and_regions(monkeypatch):
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    monkeypatch.setattr(
+        "marin.rl.placement.infer_tpu_variant_regions_from_iris",
+        lambda variants: ["us-central1", "us-east5"],
+    )
+
+    config = _test_config(
+        train_resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central1"], zone="us-east5-d"),
+        rollout_resources=ResourceConfig.with_tpu("v5p-8", zone="us-east5-d"),
+    )
+
+    with pytest.raises(ValueError, match="conflicts with requested regions"):
+        launcher_region_for_rl_experiment(config)
+
+
 def test_make_rl_step_uses_model_step_artifact_root_as_dependency(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
     model_step = ExecutorStep(name="models/test-llama", fn=_noop, config=_EmptyConfig())
