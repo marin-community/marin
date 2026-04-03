@@ -574,9 +574,8 @@ class CloudGcpService:
 
     def tpu_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[TpuInfo]:
         results: list[TpuInfo] = []
-        # TPU v2 API requires a specific zone per request.
-        # When no zones specified, only scan the caller's zones (not all known zones).
-        zone_list = zones if zones else list(self._valid_zones)
+        # Use locations/- for project-wide listing (matches gcloud --zone=-).
+        zone_list = zones if zones else ["-"]
 
         for zone in zone_list:
             try:
@@ -587,7 +586,6 @@ class CloudGcpService:
             for tpu_data in items:
                 if labels and not _labels_match(tpu_data.get("labels", {}), labels):
                     continue
-                # Extract zone from resource name if present
                 tpu_zone = zone
                 raw_name = tpu_data.get("name", "")
                 if "/" in raw_name:
@@ -663,7 +661,7 @@ class CloudGcpService:
             self._classify_response(resp)
 
     def queued_resource_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[QueuedResourceInfo]:
-        zone_list = zones if zones else list(self._valid_zones)
+        zone_list = zones if zones else ["-"]
         results: list[QueuedResourceInfo] = []
         for zone in zone_list:
             try:
