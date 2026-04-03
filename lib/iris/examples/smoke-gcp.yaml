@@ -36,6 +36,19 @@ controller:
     machine_type: e2-standard-4
     port: 10000
 
+tpu_pools:
+  v5e-smoke:
+    family: v5e
+    zones: [europe-west4-b, us-west4-a]
+    base_priority: 100
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, preemptible: true }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv5-lite
+    sizes:
+      16: { min_slices: 1, max_slices: 4 }
+
 scale_groups:
   # Low-priority fallback CPU VM group for non-preemptible scheduling tests.
   # Intentionally not default: selected only when jobs constrain preemptible=false.
@@ -56,22 +69,3 @@ scale_groups:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         mode: GCP_SLICE_MODE_VM
         machine_type: e2-standard-4
-
-  tpu_v5e_16:
-    zones: [europe-west4-b, us-west4-a]
-    num_vms: 4
-    resources:
-      cpu: 128
-      ram: 128GB
-      disk: 1TB
-      device_type: tpu
-      device_variant: v5litepod-16
-      device_count: 4
-      preemptible: true
-    min_slices: 1
-    max_slices: 4
-    priority: 100
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5-lite

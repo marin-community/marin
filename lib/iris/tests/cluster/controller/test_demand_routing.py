@@ -1260,3 +1260,149 @@ class TestCheckCoschedulingFeasibility:
         """Returns None when there are no groups (no validation possible)."""
         autoscaler = self._make_autoscaler({})
         assert autoscaler.check_coscheduling_feasibility(8, []) is None
+
+
+# ---------------------------------------------------------------------------
+# Allocation tier blocking
+# ---------------------------------------------------------------------------
+
+
+class TestAllocationTierBlocking:
+    """Tests for quota_pool / allocation_tier monotonic blocking in route_demand."""
+
+    def _make_pool_groups(
+        self,
+        pool: str,
+        tiers: list[int],
+        *,
+        variants: list[str] | None = None,
+    ) -> list[ScalingGroup]:
+        """Create a list of scaling groups in the same quota_pool with ascending tiers."""
+        if variants is None:
+            variants = [f"v5p-{8 * (2 ** i)}" for i in range(len(tiers))]
+        groups = []
+        for tier, variant in zip(tiers, variants, strict=True):
+            config = make_scale_group_config(
+                name=f"{pool}-tier{tier}",
+                max_slices=10,
+                priority=tier * 10,
+                accelerator_variant=variant,
+            )
+            config.quota_pool = pool
+            config.allocation_tier = tier
+            group = ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+            groups.append(group)
+        return groups
+
+    def test_tier_blocked_when_lower_tier_quota_exceeded(self):
+        """When tier 1 is QUOTA_EXCEEDED, tiers 2+ are skipped."""
+        groups = self._make_pool_groups("v5p", [1, 2, 3])
+        ts = Timestamp.from_ms(1000)
+
+        # Put tier 1 into quota exceeded
+        try:
+            groups[0].scale_up(timestamp=ts)
+        except Exception:
+            pass
+        groups[0].cancel_scale_up()
+        groups[0].record_quota_exceeded("quota exhausted", ts)
+
+        entries = make_demand_entries(1, device_variant="v5p-16")
+        result = route_demand(groups, entries, timestamp=Timestamp.from_ms(1100))
+
+        # All groups in pool should be blocked (tier 1 failed → 2, 3 blocked)
+        assert len(result.unmet_entries) == 1
+        for name in result.routed_entries:
+            assert "v5p" not in name
+
+    def test_higher_tiers_blocked_lower_tiers_unaffected(self):
+        """When tier 2 fails, tier 1 is still available but tier 3 is blocked."""
+        groups = self._make_pool_groups("v5p", [1, 2, 3])
+        ts = Timestamp.from_ms(1000)
+
+        # Put tier 2 into quota exceeded
+        try:
+            groups[1].scale_up(timestamp=ts)
+        except Exception:
+            pass
+        groups[1].cancel_scale_up()
+        groups[1].record_quota_exceeded("quota exhausted", ts)
+
+        # Tier 1 demand should still route
+        entries_t1 = make_demand_entries(1, device_variant="v5p-8")
+        result = route_demand(groups, entries_t1, timestamp=Timestamp.from_ms(1100))
+        assert "v5p-tier1" in result.routed_entries
+
+    def test_independent_pools_not_affected(self):
+        """Quota failure in pool A does not affect pool B."""
+        pool_a = self._make_pool_groups("pool-a", [1], variants=["v5p-8"])
+        pool_b = self._make_pool_groups("pool-b", [1], variants=["v6e-4"])
+
+        ts = Timestamp.from_ms(1000)
+
+        # Fail pool A
+        try:
+            pool_a[0].scale_up(timestamp=ts)
+        except Exception:
+            pass
+        pool_a[0].cancel_scale_up()
+        pool_a[0].record_quota_exceeded("quota exhausted", ts)
+
+        all_groups = pool_a + pool_b
+
+        # Pool B demand should still route
+        entries = make_demand_entries(1, device_variant="v6e-4")
+        result = route_demand(all_groups, entries, timestamp=Timestamp.from_ms(1100))
+        assert "pool-b-tier1" in result.routed_entries
+
+    def test_groups_without_pool_unaffected(self):
+        """Groups without quota_pool are never tier-blocked."""
+        pooled = self._make_pool_groups("v5p", [1])
+        ts = Timestamp.from_ms(1000)
+
+        # Fail the pooled group
+        try:
+            pooled[0].scale_up(timestamp=ts)
+        except Exception:
+            pass
+        pooled[0].cancel_scale_up()
+        pooled[0].record_quota_exceeded("quota exhausted", ts)
+
+        # Add a non-pooled group with the same variant
+        unpooled_config = make_scale_group_config(
+            name="standalone", max_slices=10, priority=50, accelerator_variant="v5p-8"
+        )
+        unpooled = ScalingGroup(unpooled_config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+
+        entries = make_demand_entries(1, device_variant="v5p-8")
+        result = route_demand([*pooled, unpooled], entries, timestamp=Timestamp.from_ms(1100))
+        assert "standalone" in result.routed_entries
+
+    def test_same_tier_groups_independent(self):
+        """Groups at the same tier in the same pool are independent."""
+        # Two groups at tier 1 — only one fails
+        g1_config = make_scale_group_config(name="zone-a", max_slices=10, priority=10, accelerator_variant="v5p-8")
+        g1_config.quota_pool = "v5p"
+        g1_config.allocation_tier = 1
+        g1 = ScalingGroup(g1_config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+
+        g2_config = make_scale_group_config(name="zone-b", max_slices=10, priority=10, accelerator_variant="v5p-8")
+        g2_config.quota_pool = "v5p"
+        g2_config.allocation_tier = 1
+        g2 = ScalingGroup(g2_config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+
+        ts = Timestamp.from_ms(1000)
+
+        # Fail g1 only
+        try:
+            g1.scale_up(timestamp=ts)
+        except Exception:
+            pass
+        g1.cancel_scale_up()
+        g1.record_quota_exceeded("quota exhausted", ts)
+
+        # Both are tier 1, so both are blocked (monotonicity: tier >= min_blocked)
+        entries = make_demand_entries(1, device_variant="v5p-8")
+        result = route_demand([g1, g2], entries, timestamp=Timestamp.from_ms(1100))
+        # g2 is also at tier 1 which is >= the blocked tier 1, so it's blocked too
+        assert len(result.unmet_entries) == 1

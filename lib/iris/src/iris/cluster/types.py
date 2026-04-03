@@ -678,6 +678,28 @@ TPU_TOPOLOGIES: list[TpuTopologyInfo] = [
 ]
 
 
+TPU_FAMILY_VARIANT_PREFIX: dict[str, str] = {
+    "v4": "v4",
+    "v5e": "v5litepod",
+    "v5p": "v5p",
+    "v6e": "v6e",
+}
+
+
+def tpu_variant_name(family: str, size: int) -> str:
+    """Build the device_variant string for a TPU family and chip-count size.
+
+    >>> tpu_variant_name("v5e", 16)
+    'v5litepod-16'
+    >>> tpu_variant_name("v6e", 32)
+    'v6e-32'
+    """
+    prefix = TPU_FAMILY_VARIANT_PREFIX.get(family)
+    if prefix is None:
+        raise ValueError(f"Unknown TPU family '{family}'. Known families: {sorted(TPU_FAMILY_VARIANT_PREFIX)}")
+    return f"{prefix}-{size}"
+
+
 def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     """Get TPU topology by type name."""
     for config in TPU_TOPOLOGIES:

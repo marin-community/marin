@@ -216,6 +216,17 @@ message ScaleGroupConfig {
   // What to create when scaling up — the slice template
   SliceConfig slice_template = 50;
   WorkerSettings worker = 60;
+
+  // Allocation pool grouping. Groups sharing a quota_pool propagate
+  // quota-exceeded state: when tier N fails, tiers > N are blocked.
+  // If empty, quota state is independent (default behavior).
+  string quota_pool = 80;
+
+  // Tier within the quota pool (1-based, lower = smaller/preferred).
+  // When tier N hits quota or backoff, tiers > N in the same pool are
+  // skipped during routing. Groups at the same tier are independent.
+  // 0 means unset (not part of any tier ordering).
+  int32 allocation_tier = 81 [features.field_presence = EXPLICIT];
 }
 
 // ============================================================================

@@ -28,7 +28,7 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.controller.worker_provider import WorkerProvider
-from iris.cluster.types import parse_memory_string
+from iris.cluster.types import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, parse_memory_string, tpu_variant_name
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto, duration_to_proto
@@ -594,6 +594,123 @@ def make_local_config(
     return config
 
 
+def _expand_tpu_pools(data: dict) -> None:
+    """Expand ``tpu_pools`` into per-(size, zone) scale groups.
+
+    Each pool defines shared properties for a TPU family. The ``sizes`` map
+    lists per-size overrides (min_slices, max_slices, priority). For each
+    pool x size x zone the function emits a fully-specified scale group with
+    topology-derived fields (device_variant, num_vms, device_count) and
+    autoscaler allocation metadata (quota_pool, allocation_tier, priority).
+
+    Consumes the ``tpu_pools`` key from *data* and injects results into
+    ``data["scale_groups"]``.
+    """
+    tpu_pools = data.pop("tpu_pools", None)
+    if not tpu_pools:
+        return
+    if not isinstance(tpu_pools, dict):
+        raise ValueError("tpu_pools must be a mapping")
+
+    scale_groups = data.setdefault("scale_groups", {})
+
+    for pool_name, pool in tpu_pools.items():
+        if not isinstance(pool, dict):
+            raise ValueError(f"tpu_pools.{pool_name} must be a mapping")
+
+        family = pool.get("family")
+        if not family or family not in TPU_FAMILY_VARIANT_PREFIX:
+            raise ValueError(
+                f"tpu_pools.{pool_name}: 'family' must be one of {sorted(TPU_FAMILY_VARIANT_PREFIX)}, got {family!r}"
+            )
+
+        zones = pool.get("zones")
+        if not isinstance(zones, list) or not zones:
+            raise ValueError(f"tpu_pools.{pool_name}: 'zones' must be a non-empty list")
+        for z in zones:
+            if not isinstance(z, str) or not z.strip():
+                raise ValueError(f"tpu_pools.{pool_name}: each zone must be a non-empty string, got {z!r}")
+        if len(zones) != len(set(zones)):
+            raise ValueError(f"tpu_pools.{pool_name}: zones list contains duplicates: {zones}")
+
+        sizes = pool.get("sizes")
+        if not isinstance(sizes, dict) or not sizes:
+            raise ValueError(f"tpu_pools.{pool_name}: 'sizes' must be a non-empty mapping")
+
+        base_priority = pool.get("base_priority", 10)
+        base_resources = pool.get("resources", {})
+        base_slice_template = pool.get("slice_template", {})
+
+        # Validate all sizes against the topology table up front
+        sorted_sizes = sorted(sizes.keys(), key=lambda s: int(s))
+        for size in sorted_sizes:
+            variant = tpu_variant_name(family, int(size))
+            try:
+                get_tpu_topology(variant)
+            except ValueError:
+                raise ValueError(f"tpu_pools.{pool_name}.sizes.{size}: unknown TPU topology '{variant}'") from None
+
+        for tier_index, size in enumerate(sorted_sizes):
+            size_int = int(size)
+            size_overrides = sizes[size] or {}
+            variant = tpu_variant_name(family, size_int)
+            topo = get_tpu_topology(variant)
+
+            for zone in zones:
+                region = zone.rsplit("-", 1)[0]
+                sg_name = f"tpu_{pool_name}_{size_int}-{zone}"
+
+                if sg_name in scale_groups:
+                    raise ValueError(
+                        f"tpu_pools.{pool_name}: expanded name '{sg_name}' collides with an existing scale group"
+                    )
+
+                # Build resources with topology-derived device fields
+                resources = copy.deepcopy(base_resources)
+                resources["device_type"] = "tpu"
+                resources["device_variant"] = variant
+                resources["device_count"] = topo.chips_per_vm
+
+                # Build slice template with zone injected
+                st = copy.deepcopy(base_slice_template)
+                gcp = st.setdefault("gcp", {})
+                gcp["zone"] = zone
+
+                sg = {
+                    "name": sg_name,
+                    "num_vms": topo.vm_count,
+                    "priority": size_overrides.get("priority", base_priority + tier_index * 10),
+                    "quota_pool": f"{pool_name}/{zone}",
+                    "allocation_tier": tier_index + 1,
+                    "resources": resources,
+                    "min_slices": size_overrides.get("min_slices", 0),
+                    "max_slices": size_overrides["max_slices"],
+                    "slice_template": st,
+                    "worker": {
+                        "attributes": {
+                            WellKnownAttribute.ZONE: zone,
+                            WellKnownAttribute.REGION: region,
+                        }
+                    },
+                }
+
+                scale_groups[sg_name] = sg
+
+    # Merge all TPU pool zones into platform.gcp.zones
+    all_zones: set[str] = set()
+    for pool in (tpu_pools or {}).values():
+        if isinstance(pool, dict):
+            for z in pool.get("zones", []):
+                all_zones.add(z)
+    if all_zones:
+        platform = data.setdefault("platform", {})
+        platform_gcp = platform.get("gcp")
+        if isinstance(platform_gcp, dict):
+            existing = set(platform_gcp.get("zones", []))
+            existing.update(all_zones)
+            platform_gcp["zones"] = sorted(existing)
+
+
 def _expand_multi_zone_groups(data: dict) -> None:
     """Expand scale groups with `zones` into one group per zone.
 
@@ -734,6 +851,7 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
         if "controller_address" in defaults_worker:
             defaults_worker["controller_address"] = os.path.expandvars(defaults_worker["controller_address"])
 
+    _expand_tpu_pools(data)
     _normalize_scale_group_resources(data)
     _expand_multi_zone_groups(data)
 

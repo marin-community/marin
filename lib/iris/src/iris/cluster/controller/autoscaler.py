@@ -606,6 +606,37 @@ def _build_group_statuses(
     return group_statuses
 
 
+def _pool_blocked_tiers(groups: list[ScalingGroup], ts: Timestamp) -> dict[str, int]:
+    """Return the minimum failed tier per quota_pool.
+
+    If pool "v5e" has tier 1 in QUOTA_EXCEEDED or BACKOFF, returns {"v5e": 1},
+    meaning tiers >= 1 in that pool should be skipped during routing.
+    """
+    blocked: dict[str, int] = {}
+    for g in groups:
+        pool = g.config.quota_pool
+        tier = g.config.allocation_tier
+        if not pool or not tier:
+            continue
+        avail = g.availability(ts)
+        if avail.status in (GroupAvailability.QUOTA_EXCEEDED, GroupAvailability.BACKOFF):
+            if pool not in blocked or tier < blocked[pool]:
+                blocked[pool] = tier
+    return blocked
+
+
+def _is_tier_blocked(group: ScalingGroup, pool_blocked: dict[str, int]) -> bool:
+    """Check whether a group is blocked by allocation tier monotonicity."""
+    pool = group.config.quota_pool
+    tier = group.config.allocation_tier
+    if not pool or not tier:
+        return False
+    min_blocked = pool_blocked.get(pool)
+    if min_blocked is None:
+        return False
+    return tier >= min_blocked
+
+
 def route_demand(
     groups: list[ScalingGroup],
     demand_entries: list[DemandEntry],
@@ -644,6 +675,10 @@ def route_demand(
         if group.can_accept_demand(ts):
             full_budgets[group.name] = _make_routing_budget(group)
 
+    # Allocation tier blocking: when a group in a quota_pool is failed at
+    # tier N, skip all groups at tier >= N in the same pool.
+    pool_blocked = _pool_blocked_tiers(sorted_groups, ts)
+
     for entry in demand_entries:
         if entry.invalid_reason:
             unmet.append(UnmetDemand(entry=entry, reason=entry.invalid_reason))
@@ -656,6 +691,11 @@ def route_demand(
         # influence group ordering but never exclude groups.
         matching_names = group_index.matching_entities(hard_routing_cs)
         matching_groups = [g for g in sorted_groups if g.name in matching_names]
+
+        # Filter out groups blocked by allocation tier monotonicity
+        if pool_blocked:
+            matching_groups = [g for g in matching_groups if not _is_tier_blocked(g, pool_blocked)]
+
         if not matching_groups:
             unmet.append(UnmetDemand(entry=entry, reason=_diagnose_no_matching_group(entry, sorted_groups)))
             continue
