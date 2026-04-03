@@ -1,0 +1,171 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+from dataclasses import dataclass
+
+import jax
+import optax
+
+from levanter.optim import OptimizerConfig
+from experiments.grug.moe_apr2.adamh import scale_by_adamh
+from levanter.utils.jax_utils import leaf_key_paths
+
+
+@OptimizerConfig.register_subclass("grug_moe_adamh_v2")
+@dataclass(frozen=True)
+class GrugMoeAdamHConfig(OptimizerConfig):
+    """AdamH for Grug MoE. Four optimizer groups, no flags.
+
+    - adamh: attention weights, dense MLP weights (2D matrices)
+    - adamh_expert: expert MLP weights (mlp.w_gate_up, mlp.w_down, shared.w_*)
+    - adam: norms, biases, router, embeddings, attention gates (1D / small params)
+    """
+
+    beta1: float = 0.9
+    beta2: float = 0.95
+    epsilon: float = 1e-8
+    max_grad_norm: float | None = 1.0
+    adam_lr: float = 6e-4
+    expert_lr: float | None = None
+    router_lr: float | None = None
+    embed_lr: float | None = None
+    attn_gate_lr: float | None = None
+    norm_lr: float | None = None
+    gated_norm_lr: float | None = None
+
+    def build(self, num_train_steps):
+        learning_rate_schedule = self.lr_scheduler(num_train_steps)
+        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        expert_lr_val = self.expert_lr if self.expert_lr is not None else self.learning_rate
+        expert_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=expert_lr_val)
+        router_lr_val = self.router_lr if self.router_lr is not None else self.adam_lr
+        router_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=router_lr_val)
+        embed_lr_val = self.embed_lr if self.embed_lr is not None else self.adam_lr
+        embed_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=embed_lr_val)
+        attn_gate_lr_val = self.attn_gate_lr if self.attn_gate_lr is not None else self.adam_lr
+        attn_gate_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=attn_gate_lr_val)
+        norm_lr_val = self.norm_lr if self.norm_lr is not None else self.adam_lr
+        norm_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=norm_lr_val)
+        gated_norm_lr_val = self.gated_norm_lr if self.gated_norm_lr is not None else self.learning_rate
+        gated_norm_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=gated_norm_lr_val)
+
+        def optimizer(learning_rate, adam_lr, expert_lr, router_lr, embed_lr, attn_gate_lr, norm_lr, gated_norm_lr):
+            def adamh_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
+                return optax.chain(*components)
+
+            def adamh_expert_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, expert_lr))
+                return optax.chain(*components)
+
+            def adam_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-adam_lr))
+                return optax.chain(*components)
+
+            def router_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-router_lr))
+                return optax.chain(*components)
+
+            def embed_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-embed_lr))
+                return optax.chain(*components)
+
+            def attn_gate_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-attn_gate_lr))
+                return optax.chain(*components)
+
+            def norm_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-norm_lr))
+                return optax.chain(*components)
+
+            def gated_norm_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, gated_norm_lr))
+                return optax.chain(*components)
+
+            return optax.multi_transform(
+                {
+                    "adamh": adamh_transform(),
+                    "adamh_expert": adamh_expert_transform(),
+                    "adam": adam_transform(),
+                    "router": router_transform(),
+                    "embed": embed_transform(),
+                    "attn_gate": attn_gate_transform(),
+                    "norm": norm_transform(),
+                    "gated_norm": gated_norm_transform(),
+                },
+                self.create_mask,
+            )
+
+        return optax.inject_hyperparams(optimizer)(
+            learning_rate=learning_rate_schedule,
+            adam_lr=adam_lr_schedule,
+            expert_lr=expert_lr_schedule,
+            router_lr=router_lr_schedule,
+            embed_lr=embed_lr_schedule,
+            attn_gate_lr=attn_gate_lr_schedule,
+            norm_lr=norm_lr_schedule,
+            gated_norm_lr=gated_norm_lr_schedule,
+        )
+
+    def create_mask(self, params):
+        paths = leaf_key_paths(params)
+
+        def mask_fn(param, path):
+            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+            path_lower = path_str.lower()
+            if "token_embed" in path_lower:
+                return "embed"
+            if ".router" in path_lower and "router_bias" not in path_lower:
+                return "router"
+            if "attn_gate" in path_lower:
+                return "attn_gate"
+            if "router_bias" in path_lower:
+                return "adam"
+            if (
+                "rms_attn" in path_lower
+                or "rms_mlp" in path_lower
+                or "embed_norm" in path_lower
+                or "final_norm" in path_lower
+            ):
+                return "norm"
+            if "gated_norm" in path_lower:
+                return "gated_norm"
+            if ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
+                return "adamh_expert"
+            if hasattr(param, "ndim") and param.ndim >= 2:
+                return "adamh"
+            return "adam"
+
+        return jax.tree.map(mask_fn, params, paths)
+
+
+__all__ = ["GrugMoeAdamHConfig"]
