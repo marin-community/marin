@@ -190,7 +190,7 @@ class IrisJobHandle:
     def wait(
         self, timeout: float | None = None, *, raise_on_failure: bool = True, stream_logs: bool = False
     ) -> JobStatus:
-        effective_timeout = timeout if timeout is not None else float("inf")
+        effective_timeout = timeout if timeout is not None else 86400.0
         try:
             self._job.wait(timeout=effective_timeout, raise_on_failure=raise_on_failure, stream_logs=stream_logs)
         except Exception:

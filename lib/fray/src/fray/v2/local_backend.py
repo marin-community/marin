@@ -61,8 +61,11 @@ class LocalJobHandle:
 
     def wait(self, timeout: float | None = None, *, raise_on_failure: bool = True) -> JobStatus:
         """Block until the job completes or timeout expires."""
+        # concurrent.futures.Future.result() cannot handle float("inf");
+        # pass None (wait indefinitely) when timeout is infinite.
+        effective_timeout = None if timeout is not None and timeout == float("inf") else timeout
         try:
-            self._future.result(timeout=timeout)
+            self._future.result(timeout=effective_timeout)
         except Exception:
             if raise_on_failure:
                 raise
