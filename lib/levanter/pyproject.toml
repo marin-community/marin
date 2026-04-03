@@ -98,6 +98,10 @@ kernels = [
     "tokamax",
 ]
 
+tokie = [
+    "tokie>=0.0.8",
+]
+
 gcp = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
