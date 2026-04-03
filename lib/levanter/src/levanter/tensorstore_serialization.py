@@ -52,10 +52,8 @@ def build_kvstore_spec(path: str) -> dict:
             spec["aws_region"] = "us-east-1"
 
         # Supplying credentials explicitly reduces noisy AWS CRT logs in containers.
-        access_key = os.environ.get("AWS_ACCESS_KEY_ID")
-        secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
-        if access_key and secret_key:
-            spec["aws_credentials"] = {"access_key": access_key, "secret_key": secret_key}
+        if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
+            spec["aws_credentials"] = {"type": "environment"}
 
         return spec
     elif parsed.scheme == "gs":
