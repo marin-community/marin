@@ -447,6 +447,6 @@ crashed_rerun_steps = create_crashed_rerun_steps()
 
 if __name__ == "__main__":
     executor_main(
-        steps=crashed_rerun_steps[:1],
-        description="Test: first crashed run only",
+        steps=crashed_rerun_steps[1:],
+        description="Rerun crashed v10/v11 runs (39 remaining, hardcoded hashes)",
     )
