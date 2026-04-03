@@ -33,10 +33,32 @@ HPLT_SHARD_COUNTS = {5: 74, 6: 119, 7: 275, 8: 479, 9: 344, 10: 3}
 TOP_LEVEL_REGISTERS = frozenset({"MT", "LY", "SP", "ID", "NA", "HI", "IN", "OP", "IP"})
 
 # All known sub-register codes from the Turku schema
-ALL_SUB_REGISTERS = frozenset({
-    "ob", "nb", "ne", "ra", "re", "rv", "sr", "it", "en", "av", "rs",  # good prose
-    "lt", "fi", "dtp", "oi", "on", "oh", "oo", "os", "ed", "oe", "ds",  # other sub-registers
-})
+ALL_SUB_REGISTERS = frozenset(
+    {
+        "ob",
+        "nb",
+        "ne",
+        "ra",
+        "re",
+        "rv",
+        "sr",
+        "it",
+        "en",
+        "av",
+        "rs",  # good prose
+        "lt",
+        "fi",
+        "dtp",
+        "oi",
+        "on",
+        "oh",
+        "oo",
+        "os",
+        "ed",
+        "oe",
+        "ds",  # other sub-registers
+    }
+)
 
 # Sub-registers indicating good prose content:
 # ob=Opinion Blog, nb=Narrative Blog, ne=News Report, ra=Research Article, re=Recipe,
@@ -100,7 +122,9 @@ def passes_quality_filter(doc: dict, wds_tier: int) -> bool:
 
     if dominant_sub == "lt":  # Legal Terms and Conditions
         return False
-    if dominant_top == "IP" and not any(wr.get(s, 0) > 0.15 for s in GOOD_SUB_REGISTERS):  # pure Informational Persuasion
+    if dominant_top == "IP" and not any(
+        wr.get(s, 0) > 0.15 for s in GOOD_SUB_REGISTERS
+    ):  # pure Informational Persuasion
         return False
 
     # Keep rules
@@ -216,7 +240,6 @@ def download_hplt_v3(output_path: str) -> None:
     ctx.execute(pipeline)
 
     logger.info(f"Downloaded HPLT v3 files to {output_path}")
-
 
 
 def download_hplt_v3_step() -> StepSpec:
