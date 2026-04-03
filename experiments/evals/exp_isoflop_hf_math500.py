@@ -34,7 +34,6 @@ from experiments.isoflop_sweep import MARIN_SCALING_SUITES
 from marin.execution.executor import executor_main, output_path_of, versioned
 from marin.execution.executor import Executor, ExecutorStep, this_output_path
 from marin.evaluation.utils import discover_hf_checkpoints
-from fray.cluster import ResourceConfig
 from experiments.models import ModelConfig as HFModelConfig, download_model_step
 from experiments.evals.exp1600_uncheatable_evals import (
     models,
@@ -66,11 +65,9 @@ def build_hf_steps(prompt_format: str = "question_only"):
                     output_path=this_output_path(),
                     prompt_format=versioned(prompt_format),
                 ),
-                resources=ResourceConfig.with_tpu("v5p-8"),
-                pip_dependency_groups=["vllm", "math"],
             )
         )
-    
+
     return steps
 
 def build_isoflop_steps(prompt_format: str = "question_only"):
@@ -93,11 +90,9 @@ def build_isoflop_steps(prompt_format: str = "question_only"):
                     output_path=this_output_path(),
                     prompt_format=versioned(prompt_format),
                 ),
-                resources=ResourceConfig.with_tpu("v5p-8"),
-                pip_dependency_groups=["vllm", "math"],
             )
         )
-    
+
     return steps
 
 def build_steps(model_types: list[str], prompt_format: str = "question_only"):

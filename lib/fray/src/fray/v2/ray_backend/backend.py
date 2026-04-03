@@ -343,9 +343,18 @@ class RayClient:
         topo = get_tpu_topology(device.variant)
         replicas = request.replicas or 1
         num_slices = max(1, replicas // topo.vm_count)
-        # Only propagate env_vars to TPU workers. Other runtime_env keys (pip, py_modules,
-        # etc.) reference local temp files that don't exist on the run_on_pod_ray worker node.
-        tpu_runtime_env = {"env_vars": runtime_env["env_vars"]} if "env_vars" in runtime_env else {}
+        # Build a portable runtime_env for TPU workers. The pip requirements
+        # are stored as a node-local temp file that won't exist on the gang-
+        # scheduler worker, so read the file and inline packages as a list.
+        tpu_runtime_env = dict(runtime_env)
+        pip_spec = tpu_runtime_env.get("pip")
+        if isinstance(pip_spec, dict):
+            packages = pip_spec.get("packages")
+            if isinstance(packages, str) and os.path.isfile(packages):
+                with open(packages) as f:
+                    tpu_runtime_env["pip"] = [
+                        line for line in f.read().splitlines() if line.strip() and not line.strip().startswith("#")
+                    ]
         object_ref = run_on_pod_ray.remote(
             remote_fn,
             tpu_type=device.variant,

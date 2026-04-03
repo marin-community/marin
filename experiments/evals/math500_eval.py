@@ -26,6 +26,7 @@ import fsspec
 from marin.utils import fsspec_exists
 
 from fray.cluster import ResourceConfig
+from marin.execution.remote import remote
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
@@ -46,6 +47,7 @@ class DownloadMath500Config:
     output_path: str
 
 
+@remote
 def download_math500(config: DownloadMath500Config):
     dataset = load_dataset("HuggingFaceH4/MATH-500", split="test")
     
@@ -67,7 +69,6 @@ download_math500_step = ExecutorStep(
     config=DownloadMath500Config(
         output_path=this_output_path(),
     ),
-    resources=ResourceConfig.with_cpu(),
 )
 
 
@@ -118,6 +119,7 @@ class Math500EvalConfig:
     math500_path: str | InputName = output_path_of(download_math500_step)
 
 
+@remote(resources=ResourceConfig.with_tpu("v5p-8"), pip_dependency_groups=["vllm", "math"])
 def run_math500_eval(config: Math500EvalConfig):
     # # Patch the kernel tuning to use smaller block sizes for high-KV-head models
     # import tpu_inference.kernels.ragged_paged_attention.v3.kernel as rpa_kernel
@@ -272,8 +274,6 @@ def math500_eval_step(model_step: ExecutorStep, name: str) -> ExecutorStep:
             model_path=output_path_of(model_step),
             output_path=this_output_path(),
         ),
-        resources=ResourceConfig.with_tpu("v5p-8"),
-        pip_dependency_groups=["math"],
     )
 
 def process_math500_data(config: Math500ProcessConfig):
@@ -327,8 +327,6 @@ eval_step = ExecutorStep(
         model_path=output_path_of(model_step),
         output_path=this_output_path(),
     ),
-    resources=ResourceConfig.with_tpu("v5p-8"),
-    pip_dependency_groups=["math", "vllm"],
 )
 process_step = ExecutorStep(
     name=f"rohith_math500_eval/documents/{name}",
