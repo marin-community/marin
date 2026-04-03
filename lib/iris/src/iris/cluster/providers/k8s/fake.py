@@ -302,6 +302,7 @@ class InMemoryK8sService:
         self._file_contents: dict[tuple[str, str], bytes] = {}  # (pod_name, path) -> data
         self._rm_files_calls: list[tuple[str, list[str]]] = []
         self._top_pod_overrides: dict[str, tuple[int, int] | None] = {}
+        self._log_watermarks: dict[str, int] = {}  # pod_name -> bytes consumed
 
         # Node model
         self._nodes: dict[str, FakeNode] = {}
@@ -727,20 +728,23 @@ class InMemoryK8sService:
         pod_name: str,
         *,
         container: str | None = None,
-        byte_offset: int = 0,
+        since_time: datetime | None = None,
     ) -> KubectlLogResult:
         self._check_failure("stream_logs")
         text = self._logs.get(pod_name, "")
         raw = text.encode("utf-8")
-        if len(raw) <= byte_offset:
-            return KubectlLogResult(lines=[], byte_offset=byte_offset)
-        remaining = raw[byte_offset:].decode("utf-8")
+        watermark = self._log_watermarks.get(pod_name, 0) if since_time is not None else 0
+        if len(raw) <= watermark:
+            return KubectlLogResult(lines=[], last_timestamp=since_time)
+        remaining = raw[watermark:].decode("utf-8")
         lines = [
             KubectlLogLine(timestamp=datetime.now(UTC), stream="stdout", data=line)
             for line in remaining.splitlines()
             if line
         ]
-        return KubectlLogResult(lines=lines, byte_offset=len(raw))
+        self._log_watermarks[pod_name] = len(raw)
+        last_ts = lines[-1].timestamp if lines else since_time
+        return KubectlLogResult(lines=lines, last_timestamp=last_ts)
 
     def exec(
         self,
