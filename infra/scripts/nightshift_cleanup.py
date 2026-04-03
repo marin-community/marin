@@ -1,26 +1,29 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Nightshift cleanup: single agent picks a subproject, finds something meaty, opens a PR."""
+"""Nightshift cleanup: spawns parallel sub-agents per subproject, merges results into one PR."""
 
 import datetime
+import json
+import logging
 import secrets
 import subprocess
+import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 SUBPROJECTS = ["lib/marin/src/marin", "lib/iris/src/iris", "lib/zephyr/src/zephyr", "lib/levanter/src/levanter"]
 
-CLEANUP_PROMPT = """\
-You are the Nightshift Cleanup Agent.
+SCOUT_PROMPT = """\
+You are a Nightshift Scout Agent assigned to: {subproject}
 
 Your random seed is: {haiku_seed}
-Use this seed to compose a haiku about code maintenance. Include it
-as the epigraph of your PR description.
 
 ## Your Mission
 
-Pick one of these subprojects to focus on: {subprojects}
-
-Browse the subproject and find something **meaty** to improve — not cosmetic
+Browse `{subproject}` and find something **meaty** to improve — not cosmetic
 lint, not renaming, but a genuine code quality win. Look for things like:
 
 - Dead code: unused functions, stale TODO/FIXME (>90 days via `git blame`),
@@ -45,24 +48,157 @@ Read `AGENTS.md` for project conventions.
   that test modules you changed.
 - If you find issues but the fix is non-trivial, file a GitHub issue instead
   of making a risky change.
-- Keep the PR focused: one coherent improvement.
+- Keep changes focused: one coherent improvement per subproject.
 
 ## Output
 
-Create a branch named `nightshift/cleanup-{date}` and open a PR with:
-- Title: `[nightshift] <concise description>`
-- Body: your haiku, then a summary of what was cleaned and why
-- Labels: `agent-generated`, `nightshift`
+Do NOT create a PR or push to a remote. Work locally only.
 
-If you find nothing worth changing, exit cleanly — no branch, no PR.
+If you made improvements, commit them to the current branch with a message like:
+  `[nightshift] <subproject>: <concise description>`
+
+Then write a JSON summary to `{result_file}`:
+```json
+{{
+  "subproject": "{subproject}",
+  "status": "changed",
+  "summary": "<one-paragraph description of what was cleaned and why>",
+  "files_changed": ["<list of files changed>"]
+}}
+```
+
+If you find nothing worth changing, write:
+```json
+{{
+  "subproject": "{subproject}",
+  "status": "no_change",
+  "summary": "<brief note on what you checked>"
+}}
+```
+"""
+
+MERGE_PROMPT = """\
+You are the Nightshift Merge Agent.
+
+Your random seed is: {haiku_seed}
+Use this seed to compose a haiku about code maintenance. Include it
+as the epigraph of your PR description.
+
+## Context
+
+Parallel scout agents searched these subprojects for cleanup opportunities.
+Each scout worked in its own git worktree and committed changes independently.
+Their results:
+
+{scout_results}
+
+## Worktrees
+
+The scout worktrees with their commits are at these paths:
+{worktree_info}
+
+## Your Mission
+
+1. Cherry-pick the scout commits from each worktree that had `status: "changed"`
+   into the current branch (`nightshift/cleanup-{date}`). Skip any that conflict
+   or fail tests after merging.
+
+2. Run `./infra/pre-commit.py --all-files --fix` and `uv run pytest -x` on all
+   affected test files to verify the combined changes are clean.
+
+3. Before pushing, rebase on origin/main:
+   ```
+   git fetch origin main
+   git rebase origin/main
+   ```
+
+4. Open a PR:
+   - Title: `[nightshift] {date} multi-cleanup`
+   - Body: your haiku as epigraph, then a combined summary of all scout findings
+   - Labels: `agent-generated`, `nightshift`
+
+5. Enable automerge:
+   ```
+   gh pr merge --auto --squash <PR_NUMBER>
+   ```
+
+6. Pick a reviewer by finding who recently touched the changed files:
+   ```
+   git log --format='%ae' -20 -- <changed_files> | sort | uniq -c | sort -rn | head -5
+   ```
+   Pick the top contributor who is NOT `github-actions[bot]` or `noreply`.
+   ```
+   gh pr edit <PR_NUMBER> --add-reviewer <username>
+   ```
+
+If no scouts produced changes, exit cleanly — no branch, no PR.
 """
 
 
-def main() -> None:
-    date = datetime.date.today().strftime("%Y%m%d")
-    prompt = CLEANUP_PROMPT.format(
-        haiku_seed=secrets.token_hex(4),
-        subprojects=", ".join(SUBPROJECTS),
+def run_scout(subproject: str, date: str, repo_root: Path) -> tuple[str, dict, str]:
+    """Run a single scout agent in a git worktree. Returns (subproject, result_dict, worktree_path)."""
+    worktree_name = f"nightshift-scout-{subproject.replace('/', '-')}"
+    worktree_path = repo_root / ".nightshift-worktrees" / worktree_name
+    branch_name = f"nightshift/scout-{subproject.replace('/', '-')}-{date}"
+
+    # Clean up any stale worktree
+    subprocess.run(["git", "worktree", "remove", "--force", str(worktree_path)], capture_output=True, cwd=repo_root)
+    subprocess.run(["git", "branch", "-D", branch_name], capture_output=True, cwd=repo_root)
+
+    # Create worktree on a fresh branch from origin/main
+    subprocess.run(["git", "fetch", "origin", "main"], check=True, cwd=repo_root, capture_output=True)
+    subprocess.run(
+        ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "origin/main"],
+        check=True,
+        cwd=repo_root,
+    )
+
+    result_file = tempfile.mktemp(suffix=".json", prefix=f"nightshift-{worktree_name}-")
+    haiku_seed = secrets.token_hex(4)
+
+    prompt = SCOUT_PROMPT.format(
+        subproject=subproject,
+        haiku_seed=haiku_seed,
+        result_file=result_file,
+    )
+
+    logger.info("Starting scout for %s in %s", subproject, worktree_path)
+    subprocess.run(
+        [
+            "claude",
+            "--model=opus",
+            "--print",
+            "--dangerously-skip-permissions",
+            "--tools=Read,Write,Edit,Glob,Grep,Bash",
+            "--max-turns",
+            "400",
+            "--cwd",
+            str(worktree_path),
+            "--",
+            prompt,
+        ],
+        check=False,  # Don't fail the whole run if one scout errors
+    )
+
+    result = {"subproject": subproject, "status": "error", "summary": "Scout did not produce a result file"}
+    if Path(result_file).exists():
+        result = json.loads(Path(result_file).read_text())
+        Path(result_file).unlink()
+
+    return subproject, result, str(worktree_path)
+
+
+def run_merge(date: str, haiku_seed: str, scout_results: list[dict], worktree_info: list[tuple[str, str]]) -> None:
+    """Run the merge agent to combine scout results into a single PR."""
+    results_text = "\n".join(
+        f"### {r['subproject']}\n- Status: {r['status']}\n- Summary: {r.get('summary', 'N/A')}" for r in scout_results
+    )
+    worktree_text = "\n".join(f"- `{subproject}`: `{path}`" for subproject, path in worktree_info)
+
+    prompt = MERGE_PROMPT.format(
+        haiku_seed=haiku_seed,
+        scout_results=results_text,
+        worktree_info=worktree_text,
         date=date,
     )
 
@@ -74,12 +210,59 @@ def main() -> None:
             "--dangerously-skip-permissions",
             "--tools=Read,Write,Edit,Glob,Grep,Bash",
             "--max-turns",
-            "800",
+            "200",
             "--",
             prompt,
         ],
         check=True,
     )
+
+
+def cleanup_worktrees(repo_root: Path) -> None:
+    """Remove all nightshift scout worktrees."""
+    worktrees_dir = repo_root / ".nightshift-worktrees"
+    if worktrees_dir.exists():
+        for child in worktrees_dir.iterdir():
+            subprocess.run(["git", "worktree", "remove", "--force", str(child)], capture_output=True, cwd=repo_root)
+        worktrees_dir.rmdir()
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    date = datetime.date.today().strftime("%Y%m%d")
+    repo_root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
+
+    # Create the merge branch
+    subprocess.run(["git", "fetch", "origin", "main"], check=True, cwd=repo_root, capture_output=True)
+    merge_branch = f"nightshift/cleanup-{date}"
+    subprocess.run(["git", "branch", "-D", merge_branch], capture_output=True, cwd=repo_root)
+    subprocess.run(["git", "checkout", "-b", merge_branch, "origin/main"], check=True, cwd=repo_root)
+
+    # Run scouts in parallel
+    scout_results: list[dict] = []
+    worktree_info: list[tuple[str, str]] = []
+
+    with ThreadPoolExecutor(max_workers=len(SUBPROJECTS)) as pool:
+        futures = {pool.submit(run_scout, sp, date, repo_root): sp for sp in SUBPROJECTS}
+        for future in as_completed(futures):
+            subproject, result, worktree_path = future.result()
+            scout_results.append(result)
+            if result.get("status") == "changed":
+                worktree_info.append((subproject, worktree_path))
+            logger.info("Scout %s: %s", subproject, result.get("status"))
+
+    changed = [r for r in scout_results if r.get("status") == "changed"]
+    if not changed:
+        logger.info("No scouts found changes. Exiting cleanly.")
+        cleanup_worktrees(repo_root)
+        return
+
+    # Run merge agent to cherry-pick, verify, and open PR
+    haiku_seed = secrets.token_hex(4)
+    try:
+        run_merge(date, haiku_seed, scout_results, worktree_info)
+    finally:
+        cleanup_worktrees(repo_root)
 
 
 if __name__ == "__main__":
