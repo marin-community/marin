@@ -41,7 +41,7 @@ tpu_pools:
     family: v5e
     zones: [europe-west4-b, us-west4-a]
     base_priority: 100
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, preemptible: true }
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: preemptible }
     slice_template:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
@@ -50,7 +50,7 @@ tpu_pools:
       16: { min_slices: 1, max_slices: 4 }
 
 scale_groups:
-  # Low-priority fallback CPU VM group for non-preemptible scheduling tests.
+  # Low-priority fallback CPU VM group for on-demand scheduling tests.
   # Intentionally not default: selected only when jobs constrain preemptible=false.
   cpu_vm_e2_standard_4_ondemand:
     zones: [europe-west4-b]
@@ -60,7 +60,7 @@ scale_groups:
       ram: 16GB
       disk: 100GB
       device_type: cpu
-      preemptible: false
+      capacity_type: on-demand
     min_slices: 0
     max_slices: 2
     priority: 1000

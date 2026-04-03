@@ -17,6 +17,7 @@ import pytest
 
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.service import TpuCreateRequest, VmCreateRequest
+from iris.rpc import config_pb2
 from iris.cluster.providers.types import InfraError, QuotaExhaustedError, ResourceNotFoundError
 from iris.cluster.service_mode import ServiceMode
 
@@ -32,12 +33,14 @@ def _tpu_request(
     accelerator_type: str = "v4-8",
     runtime_version: str = "tpu-ubuntu2204-base",
     labels: dict[str, str] | None = None,
+    capacity_type: int = config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
 ) -> TpuCreateRequest:
     return TpuCreateRequest(
         name=name,
         zone=zone,
         accelerator_type=accelerator_type,
         runtime_version=runtime_version,
+        capacity_type=capacity_type,
         labels=labels or {},
     )
 

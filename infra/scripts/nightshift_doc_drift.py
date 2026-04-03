@@ -57,9 +57,30 @@ If meaningful drift is found:
 - Fix straightforward issues (broken links, wrong imports in examples).
 - For larger issues, file a GitHub issue with labels `documentation`,
   `agent-generated`, and `nightshift`. Begin the body with your haiku.
-- If you made fixes, open a PR titled `[nightshift] fix documentation drift`
-  with labels `agent-generated` and `nightshift`. Begin the PR body with
-  your haiku.
+- If you made fixes, open a PR following these steps:
+  1. Before pushing, ensure your branch is up to date with origin/main:
+     ```
+     git fetch origin main
+     git rebase origin/main
+     ```
+  2. Push and open the PR:
+     - Title: `[nightshift] fix documentation drift`
+     - Labels: `agent-generated`, `nightshift`
+     - Begin the PR body with your haiku.
+  3. Enable automerge on the PR:
+     ```
+     gh pr merge --auto --squash <PR_NUMBER>
+     ```
+  4. Pick a reviewer by finding who has recently touched the files you changed.
+     Use GitHub login names (NOT emails):
+     ```
+     gh api '/repos/{owner}/{repo}/commits?path=<changed_file>&per_page=20' \
+       --jq '.[].author.login' | grep -v '\\[bot\\]' | sort | uniq -c | sort -rn | head -5
+     ```
+     Pick the top human contributor and request their review:
+     ```
+     gh pr edit <PR_NUMBER> --add-reviewer <login>
+     ```
 
 If nothing is found, exit cleanly.
 """

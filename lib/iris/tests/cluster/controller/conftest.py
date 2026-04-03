@@ -681,14 +681,14 @@ def make_scale_group_config(**kwargs: object) -> config_pb2.ScaleGroupConfig:
     accelerator_variant = kwargs.pop("accelerator_variant", "v5p-8")
     runtime_version = kwargs.pop("runtime_version", None)
     zones = kwargs.pop("zones", None)
-    preemptible = kwargs.pop("preemptible", None)
+    capacity_type = kwargs.pop("capacity_type", None)
     config = ensure_scale_group_resources(config_pb2.ScaleGroupConfig(**kwargs))
     config.resources.device_type = accelerator_type
     if accelerator_variant:
         config.resources.device_variant = accelerator_variant
-    if preemptible is not None:
-        config.slice_template.preemptible = preemptible
-        config.resources.preemptible = preemptible
+    if capacity_type is not None:
+        config.slice_template.capacity_type = capacity_type
+        config.resources.capacity_type = capacity_type
 
     # Derive slice template fields from resources, matching what
     # _derive_slice_config_from_resources() does in production config loading.
@@ -719,7 +719,7 @@ def make_demand_entries(
     device_type: DeviceType = DeviceType.TPU,
     device_variant: str | None = "v5p-8",
     device_variants: frozenset[str] | None = None,
-    preemptible: bool | None = None,
+    capacity_type: int | None = None,
     required_regions: frozenset[str] | None = None,
     required_zones: frozenset[str] | None = None,
     task_prefix: str = "task",
@@ -736,6 +736,7 @@ def make_demand_entries(
     effective_variants = device_variants
     if effective_variants is None and device_variant is not None:
         effective_variants = frozenset({device_variant})
+    preemptible = (capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE) if capacity_type is not None else None
     normalized = PlacementRequirements(
         device_type=device_type,
         device_variants=effective_variants,
@@ -751,8 +752,8 @@ def make_demand_entries(
         )
     if effective_variants:
         constraint_list.append(device_variant_constraint(sorted(effective_variants)))
-    if preemptible is not None:
-        constraint_list.append(preemptible_constraint(preemptible))
+    if capacity_type is not None:
+        constraint_list.append(preemptible_constraint(capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE))
     if required_regions:
         constraint_list.append(region_constraint(sorted(required_regions)))
     if required_zones:

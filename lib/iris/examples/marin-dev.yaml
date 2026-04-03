@@ -42,7 +42,7 @@ tpu_pools:
     family: v5e
     zones: [europe-west4-b, us-west4-a]
     base_priority: 10
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, preemptible: true }
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: preemptible }
     slice_template:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
@@ -56,7 +56,7 @@ tpu_pools:
     family: v6e
     zones: [europe-west4-a, us-east1-d, us-east5-b]
     base_priority: 10
-    resources: { cpu: 180, ram: 720GB, disk: 100GB, preemptible: true }
+    resources: { cpu: 180, ram: 720GB, disk: 100GB, capacity_type: preemptible }
     slice_template:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
@@ -70,7 +70,7 @@ tpu_pools:
     family: v5p
     zones: [us-central1-a, us-east5-a]
     base_priority: 20
-    resources: { cpu: 208, ram: 448GB, disk: 100GB, preemptible: true }
+    resources: { cpu: 208, ram: 448GB, disk: 100GB, capacity_type: preemptible }
     slice_template:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
@@ -83,7 +83,7 @@ tpu_pools:
     family: v4
     zones: [us-central2-b]
     base_priority: 20
-    resources: { cpu: 240, ram: 400GB, disk: 100GB, preemptible: true }
+    resources: { cpu: 240, ram: 400GB, disk: 100GB, capacity_type: preemptible }
     slice_template:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
@@ -97,7 +97,7 @@ scale_groups:
     zones: [us-central1-a, us-central2-b, us-east1-b, us-east1-d, us-east5-a, us-east5-b, us-west1-a, us-west4-a, europe-west4-a, europe-west4-b]
     num_vms: 1
     priority: 1000
-    resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, preemptible: false }
+    resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
     min_slices: 0
     max_slices: 1
     slice_template:

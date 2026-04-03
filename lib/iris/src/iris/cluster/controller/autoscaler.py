@@ -505,7 +505,11 @@ def _diagnose_no_matching_group(entry: DemandEntry, groups: list[ScalingGroup]) 
         return f"no_matching_group: no groups with device {device_type.value}:{variants_str}"
 
     if n.preemptible is not None:
-        preempt_matches = [g for g in device_matches if g.config.resources.preemptible == n.preemptible]
+        preempt_matches = [
+            g
+            for g in device_matches
+            if (g.config.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE) == n.preemptible
+        ]
         if not preempt_matches:
             want = "preemptible" if n.preemptible else "non-preemptible"
             return f"no_matching_group: no {want} groups for device {device_type.value}:{variants_str}"
@@ -1153,7 +1157,7 @@ class Autoscaler:
                 wc.accelerator_variant = resources.device_variant
             if resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and resources.device_count > 0:
                 wc.gpu_count = resources.device_count
-            wc.preemptible = resources.preemptible
+            wc.capacity_type = resources.capacity_type
 
         # Worker attributes from scale group
         if group.config.HasField("worker"):

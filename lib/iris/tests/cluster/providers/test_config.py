@@ -56,6 +56,7 @@ scale_groups:
       device_type: tpu
       device_variant: v5litepod-8
       device_count: 8
+      capacity_type: preemptible
     min_slices: 1
     max_slices: 10
     slice_template:
@@ -107,6 +108,7 @@ scale_groups:
       disk: 100GB
       device_type: cpu
       device_count: 0
+      capacity_type: on-demand
     slice_template:
       manual:
         hosts: [10.0.0.1, 10.0.0.2]
@@ -165,6 +167,7 @@ scale_groups:
       device_type: tpu
       device_variant: v5litepod-8
       device_count: 8
+      capacity_type: preemptible
     min_slices: 1
     max_slices: 10
     slice_template:
@@ -180,6 +183,7 @@ scale_groups:
       device_type: tpu
       device_variant: v5litepod-16
       device_count: 8
+      capacity_type: preemptible
     min_slices: 0
     max_slices: 4
     slice_template:
@@ -259,6 +263,7 @@ scale_groups:
       disk: 50GB
       device_type: {accelerator_type}
       device_count: 0
+      capacity_type: preemptible
     slice_template:
       manual:
         hosts: [10.0.0.1]
@@ -293,6 +298,7 @@ scale_groups:
       device_type: ACCELERATOR_TYPE_TPU
       device_variant: v5litepod-8
       device_count: 8
+      capacity_type: preemptible
     min_slices: 1
     max_slices: 10
     slice_template:
@@ -334,6 +340,7 @@ scale_groups:
       device_type: tpu
       device_variant: v5litepod-8
       device_count: 8
+      capacity_type: preemptible
     min_slices: 0
     max_slices: 2
     slice_template:
@@ -383,6 +390,7 @@ scale_groups:
       disk: 100GB
       device_type: cpu
       device_count: 0
+      capacity_type: on-demand
     slice_template:
       manual:
         hosts: [10.0.0.1, 10.0.0.2]
@@ -428,6 +436,7 @@ scale_groups:
       device_type: tpu
       device_variant: v5litepod-8
       device_count: 8
+      capacity_type: preemptible
     min_slices: 0
     max_slices: 2
     slice_template:
@@ -570,6 +579,7 @@ class TestSshConfigMerging:
         group.num_vms = 1
         group.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
         group.resources.device_variant = "v5litepod-4"
+        group.resources.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
         group.slice_template.gcp.zone = "us-central1-a"
         group.slice_template.gcp.runtime_version = "tpu-ubuntu2204-base"
 
@@ -616,6 +626,7 @@ scale_groups:
       device_type: tpu
       device_variant: v5litepod-8
       device_count: 8
+      capacity_type: preemptible
     min_slices: 1
     max_slices: 10
     slice_template:
@@ -669,6 +680,7 @@ scale_groups:
       disk: 100GB
       device_type: cpu
       device_count: 0
+      capacity_type: on-demand
     min_slices: 2
     max_slices: 5
     priority: 50
@@ -685,6 +697,7 @@ scale_groups:
       device_type: tpu
       device_variant: v5litepod-16
       device_count: 8
+      capacity_type: preemptible
     min_slices: 1
     max_slices: 3
     priority: 100
@@ -752,9 +765,11 @@ def _valid_scale_group() -> config_pb2.ScaleGroupConfig:
             cpu_millicores=8000,
             memory_bytes=16 * 1024**3,
             device_type=config_pb2.ACCELERATOR_TYPE_CPU,
+            capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
         ),
     )
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
     sg.slice_template.num_vms = 1
     sg.slice_template.local.SetInParent()
     return sg
@@ -843,6 +858,7 @@ class TestConfigValidation:
                 memory_bytes=16 * 1024**3,
                 device_count=4,
                 device_type=config_pb2.ACCELERATOR_TYPE_TPU,
+                capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
             ),
         )
         sg.slice_template.gcp.zone = "zone-b"
@@ -866,6 +882,7 @@ class TestConfigValidation:
                 memory_bytes=16 * 1024**3,
                 device_count=4,
                 device_type=config_pb2.ACCELERATOR_TYPE_TPU,
+                capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
             ),
         )
         sg.slice_template.gcp.zone = "zone-a"
@@ -875,15 +892,21 @@ class TestConfigValidation:
         validate_config(config)  # Should not raise
 
     @pytest.mark.parametrize(
-        "num_vms,device_type,device_count,preemptible,error_match",
+        "num_vms,device_type,device_count,capacity_type,error_match",
         [
-            (1, config_pb2.ACCELERATOR_TYPE_CPU, 0, True, "do not support preemptible"),
-            (2, config_pb2.ACCELERATOR_TYPE_CPU, 0, False, "require num_vms=1"),
-            (1, config_pb2.ACCELERATOR_TYPE_GPU, 1, False, "require device_type=cpu"),
+            (
+                1,
+                config_pb2.ACCELERATOR_TYPE_CPU,
+                0,
+                config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+                "only support capacity_type on-demand",
+            ),
+            (2, config_pb2.ACCELERATOR_TYPE_CPU, 0, config_pb2.CAPACITY_TYPE_ON_DEMAND, "require num_vms=1"),
+            (1, config_pb2.ACCELERATOR_TYPE_GPU, 1, config_pb2.CAPACITY_TYPE_ON_DEMAND, "require device_type=cpu"),
         ],
-        ids=["preemptible", "multi_vm", "non_cpu"],
+        ids=["non_on_demand", "multi_vm", "non_cpu"],
     )
-    def test_rejects_invalid_gcp_vm_mode(self, num_vms, device_type, device_count, preemptible, error_match):
+    def test_rejects_invalid_gcp_vm_mode(self, num_vms, device_type, device_count, capacity_type, error_match):
         config = config_pb2.IrisClusterConfig()
         sg = config_pb2.ScaleGroupConfig(
             name="test-vm",
@@ -893,11 +916,11 @@ class TestConfigValidation:
                 memory_bytes=16 * 1024**3,
                 device_type=device_type,
                 device_count=device_count,
-                preemptible=preemptible,
+                capacity_type=capacity_type,
             ),
         )
         sg.slice_template.accelerator_type = device_type
-        sg.slice_template.preemptible = preemptible
+        sg.slice_template.capacity_type = capacity_type
         sg.slice_template.gcp.zone = "us-central1-a"
         sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
         sg.slice_template.gcp.machine_type = "n2-standard-4"
@@ -906,16 +929,20 @@ class TestConfigValidation:
         with pytest.raises(ValueError, match=error_match):
             validate_config(config)
 
-    def test_accepts_gcp_vm_mode_cpu_single_vm_non_preemptible(self):
+    def test_accepts_gcp_vm_mode_cpu_single_vm_on_demand(self):
         config = config_pb2.IrisClusterConfig()
         sg = config_pb2.ScaleGroupConfig(
             name="cpu-vm",
             num_vms=1,
             resources=config_pb2.ScaleGroupResources(
-                cpu_millicores=8000, memory_bytes=16 * 1024**3, device_type=config_pb2.ACCELERATOR_TYPE_CPU
+                cpu_millicores=8000,
+                memory_bytes=16 * 1024**3,
+                device_type=config_pb2.ACCELERATOR_TYPE_CPU,
+                capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
             ),
         )
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
         sg.slice_template.gcp.zone = "us-central1-a"
         sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
         sg.slice_template.gcp.machine_type = "n2-standard-4"
@@ -924,7 +951,9 @@ class TestConfigValidation:
         validate_config(config)
 
 
-def _gcp_scale_group(zone: str, *, preemptible: bool = False) -> config_pb2.ScaleGroupConfig:
+def _gcp_scale_group(
+    zone: str, *, capacity_type: int = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+) -> config_pb2.ScaleGroupConfig:
     """Build a valid GCP-backed ScaleGroupConfig for worker settings validation tests."""
     sg = config_pb2.ScaleGroupConfig(
         name="test",
@@ -934,23 +963,23 @@ def _gcp_scale_group(zone: str, *, preemptible: bool = False) -> config_pb2.Scal
             memory_bytes=16 * 1024**3,
             device_count=1,
             device_type=config_pb2.ACCELERATOR_TYPE_TPU,
-            preemptible=preemptible,
+            capacity_type=capacity_type,
         ),
     )
     sg.slice_template.gcp.zone = zone
     sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
-    sg.slice_template.preemptible = preemptible
+    sg.slice_template.capacity_type = capacity_type
     return sg
 
 
 def _config_with_gcp_sg(
     zone: str,
     *,
-    preemptible: bool = False,
+    capacity_type: int = config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
     worker_attributes: dict[str, str] | None = None,
 ) -> config_pb2.IrisClusterConfig:
     """Build an IrisClusterConfig containing a single GCP scale group with optional worker attributes."""
-    sg = _gcp_scale_group(zone, preemptible=preemptible)
+    sg = _gcp_scale_group(zone, capacity_type=capacity_type)
     if worker_attributes is not None:
         for k, v in worker_attributes.items():
             sg.worker.attributes[k] = v
@@ -998,17 +1027,17 @@ class TestWorkerSettingsValidation:
         """worker.attributes.preemptible is now derived from resources and rejected."""
         config = _config_with_gcp_sg(
             "us-west4-b",
-            preemptible=True,
+            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
             worker_attributes={WellKnownAttribute.PREEMPTIBLE: preemptible_value},
         )
         with pytest.raises(ValueError, match="derived from resources"):
             validate_config(config)
 
     def test_region_valid_without_preemptible_attribute(self):
-        """Region in worker.attributes works when preemptible is only on resources."""
+        """Region in worker.attributes works when capacity_type is only on resources."""
         config = _config_with_gcp_sg(
             "us-west4-b",
-            preemptible=True,
+            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
             worker_attributes={WellKnownAttribute.REGION: "us-west4"},
         )
         validate_config(config)
@@ -1050,7 +1079,14 @@ scale_groups:
   tpu_v5e_16:
     zones: [europe-west4-b, us-west4-a]
     num_vms: 4
-    resources: { cpu: 128, ram: 128GB, disk: 1TB, device_type: tpu, device_variant: v5litepod-16, device_count: 4 }
+    resources:
+      cpu: 128
+      ram: 128GB
+      disk: 1TB
+      device_type: tpu
+      device_variant: v5litepod-16
+      device_count: 4
+      capacity_type: preemptible
     max_slices: 4
     slice_template:
       gcp:
@@ -1090,7 +1126,14 @@ scale_groups:
     zones: [us-west4-a]
     num_vms: 1
     min_slices: 2
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
+    resources:
+      cpu: 8
+      ram: 16GB
+      disk: 50GB
+      device_type: tpu
+      device_variant: v5litepod-4
+      device_count: 1
+      capacity_type: preemptible
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1114,7 +1157,14 @@ defaults:
 scale_groups:
   static_group:
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
+    resources:
+      cpu: 8
+      ram: 16GB
+      disk: 50GB
+      device_type: tpu
+      device_variant: v5litepod-4
+      device_count: 1
+      capacity_type: preemptible
     min_slices: 1
     slice_template:
       gcp:
@@ -1141,7 +1191,14 @@ scale_groups:
   tpu_group:
     zones: [us-west4-a, europe-west4-b]
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
+    resources:
+      cpu: 8
+      ram: 16GB
+      disk: 50GB
+      device_type: tpu
+      device_variant: v5litepod-4
+      device_count: 1
+      capacity_type: preemptible
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1163,7 +1220,14 @@ scale_groups:
   tpu_group:
     zones: []
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
+    resources:
+      cpu: 8
+      ram: 16GB
+      disk: 50GB
+      device_type: tpu
+      device_variant: v5litepod-4
+      device_count: 1
+      capacity_type: preemptible
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1188,7 +1252,13 @@ defaults:
 scale_groups:
   static_cpu:
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: cpu, device_count: 0 }
+    resources:
+      cpu: 8
+      ram: 16GB
+      disk: 50GB
+      device_type: cpu
+      device_count: 0
+      capacity_type: on-demand
     slice_template:
       gcp:
         zone: us-central1-a
@@ -1196,7 +1266,14 @@ scale_groups:
   expanded_tpu:
     zones: [us-west4-a, europe-west4-b]
     num_vms: 4
-    resources: { cpu: 128, ram: 128GB, disk: 1TB, device_type: tpu, device_variant: v5litepod-16, device_count: 4 }
+    resources:
+      cpu: 128
+      ram: 128GB
+      disk: 1TB
+      device_type: tpu
+      device_variant: v5litepod-16
+      device_count: 4
+      capacity_type: preemptible
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1219,7 +1296,14 @@ scale_groups:
   tpu_group:
     zones: [us-west4-a, us-west4-a]
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
+    resources:
+      cpu: 8
+      ram: 16GB
+      disk: 50GB
+      device_type: tpu
+      device_variant: v5litepod-4
+      device_count: 1
+      capacity_type: preemptible
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1239,7 +1323,14 @@ scale_groups:
   tpu_group:
     zones: [123]
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
+    resources:
+      cpu: 8
+      ram: 16GB
+      disk: 50GB
+      device_type: tpu
+      device_variant: v5litepod-4
+      device_count: 1
+      capacity_type: preemptible
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1290,7 +1381,14 @@ scale_groups:
   tpu_group:
     zones: [us-west4-a]
     num_vms: 1
-    resources: {{ cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }}
+    resources:
+      cpu: 8
+      ram: 16GB
+      disk: 50GB
+      device_type: tpu
+      device_variant: v5litepod-4
+      device_count: 1
+      capacity_type: preemptible
 {extra_yaml}
 """
         p = tmp_path / "config.yaml"
@@ -1309,7 +1407,13 @@ scale_groups:
   manual_group:
     zones: [us-west4-a]
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: cpu, device_count: 0 }
+    resources:
+      cpu: 8
+      ram: 16GB
+      disk: 50GB
+      device_type: cpu
+      device_count: 0
+      capacity_type: on-demand
     slice_template:
       manual:
         hosts: [10.0.0.1]
@@ -1330,7 +1434,14 @@ platform:
 scale_groups:
   tpu_group-us-west4-a:
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
+    resources:
+      cpu: 8
+      ram: 16GB
+      disk: 50GB
+      device_type: tpu
+      device_variant: v5litepod-4
+      device_count: 1
+      capacity_type: preemptible
     slice_template:
       gcp:
         zone: us-west4-a
@@ -1338,7 +1449,14 @@ scale_groups:
   tpu_group:
     zones: [us-west4-a]
     num_vms: 1
-    resources: { cpu: 8, ram: 16GB, disk: 50GB, device_type: tpu, device_variant: v5litepod-4, device_count: 1 }
+    resources:
+      cpu: 8
+      ram: 16GB
+      disk: 50GB
+      device_type: tpu
+      device_variant: v5litepod-4
+      device_count: 1
+      capacity_type: preemptible
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1371,7 +1489,7 @@ v5e-preempt:
     family: v5e
     zones: [europe-west4-b, us-west4-a]
     base_priority: 10
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, preemptible: true }
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: preemptible }
     slice_template:
       gcp:
         service_account: test@test.iam.gserviceaccount.com
@@ -1400,7 +1518,7 @@ v5e-preempt:
         assert g4eu.slice_template.gcp.zone == "europe-west4-b"
         assert g4eu.worker.attributes["zone"] == "europe-west4-b"
         assert g4eu.worker.attributes["region"] == "europe-west4"
-        assert g4eu.resources.preemptible is True
+        assert g4eu.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
 
         # Check v5e-16 in us-west4-a (tier 2)
         g16us = config.scale_groups["tpu_v5e-preempt_16-us-west4-a"]
@@ -1418,7 +1536,7 @@ v6e-pool:
     family: v6e
     zones: [us-east5-b]
     base_priority: 10
-    resources: { cpu: 180, ram: 720GB, disk: 100GB }
+    resources: { cpu: 180, ram: 720GB, disk: 100GB, capacity_type: preemptible }
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv6e
@@ -1440,7 +1558,7 @@ v6e-pool:
 v4-pool:
     family: v4
     zones: [us-central2-b]
-    resources: { cpu: 240, ram: 400GB, disk: 100GB }
+    resources: { cpu: 240, ram: 400GB, disk: 100GB, capacity_type: preemptible }
     slice_template:
       gcp:
         runtime_version: tpu-ubuntu2204-base
@@ -1530,7 +1648,7 @@ tpu_pools:
   v5p-pool:
     family: v5p
     zones: [us-central1-a]
-    resources: { cpu: 208, ram: 448GB, disk: 100GB }
+    resources: { cpu: 208, ram: 448GB, disk: 100GB, capacity_type: preemptible }
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5
@@ -1540,7 +1658,7 @@ tpu_pools:
 scale_groups:
   cpu_fallback:
     num_vms: 1
-    resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu }
+    resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
     slice_template:
       gcp:
         zone: us-central1-a
@@ -1570,7 +1688,7 @@ tpu_pools:
     family: v5e
     zones: [europe-west4-b]
     base_priority: 10
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, preemptible: true }
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: preemptible }
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1581,7 +1699,7 @@ tpu_pools:
     family: v5e
     zones: [us-east5-a]
     base_priority: 5
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, preemptible: false }
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: reserved }
     slice_template:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
@@ -1594,11 +1712,11 @@ tpu_pools:
 
         g_preempt = config.scale_groups["tpu_v5e-preempt_4-europe-west4-b"]
         assert g_preempt.quota_pool == "v5e-preempt/europe-west4-b"
-        assert g_preempt.resources.preemptible is True
+        assert g_preempt.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
 
         g_reserved = config.scale_groups["tpu_v5e-reserved_128-us-east5-a"]
         assert g_reserved.quota_pool == "v5e-reserved/us-east5-a"
-        assert g_reserved.resources.preemptible is False
+        assert g_reserved.resources.capacity_type == config_pb2.CAPACITY_TYPE_RESERVED
         assert g_reserved.allocation_tier == 1
 
     def test_name_collision_rejected(self, tmp_path: Path):
@@ -1638,8 +1756,8 @@ scale_groups:
             load_config(p)
 
 
-class TestPreemptibleNormalization:
-    """Tests for preemptible field parsing during config normalization."""
+class TestCapacityTypeNormalization:
+    """Tests for capacity_type field parsing during config normalization."""
 
     _BASE_CONFIG = """\
 scale_groups:
@@ -1652,7 +1770,23 @@ scale_groups:
       device_type: gpu
       device_variant: a100
       device_count: 1
-      preemptible: {value}
+      capacity_type: {value}
+    slice_template:
+      manual:
+        hosts: [10.0.0.1]
+"""
+
+    _BASE_CONFIG_NO_CAPACITY_TYPE = """\
+scale_groups:
+  test:
+    num_vms: 1
+    resources:
+      cpu: 8
+      ram: 16GB
+      disk: 50GB
+      device_type: gpu
+      device_variant: a100
+      device_count: 1
     slice_template:
       manual:
         hosts: [10.0.0.1]
@@ -1661,30 +1795,33 @@ scale_groups:
     @pytest.mark.parametrize(
         "value,expected",
         [
-            ("true", True),
-            ("True", True),
-            ("TRUE", True),
-            ("false", False),
-            ("False", False),
-            ("FALSE", False),
-            (True, True),
-            (False, False),
+            ("preemptible", config_pb2.CAPACITY_TYPE_PREEMPTIBLE),
+            ("on-demand", config_pb2.CAPACITY_TYPE_ON_DEMAND),
+            ("on_demand", config_pb2.CAPACITY_TYPE_ON_DEMAND),
+            ("reserved", config_pb2.CAPACITY_TYPE_RESERVED),
         ],
     )
-    def test_preemptible_parsed_correctly(self, tmp_path: Path, value: object, expected: bool):
+    def test_capacity_type_parsed_correctly(self, tmp_path: Path, value: str, expected: int):
         content = self._BASE_CONFIG.format(value=value)
         p = tmp_path / "config.yaml"
         p.write_text(content)
         config = load_config(p)
-        assert config.scale_groups["test"].resources.preemptible == expected
+        assert config.scale_groups["test"].resources.capacity_type == expected
 
-    @pytest.mark.parametrize("value", ['"yes"', '"no"', '"1"', '"0"', '"maybe"'])
-    def test_preemptible_rejects_invalid_string(self, tmp_path: Path, value: str):
-        """Strings other than 'true'/'false' are rejected."""
+    @pytest.mark.parametrize("value", ['"spot"', '"dedicated"', '"yes"', '"true"', '"false"'])
+    def test_capacity_type_rejects_invalid_string(self, tmp_path: Path, value: str):
+        """Strings not in the capacity type map are rejected."""
         content = self._BASE_CONFIG.format(value=value)
         p = tmp_path / "config.yaml"
         p.write_text(content)
-        with pytest.raises(ValueError, match="preemptible must be true or false"):
+        with pytest.raises(ValueError, match="capacity_type must be one of"):
+            load_config(p)
+
+    def test_missing_capacity_type_rejected(self, tmp_path: Path):
+        """Missing capacity_type raises a validation error."""
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE_CONFIG_NO_CAPACITY_TYPE)
+        with pytest.raises(ValueError, match="capacity_type is required"):
             load_config(p)
 
 
@@ -1698,6 +1835,7 @@ def _config_with_coreweave_gpu_sg(topology_attrs: dict[str, str] | None = None) 
     sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_GPU
     sg.resources.device_variant = "H100"
     sg.resources.device_count = 8
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
     sg.min_slices = 0
     sg.max_slices = 1
     sg.slice_template.num_vms = 2

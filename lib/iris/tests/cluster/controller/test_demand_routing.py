@@ -502,14 +502,16 @@ class TestPreemptibleRouting:
     def test_route_demand_filters_by_preemptible_true(self):
         """Demand with preemptible=True only routes to preemptible groups."""
         config_preemptible = make_scale_group_config(
-            name="preemptible-group", max_slices=5, priority=10, preemptible=True
+            name="preemptible-group", max_slices=5, priority=10, capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE
         )
         config_on_demand = make_scale_group_config(name="on-demand-group", max_slices=5, priority=10)
 
         group_preemptible = ScalingGroup(config_preemptible, make_mock_platform())
         group_on_demand = ScalingGroup(config_on_demand, make_mock_platform())
 
-        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8", preemptible=True)
+        demand = make_demand_entries(
+            2, device_type=DeviceType.TPU, device_variant="v5p-8", capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+        )
         result = route_demand([group_preemptible, group_on_demand], demand)
 
         assert len(result.routed_entries["preemptible-group"]) == 2
@@ -518,14 +520,16 @@ class TestPreemptibleRouting:
     def test_route_demand_filters_by_preemptible_false(self):
         """Demand with preemptible=False only routes to non-preemptible groups."""
         config_preemptible = make_scale_group_config(
-            name="preemptible-group", max_slices=5, priority=10, preemptible=True
+            name="preemptible-group", max_slices=5, priority=10, capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE
         )
         config_on_demand = make_scale_group_config(name="on-demand-group", max_slices=5, priority=10)
 
         group_preemptible = ScalingGroup(config_preemptible, make_mock_platform())
         group_on_demand = ScalingGroup(config_on_demand, make_mock_platform())
 
-        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8", preemptible=False)
+        demand = make_demand_entries(
+            2, device_type=DeviceType.TPU, device_variant="v5p-8", capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND
+        )
         result = route_demand([group_preemptible, group_on_demand], demand)
 
         assert result.routed_entries.get("preemptible-group") is None
@@ -534,14 +538,14 @@ class TestPreemptibleRouting:
     def test_route_demand_no_preference_routes_to_any(self):
         """Demand with preemptible=None routes to any matching group."""
         config_preemptible = make_scale_group_config(
-            name="preemptible-group", max_slices=5, priority=10, preemptible=True
+            name="preemptible-group", max_slices=5, priority=10, capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE
         )
         config_on_demand = make_scale_group_config(name="on-demand-group", max_slices=5, priority=20)
 
         group_preemptible = ScalingGroup(config_preemptible, make_mock_platform())
         group_on_demand = ScalingGroup(config_on_demand, make_mock_platform())
 
-        demand = make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8", preemptible=None)
+        demand = make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8", capacity_type=None)
         result = route_demand([group_preemptible, group_on_demand], demand)
 
         assert len(result.routed_entries["preemptible-group"]) == 3
@@ -599,17 +603,29 @@ class TestRegionRouting:
     def test_route_demand_combined_region_and_preemptible(self):
         """Demand requiring both region=us-west4 and preemptible=True only routes to the matching group."""
         config_west_preemptible = make_scale_group_config(
-            name="west-preemptible", max_slices=5, priority=10, zones=["us-west4-b"], preemptible=True
+            name="west-preemptible",
+            max_slices=5,
+            priority=10,
+            zones=["us-west4-b"],
+            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
         )
         config_west_preemptible.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
 
         config_west_ondemand = make_scale_group_config(
-            name="west-ondemand", max_slices=5, priority=10, zones=["us-west4-b"], preemptible=False
+            name="west-ondemand",
+            max_slices=5,
+            priority=10,
+            zones=["us-west4-b"],
+            capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
         )
         config_west_ondemand.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
 
         config_eu_preemptible = make_scale_group_config(
-            name="eu-preemptible", max_slices=5, priority=10, zones=["europe-west4-b"], preemptible=True
+            name="eu-preemptible",
+            max_slices=5,
+            priority=10,
+            zones=["europe-west4-b"],
+            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
         )
         config_eu_preemptible.worker.attributes[WellKnownAttribute.REGION] = "europe-west4"
 
@@ -621,7 +637,7 @@ class TestRegionRouting:
             2,
             device_type=DeviceType.TPU,
             device_variant="v5p-8",
-            preemptible=True,
+            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
             required_regions=frozenset({"us-west4"}),
         )
 
