@@ -161,13 +161,11 @@ def test_run_rl_coordinator_stops_rollouts_after_trainer_success(monkeypatch):
     config = SimpleNamespace(
         run_id="rl-test",
         resolved_instance_id="rl-test",
+        inference_type="levanter",
+        inference_config=None,
+        inflight_weight_updates=False,
         pip_dependency_groups=["math"],
-        run_config=RunConfig(
-            train_tpu_type="v5p-8",
-            inference_tpu_type="v5p-8",
-            num_rollout_workers=2,
-            regions=["us-central1"],
-        ),
+        run_config=_run_config(num_rollout_workers=2),
     )
 
     monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
@@ -380,13 +378,11 @@ def test_run_rl_coordinator_enables_transfer_debug_env_vars(monkeypatch):
     config = SimpleNamespace(
         run_id="rl-test",
         resolved_instance_id="rl-test",
+        inference_type="levanter",
+        inference_config=None,
+        inflight_weight_updates=False,
         pip_dependency_groups=["math"],
-        run_config=RunConfig(
-            train_tpu_type="v5p-8",
-            inference_tpu_type="v5p-8",
-            num_rollout_workers=1,
-            regions=["us-central1"],
-        ),
+        run_config=_run_config(),
     )
 
     class _DebugRLJob(_FakeRLJob):

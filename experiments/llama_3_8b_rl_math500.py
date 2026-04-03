@@ -17,6 +17,8 @@ import logging
 import os
 
 from levanter.checkpoint import CheckpointDebugConfig
+from fray.v2.types import ResourceConfig
+from levanter.checkpoint import CheckpointDebugConfig
 from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
@@ -67,6 +69,20 @@ def _default_rl_loss() -> RLOOLoss:
         do_overlong_filtering=True,
         vocab_tile_size=32064,
     )
+
+
+def _tpu_resources(
+    tpu_type: str,
+    *,
+    ram: str,
+    zone: str | None,
+    slice_count: int = 1,
+) -> ResourceConfig:
+    kwargs = {"ram": ram}
+    if zone is not None:
+        kwargs["zone"] = zone
+        kwargs["regions"] = [zone.rsplit("-", 1)[0]]
+    return ResourceConfig.with_tpu(tpu_type, slice_count=slice_count, **kwargs)
 
 
 def build_math500_curriculum(run_id: str, config: RLExperimentConfig, eval_frequency: int) -> CurriculumConfig:
@@ -214,6 +230,17 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_experiment_config(args: argparse.Namespace) -> RLExperimentConfig:
+    train_resources = _tpu_resources(
+        args.train_tpu_type,
+        ram=args.train_ram,
+        zone=args.zone,
+        slice_count=args.num_train_slices,
+    )
+    rollout_resources = _tpu_resources(
+        args.inference_tpu_type,
+        ram=args.inference_ram,
+        zone=args.zone,
+    )
     tags = [
         "rl",
         "iris-rl",
@@ -245,12 +272,8 @@ def build_experiment_config(args: argparse.Namespace) -> RLExperimentConfig:
         n_prompts=args.n_prompts,
         n_generations_per_prompt=16,
         num_rollout_workers=args.num_rollout_workers,
-        train_tpu_type=args.train_tpu_type,
-        inference_tpu_type=args.inference_tpu_type,
-        num_train_slices=args.num_train_slices,
-        train_ram=args.train_ram,
-        inference_ram=args.inference_ram,
-        zone=args.zone,
+        train_resources=train_resources,
+        rollout_resources=rollout_resources,
         inflight_weight_updates=args.inflight_weight_updates,
         max_rollout_step_delay=1,
         weight_transfer_sync_interval_steps=1,
@@ -289,12 +312,12 @@ def main() -> None:
         "Launching executor RL Math500 run %s (train_tpu=%s, inference_tpu=%s, rollout_workers=%d, "
         "train_ram=%s, inference_ram=%s, zone=%s, inflight=%s, executor_prefix=%s)",
         run_name,
-        experiment_config.train_tpu_type,
-        experiment_config.inference_tpu_type,
+        args.train_tpu_type,
+        args.inference_tpu_type,
         experiment_config.num_rollout_workers,
-        experiment_config.train_ram,
-        experiment_config.inference_ram,
-        experiment_config.zone,
+        args.train_ram,
+        args.inference_ram,
+        args.zone,
         experiment_config.inflight_weight_updates,
         executor_config.prefix,
     )

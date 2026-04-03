@@ -10,6 +10,12 @@ from rigging.filesystem import REGION_TO_DATA_BUCKET, marin_region
 logger = logging.getLogger(__name__)
 
 
+def _region_from_zone(zone: str) -> str:
+    if "-" not in zone:
+        raise ValueError(f"Invalid zone {zone!r}; expected a value like 'us-east5-d'.")
+    return zone.rsplit("-", 1)[0].lower()
+
+
 def requested_tpu_variants(train_resources: ResourceConfig, rollout_resources: ResourceConfig) -> list[str]:
     """Return the deduplicated TPU variants requested by an RL run."""
     variants: list[str] = []
@@ -23,16 +29,31 @@ def requested_tpu_variants(train_resources: ResourceConfig, rollout_resources: R
     return variants
 
 
+def _normalized_resource_regions(resource: ResourceConfig) -> list[str] | None:
+    normalized_regions: list[str] = []
+    if resource.regions is not None:
+        for region in resource.regions:
+            lowered = region.lower()
+            if lowered not in normalized_regions:
+                normalized_regions.append(lowered)
+
+    if resource.zone is None:
+        return normalized_regions or None
+
+    zone_region = _region_from_zone(resource.zone)
+    if not normalized_regions:
+        return [zone_region]
+    if zone_region not in normalized_regions:
+        raise ValueError(f"RL resource zone {resource.zone!r} conflicts with requested regions {normalized_regions}.")
+    return [zone_region]
+
+
 def _normalized_regions(resources: tuple[ResourceConfig, ResourceConfig]) -> list[str] | None:
     requested_regions: list[list[str]] = []
     for resource in resources:
-        if resource.regions is None:
+        normalized = _normalized_resource_regions(resource)
+        if normalized is None:
             continue
-        normalized = []
-        for region in resource.regions:
-            lowered = region.lower()
-            if lowered not in normalized:
-                normalized.append(lowered)
         requested_regions.append(normalized)
 
     if not requested_regions:

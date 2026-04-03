@@ -19,7 +19,6 @@ from marin.rl.environments.inference_ctx import (
     vLLMInferenceContext,
     vLLMInferenceContextConfig,
 )
-from marin.rl.environments.inference_ctx.base import InferenceRequestKind
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
 from marin.rl.environments.inference_ctx.vllm import InferenceMode
 from openai.types.chat import ChatCompletionMessage
@@ -458,7 +457,6 @@ def test_vllm_batch_completions_uses_request_generation_count(monkeypatch):
 
     ctx.batch_completions(
         prompts=["hello"],
-        request_kind=InferenceRequestKind.TRAIN,
         temperature=1.0,
         n=4,
         max_tokens=64,
