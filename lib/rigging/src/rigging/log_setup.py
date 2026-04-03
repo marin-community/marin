@@ -179,6 +179,5 @@ def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("botocore.credentials").setLevel(logging.WARNING)
 
     return _global_buffer
