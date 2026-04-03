@@ -375,6 +375,9 @@ class InMemoryGcpService:
         full_output = self._serial_port_output.get((name, zone), "")
         return full_output[start:]
 
+    def logging_read(self, filter_str: str, limit: int = 200) -> list[str]:
+        return []
+
     # ========================================================================
     # LOCAL mode: worker spawning
     # ========================================================================

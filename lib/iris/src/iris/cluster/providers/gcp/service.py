@@ -3,19 +3,15 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import re
-import subprocess
-import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
+from iris.cluster.providers.gcp.api import GCPApi
 from iris.cluster.providers.types import (
     InfraError,
-    QuotaExhaustedError,
     ResourceNotFoundError,
 )
 from iris.cluster.providers.gcp.local import LocalSliceHandle
@@ -226,6 +222,10 @@ class GcpService(Protocol):
     def vm_set_metadata(self, name: str, zone: str, metadata: dict[str, str]) -> None: ...
     def vm_get_serial_port_output(self, name: str, zone: str, start: int = 0) -> str: ...
 
+    def logging_read(self, filter_str: str, limit: int = 200) -> list[str]:
+        """Return matching Cloud Logging textPayload entries (newest first)."""
+        ...
+
     def create_local_slice(
         self,
         slice_id: str,
@@ -245,12 +245,8 @@ class GcpService(Protocol):
 
 
 # ============================================================================
-# CloudGcpService — gcloud CLI implementation
+# CloudGcpService — REST API implementation via GCPApi
 # ============================================================================
-
-
-def _format_labels(labels: dict[str, str]) -> str:
-    return ",".join(f"{k}={v}" for k, v in labels.items())
 
 
 def _build_label_filter(labels: dict[str, str]) -> str:
@@ -258,11 +254,8 @@ def _build_label_filter(labels: dict[str, str]) -> str:
     return " AND ".join(parts)
 
 
-def _classify_gcloud_error(stderr: str) -> InfraError:
-    lower = stderr.lower()
-    if "quota" in lower or "insufficient" in lower or "resource_exhausted" in lower:
-        return QuotaExhaustedError(stderr)
-    return InfraError(stderr)
+def _labels_match(resource_labels: dict[str, str], required: dict[str, str]) -> bool:
+    return all(resource_labels.get(k) == v for k, v in required.items())
 
 
 def _extract_node_name(resource_name: str) -> str:
@@ -360,10 +353,11 @@ def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
 
 
 class CloudGcpService:
-    """GcpService backed by gcloud CLI. Used in CLOUD mode."""
+    """GcpService backed by GCP REST APIs via GCPApi. Used in CLOUD mode."""
 
-    def __init__(self, project_id: str) -> None:
+    def __init__(self, project_id: str, api: GCPApi | None = None) -> None:
         self._project_id = project_id
+        self._api = api if api is not None else GCPApi(project_id)
         self._valid_zones: set[str] = set(KNOWN_GCP_ZONES)
         self._valid_accelerator_types: set[str] = set(KNOWN_TPU_TYPES)
 
@@ -375,6 +369,10 @@ class CloudGcpService:
     def project_id(self) -> str:
         return self._project_id
 
+    @property
+    def api(self) -> GCPApi:
+        return self._api
+
     # ========================================================================
     # TPU operations
     # ========================================================================
@@ -382,144 +380,67 @@ class CloudGcpService:
     def tpu_create(self, request: TpuCreateRequest) -> TpuInfo:
         validate_tpu_create(request, self._valid_zones, self._valid_accelerator_types)
 
-        cmd = [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "create",
-            request.name,
-            f"--zone={request.zone}",
-            f"--project={self._project_id}",
-            f"--accelerator-type={request.accelerator_type}",
-            f"--version={request.runtime_version}",
-            "--format=json",
-        ]
-
+        body: dict = {
+            "acceleratorType": request.accelerator_type,
+            "runtimeVersion": request.runtime_version,
+        }
         if request.labels:
-            cmd.extend(["--labels", _format_labels(request.labels)])
+            body["labels"] = request.labels
+        if request.metadata:
+            body["metadata"] = request.metadata
         if request.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE:
-            cmd.append("--preemptible")
+            body["schedulingConfig"] = {"preemptible": True}
         if request.service_account:
-            cmd.append(f"--service-account={request.service_account}")
-        if request.network:
-            cmd.append(f"--network={request.network}")
-        if request.subnetwork:
-            cmd.append(f"--subnetwork={request.subnetwork}")
-
-        # Large metadata values (e.g. startup-script) are written to temp files
-        # to avoid shell-escaping issues with --metadata inline.
-        metadata_files: dict[str, str] = {}
-        inline_metadata: dict[str, str] = {}
-        for k, v in request.metadata.items():
-            if len(v) > 256:
-                f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
-                f.write(v)
-                f.close()
-                metadata_files[k] = f.name
-            else:
-                inline_metadata[k] = v
-
-        if inline_metadata:
-            metadata_str = ",".join(f"{k}={v}" for k, v in inline_metadata.items())
-            cmd.append(f"--metadata={metadata_str}")
-        if metadata_files:
-            file_str = ",".join(f"{k}={path}" for k, path in metadata_files.items())
-            cmd.append(f"--metadata-from-file={file_str}")
+            body["serviceAccount"] = {"email": request.service_account}
+        if request.network or request.subnetwork:
+            network_config: dict = {}
+            if request.network:
+                network_config["network"] = request.network
+            if request.subnetwork:
+                network_config["subnetwork"] = request.subnetwork
+            body["networkConfig"] = network_config
 
         logger.info("Creating TPU: %s (type=%s, zone=%s)", request.name, request.accelerator_type, request.zone)
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-        finally:
-            for path in metadata_files.values():
-                os.unlink(path)
-        if result.returncode != 0:
-            raise _classify_gcloud_error(result.stderr.strip())
+        self._api.tpu_create(request.name, request.zone, body)
 
-        if result.stdout.strip():
-            tpu_data = json.loads(result.stdout)
-            return _parse_tpu_info(tpu_data, request.zone)
-
+        # REST create returns an operation, not the node — fetch it explicitly.
         info = self.tpu_describe(request.name, request.zone)
         if info is None:
             raise InfraError(f"TPU {request.name} created but could not be described")
         return info
 
     def tpu_delete(self, name: str, zone: str) -> None:
-        cmd = [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "delete",
-            name,
-            f"--zone={zone}",
-            f"--project={self._project_id}",
-            "--quiet",
-            "--async",
-        ]
         logger.info("Deleting TPU (async): %s", name)
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            error = result.stderr.strip()
-            if "not found" not in error.lower():
-                raise _classify_gcloud_error(error)
+        self._api.tpu_delete(name, zone)
 
     def tpu_describe(self, name: str, zone: str) -> TpuInfo | None:
-        cmd = [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "describe",
-            name,
-            f"--zone={zone}",
-            f"--project={self._project_id}",
-            "--format=json",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            error = result.stderr.strip().lower()
-            if "not found" in error or "could not be found" in error:
-                return None
-            logger.warning("Failed to describe TPU %s: %s", name, result.stderr.strip())
+        try:
+            tpu_data = self._api.tpu_get(name, zone)
+        except ResourceNotFoundError:
             return None
-
-        tpu_data = json.loads(result.stdout)
+        except InfraError:
+            logger.warning("Failed to describe TPU %s", name, exc_info=True)
+            return None
         return _parse_tpu_info(tpu_data, zone)
 
     def tpu_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[TpuInfo]:
         results: list[TpuInfo] = []
-
-        # Empty zones = project-wide search using --zone=-
-        zone_list = zones if zones else ["-"]
+        # TPU v2 API requires a real zone; empty zones = scan all known zones.
+        zone_list = zones if zones else list(self._valid_zones)
 
         for zone in zone_list:
-            cmd = [
-                "gcloud",
-                "compute",
-                "tpus",
-                "tpu-vm",
-                "list",
-                f"--zone={zone}",
-                f"--project={self._project_id}",
-                "--format=json",
-            ]
-            if labels:
-                cmd.append(f"--filter={_build_label_filter(labels)}")
-
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.warning("Failed to list TPUs in zone %s: %s", zone, result.stderr.strip())
+            try:
+                items = self._api.tpu_list(zone)
+            except InfraError:
+                logger.warning("Failed to list TPUs in zone %s", zone, exc_info=True)
                 continue
-            if not result.stdout.strip():
-                continue
-
-            for tpu_data in json.loads(result.stdout):
-                # With --zone=-, name is a full resource path; extract zone from it
+            for tpu_data in items:
+                if labels and not _labels_match(tpu_data.get("labels", {}), labels):
+                    continue
+                # Extract zone from resource name if present
                 tpu_zone = zone
                 raw_name = tpu_data.get("name", "")
-                if zone == "-" and "/" in raw_name:
+                if "/" in raw_name:
                     parts = raw_name.split("/")
                     if len(parts) >= 4:
                         tpu_zone = parts[3]
@@ -534,51 +455,29 @@ class CloudGcpService:
     def queued_resource_create(self, request: TpuCreateRequest) -> None:
         validate_tpu_create(request, self._valid_zones, self._valid_accelerator_types)
 
-        cmd = [
-            "gcloud",
-            "alpha",
-            "compute",
-            "tpus",
-            "queued-resources",
-            "create",
-            request.name,
-            f"--zone={request.zone}",
-            f"--project={self._project_id}",
-            f"--accelerator-type={request.accelerator_type}",
-            f"--runtime-version={request.runtime_version}",
-            f"--node-id={request.name}",
-            "--reserved",
-            "--quiet",
-        ]
-
-        if request.labels:
-            cmd.extend(["--labels", _format_labels(request.labels)])
+        node_spec: dict = {
+            "node": {
+                "acceleratorType": request.accelerator_type,
+                "runtimeVersion": request.runtime_version,
+                "labels": request.labels or {},
+                "metadata": request.metadata or {},
+            },
+            "nodeId": request.name,
+        }
         if request.service_account:
-            cmd.append(f"--service-account={request.service_account}")
-        if request.network:
-            cmd.append(f"--network={request.network}")
-        if request.subnetwork:
-            cmd.append(f"--subnetwork={request.subnetwork}")
+            node_spec["node"]["serviceAccount"] = {"email": request.service_account}
+        if request.network or request.subnetwork:
+            network_config: dict = {}
+            if request.network:
+                network_config["network"] = request.network
+            if request.subnetwork:
+                network_config["subnetwork"] = request.subnetwork
+            node_spec["node"]["networkConfig"] = network_config
 
-        # Queued resources don't support --metadata directly; metadata is
-        # applied to the TPU node via --metadata/--metadata-from-file.
-        metadata_files: dict[str, str] = {}
-        inline_metadata: dict[str, str] = {}
-        for k, v in request.metadata.items():
-            if len(v) > 256:
-                f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
-                f.write(v)
-                f.close()
-                metadata_files[k] = f.name
-            else:
-                inline_metadata[k] = v
-
-        if inline_metadata:
-            metadata_str = ",".join(f"{k}={v}" for k, v in inline_metadata.items())
-            cmd.append(f"--metadata={metadata_str}")
-        if metadata_files:
-            file_str = ",".join(f"{k}={path}" for k, path in metadata_files.items())
-            cmd.append(f"--metadata-from-file={file_str}")
+        body = {
+            "tpu": {"nodeSpec": [node_spec]},
+            "guaranteed": {"reserved": True},
+        }
 
         logger.info(
             "Creating queued resource: %s (type=%s, zone=%s)",
@@ -586,89 +485,36 @@ class CloudGcpService:
             request.accelerator_type,
             request.zone,
         )
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-        finally:
-            for path in metadata_files.values():
-                os.unlink(path)
-        if result.returncode != 0:
-            raise _classify_gcloud_error(result.stderr.strip())
+        self._api.queued_resource_create(request.name, request.zone, body)
 
     def queued_resource_describe(self, name: str, zone: str) -> QueuedResourceInfo | None:
-        cmd = [
-            "gcloud",
-            "alpha",
-            "compute",
-            "tpus",
-            "queued-resources",
-            "describe",
-            name,
-            f"--zone={zone}",
-            f"--project={self._project_id}",
-            "--format=json",
-            "--quiet",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            error = result.stderr.strip().lower()
-            if "not found" in error or "could not be found" in error:
-                return None
-            raise _classify_gcloud_error(result.stderr.strip())
-
-        data = json.loads(result.stdout)
+        try:
+            data = self._api.queued_resource_get(name, zone)
+        except ResourceNotFoundError:
+            return None
         state = data.get("state", {}).get("state", "UNKNOWN")
         return QueuedResourceInfo(name=name, state=state, zone=zone)
 
     def queued_resource_delete(self, name: str, zone: str) -> None:
-        cmd = [
-            "gcloud",
-            "alpha",
-            "compute",
-            "tpus",
-            "queued-resources",
-            "delete",
-            name,
-            f"--zone={zone}",
-            f"--project={self._project_id}",
-            "--force",
-            "--quiet",
-        ]
         logger.info("Deleting queued resource (force): %s", name)
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            error = result.stderr.strip()
-            if "not found" not in error.lower():
-                raise _classify_gcloud_error(error)
+        self._api.queued_resource_delete(name, zone)
 
     def queued_resource_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[QueuedResourceInfo]:
-        # Empty zones = project-wide search using --zone=-
-        zone_list = zones if zones else ["-"]
+        zone_list = zones if zones else list(self._valid_zones)
         results: list[QueuedResourceInfo] = []
         for zone in zone_list:
-            cmd = [
-                "gcloud",
-                "alpha",
-                "compute",
-                "tpus",
-                "queued-resources",
-                "list",
-                f"--zone={zone}",
-                f"--project={self._project_id}",
-                "--format=json",
-                "--quiet",
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.warning("Failed to list queued resources in %s: %s", zone, result.stderr.strip())
+            try:
+                items = self._api.queued_resource_list(zone)
+            except InfraError:
+                logger.warning("Failed to list queued resources in %s", zone, exc_info=True)
                 continue
-            data = json.loads(result.stdout or "[]")
-            for item in data:
-                name = item.get("name", "").rsplit("/", 1)[-1]
+            for item in items:
+                qr_name = item.get("name", "").rsplit("/", 1)[-1]
                 state = item.get("state", {}).get("state", "UNKNOWN")
                 item_labels = item.get("tpu", {}).get("nodeSpec", [{}])[0].get("node", {}).get("labels", {})
                 if labels and not all(item_labels.get(k) == v for k, v in labels.items()):
                     continue
-                results.append(QueuedResourceInfo(name=name, state=state, zone=zone, labels=item_labels))
+                results.append(QueuedResourceInfo(name=qr_name, state=state, zone=zone, labels=item_labels))
         return results
 
     # ========================================================================
@@ -678,62 +524,43 @@ class CloudGcpService:
     def vm_create(self, request: VmCreateRequest) -> VmInfo:
         validate_vm_create(request, self._valid_zones)
 
-        cmd = [
-            "gcloud",
-            "compute",
-            "instances",
-            "create",
-            request.name,
-            f"--project={self._project_id}",
-            f"--zone={request.zone}",
-            f"--machine-type={request.machine_type}",
-            f"--boot-disk-size={request.disk_size_gb}GB",
-            f"--boot-disk-type={request.boot_disk_type}",
-            f"--image-family={request.image_family}",
-            f"--image-project={request.image_project}",
-            "--scopes=cloud-platform",
-            "--format=json",
-        ]
-
-        if request.labels:
-            cmd.append(f"--labels={_format_labels(request.labels)}")
-
-        # Large metadata values (e.g. startup-script) are written to temp files.
-        metadata_files: dict[str, str] = {}
         all_metadata = dict(request.metadata)
         if request.startup_script:
             all_metadata["startup-script"] = request.startup_script
 
-        inline_metadata: dict[str, str] = {}
-        for k, v in all_metadata.items():
-            if len(v) > 256:
-                f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
-                f.write(v)
-                f.close()
-                metadata_files[k] = f.name
-            else:
-                inline_metadata[k] = v
-
-        if inline_metadata:
-            metadata_str = ",".join(f"{k}={v}" for k, v in inline_metadata.items())
-            cmd.append(f"--metadata={metadata_str}")
-        if metadata_files:
-            file_str = ",".join(f"{k}={path}" for k, path in metadata_files.items())
-            cmd.append(f"--metadata-from-file={file_str}")
-
-        if request.service_account:
-            cmd.append(f"--service-account={request.service_account}")
+        body: dict = {
+            "name": request.name,
+            "machineType": f"zones/{request.zone}/machineTypes/{request.machine_type}",
+            "disks": [
+                {
+                    "boot": True,
+                    "autoDelete": True,
+                    "initializeParams": {
+                        "diskSizeGb": str(request.disk_size_gb),
+                        "diskType": f"zones/{request.zone}/diskTypes/{request.boot_disk_type}",
+                        "sourceImage": f"projects/{request.image_project}/global/images/family/{request.image_family}",
+                    },
+                }
+            ],
+            "networkInterfaces": [{"accessConfigs": [{"type": "ONE_TO_ONE_NAT"}]}],
+            "serviceAccounts": [
+                {
+                    "email": request.service_account or "default",
+                    "scopes": ["https://www.googleapis.com/auth/cloud-platform"],
+                }
+            ],
+        }
+        if request.labels:
+            body["labels"] = request.labels
+        if all_metadata:
+            body["metadata"] = {"items": [{"key": k, "value": v} for k, v in all_metadata.items()]}
 
         logger.info("Creating VM: %s (zone=%s, type=%s)", request.name, request.zone, request.machine_type)
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-        finally:
-            for path in metadata_files.values():
-                os.unlink(path)
-        if result.returncode != 0:
-            error_msg = result.stderr.strip()
-            if "already exists" not in error_msg.lower():
-                raise _classify_gcloud_error(error_msg)
+            self._api.instance_insert(request.zone, body)
+        except InfraError as e:
+            if "already exists" not in str(e).lower():
+                raise
 
         info = self.vm_describe(request.name, request.zone)
         if info is None:
@@ -741,161 +568,89 @@ class CloudGcpService:
         return info
 
     def vm_delete(self, name: str, zone: str) -> None:
-        cmd = [
-            "gcloud",
-            "compute",
-            "instances",
-            "delete",
-            name,
-            f"--project={self._project_id}",
-            f"--zone={zone}",
-            "--quiet",
-        ]
         logger.info("Deleting VM: %s", name)
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            error = result.stderr.strip()
-            if "not found" not in error.lower():
-                raise _classify_gcloud_error(error)
+        self._api.instance_delete(name, zone)
 
     def vm_reset(self, name: str, zone: str) -> None:
-        cmd = [
-            "gcloud",
-            "compute",
-            "instances",
-            "reset",
-            name,
-            f"--project={self._project_id}",
-            f"--zone={zone}",
-            "--quiet",
-        ]
         logger.info("Resetting VM: %s", name)
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise _classify_gcloud_error(result.stderr.strip())
+        self._api.instance_reset(name, zone)
 
     def vm_describe(self, name: str, zone: str) -> VmInfo | None:
-        cmd = [
-            "gcloud",
-            "compute",
-            "instances",
-            "describe",
-            name,
-            f"--project={self._project_id}",
-            f"--zone={zone}",
-            "--format=json",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            error = result.stderr.strip().lower()
-            if "not found" in error or "could not be found" in error:
-                return None
-            logger.warning("Failed to describe VM %s: %s", name, result.stderr.strip())
+        try:
+            data = self._api.instance_get(name, zone)
+        except ResourceNotFoundError:
             return None
-
-        data = json.loads(result.stdout)
+        except InfraError:
+            logger.warning("Failed to describe VM %s", name, exc_info=True)
+            return None
         return _parse_vm_info(data, fallback_zone=zone)
 
     def vm_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[VmInfo]:
         results: list[VmInfo] = []
+        filter_str = _build_label_filter(labels) if labels else ""
 
         if not zones:
-            # Project-wide search (no --zones flag)
-            cmd = [
-                "gcloud",
-                "compute",
-                "instances",
-                "list",
-                f"--project={self._project_id}",
-                "--format=json",
-            ]
-            if labels:
-                cmd.append(f"--filter={_build_label_filter(labels)}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.warning("Failed to list instances: %s", result.stderr.strip())
+            try:
+                items = self._api.instance_list(zone=None, filter_str=filter_str)
+            except InfraError:
+                logger.warning("Failed to list instances", exc_info=True)
                 return []
-            if not result.stdout.strip():
-                return []
-            for vm_data in json.loads(result.stdout):
+            for vm_data in items:
                 results.append(_parse_vm_info(vm_data))
             return results
 
         for zone in zones:
-            cmd = [
-                "gcloud",
-                "compute",
-                "instances",
-                "list",
-                f"--project={self._project_id}",
-                f"--zones={zone}",
-                "--format=json",
-            ]
-            if labels:
-                cmd.append(f"--filter={_build_label_filter(labels)}")
-
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.warning("Failed to list instances in zone %s: %s", zone, result.stderr.strip())
+            try:
+                items = self._api.instance_list(zone=zone, filter_str=filter_str)
+            except InfraError:
+                logger.warning("Failed to list instances in zone %s", zone, exc_info=True)
                 continue
-            if not result.stdout.strip():
-                continue
-
-            for vm_data in json.loads(result.stdout):
+            for vm_data in items:
                 results.append(_parse_vm_info(vm_data, fallback_zone=zone))
 
         return results
 
     def vm_update_labels(self, name: str, zone: str, labels: dict[str, str]) -> None:
         validate_labels(labels)
-        cmd = [
-            "gcloud",
-            "compute",
-            "instances",
-            "update",
-            name,
-            f"--project={self._project_id}",
-            f"--zone={zone}",
-            f"--update-labels={_format_labels(labels)}",
-        ]
         logger.info("Updating labels on VM %s", name)
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise _classify_gcloud_error(result.stderr.strip())
+        # Read-modify-write: GET the current labelFingerprint, merge, then POST.
+        data = self._api.instance_get(name, zone)
+        current_labels = data.get("labels", {})
+        current_labels.update(labels)
+        fingerprint = data.get("labelFingerprint", "")
+        self._api.instance_set_labels(name, zone, current_labels, fingerprint)
 
     def vm_set_metadata(self, name: str, zone: str, metadata: dict[str, str]) -> None:
-        metadata_str = ",".join(f"{k}={v}" for k, v in metadata.items())
-        cmd = [
-            "gcloud",
-            "compute",
-            "instances",
-            "add-metadata",
-            name,
-            f"--project={self._project_id}",
-            f"--zone={zone}",
-            f"--metadata={metadata_str}",
-        ]
         logger.info("Setting metadata on VM %s", name)
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise _classify_gcloud_error(result.stderr.strip())
+        # Read-modify-write: GET current metadata with fingerprint, merge items, POST.
+        data = self._api.instance_get(name, zone)
+        raw_metadata = data.get("metadata", {})
+        fingerprint = raw_metadata.get("fingerprint", "")
+        existing_items: dict[str, str] = {}
+        for item in raw_metadata.get("items", []):
+            existing_items[item["key"]] = item.get("value", "")
+        existing_items.update(metadata)
+        body = {
+            "fingerprint": fingerprint,
+            "items": [{"key": k, "value": v} for k, v in existing_items.items()],
+        }
+        self._api.instance_set_metadata(name, zone, body)
 
     def vm_get_serial_port_output(self, name: str, zone: str, start: int = 0) -> str:
-        cmd = [
-            "gcloud",
-            "compute",
-            "instances",
-            "get-serial-port-output",
-            name,
-            f"--project={self._project_id}",
-            f"--zone={zone}",
-            f"--start={start}",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.warning("Failed to get serial port output for %s: %s", name, result.stderr.strip())
+        try:
+            data = self._api.instance_get_serial_port_output(name, zone, start=start)
+        except InfraError:
+            logger.warning("Failed to get serial port output for %s", name, exc_info=True)
             return ""
-        return result.stdout
+        return data.get("contents", "")
+
+    def logging_read(self, filter_str: str, limit: int = 200) -> list[str]:
+        try:
+            entries = self._api.logging_list_entries(filter_str, limit=limit)
+        except InfraError:
+            logger.warning("Cloud Logging query failed", exc_info=True)
+            return []
+        return [e.get("textPayload", "") for e in entries if e.get("textPayload")]
 
     def create_local_slice(
         self,
@@ -909,4 +664,4 @@ class CloudGcpService:
         raise RuntimeError("get_local_slices is not supported in CLOUD mode")
 
     def shutdown(self) -> None:
-        pass
+        self._api.close()

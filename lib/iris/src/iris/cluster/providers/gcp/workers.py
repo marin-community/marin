@@ -11,7 +11,6 @@ and TPU slices via GcpService.
 from __future__ import annotations
 
 import logging
-import subprocess
 import threading
 from collections.abc import Callable
 import time
@@ -762,7 +761,7 @@ def _run_tpu_bootstrap(
             break
         time.sleep(poll_interval)
     else:
-        _fetch_bootstrap_logs(project_id, handle)
+        _fetch_bootstrap_logs(gcp_service, handle)
         raise InfraError(
             f"TPU slice {handle.slice_id} bootstrap timed out: "
             f"{len(healthy_workers)}/{len(worker_addrs)} workers healthy"
@@ -773,38 +772,19 @@ def _run_tpu_bootstrap(
         handle._bootstrap_state = CloudSliceState.READY
 
 
-def _fetch_bootstrap_logs(project_id: str, handle: GcpSliceHandle) -> None:
+def _fetch_bootstrap_logs(gcp_service: GcpService, handle: GcpSliceHandle) -> None:
     """Fetch [iris-init] log entries from Cloud Logging for diagnostics."""
     log_filter = (
         f'resource.type="gce_instance" '
         f'textPayload:"[iris-init]" '
-        f'labels."compute.googleapis.com/resource_name":"{handle._slice_id}"'
+        f'labels."compute.googleapis.com/resource_name":"{handle._slice_id}" '
+        f'timestamp>="-PT30M"'
     )
-    cmd = [
-        "gcloud",
-        "logging",
-        "read",
-        log_filter,
-        f"--project={project_id}",
-        "--freshness=30m",
-        "--limit=200",
-        "--format=value(textPayload)",
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    except subprocess.TimeoutExpired:
-        logger.warning("Cloud Logging query timed out for %s", handle.slice_id)
-        return
-
-    if result.returncode == 0 and result.stdout.strip():
-        logger.error("Bootstrap logs for %s:\n%s", handle.slice_id, result.stdout)
+    texts = gcp_service.logging_read(log_filter, limit=200)
+    if texts:
+        logger.error("Bootstrap logs for %s:\n%s", handle.slice_id, "\n".join(texts))
     else:
-        logger.warning(
-            "Could not fetch Cloud Logging for %s (rc=%d): %s",
-            handle.slice_id,
-            result.returncode,
-            result.stderr.strip(),
-        )
+        logger.warning("No Cloud Logging entries found for %s", handle.slice_id)
 
 
 def _probe_worker_health(address: str, port: int) -> bool:
