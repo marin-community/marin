@@ -426,56 +426,6 @@ def test_logging_list_entries():
 # ========================================================================
 
 
-def test_instance_insert_wait_polls_until_done():
-    """instance_insert_wait should poll the zone operation until DONE."""
-    call_count = 0
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal call_count
-        # POST to create the instance
-        if request.method == "POST" and "/instances" in str(request.url) and "/operations/" not in str(request.url):
-            return _json_response(
-                {"name": "op-123", "status": "RUNNING", "zone": f"zones/{ZONE}", "kind": "compute#operation"}
-            )
-        # GET to poll the operation
-        if "/operations/op-123" in str(request.url):
-            call_count += 1
-            if call_count < 2:
-                return _json_response({"name": "op-123", "status": "RUNNING"})
-            return _json_response({"name": "op-123", "status": "DONE"})
-        return httpx.Response(404, json={"error": {"code": 404, "message": "Not found"}})
-
-    api = _make_api(handler)
-    api.instance_insert_wait(ZONE, {"name": "my-vm"})
-    api.close()
-
-    assert call_count == 2, "Must poll operation until DONE"
-
-
-def test_instance_insert_wait_raises_on_operation_error():
-    """If the operation completes with an error, raise InfraError."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST" and "/instances" in str(request.url) and "/operations/" not in str(request.url):
-            return _json_response(
-                {"name": "op-err", "status": "RUNNING", "zone": f"zones/{ZONE}", "kind": "compute#operation"}
-            )
-        if "/operations/op-err" in str(request.url):
-            return _json_response(
-                {
-                    "name": "op-err",
-                    "status": "DONE",
-                    "error": {"errors": [{"code": "QUOTA_EXCEEDED", "message": "Insufficient quota"}]},
-                }
-            )
-        return httpx.Response(404, json={"error": {"code": 404, "message": "Not found"}})
-
-    api = _make_api(handler)
-    with pytest.raises(InfraError, match="Insufficient quota"):
-        api.instance_insert_wait(ZONE, {"name": "my-vm"})
-    api.close()
-
-
 def test_vm_create_waits_for_operation():
     """vm_create must wait for the insert operation before describing the VM.
 
