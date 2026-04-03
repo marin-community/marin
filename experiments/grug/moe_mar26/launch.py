@@ -53,6 +53,7 @@ class GrugMoeLaunchConfig:
     optimizer: OptimizerConfig
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    load_checkpoint_path: str | None = None
 
 
 def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
@@ -74,6 +75,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mesh=MeshConfig(axes={"expert": 4}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
+        load_checkpoint_path=getattr(config, "load_checkpoint_path", None),
         checkpointer=CheckpointerConfig(
             base_path=os.path.join(config.output_path, "checkpoints"),
             append_run_id_to_base_path=False,
@@ -268,6 +270,7 @@ def create_1e22_run() -> list[ExecutorStep]:
                 eval_ema=False,
             )
         ),
+        load_checkpoint_path="gs://marin-us-central2/grug/test-21c1bc/checkpoints",
     )
 
     return [

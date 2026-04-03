@@ -128,6 +128,7 @@ def build_python_path(submodules_dir: str = "submodules") -> list[str]:
         "lib/iris/src",
         "lib/levanter/src",
         "lib/marin/src",
+        "lib/rigging/src",
         "lib/zephyr/src",
     ]
 
