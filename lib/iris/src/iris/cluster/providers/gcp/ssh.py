@@ -98,14 +98,8 @@ def ssh_key_file(
 
 def ssh_impersonate_service_account(
     ssh_config: config_pb2.SshConfig | None,
-    service_account: str | None = None,
 ) -> str | None:
+    """Return the explicit impersonation SA from ssh_config, or None."""
     if ssh_config and ssh_config.impersonate_service_account:
         return ssh_config.impersonate_service_account
-    # In metadata auth mode, SSH keys are managed via project/instance metadata
-    # and don't require service account impersonation.
-    if ssh_config and ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_METADATA:
-        return None
-    if service_account:
-        return service_account
     return None

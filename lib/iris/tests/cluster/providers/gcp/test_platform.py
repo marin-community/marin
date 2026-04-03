@@ -475,7 +475,7 @@ def test_gcp_vm_slice_os_login_uses_service_account_impersonation():
 
     handle = platform.create_slice(cfg)
     status = handle.describe()
-    assert status.workers[0]._remote_exec.impersonate_service_account == cfg.gcp.service_account
+    assert status.workers[0]._remote_exec.impersonate_service_account is None
 
 
 def test_gcp_vm_slice_os_login_prefers_explicit_ssh_impersonation_account():
@@ -857,7 +857,7 @@ def test_gcp_tpu_slice_os_login_resolves_user_from_service_account():
         handle = platform.create_slice(cfg)
         status = handle.describe()
 
-    resolve_user.assert_called_with(impersonate_service_account=cfg.gcp.service_account)
+    resolve_user.assert_called_with(impersonate_service_account=None)
     assert status.workers[0]._remote_exec.user == "svc-user"
 
 

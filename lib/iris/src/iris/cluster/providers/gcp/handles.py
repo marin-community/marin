@@ -65,15 +65,12 @@ _GCE_VM_SLICE_SSH_USER = "iris"
 
 def _os_login_user(
     ssh_config: config_pb2.SshConfig | None,
-    service_account: str | None = None,
 ) -> str:
     if ssh_config and ssh_config.os_login_user:
         return ssh_config.os_login_user
     if ssh_config and ssh_config.user and ssh_config.user != "root":
         return ssh_config.user
-    return resolve_current_os_login_user(
-        impersonate_service_account=ssh_impersonate_service_account(ssh_config, service_account)
-    )
+    return resolve_current_os_login_user(impersonate_service_account=ssh_impersonate_service_account(ssh_config))
 
 
 def _vm_slice_metadata_user(ssh_config: config_pb2.SshConfig | None) -> str:
@@ -319,10 +316,10 @@ class GcpSliceHandle:
                 direct_host = external_ip or internal_ip
                 remote_exec = DirectSshRemoteExec(
                     host=direct_host,
-                    user=_os_login_user(self._ssh_config, self._service_account),
+                    user=_os_login_user(self._ssh_config),
                     key_file=ssh_key_file(
                         self._ssh_config,
-                        ssh_impersonate_service_account(self._ssh_config, self._service_account),
+                        ssh_impersonate_service_account(self._ssh_config),
                     ),
                     connect_timeout=(
                         duration_from_proto(self._ssh_config.connect_timeout)
@@ -339,12 +336,9 @@ class GcpSliceHandle:
                     ssh_user=_vm_slice_metadata_user(self._ssh_config),
                     ssh_key_file=ssh_key_file(
                         self._ssh_config,
-                        ssh_impersonate_service_account(self._ssh_config, self._service_account),
+                        ssh_impersonate_service_account(self._ssh_config),
                     ),
-                    impersonate_service_account=ssh_impersonate_service_account(
-                        self._ssh_config,
-                        self._service_account,
-                    ),
+                    impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
                     _address=internal_ip,
                 )
             workers.append(
@@ -449,12 +443,9 @@ class GcpVmSliceHandle:
             ssh_user=None if uses_os_login(self._ssh_config) else _vm_slice_metadata_user(self._ssh_config),
             ssh_key_file=ssh_key_file(
                 self._ssh_config,
-                ssh_impersonate_service_account(self._ssh_config, self._service_account),
+                ssh_impersonate_service_account(self._ssh_config),
             ),
-            impersonate_service_account=ssh_impersonate_service_account(
-                self._ssh_config,
-                self._service_account,
-            ),
+            impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
         )
         worker = GcpStandaloneWorkerHandle(
             _vm_id=f"{self._slice_id}-worker-0",
