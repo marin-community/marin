@@ -10,19 +10,56 @@ from pathlib import Path
 import pytest
 from transformers import AutoTokenizer
 
+from levanter.tokenizers import HfMarinTokenizer
+
 pytest_plugins = ["tests.test_utils"]
 
 
-@pytest.fixture(scope="session")
-def local_gpt2_tokenizer(tmp_path_factory):
-    """Load a GPT2 tokenizer from a local JSON file to avoid network downloads."""
-
+def _gpt2_tokenizer_dir(tmp_path_factory):
+    """Create a local directory with the GPT-2 tokenizer files."""
     config_src = Path(__file__).parent / "gpt2_tokenizer_config.json"
     tmpdir = tmp_path_factory.mktemp("gpt2_tok")
     shutil.copy(config_src, tmpdir / "tokenizer.json")
     shutil.copy(config_src, tmpdir / "tokenizer_config.json")
     (tmpdir / "config.json").write_text(json.dumps({"model_type": "gpt2", "vocab_size": 5027}))
+    return tmpdir
+
+
+@pytest.fixture(scope="session")
+def local_gpt2_tokenizer(tmp_path_factory):
+    """Load a GPT2 tokenizer from a local JSON file to avoid network downloads."""
+    tmpdir = _gpt2_tokenizer_dir(tmp_path_factory)
     return AutoTokenizer.from_pretrained(str(tmpdir))
+
+
+@pytest.fixture(scope="session")
+def local_gpt2_marin_tokenizer(tmp_path_factory) -> HfMarinTokenizer:
+    """Load a GPT2 MarinTokenizer from a local JSON file to avoid network downloads."""
+    from tokenizers import Tokenizer as HfBaseTokenizer
+
+    config_src = Path(__file__).parent / "gpt2_tokenizer_config.json"
+    tmpdir = tmp_path_factory.mktemp("gpt2_marin_tok")
+    shutil.copy(config_src, tmpdir / "tokenizer.json")
+    shutil.copy(config_src, tmpdir / "tokenizer_config.json")
+
+    tok = HfBaseTokenizer.from_file(str(tmpdir / "tokenizer.json"))
+
+    # GPT-2 uses <|endoftext|> as both BOS and EOS
+    vocab = tok.get_vocab()
+    eos_token = "<|endoftext|>"
+    eos_id = vocab.get(eos_token)
+
+    return HfMarinTokenizer(
+        _tokenizer=tok,
+        _name_or_path=str(tmpdir),
+        _bos_id=None,
+        _eos_id=eos_id,
+        _pad_id=None,
+        _bos_token=None,
+        _eos_token=eos_token,
+        _chat_template=None,
+        _vocab_size=tok.get_vocab_size(),
+    )
 
 
 @pytest.fixture(autouse=True)

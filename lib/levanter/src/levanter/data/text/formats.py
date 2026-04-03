@@ -10,8 +10,9 @@ import numpy as np
 from draccus import ChoiceRegistry
 
 from levanter.data._preprocessor import BatchProcessor
-from ._batch_tokenizer import BatchTokenizer
+from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.utils.hf_utils import HfTokenizer, num_cpus_used_by_tokenizer
+from ._batch_tokenizer import BatchTokenizer
 
 
 class LmDatasetFormatBase(ChoiceRegistry):
@@ -39,7 +40,8 @@ class TextLmDatasetFormat(LmDatasetFormatBase):
     def build_preprocessor(
         self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
-        return BatchTokenizer(tokenizer, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=self.text_key)
+        marin_tok = _ensure_marin_tokenizer(tokenizer)
+        return BatchTokenizer(marin_tok, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=self.text_key)
 
 
 @LmDatasetFormatBase.register_subclass("chat")
@@ -283,3 +285,15 @@ def preprocessor_for_format(
     format: LmDatasetFormatBase, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
 ) -> BatchProcessor[dict, dict]:
     return format.build_preprocessor(tokenizer, enforce_eos=enforce_eos, enforce_bos=enforce_bos)
+
+
+def _ensure_marin_tokenizer(tokenizer: HfTokenizer) -> MarinTokenizer:
+    """Convert an HF tokenizer to MarinTokenizer if needed.
+
+    During the migration from HfTokenizer to MarinTokenizer, callers may still
+    pass HF transformers tokenizers. This loads the equivalent MarinTokenizer
+    using the tokenizer's name_or_path.
+    """
+    if isinstance(tokenizer, MarinTokenizer):
+        return tokenizer
+    return load_marin_tokenizer(tokenizer.name_or_path)

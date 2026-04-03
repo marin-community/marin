@@ -35,7 +35,6 @@ from levanter.data.text import (
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.schedule import BatchSchedule
-from tests.test_utils import skip_if_hf_model_not_accessible
 
 
 def test_dont_blow_up_without_validation_set():
@@ -113,15 +112,12 @@ def test_named_unnamed_lm_example_roundtrip():
     )
 
 
-def test_merge_split_encodings(local_gpt2_tokenizer):
-    tokenizer = local_gpt2_tokenizer
-    # make this very short for testing
+def test_merge_split_encodings(local_gpt2_marin_tokenizer):
+    tokenizer = local_gpt2_marin_tokenizer
 
     lorem = """Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."""
 
-    short_batch_tokenizer = BatchTokenizer(tokenizer, _workaround_len=len(lorem) // 3)
-    # force this
-    short_batch_tokenizer._needs_long_sequence_workaround = True
+    short_batch_tokenizer = BatchTokenizer(tokenizer, _workaround_len=len(lorem) // 3, long_string_workaround=True)
 
     batch_tokenizer = BatchTokenizer(tokenizer, _workaround_len=50000)
     batch = [{"text": lorem}]
@@ -130,13 +126,6 @@ def test_merge_split_encodings(local_gpt2_tokenizer):
     reg_out = batch_tokenizer(batch)
 
     assert short_out == reg_out
-
-
-@skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
-def test_llama_tokenizer_needs_long_sequence_workaround():
-    tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
-    batch_tokenizer = BatchTokenizer(tokenizer)
-    assert batch_tokenizer._needs_long_sequence_workaround
 
 
 def test_prebuilt_cache_with_loss_weights(tmp_path):
