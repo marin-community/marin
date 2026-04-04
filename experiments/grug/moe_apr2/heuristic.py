@@ -44,9 +44,11 @@ class CompletedAdamHHeuristic:
     C = 3 * flops_per_token * tokens  (flops_per_token excludes lm_head)
     """
 
-    # --- LR scaling (from empirical fit) ---
-    adam_lr_coeff: float = 2943.27
-    adam_lr_exponent: float = -0.334
+    # --- LR scaling (from empirical fit, 186 runs, R²=0.995) ---
+    # adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * bs^0.5
+    lr_coeff: float = 1.63
+    lr_tokens_exp: float = -0.2813
+    lr_dim_exp: float = -0.3678
     adamh_ratio: float = 13 / 3
 
     # --- Base hyperparameters ---
@@ -83,15 +85,19 @@ class CompletedAdamHHeuristic:
         """Compute r/r0 = (B * T0) / (B0 * T)."""
         return (batch_size * self.reference_tokens) / (self.reference_batch_size * tokens)
 
-    def _compute_adam_lr(self, batch_size: int, tokens: float, flops_per_token: float) -> float:
-        """adam_lr = adam_lr_coeff * C^(exponent) * sqrt(B/32)"""
-        C = 3 * flops_per_token * tokens
-        adam_lr = self.adam_lr_coeff * (C**self.adam_lr_exponent) * math.sqrt(batch_size / 32)
+    def _compute_adam_lr(self, batch_size: int, tokens: float, hidden_dim: int) -> float:
+        """adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * bs^0.5"""
+        adam_lr = (
+            self.lr_coeff
+            * (tokens ** self.lr_tokens_exp)
+            * (hidden_dim ** self.lr_dim_exp)
+            * math.sqrt(batch_size)
+        )
         return min(self.max_learning_rate, adam_lr)
 
-    def _compute_learning_rate(self, batch_size: int, tokens: float, flops_per_token: float) -> float:
+    def _compute_learning_rate(self, batch_size: int, tokens: float, hidden_dim: int) -> float:
         """adamh_lr = (13/3) * adam_lr"""
-        adam_lr = self._compute_adam_lr(batch_size, tokens, flops_per_token)
+        adam_lr = self._compute_adam_lr(batch_size, tokens, hidden_dim)
         return min(self.max_learning_rate, self.adamh_ratio * adam_lr)
 
     def _compute_epsilon(self, batch_size: int, tokens: float) -> float:
@@ -104,9 +110,9 @@ class CompletedAdamHHeuristic:
         exponent = batch_size / self.reference_batch_size
         return max(self.min_beta2, min(self.max_beta2, self.beta2_base**exponent))
 
-    def build_optimizer_config(self, batch_size: int, tokens: float, flops_per_token: float) -> GrugMoeAdamHConfig:
-        lr = self._compute_learning_rate(batch_size, tokens, flops_per_token)
-        adam_lr = self._compute_adam_lr(batch_size, tokens, flops_per_token)
+    def build_optimizer_config(self, batch_size: int, tokens: float, hidden_dim: int) -> GrugMoeAdamHConfig:
+        lr = self._compute_learning_rate(batch_size, tokens, hidden_dim)
+        adam_lr = self._compute_adam_lr(batch_size, tokens, hidden_dim)
         epsilon = self._compute_epsilon(batch_size, tokens)
         beta2 = self._compute_beta2(batch_size)
         return GrugMoeAdamHConfig(

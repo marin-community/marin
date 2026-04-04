@@ -150,12 +150,11 @@ def _compute_tokens_and_batch(
 # ============================================================
 
 BUDGETS: tuple[float, ...] = (1e18, 3e18, 1e19, 3e19, 1e20)
-HIDDEN_DIMS: tuple[int, ...] = (512, 640, 768, 1024, 1280, 1536, 1792, 2048)
+HIDDEN_DIMS: tuple[int, ...] = (512, 640, 768, 896, 1024, 1280, 1536, 1792, 2048)
 
 # Budget -> hidden dims to exclude
 EXCLUDED_DIMS: dict[float, set[int]] = {
-    1e18: {1792, 2048},
-    3e18: {2048},
+    1e18: {2048},
     3e19: {512},
     1e20: {512},
 }
@@ -175,24 +174,25 @@ def create_moe_isoflop_steps() -> list[ExecutorStep]:
             fpt = _compute_flops_per_token(model_cfg)
             tokens, batch_size, train_steps = _compute_tokens_and_batch(budget, fpt)
 
-            optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, fpt)
+            optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, hidden_dim)
 
-            run_id = f"isoflop-moe-v13-{budget:.0e}-d{hidden_dim}"
+            run_id = f"isoflop-moe-v14-{budget:.0e}-d{hidden_dim}"
 
             config = GrugMoeLaunchConfig(
                 model=versioned(model_cfg),
                 data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
                 output_path=this_output_path(),
                 run_id=run_id,
-                resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+                resources=versioned(ResourceConfig.with_tpu("v4-32")),
                 steps=versioned(train_steps),
                 batch_size=versioned(batch_size),
                 seed=versioned(0),
                 mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
                 tracker=WandbConfig(
                     project="dial_moe",
-                    tags=["grug", "moe-core", "isoflop", "v13", f"budget={budget:.0e}", f"d={hidden_dim}"],
-                    group="isoflop-moe-v13",
+                    tags=["grug", "moe-core", "isoflop", "v14", "gqa4",
+                          f"budget={budget:.0e}", f"d={hidden_dim}"],
+                    group="isoflop-moe-v14",
                     name=run_id,
                 ),
                 optimizer=versioned(optimizer),
@@ -258,7 +258,7 @@ def create_lr_grid_sweep() -> list[ExecutorStep]:
 
             for adam_lr in adam_lrs:
                 adamh_lr = round(adam_lr * ratio, 5)
-                optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, fpt)
+                optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, hidden_dim)
                 optimizer = dataclasses.replace(optimizer, learning_rate=adamh_lr, adam_lr=adam_lr)
 
                 run_id = f"isoflop-moe-v11-d{hidden_dim}-t{tok_ratio}x-adam{adam_lr}"
@@ -376,7 +376,7 @@ def create_v12_rerun_steps() -> list[ExecutorStep]:
         fpt = _compute_flops_per_token(model_cfg)
         tokens = tok_ratio * {512: 154e6, 768: 262e6, 1024: 420e6, 1280: 441e6}[dim]
         adamh_lr = round(adam_lr * ratio, 5)
-        optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, fpt)
+        optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, dim)
         optimizer = dataclasses.replace(optimizer, learning_rate=adamh_lr, adam_lr=adam_lr)
 
         run_id = f"isoflop-moe-v12-retry-d{dim}-t{tok_ratio}x-adam{adam_lr}"
@@ -470,7 +470,7 @@ def _create_v12_steps_from_list(run_list):
         fpt = _compute_flops_per_token(model_cfg)
         tokens = tok_ratio * {512: 154e6, 768: 262e6, 1024: 420e6, 1280: 441e6}[dim]
         adamh_lr = round(adam_lr * ratio, 5)
-        optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, fpt)
+        optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, dim)
         optimizer = dataclasses.replace(optimizer, learning_rate=adamh_lr, adam_lr=adam_lr)
 
         run_id = f"isoflop-moe-v12-retry-d{dim}-t{tok_ratio}x-adam{adam_lr}"
@@ -562,7 +562,7 @@ def _create_v13_retry_step(dim, tok_ratio, adam_lr, batch_size, train_steps):
     fpt = _compute_flops_per_token(model_cfg)
     tokens = tok_ratio * {512: 154e6, 768: 262e6, 1024: 420e6, 1280: 441e6}[dim]
     adamh_lr = round(adam_lr * ratio, 5)
-    optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, fpt)
+    optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, dim)
     optimizer = dataclasses.replace(optimizer, learning_rate=adamh_lr, adam_lr=adam_lr)
 
     run_id = f"isoflop-moe-v13-retry-d{dim}-t{tok_ratio}x-adam{adam_lr}"
@@ -633,7 +633,7 @@ def create_gqa_lr_sweep() -> list[ExecutorStep]:
 
     for adam_lr in GQA_LR_SWEEP_LRS:
         adamh_lr = round(adam_lr * ratio, 5)
-        optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, fpt)
+        optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, dim)
         optimizer = dataclasses.replace(optimizer, learning_rate=adamh_lr, adam_lr=adam_lr)
 
         run_id = f"gqa-lr-d512-t4.5x-kv1-adam{adam_lr}"
@@ -685,6 +685,6 @@ gqa_lr_sweep_steps = create_gqa_lr_sweep()
 
 if __name__ == "__main__":
     executor_main(
-        steps=gqa_lr_sweep_steps,
-        description="GQA LR sweep: d512 t4.5x, 4:1 GQA, 10 LRs",
+        steps=moe_isoflop_steps,
+        description="v14: isoflop sweep 1e18-1e20, 8 dims, GQA 4:1, fitted LR",
     )
