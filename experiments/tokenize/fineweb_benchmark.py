@@ -21,16 +21,20 @@ import tempfile
 
 from levanter.data.text import TextLmDatasetFormat
 from levanter.tokenizers import TokenizerBackend
+from rigging.filesystem import marin_prefix
 from rigging.log_setup import configure_logging
 
-from marin.datakit.download.huggingface import download_hf_step
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.step_runner import StepRunner
+from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
 logger = logging.getLogger(__name__)
 
 TOKENIZER = "meta-llama/Llama-3.1-8B"
 TINY = os.environ.get("BENCHMARK_TINY", "") == "1"
+
+# Pre-downloaded fineweb-edu 10BT sample.
+FINEWEB_10BT = "gs://marin-us-central1/raw/fineweb-edu-87f0914/sample/10BT"
 
 
 def _make_tiny_dataset() -> str:
@@ -43,46 +47,39 @@ def _make_tiny_dataset() -> str:
     return path
 
 
-def _tokenize_step(
+def _tokenize_spec(
     name: str,
-    train_paths: list[str],
+    train_path: str,
     backend: TokenizerBackend,
     sample_count: int | None = None,
-) -> ExecutorStep:
-    return ExecutorStep(
+) -> StepSpec:
+    prefix = f"{marin_prefix()}/tmp/tokenizer-benchmark"
+    return StepSpec(
         name=name,
-        fn=tokenize,
-        config=TokenizeConfig(
-            train_paths=train_paths,
-            validation_paths=versioned([]),
-            cache_path=this_output_path(),
-            tokenizer=versioned(TOKENIZER),
-            tokenizer_backend=backend,
-            format=TextLmDatasetFormat(),
-            sample_count=sample_count,
+        output_path_prefix=f"{prefix}/{name}",
+        fn=lambda op: tokenize(
+            TokenizeConfig(
+                train_paths=[train_path],
+                validation_paths=[],
+                cache_path=op,
+                tokenizer=TOKENIZER,
+                tokenizer_backend=backend,
+                format=TextLmDatasetFormat(),
+                sample_count=sample_count,
+            )
         ),
     )
 
 
-if TINY:
-    tiny_path = _make_tiny_dataset()
-    steps = [
-        _tokenize_step("tokenize/benchmark-hf", [tiny_path], TokenizerBackend.HF, sample_count=200),
-        _tokenize_step("tokenize/benchmark-tokie", [tiny_path], TokenizerBackend.TOKIE, sample_count=200),
-    ]
-else:
-    dataset = download_hf_step(
-        "raw/fineweb-edu",
-        hf_dataset_id="HuggingFaceFW/fineweb-edu",
-        revision="87f0914",
-    )
-    fineweb_path = os.path.join(dataset.output_path, "sample/10BT")
-    steps = [
-        _tokenize_step("tokenize/benchmark-hf", [fineweb_path], TokenizerBackend.HF),
-        _tokenize_step("tokenize/benchmark-tokie", [fineweb_path], TokenizerBackend.TOKIE),
+def build_steps() -> list[StepSpec]:
+    train_path = _make_tiny_dataset() if TINY else FINEWEB_10BT
+    sample_count = 200 if TINY else None
+    return [
+        _tokenize_spec("benchmark-hf", train_path, TokenizerBackend.HF, sample_count=sample_count),
+        _tokenize_spec("benchmark-tokie", train_path, TokenizerBackend.TOKIE, sample_count=sample_count),
     ]
 
 
 if __name__ == "__main__":
     configure_logging(logging.INFO)
-    executor_main(steps=steps)
+    StepRunner().run(build_steps())
