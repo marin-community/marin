@@ -422,8 +422,12 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
       return
     }
     if (resp.profileData) {
-      const decoded = atob(resp.profileData)
-      const blob = new Blob([decoded], { type: 'application/octet-stream' })
+      const bin = atob(resp.profileData)
+      const bytes = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) {
+        bytes[i] = bin.charCodeAt(i)
+      }
+      const blob = new Blob([bytes], { type: 'application/octet-stream' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
