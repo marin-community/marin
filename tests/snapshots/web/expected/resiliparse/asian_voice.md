@@ -63,5 +63,6 @@ The Lunar Eclipse on the 31st stimulates your solar sixth house. Surprises surro
 
 ---
 
-[comments powered by Disqus](http://disqus.com "")  
+[comments powered by Disqus](http://disqus.com "")
+
 to the free, weekly Asian Voice email newsletter
