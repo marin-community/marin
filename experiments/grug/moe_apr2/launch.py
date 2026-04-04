@@ -150,7 +150,7 @@ def _compute_tokens_and_batch(
 # ============================================================
 
 BUDGETS: tuple[float, ...] = (1e18, 3e18, 1e19, 3e19, 1e20)
-HIDDEN_DIMS: tuple[int, ...] = (512, 640, 768, 896, 1024, 1280, 1536, 1792, 2048)
+HIDDEN_DIMS: tuple[int, ...] = (512, 768, 1024, 1280, 1536, 1792, 2048)
 
 # Budget -> hidden dims to exclude
 EXCLUDED_DIMS: dict[float, set[int]] = {
@@ -176,7 +176,7 @@ def create_moe_isoflop_steps() -> list[ExecutorStep]:
 
             optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, hidden_dim)
 
-            run_id = f"isoflop-moe-v14-{budget:.0e}-d{hidden_dim}"
+            run_id = f"isoflop-moe-v15-{budget:.0e}-d{hidden_dim}"
 
             config = GrugMoeLaunchConfig(
                 model=versioned(model_cfg),
@@ -190,9 +190,9 @@ def create_moe_isoflop_steps() -> list[ExecutorStep]:
                 mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
                 tracker=WandbConfig(
                     project="dial_moe",
-                    tags=["grug", "moe-core", "isoflop", "v14", "gqa4",
+                    tags=["grug", "moe-core", "isoflop", "v15", "gqa4",
                           f"budget={budget:.0e}", f"d={hidden_dim}"],
-                    group="isoflop-moe-v14",
+                    group="isoflop-moe-v15",
                     name=run_id,
                 ),
                 optimizer=versioned(optimizer),
@@ -686,5 +686,5 @@ gqa_lr_sweep_steps = create_gqa_lr_sweep()
 if __name__ == "__main__":
     executor_main(
         steps=moe_isoflop_steps,
-        description="v14: isoflop sweep 1e18-1e20, 8 dims, GQA 4:1, fitted LR",
+        description="v15: isoflop sweep 1e18-1e20, 7 dims, GQA 4:1, fitted LR",
     )
