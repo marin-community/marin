@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "c754caa310c8",
+  "strategy": "manual-commit",
+  "branch": "kevin/sft",
+  "checkpoints_count": 25,
+  "files_touched": [
+    "experiments/exp3897v3_sft_ota_131k_qwen3_8b_no_offload.py",
+    "lib/iris/src/iris/cluster/client/job_info.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c7/54caa310c8/0/metadata.json",
+      "transcript": "/c7/54caa310c8/0/full.jsonl",
+      "context": "/c7/54caa310c8/0/context.md",
+      "content_hash": "/c7/54caa310c8/0/content_hash.txt",
+      "prompt": "/c7/54caa310c8/0/prompt.txt"
+    },
+    {
+      "metadata": "/c7/54caa310c8/1/metadata.json",
+      "transcript": "/c7/54caa310c8/1/full.jsonl",
+      "context": "/c7/54caa310c8/1/context.md",
+      "content_hash": "/c7/54caa310c8/1/content_hash.txt",
+      "prompt": "/c7/54caa310c8/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 690,
+    "cache_creation_tokens": 5295939,
+    "cache_read_tokens": 130189738,
+    "output_tokens": 143967,
+    "api_call_count": 443
+  }
+}

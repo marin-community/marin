@@ -1,0 +1,325 @@
+Follow https://github.com/marin-community/marin/issues/3490 and https://github.com/marin-community/marin/issues/2601 to reproduce 2 OpenThoughts-Agent SFTs. At 32k context length laion/exp_tas_optimal_combined_traces. At 131k context length, REDACTED. Start with the 32k SFT. First find the SFT model at https://huggingface.co/laion/exp_tas_optimal_combined_traces and the dataset at https://huggingface.co/datasets/DCAgent/exp_tas_optimal_combined_traces (double check this for me please). Then, reproduce OT-A's reported 23.8% on TB-Lite and 12.6% on TB2 using their released SFT weights. After making sure we can reproduced within +/-3% for TB-Lite, in parallel set up SFT closely following the model card and start the SFT. Once TB2 eval finishes, confirm that it's also within +/-3% of the reported number. Keep monitoring the SFT run (should be trainble with a v5p-32/64, choose base on availablility in the Iris cluster). Log progress via github comments like #3490 to keep all everybody in the loop in a new GitHub issue titled "[Agentic SFT] Reproduce OT-Agent's best 32K context length SFT". Once you reproduced the TB-Lite for the 32k context length model and launched and confirmed SFT is running fine for it, go through the same process for the 131k in parallel. The longer context length may need some system optimization to prevent OOM. Track all progress for the 131k reproduction under "[Agentic SFT] Reproduce OT-Agent's best 131K context length SFT".
+
+---
+
+Continue monitoring and finishing the tasks until everything is done.
+
+---
+
+[Request interrupted by user]
+
+---
+
+For the eval, did you reference how https://github.com/marin-community/marin/issues/3490#issuecomment-4085706376 uses the marin-harbor worktree/branch to eval TB-Lite?
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+You can only run 1 Harbor eval at the same time due to Daytona sandbox concurrency limitations. Commit this rule to your project memory.
+
+---
+
+<task-notification>
+<task-id>btwb8ifsi</task-id>
+<tool-use-id>toolu_01Poet5ZNZouLYafE1eEVuZ9</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Stop the TB2 eval job (only 1 Harbor eval at a time)" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>bybd9bhq2</task-id>
+<tool-use-id>toolu_01CMjUtKEHrvLHHyzcDEyWU8</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Check both jobs after 30 minutes" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+Are we evaling with the latest 4-way sharding method introduced in https://github.com/marin-community/marin/issues/3846#issuecomment-4087523679?
+
+---
+
+Yes, Daytona limit allws sharding. As long as we have <=100 concurrent jobs.
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+Wait why are we modifying ~/marin-harbor code? I thought commit https://github.com/marin-community/marin/commit/1bdab9faa31ce1a02a3a2e155e31fb51a503eeb1 already has everything?
+
+---
+
+<task-notification>
+<task-id>bj3jy77vt</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Check all 4 shard statuses after 3 minutes" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+Can you dig into one of the failed shard's log
+
+---
+
+how are the 2 running shards doing?
+
+---
+
+<task-notification>
+<task-id>bzz6ovi5j</task-id>
+<tool-use-id>toolu_01CNcFcyH99ggiXwRvWvAXRE</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Check surviving shards + SFT after 30 min" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>bkk7mz5fd</task-id>
+<tool-use-id>toolu_01Ub6F8zdv8bMf1n6196unLe</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll all jobs after 1 hour" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+is the tblite eval running on daytona?
+
+---
+
+which DAYTONA_API_KEY is used?
+
+---
+
+how many TBLite eval trials have we completed in the last 20 minutes?
+
+---
+
+There are only 2 SFT jobs running but I don't see any eval job.
+
+---
+
+I see, add a rule to project memory: always run job with Iris, not Ray. Then stop the ray job and resubmit to Iris.
+
+---
+
+I think 32K SFT was submitted with Iris?
+
+---
+
+is /kevin/kevin-exp3490b-full-sft-r2 running the 32K SFT?
+
+---
+
+[Request interrupted by user]
+
+---
+
+nevermind, /kevin/kevin-exp3490b-full-sft-r2 is another experiment.
+
+---
+
+Yes, keep monitoring both
+
+---
+
+show me the wandb link to the 32k sft
+
+---
+
+How's the TB-Lite eval going?
+
+---
+
+<task-notification>
+<task-id>blea2y1tz</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Check eval + SFT after 30 min" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>bbuu7tjnl</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Check Iris jobs + progress after 10 min" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+Ignore eval for now. Focus on the SFT.
+
+---
+
+Also, just focus on 32K SFT. Do not worry about anything else, including 131k eval/sft.
+
+---
+
+<task-notification>
+<task-id>brn81rgwo</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Check SFT progress after 10 min" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>bxokyuuj1</task-id>
+<tool-use-id>toolu_014tE9ZouETyUmCdKPH7WBUu</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "SFT check in 30 min" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>btz4r2k3s</task-id>
+<tool-use-id>toolu_01Fx1oDBv8JZu5zb5ssMSxnK</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "SFT check in 30 min" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>bq4umybhn</task-id>
+<tool-use-id>toolu_01TqpouP4JFGaFg8uTbZ2qWj</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "SFT check in 1 hour" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>bklhvp541</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "SFT check in 1 hour" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>bbnppgriq</task-id>
+<tool-use-id>toolu_01465DpP9GPWgRaJb6NTubuA</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "SFT check in 2 hours" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>boujy3e8m</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "SFT check in 2 hours" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>b9y0n3brj</task-id>
+<tool-use-id>toolu_01P41MK8RizSGmEbPyKijtKE</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "SFT check in 2 hours" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>b49p4zx1z</task-id>
+<tool-use-id>toolu_011hmbeRPVu7BpHtNXiHQ4eh</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "SFT check in 2 hours" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>bqw1hlf7n</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "SFT check in 2 hours" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>b6ri56xj5</task-id>
+<tool-use-id>toolu_014Tks9ePYyZTX3bYoXHzWdk</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "SFT check in 2 hours (should be done)" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>bc9sg3e56</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "SFT check in 2 hours (should be done)" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>bbpsfhli3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "SFT final check in 1 hour" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+How come you reported 3 days for completion but now it finished in 18h?
