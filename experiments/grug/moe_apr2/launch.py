@@ -136,11 +136,11 @@ def _compute_flops_per_token(cfg: GrugModelConfig) -> float:
 
 
 def _compute_tokens_and_batch(
-    budget: float, flops_per_token: float, target_steps: int = 2**14
+    budget: float, flops_per_token: float, target_steps: int = 2**14, min_batch_size: int = MIN_BATCH_SIZE
 ) -> tuple[float, int, int]:
     tokens = budget / (3 * flops_per_token)
     batch_exact = tokens / (target_steps * SEQ_LEN)
-    batch_size = max(MIN_BATCH_SIZE, _round_to_power_of_two(batch_exact))
+    batch_size = max(min_batch_size, _round_to_power_of_two(batch_exact))
     train_steps = max(1, round(tokens / (batch_size * SEQ_LEN)))
     return tokens, batch_size, train_steps
 
@@ -159,6 +159,15 @@ EXCLUDED_DIMS: dict[float, set[int]] = {
     1e20: {512},
 }
 
+# Budget -> (target_steps multiplier, min_batch_size)
+BUDGET_CONFIG: dict[float, tuple[int, int]] = {
+    1e18: (1, MIN_BATCH_SIZE),
+    3e18: (2, MIN_BATCH_SIZE),
+    1e19: (4, MIN_BATCH_SIZE),
+    3e19: (4, MIN_BATCH_SIZE),
+    1e20: (8, MIN_BATCH_SIZE),
+}
+
 
 def create_moe_isoflop_steps() -> list[ExecutorStep]:
     """Create ExecutorSteps for the MoE isoflop grid."""
@@ -166,17 +175,19 @@ def create_moe_isoflop_steps() -> list[ExecutorStep]:
 
     for budget in BUDGETS:
         excluded = EXCLUDED_DIMS.get(budget, set())
+        step_mult, min_bs = BUDGET_CONFIG.get(budget, (1, MIN_BATCH_SIZE))
+        target_steps = 2**14 * step_mult
         for hidden_dim in HIDDEN_DIMS:
             if hidden_dim in excluded:
                 continue
 
             model_cfg = HEURISTIC.build_model_config(hidden_dim)
             fpt = _compute_flops_per_token(model_cfg)
-            tokens, batch_size, train_steps = _compute_tokens_and_batch(budget, fpt)
+            tokens, batch_size, train_steps = _compute_tokens_and_batch(budget, fpt, target_steps=target_steps, min_batch_size=min_bs)
 
             optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, hidden_dim)
 
-            run_id = f"isoflop-moe-v15-{budget:.0e}-d{hidden_dim}"
+            run_id = f"isoflop-moe-v16-{budget:.0e}-d{hidden_dim}"
 
             config = GrugMoeLaunchConfig(
                 model=versioned(model_cfg),
@@ -190,9 +201,9 @@ def create_moe_isoflop_steps() -> list[ExecutorStep]:
                 mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
                 tracker=WandbConfig(
                     project="dial_moe",
-                    tags=["grug", "moe-core", "isoflop", "v15", "gqa4",
+                    tags=["grug", "moe-core", "isoflop", "v16", "gqa4",
                           f"budget={budget:.0e}", f"d={hidden_dim}"],
-                    group="isoflop-moe-v15",
+                    group="isoflop-moe-v16",
                     name=run_id,
                 ),
                 optimizer=versioned(optimizer),
