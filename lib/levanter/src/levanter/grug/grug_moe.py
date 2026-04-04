@@ -107,6 +107,7 @@ def _moe_mlp_local(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
+    w13_local_expert_capacity: int | None = None,
 ) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Per-shard non-EP MoE FFN path with argsort routing + grouped matmul."""
     x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
@@ -118,7 +119,18 @@ def _moe_mlp_local(
     x_dispatch = tree_checkpoint_name(x_dispatch, "grug_moe_dispatch_input")
 
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), "grug_moe_expert_hidden")
+        if w13_local_expert_capacity is None:
+            w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), "grug_moe_expert_hidden")
+        else:
+            w13_out = tree_checkpoint_name(
+                _ragged_dot_expert_padded_batched(
+                    x_dispatch,
+                    moe_w13,
+                    group_sizes,
+                    local_expert_capacity=w13_local_expert_capacity,
+                ),
+                "grug_moe_expert_hidden",
+            )
         moe_dim = moe_w2.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = tree_checkpoint_name(
@@ -242,6 +254,70 @@ def _local_permute_from_counts(
     return sorted_inputs, sorted_indices, group_sizes
 
 
+def _ragged_dot_expert_padded_batched(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    *,
+    local_expert_capacity: int,
+) -> jax.Array:
+    if local_expert_capacity <= 0:
+        raise ValueError(f"local_expert_capacity must be positive, got {local_expert_capacity}")
+
+    hidden = lhs.shape[-1]
+    if rhs.shape[1] == hidden:
+        rhs_prepared = rhs
+    elif rhs.ndim > 2 and rhs.shape[2] == hidden:
+        rhs_prepared = jnp.swapaxes(rhs, 1, 2)
+    else:
+        raise ValueError(
+            f"ragged expert batched dot requires rhs to contract over hidden={hidden}, got rhs.shape={rhs.shape}"
+        )
+
+    local_experts = rhs_prepared.shape[0]
+    if group_sizes.shape[0] != local_experts:
+        raise ValueError(
+            f"group_sizes.shape[0]={group_sizes.shape[0]} must match local_experts={local_experts} for padded batched dot"
+        )
+
+    total_rows = lhs.shape[0]
+    row_ids = jnp.arange(total_rows, dtype=jnp.int32)
+    segment_ends = jnp.cumsum(group_sizes, dtype=jnp.int32)
+    total_valid = jnp.sum(group_sizes, dtype=jnp.int32)
+    valid = row_ids < total_valid
+
+    expert_ids = jnp.searchsorted(segment_ends, row_ids, side="right").astype(jnp.int32)
+    segment_starts = jnp.concatenate(
+        [jnp.zeros((1,), dtype=jnp.int32), segment_ends[:-1].astype(jnp.int32)],
+        axis=0,
+    )
+    expert_ids_clipped = jnp.clip(expert_ids, 0, max(0, local_experts - 1))
+    within_expert = row_ids - jnp.take(segment_starts, expert_ids_clipped, axis=0)
+    valid = valid & (expert_ids < local_experts) & (within_expert < local_expert_capacity)
+
+    flat_capacity = local_experts * local_expert_capacity
+    flat_indices = expert_ids * local_expert_capacity + within_expert
+    scatter_indices = jnp.where(valid, flat_indices, flat_capacity)
+
+    with jax.named_scope("expert_padded_pack"):
+        packed_lhs = jnp.zeros((flat_capacity, lhs.shape[-1]), dtype=lhs.dtype)
+        packed_lhs = packed_lhs.at[scatter_indices].add(lhs, mode="drop")
+        packed_lhs = packed_lhs.reshape(local_experts, local_expert_capacity, lhs.shape[-1])
+
+    with jax.named_scope("expert_padded_bmm"):
+        packed_out = jax.lax.dot_general(
+            packed_lhs,
+            rhs_prepared,
+            dimension_numbers=(((2,), (1,)), ((0,), (0,))),
+        )
+
+    with jax.named_scope("expert_padded_unpack"):
+        packed_out_flat = packed_out.reshape(flat_capacity, packed_out.shape[-1])
+        gather_indices = jnp.where(valid, flat_indices, 0)
+        out = jnp.take(packed_out_flat, gather_indices, axis=0)
+        return jnp.where(valid[:, None], out, 0)
+
+
 def _moe_mlp_ep_ring_local(
     x_local: Float[Array, "TL D"],
     selected_experts_local: Int[Array, "TL K"],
@@ -252,6 +328,7 @@ def _moe_mlp_ep_ring_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    w13_local_expert_capacity: int | None = None,
 ) -> tuple[Float[Array, "TL D"], Int[Array, ""]]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
@@ -320,7 +397,21 @@ def _moe_mlp_ep_ring_local(
     group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), "grug_moe_expert_hidden")
+        if w13_local_expert_capacity is None:
+            w13_out = tree_checkpoint_name(
+                ragged_dot(x_dispatch, moe_w13_local, group_sizes),
+                "grug_moe_expert_hidden",
+            )
+        else:
+            w13_out = tree_checkpoint_name(
+                _ragged_dot_expert_padded_batched(
+                    x_dispatch,
+                    moe_w13_local,
+                    group_sizes,
+                    local_expert_capacity=w13_local_expert_capacity,
+                ),
+                "grug_moe_expert_hidden",
+            )
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = tree_checkpoint_name(
@@ -434,6 +525,7 @@ def moe_mlp(
     mesh: jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
+    w13_local_expert_capacity: int | None = None,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -486,6 +578,7 @@ def moe_mlp(
             w_down,
             activation_fn=activation_fn,
             num_experts=num_experts,
+            w13_local_expert_capacity=w13_local_expert_capacity,
         )
         if report_capacity_overflow:
             return out, dropped
@@ -511,6 +604,7 @@ def moe_mlp(
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
+                w13_local_expert_capacity=w13_local_expert_capacity,
             ),
             mesh=mesh,
             in_specs=(
@@ -535,6 +629,7 @@ def moe_mlp(
             _moe_mlp_local,
             activation_fn=activation_fn,
             num_experts=num_experts,
+            w13_local_expert_capacity=w13_local_expert_capacity,
         ),
         mesh=mesh,
         in_specs=(
