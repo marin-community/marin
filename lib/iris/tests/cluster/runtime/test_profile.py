@@ -66,6 +66,7 @@ def test_resolve_cpu_spec_preserves_nonzero_rate_hz():
         (cluster_pb2.MemoryProfile.FLAMEGRAPH, "flamegraph", "html", True),
         (cluster_pb2.MemoryProfile.TABLE, "table", "txt", False),
         (cluster_pb2.MemoryProfile.STATS, "stats", "json", True),
+        (cluster_pb2.MemoryProfile.RAW, "raw", "bin", False),
     ],
 )
 def test_resolve_memory_spec_maps_format(proto_format, expected_reporter, expected_ext, expected_is_file):
@@ -98,6 +99,7 @@ def test_memray_attach_includes_aggregate_when_leaks_enabled():
     spec = resolve_memory_spec(cfg, duration_seconds=10, pid="5")
     cmd = build_memray_attach_cmd(spec, memray_bin="memray", trace_path="/tmp/trace.bin")
     assert "--aggregate" in cmd
+    assert "--native" in cmd
 
 
 def test_memray_attach_excludes_aggregate_when_leaks_disabled():
@@ -105,6 +107,7 @@ def test_memray_attach_excludes_aggregate_when_leaks_disabled():
     spec = resolve_memory_spec(cfg, duration_seconds=5, pid="1")
     cmd = build_memray_attach_cmd(spec, memray_bin="memray", trace_path="/tmp/trace.bin")
     assert "--aggregate" not in cmd
+    assert "--native" in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -165,12 +168,25 @@ def _allocate_during(duration_seconds: int) -> list:
     return results
 
 
+def test_resolve_memory_spec_raw_is_raw():
+    cfg = cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.RAW)
+    spec = resolve_memory_spec(cfg, duration_seconds=5, pid="1")
+    assert spec.is_raw is True
+
+
+def test_resolve_memory_spec_flamegraph_is_not_raw():
+    cfg = cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.FLAMEGRAPH)
+    spec = resolve_memory_spec(cfg, duration_seconds=5, pid="1")
+    assert spec.is_raw is False
+
+
 @pytest.mark.parametrize(
     "proto_format",
     [
         cluster_pb2.MemoryProfile.FLAMEGRAPH,
         cluster_pb2.MemoryProfile.TABLE,
         cluster_pb2.MemoryProfile.STATS,
+        cluster_pb2.MemoryProfile.RAW,
     ],
 )
 def test_run_memray_profile_returns_nonempty_output(proto_format):
