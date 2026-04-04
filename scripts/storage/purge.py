@@ -2,32 +2,51 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run the one-off storage purge workflow as a resumable ordered driver."""
+"""Storage cleanup workflow: delete cold unprotected objects with soft-delete safety net.
+
+Approach:
+  1. Resolve the protect-set (wildcard and direct prefixes) into concrete prefix lists.
+  2. Estimate deletion savings by scanning objects and grouping by storage class.
+  3. Enable soft-delete on each source bucket (3-day retention window).
+  4. Delete non-STANDARD objects that fall outside the protect set.
+  5. Wait for the soft-delete safety window to elapse.
+  6. Disable soft-delete to finalize the purge.
+
+Objects in STANDARD storage class are presumed recently-accessed (Autoclass promotes active
+objects) and are never deleted.  The protect-set is always preserved regardless of class.
+"""
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import fnmatch
 import hashlib
 import json
+import logging
 import os
 import shlex
 import sqlite3
 import subprocess
 import sys
 from collections import defaultdict
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 import click
 import google.auth
 from google.cloud import storage
 from tqdm.auto import tqdm
+
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
 
 SCRIPT_PATH = Path(__file__).resolve()
 STORAGE_DIR = SCRIPT_PATH.parent
@@ -36,10 +55,13 @@ OUTPUT_ROOT = STORAGE_DIR / "purge"
 PROTECT_DIR = OUTPUT_ROOT / "protect"
 RESOLVE_DIR = OUTPUT_ROOT / "resolve"
 BACKUP_DIR = OUTPUT_ROOT / "backup"
-PURGE_DIR = OUTPUT_ROOT / "purge"
 STATE_DIR = OUTPUT_ROOT / "state"
 LOG_DIR = OUTPUT_ROOT / "logs"
 CACHE_DB_PATH = OUTPUT_ROOT / "cache.sqlite3"
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
 MARIN_BUCKETS = [
     "marin-eu-west4",
@@ -59,16 +81,31 @@ BUCKET_LOCATIONS = {
     "marin-us-west4": "US-WEST4",
 }
 
-NON_STANDARD_STORAGE_CLASSES = ["NEARLINE", "COLDLINE", "ARCHIVE"]
+NON_STANDARD_STORAGE_CLASSES = frozenset({"NEARLINE", "COLDLINE", "ARCHIVE"})
 
-# GCS Standard Storage list prices (USD per GiB per month).
-# Source: https://cloud.google.com/storage/pricing
-# We apply a 50% CUD/negotiated discount.
-GCS_STANDARD_PRICE_PER_GIB_MONTH: dict[str, float] = {
-    "US": 0.020,
-    "EUROPE": 0.023,
+SOFT_DELETE_RETENTION_SECONDS = 3 * 24 * 3600  # 3 days
+
+# GCS storage pricing (USD / GiB / month).  Source: cloud.google.com/storage/pricing
+# We apply a 50 % CUD/negotiated discount.
+GCS_PRICE_PER_GIB_MONTH: dict[str, dict[str, float]] = {
+    "US": {
+        "STANDARD": 0.020,
+        "NEARLINE": 0.010,
+        "COLDLINE": 0.004,
+        "ARCHIVE": 0.0012,
+    },
+    "EUROPE": {
+        "STANDARD": 0.023,
+        "NEARLINE": 0.013,
+        "COLDLINE": 0.006,
+        "ARCHIVE": 0.0025,
+    },
 }
 GCS_DISCOUNT = 0.50
+
+# ---------------------------------------------------------------------------
+# Step spec
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -85,7 +122,7 @@ class StepSpec:
     requirements: tuple[str, ...] = ()
     listing_workers: bool = False
     estimate_workers: bool = False
-    sample_size: bool = False
+    delete_workers: bool = False
     settle_hours: bool = False
     optional: bool = False
 
@@ -93,11 +130,18 @@ class StepSpec:
         self.runner(ctx, self)
 
 
+# ---------------------------------------------------------------------------
+# Data types
+# ---------------------------------------------------------------------------
+
+
 @dataclass(frozen=True)
 class PrefixEstimate:
     prefix: str
     object_count: int
     total_bytes: int
+    bytes_by_class: dict[str, int]
+    count_by_class: dict[str, int]
 
 
 @dataclass
@@ -107,7 +151,7 @@ class Context:
     include_optional: bool
     listing_workers: int
     estimate_workers: int
-    sample_size: int
+    delete_workers: int
     settle_hours: int
     selected_regions: set[str] | None
     log_path: Path
@@ -125,8 +169,13 @@ class Context:
         return STATE_DIR / f"{sanitized}__{self.region_key}.json"
 
 
+# ---------------------------------------------------------------------------
+# Output directories and cache
+# ---------------------------------------------------------------------------
+
+
 def ensure_output_dirs() -> None:
-    for path in [OUTPUT_ROOT, PROTECT_DIR, RESOLVE_DIR, BACKUP_DIR, PURGE_DIR, STATE_DIR, LOG_DIR]:
+    for path in [OUTPUT_ROOT, PROTECT_DIR, RESOLVE_DIR, BACKUP_DIR, STATE_DIR, LOG_DIR]:
         path.mkdir(parents=True, exist_ok=True)
     init_cache_db()
 
@@ -139,9 +188,29 @@ def cache_connection() -> sqlite3.Connection:
     return connection
 
 
+CACHE_SCHEMA_VERSION = 2  # bump to invalidate stale caches
+
+
 def init_cache_db() -> None:
-    with cache_connection() as connection:
-        connection.execute(
+    with cache_connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cache_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        row = conn.execute("SELECT value FROM cache_meta WHERE key = 'schema_version'").fetchone()
+        current_version = int(row["value"]) if row else 0
+        if current_version < CACHE_SCHEMA_VERSION:
+            conn.execute("DROP TABLE IF EXISTS listing_cache")
+            conn.execute("DROP TABLE IF EXISTS prefix_estimate_cache")
+            conn.execute(
+                "INSERT OR REPLACE INTO cache_meta (key, value) VALUES ('schema_version', ?)",
+                (str(CACHE_SCHEMA_VERSION),),
+            )
+        conn.execute(
             """
             CREATE TABLE IF NOT EXISTS listing_cache (
                 listing_prefix TEXT PRIMARY KEY,
@@ -150,18 +219,25 @@ def init_cache_db() -> None:
             )
             """
         )
-        connection.execute(
+        conn.execute(
             """
             CREATE TABLE IF NOT EXISTS prefix_estimate_cache (
                 bucket_name TEXT NOT NULL,
                 prefix TEXT NOT NULL,
                 object_count INTEGER NOT NULL,
                 total_bytes INTEGER NOT NULL,
+                bytes_by_class_json TEXT NOT NULL DEFAULT '{}',
+                count_by_class_json TEXT NOT NULL DEFAULT '{}',
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (bucket_name, prefix)
             )
             """
         )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def now_utc() -> datetime:
@@ -215,7 +291,7 @@ def storage_client(ctx: Context) -> storage.Client:
     return storage.Client(project=project, credentials=credentials)
 
 
-def run_command(
+def run_subprocess(
     ctx: Context,
     command: list[str],
     *,
@@ -235,25 +311,26 @@ def run_command(
         cwd=REPO_ROOT,
         check=False,
     )
-    if completed.stdout:
-        if completed.stdout.strip():
-            print(completed.stdout.rstrip())
+    if completed.stdout and completed.stdout.strip():
+        print(completed.stdout.rstrip())
         log_line(ctx, completed.stdout)
-    if completed.stderr:
-        if completed.stderr.strip():
-            print(completed.stderr.rstrip(), file=sys.stderr)
+    if completed.stderr and completed.stderr.strip():
+        print(completed.stderr.rstrip(), file=sys.stderr)
         log_line(ctx, completed.stderr)
     if completed.returncode != 0 and not allow_failure:
         raise RuntimeError(f"Command failed ({completed.returncode}): {rendered}\n{completed.stderr}")
     if capture_json:
-        if completed.returncode != 0:
-            return None
-        return json.loads(completed.stdout or "{}")
+        return json.loads(completed.stdout or "{}") if completed.returncode == 0 else None
     return completed
 
 
 def print_summary(message: str) -> None:
     print(message)
+
+
+# ---------------------------------------------------------------------------
+# CSV / JSON
+# ---------------------------------------------------------------------------
 
 
 def read_csv_rows(path: Path) -> list[dict[str, str]]:
@@ -286,16 +363,9 @@ def file_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def stat_fingerprint(paths: list[Path]) -> str:
-    digest = hashlib.sha256()
-    for path in sorted(paths):
-        if path.is_dir():
-            continue
-        stat = path.stat()
-        digest.update(str(path.relative_to(REPO_ROOT)).encode())
-        digest.update(str(stat.st_size).encode())
-        digest.update(str(stat.st_mtime_ns).encode())
-    return digest.hexdigest()
+# ---------------------------------------------------------------------------
+# Markers (resumable step state)
+# ---------------------------------------------------------------------------
 
 
 def marker_matches(ctx: Context, step: StepSpec, input_fingerprint: str) -> bool:
@@ -317,7 +387,7 @@ def write_marker(
     remote_summary: dict[str, Any] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> None:
-    payload = {
+    payload: dict[str, Any] = {
         "action_id": step.action_id,
         "completed_at": now_utc().isoformat(),
         "dry_run": ctx.dry_run,
@@ -330,9 +400,13 @@ def write_marker(
     write_json(ctx.state_path(step.action_id), payload)
 
 
+# ---------------------------------------------------------------------------
+# Region / bucket helpers
+# ---------------------------------------------------------------------------
+
+
 def region_from_bucket(bucket: str) -> str:
-    prefix = "marin-"
-    return bucket.removeprefix(prefix) if bucket.startswith(prefix) else bucket
+    return bucket.removeprefix("marin-") if bucket.startswith("marin-") else bucket
 
 
 def region_bucket(region: str) -> str:
@@ -358,13 +432,19 @@ def url_object_path(url: str) -> str:
     return parts[1] if len(parts) == 2 else ""
 
 
-def join_gs_url(bucket: str, object_path: str) -> str:
-    cleaned = object_path.lstrip("/")
-    return f"gs://{bucket}/{cleaned}" if cleaned else f"gs://{bucket}"
-
-
 def normalized_prefix_url(url: str) -> str:
     return url if url.endswith("/") else f"{url}/"
+
+
+def normalize_relative_prefix(prefix: str) -> str:
+    return prefix if prefix.endswith("/") else f"{prefix}/"
+
+
+def relative_prefix(prefix_url: str, bucket: str) -> str:
+    prefix = url_object_path(prefix_url)
+    if prefix.endswith("/"):
+        return prefix
+    return f"{prefix}/" if prefix else ""
 
 
 def human_bytes(num_bytes: int) -> str:
@@ -377,22 +457,29 @@ def human_bytes(num_bytes: int) -> str:
     return f"{num_bytes} B"
 
 
-def estimate_monthly_cost(total_bytes: int, region: str) -> float:
-    """Estimate monthly GCS Standard storage cost in USD, after discount."""
-    continent = "EUROPE" if region.startswith("eu-") else "US"
-    list_price = GCS_STANDARD_PRICE_PER_GIB_MONTH.get(continent, GCS_STANDARD_PRICE_PER_GIB_MONTH["US"])
-    gib = total_bytes / (1024**3)
-    return gib * list_price * (1.0 - GCS_DISCOUNT)
+def continent_for_region(region: str) -> str:
+    return "EUROPE" if region.startswith("eu-") else "US"
 
 
-def normalize_relative_prefix(prefix: str) -> str:
-    return prefix if prefix.endswith("/") else f"{prefix}/"
+def estimate_monthly_cost_by_class(bytes_by_class: dict[str, int], region: str) -> float:
+    continent = continent_for_region(region)
+    prices = GCS_PRICE_PER_GIB_MONTH.get(continent, GCS_PRICE_PER_GIB_MONTH["US"])
+    total = 0.0
+    for storage_class, num_bytes in bytes_by_class.items():
+        price = prices.get(storage_class, prices["STANDARD"])
+        total += (num_bytes / (1024**3)) * price * (1.0 - GCS_DISCOUNT)
+    return total
+
+
+# ---------------------------------------------------------------------------
+# Prefix utilities
+# ---------------------------------------------------------------------------
 
 
 def collapse_overlapping_prefixes(prefixes: list[str]) -> tuple[list[str], list[str]]:
     normalized = sorted(
-        {normalize_relative_prefix(prefix) for prefix in prefixes},
-        key=lambda prefix: (len(prefix), prefix),
+        {normalize_relative_prefix(p) for p in prefixes},
+        key=lambda p: (len(p), p),
     )
     kept: list[str] = []
     skipped: list[str] = []
@@ -404,82 +491,37 @@ def collapse_overlapping_prefixes(prefixes: list[str]) -> tuple[list[str], list[
     return kept, skipped
 
 
-def recursive_listing_url(prefix_url: str) -> str:
-    return normalized_prefix_url(prefix_url) + "**"
+def relative_object_paths_for_bucket(prefix_rows: list[dict[str, str]], bucket: str) -> list[str]:
+    values = [relative_prefix(row["prefix_url"], bucket) for row in prefix_rows if row["bucket"] == bucket]
+    return sorted(dict.fromkeys(values))
 
 
-def relative_prefix(prefix_url: str, bucket: str) -> str:
-    prefix = url_object_path(prefix_url)
-    if prefix.endswith("/"):
-        return prefix
-    return f"{prefix}/" if prefix else ""
+def filter_rows_by_region(rows: list[dict[str, str]], ctx: Context, bucket_key: str = "bucket") -> list[dict[str, str]]:
+    return [row for row in rows if bucket_selected(ctx, row[bucket_key])]
 
 
-def suggest_backup_bucket(bucket: str) -> str:
-    return f"marin-tmp-backup-{region_from_bucket(bucket)}-purge-tmp-20260326"
-
-
-def stable_job_name(region: str, include_prefixes: list[str]) -> str:
-    digest = hashlib.sha256("\n".join(include_prefixes).encode()).hexdigest()[:10]
-    return f"storage-purge-backup-{region}-{digest}"
-
-
-def size_estimate_path(region: str) -> Path:
-    return BACKUP_DIR / f"backup_size_estimate_{region}.json"
-
-
-def gcloud_bucket_describe(ctx: Context, bucket_url: str) -> dict[str, Any]:
-    return run_command(
-        ctx,
-        ["gcloud", "storage", "buckets", "describe", bucket_url, "--format=json"],
-        capture_json=True,
-    )
-
-
-def gcloud_object_describe(ctx: Context, object_url: str) -> dict[str, Any] | None:
-    return run_command(
-        ctx,
-        ["gcloud", "storage", "objects", "describe", object_url, "--format=json"],
-        allow_failure=True,
-        capture_json=True,
-    )
-
-
-def gcloud_transfer_job_describe(ctx: Context, job_name: str) -> dict[str, Any] | None:
-    return run_command(
-        ctx,
-        ["gcloud", "transfer", "jobs", "describe", job_name, "--format=json"],
-        allow_failure=True,
-        capture_json=True,
-    )
-
-
-def gcloud_ls(ctx: Context, path: str, *, recursive: bool = False) -> list[str]:
-    command = ["gcloud", "storage", "ls"]
-    if recursive:
-        command.append("--recursive")
-    command.append(path)
-    completed = run_command(ctx, command)
-    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+# ---------------------------------------------------------------------------
+# Listing cache
+# ---------------------------------------------------------------------------
 
 
 def listing_cache_lookup(listing_prefix: str) -> list[str] | None:
-    with cache_connection() as connection:
-        row = connection.execute(
+    with cache_connection() as conn:
+        row = conn.execute(
             "SELECT entries_json FROM listing_cache WHERE listing_prefix = ?",
             (listing_prefix,),
         ).fetchone()
     if row is None:
         return None
     entries = json.loads(row["entries_json"])
-    if not isinstance(entries, list) or not all(isinstance(entry, str) for entry in entries):
+    if not isinstance(entries, list) or not all(isinstance(e, str) for e in entries):
         return None
     return entries
 
 
 def write_listing_cache(listing_prefix: str, entries: list[str]) -> None:
-    with cache_connection() as connection:
-        connection.execute(
+    with cache_connection() as conn:
+        conn.execute(
             """
             INSERT INTO listing_cache (listing_prefix, entries_json, updated_at)
             VALUES (?, ?, ?)
@@ -491,11 +533,16 @@ def write_listing_cache(listing_prefix: str, entries: list[str]) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Estimate cache (v2: per-class breakdowns)
+# ---------------------------------------------------------------------------
+
+
 def estimate_cache_lookup(bucket_name: str, prefix: str) -> PrefixEstimate | None:
-    with cache_connection() as connection:
-        row = connection.execute(
+    with cache_connection() as conn:
+        row = conn.execute(
             """
-            SELECT object_count, total_bytes
+            SELECT object_count, total_bytes, bytes_by_class_json, count_by_class_json
             FROM prefix_estimate_cache
             WHERE bucket_name = ? AND prefix = ?
             """,
@@ -507,18 +554,23 @@ def estimate_cache_lookup(bucket_name: str, prefix: str) -> PrefixEstimate | Non
         prefix=prefix,
         object_count=int(row["object_count"]),
         total_bytes=int(row["total_bytes"]),
+        bytes_by_class=json.loads(row["bytes_by_class_json"]),
+        count_by_class=json.loads(row["count_by_class_json"]),
     )
 
 
 def write_estimate_cache(estimate: PrefixEstimate, bucket_name: str) -> None:
-    with cache_connection() as connection:
-        connection.execute(
+    with cache_connection() as conn:
+        conn.execute(
             """
-            INSERT INTO prefix_estimate_cache (bucket_name, prefix, object_count, total_bytes, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO prefix_estimate_cache
+                (bucket_name, prefix, object_count, total_bytes, bytes_by_class_json, count_by_class_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(bucket_name, prefix) DO UPDATE SET
                 object_count = excluded.object_count,
                 total_bytes = excluded.total_bytes,
+                bytes_by_class_json = excluded.bytes_by_class_json,
+                count_by_class_json = excluded.count_by_class_json,
                 updated_at = excluded.updated_at
             """,
             (
@@ -526,9 +578,16 @@ def write_estimate_cache(estimate: PrefixEstimate, bucket_name: str) -> None:
                 estimate.prefix,
                 estimate.object_count,
                 estimate.total_bytes,
+                json.dumps(estimate.bytes_by_class),
+                json.dumps(estimate.count_by_class),
                 now_utc().isoformat(),
             ),
         )
+
+
+# ---------------------------------------------------------------------------
+# GCS helpers
+# ---------------------------------------------------------------------------
 
 
 def cached_child_prefixes(ctx: Context, listing_prefix: str) -> list[str]:
@@ -546,50 +605,28 @@ def cached_child_prefixes(ctx: Context, listing_prefix: str) -> list[str]:
     child_prefixes: set[str] = set()
     for page in iterator.pages:
         child_prefixes.update(page.prefixes)
-    entries = [f"gs://{bucket}/{child_prefix}" for child_prefix in sorted(child_prefixes)]
+    entries = [f"gs://{bucket}/{cp}" for cp in sorted(child_prefixes)]
     write_listing_cache(listing_prefix, entries)
     return entries
 
 
-def bucket_autoclass_enabled(metadata: dict[str, Any]) -> bool:
-    autoclass = metadata.get("autoclass") or {}
-    return bool(autoclass.get("enabled", False))
+def gcloud_bucket_describe(ctx: Context, bucket_url: str) -> dict[str, Any]:
+    return run_subprocess(
+        ctx,
+        ["gcloud", "storage", "buckets", "describe", bucket_url, "--format=json"],
+        capture_json=True,
+    )
 
 
 def bucket_soft_delete_seconds(metadata: dict[str, Any]) -> int:
     policy = metadata.get("softDeletePolicy") or {}
     value = policy.get("retentionDurationSeconds")
-    if value is None:
-        return 0
-    return int(value)
+    return int(value) if value is not None else 0
 
 
-def lifecycle_rules_from_metadata(metadata: dict[str, Any]) -> list[dict[str, Any]]:
-    lifecycle = metadata.get("lifecycle") or {}
-    rule = lifecycle.get("rule")
-    if isinstance(rule, list):
-        return rule
-    return []
-
-
-def is_delete_nonstandard_rule(rule: dict[str, Any]) -> bool:
-    action = rule.get("action") or {}
-    condition = rule.get("condition") or {}
-    matches = condition.get("matchesStorageClass")
-    return action.get("type") == "Delete" and matches == NON_STANDARD_STORAGE_CLASSES
-
-
-def relative_object_paths_for_bucket(prefix_rows: list[dict[str, str]], bucket: str) -> list[str]:
-    values = [relative_prefix(row["prefix_url"], bucket) for row in prefix_rows if row["bucket"] == bucket]
-    return sorted(dict.fromkeys(values))
-
-
-def preview_rows(rows: list[dict[str, Any]], *, limit: int = 3) -> str:
-    if not rows:
-        return "0 rows"
-    sample = ", ".join(str(row) for row in rows[:limit])
-    suffix = "" if len(rows) <= limit else f", ... ({len(rows)} rows total)"
-    return sample + suffix
+# ---------------------------------------------------------------------------
+# Prefix resolution (shared with old script)
+# ---------------------------------------------------------------------------
 
 
 def resolve_prefix_from_match(normalized_glob: str, listing_prefix: str, candidate_url: str) -> str | None:
@@ -613,8 +650,9 @@ def resolve_prefix_from_match(normalized_glob: str, listing_prefix: str, candida
     return f"gs://{bucket}/{resolved_path}/"
 
 
-def filter_rows_by_region(rows: list[dict[str, str]], ctx: Context, bucket_key: str = "bucket") -> list[dict[str, str]]:
-    return [row for row in rows if bucket_selected(ctx, row[bucket_key])]
+# ===========================================================================
+# PREP steps
+# ===========================================================================
 
 
 def resolve_listing_prefixes(ctx: Context, action: StepSpec) -> None:
@@ -686,37 +724,33 @@ def resolve_listing_prefixes(ctx: Context, action: StepSpec) -> None:
         )
         progress = tqdm(total=len(listing_prefixes), desc=f"resolve {region}", unit="prefix", leave=True)
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_listing_prefix = {
-                executor.submit(cached_child_prefixes, ctx, listing_prefix): listing_prefix
-                for listing_prefix in listing_prefixes
-            }
-            for future in as_completed(future_to_listing_prefix):
-                listing_prefix = future_to_listing_prefix[future]
+            future_to_lp = {executor.submit(cached_child_prefixes, ctx, lp): lp for lp in listing_prefixes}
+            for future in as_completed(future_to_lp):
+                lp = future_to_lp[future]
                 listing_calls += 1
-                progress.set_postfix_str(listing_prefix.removeprefix(f"gs://{region_bucket(region)}/")[:60])
-                candidate_prefixes_by_listing_prefix[listing_prefix] = future.result()
+                progress.set_postfix_str(lp.removeprefix(f"gs://{region_bucket(region)}/")[:60])
+                candidate_prefixes_by_listing_prefix[lp] = future.result()
                 progress.update(1)
         progress.close()
-        for listing_prefix in listing_prefixes:
-            candidate_prefixes = candidate_prefixes_by_listing_prefix[listing_prefix]
-            for row in rows_by_listing_prefix[listing_prefix]:
+        for lp in listing_prefixes:
+            candidate_prefixes = candidate_prefixes_by_listing_prefix[lp]
+            for row in rows_by_listing_prefix[lp]:
                 for candidate in candidate_prefixes:
-                    resolved_prefix = resolve_prefix_from_match(row["normalized_glob"], row["listing_prefix"], candidate)
-                    if resolved_prefix is None:
-                        continue
-                    resolved_rows.append(
-                        {
-                            "prefix_url": resolved_prefix,
-                            "bucket": row["bucket"],
-                            "owners": row["owners"],
-                            "reasons": row["reasons"],
-                            "sources": row["sources"],
-                            "artifact_kinds": row["artifact_kinds"],
-                            "priority_max": row["priority_max"],
-                            "normalized_glob": row["normalized_glob"],
-                            "listing_prefix": row["listing_prefix"],
-                        }
-                    )
+                    resolved = resolve_prefix_from_match(row["normalized_glob"], row["listing_prefix"], candidate)
+                    if resolved is not None:
+                        resolved_rows.append(
+                            {
+                                "prefix_url": resolved,
+                                "bucket": row["bucket"],
+                                "owners": row["owners"],
+                                "reasons": row["reasons"],
+                                "sources": row["sources"],
+                                "artifact_kinds": row["artifact_kinds"],
+                                "priority_max": row["priority_max"],
+                                "normalized_glob": row["normalized_glob"],
+                                "listing_prefix": row["listing_prefix"],
+                            }
+                        )
         resolved_rows = sorted(
             {
                 (
@@ -759,7 +793,7 @@ def resolve_listing_prefixes(ctx: Context, action: StepSpec) -> None:
     write_marker(ctx, action, fingerprint, outputs=written_outputs or expected_outputs, remote_summary=remote_summary)
 
 
-def build_backup_inputs(ctx: Context, action: StepSpec) -> None:
+def build_protect_inputs(ctx: Context, action: StepSpec) -> None:
     direct_rows = filter_rows_by_region(read_csv_rows(PROTECT_DIR / "protect_prefixes_direct.csv"), ctx)
     fingerprint = hashlib.sha256(
         (
@@ -819,7 +853,7 @@ def build_backup_inputs(ctx: Context, action: StepSpec) -> None:
         ]
         deduped = list({(row["prefix_url"], row["bucket"]): row for row in combined_rows}.values())
         deduped.sort(key=lambda row: row["prefix_url"])
-        output_path = BACKUP_DIR / f"backup_prefixes_{region}.csv"
+        output_path = BACKUP_DIR / f"protect_prefixes_{region}.csv"
         write_csv_rows(
             output_path,
             deduped,
@@ -840,602 +874,360 @@ def build_backup_inputs(ctx: Context, action: StepSpec) -> None:
         plan_rows.append(
             {
                 "region": region,
-                "source_bucket": bucket,
+                "bucket": bucket,
                 "location": BUCKET_LOCATIONS[bucket],
-                "backup_bucket": suggest_backup_bucket(bucket),
-                "backup_prefix_csv": str(output_path.relative_to(REPO_ROOT)),
+                "protect_prefix_csv": str(output_path.relative_to(REPO_ROOT)),
                 "prefix_count": str(len(deduped)),
             }
         )
-    plan_path = BACKUP_DIR / "backup_bucket_plan.csv"
+    plan_path = BACKUP_DIR / "cleanup_plan.csv"
     write_csv_rows(
         plan_path,
         plan_rows,
-        fieldnames=["region", "source_bucket", "location", "backup_bucket", "backup_prefix_csv", "prefix_count"],
+        fieldnames=["region", "bucket", "location", "protect_prefix_csv", "prefix_count"],
     )
     written_outputs.append(plan_path)
-    print_summary(f"{action.action_id}: wrote merged backup inputs for {len(plan_rows)} regions")
+    print_summary(f"{action.action_id}: wrote merged protect inputs for {len(plan_rows)} regions")
     write_marker(ctx, action, fingerprint, outputs=written_outputs, extra={"regions": plan_rows})
 
 
-def create_backup_buckets(ctx: Context, action: StepSpec) -> None:
-    plan_rows = read_csv_rows(BACKUP_DIR / "backup_bucket_plan.csv")
-    fingerprint = hashlib.sha256(
-        (file_digest(BACKUP_DIR / "backup_bucket_plan.csv") + ctx.region_key).encode()
-    ).hexdigest()
-    verification_rows: list[dict[str, str]] = []
-    remote_summary: dict[str, Any] = {"regions": {}}
+def build_protect_prefix_set(ctx: Context) -> dict[str, set[str]]:
+    """Load the merged protect prefix set per bucket, for matching during deletion."""
+    plan_path = BACKUP_DIR / "cleanup_plan.csv"
+    plan_rows = read_csv_rows(plan_path)
+    result: dict[str, set[str]] = {}
     for row in plan_rows:
         region = row["region"]
         if ctx.selected_regions and region not in ctx.selected_regions:
             continue
-        bucket_url = f"gs://{row['backup_bucket']}"
-        metadata = run_command(
-            ctx,
-            ["gcloud", "storage", "buckets", "describe", bucket_url, "--format=json"],
-            allow_failure=True,
-            capture_json=True,
-        )
-        status = "exists"
-        if metadata is None:
-            status = "missing"
-            print_summary(f"{action.action_id}: {'would create' if ctx.dry_run else 'creating'} {bucket_url}")
-            if not ctx.dry_run:
-                run_command(
-                    ctx,
-                    [
-                        "gcloud",
-                        "storage",
-                        "buckets",
-                        "create",
-                        bucket_url,
-                        f"--location={row['location']}",
-                        "--soft-delete-duration=0",
-                        "--no-enable-autoclass",
-                    ],
-                )
-            metadata = gcloud_bucket_describe(ctx, bucket_url)
-            status = "created"
-        else:
-            print_summary(f"{action.action_id}: {'would reconcile' if ctx.dry_run else 'reconciling'} {bucket_url}")
-            if not ctx.dry_run:
-                run_command(
-                    ctx,
-                    [
-                        "gcloud",
-                        "storage",
-                        "buckets",
-                        "update",
-                        bucket_url,
-                        "--clear-soft-delete",
-                        "--no-enable-autoclass",
-                    ],
-                )
-            metadata = gcloud_bucket_describe(ctx, bucket_url)
-            status = "updated" if not ctx.dry_run else "planned"
-        autoclass_enabled = bucket_autoclass_enabled(metadata)
-        soft_delete_seconds = bucket_soft_delete_seconds(metadata)
-        verification_rows.append(
-            {
-                "region": region,
-                "backup_bucket": row["backup_bucket"],
-                "status": status,
-                "location": metadata.get("location", ""),
-                "autoclass_enabled": str(autoclass_enabled).lower(),
-                "soft_delete_seconds": str(soft_delete_seconds),
-            }
-        )
-        if metadata.get("location") != row["location"]:
-            raise RuntimeError(f"Backup bucket {bucket_url} is in {metadata.get('location')} not {row['location']}")
-        if autoclass_enabled:
-            raise RuntimeError(f"Backup bucket {bucket_url} still has Autoclass enabled")
-        if soft_delete_seconds != 0:
-            raise RuntimeError(f"Backup bucket {bucket_url} still has soft delete configured")
-        remote_summary["regions"][region] = verification_rows[-1]
-    output_path = BACKUP_DIR / "backup_bucket_state.csv"
-    write_csv_rows(
-        output_path,
-        verification_rows,
-        fieldnames=["region", "backup_bucket", "status", "location", "autoclass_enabled", "soft_delete_seconds"],
-    )
-    print_summary(f"{action.action_id}: reconciled {len(verification_rows)} backup buckets")
-    if not ctx.dry_run:
-        write_marker(ctx, action, fingerprint, outputs=[output_path], remote_summary=remote_summary)
+        prefix_rows = read_csv_rows(REPO_ROOT / row["protect_prefix_csv"])
+        bucket = row["bucket"]
+        prefixes = {normalize_relative_prefix(url_object_path(r["prefix_url"])) for r in prefix_rows}
+        result[bucket] = prefixes
+    return result
 
 
-def prepare_backup_jobs(ctx: Context, action: StepSpec) -> None:
-    plan_rows = read_csv_rows(BACKUP_DIR / "backup_bucket_plan.csv")
-    fingerprint = hashlib.sha256(
-        (file_digest(BACKUP_DIR / "backup_bucket_plan.csv") + ctx.region_key).encode()
-    ).hexdigest()
-    if not ctx.force and marker_matches(ctx, action, fingerprint):
-        print_summary(f"skip {action.action_id}: outputs and marker are current")
-        return
-
-    outputs: list[Path] = []
-    for row in plan_rows:
-        region = row["region"]
-        if ctx.selected_regions and region not in ctx.selected_regions:
-            continue
-        prefix_rows = read_csv_rows(REPO_ROOT / row["backup_prefix_csv"])
-        include_prefixes = relative_object_paths_for_bucket(prefix_rows, row["source_bucket"])
-        job_name = stable_job_name(region, include_prefixes)
-        spec_path = BACKUP_DIR / f"sts_job_{region}.json"
-        prefix_list_path = BACKUP_DIR / f"sts_job_include_prefixes_{region}.txt"
-        spec = {
-            "name": job_name,
-            "description": f"Protect-set backup for {region}",
-            "source": f"gs://{row['source_bucket']}",
-            "destination": f"gs://{row['backup_bucket']}",
-            "include_prefixes": include_prefixes,
-        }
-        write_json(spec_path, spec)
-        prefix_list_path.write_text("\n".join(include_prefixes) + ("\n" if include_prefixes else ""))
-        outputs.extend([spec_path, prefix_list_path])
-    print_summary(f"{action.action_id}: wrote backup job specs for {len(outputs) // 2} regions")
-    write_marker(ctx, action, fingerprint, outputs=outputs)
+def object_is_protected(object_name: str, protect_prefixes: set[str]) -> bool:
+    for prefix in protect_prefixes:
+        if object_name.startswith(prefix):
+            return True
+    return False
 
 
-def estimate_backup_prefix(ctx: Context, bucket_name: str, prefix: str) -> PrefixEstimate:
+# ===========================================================================
+# PREP: estimate deletion savings (per-class pricing)
+# ===========================================================================
+
+
+def size_estimate_path(region: str) -> Path:
+    return BACKUP_DIR / f"deletion_estimate_{region}.json"
+
+
+def estimate_prefix_with_classes(ctx: Context, bucket_name: str, prefix: str) -> PrefixEstimate:
     client = storage_client(ctx)
     object_count = 0
     total_bytes = 0
+    bytes_by_class: dict[str, int] = defaultdict(int)
+    count_by_class: dict[str, int] = defaultdict(int)
     for blob in client.list_blobs(bucket_name, prefix=prefix):
+        size = int(blob.size or 0)
+        sc = blob.storage_class or "STANDARD"
         object_count += 1
-        total_bytes += int(blob.size or 0)
-    return PrefixEstimate(prefix=prefix, object_count=object_count, total_bytes=total_bytes)
+        total_bytes += size
+        bytes_by_class[sc] += size
+        count_by_class[sc] += 1
+    return PrefixEstimate(
+        prefix=prefix,
+        object_count=object_count,
+        total_bytes=total_bytes,
+        bytes_by_class=dict(bytes_by_class),
+        count_by_class=dict(count_by_class),
+    )
 
 
-def estimate_backup_size(ctx: Context, action: StepSpec) -> None:
-    regions = selected_regions(ctx)
-    spec_paths = [BACKUP_DIR / f"sts_job_{region}.json" for region in regions]
-    missing_specs = [path for path in spec_paths if not path.exists()]
-    if missing_specs:
-        raise RuntimeError(
-            "Missing STS job specs. Run `prep prepare-backup-jobs` first:\n"
-            + "\n".join(str(path.relative_to(REPO_ROOT)) for path in missing_specs)
-        )
-    fingerprint = hashlib.sha256(
-        ("".join(file_digest(path) for path in spec_paths) + ctx.region_key).encode()
-    ).hexdigest()
+def estimate_deletion_savings(ctx: Context, action: StepSpec) -> None:
+    """Estimate how much data will be deleted and the monthly savings by storage class."""
+    plan_path = BACKUP_DIR / "cleanup_plan.csv"
+    if not plan_path.exists():
+        raise RuntimeError("Missing cleanup_plan.csv. Run `prep build-protect-inputs` first.")
+    plan_rows = read_csv_rows(plan_path)
+    fingerprint = hashlib.sha256((file_digest(plan_path) + ctx.region_key).encode()).hexdigest()
     if not ctx.force and marker_matches(ctx, action, fingerprint):
         print_summary(f"skip {action.action_id}: outputs and marker are current")
         return
 
+    protect_set = build_protect_prefix_set(ctx)
     summary_rows: list[dict[str, str]] = []
     outputs: list[Path] = []
     remote_summary: dict[str, Any] = {"project": resolved_project(ctx), "regions": {}}
-    for region in regions:
-        spec_path = BACKUP_DIR / f"sts_job_{region}.json"
-        spec = read_json(spec_path)
-        source = spec.get("source")
-        include_prefixes = spec.get("include_prefixes")
-        if not isinstance(source, str) or not source.startswith("gs://"):
-            raise RuntimeError(f"Invalid or missing `source` in {spec_path.relative_to(REPO_ROOT)}")
-        if not isinstance(include_prefixes, list) or not all(isinstance(prefix, str) for prefix in include_prefixes):
-            raise RuntimeError(f"Invalid or missing `include_prefixes` in {spec_path.relative_to(REPO_ROOT)}")
-        bucket_name = url_bucket(source)
-        kept_prefixes, skipped_prefixes = collapse_overlapping_prefixes(include_prefixes)
-        cached_estimates: list[PrefixEstimate] = []
-        pending_prefixes: list[str] = []
-        for prefix in kept_prefixes:
-            cached_estimate = estimate_cache_lookup(bucket_name, prefix)
-            if cached_estimate is None:
-                pending_prefixes.append(prefix)
-                continue
-            cached_estimates.append(cached_estimate)
-        workers = max(1, min(ctx.estimate_workers, len(pending_prefixes) or 1))
-        print_summary(
-            f"{action.action_id}: region {region} estimating {len(kept_prefixes)} deduped prefixes "
-            f"from {len(include_prefixes)} inputs"
-        )
-        print_summary(
-            f"{action.action_id}: region {region} reused {len(cached_estimates)} cached prefix estimates, "
-            f"scanning {len(pending_prefixes)} prefixes"
-        )
-        estimates = list(cached_estimates)
-        if pending_prefixes:
-            if len(pending_prefixes) <= 5:
-                print_summary(f"{action.action_id}: region {region} live prefixes: {', '.join(pending_prefixes)}")
+
+    for plan_row in plan_rows:
+        region = plan_row["region"]
+        if ctx.selected_regions and region not in ctx.selected_regions:
+            continue
+        bucket_name = plan_row["bucket"]
+        bucket_protect = protect_set.get(bucket_name, set())
+
+        # Scan the entire bucket, tallying protected vs deletable by class
+        print_summary(f"{action.action_id}: scanning {bucket_name} (this may take a while)")
+        client = storage_client(ctx)
+        delete_bytes_by_class: dict[str, int] = defaultdict(int)
+        delete_count_by_class: dict[str, int] = defaultdict(int)
+        protect_bytes_by_class: dict[str, int] = defaultdict(int)
+        protect_count_by_class: dict[str, int] = defaultdict(int)
+        total_objects = 0
+        total_bytes = 0
+
+        progress = tqdm(desc=f"scan {bucket_name}", unit=" obj", leave=True)
+        for blob in client.list_blobs(bucket_name):
+            size = int(blob.size or 0)
+            sc = blob.storage_class or "STANDARD"
+            total_objects += 1
+            total_bytes += size
+            progress.update(1)
+
+            protected = object_is_protected(blob.name, bucket_protect)
+            is_cold = sc in NON_STANDARD_STORAGE_CLASSES
+
+            if protected or not is_cold:
+                protect_bytes_by_class[sc] += size
+                protect_count_by_class[sc] += 1
             else:
-                print_summary(f"{action.action_id}: region {region} scanning with {workers} workers")
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                future_to_prefix = {
-                    executor.submit(estimate_backup_prefix, ctx, bucket_name, prefix): prefix
-                    for prefix in pending_prefixes
-                }
-                progress = tqdm(total=len(pending_prefixes), desc=f"estimate {region}", unit="prefix", leave=True)
-                if len(pending_prefixes) == 1:
-                    progress.set_postfix_str(pending_prefixes[0][:60])
-                for future in as_completed(future_to_prefix):
-                    prefix = future_to_prefix[future]
-                    estimate = future.result()
-                    write_estimate_cache(estimate, bucket_name)
-                    estimates.append(estimate)
-                    progress.set_postfix_str(prefix[:60])
-                    progress.update(1)
-                progress.close()
-        else:
-            print_summary(f"{action.action_id}: region {region} has no uncached prefixes to scan")
-        estimates.sort(key=lambda item: item.total_bytes, reverse=True)
-        total_objects = sum(item.object_count for item in estimates)
-        total_bytes = sum(item.total_bytes for item in estimates)
-        top_prefixes = [
-            {
-                "prefix": item.prefix,
-                "object_count": item.object_count,
-                "total_bytes": item.total_bytes,
-                "total_human_bytes": human_bytes(item.total_bytes),
-            }
-            for item in estimates[:50]
-        ]
-        monthly_cost = estimate_monthly_cost(total_bytes, region)
+                delete_bytes_by_class[sc] += size
+                delete_count_by_class[sc] += 1
+        progress.close()
+
+        delete_total_bytes = sum(delete_bytes_by_class.values())
+        delete_total_count = sum(delete_count_by_class.values())
+        monthly_savings = estimate_monthly_cost_by_class(delete_bytes_by_class, region)
+
         region_output = size_estimate_path(region)
         write_json(
             region_output,
             {
                 "region": region,
                 "project": resolved_project(ctx),
-                "source_bucket": bucket_name,
-                "spec_path": str(spec_path.relative_to(REPO_ROOT)),
-                "input_prefix_count": len(include_prefixes),
-                "deduped_prefix_count": len(kept_prefixes),
-                "skipped_nested_prefix_count": len(skipped_prefixes),
-                "skipped_nested_prefixes": skipped_prefixes,
-                "total_object_count": total_objects,
-                "total_bytes": total_bytes,
-                "total_human_bytes": human_bytes(total_bytes),
-                "estimated_monthly_cost_usd": round(monthly_cost, 2),
-                "top_prefixes": top_prefixes,
+                "bucket": bucket_name,
+                "total_objects_scanned": total_objects,
+                "total_bytes_scanned": total_bytes,
+                "total_human_bytes_scanned": human_bytes(total_bytes),
+                "delete_object_count": delete_total_count,
+                "delete_total_bytes": delete_total_bytes,
+                "delete_human_bytes": human_bytes(delete_total_bytes),
+                "delete_bytes_by_class": dict(delete_bytes_by_class),
+                "delete_count_by_class": dict(delete_count_by_class),
+                "protect_object_count": sum(protect_count_by_class.values()),
+                "protect_total_bytes": sum(protect_bytes_by_class.values()),
+                "protect_bytes_by_class": dict(protect_bytes_by_class),
+                "estimated_monthly_savings_usd": round(monthly_savings, 2),
             },
         )
         outputs.append(region_output)
         summary_rows.append(
             {
                 "region": region,
-                "source_bucket": bucket_name,
-                "input_prefix_count": str(len(include_prefixes)),
-                "deduped_prefix_count": str(len(kept_prefixes)),
-                "total_object_count": str(total_objects),
-                "total_bytes": str(total_bytes),
-                "total_human_bytes": human_bytes(total_bytes),
-                "estimated_monthly_cost_usd": f"{monthly_cost:.2f}",
+                "bucket": bucket_name,
+                "total_objects": str(total_objects),
+                "delete_objects": str(delete_total_count),
+                "delete_bytes": str(delete_total_bytes),
+                "delete_human_bytes": human_bytes(delete_total_bytes),
+                "estimated_monthly_savings_usd": f"{monthly_savings:.2f}",
             }
         )
         remote_summary["regions"][region] = {
-            "source_bucket": bucket_name,
-            "total_object_count": total_objects,
-            "total_bytes": total_bytes,
-            "total_human_bytes": human_bytes(total_bytes),
-            "estimated_monthly_cost_usd": round(monthly_cost, 2),
-            "top_prefixes": top_prefixes,
+            "bucket": bucket_name,
+            "total_objects": total_objects,
+            "delete_objects": delete_total_count,
+            "delete_bytes": delete_total_bytes,
+            "delete_human_bytes": human_bytes(delete_total_bytes),
+            "delete_bytes_by_class": dict(delete_bytes_by_class),
+            "estimated_monthly_savings_usd": round(monthly_savings, 2),
         }
         print_summary(
-            f"{region}: {human_bytes(total_bytes)} ({total_objects} objects) "
-            f"~${monthly_cost:,.2f}/mo (after 50% discount)"
+            f"{region}: will delete {human_bytes(delete_total_bytes)} ({delete_total_count} objects) "
+            f"~${monthly_savings:,.2f}/mo savings"
         )
-        if top_prefixes:
-            print_summary("top 5 prefixes:")
-            for prefix_summary in top_prefixes:
-                print_summary(
-                    f"  {prefix_summary['total_human_bytes']:>12}  "
-                    f"{prefix_summary['object_count']:>8}  {prefix_summary['prefix']}"
-                )
+        for sc in sorted(delete_bytes_by_class):
+            print_summary(
+                f"  {sc:>12}: {human_bytes(delete_bytes_by_class[sc]):>12}  " f"{delete_count_by_class[sc]:>8} objects"
+            )
 
-    summary_path = BACKUP_DIR / "backup_size_summary.csv"
+    summary_path = BACKUP_DIR / "deletion_estimate_summary.csv"
     write_csv_rows(
         summary_path,
         summary_rows,
         fieldnames=[
             "region",
-            "source_bucket",
-            "input_prefix_count",
-            "deduped_prefix_count",
-            "total_object_count",
-            "total_bytes",
-            "total_human_bytes",
-            "estimated_monthly_cost_usd",
+            "bucket",
+            "total_objects",
+            "delete_objects",
+            "delete_bytes",
+            "delete_human_bytes",
+            "estimated_monthly_savings_usd",
         ],
     )
     outputs.append(summary_path)
-    total_monthly = sum(float(row["estimated_monthly_cost_usd"]) for row in summary_rows)
+    total_monthly = sum(float(row["estimated_monthly_savings_usd"]) for row in summary_rows)
     total_annual = total_monthly * 12
-    total_all_bytes = sum(int(row["total_bytes"]) for row in summary_rows)
-    print_summary(f"{action.action_id}: wrote size estimates for {len(summary_rows)} regions")
+    total_delete_bytes = sum(int(row["delete_bytes"]) for row in summary_rows)
+    print_summary(f"{action.action_id}: wrote deletion estimates for {len(summary_rows)} regions")
     print_summary(
-        f"  total: {human_bytes(total_all_bytes)} — "
-        f"~${total_monthly:,.2f}/mo, ~${total_annual:,.2f}/yr (GCS Standard, 50% discount)"
+        f"  total deletable: {human_bytes(total_delete_bytes)} — "
+        f"~${total_monthly:,.2f}/mo, ~${total_annual:,.2f}/yr savings (after 50% discount)"
     )
     write_marker(ctx, action, fingerprint, outputs=outputs, remote_summary=remote_summary)
 
 
-def create_backup_jobs(ctx: Context, action: StepSpec) -> None:
-    spec_paths = [BACKUP_DIR / f"sts_job_{region}.json" for region in selected_regions(ctx)]
-    fingerprint = hashlib.sha256(
-        ("".join(file_digest(path) for path in spec_paths if path.exists()) + ctx.region_key).encode()
-    ).hexdigest()
-    marker_path = ctx.state_path(action.action_id)
-    if marker_path.exists() and not ctx.force:
-        marker = read_json(marker_path)
-        if marker.get("input_fingerprint") == fingerprint:
-            job_names = marker.get("job_names", [])
-            if job_names and all(gcloud_transfer_job_describe(ctx, job_name) is not None for job_name in job_names):
-                print_summary(f"skip {action.action_id}: STS jobs already exist and were verified")
-                return
-
-    created_jobs: list[dict[str, Any]] = []
-    outputs: list[Path] = []
-    for region in selected_regions(ctx):
-        spec_path = BACKUP_DIR / f"sts_job_{region}.json"
-        if not spec_path.exists():
-            raise RuntimeError(f"Missing STS spec for {region}: {spec_path}")
-        spec = read_json(spec_path)
-        prefix_list_path = BACKUP_DIR / f"sts_job_include_prefixes_{region}.txt"
-        outputs.extend([spec_path, prefix_list_path])
-        job_name = spec["name"]
-        existing = gcloud_transfer_job_describe(ctx, job_name)
-        if existing is not None and not ctx.force:
-            created_jobs.append(existing)
-            continue
-        print_summary(f"{action.action_id}: {'would create' if ctx.dry_run else 'creating'} STS job {job_name}")
-        if ctx.dry_run:
-            continue
-        command = [
-            "gcloud",
-            "transfer",
-            "jobs",
-            "create",
-            spec["source"],
-            spec["destination"],
-            f"--name={job_name}",
-            f"--description={spec['description']}",
-            "--do-not-run",
-            f"--include-prefixes={','.join(spec['include_prefixes'])}",
-            "--format=json",
-        ]
-        created = run_command(ctx, command, capture_json=True)
-        verified = gcloud_transfer_job_describe(ctx, job_name)
-        if verified is None:
-            raise RuntimeError(f"Failed to verify created STS job {job_name}")
-        created_jobs.append(created or verified)
-    if not ctx.dry_run:
-        write_marker(
-            ctx,
-            action,
-            fingerprint,
-            outputs=outputs,
-            remote_summary={"created_jobs": created_jobs},
-            extra={"job_names": [job["name"] for job in created_jobs if "name" in job]},
-        )
+# ===========================================================================
+# CLEANUP steps
+# ===========================================================================
 
 
-def validate_backup_sample(ctx: Context, action: StepSpec) -> None:
-    plan_rows = read_csv_rows(BACKUP_DIR / "backup_bucket_plan.csv")
-    fingerprint = hashlib.sha256(
-        (file_digest(BACKUP_DIR / "backup_bucket_plan.csv") + ctx.region_key).encode()
-    ).hexdigest()
-    if not ctx.force and marker_matches(ctx, action, fingerprint):
-        print_summary(f"skip {action.action_id}: outputs and marker are current")
-        return
-
-    verification_rows: list[dict[str, str]] = []
+def enable_soft_delete(ctx: Context, action: StepSpec) -> None:
+    plan_rows = read_csv_rows(BACKUP_DIR / "cleanup_plan.csv")
+    fingerprint = hashlib.sha256((file_digest(BACKUP_DIR / "cleanup_plan.csv") + ctx.region_key).encode()).hexdigest()
     remote_summary: dict[str, Any] = {"regions": {}}
     for row in plan_rows:
         region = row["region"]
         if ctx.selected_regions and region not in ctx.selected_regions:
             continue
-        prefix_rows = read_csv_rows(REPO_ROOT / row["backup_prefix_csv"])
-        sampled = prefix_rows[: ctx.sample_size]
-        found = 0
-        for prefix_row in sampled:
-            source_prefix = prefix_row["prefix_url"]
-            backup_prefix = source_prefix.replace(
-                f"gs://{row['source_bucket']}/",
-                f"gs://{row['backup_bucket']}/",
-                1,
-            )
-            objects = gcloud_ls(ctx, recursive_listing_url(backup_prefix), recursive=False)
-            if objects:
-                found += 1
-        verification_rows.append(
-            {
-                "region": region,
-                "sampled_prefixes": str(len(sampled)),
-                "prefixes_with_objects": str(found),
-                "backup_bucket": row["backup_bucket"],
-            }
-        )
-        remote_summary["regions"][region] = verification_rows[-1]
-        if sampled and found == 0:
-            raise RuntimeError(f"No sampled backup prefixes were readable in {row['backup_bucket']}")
-    output_path = BACKUP_DIR / "backup_validation.csv"
-    write_csv_rows(
-        output_path,
-        verification_rows,
-        fieldnames=["region", "sampled_prefixes", "prefixes_with_objects", "backup_bucket"],
-    )
-    print_summary(f"{action.action_id}: validated sampled backup prefixes")
-    write_marker(ctx, action, fingerprint, outputs=[output_path], remote_summary=remote_summary)
-
-
-def materialize_hold_manifest(ctx: Context, action: StepSpec) -> None:
-    plan_rows = read_csv_rows(BACKUP_DIR / "backup_bucket_plan.csv")
-    fingerprint = hashlib.sha256(
-        (file_digest(BACKUP_DIR / "backup_bucket_plan.csv") + ctx.region_key).encode()
-    ).hexdigest()
-    if not ctx.force and marker_matches(ctx, action, fingerprint):
-        print_summary(f"skip {action.action_id}: outputs and marker are current")
-        return
-
-    outputs: list[Path] = []
-    remote_summary: dict[str, Any] = {"regions": {}}
-    for row in plan_rows:
-        region = row["region"]
-        if ctx.selected_regions and region not in ctx.selected_regions:
-            continue
-        prefix_rows = read_csv_rows(REPO_ROOT / row["backup_prefix_csv"])
-        hold_rows: list[dict[str, str]] = []
-        for prefix_row in prefix_rows:
-            for object_url in gcloud_ls(ctx, recursive_listing_url(prefix_row["prefix_url"])):
-                hold_rows.append(
-                    {
-                        "object_url": object_url,
-                        "bucket": row["source_bucket"],
-                        "prefix_url": prefix_row["prefix_url"],
-                    }
-                )
-        output_path = PURGE_DIR / f"hold_objects_{region}.csv"
-        write_csv_rows(output_path, hold_rows, fieldnames=["object_url", "bucket", "prefix_url"])
-        outputs.append(output_path)
-        remote_summary["regions"][region] = {"objects": len(hold_rows)}
-    print_summary(f"{action.action_id}: materialized exact hold objects")
-    write_marker(ctx, action, fingerprint, outputs=outputs, remote_summary=remote_summary)
-
-
-def verify_object_holds(ctx: Context, object_urls: list[str], *, expected: bool) -> bool:
-    for object_url in object_urls:
-        metadata = gcloud_object_describe(ctx, object_url)
-        if metadata is None:
-            return False
-        actual = bool(metadata.get("temporaryHold", False))
-        if actual != expected:
-            return False
-    return True
-
-
-def update_temporary_holds(ctx: Context, object_urls: list[str], *, enable: bool) -> None:
-    if not object_urls:
-        return
-    flag = "--temporary-hold" if enable else "--no-temporary-hold"
-    run_command(
-        ctx,
-        ["gcloud", "storage", "objects", "update", "--read-paths-from-stdin", flag],
-        input_text="\n".join(object_urls) + "\n",
-    )
-
-
-def apply_temporary_holds(ctx: Context, action: StepSpec) -> None:
-    manifest_paths = [PURGE_DIR / f"hold_objects_{region}.csv" for region in selected_regions(ctx)]
-    fingerprint = hashlib.sha256(
-        ("".join(file_digest(path) for path in manifest_paths if path.exists()) + ctx.region_key).encode()
-    ).hexdigest()
-    object_urls: list[str] = []
-    for path in manifest_paths:
-        if path.exists():
-            object_urls.extend(row["object_url"] for row in read_csv_rows(path))
-    if (
-        not ctx.force
-        and marker_matches(ctx, action, fingerprint)
-        and verify_object_holds(ctx, object_urls, expected=True)
-    ):
-        print_summary(f"skip {action.action_id}: temporary holds already verified")
-        return
-
-    print_summary(f"{action.action_id}: applying temporary holds to {len(object_urls)} objects")
-    if ctx.dry_run:
-        print_summary(f"{action.action_id}: dry-run only, would apply temporary holds")
-        return
-    update_temporary_holds(ctx, object_urls, enable=True)
-    if not verify_object_holds(ctx, object_urls, expected=True):
-        raise RuntimeError("Temporary hold verification failed after update")
-    write_marker(
-        ctx,
-        action,
-        fingerprint,
-        outputs=manifest_paths,
-        remote_summary={"object_count": len(object_urls), "temporary_hold": True},
-    )
-
-
-def disable_autoclass(ctx: Context, action: StepSpec) -> None:
-    plan_rows = read_csv_rows(BACKUP_DIR / "backup_bucket_plan.csv")
-    fingerprint = hashlib.sha256(
-        (file_digest(BACKUP_DIR / "backup_bucket_plan.csv") + ctx.region_key).encode()
-    ).hexdigest()
-    snapshot_paths: list[Path] = []
-    remote_summary: dict[str, Any] = {"regions": {}}
-    for row in plan_rows:
-        region = row["region"]
-        if ctx.selected_regions and region not in ctx.selected_regions:
-            continue
-        bucket_url = f"gs://{row['source_bucket']}"
+        bucket_url = f"gs://{row['bucket']}"
         metadata = gcloud_bucket_describe(ctx, bucket_url)
-        before_path = PURGE_DIR / f"bucket_before_autoclass_disable_{region}.json"
-        write_json(before_path, metadata)
-        snapshot_paths.append(before_path)
-        if not ctx.force and marker_matches(ctx, action, fingerprint) and not bucket_autoclass_enabled(metadata):
-            remote_summary["regions"][region] = {"autoclass_enabled": False}
-            continue
-        print_summary(f"{action.action_id}: {'would disable' if ctx.dry_run else 'disabling'} Autoclass on {bucket_url}")
-        if not ctx.dry_run:
-            run_command(ctx, ["gcloud", "storage", "buckets", "update", bucket_url, "--no-enable-autoclass"])
-        after = gcloud_bucket_describe(ctx, bucket_url)
-        if not ctx.dry_run and bucket_autoclass_enabled(after):
-            raise RuntimeError(f"Autoclass is still enabled for {bucket_url}")
-        remote_summary["regions"][region] = {"autoclass_enabled": bucket_autoclass_enabled(after)}
-    if not ctx.dry_run:
-        write_marker(ctx, action, fingerprint, outputs=snapshot_paths, remote_summary=remote_summary)
-
-
-def lifecycle_rule_payload(existing_rules: list[dict[str, Any]]) -> dict[str, Any]:
-    merged_rules = [rule for rule in existing_rules if not is_delete_nonstandard_rule(rule)]
-    merged_rules.append(
-        {
-            "action": {"type": "Delete"},
-            "condition": {"matchesStorageClass": NON_STANDARD_STORAGE_CLASSES},
-        }
-    )
-    return {"rule": merged_rules}
-
-
-def apply_delete_lifecycle(ctx: Context, action: StepSpec) -> None:
-    plan_rows = read_csv_rows(BACKUP_DIR / "backup_bucket_plan.csv")
-    fingerprint = hashlib.sha256(
-        (file_digest(BACKUP_DIR / "backup_bucket_plan.csv") + ctx.region_key).encode()
-    ).hexdigest()
-    outputs: list[Path] = []
-    remote_summary: dict[str, Any] = {"regions": {}}
-    for row in plan_rows:
-        region = row["region"]
-        if ctx.selected_regions and region not in ctx.selected_regions:
-            continue
-        bucket_url = f"gs://{row['source_bucket']}"
-        before = gcloud_bucket_describe(ctx, bucket_url)
-        before_path = PURGE_DIR / f"bucket_lifecycle_before_{region}.json"
-        desired_path = PURGE_DIR / f"lifecycle_delete_nonstandard_{region}.json"
-        write_json(before_path, before)
-        payload = lifecycle_rule_payload(lifecycle_rules_from_metadata(before))
-        write_json(desired_path, payload)
-        outputs.extend([before_path, desired_path])
-        if (
-            not ctx.force
-            and marker_matches(ctx, action, fingerprint)
-            and any(is_delete_nonstandard_rule(rule) for rule in lifecycle_rules_from_metadata(before))
-        ):
-            remote_summary["regions"][region] = {"delete_rule_present": True}
+        current_seconds = bucket_soft_delete_seconds(metadata)
+        if current_seconds >= SOFT_DELETE_RETENTION_SECONDS and not ctx.force:
+            print_summary(
+                f"{action.action_id}: {bucket_url} already has soft-delete >= {SOFT_DELETE_RETENTION_SECONDS}s"
+            )
+            remote_summary["regions"][region] = {"soft_delete_seconds": current_seconds, "action": "already_enabled"}
             continue
         print_summary(
-            f"{action.action_id}: {'would apply' if ctx.dry_run else 'applying'} lifecycle delete to {bucket_url}"
+            f"{action.action_id}: {'would enable' if ctx.dry_run else 'enabling'} "
+            f"soft-delete ({SOFT_DELETE_RETENTION_SECONDS}s) on {bucket_url}"
         )
         if not ctx.dry_run:
-            run_command(
+            run_subprocess(
                 ctx,
-                ["gcloud", "storage", "buckets", "update", bucket_url, f"--lifecycle-file={desired_path}"],
+                [
+                    "gcloud",
+                    "storage",
+                    "buckets",
+                    "update",
+                    bucket_url,
+                    f"--soft-delete-duration={SOFT_DELETE_RETENTION_SECONDS}s",
+                ],
             )
-        after = gcloud_bucket_describe(ctx, bucket_url)
-        if not ctx.dry_run and not any(
-            is_delete_nonstandard_rule(rule) for rule in lifecycle_rules_from_metadata(after)
-        ):
-            raise RuntimeError(f"Lifecycle delete rule is missing on {bucket_url}")
-        remote_summary["regions"][region] = {"delete_rule_present": True}
+            after = gcloud_bucket_describe(ctx, bucket_url)
+            after_seconds = bucket_soft_delete_seconds(after)
+            if after_seconds < SOFT_DELETE_RETENTION_SECONDS:
+                raise RuntimeError(
+                    f"Soft-delete on {bucket_url} is {after_seconds}s, expected >= {SOFT_DELETE_RETENTION_SECONDS}s"
+                )
+            remote_summary["regions"][region] = {"soft_delete_seconds": after_seconds, "action": "enabled"}
+        else:
+            remote_summary["regions"][region] = {"action": "dry_run"}
+    if not ctx.dry_run:
+        write_marker(ctx, action, fingerprint, outputs=[], remote_summary=remote_summary)
+
+
+def delete_cold_unprotected(ctx: Context, action: StepSpec) -> None:
+    """Delete non-STANDARD objects outside the protect set."""
+    plan_rows = read_csv_rows(BACKUP_DIR / "cleanup_plan.csv")
+    fingerprint = hashlib.sha256((file_digest(BACKUP_DIR / "cleanup_plan.csv") + ctx.region_key).encode()).hexdigest()
+    if not ctx.force and marker_matches(ctx, action, fingerprint):
+        print_summary(f"skip {action.action_id}: already completed")
+        return
+
+    protect_set = build_protect_prefix_set(ctx)
+    remote_summary: dict[str, Any] = {"regions": {}}
+    outputs: list[Path] = []
+
+    for row in plan_rows:
+        region = row["region"]
+        if ctx.selected_regions and region not in ctx.selected_regions:
+            continue
+        bucket_name = row["bucket"]
+        bucket_protect = protect_set.get(bucket_name, set())
+        client = storage_client(ctx)
+        bucket_obj = client.bucket(bucket_name)
+
+        deleted_count = 0
+        deleted_bytes = 0
+        skipped_protected = 0
+        skipped_standard = 0
+        deleted_by_class: dict[str, int] = defaultdict(int)
+
+        print_summary(f"{action.action_id}: scanning {bucket_name} for cold unprotected objects")
+        progress = tqdm(desc=f"delete {bucket_name}", unit=" obj", leave=True)
+
+        delete_batch: list[storage.Blob] = []
+        BATCH_SIZE = 1000
+
+        for blob in client.list_blobs(bucket_name):
+            sc = blob.storage_class or "STANDARD"
+            size = int(blob.size or 0)
+            progress.update(1)
+
+            if sc not in NON_STANDARD_STORAGE_CLASSES:
+                skipped_standard += 1
+                continue
+            if object_is_protected(blob.name, bucket_protect):
+                skipped_protected += 1
+                continue
+
+            deleted_count += 1
+            deleted_bytes += size
+            deleted_by_class[sc] += 1
+            delete_batch.append(bucket_obj.blob(blob.name))
+
+            if len(delete_batch) >= BATCH_SIZE:
+                if not ctx.dry_run:
+                    with client.batch():
+                        for b in delete_batch:
+                            b.delete()
+                delete_batch.clear()
+
+        if delete_batch and not ctx.dry_run:
+            with client.batch():
+                for b in delete_batch:
+                    b.delete()
+            delete_batch.clear()
+        progress.close()
+
+        deletion_log_path = BACKUP_DIR / f"deletion_log_{region}.json"
+        write_json(
+            deletion_log_path,
+            {
+                "region": region,
+                "bucket": bucket_name,
+                "deleted_count": deleted_count,
+                "deleted_bytes": deleted_bytes,
+                "deleted_human_bytes": human_bytes(deleted_bytes),
+                "deleted_by_class": dict(deleted_by_class),
+                "skipped_protected": skipped_protected,
+                "skipped_standard": skipped_standard,
+                "dry_run": ctx.dry_run,
+            },
+        )
+        outputs.append(deletion_log_path)
+        remote_summary["regions"][region] = {
+            "deleted_count": deleted_count,
+            "deleted_bytes": deleted_bytes,
+            "skipped_protected": skipped_protected,
+            "skipped_standard": skipped_standard,
+        }
+        verb = "would delete" if ctx.dry_run else "deleted"
+        print_summary(
+            f"{region}: {verb} {deleted_count} objects ({human_bytes(deleted_bytes)}), "
+            f"skipped {skipped_protected} protected + {skipped_standard} STANDARD"
+        )
     if not ctx.dry_run:
         write_marker(ctx, action, fingerprint, outputs=outputs, remote_summary=remote_summary)
 
 
-def wait_for_lifecycle(ctx: Context, action: StepSpec) -> None:
-    prerequisite_marker = ctx.state_path("purge.apply_delete_lifecycle")
+def wait_for_soft_delete_window(ctx: Context, action: StepSpec) -> None:
+    prerequisite_marker = ctx.state_path("cleanup.delete_cold_objects")
     if not prerequisite_marker.exists():
-        raise RuntimeError("purge.wait_for_lifecycle requires purge.apply_delete_lifecycle to be complete first")
+        raise RuntimeError("cleanup.wait_for_safety_window requires cleanup.delete_cold_objects to be complete first")
     fingerprint = file_digest(prerequisite_marker)
     marker_path = ctx.state_path(action.action_id)
     settle_deadline = now_utc() + timedelta(hours=ctx.settle_hours)
@@ -1443,14 +1235,15 @@ def wait_for_lifecycle(ctx: Context, action: StepSpec) -> None:
         marker = read_json(marker_path)
         existing_deadline = datetime.fromisoformat(marker["settle_deadline"])
         if now_utc() < existing_deadline:
+            remaining = existing_deadline - now_utc()
             raise RuntimeError(
-                f"Lifecycle settle window still open until {existing_deadline.isoformat()}. "
-                "Rerun after the deadline or use --force to override."
+                f"Soft-delete safety window still open until {existing_deadline.isoformat()} "
+                f"({remaining} remaining). Rerun after the deadline or use --force to override."
             )
-        print_summary(f"{action.action_id}: lifecycle settle window already elapsed")
+        print_summary(f"{action.action_id}: soft-delete safety window already elapsed")
         return
     print_summary(
-        f"{action.action_id}: recording lifecycle settle window for {ctx.settle_hours} hours "
+        f"{action.action_id}: recording safety window for {ctx.settle_hours} hours "
         f"(until {settle_deadline.isoformat()})"
     )
     write_marker(
@@ -1462,114 +1255,42 @@ def wait_for_lifecycle(ctx: Context, action: StepSpec) -> None:
     )
 
 
-def remove_delete_lifecycle(ctx: Context, action: StepSpec) -> None:
-    plan_rows = read_csv_rows(BACKUP_DIR / "backup_bucket_plan.csv")
-    fingerprint = hashlib.sha256(
-        (file_digest(BACKUP_DIR / "backup_bucket_plan.csv") + ctx.region_key).encode()
-    ).hexdigest()
-    outputs: list[Path] = []
+def disable_soft_delete(ctx: Context, action: StepSpec) -> None:
+    plan_rows = read_csv_rows(BACKUP_DIR / "cleanup_plan.csv")
+    fingerprint = hashlib.sha256((file_digest(BACKUP_DIR / "cleanup_plan.csv") + ctx.region_key).encode()).hexdigest()
     remote_summary: dict[str, Any] = {"regions": {}}
     for row in plan_rows:
         region = row["region"]
         if ctx.selected_regions and region not in ctx.selected_regions:
             continue
-        bucket_url = f"gs://{row['source_bucket']}"
-        before_path = PURGE_DIR / f"bucket_lifecycle_before_{region}.json"
-        if not before_path.exists():
-            raise RuntimeError(f"Missing previous lifecycle snapshot for {region}: {before_path}")
-        previous = read_json(before_path)
-        previous_rules = lifecycle_rules_from_metadata(previous)
-        previous_path = PURGE_DIR / f"lifecycle_restore_{region}.json"
-        if previous_rules:
-            write_json(previous_path, {"rule": previous_rules})
-            outputs.append(previous_path)
+        bucket_url = f"gs://{row['bucket']}"
         metadata = gcloud_bucket_describe(ctx, bucket_url)
-        if (
-            not ctx.force
-            and marker_matches(ctx, action, fingerprint)
-            and not any(is_delete_nonstandard_rule(rule) for rule in lifecycle_rules_from_metadata(metadata))
-        ):
-            remote_summary["regions"][region] = {"delete_rule_present": False}
+        current_seconds = bucket_soft_delete_seconds(metadata)
+        if current_seconds == 0 and not ctx.force:
+            print_summary(f"{action.action_id}: {bucket_url} already has soft-delete disabled")
+            remote_summary["regions"][region] = {"soft_delete_seconds": 0, "action": "already_disabled"}
             continue
-        print_summary(f"{action.action_id}: {'would restore' if ctx.dry_run else 'restoring'} lifecycle on {bucket_url}")
+        print_summary(
+            f"{action.action_id}: {'would disable' if ctx.dry_run else 'disabling'} soft-delete on {bucket_url}"
+        )
         if not ctx.dry_run:
-            if previous_rules:
-                run_command(
-                    ctx,
-                    ["gcloud", "storage", "buckets", "update", bucket_url, f"--lifecycle-file={previous_path}"],
-                )
-            else:
-                run_command(ctx, ["gcloud", "storage", "buckets", "update", bucket_url, "--clear-lifecycle"])
-        after = gcloud_bucket_describe(ctx, bucket_url)
-        if not ctx.dry_run and any(is_delete_nonstandard_rule(rule) for rule in lifecycle_rules_from_metadata(after)):
-            raise RuntimeError(f"Temporary lifecycle delete rule still present on {bucket_url}")
-        remote_summary["regions"][region] = {"delete_rule_present": False}
+            run_subprocess(ctx, ["gcloud", "storage", "buckets", "update", bucket_url, "--clear-soft-delete"])
+            after = gcloud_bucket_describe(ctx, bucket_url)
+            after_seconds = bucket_soft_delete_seconds(after)
+            if after_seconds != 0:
+                raise RuntimeError(f"Soft-delete on {bucket_url} is still {after_seconds}s after clear")
+            remote_summary["regions"][region] = {"soft_delete_seconds": 0, "action": "disabled"}
+        else:
+            remote_summary["regions"][region] = {"action": "dry_run"}
     if not ctx.dry_run:
-        write_marker(ctx, action, fingerprint, outputs=outputs, remote_summary=remote_summary)
+        write_marker(ctx, action, fingerprint, outputs=[], remote_summary=remote_summary)
 
 
-def reenable_autoclass(ctx: Context, action: StepSpec) -> None:
-    plan_rows = read_csv_rows(BACKUP_DIR / "backup_bucket_plan.csv")
-    fingerprint = hashlib.sha256(
-        (file_digest(BACKUP_DIR / "backup_bucket_plan.csv") + ctx.region_key).encode()
-    ).hexdigest()
-    remote_summary: dict[str, Any] = {"regions": {}}
-    outputs: list[Path] = []
-    for row in plan_rows:
-        region = row["region"]
-        if ctx.selected_regions and region not in ctx.selected_regions:
-            continue
-        bucket_url = f"gs://{row['source_bucket']}"
-        snapshot_path = PURGE_DIR / f"bucket_after_autoclass_reenable_{region}.json"
-        metadata = gcloud_bucket_describe(ctx, bucket_url)
-        if not ctx.force and marker_matches(ctx, action, fingerprint) and bucket_autoclass_enabled(metadata):
-            write_json(snapshot_path, metadata)
-            outputs.append(snapshot_path)
-            remote_summary["regions"][region] = {"autoclass_enabled": True}
-            continue
-        print_summary(f"{action.action_id}: {'would enable' if ctx.dry_run else 'enabling'} Autoclass on {bucket_url}")
-        if not ctx.dry_run:
-            run_command(ctx, ["gcloud", "storage", "buckets", "update", bucket_url, "--enable-autoclass"])
-        after = gcloud_bucket_describe(ctx, bucket_url)
-        write_json(snapshot_path, after)
-        outputs.append(snapshot_path)
-        if not ctx.dry_run and not bucket_autoclass_enabled(after):
-            raise RuntimeError(f"Autoclass is still disabled for {bucket_url}")
-        remote_summary["regions"][region] = {"autoclass_enabled": bucket_autoclass_enabled(after)}
-    if not ctx.dry_run:
-        write_marker(ctx, action, fingerprint, outputs=outputs, remote_summary=remote_summary)
+# ===========================================================================
+# Step registry
+# ===========================================================================
 
-
-def clear_temporary_holds(ctx: Context, action: StepSpec) -> None:
-    manifest_paths = [PURGE_DIR / f"hold_objects_{region}.csv" for region in selected_regions(ctx)]
-    fingerprint = hashlib.sha256(
-        ("".join(file_digest(path) for path in manifest_paths if path.exists()) + ctx.region_key).encode()
-    ).hexdigest()
-    object_urls: list[str] = []
-    for path in manifest_paths:
-        if path.exists():
-            object_urls.extend(row["object_url"] for row in read_csv_rows(path))
-    if (
-        not ctx.force
-        and marker_matches(ctx, action, fingerprint)
-        and verify_object_holds(ctx, object_urls, expected=False)
-    ):
-        print_summary(f"skip {action.action_id}: temporary holds already cleared")
-        return
-    print_summary(f"{action.action_id}: {'would clear' if ctx.dry_run else 'clearing'} temporary holds")
-    if ctx.dry_run:
-        return
-    update_temporary_holds(ctx, object_urls, enable=False)
-    if not verify_object_holds(ctx, object_urls, expected=False):
-        raise RuntimeError("Temporary hold verification failed after clear")
-    write_marker(
-        ctx,
-        action,
-        fingerprint,
-        outputs=manifest_paths,
-        remote_summary={"object_count": len(object_urls), "temporary_hold": False},
-    )
-
+ALL_REGIONS = [region_from_bucket(b) for b in MARIN_BUCKETS]
 
 STEPS = [
     StepSpec(
@@ -1579,20 +1300,13 @@ STEPS = [
         description="Resolve listing-based protect families into concrete prefixes.",
         help_text=(
             "Resolve wildcard protect families into concrete prefixes by listing one level below each parent prefix. "
-            "This step explains exactly what will be copied later, caches the child-prefix listings, and avoids "
-            "recursive subtree walks. Use `--listing-workers` to control parallel listing."
+            "Use `--listing-workers` to control parallel listing."
         ),
         outputs=tuple(
             sorted(
                 [
-                    *(
-                        RESOLVE_DIR / f"listing_prefixes_{region}.csv"
-                        for region in [region_from_bucket(bucket) for bucket in MARIN_BUCKETS]
-                    ),
-                    *(
-                        RESOLVE_DIR / f"resolved_prefixes_{region}.csv"
-                        for region in [region_from_bucket(bucket) for bucket in MARIN_BUCKETS]
-                    ),
+                    *(RESOLVE_DIR / f"listing_prefixes_{r}.csv" for r in ALL_REGIONS),
+                    *(RESOLVE_DIR / f"resolved_prefixes_{r}.csv" for r in ALL_REGIONS),
                 ]
             )
         ),
@@ -1602,272 +1316,118 @@ STEPS = [
         requirements=(str(PROTECT_DIR / "protect_prefixes_classified.csv"),),
     ),
     StepSpec(
-        action_id="prep.build_backup_inputs",
+        action_id="prep.build_protect_inputs",
         group_name="prep",
-        command_name="build-backup-inputs",
-        description="Merge direct and resolved prefixes into backup inputs and a bucket plan.",
+        command_name="build-protect-inputs",
+        description="Merge direct and resolved prefixes into the protect set.",
         help_text=(
-            "Merge direct keep prefixes with the resolved wildcard prefixes into one backup input set per region. "
-            "This step is local-only and produces the CSVs that the copy stage and later purge steps consume. "
-            "Run it again whenever the resolved prefix outputs change."
+            "Merge direct keep prefixes with resolved wildcard prefixes into one protect-set per region. "
+            "This step is local-only and produces the CSVs that later cleanup steps consume."
         ),
         outputs=tuple(
             [
-                *(BACKUP_DIR / f"backup_prefixes_{region_from_bucket(bucket)}.csv" for bucket in MARIN_BUCKETS),
-                BACKUP_DIR / "backup_bucket_plan.csv",
+                *(BACKUP_DIR / f"protect_prefixes_{r}.csv" for r in ALL_REGIONS),
+                BACKUP_DIR / "cleanup_plan.csv",
             ]
         ),
         mutating=False,
-        runner=build_backup_inputs,
+        runner=build_protect_inputs,
         predecessors=("prep.resolve_listing_prefixes",),
         requirements=(str(PROTECT_DIR / "protect_prefixes_direct.csv"),),
     ),
     StepSpec(
-        action_id="prep.prepare_backup_jobs",
+        action_id="prep.estimate_deletion_savings",
         group_name="prep",
-        command_name="prepare-backup-jobs",
-        description="Write STS job specs for backup copies.",
+        command_name="estimate-deletion-savings",
+        description="Estimate deletion savings by scanning objects and their storage classes.",
         help_text=(
-            "Write STS job specs and include-prefix lists for each region without creating any transfer jobs yet. "
-            "This step turns the backup input CSVs into stable, reviewable artifacts that the copy stage can execute "
-            "directly. Run it before size estimation or backup-bucket creation so later commands have one canonical "
-            "spec per region."
+            "Scan each source bucket, classify every object as protected/deletable by storage class, "
+            "and compute the monthly cost savings from deletion. Produces per-region JSON estimates "
+            "and a summary CSV."
         ),
         outputs=tuple(
             [
-                *(BACKUP_DIR / f"sts_job_{region_from_bucket(bucket)}.json" for bucket in MARIN_BUCKETS),
-                *(BACKUP_DIR / f"sts_job_include_prefixes_{region_from_bucket(bucket)}.txt" for bucket in MARIN_BUCKETS),
+                *(size_estimate_path(r) for r in ALL_REGIONS),
+                BACKUP_DIR / "deletion_estimate_summary.csv",
             ]
         ),
         mutating=False,
-        runner=prepare_backup_jobs,
-        predecessors=("prep.build_backup_inputs",),
-        requirements=(str(BACKUP_DIR / "backup_bucket_plan.csv"),),
-    ),
-    StepSpec(
-        action_id="prep.estimate_backup_size",
-        group_name="prep",
-        command_name="estimate-backup-size",
-        description="Estimate backup size from the prepared STS job specs.",
-        help_text=(
-            "Estimate how much data each prepared STS backup job will copy by scanning the source prefixes in Cloud "
-            "Storage. This step deduplicates nested prefixes first so totals are not double-counted, then writes one "
-            "JSON estimate per region plus a human-readable summary CSV. Use `--estimate-workers` to control parallel "
-            "prefix scans and `--project` if the storage client should use a non-default GCP project."
-        ),
-        outputs=tuple(
-            [
-                *(size_estimate_path(region_from_bucket(bucket)) for bucket in MARIN_BUCKETS),
-                BACKUP_DIR / "backup_size_summary.csv",
-            ]
-        ),
-        mutating=False,
-        runner=estimate_backup_size,
-        predecessors=("prep.prepare_backup_jobs",),
-        requirements=tuple(str(BACKUP_DIR / f"sts_job_{region_from_bucket(bucket)}.json") for bucket in MARIN_BUCKETS),
+        runner=estimate_deletion_savings,
+        predecessors=("prep.build_protect_inputs",),
+        requirements=(str(BACKUP_DIR / "cleanup_plan.csv"),),
         estimate_workers=True,
     ),
     StepSpec(
-        action_id="copy.create_backup_buckets",
-        group_name="copy",
-        command_name="create-backup-buckets",
-        description="Create or reconcile temporary same-region backup buckets.",
+        action_id="cleanup.enable_soft_delete",
+        group_name="cleanup",
+        command_name="enable-soft-delete",
+        description="Enable 3-day soft-delete retention on source buckets.",
         help_text=(
-            "Create each temporary same-region backup bucket if it is missing, and reconcile its settings if it "
-            "already exists. This step ensures the backup buckets, not the source buckets, have Autoclass disabled "
-            "and soft delete cleared before any transfer jobs are created. Use `--dry-run` to inspect which buckets "
-            "would be created or updated without mutating Cloud Storage."
+            "Enable soft-delete with a 3-day retention window on each source bucket. This ensures "
+            "that any objects deleted in the next step can be restored if something goes wrong."
         ),
-        outputs=(BACKUP_DIR / "backup_bucket_state.csv",),
+        outputs=(),
         mutating=True,
-        runner=create_backup_buckets,
-        predecessors=("prep.prepare_backup_jobs",),
-        requirements=(str(BACKUP_DIR / "backup_bucket_plan.csv"),),
+        runner=enable_soft_delete,
+        predecessors=("prep.estimate_deletion_savings",),
+        requirements=(str(BACKUP_DIR / "cleanup_plan.csv"),),
     ),
     StepSpec(
-        action_id="copy.create_backup_jobs",
-        group_name="copy",
-        command_name="create-backup-jobs",
-        description="Create STS jobs for same-region backup copies.",
+        action_id="cleanup.delete_cold_objects",
+        group_name="cleanup",
+        command_name="delete-cold-objects",
+        description="Delete non-STANDARD objects outside the protect set.",
         help_text=(
-            "Create same-region Storage Transfer Service jobs from the prepared specs. This is the first "
-            "remote-mutation step in the workflow, and it verifies that the expected STS jobs exist before marking "
-            "itself complete. Use `--dry-run` to inspect the generated specs without creating jobs."
+            "Scan each source bucket and delete objects whose storage class is NEARLINE, COLDLINE, or "
+            "ARCHIVE and that do not fall under any protected prefix. Uses batch deletes for throughput. "
+            "Soft-delete must be enabled first so deletions are recoverable during the safety window."
         ),
-        outputs=tuple(
-            [
-                *(BACKUP_DIR / f"sts_job_{region_from_bucket(bucket)}.json" for bucket in MARIN_BUCKETS),
-                *(BACKUP_DIR / f"sts_job_include_prefixes_{region_from_bucket(bucket)}.txt" for bucket in MARIN_BUCKETS),
-            ]
-        ),
+        outputs=tuple(BACKUP_DIR / f"deletion_log_{r}.json" for r in ALL_REGIONS),
         mutating=True,
-        runner=create_backup_jobs,
-        predecessors=("copy.create_backup_buckets",),
-        requirements=tuple(str(BACKUP_DIR / f"sts_job_{region_from_bucket(bucket)}.json") for bucket in MARIN_BUCKETS),
+        runner=delete_cold_unprotected,
+        predecessors=("cleanup.enable_soft_delete",),
+        requirements=(str(BACKUP_DIR / "cleanup_plan.csv"),),
+        delete_workers=True,
     ),
     StepSpec(
-        action_id="copy.validate_backup_sample",
-        group_name="copy",
-        command_name="validate-backup-sample",
-        description="Inspect sampled prefixes in backup buckets.",
+        action_id="cleanup.wait_for_safety_window",
+        group_name="cleanup",
+        command_name="wait-for-safety-window",
+        description="Record and honor the soft-delete safety window.",
         help_text=(
-            "Inspect a small sample of copied prefixes in each backup bucket to confirm that the transferred "
-            "content is present and readable. This step gives a lightweight safety check before any source-bucket "
-            "protection or deletion logic begins. Use `--sample-size` to adjust how many prefixes are sampled."
+            "Record the soft-delete safety window and refuse to disable soft-delete until that window "
+            "has elapsed. This is a checkpoint, not a sleep. Use `--settle-hours` to adjust the window."
         ),
-        outputs=(BACKUP_DIR / "backup_validation.csv",),
+        outputs=(),
         mutating=False,
-        runner=validate_backup_sample,
-        predecessors=("copy.create_backup_jobs",),
-        requirements=(str(BACKUP_DIR / "backup_bucket_plan.csv"),),
-        sample_size=True,
-    ),
-    StepSpec(
-        action_id="purge.materialize_hold_manifest",
-        group_name="purge",
-        command_name="materialize-hold-manifest",
-        description="Expand the keep set to exact object URLs for temporary holds.",
-        help_text=(
-            "Expand the keep prefixes into exact object URLs that will receive temporary holds in the source "
-            "buckets. This step is read-only against storage and produces the concrete hold manifest used by later "
-            "purge commands. It makes the protected object set explicit before any bucket settings are changed."
-        ),
-        outputs=tuple(PURGE_DIR / f"hold_objects_{region_from_bucket(bucket)}.csv" for bucket in MARIN_BUCKETS),
-        mutating=False,
-        runner=materialize_hold_manifest,
-        predecessors=("copy.validate_backup_sample",),
-        requirements=(str(BACKUP_DIR / "backup_bucket_plan.csv"),),
-    ),
-    StepSpec(
-        action_id="purge.apply_temporary_holds",
-        group_name="purge",
-        command_name="apply-temporary-holds",
-        description="Apply temporary holds to the protected in-place objects.",
-        help_text=(
-            "Apply temporary holds to every object in the materialized hold manifest so lifecycle deletion cannot "
-            "remove them. This is the main guardrail that lets the later lifecycle rule stay broad without touching "
-            "protected artifacts. Use `--dry-run` to inspect counts and inputs without changing object metadata."
-        ),
-        outputs=tuple(PURGE_DIR / f"hold_objects_{region_from_bucket(bucket)}.csv" for bucket in MARIN_BUCKETS),
-        mutating=True,
-        runner=apply_temporary_holds,
-        predecessors=("purge.materialize_hold_manifest",),
-    ),
-    StepSpec(
-        action_id="purge.disable_autoclass",
-        group_name="purge",
-        command_name="disable-autoclass",
-        description="Disable Autoclass on the source buckets.",
-        help_text=(
-            "Disable Autoclass on the source buckets so the current storage classes stop changing during the purge "
-            "window. This step snapshots bucket metadata first and verifies that Autoclass is truly off afterward. "
-            "It should only run after backup validation and temporary holds are in place."
-        ),
-        outputs=tuple(
-            PURGE_DIR / f"bucket_before_autoclass_disable_{region_from_bucket(bucket)}.json" for bucket in MARIN_BUCKETS
-        ),
-        mutating=True,
-        runner=disable_autoclass,
-        predecessors=("purge.apply_temporary_holds",),
-        requirements=(str(BACKUP_DIR / "backup_bucket_plan.csv"),),
-    ),
-    StepSpec(
-        action_id="purge.apply_delete_lifecycle",
-        group_name="purge",
-        command_name="apply-delete-lifecycle",
-        description="Apply the temporary non-STANDARD delete lifecycle rule.",
-        help_text=(
-            "Apply the temporary lifecycle rule that deletes non-`STANDARD` objects from the source buckets. This "
-            "is the broad deletion mechanism for cold, unprotected data, so it writes the exact lifecycle JSON "
-            "alongside the before-state snapshots. Use `--dry-run` to review the planned lifecycle payloads "
-            "without updating buckets."
-        ),
-        outputs=tuple(
-            [
-                *(PURGE_DIR / f"bucket_lifecycle_before_{region_from_bucket(bucket)}.json" for bucket in MARIN_BUCKETS),
-                *(
-                    PURGE_DIR / f"lifecycle_delete_nonstandard_{region_from_bucket(bucket)}.json"
-                    for bucket in MARIN_BUCKETS
-                ),
-            ]
-        ),
-        mutating=True,
-        runner=apply_delete_lifecycle,
-        predecessors=("purge.disable_autoclass",),
-        requirements=(str(BACKUP_DIR / "backup_bucket_plan.csv"),),
-    ),
-    StepSpec(
-        action_id="purge.wait_for_lifecycle",
-        group_name="purge",
-        command_name="wait-for-lifecycle",
-        description="Record and honor the lifecycle settle window.",
-        help_text=(
-            "Record the lifecycle settle window and refuse cleanup until that window has elapsed. This step is "
-            "intentionally a checkpoint rather than a long sleep, so reruns remain explicit and auditable. "
-            "Use `--settle-hours` to adjust the recorded waiting period."
-        ),
-        outputs=tuple(),
-        mutating=False,
-        runner=wait_for_lifecycle,
-        predecessors=("purge.apply_delete_lifecycle",),
+        runner=wait_for_soft_delete_window,
+        predecessors=("cleanup.delete_cold_objects",),
         settle_hours=True,
     ),
     StepSpec(
-        action_id="purge.remove_delete_lifecycle",
-        group_name="purge",
-        command_name="remove-delete-lifecycle",
-        description="Restore each source bucket's pre-purge lifecycle configuration.",
+        action_id="cleanup.disable_soft_delete",
+        group_name="cleanup",
+        command_name="disable-soft-delete",
+        description="Disable soft-delete after the safety window has elapsed.",
         help_text=(
-            "Remove the temporary delete rule and restore the previous lifecycle configuration on each source "
-            "bucket. This step verifies that the non-`STANDARD` delete rule is gone before it marks itself "
-            "complete. It should only run after the recorded settle window has elapsed and the purge result "
-            "has been reviewed."
+            "Disable soft-delete on each source bucket, permanently removing the soft-deleted objects. "
+            "Only run this after the safety window has elapsed and you have confirmed no important "
+            "data was accidentally deleted."
         ),
-        outputs=tuple(PURGE_DIR / f"lifecycle_restore_{region_from_bucket(bucket)}.json" for bucket in MARIN_BUCKETS),
+        outputs=(),
         mutating=True,
-        runner=remove_delete_lifecycle,
-        predecessors=("purge.wait_for_lifecycle",),
-        requirements=tuple(
-            str(PURGE_DIR / f"bucket_lifecycle_before_{region_from_bucket(bucket)}.json") for bucket in MARIN_BUCKETS
-        ),
-    ),
-    StepSpec(
-        action_id="purge.reenable_autoclass",
-        group_name="purge",
-        command_name="reenable-autoclass",
-        description="Re-enable Autoclass on the source buckets.",
-        help_text=(
-            "Re-enable Autoclass on the source buckets so they return to normal steady-state storage behavior. "
-            "This step snapshots the post-change bucket metadata and confirms that Autoclass is enabled again. "
-            "It should run after lifecycle cleanup, not before."
-        ),
-        outputs=tuple(
-            PURGE_DIR / f"bucket_after_autoclass_reenable_{region_from_bucket(bucket)}.json" for bucket in MARIN_BUCKETS
-        ),
-        mutating=True,
-        runner=reenable_autoclass,
-        predecessors=("purge.remove_delete_lifecycle",),
-        requirements=(str(BACKUP_DIR / "backup_bucket_plan.csv"),),
-    ),
-    StepSpec(
-        action_id="purge.clear_temporary_holds",
-        group_name="purge",
-        command_name="clear-temporary-holds",
-        description="Optionally clear temporary holds after purge confidence is high.",
-        help_text=(
-            "Clear temporary holds from the protected objects once you are satisfied with the backup and purge "
-            "result. This is optional cleanup, not part of the default end-to-end run. Use `--dry-run` if you "
-            "want to inspect the manifest size without modifying object metadata."
-        ),
-        outputs=tuple(PURGE_DIR / f"hold_objects_{region_from_bucket(bucket)}.csv" for bucket in MARIN_BUCKETS),
-        mutating=True,
-        runner=clear_temporary_holds,
-        predecessors=("purge.reenable_autoclass",),
+        runner=disable_soft_delete,
+        predecessors=("cleanup.wait_for_safety_window",),
+        requirements=(str(BACKUP_DIR / "cleanup_plan.csv"),),
         optional=True,
     ),
 ]
 
 STEP_INDEX = {step.action_id: step for step in STEPS}
+
+# ===========================================================================
+# CLI
+# ===========================================================================
 
 
 def parse_regions(raw_regions: list[str] | None) -> set[str] | None:
@@ -1890,70 +1450,174 @@ def selected_steps(
 ) -> list[StepSpec]:
     if only_action is not None:
         return [STEP_INDEX[only_action]]
-    start_index = 0 if from_action is None else next(i for i, step in enumerate(STEPS) if step.action_id == from_action)
-    end_index = (
-        len(STEPS) - 1 if to_action is None else next(i for i, step in enumerate(STEPS) if step.action_id == to_action)
-    )
+    start_index = 0 if from_action is None else next(i for i, s in enumerate(STEPS) if s.action_id == from_action)
+    end_index = len(STEPS) - 1 if to_action is None else next(i for i, s in enumerate(STEPS) if s.action_id == to_action)
     steps = STEPS[start_index : end_index + 1]
     if include_optional:
         return steps
     if to_action is not None and STEP_INDEX[to_action].optional:
         return steps
-    return [step for step in steps if not step.optional]
+    return [s for s in steps if not s.optional]
 
 
-def plan_command(regions: set[str] | None) -> None:
-    ensure_output_dirs()
-    print("Ordered storage purge steps:")
-    for step in STEPS:
-        if step.optional:
-            suffix = " [optional]"
-        else:
-            suffix = ""
-        marker_path = Context(
-            dry_run=False,
-            force=False,
-            include_optional=False,
-            listing_workers=32,
-            estimate_workers=32,
-            sample_size=0,
-            settle_hours=48,
-            selected_regions=regions,
-            log_path=LOG_DIR / f"plan_{timestamp_string()}.log",
-            timestamp=timestamp_string(),
-            project=None,
-        ).state_path(step.action_id)
-        status = "done" if marker_path.exists() else "pending"
-        print(f"  {status:7}  {step.action_id}{suffix}")
+def assert_step_predecessors(ctx: Context, step: StepSpec) -> None:
+    if ctx.force:
+        return
+    missing = [p for p in step.predecessors if not ctx.state_path(p).exists()]
+    if missing:
+        raise RuntimeError(
+            f"{step.action_id} requires these predecessor steps to be complete first: {', '.join(missing)}"
+        )
 
 
-def run_command_mode(
+def build_context(
     *,
-    from_action: str | None,
-    to_action: str | None,
-    only_action: str | None,
     dry_run: bool,
     force: bool,
     include_optional: bool,
     listing_workers: int,
     estimate_workers: int,
-    sample_size: int,
+    delete_workers: int,
     settle_hours: int,
-    regions: set[str] | None,
+    regions: tuple[str, ...],
+    log_prefix: str,
     project: str | None,
-) -> int:
+) -> Context:
     ensure_output_dirs()
-    ctx = Context(
+    return Context(
         dry_run=dry_run,
         force=force,
         include_optional=include_optional,
         listing_workers=listing_workers,
         estimate_workers=estimate_workers,
-        sample_size=sample_size,
+        delete_workers=delete_workers,
         settle_hours=settle_hours,
-        selected_regions=regions,
-        log_path=LOG_DIR / f"run_{timestamp_string()}.log",
+        selected_regions=parse_regions(list(regions) or None),
+        log_path=LOG_DIR / f"{log_prefix}_{timestamp_string()}.log",
         timestamp=timestamp_string(),
+        project=project,
+    )
+
+
+def runtime_options(
+    *,
+    listing_workers: bool = False,
+    estimate_workers: bool = False,
+    delete_workers: bool = False,
+    settle_hours: bool = False,
+    include_optional: bool = False,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        options: list[Callable[[Callable[..., Any]], Callable[..., Any]]] = [
+            click.option("--region", "regions", multiple=True, help="Limit to specific Marin storage regions."),
+            click.option("--force", is_flag=True, help="Ignore cached markers and recompute."),
+            click.option("--dry-run", is_flag=True, help="Read-only mode: inspect but never mutate remote state."),
+            click.option("--project", help="Override the GCP project for Cloud Storage API calls."),
+        ]
+        if include_optional:
+            options.append(click.option("--include-optional", is_flag=True, help="Include optional cleanup steps."))
+        if listing_workers:
+            options.append(
+                click.option(
+                    "--listing-workers", default=32, show_default=True, type=int, help="Concurrent listing fetches."
+                )
+            )
+        if estimate_workers:
+            options.append(
+                click.option(
+                    "--estimate-workers", default=32, show_default=True, type=int, help="Concurrent prefix scans."
+                )
+            )
+        if delete_workers:
+            options.append(
+                click.option(
+                    "--delete-workers", default=16, show_default=True, type=int, help="Concurrent delete workers."
+                )
+            )
+        if settle_hours:
+            options.append(
+                click.option(
+                    "--settle-hours", default=72, show_default=True, type=int, help="Soft-delete safety window (hours)."
+                )
+            )
+        for option in reversed(options):
+            func = option(func)
+        return func
+
+    return decorator
+
+
+@click.group(
+    context_settings={"help_option_names": ["-h", "--help"]},
+    help=(
+        "Storage cleanup workflow: delete cold unprotected objects from Marin buckets "
+        "with a soft-delete safety net. Run `plan` to see step status, or use the "
+        "prep/cleanup subcommands to execute individual steps."
+    ),
+)
+def cli() -> None:
+    pass
+
+
+@cli.command("plan", help="Show ordered step list and completion status.")
+@click.option("--region", "regions", multiple=True, help="Limit to specific regions.")
+def plan_cli(regions: tuple[str, ...]) -> None:
+    ensure_output_dirs()
+    parsed = parse_regions(list(regions) or None)
+    print("Ordered storage cleanup steps:")
+    for step in STEPS:
+        suffix = " [optional]" if step.optional else ""
+        dummy_ctx = Context(
+            dry_run=False,
+            force=False,
+            include_optional=False,
+            listing_workers=32,
+            estimate_workers=32,
+            delete_workers=16,
+            settle_hours=72,
+            selected_regions=parsed,
+            log_path=LOG_DIR / "plan.log",
+            timestamp=timestamp_string(),
+            project=None,
+        )
+        status = "done" if dummy_ctx.state_path(step.action_id).exists() else "pending"
+        print(f"  {status:7}  {step.action_id}{suffix}")
+
+
+@cli.command(
+    "run",
+    help="Execute a contiguous slice of the ordered workflow.",
+)
+@runtime_options(
+    listing_workers=True, estimate_workers=True, delete_workers=True, settle_hours=True, include_optional=True
+)
+@click.option("--from", "from_action", type=click.Choice(sorted(STEP_INDEX)), help="Start from this step.")
+@click.option("--to", "to_action", type=click.Choice(sorted(STEP_INDEX)), help="Stop after this step.")
+@click.option("--only", "only_action", type=click.Choice(sorted(STEP_INDEX)), help="Run exactly one step.")
+def run_cli(
+    regions: tuple[str, ...],
+    dry_run: bool,
+    force: bool,
+    include_optional: bool,
+    listing_workers: int,
+    estimate_workers: int,
+    delete_workers: int,
+    settle_hours: int,
+    project: str | None,
+    from_action: str | None,
+    to_action: str | None,
+    only_action: str | None,
+) -> None:
+    ctx = build_context(
+        dry_run=dry_run,
+        force=force,
+        include_optional=include_optional,
+        listing_workers=listing_workers,
+        estimate_workers=estimate_workers,
+        delete_workers=delete_workers,
+        settle_hours=settle_hours,
+        regions=regions,
+        log_prefix="run",
         project=project,
     )
     steps = selected_steps(
@@ -1968,282 +1632,26 @@ def run_command_mode(
         assert_step_predecessors(ctx, step)
         step.run(ctx)
     print_summary("completed selected steps")
-    return 0
 
 
-def build_context(
-    *,
-    dry_run: bool,
-    force: bool,
-    include_optional: bool,
-    listing_workers: int,
-    estimate_workers: int,
-    sample_size: int,
-    settle_hours: int,
-    regions: tuple[str, ...],
-    log_prefix: str,
-    project: str | None,
-) -> Context:
-    ensure_output_dirs()
-    return Context(
-        dry_run=dry_run,
-        force=force,
-        include_optional=include_optional,
-        listing_workers=listing_workers,
-        estimate_workers=estimate_workers,
-        sample_size=sample_size,
-        settle_hours=settle_hours,
-        selected_regions=parse_regions(list(regions) or None),
-        log_path=LOG_DIR / f"{log_prefix}_{timestamp_string()}.log",
-        timestamp=timestamp_string(),
-        project=project,
-    )
-
-
-def assert_step_predecessors(ctx: Context, step: StepSpec) -> None:
-    if ctx.force:
-        return
-    missing = [predecessor for predecessor in step.predecessors if not ctx.state_path(predecessor).exists()]
-    if not missing:
-        return
-    raise RuntimeError(f"{step.action_id} requires these predecessor steps to be complete first: {', '.join(missing)}")
-
-
-def invoke_single_step(ctx: Context, action_id: str) -> None:
-    step = STEP_INDEX[action_id]
-    print_summary(f"running 1 step; log: {ctx.log_path.relative_to(REPO_ROOT)}")
-    print_summary(f"==> {step.action_id}: {step.description}")
-    assert_step_predecessors(ctx, step)
-    step.run(ctx)
-    print_summary("completed selected steps")
-
-
-def runtime_options(
-    *,
-    listing_workers: bool = False,
-    estimate_workers: bool = False,
-    sample_size: bool = False,
-    settle_hours: bool = False,
-    include_optional: bool = False,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        options: list[Callable[[Callable[..., Any]], Callable[..., Any]]] = [
-            click.option(
-                "--region",
-                "regions",
-                multiple=True,
-                help="Limit the command to one or more Marin storage regions such as `eu-west4`.",
-            ),
-            click.option(
-                "--force",
-                is_flag=True,
-                help="Ignore cached markers and cached listings, and recompute the selected work.",
-            ),
-            click.option(
-                "--dry-run",
-                is_flag=True,
-                help="Allow local artifact writes and read-only cloud inspection, but never apply remote mutations.",
-            ),
-            click.option(
-                "--project",
-                help=(
-                    "Override the GCP project used for Cloud Storage API calls. "
-                    "By default the command uses env vars or `gcloud config`."
-                ),
-            ),
-        ]
-        if include_optional:
-            options.append(
-                click.option(
-                    "--include-optional",
-                    is_flag=True,
-                    help="Include optional cleanup actions such as clearing temporary holds.",
-                )
-            )
-        if listing_workers:
-            options.append(
-                click.option(
-                    "--listing-workers",
-                    default=32,
-                    show_default=True,
-                    type=int,
-                    help="Maximum concurrent listing-prefix fetches during wildcard resolution.",
-                )
-            )
-        if sample_size:
-            options.append(
-                click.option(
-                    "--sample-size",
-                    default=3,
-                    show_default=True,
-                    type=int,
-                    help="Number of copied prefixes to inspect per region when validating backup contents.",
-                )
-            )
-        if estimate_workers:
-            options.append(
-                click.option(
-                    "--estimate-workers",
-                    default=32,
-                    show_default=True,
-                    type=int,
-                    help="Maximum concurrent prefix scans when estimating backup size from STS specs.",
-                )
-            )
-        if settle_hours:
-            options.append(
-                click.option(
-                    "--settle-hours",
-                    default=48,
-                    show_default=True,
-                    type=int,
-                    help="Lifecycle settle window to record before delete-rule cleanup is allowed.",
-                )
-            )
-        for option in reversed(options):
-            func = option(func)
-        return func
-
-    return decorator
-
-
-@click.group(
-    context_settings={"help_option_names": ["-h", "--help"]},
-    help=(
-        "Run the one-off storage purge workflow as a click application with explicit prep, copy, and purge "
-        "commands. Each subcommand owns one concrete step, writes its own artifacts, and can be inspected "
-        "with `--help` before you run it."
-    ),
-)
-def cli() -> None:
-    pass
-
-
-@cli.command(
-    "plan",
-    help=(
-        "Show the ordered step list and whether a completion marker exists for each step in the selected regions. "
-        "This command is read-only and is the fastest way to see where a partially completed workflow currently stands."
-    ),
-)
-@click.option(
-    "--region",
-    "regions",
-    multiple=True,
-    help="Limit the displayed status to one or more Marin storage regions such as `eu-west4`.",
-)
-def plan_cli(regions: tuple[str, ...]) -> None:
-    plan_command(parse_regions(list(regions) or None))
-
-
-@cli.command(
-    "run",
-    help=(
-        "Execute a contiguous slice of the ordered workflow using the same underlying steps as the explicit "
-        "subcommands. Use this when you want the convenience of a range runner, but prefer the subcommands "
-        "when you want one step at a time."
-    ),
-)
-@runtime_options(
-    listing_workers=True,
-    estimate_workers=True,
-    sample_size=True,
-    settle_hours=True,
-    include_optional=True,
-)
-@click.option(
-    "--from",
-    "from_action",
-    type=click.Choice(sorted(STEP_INDEX)),
-    help="Start from this step id in the ordered workflow.",
-)
-@click.option(
-    "--to",
-    "to_action",
-    type=click.Choice(sorted(STEP_INDEX)),
-    help="Stop after this step id in the ordered workflow.",
-)
-@click.option(
-    "--only",
-    "only_action",
-    type=click.Choice(sorted(STEP_INDEX)),
-    help="Run exactly one step id instead of a range.",
-)
-def run_cli(
-    regions: tuple[str, ...],
-    dry_run: bool,
-    force: bool,
-    include_optional: bool,
-    listing_workers: int,
-    estimate_workers: int,
-    sample_size: int,
-    settle_hours: int,
-    project: str | None,
-    from_action: str | None,
-    to_action: str | None,
-    only_action: str | None,
-) -> None:
-    run_command_mode(
-        from_action=from_action,
-        to_action=to_action,
-        only_action=only_action,
-        dry_run=dry_run,
-        force=force,
-        include_optional=include_optional,
-        listing_workers=listing_workers,
-        estimate_workers=estimate_workers,
-        sample_size=sample_size,
-        settle_hours=settle_hours,
-        regions=parse_regions(list(regions) or None),
-        project=project,
-    )
-
-
-@cli.group(
-    help=(
-        "Preparation commands derive or verify the inputs needed for copy and purge work without changing "
-        "source-bucket data. These commands are the place to inspect listings, backup inputs, and bucket "
-        "readiness before any remote mutations occur."
-    )
-)
+@cli.group(help="Preparation commands: resolve protect set, estimate savings. Read-only against buckets.")
 def prep() -> None:
     pass
 
 
-@cli.group(
-    help=(
-        "Copy commands create and validate the same-region backup jobs that protect the keep set before "
-        "deletion starts. They operate on backup buckets and transfer jobs, not on destructive source-bucket "
-        "lifecycle settings."
-    )
-)
-def copy() -> None:
+@cli.group(help="Cleanup commands: enable soft-delete, delete cold objects, finalize.")
+def cleanup() -> None:
     pass
 
 
-@cli.group(
-    help=(
-        "Purge commands operate on the source buckets after backups are in place and validated. "
-        "These commands apply holds, freeze storage classes, perform lifecycle-based deletion, and then "
-        "restore steady-state settings."
-    )
-)
-def purge() -> None:
-    pass
-
-
-GROUPS: dict[str, click.Group] = {
-    "prep": prep,
-    "copy": copy,
-    "purge": purge,
-}
+GROUPS: dict[str, click.Group] = {"prep": prep, "cleanup": cleanup}
 
 
 def register_step_command(group: click.Group, step: StepSpec) -> None:
     @runtime_options(
         listing_workers=step.listing_workers,
         estimate_workers=step.estimate_workers,
-        sample_size=step.sample_size,
+        delete_workers=step.delete_workers,
         settle_hours=step.settle_hours,
     )
     def command(
@@ -2253,8 +1661,8 @@ def register_step_command(group: click.Group, step: StepSpec) -> None:
         project: str | None,
         listing_workers: int = 32,
         estimate_workers: int = 32,
-        sample_size: int = 3,
-        settle_hours: int = 48,
+        delete_workers: int = 16,
+        settle_hours: int = 72,
     ) -> None:
         ctx = build_context(
             dry_run=dry_run,
@@ -2262,25 +1670,25 @@ def register_step_command(group: click.Group, step: StepSpec) -> None:
             include_optional=False,
             listing_workers=listing_workers,
             estimate_workers=estimate_workers,
-            sample_size=sample_size,
+            delete_workers=delete_workers,
             settle_hours=settle_hours,
             regions=regions,
             log_prefix=step.action_id.replace(".", "__"),
             project=project,
         )
-        invoke_single_step(ctx, step.action_id)
+        print_summary(f"running 1 step; log: {ctx.log_path.relative_to(REPO_ROOT)}")
+        print_summary(f"==> {step.action_id}: {step.description}")
+        assert_step_predecessors(ctx, step)
+        step.run(ctx)
+        print_summary("completed selected steps")
 
     command.__name__ = step.action_id.replace(".", "_").replace("-", "_")
     group.command(name=step.command_name, help=step.help_text)(command)
 
 
-for step in STEPS:
-    register_step_command(GROUPS[step.group_name], step)
-
-
-def main() -> None:
-    cli()
+for _step in STEPS:
+    register_step_command(GROUPS[_step.group_name], _step)
 
 
 if __name__ == "__main__":
-    main()
+    cli()
