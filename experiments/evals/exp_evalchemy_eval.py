@@ -27,6 +27,7 @@ from experiments.evals.evalchemy_task_configs import (
     LIVECODEBENCH_V6_OFFICIAL,
     MATH500,
     OLYMPIADBENCH,
+    OLYMPIADBENCH_PHYSICS,
 )
 from fray.cluster import ResourceConfig
 
@@ -68,7 +69,7 @@ MATH_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
 ]
 
 SCIENCE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
-    ([GPQA_DIAMOND, JEEBENCH, HUMANITYS_LAST_EXAM], SEEDS[:3]),
+    ([GPQA_DIAMOND, JEEBENCH, HUMANITYS_LAST_EXAM, OLYMPIADBENCH_PHYSICS], SEEDS[:3]),
 ]
 
 CODE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [

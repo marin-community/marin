@@ -39,6 +39,7 @@ __all__ = [
     "MATH500",
     "MBPP_PLUS",
     "OLYMPIADBENCH",
+    "OLYMPIADBENCH_PHYSICS",
 ]
 
 # =============================================================================
@@ -58,6 +59,9 @@ AMC23 = EvalTaskConfig(name="AMC23", num_fewshot=0, task_alias="AMC23", task_kwa
 MATH500 = EvalTaskConfig(name="MATH500", num_fewshot=0, task_alias="MATH500")
 HMMT = EvalTaskConfig(name="HMMT", num_fewshot=0, task_alias="HMMT", task_kwargs={"n_repeat": 1})
 OLYMPIADBENCH = EvalTaskConfig(name="OlympiadBench", num_fewshot=0, task_alias="OlympiadBench")
+OLYMPIADBENCH_PHYSICS = EvalTaskConfig(
+    name="OlympiadBench_Physics", num_fewshot=0, task_alias="OlympiadBench_Physics", task_kwargs={"n_repeat": 1}
+)
 
 # =============================================================================
 # Code tasks
@@ -105,7 +109,7 @@ EVALCHEMY_CODE_TASKS = (
     CODEFORCES,
     CODEELO,
 )
-EVALCHEMY_SCIENCE_TASKS = (GPQA_DIAMOND, JEEBENCH)
+EVALCHEMY_SCIENCE_TASKS = (GPQA_DIAMOND, JEEBENCH, OLYMPIADBENCH_PHYSICS)
 EVALCHEMY_REASONING_TASKS = (ALICE_IN_WONDERLAND, HUMANITYS_LAST_EXAM)
 
 # Combined core tasks for comprehensive evaluation

@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 # Evalchemy git repo and commit to use
 EVALCHEMY_REPO = "https://github.com/teetone/evalchemy.git"
-EVALCHEMY_COMMIT = "010412c"  # 2026-03-14: fix int-too-large crash in json.dumps, fail fast on results save errors
+EVALCHEMY_COMMIT = "7f24168"  # 2026-03-31: OlympiadBench_Physics with multi-part, var stripping, 0.1% rel tolerance
 
 
 # Evalchemy benchmarks that have hardcoded n_repeat values and their paths.
