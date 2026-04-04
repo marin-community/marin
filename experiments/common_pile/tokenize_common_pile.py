@@ -19,7 +19,7 @@ _filtered_steps = {
 
 # Map filtered dataset names to their corresponding download steps.
 # Used by common_pile_tokenized() below for the COMMA llama3 mixture.
-COMMON_PILE_DATASETS: dict[str, TokenizerStep] = _filtered_steps
+COMMON_PILE_TOKENIZED: dict[str, TokenizerStep] = _filtered_steps
 
 # Effective token counts for the main training stage (in teratokens)
 # Weights pulled from https://huggingface.co/datasets/common-pile/comma_v0.1_training_dataset under Main stage
@@ -81,7 +81,7 @@ COMMA_COOLDOWN_MIXTURE_WEIGHTS = {
 def common_pile_tokenized(*, tokenizer: str = llama3_tokenizer) -> dict[str, TokenizerStep]:
     """Return tokenization steps for the Common Pile filtered datasets."""
     tokenized: dict[str, TokenizerStep] = {}
-    for dataset, step in COMMON_PILE_DATASETS.items():
+    for dataset, step in COMMON_PILE_TOKENIZED.items():
         tokenized[f"common_pile/{dataset}"] = default_tokenize(
             name=f"common_pile/{dataset}",
             dataset=step,
@@ -93,7 +93,7 @@ def common_pile_tokenized(*, tokenizer: str = llama3_tokenizer) -> dict[str, Tok
 def comma_main_mixture(*, tokenizer: str = llama3_tokenizer):
     """LmMixtureDatasetConfig for the main training stage."""
     tokenized = common_pile_tokenized(tokenizer=tokenizer)
-    components = {f"common_pile/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_DATASETS}
+    components = {f"common_pile/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_TOKENIZED}
     return lm_mixture_data_config(
         components=components,
         weights=COMMA_MAIN_MIXTURE_WEIGHTS,
@@ -103,7 +103,7 @@ def comma_main_mixture(*, tokenizer: str = llama3_tokenizer):
 def comma_cooldown_mixture(*, tokenizer: str = llama3_tokenizer):
     """LmMixtureDatasetConfig for the cooldown stage."""
     tokenized = common_pile_tokenized(tokenizer=tokenizer)
-    components = {f"common_pile/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_DATASETS}
+    components = {f"common_pile/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_TOKENIZED}
     return lm_mixture_data_config(
         components=components,
         weights=COMMA_COOLDOWN_MIXTURE_WEIGHTS,
