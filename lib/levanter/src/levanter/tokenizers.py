@@ -559,7 +559,12 @@ def _load_tokenizer_config(name_or_path: str) -> dict:
 def _load_tokie_tokenizer(name_or_path: str) -> TokieMarinTokenizer:
     import tokie
 
-    tok = tokie.Tokenizer.from_pretrained(name_or_path)
+    # Use hf_hub_download for auth support (gated models like Llama 3).
+    # tokie's from_pretrained doesn't pass HF_TOKEN.
+    local_json = os.path.join(name_or_path, "tokenizer.json")
+    if not os.path.isfile(local_json):
+        local_json = hf_hub_download(name_or_path, "tokenizer.json")
+    tok = tokie.Tokenizer.from_json(local_json)
     config = _load_tokenizer_config(name_or_path)
 
     bos_token = _resolve_special_token(config, "bos_token")
