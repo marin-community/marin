@@ -1,0 +1,54 @@
+{
+  "action_id": "prep.resolve_listing_prefixes",
+  "completed_at": "2026-04-04T00:34:39.338887+00:00",
+  "dry_run": false,
+  "input_fingerprint": "76b970855a23ffbddd057c316302f721190a523dcdb544b86fc0f4cd0422abc3",
+  "outputs": [
+    "scripts/storage/purge/resolve/listing_prefixes_eu-west4.csv",
+    "scripts/storage/purge/resolve/resolved_prefixes_eu-west4.csv",
+    "scripts/storage/purge/resolve/listing_prefixes_us-central1.csv",
+    "scripts/storage/purge/resolve/resolved_prefixes_us-central1.csv",
+    "scripts/storage/purge/resolve/listing_prefixes_us-central2.csv",
+    "scripts/storage/purge/resolve/resolved_prefixes_us-central2.csv",
+    "scripts/storage/purge/resolve/listing_prefixes_us-east1.csv",
+    "scripts/storage/purge/resolve/resolved_prefixes_us-east1.csv",
+    "scripts/storage/purge/resolve/listing_prefixes_us-east5.csv",
+    "scripts/storage/purge/resolve/resolved_prefixes_us-east5.csv",
+    "scripts/storage/purge/resolve/listing_prefixes_us-west4.csv",
+    "scripts/storage/purge/resolve/resolved_prefixes_us-west4.csv"
+  ],
+  "remote_summary": {
+    "regions": {
+      "eu-west4": {
+        "listing_calls": 58,
+        "listing_rows": 290,
+        "resolved_prefix_rows": 2136
+      },
+      "us-central1": {
+        "listing_calls": 60,
+        "listing_rows": 296,
+        "resolved_prefix_rows": 2601
+      },
+      "us-central2": {
+        "listing_calls": 62,
+        "listing_rows": 299,
+        "resolved_prefix_rows": 2262
+      },
+      "us-east1": {
+        "listing_calls": 60,
+        "listing_rows": 296,
+        "resolved_prefix_rows": 280
+      },
+      "us-east5": {
+        "listing_calls": 60,
+        "listing_rows": 296,
+        "resolved_prefix_rows": 2068
+      },
+      "us-west4": {
+        "listing_calls": 60,
+        "listing_rows": 296,
+        "resolved_prefix_rows": 131
+      }
+    }
+  }
+}

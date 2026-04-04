@@ -1,0 +1,177 @@
+{
+  "deduped_prefix_count": 2235,
+  "input_prefix_count": 2246,
+  "project": "hai-gcp-models",
+  "region": "us-central2",
+  "skipped_nested_prefix_count": 11,
+  "skipped_nested_prefixes": [
+    "raw/dolma/v1.7/",
+    "raw/the-stack-dedup-4ba450/17cad72/",
+    "raw/google-research-datasets/mbpphf/4bb6404/full/",
+    "checkpoints/tootsie-8b-giraffe-32k-293fef/hf/step-1000/",
+    "checkpoints/tootsie-8b-giraffe-32k-293fef/hf/step-2000/",
+    "checkpoints/tootsie-8b-giraffe-32k-293fef/hf/step-2999/",
+    "checkpoints/tootsie-8b-sensible-starling/checkpoints/step-1399923/",
+    "checkpoints/tootsie-32b-cooldown-bison-adamc/checkpoints/step-190000/",
+    "checkpoints/tootsie-8b-sensible-starling/checkpoints/step-1399923-patched/",
+    "raw/proof-pile-2-f1b1d8/901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927/",
+    "raw/SlimPajama-627B-262830/2d0accd/huggingface.co/datasets/cerebras/SlimPajama-627B/resolve/2d0accd/"
+  ],
+  "source_bucket": "marin-us-central2",
+  "spec_path": "scripts/storage/purge/backup/sts_job_us-central2.json",
+  "top_prefixes": [
+    {
+      "object_count": 24463,
+      "prefix": "raw/fineweb-compel-b59084/",
+      "total_bytes": 47625660245491,
+      "total_human_bytes": "43.32 TiB"
+    },
+    {
+      "object_count": 246764,
+      "prefix": "checkpoints/sft/mixture_sft_deeper_starling_with_nemotron_and_openthoughts3-de8fa2/",
+      "total_bytes": 15701481319136,
+      "total_human_bytes": "14.28 TiB"
+    },
+    {
+      "object_count": 12764,
+      "prefix": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_code9k_n8_vr5_round1-2e374d/",
+      "total_bytes": 12024756014799,
+      "total_human_bytes": "10.94 TiB"
+    },
+    {
+      "object_count": 34339,
+      "prefix": "raw/nemotro-cc-eeb783/",
+      "total_bytes": 11774331928851,
+      "total_human_bytes": "10.71 TiB"
+    },
+    {
+      "object_count": 11700,
+      "prefix": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_code9k_n1_vr1_round1-ddab85/",
+      "total_bytes": 10906279218192,
+      "total_human_bytes": "9.92 TiB"
+    },
+    {
+      "object_count": 11028,
+      "prefix": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_code9k_n8_vr3_round1-e67d23/",
+      "total_bytes": 10235886203517,
+      "total_human_bytes": "9.31 TiB"
+    },
+    {
+      "object_count": 9268,
+      "prefix": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_code9k_n4_vr3_round1-c4bb99/",
+      "total_bytes": 8653182968121,
+      "total_human_bytes": "7.87 TiB"
+    },
+    {
+      "object_count": 27388,
+      "prefix": "tokenized/dclm_baseline-0206f1/train/",
+      "total_bytes": 7806302639040,
+      "total_human_bytes": "7.10 TiB"
+    },
+    {
+      "object_count": 27841,
+      "prefix": "raw/dclm/a3b142c/",
+      "total_bytes": 7196113015581,
+      "total_human_bytes": "6.54 TiB"
+    },
+    {
+      "object_count": 5897,
+      "prefix": "raw/fineweb2-hq/",
+      "total_bytes": 6042407656787,
+      "total_human_bytes": "5.50 TiB"
+    },
+    {
+      "object_count": 10485,
+      "prefix": "adamh-scaling-ladder-nemotron-optimal-1e+23-v5-27f2fb/",
+      "total_bytes": 5884047625856,
+      "total_human_bytes": "5.35 TiB"
+    },
+    {
+      "object_count": 6082,
+      "prefix": "raw/fineweb-edu-87f0914/",
+      "total_bytes": 5835743145579,
+      "total_human_bytes": "5.31 TiB"
+    },
+    {
+      "object_count": 2261,
+      "prefix": "raw/fineweb-edu-c2beb4/",
+      "total_bytes": 5074070777326,
+      "total_human_bytes": "4.61 TiB"
+    },
+    {
+      "object_count": 533901,
+      "prefix": "checkpoints/llama-32b-tootsie-2/",
+      "total_bytes": 5055681842385,
+      "total_human_bytes": "4.60 TiB"
+    },
+    {
+      "object_count": 2422,
+      "prefix": "raw/dolma/",
+      "total_bytes": 4507601522896,
+      "total_human_bytes": "4.10 TiB"
+    },
+    {
+      "object_count": 4631,
+      "prefix": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot3_math53k_n1_vr3_round1-c33b92/",
+      "total_bytes": 4453131073805,
+      "total_human_bytes": "4.05 TiB"
+    },
+    {
+      "object_count": 443225,
+      "prefix": "checkpoints/marin-32b-qwen/",
+      "total_bytes": 4266490897023,
+      "total_human_bytes": "3.88 TiB"
+    },
+    {
+      "object_count": 1423475,
+      "prefix": "checkpoints/llama-8b-tootsie-adept-phoenix/",
+      "total_bytes": 4177889167135,
+      "total_human_bytes": "3.80 TiB"
+    },
+    {
+      "object_count": 14633,
+      "prefix": "tokenized/nemotron_cc/medium-d86506/",
+      "total_bytes": 4166477853043,
+      "total_human_bytes": "3.79 TiB"
+    },
+    {
+      "object_count": 1636,
+      "prefix": "raw/fineweb-edu/",
+      "total_bytes": 3761055669160,
+      "total_human_bytes": "3.42 TiB"
+    },
+    {
+      "object_count": 12921,
+      "prefix": "tokenized/fineweb-edu-24698d/",
+      "total_bytes": 3707761934761,
+      "total_human_bytes": "3.37 TiB"
+    },
+    {
+      "object_count": 3644,
+      "prefix": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot3_math53k_n1_vr1_round1-16b3cd/",
+      "total_bytes": 3533935200106,
+      "total_human_bytes": "3.21 TiB"
+    },
+    {
+      "object_count": 3646,
+      "prefix": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_science26k_n1_vr1_round1-f757ed/",
+      "total_bytes": 3492158828474,
+      "total_human_bytes": "3.18 TiB"
+    },
+    {
+      "object_count": 11193,
+      "prefix": "tokenized/nemotron_cc/hq_synth-3525e2/",
+      "total_bytes": 3234913705181,
+      "total_human_bytes": "2.94 TiB"
+    },
+    {
+      "object_count": 3187,
+      "prefix": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_science26k_n4_vr3_round1-82c9f4/",
+      "total_bytes": 3057730241568,
+      "total_human_bytes": "2.78 TiB"
+    }
+  ],
+  "total_bytes": 380011741274658,
+  "total_human_bytes": "345.62 TiB",
+  "total_object_count": 8639119
+}

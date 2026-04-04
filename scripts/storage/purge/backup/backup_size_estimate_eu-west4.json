@@ -1,0 +1,169 @@
+{
+  "deduped_prefix_count": 3820,
+  "input_prefix_count": 3823,
+  "project": "hai-gcp-models",
+  "region": "eu-west4",
+  "skipped_nested_prefix_count": 3,
+  "skipped_nested_prefixes": [
+    "raw/dolma/v1.7/",
+    "raw/google-research-datasets/mbpphf/4bb6404/full/",
+    "raw/proof-pile-2-f1b1d8/901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927/"
+  ],
+  "source_bucket": "marin-eu-west4",
+  "spec_path": "scripts/storage/purge/backup/sts_job_eu-west4.json",
+  "top_prefixes": [
+    {
+      "object_count": 478771,
+      "prefix": "raw/dolma3_pool-d37843/",
+      "total_bytes": 13983218022406,
+      "total_human_bytes": "12.72 TiB"
+    },
+    {
+      "object_count": 62568,
+      "prefix": "raw/nemotro-cc-eeb783/",
+      "total_bytes": 11774331929164,
+      "total_human_bytes": "10.71 TiB"
+    },
+    {
+      "object_count": 27191,
+      "prefix": "tokenized/dclm_baseline-0206f1/train/",
+      "total_bytes": 7750541087144,
+      "total_human_bytes": "7.05 TiB"
+    },
+    {
+      "object_count": 13611,
+      "prefix": "checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/",
+      "total_bytes": 7673994121818,
+      "total_human_bytes": "6.98 TiB"
+    },
+    {
+      "object_count": 28706,
+      "prefix": "tokenized/nemotron_cc/medium-d86506/",
+      "total_bytes": 7672896161756,
+      "total_human_bytes": "6.98 TiB"
+    },
+    {
+      "object_count": 27841,
+      "prefix": "raw/dclm/a3b142c/",
+      "total_bytes": 7196113015581,
+      "total_human_bytes": "6.54 TiB"
+    },
+    {
+      "object_count": 546723,
+      "prefix": "checkpoints/llama-8b-tootsie-0.001-19ad63/",
+      "total_bytes": 6254521309353,
+      "total_human_bytes": "5.69 TiB"
+    },
+    {
+      "object_count": 6080,
+      "prefix": "raw/fineweb-edu-87f0914/",
+      "total_bytes": 5835743145602,
+      "total_human_bytes": "5.31 TiB"
+    },
+    {
+      "object_count": 2261,
+      "prefix": "raw/fineweb-edu-c2beb4/",
+      "total_bytes": 5074070730550,
+      "total_human_bytes": "4.61 TiB"
+    },
+    {
+      "object_count": 22892,
+      "prefix": "tokenized/dolma/cc-74b017/",
+      "total_bytes": 4934718915225,
+      "total_human_bytes": "4.49 TiB"
+    },
+    {
+      "object_count": 2432,
+      "prefix": "raw/dolma/",
+      "total_bytes": 4507602678688,
+      "total_human_bytes": "4.10 TiB"
+    },
+    {
+      "object_count": 175964,
+      "prefix": "raw/dolma3_dolmino_pool-72089d/",
+      "total_bytes": 4136786833923,
+      "total_human_bytes": "3.76 TiB"
+    },
+    {
+      "object_count": 1305942,
+      "prefix": "ego-dex/",
+      "total_bytes": 3952097302565,
+      "total_human_bytes": "3.59 TiB"
+    },
+    {
+      "object_count": 13075,
+      "prefix": "tokenized/nemotron_cc/hq_synth-3525e2/",
+      "total_bytes": 3710018918276,
+      "total_human_bytes": "3.37 TiB"
+    },
+    {
+      "object_count": 14874,
+      "prefix": "tokenized/nemotron_cc/medium-dd421f/",
+      "total_bytes": 3704831339914,
+      "total_human_bytes": "3.37 TiB"
+    },
+    {
+      "object_count": 13651,
+      "prefix": "tokenized/nemotron_cc/medium_low-0fdb07/",
+      "total_bytes": 3633728110402,
+      "total_human_bytes": "3.30 TiB"
+    },
+    {
+      "object_count": 16603,
+      "prefix": "tokenized/dolmino/dclm-6c18eb/",
+      "total_bytes": 3180432870823,
+      "total_human_bytes": "2.89 TiB"
+    },
+    {
+      "object_count": 8522,
+      "prefix": "tokenized/nemotron_cc/hq_actual-5af4cc/",
+      "total_bytes": 2263238519157,
+      "total_human_bytes": "2.06 TiB"
+    },
+    {
+      "object_count": 7904,
+      "prefix": "tokenized/dolma3_dolmino_pool/synth_qa_nemotron_synth_qa-4c6ea5/",
+      "total_bytes": 2077212546284,
+      "total_human_bytes": "1.89 TiB"
+    },
+    {
+      "object_count": 7962,
+      "prefix": "tokenized/nemotron_cc/hq_actual-000e97/",
+      "total_bytes": 2074881562619,
+      "total_human_bytes": "1.89 TiB"
+    },
+    {
+      "object_count": 7787,
+      "prefix": "tokenized/nemotron_cc/medium_high-d21701/",
+      "total_bytes": 2066228883683,
+      "total_human_bytes": "1.88 TiB"
+    },
+    {
+      "object_count": 9294,
+      "prefix": "tokenized/dolma/falcon-da8fd0/",
+      "total_bytes": 1881314660509,
+      "total_human_bytes": "1.71 TiB"
+    },
+    {
+      "object_count": 2444,
+      "prefix": "checkpoints/exp2262pt2b_sft_qwen2pt5_ot4_3745_math_n8_qwen3_32b_32768tokens-82933c/",
+      "total_bytes": 1675659322965,
+      "total_human_bytes": "1.52 TiB"
+    },
+    {
+      "object_count": 14715,
+      "prefix": "raw/dolmino-mix-1124-157960/",
+      "total_bytes": 1652003265605,
+      "total_human_bytes": "1.50 TiB"
+    },
+    {
+      "object_count": 2553,
+      "prefix": "checkpoints/exp2262pt2g_3_llama3pt1_ot4_30k_math_n1_rejsamp_qwen3_32b_32768t-662abd/",
+      "total_bytes": 1285034234683,
+      "total_human_bytes": "1.17 TiB"
+    }
+  ],
+  "total_bytes": 190262177316308,
+  "total_human_bytes": "173.04 TiB",
+  "total_object_count": 12180297
+}

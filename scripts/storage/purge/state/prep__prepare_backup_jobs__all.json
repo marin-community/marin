@@ -1,0 +1,21 @@
+{
+  "action_id": "prep.prepare_backup_jobs",
+  "completed_at": "2026-04-04T00:43:06.350136+00:00",
+  "dry_run": false,
+  "input_fingerprint": "4bb0f7c2f862f1b38455131e5cd2a40a2b7a107cf0ecd9928506c153a4bff722",
+  "outputs": [
+    "scripts/storage/purge/backup/sts_job_eu-west4.json",
+    "scripts/storage/purge/backup/sts_job_include_prefixes_eu-west4.txt",
+    "scripts/storage/purge/backup/sts_job_us-central1.json",
+    "scripts/storage/purge/backup/sts_job_include_prefixes_us-central1.txt",
+    "scripts/storage/purge/backup/sts_job_us-central2.json",
+    "scripts/storage/purge/backup/sts_job_include_prefixes_us-central2.txt",
+    "scripts/storage/purge/backup/sts_job_us-east1.json",
+    "scripts/storage/purge/backup/sts_job_include_prefixes_us-east1.txt",
+    "scripts/storage/purge/backup/sts_job_us-east5.json",
+    "scripts/storage/purge/backup/sts_job_include_prefixes_us-east5.txt",
+    "scripts/storage/purge/backup/sts_job_us-west4.json",
+    "scripts/storage/purge/backup/sts_job_include_prefixes_us-west4.txt"
+  ],
+  "remote_summary": {}
+}
