@@ -10,7 +10,7 @@ answer, topic, and answer type. We render these into a single document.
 import hashlib
 
 from fray.v2 import ResourceConfig
-from zephyr import Dataset, ZephyrContext, load_parquet
+from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.execution.step_spec import StepSpec
@@ -19,11 +19,12 @@ HF_DATASET_ID = "facebook/principia-collection"
 HF_REVISION = "f4413ee"
 
 
-def row_to_doc(row: dict) -> dict | None:
+def row_to_doc(row: dict) -> list[dict]:
     problem = row.get("problem_statement", "")
     answer = row.get("answer", "")
     if not problem or not answer:
-        return None
+        counters.increment("principia/dropped")
+        return []
 
     topic = row.get("topic", "")
     answer_type = row.get("answer_type", "")
@@ -39,20 +40,22 @@ def row_to_doc(row: dict) -> dict | None:
 
     text = "\n\n".join(parts)
 
-    return {
-        "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        "text": text,
-        "source": "facebook/principia-collection",
-    }
+    counters.increment("principia/kept")
+    return [
+        {
+            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "text": text,
+            "source": "facebook/principia-collection",
+        }
+    ]
 
 
 def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/**/*.parquet")
         .flat_map(load_parquet)
-        .map(row_to_doc)
-        .filter(lambda r: r is not None)
-        .write_jsonl(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
+        .flat_map(row_to_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
     ctx = ZephyrContext(name="principia-transform", resources=ResourceConfig(cpu=1, ram="4g"))
     list(ctx.execute(pipeline))

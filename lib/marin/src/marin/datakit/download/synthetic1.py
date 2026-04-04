@@ -10,9 +10,10 @@ single document by concatenating prompt + score tag + response.
 import hashlib
 
 from fray.v2 import ResourceConfig
-from zephyr import Dataset, ZephyrContext, load_parquet
+from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.rollout_transforms import strip_think_tags
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "PrimeIntellect/SYNTHETIC-1"
@@ -37,37 +38,37 @@ def score_to_tag(score: float | None) -> str:
     return "This is an incorrect solution."
 
 
-def strip_think_tags(text: str) -> str:
-    return text.replace("<think>", "").replace("</think>", "").strip()
-
-
-def row_to_doc(row: dict) -> dict | None:
+def row_to_doc(row: dict) -> list[dict]:
     prompt = row.get("prompt", "")
     response = row.get("llm_response", "")
     if not prompt or not response:
-        return None
+        counters.increment("synthetic1/dropped")
+        return []
 
     response = strip_think_tags(response)
     if not response.strip():
-        return None
+        counters.increment("synthetic1/dropped")
+        return []
 
     tag = score_to_tag(row.get("score"))
     text = f"{prompt}\n\n{tag}\n\n{response}"
 
-    return {
-        "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        "text": text,
-        "source": "PrimeIntellect/SYNTHETIC-1",
-    }
+    counters.increment("synthetic1/kept")
+    return [
+        {
+            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "text": text,
+            "source": "PrimeIntellect/SYNTHETIC-1",
+        }
+    ]
 
 
 def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/**/*.parquet")
         .flat_map(load_parquet)
-        .map(row_to_doc)
-        .filter(lambda r: r is not None)
-        .write_jsonl(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
+        .flat_map(row_to_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
     ctx = ZephyrContext(name="synthetic1-transform", resources=ResourceConfig(cpu=1, ram="4g"))
     list(ctx.execute(pipeline))

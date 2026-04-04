@@ -9,14 +9,12 @@ CLI tasks, with thinking traces.
 """
 
 import hashlib
-from collections.abc import Iterator
 
-import pyarrow.parquet as pq
 from fray.v2 import ResourceConfig
-from rigging.filesystem import open_url
-from zephyr import Dataset, ZephyrContext
+from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.rollout_transforms import load_parquet_batched
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "nvidia/Nemotron-Terminal-Corpus"
@@ -29,39 +27,31 @@ def render_message(msg: dict) -> str:
     return f"<{role}>\n{content}\n</{role}>"
 
 
-def row_to_doc(row: dict) -> dict | None:
+def row_to_doc(row: dict) -> list[dict]:
     conversations = row.get("conversations")
     if not conversations:
-        return None
+        counters.increment("nemotron_terminal/dropped")
+        return []
 
     text = "\n\n".join(render_message(m) for m in conversations)
 
-    return {
-        "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        "text": text,
-        "source": "nvidia/Nemotron-Terminal-Corpus",
-    }
-
-
-def load_parquet_batched(path: str) -> Iterator[dict]:
-    """Read parquet via iter_batches — works around older pyarrow failing on nested list<struct> columns."""
-    with open_url(path, "rb") as f:
-        pf = pq.ParquetFile(f)
-        for batch in pf.iter_batches(batch_size=16):
-            rows = batch.to_pydict()
-            n = len(next(iter(rows.values())))
-            for i in range(n):
-                yield {k: rows[k][i] for k in rows}
+    counters.increment("nemotron_terminal/kept")
+    return [
+        {
+            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "text": text,
+            "source": "nvidia/Nemotron-Terminal-Corpus",
+        }
+    ]
 
 
 def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/**/*.parquet")
         .flat_map(load_parquet_batched)
-        .map(row_to_doc)
-        .filter(lambda r: r is not None)
+        .flat_map(row_to_doc)
         .reshard(64)
-        .write_jsonl(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
     ctx = ZephyrContext(name="nemotron-terminal-transform", resources=ResourceConfig(cpu=1, ram="32g"))
     list(ctx.execute(pipeline))

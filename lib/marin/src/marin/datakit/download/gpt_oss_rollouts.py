@@ -13,7 +13,7 @@ assistant response. We render these into a single document.
 import hashlib
 
 from fray.v2 import ResourceConfig
-from zephyr import Dataset, ZephyrContext
+from zephyr import Dataset, ZephyrContext, counters
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
@@ -29,12 +29,13 @@ SUBSETS = {
 }
 
 
-def row_to_doc(row: dict) -> dict | None:
+def row_to_doc(row: dict) -> list[dict]:
     user = row.get("user_content") or ""
     thinking = row.get("assistant_thinking") or ""
     response = row.get("assistant_content") or ""
     if not user or not response:
-        return None
+        counters.increment("gpt_oss_rollouts/dropped")
+        return []
 
     parts = [f"<user>\n{user}\n</user>"]
     if thinking:
@@ -43,11 +44,14 @@ def row_to_doc(row: dict) -> dict | None:
 
     text = "\n\n".join(parts)
 
-    return {
-        "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        "text": text,
-        "source": "andyrdt/gpt-oss-20b-rollouts",
-    }
+    counters.increment("gpt_oss_rollouts/kept")
+    return [
+        {
+            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "text": text,
+            "source": "andyrdt/gpt-oss-20b-rollouts",
+        }
+    ]
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -55,9 +59,8 @@ def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_list(input_files)
         .flat_map(load_jsonl)
-        .map(row_to_doc)
-        .filter(lambda r: r is not None)
-        .write_jsonl(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
+        .flat_map(row_to_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
     ctx = ZephyrContext(name="gpt-oss-rollouts-transform", resources=ResourceConfig(cpu=1, ram="8g"))
     list(ctx.execute(pipeline))

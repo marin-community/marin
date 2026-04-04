@@ -10,10 +10,11 @@ Each row has a math prompt and a model response with reasoning traces.
 import hashlib
 
 from fray.v2 import ResourceConfig
-from zephyr import Dataset, ZephyrContext
+from zephyr import Dataset, ZephyrContext, counters
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.rollout_transforms import strip_think_tags
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "Alibaba-Apsara/Superior-Reasoning-SFT-gpt-oss-120b"
@@ -25,27 +26,28 @@ STAGES = [
 ]
 
 
-def strip_think_tags(text: str) -> str:
-    return text.replace("<think>", "").replace("</think>", "").strip()
-
-
-def row_to_doc(row: dict) -> dict | None:
+def row_to_doc(row: dict) -> list[dict]:
     prompt = row.get("input") or ""
     response = row.get("output") or ""
     if not prompt or not response:
-        return None
+        counters.increment("superior_reasoning/dropped")
+        return []
 
     response = strip_think_tags(response)
     if not response:
-        return None
+        counters.increment("superior_reasoning/dropped")
+        return []
 
     text = f"<user>\n{prompt}\n</user>\n\n<assistant>\n{response}\n</assistant>"
 
-    return {
-        "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        "text": text,
-        "source": "Alibaba-Apsara/Superior-Reasoning-SFT-gpt-oss-120b",
-    }
+    counters.increment("superior_reasoning/kept")
+    return [
+        {
+            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "text": text,
+            "source": "Alibaba-Apsara/Superior-Reasoning-SFT-gpt-oss-120b",
+        }
+    ]
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -53,9 +55,8 @@ def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_list(input_files)
         .flat_map(load_jsonl)
-        .map(row_to_doc)
-        .filter(lambda r: r is not None)
-        .write_jsonl(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
+        .flat_map(row_to_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
     ctx = ZephyrContext(name="superior-reasoning-transform", resources=ResourceConfig(cpu=1, ram="8g"))
     list(ctx.execute(pipeline))

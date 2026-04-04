@@ -13,7 +13,7 @@ import hashlib
 import json
 
 from fray.v2 import ResourceConfig
-from zephyr import Dataset, ZephyrContext, load_parquet
+from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.execution.step_spec import StepSpec
@@ -60,24 +60,29 @@ def render_message(msg: dict) -> str:
     return "\n".join(parts)
 
 
-def row_to_doc(row: dict) -> dict | None:
+def row_to_doc(row: dict) -> list[dict]:
     messages_raw = row.get("messages", "")
     if not messages_raw:
-        return None
+        counters.increment("coderforge/dropped")
+        return []
 
     messages = json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
     if not messages:
-        return None
+        counters.increment("coderforge/dropped")
+        return []
 
     tag = reward_to_tag(row.get("reward"))
     rendered = "\n\n".join(render_message(m) for m in messages)
     text = f"{tag}\n\n{rendered}"
 
-    return {
-        "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        "text": text,
-        "source": "togethercomputer/CoderForge-Preview",
-    }
+    counters.increment("coderforge/kept")
+    return [
+        {
+            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "text": text,
+            "source": "togethercomputer/CoderForge-Preview",
+        }
+    ]
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -85,9 +90,8 @@ def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/**/*.parquet")
         .flat_map(load_parquet)
-        .map(row_to_doc)
-        .filter(lambda r: r is not None)
-        .write_jsonl(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
+        .flat_map(row_to_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
     ctx = ZephyrContext(name="coderforge-transform", resources=ResourceConfig(cpu=1, ram="8g"))
     list(ctx.execute(pipeline))
