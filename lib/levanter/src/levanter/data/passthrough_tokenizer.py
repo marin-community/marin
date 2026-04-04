@@ -14,6 +14,9 @@ class PassthroughTokenizer:
 
     _vocab_size: int
 
+    def __len__(self) -> int:
+        return self._vocab_size
+
     @property
     def name_or_path(self) -> str:
         return "passthrough"

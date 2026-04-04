@@ -36,6 +36,10 @@ def test_name_or_path(tokenizer):
     assert tokenizer.name_or_path == MODEL_NAME
 
 
+def test_len(tokenizer):
+    assert len(tokenizer) == tokenizer.vocab_size
+
+
 def test_vocab_size(tokenizer):
     assert tokenizer.vocab_size == 128256
 
