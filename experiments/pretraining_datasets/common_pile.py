@@ -105,7 +105,7 @@ cp_tokenized = {
     "cp/youtube": tokenize_cp("common_pile/youtube", cp_downloads["youtube"] / "**/*.json*"),
     "cp/biodiversity": tokenize_cp(
         "common_pile/biodiversity_heritage_library_books",
-        cp_downloads["biodiversity"] / "**/*.jsonl.gz",
+        cp_downloads["biodiversity"] / "**/*.parquet",
         worker_resources=_R20,
     ),
     "cp/library_of_congress": tokenize_cp(

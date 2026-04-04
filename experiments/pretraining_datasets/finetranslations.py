@@ -12,7 +12,7 @@ finetranslations_download = finetranslations_raw.step
 
 finetranslations_tokenized = default_tokenize(
     "finetranslations_parallel",
-    finetranslations_prepared / "**/*.jsonl.gz",
+    finetranslations_prepared / "**/*.parquet",
     tokenizer=marin_tokenizer,
     worker_resources=ResourceConfig(ram="20g", disk="10g"),
 )
