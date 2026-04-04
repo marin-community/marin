@@ -45,16 +45,15 @@ def _make_tiny_dataset() -> str:
 
 def _tokenize_step(
     name: str,
-    raw_dataset,
+    train_paths: list[str],
     backend: TokenizerBackend,
     sample_count: int | None = None,
 ) -> ExecutorStep:
-    """Create a tokenization step. raw_dataset can be an ExecutorStep (dependency) or a path string."""
     return ExecutorStep(
         name=name,
         fn=tokenize,
         config=TokenizeConfig(
-            train_paths=[raw_dataset],
+            train_paths=train_paths,
             validation_paths=versioned([]),
             cache_path=this_output_path(),
             tokenizer=versioned(TOKENIZER),
@@ -68,8 +67,8 @@ def _tokenize_step(
 if TINY:
     tiny_path = _make_tiny_dataset()
     steps = [
-        _tokenize_step("tokenize/benchmark-hf", tiny_path, TokenizerBackend.HF, sample_count=200),
-        _tokenize_step("tokenize/benchmark-tokie", tiny_path, TokenizerBackend.TOKIE, sample_count=200),
+        _tokenize_step("tokenize/benchmark-hf", [tiny_path], TokenizerBackend.HF, sample_count=200),
+        _tokenize_step("tokenize/benchmark-tokie", [tiny_path], TokenizerBackend.TOKIE, sample_count=200),
     ]
 else:
     dataset = download_hf_step(
@@ -77,11 +76,10 @@ else:
         hf_dataset_id="HuggingFaceFW/fineweb-edu",
         revision="87f0914",
     )
-    # The download step is referenced as a dependency in train_paths —
-    # the executor resolves it automatically.
+    fineweb_path = os.path.join(dataset.output_path, "sample/10BT")
     steps = [
-        _tokenize_step("tokenize/benchmark-hf", dataset, TokenizerBackend.HF),
-        _tokenize_step("tokenize/benchmark-tokie", dataset, TokenizerBackend.TOKIE),
+        _tokenize_step("tokenize/benchmark-hf", [fineweb_path], TokenizerBackend.HF),
+        _tokenize_step("tokenize/benchmark-tokie", [fineweb_path], TokenizerBackend.TOKIE),
     ]
 
 
