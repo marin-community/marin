@@ -19,7 +19,7 @@ class _EnumSafeEncoder(json.JSONEncoder):
 
 from experiments.dspy.adapters.baml import BAMLAdapter
 from experiments.dspy.adapters.toon import ToonAdapter
-from experiments.dspy.programs.hover import HoVer
+from experiments.dspy.programs.hover import HoVer, HoverLabel
 from experiments.dspy.programs.hotpotqa import HotpotQA
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 
@@ -42,10 +42,10 @@ ADAPTER_MAP: dict[str, type[dspy.Adapter]] = {
 # ---------------------------------------------------------------------------
 
 def _hover_metric(example: dspy.Example, pred: dspy.Prediction, trace=None) -> float:
-    """Compare HoVer gold string label with prediction integer.
+    """Compare HoVer gold string label with predicted HoverLabel enum.
 
     HoVer gold label is 'SUPPORTED' or 'NOT_SUPPORTED' (string).
-    ClaimVerification returns ``label_int`` which is 0 or 1.
+    HoVer program returns ``label_int`` (0 or 1) derived from the HoverLabel enum.
     """
     if pred is None:
         return 0.0

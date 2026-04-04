@@ -10,7 +10,7 @@ from dspy.teleprompt.bootstrap_trace import bootstrap_trace_data
 from transformers import AutoTokenizer
 from experiments.dspy.inference_server import start_inference_server
 from experiments.dspy.programs.simplified_baleen import SimplifiedBaleen
-from experiments.dspy.programs.claim_verification import ClaimVerification
+from experiments.dspy.programs.hover import HoVer
 from experiments.dspy.programs.field_extraction import FieldExtraction
 from experiments.dspy.adapters.baml import BAMLAdapter
 from experiments.dspy.metrics import claim_verification_metric, field_extraction_metric
@@ -167,7 +167,7 @@ if __name__ == "__main__":
     
     # 2. Modules
     baleen = SimplifiedBaleen()
-    claim_verifier = ClaimVerification()
+    claim_verifier = HoVer(search=rm)
     fhir_module = FieldExtraction()
     
     # 3. Collect Traces
