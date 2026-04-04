@@ -79,7 +79,7 @@ class ManualStandaloneWorkerHandle(RemoteExecWorkerBase):
     def status(self) -> WorkerStatus:
         return WorkerStatus(state=CloudWorkerState.RUNNING)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         if self._on_terminate:
             self._on_terminate()
 
@@ -174,7 +174,7 @@ class ManualSliceHandle:
 
         return SliceStatus(state=state, worker_count=len(self._hosts), workers=workers)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         if self._terminated:
             return
         self._terminated = True

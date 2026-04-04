@@ -261,7 +261,7 @@ class StandaloneWorkerHandle(RemoteWorkerHandle, Protocol):
         """Run the bootstrap script on the worker."""
         ...
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         """Destroy the worker."""
         ...
 
@@ -317,7 +317,7 @@ class SliceHandle(Protocol):
         """Query cloud state, returning status and worker handles."""
         ...
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         """Destroy the slice and all its workers."""
         ...
 

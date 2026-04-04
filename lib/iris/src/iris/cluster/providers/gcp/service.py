@@ -232,7 +232,7 @@ class GcpService(Protocol):
     ) -> list[QueuedResourceInfo]: ...
 
     def vm_create(self, request: VmCreateRequest) -> VmInfo: ...
-    def vm_delete(self, name: str, zone: str) -> None: ...
+    def vm_delete(self, name: str, zone: str, *, wait: bool = False) -> None: ...
     def vm_describe(self, name: str, zone: str) -> VmInfo | None: ...
     def vm_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[VmInfo]: ...
     def vm_reset(self, name: str, zone: str) -> None: ...
@@ -736,12 +736,17 @@ class CloudGcpService:
             raise InfraError(f"VM {request.name} created but could not be described")
         return info
 
-    def vm_delete(self, name: str, zone: str) -> None:
+    def vm_delete(self, name: str, zone: str, *, wait: bool = False) -> None:
         logger.info("Deleting VM: %s", name)
         url = self._instance_url(zone, name)
         resp = self._client.delete(url, headers=self._headers())
-        if resp.status_code != 404:
-            self._classify_response(resp)
+        if resp.status_code == 404:
+            return
+        self._classify_response(resp)
+        if wait:
+            op_name = resp.json().get("name", "")
+            if op_name:
+                self._wait_zone_operation(zone, op_name)
 
     def vm_reset(self, name: str, zone: str) -> None:
         logger.info("Resetting VM: %s", name)
@@ -813,6 +818,9 @@ class CloudGcpService:
             json={"labels": current_labels, "labelFingerprint": fingerprint},
         )
         self._classify_response(resp)
+        op_name = resp.json().get("name", "")
+        if op_name:
+            self._wait_zone_operation(zone, op_name)
 
     def vm_set_metadata(self, name: str, zone: str, metadata: dict[str, str]) -> None:
         logger.info("Setting metadata on VM %s", name)
@@ -830,6 +838,9 @@ class CloudGcpService:
         url = self._instance_url(zone, name) + "/setMetadata"
         resp = self._client.post(url, headers=self._headers(), json=body)
         self._classify_response(resp)
+        op_name = resp.json().get("name", "")
+        if op_name:
+            self._wait_zone_operation(zone, op_name)
 
     def vm_get_serial_port_output(self, name: str, zone: str, start: int = 0) -> str:
         try:

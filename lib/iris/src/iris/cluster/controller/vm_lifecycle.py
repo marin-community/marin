@@ -350,7 +350,7 @@ def start_controller(
             logger.info("Existing controller at %s is healthy", address)
             return address, existing_vm
         logger.info("Existing controller is unhealthy, terminating and recreating")
-        existing_vm.terminate()
+        existing_vm.terminate(wait=True)
 
     # Create new controller VM
     vm_config = _build_controller_vm_config(config)
@@ -359,7 +359,7 @@ def start_controller(
 
     # Wait for connection
     if not vm.wait_for_connection(timeout=Duration.from_seconds(300)):
-        vm.terminate()
+        vm.terminate(wait=True)
         raise RuntimeError(f"Controller VM {vm_config.name} did not become reachable within 300s")
 
     # Bootstrap
@@ -424,6 +424,6 @@ def stop_controller(platform: WorkerInfraProvider, config: config_pb2.IrisCluste
     vm = _discover_controller_vm(platform, label_prefix)
     if vm:
         logger.info("Stopping controller VM %s", vm.vm_id)
-        vm.terminate()
+        vm.terminate(wait=True)
     else:
         logger.info("No controller VM found to stop")

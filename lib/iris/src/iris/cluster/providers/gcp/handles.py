@@ -179,10 +179,10 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
         logger.info("Rebooting GCE instance: %s", self._gce_vm_name)
         self._gcp_service.vm_reset(self._gce_vm_name, self._zone)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         assert self._gcp_service is not None
         logger.info("Deleting GCE instance: %s", self._gce_vm_name)
-        self._gcp_service.vm_delete(self._gce_vm_name, self._zone)
+        self._gcp_service.vm_delete(self._gce_vm_name, self._zone, wait=wait)
 
     def set_labels(self, labels: dict[str, str]) -> None:
         assert self._gcp_service is not None
@@ -366,7 +366,7 @@ class GcpSliceHandle:
         # QUEUED, PROVISIONING, WAITING_FOR_RESOURCES → still creating
         return SliceStatus(state=CloudSliceState.CREATING, worker_count=0)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         if self.is_queued_resource:
             logger.info("Terminating queued resource (force): %s", self._slice_id)
             self._gcp_service.queued_resource_delete(self._slice_id, self._zone)
@@ -478,6 +478,6 @@ class GcpVmSliceHandle:
         )
         return SliceStatus(state=state, worker_count=1, workers=[worker])
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         logger.info("Terminating VM slice: %s (vm=%s)", self._slice_id, self._vm_name)
-        self._gcp_service.vm_delete(self._vm_name, self._zone)
+        self._gcp_service.vm_delete(self._vm_name, self._zone, wait=wait)

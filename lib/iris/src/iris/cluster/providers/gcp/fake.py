@@ -324,7 +324,7 @@ class InMemoryGcpService:
         self._vms[(request.name, request.zone)] = info
         return info
 
-    def vm_delete(self, name: str, zone: str) -> None:
+    def vm_delete(self, name: str, zone: str, *, wait: bool = False) -> None:
         self._check_injected_failure("vm_delete")
         self._vms.pop((name, zone), None)
 
