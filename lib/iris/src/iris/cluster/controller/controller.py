@@ -1594,7 +1594,7 @@ class Controller:
             gated.jobs,
         )
 
-        all_assignments, context = self._run_scheduler_pass(
+        all_assignments, context, tainted_jobs = self._run_scheduler_pass(
             order.ordered_task_ids,
             gated.jobs,
             gated.has_reservation,
@@ -1607,7 +1607,7 @@ class Controller:
 
         preemptions = self._apply_preemptions(
             order.ordered_task_ids,
-            gated.jobs,
+            tainted_jobs,
             order.task_band_map,
             all_assignments,
             claims,
@@ -1616,7 +1616,7 @@ class Controller:
             context,
         )
 
-        self._cache_scheduling_diagnostics(context, gated.jobs, all_assignments, order.ordered_task_ids)
+        self._cache_scheduling_diagnostics(context, tainted_jobs, all_assignments, order.ordered_task_ids)
 
         if all_assignments or preemptions:
             return SchedulingOutcome.ASSIGNMENTS_MADE
@@ -1753,8 +1753,8 @@ class Controller:
         claims: dict[WorkerId, ReservationClaim],
         timer: Timer,
         state_read_ms: int,
-    ) -> tuple[list[tuple[JobName, WorkerId]], SchedulingContext]:
-        """Run preference + normal assignment passes. Returns (assignments, context)."""
+    ) -> tuple[list[tuple[JobName, WorkerId]], SchedulingContext, dict[JobName, JobRequirements]]:
+        """Run preference + normal assignment passes. Returns (assignments, context, taint-injected jobs)."""
         modified_workers = _inject_reservation_taints(workers, claims)
         modified_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
@@ -1785,7 +1785,7 @@ class Controller:
                 timer.elapsed_ms(),
                 state_read_ms,
             )
-        return all_assignments, context
+        return all_assignments, context, modified_jobs
 
     def _apply_preemptions(
         self,

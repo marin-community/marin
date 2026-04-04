@@ -390,7 +390,7 @@ def _terminate_task(
 
     attempt_id < 0 means no attempt exists; the attempt UPDATE is skipped.
     """
-    finished_at_ms = None if state in ACTIVE_TASK_STATES else now_ms
+    finished_at_ms = None if state in ACTIVE_TASK_STATES or state == cluster_pb2.TASK_STATE_PENDING else now_ms
     effective_attempt_state = attempt_state if attempt_state is not None else state
 
     if attempt_id is not None and attempt_id >= 0:
