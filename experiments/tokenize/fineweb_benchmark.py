@@ -26,6 +26,7 @@ from rigging.log_setup import configure_logging
 
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from fray.v2 import ResourceConfig
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ def _tokenize_spec(
                 tokenizer_backend=backend,
                 format=TextLmDatasetFormat(),
                 sample_count=sample_count,
+                worker_resources=ResourceConfig(ram="16g", disk="5g"),
             )
         ),
     )

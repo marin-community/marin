@@ -390,6 +390,8 @@ class TokieMarinTokenizer:
         return self._tokenizer.decode(ids)
 
     def encode_batch(self, texts: list[str], *, add_special_tokens: bool = False) -> list[list[int]]:
+        # Copy strings to release references to potentially large source buffers.
+        texts = ["".join(s) for s in texts]
         encodings = self._tokenizer.encode_batch(texts, add_special_tokens=add_special_tokens)
         return [enc.ids for enc in encodings]
 
