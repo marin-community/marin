@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "0dd38d458769",
+  "strategy": "manual-commit",
+  "branch": "kevin/harbor",
+  "checkpoints_count": 43,
+  "files_touched": [
+    "experiments/exp4420_eval_marin_8b_instruct_sft.py",
+    "experiments/exp4420_eval_marin_8b_instruct_tb2.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0d/d38d458769/0/metadata.json",
+      "transcript": "/0d/d38d458769/0/full.jsonl",
+      "context": "/0d/d38d458769/0/context.md",
+      "content_hash": "/0d/d38d458769/0/content_hash.txt",
+      "prompt": "/0d/d38d458769/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1105,
+    "cache_creation_tokens": 9152406,
+    "cache_read_tokens": 270021316,
+    "output_tokens": 279381,
+    "api_call_count": 797
+  }
+}
