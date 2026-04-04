@@ -66,3 +66,61 @@
   - that still answers the user’s interaction question because both optimizations directly act on the same routed FC1 grouped-matmul surface in the `current` path
 - Next action:
   - create a minimal exact-cap benchmark harness for `current` EP=8 on top of the PR 4297 base, then run the four-way matrix `xla`, `xla+padded`, `triton`, `triton+padded` on `iris-ci`
+
+### 2026-04-04 01:46 UTC - First H100 submission failed on default Iris env
+- Hypothesis:
+  - the new exact-cap benchmark harness should run directly as an Iris H100x8 job from the worktree.
+- Command:
+  - `KUBECONFIG=~/.kube/coreweave-iris uv run iris --config=lib/iris/examples/coreweave-ci.yaml job run --job-name pr4297-plus-w13-20260404-014558 --gpu H100x8 --cpu 32 --memory 256GB --disk 128GB --timeout 7200 --extra gpu -- bash -lc '<matrix driver using plain python>'`
+- Config:
+  - Iris job id: `/ubuntu/pr4297-plus-w13-20260404-014558`
+  - same benchmark cell planned for the final measurement
+- Result:
+  - the worker reached the user command, but the benchmark failed immediately with `ModuleNotFoundError: No module named 'numpy'`
+  - the default Iris task environment did not install the `levanter` dependency stack needed by the benchmark script
+- Interpretation:
+  - the benchmark must run inside an explicit `uv run --python 3.11 --package levanter --extra gpu ...` environment inside the task, rather than assuming the default task venv is sufficient
+- Next action:
+  - resubmit the same H100x8 matrix with an explicit `levanter[gpu]` uv environment inside the container
+
+### 2026-04-04 01:47 UTC - Replicated H100x8 exact-cap matrix on top of #4297
+- Hypothesis:
+  - if the #3821-style padded `w13` lowering still targets a bottleneck that Triton does not remove, `triton + w13 padded` should remain measurably faster than plain `triton`.
+- Command:
+  - `KUBECONFIG=~/.kube/coreweave-iris uv run iris --config=lib/iris/examples/coreweave-ci.yaml job run --job-name pr4297-plus-w13-uv-20260404-014704 --gpu H100x8 --cpu 32 --memory 256GB --disk 128GB --timeout 7200 -- bash -lc 'uv run --python 3.11 --package levanter --extra gpu python - <<PY ... seeds=(0,1,2), variants=(xla,xla+padded,triton,triton+padded) ... PY'`
+- Config:
+  - Iris job id: `/ubuntu/pr4297-plus-w13-uv-20260404-014704`
+  - hardware: CoreWeave `iris-ci` / `h100-8x`
+  - benchmark script: `lib/levanter/scripts/bench/bench_pr4297_w13_current.py`
+  - benchmark cell:
+    - `tokens=262144`
+    - `hidden=2048`
+    - `mlp_dim=768`
+    - `experts=128`
+    - `topk=2`
+    - `shared_expert_dim=0`
+    - `distribution=random`
+    - `ep_size=8`
+    - `warmup=5`
+    - `iters=20`
+    - seeds: `0,1,2`
+- Result:
+  - per-seed paired deltas for the key question (`triton+padded` vs `triton`):
+    - seed `0`: `25224053.59` vs `26037983.42` tokens/s, delta `-3.13%`
+    - seed `1`: `25219442.80` vs `26093597.99` tokens/s, delta `-3.35%`
+    - seed `2`: `25185414.51` vs `26063969.19` tokens/s, delta `-3.37%`
+  - aggregate means across the three seeds:
+
+    | Variant | mean time_s | mean tokens/s | delta |
+    | --- | ---: | ---: | --- |
+    | `xla` | `0.026271` | `9982858.40` | baseline |
+    | `xla + w13 padded` | `0.015337` | `17092122.30` | `+71.21%` vs `xla` |
+    | `triton` | `0.010057` | `26065183.53` | `+161.10%` vs `xla` |
+    | `triton + w13 padded` | `0.010399` | `25209636.97` | `-3.28%` vs `triton`, `+152.53%` vs `xla` |
+- Interpretation:
+  - on this shared exact-cap-style `current` EP=8 surface, the #3821-style padded `w13` lowering is still a large win for the `xla` backend
+  - on top of the #4297 Triton `ragged_dot` path, the same change is not additive; it is a small but very consistent regression across all three seeds
+  - the answer to the user’s question on this surface is therefore: assuming #4297 lands, replaying the #3821-style `w13` change does not buy additional throughput here, and likely costs about `3.3%`
+  - this should be treated as `replicated` for the exact-cap microbenchmark surface, but not generalized to the full historical #3821 DeepEP transport stack, which is absent on the #4297 base
+- Next action:
+  - update the experiment issue with the replicated conclusion, seal this snapshot with a tag, and report the measured incremental delta back to the user
