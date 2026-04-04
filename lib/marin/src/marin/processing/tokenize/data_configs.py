@@ -24,6 +24,7 @@ _KNOWN_VOCAB_SIZES: dict[str, int] = {
     "EleutherAI/gpt-neox-20b": 50_257,
     "meta-llama/Meta-Llama-3.1-8B": 128_256,
     "meta-llama/Meta-Llama-3.1-8B-Instruct": 128_256,
+    "Qwen/Qwen3-32B": 151_936,
     "stanford-crfm/marin-tokenizer": 128_256,
     "marin-community/marin-tokenizer": 128_256,
     "meta-llama/Llama-2-7b": 32_000,
