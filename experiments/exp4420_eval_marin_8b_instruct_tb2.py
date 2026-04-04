@@ -86,7 +86,7 @@ ENV_TYPE = os.environ.get("ENV_TYPE", "daytona")
 HARBOR_AGENT = "terminus-2"
 
 MODEL_NAME = "marin-8b-instruct"
-MODEL_PATH = "marin-community/marin-8b-instruct"
+MODEL_PATH = "gs://marin-us-central1/models/marin-community--marin-8b-instruct--0378f9c/"
 
 HARBOR_N_CONCURRENT = _optional_int_from_env("HARBOR_N_CONCURRENT", default=25) or 1
 HARBOR_AGENT_KWARGS = _optional_json_dict_from_env("HARBOR_AGENT_KWARGS_JSON")
