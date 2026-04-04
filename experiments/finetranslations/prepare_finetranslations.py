@@ -20,7 +20,7 @@ import dataclasses
 from fray.cluster import ResourceConfig
 from marin.datakit.download.finetranslations import download_finetranslations_step
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from zephyr import Dataset, ZephyrContext, load_parquet
+from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 finetranslations_raw = download_finetranslations_step().as_executor_step().as_input_name()
 
@@ -38,7 +38,9 @@ def prepare_finetranslations(config: PrepareFinetranslationsConfig):
         translated = record.get("translated_text", "")
         original = record.get("og_full_text", "")
         if not translated and not original:
+            counters.increment("finetranslations/empty")
             return []
+        counters.increment("finetranslations/kept")
         return [{"text": f"{translated}\n\n{original}"}]
 
     pipeline = (

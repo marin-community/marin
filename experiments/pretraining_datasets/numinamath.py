@@ -10,7 +10,7 @@ from experiments.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
 from marin.datakit.download.numinamath import download_numinamath_step
 from marin.execution.executor import ExecutorStep, this_output_path
-from zephyr import Dataset, ZephyrContext, load_parquet
+from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 numinamath_download = download_numinamath_step().as_executor_step()
 
@@ -22,19 +22,20 @@ class PrepareNuminaMathConfig:
 
 
 def prepare_numinamath(config: PrepareNuminaMathConfig):
-    def format_record(record: dict) -> dict | None:
+    def format_record(record: dict) -> list[dict]:
         problem = record.get("problem", "")
         solution = record.get("solution", "")
         if not problem:
-            return None
-        return {"text": f"{problem}\n\n{solution}"}
+            counters.increment("numinamath/no_problem")
+            return []
+        counters.increment("numinamath/kept")
+        return [{"text": f"{problem}\n\n{solution}"}]
 
     pipeline = (
         Dataset.from_files(f"{config.input_path}/data/*.parquet")
         .flat_map(load_parquet)
-        .map(format_record)
-        .filter(lambda r: r is not None)
-        .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
+        .flat_map(format_record)
+        .write_parquet(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
     ctx = ZephyrContext(name="prepare-numinamath", resources=ResourceConfig(cpu=1, ram="4g"))
     ctx.execute(pipeline)
@@ -51,6 +52,6 @@ numinamath_prepared = ExecutorStep(
 
 numinamath_tokenized = default_tokenize(
     name="numinamath_1_5",
-    dataset=numinamath_prepared / "**/*.jsonl.gz",
+    dataset=numinamath_prepared / "**/*.parquet",
     tokenizer=marin_tokenizer,
 )

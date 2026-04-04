@@ -21,7 +21,7 @@ from experiments.marin_models import marin_tokenizer
 from fray.cluster import ResourceConfig
 from marin.datakit.download.common_pile import download_common_pile_filtered_step
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from zephyr import Dataset, ZephyrContext
+from zephyr import Dataset, ZephyrContext, counters
 
 biodiversity_heritage_library_filtered = download_common_pile_filtered_step(
     "biodiversity_heritage_library"
@@ -70,10 +70,18 @@ def stitch_bhl_full_books(config: StitchBHLConfig):
                         if isinstance(record, dict):
                             yield record
                     except (json.JSONDecodeError, Exception) as e:
+                        counters.increment("bhl/corrupt_lines")
                         logger.warning(f"Skipping corrupt line: {e}")
             finally:
                 if spec.path.endswith(".gz"):
                     f.close()
+
+    def filter_empty_books(book: dict) -> bool:
+        if not book.get("text", "").strip():
+            counters.increment("bhl/empty_books")
+            return False
+        counters.increment("bhl/books_kept")
+        return True
 
     pipeline = (
         Dataset.from_files(f"{config.input_path}/**/*.json*")
@@ -83,7 +91,7 @@ def stitch_bhl_full_books(config: StitchBHLConfig):
             sort_by=lambda page: int(page.get("page_num", 0)),
             reducer=_stitch_pages,
         )
-        .filter(lambda book: len(book.get("text", "").strip()) > 0)
+        .filter(filter_empty_books)
         .write_parquet(f"{config.output_path}/books-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
     ctx = ZephyrContext(

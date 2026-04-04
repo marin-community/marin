@@ -15,5 +15,5 @@ def download_institutional_books_step() -> StepSpec:
         "raw/institutional-books-1.0",
         hf_dataset_id=INSTITUTIONAL_BOOKS_HF_ID,
         revision=INSTITUTIONAL_BOOKS_REVISION,
-        override_output_path="raw/institutional-books-d2f504a",
+        override_output_path=f"raw/institutional-books-{INSTITUTIONAL_BOOKS_REVISION}",
     )
