@@ -91,6 +91,24 @@ def test_write_jsonl(tmp_path, zephyr_ctx):
     assert sorted(all_records, key=lambda r: r["a"]) == [{"a": 1}, {"a": 2}, {"a": 3}]
 
 
+def test_load_jsonl_skip_malformed_lines(tmp_path):
+    """load_jsonl with skip_malformed_lines=True skips bad lines and yields good ones."""
+    from zephyr.readers import load_jsonl
+
+    jsonl_file = tmp_path / "data.jsonl"
+    jsonl_file.write_text('{"a": 1}\nNOT JSON\n{"a": 2}\n\n{"a": 3}\n')
+
+    # Strict mode (default) raises on the bad line
+    it = load_jsonl(str(jsonl_file))
+    assert next(it) == {"a": 1}
+    with pytest.raises(Exception):
+        next(it)
+
+    # Lenient mode skips the bad line
+    records = list(load_jsonl(str(jsonl_file), skip_malformed_lines=True))
+    assert records == [{"a": 1}, {"a": 2}, {"a": 3}]
+
+
 def test_dry_run(zephyr_ctx):
     """Dry run shows plan without executing."""
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)

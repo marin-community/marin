@@ -100,7 +100,7 @@ def open_file(file_path: str, mode: str = "rb"):
         yield f
 
 
-def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
+def load_jsonl(source: str | InputFileSpec, *, skip_malformed_lines: bool = False) -> Iterator[dict]:
     """Load a JSONL file and yield parsed records as dictionaries.
 
     If the input file is compressed (.gz, .zst, .xz), it will be automatically
@@ -109,6 +109,9 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
     Args:
         source: Path to JSONL file or InputFileSpec containing the path.
             Supports: local paths, gs://, s3://, hf://datasets/{repo}@{rev}/{path}
+        skip_malformed_lines: If True, log and skip lines that fail to decode
+            (bad JSON or encoding errors) instead of raising. Skipped lines are
+            counted via the ``zephyr/jsonl_malformed_lines`` counter.
 
     Yields:
         Parsed JSON records as dictionaries
@@ -135,8 +138,16 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
         for line in f:
             line = line.strip()
             if line:
+                try:
+                    record = decoder.decode(line)
+                except (msgspec.DecodeError, UnicodeDecodeError):
+                    if not skip_malformed_lines:
+                        raise
+                    counters.increment("zephyr/jsonl_malformed_lines")
+                    logger.warning("Skipping malformed line in %s: %s", spec.path, line[:200])
+                    continue
                 counters.increment("zephyr/records_in")
-                yield decoder.decode(line)
+                yield record
 
 
 def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:

@@ -8,13 +8,12 @@ and `page_num` (page number within book). This transform groups pages by
 item_id, sorts by page_num, and concatenates into full book documents.
 
 Example Usage:
-    uv run python experiments/common_pile/stitch_bhl_full_books.py
+    uv run python experiments/common_pile/stitch_bhl_books.py
 """
 
 import dataclasses
-import json
-import logging
 from collections.abc import Iterator
+from functools import partial
 
 from experiments.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
@@ -22,12 +21,11 @@ from fray.cluster import ResourceConfig
 from marin.datakit.download.common_pile import download_common_pile_filtered_step
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from zephyr import Dataset, ZephyrContext, counters
+from zephyr.readers import load_jsonl
 
 biodiversity_heritage_library_filtered = download_common_pile_filtered_step(
     "biodiversity_heritage_library"
 ).as_executor_step()
-
-logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -46,36 +44,6 @@ def _stitch_pages(item_id: str, pages: Iterator[dict]) -> dict:
 def stitch_bhl_full_books(config: StitchBHLConfig):
     """Group BHL pages by item_id, sort by page_num, concat into books."""
 
-    def load_jsonl_lenient(source):
-        """Read JSONL/JSON.gz, skipping truncated or corrupt lines."""
-        import gzip
-        import fsspec
-        from zephyr.readers import _as_spec
-
-        spec = _as_spec(source)
-        with fsspec.open(spec.path, "rb") as raw:
-            if spec.path.endswith(".gz"):
-                f = gzip.open(raw, "rt", encoding="utf-8", errors="replace")
-            else:
-                f = raw
-            try:
-                for line in f:
-                    if isinstance(line, bytes):
-                        line = line.decode("utf-8", errors="replace")
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        record = json.loads(line)
-                        if isinstance(record, dict):
-                            yield record
-                    except (json.JSONDecodeError, Exception) as e:
-                        counters.increment("bhl/corrupt_lines")
-                        logger.warning(f"Skipping corrupt line: {e}")
-            finally:
-                if spec.path.endswith(".gz"):
-                    f.close()
-
     def filter_empty_books(book: dict) -> bool:
         if not book.get("text", "").strip():
             counters.increment("bhl/empty_books")
@@ -85,7 +53,7 @@ def stitch_bhl_full_books(config: StitchBHLConfig):
 
     pipeline = (
         Dataset.from_files(f"{config.input_path}/**/*.json*")
-        .flat_map(load_jsonl_lenient)
+        .flat_map(partial(load_jsonl, skip_malformed_lines=True))
         .group_by(
             key=lambda page: page.get("item_id", "unknown"),
             sort_by=lambda page: int(page.get("page_num", 0)),
