@@ -3,7 +3,7 @@
   "checkpoint_id": "0dd38d458769",
   "strategy": "manual-commit",
   "branch": "kevin/harbor",
-  "checkpoints_count": 46,
+  "checkpoints_count": 97,
   "files_touched": [
     "experiments/exp4420_eval_marin_8b_instruct_sft.py",
     "experiments/exp4420_eval_marin_8b_instruct_tb2.py"
@@ -29,13 +29,20 @@
       "context": "/0d/d38d458769/2/context.md",
       "content_hash": "/0d/d38d458769/2/content_hash.txt",
       "prompt": "/0d/d38d458769/2/prompt.txt"
+    },
+    {
+      "metadata": "/0d/d38d458769/3/metadata.json",
+      "transcript": "/0d/d38d458769/3/full.jsonl",
+      "context": "/0d/d38d458769/3/context.md",
+      "content_hash": "/0d/d38d458769/3/content_hash.txt",
+      "prompt": "/0d/d38d458769/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 1119,
-    "cache_creation_tokens": 9193273,
-    "cache_read_tokens": 270151708,
-    "output_tokens": 280252,
-    "api_call_count": 805
+    "input_tokens": 3058,
+    "cache_creation_tokens": 36665313,
+    "cache_read_tokens": 992950251,
+    "output_tokens": 746115,
+    "api_call_count": 2251
   }
 }
