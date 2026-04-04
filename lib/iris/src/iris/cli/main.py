@@ -8,8 +8,6 @@ Defines the ``iris`` Click group and registers all subcommands.
 
 import logging as _logging_module
 import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
 
 import click
 
@@ -74,19 +72,14 @@ def _configure_client_s3(config) -> None:
     configure_client_s3(config)
 
 
-@contextmanager
 def rpc_client(
     address: str,
     token_provider: TokenProvider | None = None,
     timeout_ms: int = 30_000,
-) -> Iterator[ControllerServiceClientSync]:
-    """Context manager that creates an RPC client and ensures it is closed."""
+) -> ControllerServiceClientSync:
+    """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``."""
     interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
-    client = ControllerServiceClientSync(address, timeout_ms=timeout_ms, interceptors=interceptors)
-    try:
-        yield client
-    finally:
-        client.close()
+    return ControllerServiceClientSync(address, timeout_ms=timeout_ms, interceptors=interceptors)
 
 
 def require_controller_url(ctx: click.Context) -> str:

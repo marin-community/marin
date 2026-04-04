@@ -1069,7 +1069,7 @@ class Controller:
 
         # Checkpoint coordination: when set, scheduling and autoscaler loops
         # skip their work so the snapshot captures a quiescent state.
-        # clear = normal operation, set = paused for checkpoint.
+        # threading.Event (not a bare bool) for cross-thread memory ordering.
         self._checkpoint_paused = threading.Event()
         self._atexit_registered = False
 
@@ -1594,27 +1594,9 @@ class Controller:
             gated.jobs,
         )
 
-        all_assignments, context, tainted_jobs = self._run_scheduler_pass(
-            order.ordered_task_ids,
-            gated.jobs,
-            gated.has_reservation,
-            gated.has_direct_reservation,
-            state.workers,
-            claims,
-            timer,
-            state.state_read_ms,
-        )
+        all_assignments, context, tainted_jobs = self._run_scheduler_pass(order, gated, state, claims, timer)
 
-        preemptions = self._apply_preemptions(
-            order.ordered_task_ids,
-            tainted_jobs,
-            order.task_band_map,
-            all_assignments,
-            claims,
-            order.user_spend,
-            order.user_budget_limits,
-            context,
-        )
+        preemptions = self._apply_preemptions(order, tainted_jobs, all_assignments, claims, context)
 
         self._cache_scheduling_diagnostics(context, tainted_jobs, all_assignments, order.ordered_task_ids)
 
@@ -1745,31 +1727,28 @@ class Controller:
 
     def _run_scheduler_pass(
         self,
-        schedulable_task_ids: list[JobName],
-        jobs: dict[JobName, JobRequirements],
-        has_reservation: set[JobName],
-        has_direct_reservation: set[JobName],
-        workers: list[WorkerRow],
+        order: _SchedulingOrder,
+        gated: _GatedCandidates,
+        state: _SchedulingStateRead,
         claims: dict[WorkerId, ReservationClaim],
         timer: Timer,
-        state_read_ms: int,
     ) -> tuple[list[tuple[JobName, WorkerId]], SchedulingContext, dict[JobName, JobRequirements]]:
         """Run preference + normal assignment passes. Returns (assignments, context, taint-injected jobs)."""
-        modified_workers = _inject_reservation_taints(workers, claims)
-        modified_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+        modified_workers = _inject_reservation_taints(state.workers, claims)
+        modified_jobs = _inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
 
         with slow_log(logger, "building_counts", threshold_ms=50):
-            building_counts = _building_counts(self._db, workers=workers)
+            building_counts = _building_counts(self._db, workers=state.workers)
         context = self._scheduler.create_scheduling_context(
             modified_workers,
             building_counts=building_counts,
-            pending_tasks=schedulable_task_ids,
+            pending_tasks=order.ordered_task_ids,
             jobs=modified_jobs,
         )
 
         # Soft preference — steer reservation tasks toward claimed workers.
         # Skips coscheduled jobs (they need atomic all-or-nothing via find_assignments).
-        preference_assignments = _preference_pass(context, has_reservation, claims)
+        preference_assignments = _preference_pass(context, gated.has_reservation, claims)
 
         result = self._scheduler.find_assignments(context)
 
@@ -1783,19 +1762,16 @@ class Controller:
                 len(preference_assignments),
                 len(result.assignments),
                 timer.elapsed_ms(),
-                state_read_ms,
+                state.state_read_ms,
             )
         return all_assignments, context, modified_jobs
 
     def _apply_preemptions(
         self,
-        schedulable_task_ids: list[JobName],
+        order: _SchedulingOrder,
         jobs: dict[JobName, JobRequirements],
-        task_band_map: dict[JobName, int],
         all_assignments: list[tuple[JobName, WorkerId]],
         claims: dict[WorkerId, ReservationClaim],
-        user_spend: dict[str, int],
-        user_budget_limits: dict[str, int],
         context: SchedulingContext,
     ) -> list[tuple[JobName, JobName]]:
         """Evict lower-priority running tasks for higher-priority unscheduled work."""
@@ -1804,16 +1780,16 @@ class Controller:
             PreemptionCandidate(
                 job_name=tid,
                 requirements=jobs[tid.parent],
-                band=task_band_map.get(tid, cluster_pb2.PRIORITY_BAND_INTERACTIVE),
+                band=order.task_band_map.get(tid, cluster_pb2.PRIORITY_BAND_INTERACTIVE),
             )
-            for tid in schedulable_task_ids
+            for tid in order.ordered_task_ids
             if tid not in assigned_ids and tid.parent is not None and tid.parent in jobs
         ]
         preemptions: list[tuple[JobName, JobName]] = []
         if unscheduled:
             claimed_workers = set(claims.keys())
             running_info = _get_running_tasks_with_band_and_value(
-                self._db, claimed_workers, user_spend=user_spend, user_budget_limits=user_budget_limits
+                self._db, claimed_workers, user_spend=order.user_spend, user_budget_limits=order.user_budget_limits
             )
             preemptions = _run_preemption_pass(unscheduled, running_info, context)
             for preemptor_name, victim_id in preemptions:
