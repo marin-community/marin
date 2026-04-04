@@ -389,6 +389,25 @@ def test_controller_deployment_includes_endpoint_url():
     provider.shutdown()
 
 
+def test_controller_deployment_has_sys_ptrace():
+    """Controller container gets SYS_PTRACE capability for profiling."""
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+
+    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    t.start()
+
+    provider.start_controller(cluster_config)
+
+    dep = k8s.get_json("deployment", "iris-controller")
+    container = dep["spec"]["template"]["spec"]["containers"][0]
+    caps = container["securityContext"]["capabilities"]["add"]
+    assert "SYS_PTRACE" in caps
+
+    t.join(timeout=5)
+    provider.shutdown()
+
+
 # ============================================================================
 # Tests: controller error handling
 # ============================================================================
