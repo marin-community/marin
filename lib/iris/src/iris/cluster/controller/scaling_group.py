@@ -1035,6 +1035,10 @@ class ScalingGroup:
         with self._slices_lock:
             pending = self._pending_scale_ups
             count = len(self._slices) + pending
+            has_inflight = pending > 0 or any(
+                s.lifecycle in (SliceLifecycleState.BOOTING, SliceLifecycleState.INITIALIZING)
+                for s in self._slices.values()
+            )
         if pending > 0:
             return AvailabilityState(
                 GroupAvailability.REQUESTING,
@@ -1042,6 +1046,11 @@ class ScalingGroup:
             )
 
         if count >= self._config.max_slices:
+            # When all slice slots are filled but some are still booting/initializing,
+            # accept demand so it doesn't waterfall to other groups. The routing budget
+            # already accounts for in-flight capacity via max_vms.
+            if has_inflight:
+                return AvailabilityState(GroupAvailability.COOLDOWN, "at max_slices with in-flight capacity")
             return AvailabilityState(GroupAvailability.AT_MAX_SLICES)
 
         cooldown_end = self._last_scale_up.add(self._scale_up_cooldown)
