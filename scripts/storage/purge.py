@@ -120,6 +120,15 @@ class StepSpec:
         self.runner(ctx, self)
 
 
+@dataclass(frozen=True)
+class ScannedObject:
+    bucket: str
+    name: str
+    size_bytes: int
+    storage_class_id: int
+    updated: str | None
+
+
 # ---------------------------------------------------------------------------
 # Context
 # ---------------------------------------------------------------------------
@@ -882,48 +891,48 @@ def _scan_prefix(
     bucket_name: str,
     prefix: str,
     sc_id_map: dict[str, int],
-) -> list[tuple[str, str, int, int, str | None]]:
-    """Scan all objects under a single top-level prefix. Returns rows for DB insert.
+) -> list[ScannedObject]:
+    """Scan all objects under a single top-level prefix.
 
     For prefix="" (root-level objects), uses delimiter="/" to avoid re-scanning the
     entire bucket — only blobs returned directly (not under sub-prefixes) are included.
     """
     client = storage_client(ctx)
-    rows: list[tuple[str, str, int, int, str | None]] = []
-
+    objects: list[ScannedObject] = []
+    kwargs: dict[str, Any] = {"page_size": GCS_MAX_PAGE_SIZE}
     if prefix == "":
-        # Root-level objects only: delimiter prevents descending into sub-prefixes
-        for blob in client.list_blobs(bucket_name, delimiter="/", page_size=GCS_MAX_PAGE_SIZE):
-            size = int(blob.size or 0)
-            sc = blob.storage_class or "STANDARD"
-            sc_id = sc_id_map.get(sc, sc_id_map["STANDARD"])
-            updated = blob.updated.isoformat() if blob.updated else None
-            rows.append((bucket_name, blob.name, size, sc_id, updated))
+        kwargs["delimiter"] = "/"
     else:
-        for blob in client.list_blobs(bucket_name, prefix=prefix, page_size=GCS_MAX_PAGE_SIZE):
-            size = int(blob.size or 0)
-            sc = blob.storage_class or "STANDARD"
-            sc_id = sc_id_map.get(sc, sc_id_map["STANDARD"])
-            updated = blob.updated.isoformat() if blob.updated else None
-            rows.append((bucket_name, blob.name, size, sc_id, updated))
+        kwargs["prefix"] = prefix
 
-    return rows
+    for blob in client.list_blobs(bucket_name, **kwargs):
+        sc = blob.storage_class or "STANDARD"
+        objects.append(
+            ScannedObject(
+                bucket=bucket_name,
+                name=blob.name,
+                size_bytes=int(blob.size or 0),
+                storage_class_id=sc_id_map.get(sc, sc_id_map["STANDARD"]),
+                updated=blob.updated.isoformat() if blob.updated else None,
+            )
+        )
+    return objects
 
 
-def _flush_scan_rows(
+def _flush_scanned_objects(
     conn: sqlite3.Connection,
-    rows: list[tuple[str, str, int, int, str | None]],
+    objects: list[ScannedObject],
     bucket_name: str,
     prefix: str,
 ) -> None:
-    """Write scanned rows to DB and mark the prefix as scanned. Must be called from the main thread."""
+    """Write scanned objects to DB and mark the prefix as scanned. Must be called from the main thread."""
     conn.executemany(
         "INSERT OR REPLACE INTO objects (bucket, name, size_bytes, storage_class_id, updated) VALUES (?, ?, ?, ?, ?)",
-        rows,
+        [(o.bucket, o.name, o.size_bytes, o.storage_class_id, o.updated) for o in objects],
     )
     conn.execute(
         "INSERT OR REPLACE INTO scanned_prefixes (bucket, prefix, object_count, scanned_at) VALUES (?, ?, ?, ?)",
-        (bucket_name, prefix, len(rows), now_utc().isoformat()),
+        (bucket_name, prefix, len(objects), now_utc().isoformat()),
     )
     conn.commit()
 
@@ -1010,10 +1019,10 @@ def scan_objects(ctx: Context, action: StepSpec) -> None:
             future_to_prefix = {executor.submit(_scan_prefix, ctx, bucket_name, p, sc_id_map): p for p in pending}
             for future in as_completed(future_to_prefix):
                 p = future_to_prefix[future]
-                rows = future.result()
-                _flush_scan_rows(db_conn, rows, bucket_name, p)
-                total_objects += len(rows)
-                progress.set_postfix_str(f"{p[:50]} ({len(rows)} obj)")
+                objects = future.result()
+                _flush_scanned_objects(db_conn, objects, bucket_name, p)
+                total_objects += len(objects)
+                progress.set_postfix_str(f"{p[:50]} ({len(objects)} obj)")
                 progress.update(1)
         progress.close()
         db_conn.close()
