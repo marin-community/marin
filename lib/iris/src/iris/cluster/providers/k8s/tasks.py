@@ -1094,6 +1094,11 @@ class K8sTaskProvider:
         attach_cmd = shlex.join(build_memray_attach_cmd(spec, memray_bin="memray", trace_path=trace_path))
         self._kubectl_exec_shell(pod_name, attach_cmd, timeout=duration + 30)
 
+        if spec.is_raw:
+            data = self.kubectl.read_file(pod_name, trace_path, container="task")
+            self.kubectl.rm_files(pod_name, [trace_path], container="task")
+            return cluster_pb2.ProfileTaskResponse(profile_data=data)
+
         transform_cmd = shlex.join(
             build_memray_transform_cmd(spec, memray_bin="memray", trace_path=trace_path, output_path=output_path)
         )

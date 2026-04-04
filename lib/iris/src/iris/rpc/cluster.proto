@@ -105,6 +105,7 @@ message MemoryProfile {
     FLAMEGRAPH = 1;     // HTML flamegraph with memory timeline
     TABLE = 2;          // Text summary table
     STATS = 3;          // JSON statistics
+    RAW = 4;            // Raw .bin trace file (use with memray CLI locally)
   }
   Format format = 1;
   bool leaks = 2;       // Focus on potential memory leaks

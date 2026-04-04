@@ -404,7 +404,7 @@ const filteredTasks = computed(() => {
 
 function buildProfileType(profilerType: string, format: string | null): Record<string, unknown> {
   if (profilerType === 'cpu') return { cpu: { format: format ?? 'SPEEDSCOPE' } }
-  if (profilerType === 'memory') return { memory: { format: format ?? 'FLAMEGRAPH' } }
+  if (profilerType === 'memory') return { memory: { format: format ?? 'RAW' } }
   return { threads: {} }
 }
 
@@ -428,7 +428,8 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
       const a = document.createElement('a')
       a.href = url
       const ts = new Date().toISOString().replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+Z$/, '')
-      a.download = `${ts}_profile-${taskId.replace(/\//g, '_')}.out`
+      const ext = profilerType === 'memory' ? 'bin' : 'out'
+      a.download = `${ts}_profile-${taskId.replace(/\//g, '_')}.${ext}`
       a.click()
       URL.revokeObjectURL(url)
     }
@@ -785,7 +786,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                   <button
                     class="px-2 py-0.5 text-[11px] font-semibold rounded bg-status-success text-white hover:opacity-80 disabled:opacity-50"
                     :disabled="profilingTaskId === task.taskId"
-                    @click="handleProfile(task.taskId, 'memory', 'FLAMEGRAPH')"
+                    @click="handleProfile(task.taskId, 'memory', 'RAW')"
                   >
                     {{ profilingTaskId === task.taskId ? '⏳' : 'MEM' }}
                   </button>
