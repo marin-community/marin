@@ -568,7 +568,7 @@ def create_gqa_ablation() -> list[ExecutorStep]:
     train_steps = 9995
     tokens = 10.0 * 262e6
 
-    for label, kv_heads in [("gqa3to1", 2), ("gqa6to1", 1)]:
+    for label, kv_heads, num_steps in [("gqa2to1", 3, train_steps)]:  # ("mha-baseline", 6, 100), ("gqa3to1", 2, train_steps), ("gqa6to1", 1, train_steps)]:
         model_cfg = HEURISTIC.build_model_config(768)
         model_cfg = dataclasses.replace(model_cfg, num_kv_heads=kv_heads)
         fpt = _compute_flops_per_token(model_cfg)
@@ -582,7 +582,7 @@ def create_gqa_ablation() -> list[ExecutorStep]:
             output_path=this_output_path(),
             run_id=run_id,
             resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-            steps=versioned(train_steps),
+            steps=versioned(num_steps),
             batch_size=versioned(batch_size),
             seed=versioned(0),
             mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
