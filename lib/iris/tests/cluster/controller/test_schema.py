@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from iris.cluster.controller.schema import (
+    AUTH_TABLES,
     JOBS,
     MAIN_TABLES,
     generate_full_ddl,
@@ -17,11 +18,12 @@ from iris.cluster.controller.schema import (
 
 
 def _create_db() -> sqlite3.Connection:
-    """Create an in-memory SQLite DB with the full MAIN_TABLES schema."""
+    """Create an in-memory SQLite DB with the full schema (main + auth)."""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    ddl = generate_full_ddl(MAIN_TABLES)
-    conn.executescript(ddl)
+    conn.execute("ATTACH ':memory:' AS auth")
+    conn.executescript(generate_full_ddl(MAIN_TABLES))
+    conn.executescript(generate_full_ddl(AUTH_TABLES))
     return conn
 
 
@@ -144,18 +146,23 @@ def _normalize_sql(sql: str) -> str:
 
 
 def _extract_schema(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:
-    """Extract (type, name, normalized_sql) from sqlite_master, sorted and filtered."""
-    rows = conn.execute("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").fetchall()
+    """Extract (type, name, normalized_sql) from sqlite_master + auth.sqlite_master, sorted and filtered."""
     result = []
-    for row in rows:
-        obj_type, name, sql = row[0], row[1], row[2]
-        # Skip auto-created entries
-        if name == "sqlite_sequence":
+    for schema in ("main", "auth"):
+        try:
+            rows = conn.execute(f"SELECT type, name, sql FROM {schema}.sqlite_master ORDER BY type, name").fetchall()
+        except sqlite3.OperationalError:
             continue
-        if name.startswith("sqlite_autoindex_"):
-            continue
-        normalized = _normalize_sql(sql) if sql else ""
-        result.append((obj_type, name, normalized))
+        for row in rows:
+            obj_type, name, sql = row[0], row[1], row[2]
+            if name == "sqlite_sequence":
+                continue
+            if name.startswith("sqlite_autoindex_"):
+                continue
+            normalized = _normalize_sql(sql) if sql else ""
+            # Prefix auth objects so they don't collide with main
+            qualified_name = f"auth.{name}" if schema == "auth" else name
+            result.append((obj_type, qualified_name, normalized))
     return sorted(result)
 
 
