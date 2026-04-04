@@ -77,9 +77,9 @@ else:
         hf_dataset_id="HuggingFaceFW/fineweb-edu",
         revision="87f0914",
     )
-    # Pass the download step as a dependency — the executor resolves its output path.
+    # The download step is referenced as a dependency in train_paths —
+    # the executor resolves it automatically.
     steps = [
-        dataset,
         _tokenize_step("tokenize/benchmark-hf", dataset, TokenizerBackend.HF),
         _tokenize_step("tokenize/benchmark-tokie", dataset, TokenizerBackend.TOKIE),
     ]
