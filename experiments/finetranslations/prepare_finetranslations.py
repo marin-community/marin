@@ -34,19 +34,18 @@ class PrepareFinetranslationsConfig:
 def prepare_finetranslations(config: PrepareFinetranslationsConfig):
     """Concatenate translated_text + og_full_text into a single text field."""
 
-    def concat_parallel(record: dict) -> dict | None:
+    def concat_parallel(record: dict) -> list[dict]:
         translated = record.get("translated_text", "")
         original = record.get("og_full_text", "")
         if not translated and not original:
-            return None
-        return {"text": f"{translated}\n\n{original}"}
+            return []
+        return [{"text": f"{translated}\n\n{original}"}]
 
     pipeline = (
         Dataset.from_files(f"{config.input_path}/data/**/*.parquet")
         .flat_map(load_parquet)
-        .map(concat_parallel)
-        .filter(lambda r: r is not None)
-        .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
+        .flat_map(concat_parallel)
+        .write_parquet(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
     ctx = ZephyrContext(
         name="prepare-finetranslations",

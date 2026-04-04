@@ -58,7 +58,7 @@ def reshard_parquet(config: ReshardConfig):
     ds = Dataset.from_files(pattern).flat_map(load_parquet)
     if config.filter_null_text:
         ds = ds.filter(lambda r: r.get("text") is not None and len(r.get("text", "")) > 0)
-    pipeline = ds.write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
+    pipeline = ds.write_parquet(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet")
     ctx = ZephyrContext(
         name="reshard-parquet",
         # 120g needed because load_parquet decompresses entire parquet files in memory;
@@ -88,7 +88,7 @@ finepdfs_tokenized: dict[str, ExecutorStep] = {}
 _english_resharded = _reshard_step("eng_Latn", finepdfs_by_language["eng_Latn"])
 finepdfs_tokenized["eng_Latn"] = default_tokenize(
     "finepdfs_eng_Latn",
-    _english_resharded / "**/*.jsonl.gz",
+    _english_resharded / "**/*.parquet",
     tokenizer=marin_tokenizer,
     worker_resources=_worker_resources,
 )
@@ -97,7 +97,7 @@ for _lang in FINEPDFS_EXTRA_LANGS:
     _resharded = _reshard_step(_lang, finepdfs_extra_by_language[_lang])
     finepdfs_tokenized[_lang] = default_tokenize(
         f"finepdfs_{_lang}",
-        _resharded / "**/*.jsonl.gz",
+        _resharded / "**/*.parquet",
         tokenizer=marin_tokenizer,
         worker_resources=_worker_resources,
     )

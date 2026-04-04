@@ -80,11 +80,11 @@ def stitch_bhl_full_books(config: StitchBHLConfig):
         .flat_map(load_jsonl_lenient)
         .group_by(
             key=lambda page: page.get("item_id", "unknown"),
-            sort_by=lambda page: page.get("page_num", "0000"),
+            sort_by=lambda page: int(page.get("page_num", 0)),
             reducer=_stitch_pages,
         )
         .filter(lambda book: len(book.get("text", "").strip()) > 0)
-        .write_jsonl(f"{config.output_path}/books-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
+        .write_parquet(f"{config.output_path}/books-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
     ctx = ZephyrContext(
         name="stitch-bhl-books",
@@ -105,7 +105,7 @@ bhl_full_books = ExecutorStep(
 
 bhl_full_books_tokenized = default_tokenize(
     "common_pile/biodiversity_heritage_library_books",
-    bhl_full_books / "**/*.jsonl.gz",
+    bhl_full_books / "**/*.parquet",
     tokenizer=marin_tokenizer,
     worker_resources=ResourceConfig(ram="20g", disk="10g"),
 )
