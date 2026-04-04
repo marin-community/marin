@@ -11,6 +11,7 @@ import time
 import uuid
 from pathlib import Path
 
+import msgspec
 import pytest
 from fray.v2 import ResourceConfig
 from zephyr.dataset import Dataset
@@ -101,7 +102,7 @@ def test_load_jsonl_skip_malformed_lines(tmp_path):
     # Strict mode (default) raises on the bad line
     it = load_jsonl(str(jsonl_file))
     assert next(it) == {"a": 1}
-    with pytest.raises(Exception):
+    with pytest.raises(msgspec.DecodeError):
         next(it)
 
     # Lenient mode skips the bad line
