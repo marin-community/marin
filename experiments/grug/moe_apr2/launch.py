@@ -555,8 +555,73 @@ V12_D1280_SHIFTED = [
 v12_d1280_shifted_steps = _create_v12_steps_from_list(V12_D1280_SHIFTED)
 
 
+def create_gqa_ablation() -> list[ExecutorStep]:
+    """GQA ablation: d768, t10x, adam_lr=0.00226, comparing 3:1 and 6:1 GQA.
+
+    Baseline (MHA, num_kv_heads=6) already exists as isoflop-moe-v11-d768-t10x-adam0.00226.
+    """
+    steps = []
+    adam_lr = 0.00226
+    ratio = 13 / 3
+    adamh_lr = round(adam_lr * ratio, 5)
+    batch_size = 64
+    train_steps = 9995
+    tokens = 10.0 * 262e6
+
+    for label, kv_heads in [("gqa3to1", 2), ("gqa6to1", 1)]:
+        model_cfg = HEURISTIC.build_model_config(768)
+        model_cfg = dataclasses.replace(model_cfg, num_kv_heads=kv_heads)
+        fpt = _compute_flops_per_token(model_cfg)
+        optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, fpt)
+        optimizer = dataclasses.replace(optimizer, learning_rate=adamh_lr, adam_lr=adam_lr)
+
+        run_id = f"gqa-ablation-d768-t10x-{label}"
+        config = GrugMoeLaunchConfig(
+            model=versioned(model_cfg),
+            data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+            output_path=this_output_path(),
+            run_id=run_id,
+            resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+            steps=versioned(train_steps),
+            batch_size=versioned(batch_size),
+            seed=versioned(0),
+            mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+            tracker=WandbConfig(
+                project="dial_moe",
+                tags=[
+                    "grug", "moe-core", "gqa-ablation", "d=768",
+                    f"kv={kv_heads}", label,
+                ],
+                group="gqa-ablation",
+                name=run_id,
+            ),
+            optimizer=versioned(optimizer),
+            grug_trainer=versioned(
+                GrugTrainerConfig(
+                    z_loss_weight=HEURISTIC.z_loss_weight,
+                    ema_beta=None,
+                    log_every=1,
+                )
+            ),
+            eval=versioned(
+                GrugEvalConfig(
+                    eval_batch_size=512,
+                    steps_per_eval=1000,
+                    max_eval_batches=8,
+                    eval_current=True,
+                    eval_ema=False,
+                )
+            ),
+        )
+        steps.append(ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config))
+    return steps
+
+
+gqa_ablation_steps = create_gqa_ablation()
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=v12_d1280_shifted_steps,
-        description="v12-retry: 25 d1280 shifted LR runs",
+        steps=gqa_ablation_steps,
+        description="GQA ablation: d768 t10x, 3:1 and 6:1 vs MHA baseline",
     )
