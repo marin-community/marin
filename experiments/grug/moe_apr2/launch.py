@@ -555,8 +555,64 @@ V12_D1280_SHIFTED = [
 v12_d1280_shifted_steps = _create_v12_steps_from_list(V12_D1280_SHIFTED)
 
 
+def _create_v13_retry_step(dim, tok_ratio, adam_lr, batch_size, train_steps):
+    """Single v13-retry run with new name to avoid executor lock conflicts."""
+    ratio = 13 / 3
+    model_cfg = HEURISTIC.build_model_config(dim)
+    fpt = _compute_flops_per_token(model_cfg)
+    tokens = tok_ratio * {512: 154e6, 768: 262e6, 1024: 420e6, 1280: 441e6}[dim]
+    adamh_lr = round(adam_lr * ratio, 5)
+    optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, fpt)
+    optimizer = dataclasses.replace(optimizer, learning_rate=adamh_lr, adam_lr=adam_lr)
+
+    run_id = f"isoflop-moe-v13-retry-d{dim}-t{tok_ratio}x-adam{adam_lr}"
+    eval_bs = 64 if dim >= 2048 else 512
+    eval_batches = 64 if dim >= 2048 else 8
+
+    config = GrugMoeLaunchConfig(
+        model=versioned(model_cfg),
+        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        output_path=this_output_path(),
+        run_id=run_id,
+        resources=versioned(ResourceConfig.with_tpu("v4-32")),
+        steps=versioned(train_steps),
+        batch_size=versioned(batch_size),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=[
+                "grug", "moe-core", "isoflop", "v13",
+                f"d={dim}", f"tok_ratio={tok_ratio}", f"adam_lr={adam_lr}",
+                f"adamh_lr={adamh_lr}", f"bs={batch_size}",
+                "decayNone", "warmup=0.1",
+            ],
+            group="isoflop-moe-v13-retry",
+            name=run_id,
+        ),
+        optimizer=versioned(optimizer),
+        grug_trainer=versioned(
+            GrugTrainerConfig(
+                z_loss_weight=HEURISTIC.z_loss_weight,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            GrugEvalConfig(
+                eval_batch_size=eval_bs,
+                steps_per_eval=1000,
+                max_eval_batches=eval_batches,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+    )
+    return [ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config)]
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=v12_d1280_shifted_steps,
-        description="v12-retry: 25 d1280 shifted LR runs",
+        steps=_create_v13_retry_step(1280, 50.0, 0.008, 128, 42057),
+        description="v13-retry: d1280-t50x-adam0.008",
     )
