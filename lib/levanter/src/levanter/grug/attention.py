@@ -142,11 +142,10 @@ def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[A
     if num_q_heads % num_kv_heads != 0:
         raise ValueError(f"num_heads ({num_q_heads}) must be divisible by num_kv_heads ({num_kv_heads})")
     repeat = num_q_heads // num_kv_heads
-    out_sharding = None
-    if isinstance(getattr(x, "sharding", None), NamedSharding):
-        sharding = x.sharding
-        out_sharding = sharding.spec if get_abstract_mesh() is not None else sharding
-    return jnp.repeat(x, repeat, axis=2, out_sharding=out_sharding)
+    # Avoid jnp.repeat sharding issues — use reshape + broadcast instead
+    expanded = jnp.expand_dims(x, axis=3)
+    tiled = jnp.broadcast_to(expanded, (*x.shape[:3], repeat, x.shape[3]))
+    return tiled.reshape(*x.shape[:2], num_q_heads, x.shape[3])
 
 
 def reference_attention(

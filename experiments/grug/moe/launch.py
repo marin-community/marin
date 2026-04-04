@@ -57,18 +57,18 @@ class GrugMoeLaunchConfig:
 
 GRUG_MOE_TRIAL_MODEL = GrugModelConfig(
     vocab_size=128_256,
-    hidden_dim=1024,
-    intermediate_dim=512,
-    shared_expert_intermediate_dim=1024,
-    dense_intermediate_dim=3072,
+    hidden_dim=512,
+    intermediate_dim=256,
+    shared_expert_intermediate_dim=512,
+    dense_intermediate_dim=1536,
     num_experts=64,
     num_experts_per_token=4,
-    num_layers=11,
-    num_heads=8,
-    num_kv_heads=8,
+    num_layers=8,
+    num_heads=4,
+    num_kv_heads=2,
     max_seq_len=4096,
     head_dim=None,
-    initializer_std=0.5 / 1024**0.5,  # 0.5 / sqrt(hidden_dim)
+    initializer_std=0.5 / 512**0.5,
     qk_mult=1.3,
 )
 
@@ -128,28 +128,26 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     run_grug(run_config)
 
 
-RESOLVED_RUN_ID = _resolve_run_id("03_24_baseline_moe")
+RESOLVED_RUN_ID = _resolve_run_id("gqa_test_d512_2to1")
 
 
 baseline_moe = ExecutorStep(
-    name="grug/03_24_baseline_moe",
+    name="grug/gqa_test_d512_2to1",
     fn=run_grug_moe_trial,
     config=GrugMoeLaunchConfig(
         model=versioned(GRUG_MOE_TRIAL_MODEL),
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-        # this_output_path() resolves to this step's output root (e.g. gs://.../grug/moe-trial-<version>).
         output_path=this_output_path(),
-        # Keep run id out of versioning so changing job metadata doesn't create a new output path.
         run_id=RESOLVED_RUN_ID,
         resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-        steps=versioned(10_670),
+        steps=versioned(20),
         batch_size=versioned(32),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
             project="dial_moe",
-            tags=["adamh", "qb", "sharded-qb", "gatednorm", "xsa", "zloss", "eq3e3"],
-            group="moe-iter04",
+            tags=["adamh", "qb", "gatednorm", "xsa", "zloss", "gqa-test", "d512", "2to1"],
+            group="gqa-test",
             name=None,
         ),
         optimizer=versioned(
@@ -189,5 +187,5 @@ baseline_moe = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         steps=[baseline_moe],
-        description="Baseline grug MoE (QB+GN+XSA+zloss) on Nemotron mix.",
+        description="GQA test: d512, 2:1 ratio, 20 steps",
     )
