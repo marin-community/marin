@@ -69,6 +69,7 @@ class CompletedAdamHHeuristic:
     # --- Architecture ---
     vocab_size: int = 128_256
     hidden_head_ratio: int = 128
+    gqa_ratio: int | None = 4  # None = MHA, 4 = 4:1 GQA, etc.
     base_hidden_layer_ratio: int = 64
     layer_scaling_factor: float = 4.0
     layer_formula_offset: int = 9
@@ -137,6 +138,21 @@ class CompletedAdamHHeuristic:
         scaling = self.base_max_params * math.sqrt(budget / self.base_max_params_budget)
         return min(max(self.base_max_params, scaling), self.global_max_params)
 
+    @staticmethod
+    def _compute_kv_heads(num_heads: int, gqa_ratio: int | None) -> int:
+        """Compute num_kv_heads for a given GQA ratio.
+
+        If gqa_ratio is None, returns num_heads (MHA).
+        Otherwise returns the largest divisor of num_heads <= num_heads // gqa_ratio.
+        """
+        if gqa_ratio is None:
+            return num_heads
+        target = num_heads // gqa_ratio
+        for k in range(target, 0, -1):
+            if num_heads % k == 0:
+                return k
+        return 1
+
     def build_model_config(self, hidden_size: int) -> GrugModelConfig:
         if hidden_size % self.hidden_head_ratio != 0:
             raise ValueError(
@@ -144,6 +160,7 @@ class CompletedAdamHHeuristic:
             )
         num_layers = self._compute_num_layers(hidden_size)
         num_heads = max(1, hidden_size // self.hidden_head_ratio)
+        num_kv_heads = self._compute_kv_heads(num_heads, self.gqa_ratio)
 
         return GrugModelConfig(
             vocab_size=self.vocab_size,
@@ -154,7 +171,7 @@ class CompletedAdamHHeuristic:
             num_experts_per_token=4,
             num_layers=num_layers,
             num_heads=num_heads,
-            num_kv_heads=num_heads,
+            num_kv_heads=num_kv_heads,
             max_seq_len=SEQ_LEN,
             sliding_window=SEQ_LEN,
             initializer_std=0.5 / math.sqrt(hidden_size),
