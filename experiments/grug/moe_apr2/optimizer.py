@@ -2,13 +2,49 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import jax
+import jax.numpy as jnp
 import optax
 
 from levanter.optim import OptimizerConfig
 from experiments.grug.moe_apr2.adamh import scale_by_adamh
 from levanter.utils.jax_utils import leaf_key_paths
+
+
+class CautiousWeightDecayState(NamedTuple):
+    """Empty state for cautious weight decay."""
+
+
+def cautious_weight_decay(decay_constant: float, lr_ref, lr_max: float):
+    """Cautious weight decay: decay only when grad and weight have the same sign.
+
+    update += -decay_constant * (lr / lr_max) * lr * weight * mask
+    where mask = (sign(grad) == sign(weight)) & (grad != 0)
+
+    Args:
+        decay_constant: base decay strength
+        lr_ref: injected hyperparameter reference for current LR
+        lr_max: peak learning rate (static float)
+    """
+
+    def init_fn(params):
+        del params
+        return CautiousWeightDecayState()
+
+    def update_fn(updates, state, params):
+        lr = lr_ref
+        scale = decay_constant * (lr / lr_max) * lr
+
+        def apply_decay(update, param):
+            mask = (jnp.sign(update) == jnp.sign(param)) & (update != 0)
+            return update - jnp.where(mask, scale * param, 0.0)
+
+        updates = jax.tree.map(apply_decay, updates, params)
+        return updates, state
+
+    return optax.GradientTransformation(init_fn, update_fn)
 
 
 @OptimizerConfig.register_subclass("grug_moe_adamh_v2")
@@ -29,6 +65,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
     expert_lr: float | None = None
     router_lr: float | None = None
     embed_lr: float | None = None
+    embed_cautious_wd: float = 0.0  # Cautious weight decay constant for embeddings
     attn_gate_lr: float | None = None
     norm_lr: float | None = None
     gated_norm_lr: float | None = None
@@ -86,6 +123,8 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
                 components.append(optax.scale(-embed_lr))
+                if self.embed_cautious_wd > 0:
+                    components.append(cautious_weight_decay(self.embed_cautious_wd, embed_lr, embed_lr_val))
                 return optax.chain(*components)
 
             def attn_gate_transform():
