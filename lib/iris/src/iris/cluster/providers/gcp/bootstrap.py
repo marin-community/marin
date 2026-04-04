@@ -136,9 +136,11 @@ fi
 sudo systemctl start docker || true
 
 # Tune network stack for high-connection workloads (#3066).
-# Expands ephemeral port range and allows reuse of TIME_WAIT sockets.
+# Expands ephemeral port range, allows reuse of TIME_WAIT sockets,
+# and raises listen backlog for actor servers handling 1000s of workers.
 sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
 sudo sysctl -w net.ipv4.tcp_tw_reuse=1
+sudo sysctl -w net.core.somaxconn=4096
 
 # Create cache directory
 sudo mkdir -p {{ cache_dir }}

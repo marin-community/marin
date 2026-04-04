@@ -62,6 +62,7 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
             disk_bytes=50 * 1024**3,
             device_type=config_pb2.ACCELERATOR_TYPE_CPU,
             device_count=0,
+            capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
         ),
     )
     config.scale_groups["local-cpu"].CopyFrom(sg)

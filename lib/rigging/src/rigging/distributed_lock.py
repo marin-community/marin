@@ -19,6 +19,7 @@ by other holders.
 """
 
 import abc
+import functools
 import json
 import logging
 import os
@@ -254,6 +255,7 @@ class S3Lease(DistributedLease):
         return (bucket, key)
 
     @staticmethod
+    @functools.cache
     def _make_client():
         import botocore.config
         import botocore.session

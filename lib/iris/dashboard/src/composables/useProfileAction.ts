@@ -12,7 +12,7 @@ export type ProfilerType = 'cpu' | 'memory' | 'threads'
 
 function buildProfileType(profilerType: ProfilerType): Record<string, unknown> {
   if (profilerType === 'cpu') return { cpu: { format: 'SPEEDSCOPE' } }
-  if (profilerType === 'memory') return { memory: { format: 'FLAMEGRAPH' } }
+  if (profilerType === 'memory') return { memory: { format: 'RAW' } }
   return { threads: {} }
 }
 
@@ -33,7 +33,8 @@ function handleProfileResult(decoded: string, profilerType: ProfilerType, label:
     const a = document.createElement('a')
     a.href = url
     const ts = new Date().toISOString().replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+Z$/, '')
-    a.download = `${ts}_profile-${label.replace(/\//g, '_')}.out`
+    const ext = profilerType === 'memory' ? 'bin' : 'out'
+    a.download = `${ts}_profile-${label.replace(/\//g, '_')}.${ext}`
     a.click()
     URL.revokeObjectURL(url)
   }

@@ -444,8 +444,10 @@ class TokenBucket:
 
     @property
     def available(self) -> int:
-        """Current available tokens (approximate, no refill)."""
-        return int(self._tokens)
+        """Current available tokens after refilling from elapsed time."""
+        with self._lock:
+            self._refill(Timestamp.now())
+            return int(self._tokens)
 
 
 class ExponentialBackoff:

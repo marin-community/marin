@@ -44,11 +44,12 @@ from iris.cluster.controller.db import (
     TERMINAL_JOB_STATES,
     ControllerDB,
     EndpointQuery,
-    JobDetail,
-    decode_rows,
     healthy_active_workers_with_attributes,
     running_tasks_by_worker,
     tasks_for_job_with_attempts,
+)
+from iris.cluster.controller.schema import (
+    JOB_DETAIL_PROJECTION,
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
@@ -369,8 +370,7 @@ def benchmark_dashboard(db: ControllerDB) -> None:
     def _bench_jobs_in_states(db):
         placeholders = ",".join("?" for _ in USER_JOB_STATES)
         with db.read_snapshot() as q:
-            return decode_rows(
-                JobDetail,
+            return JOB_DETAIL_PROJECTION.decode(
                 q.fetchall(
                     f"SELECT * FROM jobs WHERE state IN ({placeholders}) AND depth = 1",
                     (*USER_JOB_STATES,),

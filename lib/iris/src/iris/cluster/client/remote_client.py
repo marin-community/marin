@@ -78,7 +78,7 @@ class RemoteClusterClient:
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
-        max_retries_preemption: int = 100,
+        max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
         reservation: cluster_pb2.ReservationConfig | None = None,
         preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
@@ -246,7 +246,7 @@ class RemoteClusterClient:
             state_name = cluster_pb2.JobState.Name(state)
 
             try:
-                log_response = self.fetch_logs(source, cursor=cursor, min_level=min_level)
+                log_response = self.fetch_logs(source, since_ms=since_ms, cursor=cursor, min_level=min_level)
             except Exception as e:
                 msg = format_connect_error(e) if isinstance(e, ConnectError) else str(e)
                 logger.warning("Failed to fetch logs for %s, will retry: %s", job_id, msg)

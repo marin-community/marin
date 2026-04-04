@@ -609,6 +609,7 @@ def is_task_finished(state: int) -> bool:
             cluster_pb2.TASK_STATE_FAILED,
             cluster_pb2.TASK_STATE_KILLED,
             cluster_pb2.TASK_STATE_WORKER_FAILED,
+            cluster_pb2.TASK_STATE_PREEMPTED,
             cluster_pb2.TASK_STATE_UNSCHEDULABLE,
         }
     )
@@ -675,6 +676,28 @@ TPU_TOPOLOGIES: list[TpuTopologyInfo] = [
     TpuTopologyInfo("v6e-128", 128, 32, 32, 4),
     TpuTopologyInfo("v6e-256", 256, 64, 64, 4),
 ]
+
+
+TPU_FAMILY_VARIANT_PREFIX: dict[str, str] = {
+    "v4": "v4",
+    "v5e": "v5litepod",
+    "v5p": "v5p",
+    "v6e": "v6e",
+}
+
+
+def tpu_variant_name(family: str, size: int) -> str:
+    """Build the device_variant string for a TPU family and chip-count size.
+
+    >>> tpu_variant_name("v5e", 16)
+    'v5litepod-16'
+    >>> tpu_variant_name("v6e", 32)
+    'v6e-32'
+    """
+    prefix = TPU_FAMILY_VARIANT_PREFIX.get(family)
+    if prefix is None:
+        raise ValueError(f"Unknown TPU family '{family}'. Known families: {sorted(TPU_FAMILY_VARIANT_PREFIX)}")
+    return f"{prefix}-{size}"
 
 
 def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:

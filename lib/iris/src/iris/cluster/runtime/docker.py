@@ -383,7 +383,7 @@ class DockerContainerHandle:
 
             if status.exit_code != 0:
                 log_text = "\n".join(f"[{entry.source}] {entry.data}" for entry in build_logs[-50:])
-                raise RuntimeError(f"Build failed with exit_code={status.exit_code}\n" f"Last 50 log lines:\n{log_text}")
+                raise RuntimeError(f"Build failed with exit_code={status.exit_code}\nLast 50 log lines:\n{log_text}")
 
             logger.info("Build phase completed successfully for task %s", self.config.task_id)
             return build_logs
@@ -551,7 +551,6 @@ exec {quoted_cmd}
         output_path = f"/tmp/memray-output-{profile_id}.{spec.ext}"
 
         attach_cmd = build_memray_attach_cmd(spec, memray_bin, trace_path)
-        transform_cmd = build_memray_transform_cmd(spec, memray_bin, trace_path, output_path)
 
         logger.info(
             "Memory profiling container %s for %ds (format=%s, leaks=%s)",
@@ -567,6 +566,10 @@ exec {quoted_cmd}
             if result.returncode != 0:
                 raise RuntimeError(f"memray attach failed: {result.stderr}")
 
+            if spec.is_raw:
+                return self._docker_read_file(container_id, trace_path)
+
+            transform_cmd = build_memray_transform_cmd(spec, memray_bin, trace_path, output_path)
             result = self._docker_exec(container_id, transform_cmd, capture_output=True, text=True, timeout=30)
             if result.returncode != 0:
                 raise RuntimeError(f"memray {spec.reporter} failed: {result.stderr}")
@@ -618,6 +621,8 @@ exec {quoted_cmd}
             "create",
             "--ulimit",
             "core=0:0",
+            "--ulimit",
+            "nofile=65536:524288",
             "-w",
             config.workdir,
         ]

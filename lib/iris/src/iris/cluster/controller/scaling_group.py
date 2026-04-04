@@ -98,8 +98,8 @@ class AvailabilityState:
     until: Timestamp | None = None
 
 
-DEFAULT_SCALE_UP_RATE_LIMIT = 5  # per minute
-DEFAULT_SCALE_DOWN_RATE_LIMIT = 5  # per minute
+DEFAULT_SCALE_UP_RATE_LIMIT = 32  # per minute
+DEFAULT_SCALE_DOWN_RATE_LIMIT = 32  # per minute
 DEFAULT_SCALE_UP_COOLDOWN = Duration.from_minutes(1)
 DEFAULT_BACKOFF_INITIAL = Duration.from_minutes(5)
 DEFAULT_BACKOFF_MAX = Duration.from_minutes(15)
@@ -552,24 +552,33 @@ class ScalingGroup:
             slice_id: ID of the slice to terminate
             timestamp: Optional timestamp (for testing)
         """
+        handle = self.detach_slice(slice_id, timestamp=timestamp)
+        if handle is not None:
+            self._terminate_slice_handle(handle, context="cleaning up anyway")
+
+    def detach_slice(self, slice_id: str, timestamp: Timestamp | None = None) -> SliceHandle | None:
+        """Remove a slice from tracking and persistence without terminating it."""
         timestamp = timestamp or Timestamp.now()
         with self._slices_lock:
-            state = self._slices.get(slice_id)
-        if state:
-            try:
-                state.handle.terminate()
-            except Exception:
-                logger.warning(
-                    "Scale group %s: terminate() failed for slice %s, cleaning up anyway",
-                    self.name,
-                    slice_id,
-                    exc_info=True,
-                )
-            with self._slices_lock:
-                self._slices.pop(slice_id, None)
-            self._last_scale_down = timestamp
-            self._db_remove_slice(slice_id)
-            self._db_update_group()
+            state = self._slices.pop(slice_id, None)
+        if state is None:
+            return None
+        self._last_scale_down = timestamp
+        self._db_remove_slice(slice_id)
+        self._db_update_group()
+        return state.handle
+
+    def _terminate_slice_handle(self, handle: SliceHandle, *, context: str) -> None:
+        try:
+            handle.terminate()
+        except Exception:
+            logger.warning(
+                "Scale group %s: terminate() failed for slice %s, %s",
+                self.name,
+                handle.slice_id,
+                context,
+                exc_info=True,
+            )
 
     def slice_handles(self) -> list[SliceHandle]:
         """All slice handles in this scale group."""
@@ -961,7 +970,8 @@ class ScalingGroup:
         if self._config.HasField("resources") and self._config.resources.device_variant:
             attrs[WellKnownAttribute.DEVICE_VARIANT] = AttributeValue(self._config.resources.device_variant.lower())
         if self._config.HasField("resources"):
-            attrs[WellKnownAttribute.PREEMPTIBLE] = AttributeValue(str(self._config.resources.preemptible).lower())
+            is_preemptible = self._config.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+            attrs[WellKnownAttribute.PREEMPTIBLE] = AttributeValue(str(is_preemptible).lower())
         region = self.region
         if region:
             attrs[WellKnownAttribute.REGION] = AttributeValue(region)

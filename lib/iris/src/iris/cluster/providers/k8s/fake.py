@@ -229,22 +229,38 @@ def _pod_spec(manifest: dict) -> dict | None:
     return None
 
 
-def _matches_field_selector(event: dict, selector: str) -> bool:
-    """Minimal field_selector matching for testing (supports key=value pairs)."""
+def _matches_field_selector(obj: dict, selector: str) -> bool:
+    """Minimal field_selector matching for testing (supports = and != operators)."""
     for part in selector.split(","):
-        if "=" not in part:
+        part = part.strip()
+        if not part:
             continue
-        key, value = part.split("=", 1)
+        if "!=" in part:
+            key, value = part.split("!=", 1)
+            negate = True
+        elif "=" in part:
+            key, value = part.split("=", 1)
+            negate = False
+        else:
+            continue
         segments = key.strip().split(".")
-        obj = event
+        cursor = obj
         for seg in segments:
-            if not isinstance(obj, dict):
+            if not isinstance(cursor, dict):
+                if negate:
+                    break
                 return False
-            obj = obj.get(seg)
-            if obj is None:
+            cursor = cursor.get(seg)
+            if cursor is None:
+                if negate:
+                    break
                 return False
-        if str(obj) != value.strip():
-            return False
+        else:
+            matched = str(cursor) == value.strip()
+            if negate and matched:
+                return False
+            if not negate and not matched:
+                return False
     return True
 
 
@@ -286,6 +302,7 @@ class InMemoryK8sService:
         self._file_contents: dict[tuple[str, str], bytes] = {}  # (pod_name, path) -> data
         self._rm_files_calls: list[tuple[str, list[str]]] = []
         self._top_pod_overrides: dict[str, tuple[int, int] | None] = {}
+        self._log_watermarks: dict[str, int] = {}  # pod_name -> bytes consumed
 
         # Node model
         self._nodes: dict[str, FakeNode] = {}
@@ -641,6 +658,7 @@ class InMemoryK8sService:
         resource: str,
         *,
         labels: dict[str, str] | None = None,
+        field_selector: str | None = None,
         cluster_scoped: bool = False,
     ) -> list[dict]:
         self._check_failure("list_json")
@@ -675,6 +693,8 @@ class InMemoryK8sService:
                 res_labels = manifest.get("metadata", {}).get("labels", {})
                 if not all(res_labels.get(k) == v for k, v in labels.items()):
                     continue
+            if field_selector and not _matches_field_selector(manifest, field_selector):
+                continue
             results.append(manifest)
         return results
 
@@ -708,20 +728,23 @@ class InMemoryK8sService:
         pod_name: str,
         *,
         container: str | None = None,
-        byte_offset: int = 0,
+        since_time: datetime | None = None,
     ) -> KubectlLogResult:
         self._check_failure("stream_logs")
         text = self._logs.get(pod_name, "")
         raw = text.encode("utf-8")
-        if len(raw) <= byte_offset:
-            return KubectlLogResult(lines=[], byte_offset=byte_offset)
-        remaining = raw[byte_offset:].decode("utf-8")
+        watermark = self._log_watermarks.get(pod_name, 0) if since_time is not None else 0
+        if len(raw) <= watermark:
+            return KubectlLogResult(lines=[], last_timestamp=since_time)
+        remaining = raw[watermark:].decode("utf-8")
         lines = [
             KubectlLogLine(timestamp=datetime.now(UTC), stream="stdout", data=line)
             for line in remaining.splitlines()
             if line
         ]
-        return KubectlLogResult(lines=lines, byte_offset=len(raw))
+        self._log_watermarks[pod_name] = len(raw)
+        last_ts = lines[-1].timestamp if lines else since_time
+        return KubectlLogResult(lines=lines, last_timestamp=last_ts)
 
     def exec(
         self,

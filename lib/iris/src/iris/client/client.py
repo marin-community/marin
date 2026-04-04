@@ -253,6 +253,7 @@ class Job:
         *,
         raise_on_failure: bool = True,
         stream_logs: bool = False,
+        since_ms: int = 0,
         min_level: str = "",
     ) -> cluster_pb2.JobStatus:
         """Wait for job to complete.
@@ -262,6 +263,7 @@ class Job:
             poll_interval: Maximum time between status checks
             raise_on_failure: If True, raise JobFailedError on any non-SUCCESS terminal state
             stream_logs: If True, stream logs from all tasks interleaved
+            since_ms: Only show logs after this epoch millisecond timestamp
             min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
 
         Returns:
@@ -278,6 +280,7 @@ class Job:
                 self._job_id,
                 timeout=timeout,
                 poll_interval=poll_interval,
+                since_ms=since_ms,
                 min_level=min_level,
             )
 
@@ -555,7 +558,7 @@ class IrisClient:
         coscheduling: CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
-        max_retries_preemption: int = 100,
+        max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
         user: str | None = None,
         reservation: list[ReservationEntry] | None = None,
@@ -787,6 +790,7 @@ class IrisClient:
         substring: str = "",
         attempt_id: int = -1,
         min_level: str = "",
+        tail: bool = False,
     ) -> list[TaskLogEntry]:
         """Fetch logs for a task or job.
 
@@ -798,10 +802,11 @@ class IrisClient:
         Args:
             target: Task ID or Job ID
             start: Only return logs after this timestamp (None = from beginning)
-            max_lines: Maximum number of log lines to return (0 = unlimited)
+            max_lines: Maximum number of log lines to return (0 = server default)
             substring: Substring filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
             min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+            tail: If True, return the most recent lines instead of earliest
 
         Returns:
             List of TaskLogEntry objects, sorted by timestamp
@@ -813,6 +818,7 @@ class IrisClient:
             max_lines=max_lines,
             substring=substring,
             min_level=min_level,
+            tail=tail,
         )
 
         result = [

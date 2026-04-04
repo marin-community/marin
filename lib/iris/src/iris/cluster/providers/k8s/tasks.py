@@ -10,18 +10,22 @@ k8s API via kubectl, launching one Pod per task attempt.
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import hashlib
 import logging
 import re
 import shlex
+import threading
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
-from iris.cluster.providers.k8s.constants import CW_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.log_store._types import LogStoreProtocol, TaskAttempt, task_log_key
+from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
@@ -65,11 +69,12 @@ _K8S_LABEL_MAX_LEN = 63
 _POD_NOT_FOUND_GRACE_CYCLES = 3
 
 # Kubernetes terminated reasons that indicate infrastructure failure (not application error).
-# OOMKilled: container exceeded memory limits or node ran out of memory.
 # Evicted: kubelet evicted the pod due to resource pressure.
 # DeadlineExceeded: pod's activeDeadlineSeconds expired.
 # Preempting: scheduler preempted the pod for a higher-priority workload.
-_INFRASTRUCTURE_FAILURE_REASONS = frozenset({"OOMKilled", "Evicted", "DeadlineExceeded", "Preempting"})
+# NOTE: OOMKilled is intentionally excluded — it indicates a misconfigured job
+# (requesting too little memory), not transient infrastructure failure.
+_INFRASTRUCTURE_FAILURE_REASONS = frozenset({"Evicted", "DeadlineExceeded", "Preempting"})
 
 
 def _constraints_to_node_selector(
@@ -425,12 +430,7 @@ def _build_pod_manifest(
         spec["nodeSelector"] = node_selector
 
     if gpu_count > 0:
-        spec.setdefault("tolerations", []).extend(
-            [
-                CW_INTERRUPTABLE_TOLERATION,
-                NVIDIA_GPU_TOLERATION,
-            ]
-        )
+        spec.setdefault("tolerations", []).append(NVIDIA_GPU_TOLERATION)
 
     if service_account:
         spec["serviceAccountName"] = service_account
@@ -496,8 +496,8 @@ def _is_infrastructure_failure(pod: dict) -> bool:
 def _task_update_from_pod(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
     """Build a TaskUpdate from a Kubernetes Pod dict.
 
-    Infrastructure failures (OOMKilled, eviction) are reported as WORKER_FAILED
-    so they count against max_retries_preemption (default: 100).
+    Infrastructure failures (eviction, preemption) are reported as WORKER_FAILED
+    so they count against max_retries_preemption.
     Application failures (non-zero exit code) are reported as FAILED so they
     count against max_retries_failure (default: 0, no retries).
     """
@@ -576,6 +576,167 @@ def _format_bytes(n: int) -> str:
     return f"{n} B"
 
 
+# Field selector to exclude completed pods from list calls. Reduces API server
+# response payload when many tasks have finished.
+_ACTIVE_PODS_FIELD_SELECTOR = "status.phase!=Succeeded,status.phase!=Failed"
+
+# Standard label filter for iris-managed pods.
+_MANAGED_POD_LABELS = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE}
+
+
+@dataclass
+class _LogPod:
+    """A pod tracked by LogCollector for incremental log fetching."""
+
+    pod_name: str
+    task_id: JobName
+    attempt_id: int
+    last_timestamp: datetime | None = None
+
+
+class LogCollector:
+    """Background log fetcher that writes directly to a LogStore.
+
+    Runs on its own daemon thread with a bounded ThreadPoolExecutor.
+    The sync loop calls track()/untrack() to manage the set of pods;
+    the collector independently fetches logs and writes them to the
+    log store without blocking the scheduling path.
+    """
+
+    def __init__(self, kubectl: K8sService, log_store: LogStoreProtocol, concurrency: int = 8):
+        self._kubectl = kubectl
+        self._log_store = log_store
+        self._pods: dict[str, _LogPod] = {}
+        self._lock = threading.Lock()
+        self._pod_locks: dict[str, threading.Lock] = {}
+        self._stop = threading.Event()
+        self._executor = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="log-collect")
+        self._thread = threading.Thread(target=self._run, daemon=True, name="log-collector")
+        self._thread.start()
+
+    def track(self, pod_name: str, task_id: JobName, attempt_id: int) -> None:
+        """Start collecting logs for a pod."""
+        key = f"{task_id.to_wire()}:{attempt_id}"
+        with self._lock:
+            if key not in self._pods:
+                self._pods[key] = _LogPod(pod_name=pod_name, task_id=task_id, attempt_id=attempt_id)
+                self._pod_locks[key] = threading.Lock()
+
+    def untrack(self, task_id: JobName, attempt_id: int) -> None:
+        """Stop collecting logs for a pod. Does one final incremental fetch."""
+        key = f"{task_id.to_wire()}:{attempt_id}"
+        with self._lock:
+            pod = self._pods.pop(key, None)
+            pod_lock = self._pod_locks.pop(key, None)
+        if pod is not None and pod_lock is not None:
+            with pod_lock:
+                self._fetch_and_store(pod)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            with self._lock:
+                snapshot = list(self._pods.items())
+            for key, pod in snapshot:
+                with self._lock:
+                    pod_lock = self._pod_locks.get(key)
+                if pod_lock is not None:
+                    self._executor.submit(self._guarded_fetch, pod, pod_lock)
+            self._stop.wait(timeout=2.0)
+
+    def _guarded_fetch(self, pod: _LogPod, pod_lock: threading.Lock) -> None:
+        if not pod_lock.acquire(blocking=False):
+            return
+        try:
+            self._fetch_and_store(pod)
+        finally:
+            pod_lock.release()
+
+    def _fetch_and_store(self, pod: _LogPod) -> None:
+        """Fetch logs since last timestamp and advance. Must be called under pod lock."""
+        try:
+            result = self._kubectl.stream_logs(pod.pod_name, container="task", since_time=pod.last_timestamp)
+            if result.lines:
+                entries = [_kubectl_log_line_to_log_entry(kll, pod.attempt_id) for kll in result.lines]
+                key = task_log_key(TaskAttempt(task_id=pod.task_id, attempt_id=pod.attempt_id))
+                self._log_store.append_batch([(key, entries)])
+            pod.last_timestamp = result.last_timestamp
+        except Exception as e:
+            logger.debug("LogCollector: failed for pod %s: %s", pod.pod_name, e)
+
+    def close(self) -> None:
+        self._stop.set()
+        self._executor.shutdown(wait=False)
+        self._thread.join(timeout=5)
+
+
+class ResourceCollector:
+    """Background resource usage collector that writes to TaskUpdate-compatible storage.
+
+    Same pattern as LogCollector: runs on its own daemon thread with a bounded
+    ThreadPoolExecutor. Calls kubectl top pod for each tracked pod and stores
+    the latest reading so the sync loop can pick it up without blocking.
+    """
+
+    def __init__(self, kubectl: K8sService, concurrency: int = 8):
+        self._kubectl = kubectl
+        self._pods: dict[str, str] = {}  # cursor_key -> pod_name
+        self._results: dict[str, cluster_pb2.ResourceUsage] = {}  # cursor_key -> latest reading
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._executor = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="resource-collect")
+        self._thread = threading.Thread(target=self._run, daemon=True, name="resource-collector")
+        self._thread.start()
+
+    def track(self, pod_name: str, task_id: JobName, attempt_id: int) -> None:
+        key = f"{task_id.to_wire()}:{attempt_id}"
+        with self._lock:
+            self._pods[key] = pod_name
+
+    def untrack(self, task_id: JobName, attempt_id: int) -> None:
+        key = f"{task_id.to_wire()}:{attempt_id}"
+        with self._lock:
+            self._pods.pop(key, None)
+            self._results.pop(key, None)
+
+    def get(self, task_id: JobName, attempt_id: int) -> cluster_pb2.ResourceUsage | None:
+        """Return the latest resource reading for a pod (non-blocking)."""
+        key = f"{task_id.to_wire()}:{attempt_id}"
+        with self._lock:
+            return self._results.get(key)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            with self._lock:
+                snapshot = list(self._pods.items())
+            if snapshot:
+                futures = {self._executor.submit(self._fetch_one, key, pod_name): key for key, pod_name in snapshot}
+                for f in concurrent.futures.as_completed(futures):
+                    try:
+                        f.result()
+                    except Exception:
+                        pass
+            self._stop.wait(timeout=5.0)
+
+    def _fetch_one(self, key: str, pod_name: str) -> None:
+        try:
+            top = self._kubectl.top_pod(pod_name)
+            if top is not None:
+                cpu_mc, mem_bytes = top
+                usage = cluster_pb2.ResourceUsage(
+                    cpu_millicores=cpu_mc,
+                    memory_mb=mem_bytes // (1024 * 1024),
+                )
+                with self._lock:
+                    self._results[key] = usage
+        except Exception as e:
+            logger.debug("ResourceCollector: failed for pod %s: %s", pod_name, e)
+
+    def close(self) -> None:
+        self._stop.set()
+        self._executor.shutdown(wait=False)
+        self._thread.join(timeout=5)
+
+
 @dataclass
 class K8sTaskProvider:
     """Executes tasks as Kubernetes Pods without worker daemons.
@@ -604,8 +765,36 @@ class K8sTaskProvider:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
-    _log_cursors: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    log_store: LogStoreProtocol | None = None
+    poll_concurrency: int = 8
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _log_collector: LogCollector | None = field(default=None, init=False, repr=False)
+    _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
+
+    def _ensure_resource_collector(self) -> ResourceCollector:
+        if self._resource_collector is None:
+            self._resource_collector = ResourceCollector(self.kubectl, concurrency=self.poll_concurrency)
+        return self._resource_collector
+
+    def _ensure_log_collector(self) -> LogCollector | None:
+        if self._log_collector is None and self.log_store is not None:
+            self._log_collector = LogCollector(self.kubectl, self.log_store, concurrency=self.poll_concurrency)
+        return self._log_collector
+
+    def _track_pod(self, pod_name: str, task_id: JobName, attempt_id: int, phase: str) -> None:
+        """Register a pod with background collectors, creating them lazily."""
+        log_collector = self._ensure_log_collector()
+        if log_collector is not None:
+            log_collector.track(pod_name, task_id, attempt_id)
+        if phase == "Running":
+            self._ensure_resource_collector().track(pod_name, task_id, attempt_id)
+
+    def _untrack_pod(self, task_id: JobName, attempt_id: int) -> None:
+        """Remove a pod from all background collectors."""
+        if self._log_collector is not None:
+            self._log_collector.untrack(task_id, attempt_id)
+        if self._resource_collector is not None:
+            self._resource_collector.untrack(task_id, attempt_id)
 
     def sync(self, batch: DirectProviderBatch) -> DirectProviderSyncResult:
         """Sync task state: apply new pods, delete killed pods, poll running pods."""
@@ -623,10 +812,18 @@ class K8sTaskProvider:
                         error=str(exc),
                     )
                 )
-        self._bulk_delete_task_pods(batch.tasks_to_kill)
-        updates = apply_failures + self._poll_pods(batch.running_tasks)
-        capacity = self._query_capacity()
-        scheduling_events = self._fetch_scheduling_events()
+
+        # Single pod list for the entire cycle — excludes terminal pods via field selector.
+        managed_pods = self.kubectl.list_json(
+            "pods",
+            labels=_MANAGED_POD_LABELS,
+            field_selector=_ACTIVE_PODS_FIELD_SELECTOR,
+        )
+
+        self._bulk_delete_task_pods(batch.tasks_to_kill, managed_pods)
+        updates = apply_failures + self._poll_pods(batch.running_tasks, managed_pods)
+        capacity = self._query_capacity(managed_pods)
+        scheduling_events = self._fetch_scheduling_events(managed_pods)
         return DirectProviderSyncResult(updates=updates, scheduling_events=scheduling_events, capacity=capacity)
 
     def fetch_live_logs(
@@ -638,23 +835,16 @@ class K8sTaskProvider:
     ) -> tuple[list[logging_pb2.LogEntry], int]:
         """Fetch live logs from a task pod.
 
-        Cursor semantics:
-        - Primary path (running pod): cursor is a byte offset into the stdout
-          stream, returned as the next cursor.
-        - Fallback path (terminated pod): all logs are replayed from the start
-          regardless of cursor, because byte offsets cannot map to line indices.
-          Returns len(lines) as the next cursor so subsequent calls are no-ops.
+        Cursor semantics: cursor is epoch-microseconds encoding the last seen
+        timestamp. 0 means "from the beginning".
         """
+        since_time = datetime.fromtimestamp(cursor / 1_000_000, tz=UTC) if cursor > 0 else None
         pod_name = _pod_name(JobName.from_wire(task_id), attempt_id)
-        result = self.kubectl.stream_logs(pod_name, container="task", byte_offset=cursor)
+        result = self.kubectl.stream_logs(pod_name, container="task", since_time=since_time)
         entries = [_kubectl_log_line_to_log_entry(kll, attempt_id) for kll in result.lines]
 
         if not entries:
             # Pod may have terminated; try fetching the complete logs.
-            # The primary path cursor is a byte offset that cannot be reliably
-            # mapped to a line index, so we always replay all terminated-pod
-            # logs from the start. The returned cursor equals len(lines) so
-            # subsequent calls return nothing.
             raw = self.kubectl.logs(pod_name, container="task", previous=True, tail=-1)
             if raw:
                 lines = raw.splitlines()
@@ -665,12 +855,13 @@ class K8sTaskProvider:
                     entry = logging_pb2.LogEntry(source="stdout", data=line, attempt_id=attempt_id)
                     entry.timestamp.CopyFrom(timestamp_to_proto(now_ts))
                     fallback_entries.append(entry)
-                return fallback_entries, len(lines)
+                return fallback_entries, now_ts.epoch_ms() * 1_000
 
         if max_lines > 0:
             entries = entries[:max_lines]
 
-        return entries, result.byte_offset
+        next_cursor = int(result.last_timestamp.timestamp() * 1_000_000) if result.last_timestamp else cursor
+        return entries, next_cursor
 
     def profile_task(
         self,
@@ -716,7 +907,10 @@ class K8sTaskProvider:
             return cluster_pb2.Worker.ExecInContainerResponse(error=str(e))
 
     def close(self) -> None:
-        """No persistent resources to release."""
+        if self._log_collector is not None:
+            self._log_collector.close()
+        if self._resource_collector is not None:
+            self._resource_collector.close()
 
     def get_cluster_status(self) -> cluster_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Query Kubernetes for cluster-level status: node counts, capacity, and recent pod statuses."""
@@ -900,6 +1094,11 @@ class K8sTaskProvider:
         attach_cmd = shlex.join(build_memray_attach_cmd(spec, memray_bin="memray", trace_path=trace_path))
         self._kubectl_exec_shell(pod_name, attach_cmd, timeout=duration + 30)
 
+        if spec.is_raw:
+            data = self.kubectl.read_file(pod_name, trace_path, container="task")
+            self.kubectl.rm_files(pod_name, [trace_path], container="task")
+            return cluster_pb2.ProfileTaskResponse(profile_data=data)
+
         transform_cmd = shlex.join(
             build_memray_transform_cmd(spec, memray_bin="memray", trace_path=trace_path, output_path=output_path)
         )
@@ -981,22 +1180,15 @@ class K8sTaskProvider:
             run_req.attempt_id,
         )
 
-    def _bulk_delete_task_pods(self, task_ids: list[str]) -> None:
+    def _bulk_delete_task_pods(self, task_ids: list[str], cached_pods: list[dict]) -> None:
         """Delete pods and configmaps for multiple tasks in one kubectl call per resource type."""
         if not task_ids:
             return
         task_hashes = {_task_hash(tid) for tid in task_ids}
 
-        all_pods = self.kubectl.list_json(
-            "pods",
-            labels={
-                _LABEL_MANAGED: "true",
-                _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
-            },
-        )
         pod_names = [
             p["metadata"]["name"]
-            for p in all_pods
+            for p in cached_pods
             if p.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH) in task_hashes
         ]
 
@@ -1049,43 +1241,32 @@ class K8sTaskProvider:
                 self.kubectl.delete("configmap", cm_name)
                 logger.info("Deleted configmap %s for task %s", cm_name, task_id)
 
-    def _fetch_incremental_logs(
-        self,
-        pod_name: str,
-        attempt_id: int,
-        cursor_key: str,
-    ) -> list[logging_pb2.LogEntry]:
-        """Fetch logs from a pod starting at the last-seen byte offset."""
-        byte_offset = self._log_cursors.get(cursor_key, 0)
-        try:
-            result = self.kubectl.stream_logs(pod_name, container="task", byte_offset=byte_offset)
-            self._log_cursors[cursor_key] = result.byte_offset
-            return [_kubectl_log_line_to_log_entry(kll, attempt_id) for kll in result.lines]
-        except Exception as e:
-            logger.warning("Failed to fetch logs for pod %s: %s", pod_name, e)
-            return []
+    def _poll_pods(self, running: list[RunningTaskEntry], cached_pods: list[dict]) -> list[TaskUpdate]:
+        """Poll pod phases for all running tasks.
 
-    def _poll_pods(self, running: list[RunningTaskEntry]) -> list[TaskUpdate]:
-        """Poll pod phases for all running tasks and build TaskUpdates.
+        Uses the pre-fetched pod list (active pods only, terminal pods excluded
+        by field selector). For entries missing from the cached list, does a
+        targeted get_json to check if the pod completed — this avoids the grace-
+        period-to-FAILED path for legitimately Succeeded pods.
 
-        Fetches incremental logs every sync cycle (running + terminal pods).
-        On terminal pods, a final full-log fetch ensures nothing is missed,
-        then the cursor is cleaned up.
+        Log fetching and resource usage collection are handled by background
+        LogCollector and ResourceCollector threads. This method only reads pod
+        phase and the latest cached resource snapshot.
         """
         if not running:
             return []
 
-        all_pods = self.kubectl.list_json(
-            "pods",
-            labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE},
-        )
-        pods_by_name: dict[str, dict] = {pod.get("metadata", {}).get("name", ""): pod for pod in all_pods}
-
+        pods_by_name: dict[str, dict] = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
         updates: list[TaskUpdate] = []
+
         for entry in running:
             pod_name = _pod_name(entry.task_id, entry.attempt_id)
             cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
             pod = pods_by_name.get(pod_name)
+
+            if pod is None:
+                # Pod not in active list — may have completed or truly vanished.
+                pod = self.kubectl.get_json("pods", pod_name)
 
             if pod is None:
                 count = self._pod_not_found_counts.get(cursor_key, 0) + 1
@@ -1099,13 +1280,9 @@ class K8sTaskProvider:
                         )
                     )
                     continue
-                # Grace exhausted -- pod is truly gone. Treat as application
-                # failure (FAILED) rather than infrastructure (WORKER_FAILED)
-                # because we cannot determine the cause. Using FAILED ensures
-                # max_retries_failure (default: 0) applies instead of
-                # max_retries_preemption (default: 100), preventing runaway retries.
+                # Grace exhausted — pod is truly gone.
                 self._pod_not_found_counts.pop(cursor_key, None)
-                self._log_cursors.pop(cursor_key, None)
+                self._untrack_pod(entry.task_id, entry.attempt_id)
                 updates.append(
                     TaskUpdate(
                         task_id=entry.task_id,
@@ -1117,29 +1294,18 @@ class K8sTaskProvider:
                 continue
 
             self._pod_not_found_counts.pop(cursor_key, None)
-            log_entries = self._fetch_incremental_logs(pod_name, entry.attempt_id, cursor_key)
-
             update = _task_update_from_pod(entry, pod)
             phase = pod.get("status", {}).get("phase", "")
 
+            self._track_pod(pod_name, entry.task_id, entry.attempt_id, phase)
+
+            # Read latest cached resource usage (non-blocking).
             resource_usage = None
-            if phase == "Running":
-                try:
-                    top_result = self.kubectl.top_pod(pod_name)
-                    if top_result is not None:
-                        cpu_mc, mem_bytes = top_result
-                        resource_usage = cluster_pb2.ResourceUsage(
-                            cpu_millicores=cpu_mc,
-                            memory_mb=mem_bytes // (1024 * 1024),
-                        )
-                except Exception as e:
-                    logger.debug("Failed to fetch resource stats for pod %s: %s", pod_name, e)
+            if self._resource_collector is not None:
+                resource_usage = self._resource_collector.get(entry.task_id, entry.attempt_id)
 
             if phase in ("Succeeded", "Failed"):
-                final_logs = self._fetch_completed_pod_logs(pod_name, entry.attempt_id)
-                if len(final_logs) > len(log_entries):
-                    log_entries = final_logs
-                self._log_cursors.pop(cursor_key, None)
+                self._untrack_pod(entry.task_id, entry.attempt_id)
 
             updates.append(
                 TaskUpdate(
@@ -1149,22 +1315,12 @@ class K8sTaskProvider:
                     error=update.error,
                     exit_code=update.exit_code,
                     resource_usage=resource_usage or update.resource_usage,
-                    log_entries=log_entries,
                 )
             )
 
         return updates
 
-    def _fetch_completed_pod_logs(self, pod_name: str, attempt_id: int) -> list[logging_pb2.LogEntry]:
-        """Fetch all logs from a completed pod."""
-        try:
-            result = self.kubectl.stream_logs(pod_name, container="task", byte_offset=0)
-            return [_kubectl_log_line_to_log_entry(kll, attempt_id) for kll in result.lines]
-        except Exception as e:
-            logger.warning("Failed to fetch logs for completed pod %s: %s", pod_name, e)
-            return []
-
-    def _query_capacity(self) -> ClusterCapacity | None:
+    def _query_capacity(self, cached_pods: list[dict]) -> ClusterCapacity | None:
         """Compute cluster capacity from node allocatable minus running pod requests."""
         try:
             nodes = self.kubectl.list_json("nodes", cluster_scoped=True)
@@ -1193,31 +1349,24 @@ class K8sTaskProvider:
         if schedulable_count == 0:
             return None
 
-        # Compute used resources from running pod requests.
+        # Compute used resources from running pod requests (cached_pods already
+        # excludes terminal pods via field selector).
         used_cpu_mc = 0
         used_memory_bytes = 0
-        try:
-            pods = self.kubectl.list_json(
-                "pods",
-                labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE},
-            )
-            for pod in pods:
-                phase = pod.get("status", {}).get("phase", "")
-                if phase not in ("Pending", "Running"):
-                    continue
-                for container in pod.get("spec", {}).get("containers", []):
-                    requests = container.get("resources", {}).get("requests", {})
-                    limits = container.get("resources", {}).get("limits", {})
-                    # Use requests if available, else limits.
-                    cpu_req = requests.get("cpu") or limits.get("cpu", "0")
-                    mem_req = requests.get("memory") or limits.get("memory", "0")
-                    cpu_v = parse_k8s_quantity(cpu_req)
-                    if not cpu_req.endswith("m"):
-                        cpu_v *= 1000
-                    used_cpu_mc += cpu_v
-                    used_memory_bytes += parse_k8s_quantity(mem_req)
-        except Exception as e:
-            logger.warning("Failed to query pod resources for capacity: %s", e)
+        for pod in cached_pods:
+            phase = pod.get("status", {}).get("phase", "")
+            if phase not in ("Pending", "Running"):
+                continue
+            for container in pod.get("spec", {}).get("containers", []):
+                requests = container.get("resources", {}).get("requests", {})
+                limits = container.get("resources", {}).get("limits", {})
+                cpu_req = requests.get("cpu") or limits.get("cpu", "0")
+                mem_req = requests.get("memory") or limits.get("memory", "0")
+                cpu_v = parse_k8s_quantity(cpu_req)
+                if not cpu_req.endswith("m"):
+                    cpu_v *= 1000
+                used_cpu_mc += cpu_v
+                used_memory_bytes += parse_k8s_quantity(mem_req)
 
         return ClusterCapacity(
             schedulable_nodes=schedulable_count,
@@ -1227,24 +1376,16 @@ class K8sTaskProvider:
             available_memory_bytes=total_memory_bytes - used_memory_bytes,
         )
 
-    def _fetch_scheduling_events(self) -> list[SchedulingEvent]:
+    def _fetch_scheduling_events(self, cached_pods: list[dict]) -> list[SchedulingEvent]:
         """Fetch recent k8s events for iris-managed pods.
 
         K8s Events don't carry pod labels, so we query all events in the
         namespace and filter client-side by pod name prefix.
         """
-        try:
-            all_pods = self.kubectl.list_json(
-                "pods",
-                labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE},
-            )
-            pod_names = {pod.get("metadata", {}).get("name", "") for pod in all_pods}
-            pod_labels = {
-                pod.get("metadata", {}).get("name", ""): pod.get("metadata", {}).get("labels", {}) for pod in all_pods
-            }
-        except Exception as e:
-            logger.warning("Failed to query pods for scheduling events: %s", e)
-            return []
+        pod_names = {pod.get("metadata", {}).get("name", "") for pod in cached_pods}
+        pod_labels = {
+            pod.get("metadata", {}).get("name", ""): pod.get("metadata", {}).get("labels", {}) for pod in cached_pods
+        }
 
         if not pod_names:
             return []

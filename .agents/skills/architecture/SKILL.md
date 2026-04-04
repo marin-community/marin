@@ -57,8 +57,7 @@ marin/
 ├── docs/                       # Documentation (tutorials/, explanations/, references/, recipes/, reports/, design/, dev-guide/, model-cards/)
 ├── infra/                      # Ray cluster configs (marin-*.yaml, configure_gcp_registry.py)
 ├── scripts/                    # Utilities (ray/, training/, pm/, debug/, gpu_eval/)
-├── docker/                     # Docker configs (marin/, levanter/)
-└── data_browser/               # Web UI (server.py, src/, conf/)
+└── docker/                     # Docker configs (marin/, levanter/)
 ```
 
 ## Key Concepts

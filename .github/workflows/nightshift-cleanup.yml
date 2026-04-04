@@ -12,7 +12,7 @@ concurrency:
 jobs:
   cleanup:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     permissions:
       contents: write
       pull-requests: write

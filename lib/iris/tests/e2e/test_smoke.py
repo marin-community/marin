@@ -71,6 +71,7 @@ def _add_cpu_group(config: config_pb2.IrisClusterConfig, num_workers: int = 4) -
     sg.resources.memory_bytes = 16 * 1024**3
     sg.resources.disk_bytes = 50 * 1024**3
     sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
     sg.slice_template.local.SetInParent()
 
 
@@ -86,8 +87,8 @@ def _add_coscheduling_group_4vm(config: config_pb2.IrisClusterConfig) -> None:
     sg.resources.disk_bytes = 1024 * 1024**3
     sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
     sg.resources.device_variant = "v5litepod-32"
-    sg.resources.preemptible = True
-    sg.slice_template.preemptible = True
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+    sg.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
     sg.slice_template.num_vms = 4
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
     sg.slice_template.accelerator_variant = "v5litepod-32"
@@ -106,6 +107,7 @@ def _add_multi_region_groups(config: config_pb2.IrisClusterConfig) -> None:
         sg.resources.memory_bytes = 16 * 1024**3
         sg.resources.disk_bytes = 50 * 1024**3
         sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
         sg.slice_template.local.SetInParent()
         sg.worker.attributes[WellKnownAttribute.REGION] = region
 
@@ -431,6 +433,29 @@ def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, 
     )
 
 
+def test_dashboard_scheduler_tab(smoke_cluster, smoke_page, smoke_screenshot):
+    """Scheduler tab shows pending queue, user budgets, and running tasks."""
+    running = smoke_cluster.submit(TestJobs.sleep, "smoke-sched-running", 300)
+    smoke_cluster.wait_for_state(running, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
+
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/scheduler")
+    wait_for_dashboard_ready(smoke_page)
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('Pending Queue') || "
+        "document.body.textContent.includes('User Budgets')",
+        timeout=10000,
+    )
+    assert_visible(smoke_page, "text=Pending Queue")
+    assert_visible(smoke_page, "text=User Budgets")
+    assert_visible(smoke_page, "text=Running Tasks")
+    smoke_screenshot(
+        "scheduler-tab",
+        "Scheduler tab showing pending queue, user budgets, and running tasks",
+    )
+
+    smoke_cluster.kill(running)
+
+
 # ============================================================================
 # Scheduling & endpoint verification
 # ============================================================================
@@ -579,6 +604,35 @@ def test_region_constrained_routing(smoke_cluster, capabilities):
     region_attr = worker.metadata.attributes.get(WellKnownAttribute.REGION)
     if region_attr and region_attr.HasField("string_value"):
         assert region_attr.string_value == target_region, f"Expected {target_region}, got {region_attr.string_value}"
+
+
+def test_capacity_type_propagates_to_worker_attributes(smoke_cluster):
+    """Workers from preemptible groups register preemptible=true, on-demand groups false.
+
+    Catches regressions where config.capacity_type gets lost on the way to
+    worker metadata (e.g. LOCAL-mode fake deriving it from the wrong source).
+    """
+    request = cluster_pb2.Controller.ListWorkersRequest()
+    response = smoke_cluster.controller_client.list_workers(request)
+    assert response.workers, "Expected registered workers"
+
+    for w in response.workers:
+        attrs = w.metadata.attributes
+        preemptible_attr = attrs.get(WellKnownAttribute.PREEMPTIBLE)
+        assert preemptible_attr is not None, f"Worker {w.worker_id} missing preemptible attribute"
+
+        device_attr = attrs.get(WellKnownAttribute.DEVICE_TYPE)
+        device_type = device_attr.string_value if device_attr else "cpu"
+
+        # Smoke cluster: TPU groups are preemptible, CPU groups are on-demand
+        if device_type == "tpu":
+            assert (
+                preemptible_attr.string_value == "true"
+            ), f"TPU worker {w.worker_id} should be preemptible=true, got {preemptible_attr.string_value}"
+        else:
+            assert (
+                preemptible_attr.string_value == "false"
+            ), f"CPU worker {w.worker_id} should be preemptible=false, got {preemptible_attr.string_value}"
 
 
 # ============================================================================
@@ -815,6 +869,7 @@ def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
     sg.resources.memory_bytes = 1 * 1024**3
     sg.resources.disk_bytes = 10 * 1024**3
     sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
     sg.slice_template.local.SetInParent()
     return make_local_config(config)
 

@@ -7,7 +7,11 @@ import time
 
 import pytest
 from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.db import ControllerDB, TaskDetail, WorkerDetail, decode_one, decode_rows
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import (
+    TASK_DETAIL_PROJECTION,
+    WORKER_DETAIL_PROJECTION,
+)
 from iris.cluster.log_store import LogStore
 from tests.cluster.controller.conftest import FakeProvider
 from iris.cluster.controller.transitions import (
@@ -75,7 +79,7 @@ def test_worker_heartbeat_expired_check(state, worker_metadata):
     )
 
     with state._db.snapshot() as q:
-        workers = decode_rows(WorkerDetail, q.fetchall("SELECT * FROM workers"))
+        workers = WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers"))
     worker = workers[0]
 
     # Short timeout should not expire immediately
@@ -99,8 +103,7 @@ def test_complete_heartbeat_success(state, worker_metadata):
     assert result.action == HeartbeatAction.OK
 
     with state._db.snapshot() as q:
-        worker = decode_one(
-            WorkerDetail,
+        worker = WORKER_DETAIL_PROJECTION.decode_one(
             q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", ("worker1",)),
         )
     assert worker is not None
@@ -116,8 +119,7 @@ def test_fail_heartbeat_below_threshold(state, worker_metadata):
     assert action == HeartbeatAction.TRANSIENT_FAILURE
 
     with state._db.snapshot() as q:
-        worker = decode_one(
-            WorkerDetail,
+        worker = WORKER_DETAIL_PROJECTION.decode_one(
             q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", ("worker1",)),
         )
     assert worker is not None
@@ -218,8 +220,7 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
     assert result.action == HeartbeatAction.WORKER_FAILED
 
     with state._db.snapshot() as q:
-        task = decode_one(
-            TaskDetail,
+        task = TASK_DETAIL_PROJECTION.decode_one(
             q.fetchall("SELECT * FROM tasks WHERE task_id = ? LIMIT 1", (task_id.to_wire(),)),
         )
     assert task is not None

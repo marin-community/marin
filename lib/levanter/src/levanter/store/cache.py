@@ -398,6 +398,7 @@ def consolidate_shard_caches(
     output_path: str,
     exemplar,
     metadata: CacheMetadata | None = None,
+    copy_max_workers: int = 128,
 ) -> CacheLedger:
     """
     Consolidate multiple shard caches into a single cache directory.
@@ -407,9 +408,12 @@ def consolidate_shard_caches(
         output_path: Destination cache directory.
         exemplar: Output exemplar structure.
         metadata: CacheMetadata to use for the final ledger.
+        copy_max_workers: Maximum Zephyr fanout for the cache copy phase.
     """
     if metadata is None:
         metadata = CacheMetadata.empty()
+    if copy_max_workers < 1:
+        raise ValueError(f"copy_max_workers must be positive, got {copy_max_workers}")
 
     if not shard_cache_paths:
         ledger = CacheLedger(
@@ -467,7 +471,7 @@ def consolidate_shard_caches(
 
     ctx = ZephyrContext(
         resources=ResourceConfig(ram="32g", disk="16g"),
-        max_workers=min(128, len(shard_info)),
+        max_workers=min(copy_max_workers, len(shard_info)),
         name="levanter-cache-copy",
     )
     ctx.execute(
