@@ -952,9 +952,10 @@ def _normalize_scale_group_resources(data: dict) -> None:
             raise ValueError(f"scale_groups.{name}.resources must be a mapping")
 
         # Proto field names derived from the ScaleGroupResources descriptor,
-        # plus user-friendly YAML aliases that get normalized below.
-        _YAML_ALIASES = {"cpu", "ram", "disk"}
-        allowed_keys = set(config_pb2.ScaleGroupResources.DESCRIPTOR.fields_by_name.keys()) | _YAML_ALIASES
+        # plus fields handled explicitly by normalization code below (may not
+        # yet appear in stale compiled protos).
+        _NORMALIZED_KEYS = {"cpu", "ram", "disk", "capacity_type"}
+        allowed_keys = set(config_pb2.ScaleGroupResources.DESCRIPTOR.fields_by_name.keys()) | _NORMALIZED_KEYS
         unknown_keys = set(resources.keys()) - allowed_keys
         if unknown_keys:
             unknown = ", ".join(sorted(unknown_keys))
