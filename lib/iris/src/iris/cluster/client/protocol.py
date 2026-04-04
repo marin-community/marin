@@ -7,28 +7,7 @@ from typing import Protocol
 
 from iris.cluster.types import Entrypoint, JobName, TaskAttempt
 from iris.rpc import cluster_pb2
-from iris.time_utils import Duration
-
-
-class TaskStateLogger(Protocol):
-    """Observer for task state changes during streaming job wait.
-
-    Implement this protocol to customize how task lifecycle events and log
-    output are presented.  The streaming loop in ``wait_for_job_with_streaming``
-    calls these methods as child-job states transition and log batches arrive.
-    """
-
-    def task_started(self, job_id: str, status: cluster_pb2.JobStatus) -> None:
-        """Called when a child job is first observed in the status list."""
-        ...
-
-    def task_finished(self, job_id: str, status: cluster_pb2.JobStatus) -> None:
-        """Called when a child job reaches a terminal state (success or failure)."""
-        ...
-
-    def task_logging(self, response: cluster_pb2.Controller.GetTaskLogsResponse) -> None:
-        """Called with each batch of fetched task logs."""
-        ...
+from rigging.timing import Duration
 
 
 class ClusterClient(Protocol):
@@ -50,7 +29,7 @@ class ClusterClient(Protocol):
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
-        max_retries_preemption: int = 100,
+        max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
         reservation: cluster_pb2.ReservationConfig | None = None,
         preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
@@ -58,6 +37,10 @@ class ClusterClient(Protocol):
     ) -> JobName: ...
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus: ...
+
+    def get_job_states(self, job_ids: list[JobName]) -> dict[str, int]:
+        """Lightweight batch query returning only the state enum per job."""
+        ...
 
     def wait_for_job(
         self,
@@ -72,9 +55,7 @@ class ClusterClient(Protocol):
         *,
         timeout: float,
         poll_interval: float,
-        include_children: bool,
         since_ms: int = 0,
-        state_logger: TaskStateLogger | None = None,
         min_level: str = "",
     ) -> cluster_pb2.JobStatus: ...
 
@@ -100,18 +81,17 @@ class ClusterClient(Protocol):
 
     def list_tasks(self, job_id: JobName) -> list[cluster_pb2.TaskStatus]: ...
 
-    def fetch_task_logs(
+    def fetch_logs(
         self,
-        target: JobName,
+        source: str,
         *,
-        include_children: bool = False,
         since_ms: int = 0,
-        max_total_lines: int = 0,
-        substring: str | None = None,
-        attempt_id: int = -1,
         cursor: int = 0,
+        max_lines: int = 0,
+        substring: str = "",
         min_level: str = "",
-    ) -> cluster_pb2.Controller.GetTaskLogsResponse: ...
+        tail: bool = False,
+    ) -> cluster_pb2.FetchLogsResponse: ...
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse: ...
 

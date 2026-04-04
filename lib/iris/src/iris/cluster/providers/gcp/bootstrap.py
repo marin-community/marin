@@ -136,9 +136,11 @@ fi
 sudo systemctl start docker || true
 
 # Tune network stack for high-connection workloads (#3066).
-# Expands ephemeral port range and allows reuse of TIME_WAIT sockets.
+# Expands ephemeral port range, allows reuse of TIME_WAIT sockets,
+# and raises listen backlog for actor servers handling 1000s of workers.
 sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
 sudo sysctl -w net.ipv4.tcp_tw_reuse=1
+sudo sysctl -w net.core.somaxconn=4096
 
 # Create cache directory
 sudo mkdir -p {{ cache_dir }}
@@ -169,15 +171,11 @@ sudo mv /tmp/iris_worker_config.json /etc/iris/worker_config.json
 
 echo "[iris-init] Phase: worker_start"
 
-# Force-remove existing worker (handles restart policy race)
+# Force-remove existing worker (handles restart policy race).
+# Task containers are NOT removed here — the worker process handles
+# adoption-or-cleanup in start() so it can adopt running containers
+# from a previous worker during rolling restarts.
 sudo docker rm -f iris-worker 2>/dev/null || true
-
-# Clean up ALL iris-managed task containers by label
-echo "[iris-init] Cleaning up iris task containers"
-IRIS_CONTAINERS=$(sudo docker ps -aq --filter "label=iris.managed=true" 2>/dev/null || true)
-if [ -n "$IRIS_CONTAINERS" ]; then
-    sudo docker rm -f $IRIS_CONTAINERS 2>/dev/null || true
-fi
 
 # Start worker container without restart policy first (fail fast during bootstrap)
 sudo docker run -d --name iris-worker \\

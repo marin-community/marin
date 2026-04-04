@@ -43,7 +43,7 @@ import psutil
 from iris.client.client import IrisClient, Job, ResourceSpec
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.types import Entrypoint, EnvironmentSpec, get_tpu_topology, tpu_device
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
@@ -133,7 +133,8 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
         sg.resources.device_count = tpu_count
         sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
         sg.resources.device_variant = variant
-        sg.slice_template.preemptible = True
+        sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+        sg.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
         sg.slice_template.num_vms = num_vms
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
         sg.slice_template.accelerator_variant = variant
@@ -237,7 +238,6 @@ def _wait_for_job(job: Job, timeout: float) -> JobResult:
             poll_interval=2.0,
             raise_on_failure=False,
             stream_logs=True,
-            include_children=True,
         )
         state_name = cluster_pb2.JobState.Name(status.state)
         return JobResult(job=job, state_name=state_name, elapsed=time.monotonic() - start)
@@ -372,6 +372,7 @@ def _make_single_worker_config() -> config_pb2.IrisClusterConfig:
     sg.resources.memory_bytes = 256 * 1024**3
     sg.resources.disk_bytes = 500 * 1024**3
     sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
     sg.slice_template.local.SetInParent()
 
     return make_local_config(config)

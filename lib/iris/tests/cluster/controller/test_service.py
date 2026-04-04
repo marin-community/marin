@@ -16,7 +16,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 
 from .conftest import (
     make_job_request,
@@ -358,6 +358,19 @@ def test_get_job_status_redacts_sensitive_env_vars(service):
     assert env["DB_PASSWORD"] == REDACTED_VALUE
     assert env["SAFE_VAR"] == "visible"
     assert env["NUM_WORKERS"] == "4"
+
+
+def test_get_job_status_omits_per_task_detail(service):
+    """GetJobStatus never populates per-task detail (callers use ListTasks)."""
+    service.launch_job(make_job_request("task-test"), None)
+    job_id = JobName.root("test-user", "task-test")
+
+    request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
+    response = service.get_job_status(request, None)
+
+    assert response.job.state == cluster_pb2.JOB_STATE_PENDING
+    assert len(response.job.tasks) == 0
+    assert response.job.task_count == 1
 
 
 # =============================================================================
@@ -1026,5 +1039,52 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
             None,
         )
         assert resp.accepted
+    finally:
+        _verified_identity.reset(token)
+
+
+def test_get_scheduler_state_with_running_task(controller_service, state):
+    """get_scheduler_state must not crash when there are running tasks.
+
+    Regression: JobName has no `.job` attribute — the code must use `.parent`.
+    """
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
+
+    # Submit a job and move a task to RUNNING
+    job_id = JobName.root("alice", "sched-test")
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name=job_id.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    state.submit_job(job_id, request, Timestamp.now())
+
+    w1 = WorkerId("w1")
+    state.register_or_refresh_worker(
+        worker_id=w1,
+        address="w1:8080",
+        metadata=cluster_pb2.WorkerMetadata(
+            hostname="w1",
+            ip_address="127.0.0.1",
+            cpu_count=8,
+            memory_bytes=16 * 1024**3,
+            disk_bytes=100 * 1024**3,
+        ),
+        ts=Timestamp.now(),
+    )
+    task_id = job_id.task(0)
+    _assign_and_transition(state, task_id, w1, cluster_pb2.TASK_STATE_RUNNING)
+
+    token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
+    try:
+        resp = controller_service.get_scheduler_state(
+            cluster_pb2.Controller.GetSchedulerStateRequest(),
+            None,
+        )
+        assert resp.total_running == 1
+        assert resp.running_tasks[0].job_id == job_id.to_wire()
+        assert resp.running_tasks[0].user_id == "alice"
     finally:
         _verified_identity.reset(token)

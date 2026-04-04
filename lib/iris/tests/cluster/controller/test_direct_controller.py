@@ -3,6 +3,7 @@
 
 """Tests for KubernetesProvider integration with controller and transitions."""
 
+from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.controller.transitions import (
     DirectProviderBatch,
     DirectProviderSyncResult,
@@ -10,7 +11,7 @@ from iris.cluster.controller.transitions import (
 )
 from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2, logging_pb2
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 
 from .conftest import (
     make_direct_job_request,
@@ -155,9 +156,7 @@ def test_apply_failed_with_retry(state):
     req.max_retries_failure = 2
     state.submit_job(jid, req, Timestamp.now())
     with state._db.snapshot() as q:
-        from iris.cluster.controller.db import TASKS
-
-        tasks = q.select(TASKS, where=TASKS.c.job_id == jid.to_wire())
+        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
     task_id = tasks[0].task_id
 
     batch = state.drain_for_direct_provider()
@@ -187,9 +186,7 @@ def test_apply_failed_no_retry(state):
     req.max_retries_failure = 0
     state.submit_job(jid, req, Timestamp.now())
     with state._db.snapshot() as q:
-        from iris.cluster.controller.db import TASKS
-
-        tasks = q.select(TASKS, where=TASKS.c.job_id == jid.to_wire())
+        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
     task_id = tasks[0].task_id
 
     batch = state.drain_for_direct_provider()
@@ -240,9 +237,7 @@ def test_apply_worker_failed_from_running_retries(state):
     req.max_retries_preemption = 5
     state.submit_job(jid, req, Timestamp.now())
     with state._db.snapshot() as q:
-        from iris.cluster.controller.db import TASKS
-
-        tasks = q.select(TASKS, where=TASKS.c.job_id == jid.to_wire())
+        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
     task_id = tasks[0].task_id
 
     batch = state.drain_for_direct_provider()

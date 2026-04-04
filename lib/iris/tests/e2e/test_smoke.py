@@ -10,6 +10,7 @@ has workers across CPU, TPU coscheduling, and multi-region scale groups.
 
 import logging
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -33,11 +34,11 @@ from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2, config_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff
 
 from .conftest import (
     DEFAULT_CONFIG,
-    IRIS_ROOT,
+    MARIN_ROOT,
     ClusterCapabilities,
     IrisTestCluster,
     _NoOpPage,
@@ -70,6 +71,7 @@ def _add_cpu_group(config: config_pb2.IrisClusterConfig, num_workers: int = 4) -
     sg.resources.memory_bytes = 16 * 1024**3
     sg.resources.disk_bytes = 50 * 1024**3
     sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
     sg.slice_template.local.SetInParent()
 
 
@@ -85,8 +87,8 @@ def _add_coscheduling_group_4vm(config: config_pb2.IrisClusterConfig) -> None:
     sg.resources.disk_bytes = 1024 * 1024**3
     sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
     sg.resources.device_variant = "v5litepod-32"
-    sg.resources.preemptible = True
-    sg.slice_template.preemptible = True
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+    sg.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
     sg.slice_template.num_vms = 4
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
     sg.slice_template.accelerator_variant = "v5litepod-32"
@@ -105,6 +107,7 @@ def _add_multi_region_groups(config: config_pb2.IrisClusterConfig) -> None:
         sg.resources.memory_bytes = 16 * 1024**3
         sg.resources.disk_bytes = 50 * 1024**3
         sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
         sg.slice_template.local.SetInParent()
         sg.worker.attributes[WellKnownAttribute.REGION] = region
 
@@ -140,7 +143,7 @@ def smoke_cluster(request):
     controller_url = request.config.getoption("--iris-controller-url")
 
     if controller_url:
-        client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(controller_url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
         tc = IrisTestCluster(
             url=controller_url,
@@ -160,7 +163,7 @@ def smoke_cluster(request):
 
     config = _make_smoke_config()
     with connect_cluster(config) as url:
-        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(SMOKE_WORKER_COUNT, timeout=60)
@@ -230,46 +233,6 @@ def capabilities(smoke_cluster) -> ClusterCapabilities:
 
 
 # ============================================================================
-# Config parity: verify the real cloud smoke config works in local mode.
-# This catches naming issues (GCE 63-char limit, invalid chars from zone
-# expansion) that only surface when the autoscaler tries to create slices
-# with realistic expanded-zone name prefixes.
-# ============================================================================
-
-
-SMOKE_GCP_CONFIG = IRIS_ROOT / "examples" / "smoke-gcp.yaml"
-
-
-def test_smoke_gcp_config_boots_locally():
-    """Load smoke-gcp.yaml, convert to local mode, verify workers join.
-
-    This is the local equivalent of the cloud-smoke-test CI job. If this
-    test fails, the cloud smoke test will also fail — catching GCE naming
-    validation errors without needing real GCP resources.
-    """
-    config = load_config(SMOKE_GCP_CONFIG)
-    config = make_local_config(config)
-
-    with connect_cluster(config) as url:
-        client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        # The smoke config has min_slices=1 for tpu_v5e_16, so at least
-        # one slice (with 4 workers) should come up.
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
-            healthy = [w for w in workers if w.healthy]
-            if healthy:
-                break
-            time.sleep(0.5)
-        else:
-            raise AssertionError(
-                f"No healthy workers after 30s with smoke-gcp.yaml in local mode. "
-                f"Total workers: {len(workers)}, healthy: {len(healthy)}"
-            )
-        client.close()
-
-
-# ============================================================================
 # ============================================================================
 # Dashboard tests
 # ============================================================================
@@ -279,7 +242,7 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Jobs tab shows diverse states."""
     quick = smoke_cluster.submit(TestJobs.quick, "smoke-simple")
     failed = smoke_cluster.submit(TestJobs.fail, "smoke-failed")
-    running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 30)
+    running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 300)
 
     smoke_cluster.wait(quick, timeout=smoke_cluster.job_timeout)
     smoke_cluster.wait(failed, timeout=smoke_cluster.job_timeout)
@@ -470,6 +433,29 @@ def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, 
     )
 
 
+def test_dashboard_scheduler_tab(smoke_cluster, smoke_page, smoke_screenshot):
+    """Scheduler tab shows pending queue, user budgets, and running tasks."""
+    running = smoke_cluster.submit(TestJobs.sleep, "smoke-sched-running", 300)
+    smoke_cluster.wait_for_state(running, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
+
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/scheduler")
+    wait_for_dashboard_ready(smoke_page)
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('Pending Queue') || "
+        "document.body.textContent.includes('User Budgets')",
+        timeout=10000,
+    )
+    assert_visible(smoke_page, "text=Pending Queue")
+    assert_visible(smoke_page, "text=User Budgets")
+    assert_visible(smoke_page, "text=Running Tasks")
+    smoke_screenshot(
+        "scheduler-tab",
+        "Scheduler tab showing pending queue, user budgets, and running tasks",
+    )
+
+    smoke_cluster.kill(running)
+
+
 # ============================================================================
 # Scheduling & endpoint verification
 # ============================================================================
@@ -551,11 +537,9 @@ def test_log_levels_populated(smoke_cluster, verbose_job, capabilities):
     deadline = time.monotonic() + smoke_cluster.job_timeout
     entries = []
     while time.monotonic() < deadline:
-        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
-        response = smoke_cluster.controller_client.get_task_logs(request)
-        entries = []
-        for batch in response.task_logs:
-            entries.extend(batch.logs)
+        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        response = smoke_cluster.controller_client.fetch_logs(request)
+        entries = list(response.entries)
         if any("info-marker" in e.data for e in entries):
             break
         time.sleep(0.5)
@@ -579,11 +563,9 @@ def test_log_level_filter(smoke_cluster, verbose_job, capabilities):
 
     task_id = verbose_job.job_id.task(0).to_wire()
 
-    request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id, min_level="WARNING")
-    response = smoke_cluster.controller_client.get_task_logs(request)
-    filtered = []
-    for batch in response.task_logs:
-        filtered.extend(batch.logs)
+    request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*", min_level="WARNING")
+    response = smoke_cluster.controller_client.fetch_logs(request)
+    filtered = list(response.entries)
 
     filtered_data = [e.data for e in filtered]
     assert any("warning-marker" in d for d in filtered_data), f"warning-marker missing: {filtered_data}"
@@ -622,6 +604,35 @@ def test_region_constrained_routing(smoke_cluster, capabilities):
     region_attr = worker.metadata.attributes.get(WellKnownAttribute.REGION)
     if region_attr and region_attr.HasField("string_value"):
         assert region_attr.string_value == target_region, f"Expected {target_region}, got {region_attr.string_value}"
+
+
+def test_capacity_type_propagates_to_worker_attributes(smoke_cluster):
+    """Workers from preemptible groups register preemptible=true, on-demand groups false.
+
+    Catches regressions where config.capacity_type gets lost on the way to
+    worker metadata (e.g. LOCAL-mode fake deriving it from the wrong source).
+    """
+    request = cluster_pb2.Controller.ListWorkersRequest()
+    response = smoke_cluster.controller_client.list_workers(request)
+    assert response.workers, "Expected registered workers"
+
+    for w in response.workers:
+        attrs = w.metadata.attributes
+        preemptible_attr = attrs.get(WellKnownAttribute.PREEMPTIBLE)
+        assert preemptible_attr is not None, f"Worker {w.worker_id} missing preemptible attribute"
+
+        device_attr = attrs.get(WellKnownAttribute.DEVICE_TYPE)
+        device_type = device_attr.string_value if device_attr else "cpu"
+
+        # Smoke cluster: TPU groups are preemptible, CPU groups are on-demand
+        if device_type == "tpu":
+            assert (
+                preemptible_attr.string_value == "true"
+            ), f"TPU worker {w.worker_id} should be preemptible=true, got {preemptible_attr.string_value}"
+        else:
+            assert (
+                preemptible_attr.string_value == "false"
+            ), f"CPU worker {w.worker_id} should be preemptible=false, got {preemptible_attr.string_value}"
 
 
 # ============================================================================
@@ -696,6 +707,70 @@ def test_exec_in_container(smoke_cluster):
     smoke_cluster.kill(job)
 
 
+@pytest.mark.timeout(180)
+def test_worker_restart_preserves_task(smoke_cluster):
+    """Restarting a worker preserves its running task via container adoption.
+
+    Submits a task that logs every second, restarts the worker running it,
+    then verifies the task is still RUNNING and eventually succeeds. Fetches
+    logs to confirm continuity across the restart.
+    """
+    # Use shorter duration in local mode (restart is a no-op there)
+    is_local = not smoke_cluster.is_cloud
+    task_duration = 30 if is_local else 90
+
+    job = smoke_cluster.submit(TestJobs.log_periodic, "smoke-restart", task_duration, 1.0)
+    smoke_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
+
+    # Wait for task itself to be RUNNING (not just BUILDING)
+    deadline = time.monotonic() + smoke_cluster.job_timeout
+    while time.monotonic() < deadline:
+        task = smoke_cluster.task_status(job, task_index=0)
+        if task.state == cluster_pb2.TASK_STATE_RUNNING:
+            break
+        time.sleep(0.5)
+    assert task.state == cluster_pb2.TASK_STATE_RUNNING, f"Task stuck in {cluster_pb2.TaskState.Name(task.state)}"
+
+    # Let a few ticks log before we restart
+    time.sleep(3)
+
+    # Find the worker running this task
+    worker_id = task.worker_id
+    assert worker_id, "Task has no worker_id"
+
+    # Restart the worker via the controller RPC
+    restart_resp = smoke_cluster.controller_client.restart_worker(
+        cluster_pb2.Controller.RestartWorkerRequest(worker_id=worker_id),
+        timeout_ms=60_000,
+    )
+    assert restart_resp.accepted, f"Restart rejected: {restart_resp.error}"
+
+    # In cloud mode, wait for the worker to come back as healthy after real restart.
+    # In local mode, restart_worker is a no-op so the worker stays healthy.
+    if not is_local:
+        worker_back = False
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            time.sleep(5)
+            workers_resp = smoke_cluster.controller_client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+            for w in workers_resp.workers:
+                if w.worker_id == worker_id and w.healthy:
+                    worker_back = True
+                    break
+            if worker_back:
+                break
+        assert worker_back, f"Worker {worker_id} did not re-register within 120s"
+
+    # Wait for the job to complete — the task should either be adopted by
+    # the new worker (RUNNING → SUCCEEDED) or retried by the controller
+    # (WORKER_FAILED → re-scheduled → SUCCEEDED). Either path validates
+    # that the restart didn't permanently break the task.
+    final = smoke_cluster.wait(job, timeout=120)
+    assert (
+        final.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    ), f"Job should succeed after restart, got {cluster_pb2.JobState.Name(final.state)}"
+
+
 # ============================================================================
 # Checkpoint / restore
 # ============================================================================
@@ -719,7 +794,7 @@ def test_checkpoint_restore():
     url = cluster.start()
     try:
         # Phase 1: complete a job, write checkpoint, restart controller.
-        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(1, timeout=30)
@@ -738,7 +813,7 @@ def test_checkpoint_restore():
         # Phase 2: verify restored state and submit new work.
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(
-            url=url, client=IrisClient.remote(url, workspace=IRIS_ROOT), controller_client=controller_client
+            url=url, client=IrisClient.remote(url, workspace=MARIN_ROOT), controller_client=controller_client
         )
 
         resp = controller_client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=saved_job_id))
@@ -794,6 +869,7 @@ def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
     sg.resources.memory_bytes = 1 * 1024**3
     sg.resources.disk_bytes = 10 * 1024**3
     sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
     sg.slice_template.local.SetInParent()
     return make_local_config(config)
 

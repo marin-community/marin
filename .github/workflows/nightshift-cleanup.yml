@@ -12,13 +12,13 @@ concurrency:
 jobs:
   cleanup:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     permissions:
       contents: write
       pull-requests: write
       issues: write
-      actions: read
       id-token: write
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

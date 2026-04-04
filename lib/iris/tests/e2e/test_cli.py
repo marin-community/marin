@@ -62,6 +62,7 @@ def cluster_config_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
                             "disk": 0,
                             "device_type": "cpu",
                             "device_count": 0,
+                            "capacity_type": "on_demand",
                         },
                         "slice_template": {
                             "accelerator_type": "ACCELERATOR_TYPE_CPU",

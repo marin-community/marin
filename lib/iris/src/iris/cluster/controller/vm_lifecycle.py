@@ -37,8 +37,9 @@ from iris.cluster.providers.types import (
 from iris.cluster.providers.gcp.bootstrap import (
     build_controller_bootstrap_script_from_config,
 )
+from iris.cluster.providers.gcp.ssh import OS_LOGIN_METADATA
 from iris.rpc import config_pb2
-from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timer
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 
 logger = logging.getLogger(__name__)
 
@@ -302,6 +303,10 @@ def _build_controller_vm_config(
         vm_config.gcp.zone = zone
         vm_config.gcp.machine_type = gcp_ctrl.machine_type or "n2-standard-4"
         vm_config.gcp.boot_disk_size_gb = gcp_ctrl.boot_disk_size_gb or 100
+        vm_config.gcp.service_account = gcp_ctrl.service_account
+        if config.defaults.ssh.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
+            for key, value in OS_LOGIN_METADATA.items():
+                vm_config.metadata[key] = value
     elif which == "manual":
         manual_ctrl = config.controller.manual
         if not manual_ctrl.host:

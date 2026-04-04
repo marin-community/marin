@@ -14,22 +14,23 @@ import logging
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import StrEnum, auto
 import dupekit
 
 from marin.execution.executor import THIS_OUTPUT_PATH
 import draccus
 import msgspec
-from iris.marin_fs import url_to_fs
-import wandb
+from rigging.filesystem import url_to_fs
 
-from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
-
-from marin.utils import fsspec_glob, rebase_file_path
+from marin.processing.classification.deduplication.dedup_commons import (
+    DEFAULT_FILETYPES,
+    _collect_input_files,
+    _get_extension,
+)
+from marin.utils import rebase_file_path
 from zephyr import Dataset, ZephyrContext
-from zephyr.readers import load_file, SUPPORTED_EXTENSIONS
-from iris.logging import configure_logging
+from zephyr.readers import load_file
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -115,50 +116,6 @@ def extract_features(text: str, ngram_config: NGramConfig | None) -> Iterator[st
             yield para
 
 
-def _collect_input_files(input_path: str | list[str]) -> list[str]:
-    """
-    Given an input path or list of paths, collect all matching files (jsonl, parquet, etc).
-    """
-    input_paths = input_path if isinstance(input_path, list) else [input_path]
-    all_files = []
-    for path in input_paths:
-        logger.info(f"Collecting files from path: {path}")
-        files = fsspec_glob(f"{path.rstrip('/')}/**/*.{{jsonl,jsonl.gz,jsonl.zst,parquet}}")
-        if files:
-            all_files.extend(files)
-        else:
-            if not path.endswith(("jsonl", "jsonl.gz", "jsonl.zst", "parquet")):
-                raise FileNotFoundError(f"No files found in path: {path}")
-            all_files.append(path)  # Assume it's a single file
-    assert all_files, "No input files found for deduplication."
-    return all_files
-
-
-def _init_wandb(config: DeconConfig, tags: list[str] | None = None):
-    """
-    Initialize wandb if configured.
-    """
-    if "WANDB_API_KEY" not in os.environ:
-        return
-
-    run_name = os.environ.get("WANDB_RUN_NAME")
-    if not run_name:
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        run_name = f"{config.mode}-{timestamp}"
-
-    wandb.init(
-        entity=WANDB_ENTITY,
-        project=WANDB_PROJECT,
-        name=run_name,
-        tags=[str(config.mode)] + (tags or []),
-        config={
-            "mode": str(config.mode),
-            "input_path": config.input_path,
-            "processes": config.processes,
-        },
-    )
-
-
 def _record_id(record: dict) -> str:
     if "id" in record:
         return record["id"]
@@ -166,13 +123,6 @@ def _record_id(record: dict) -> str:
         # compute hash of the msgspec serialization of the record
         s = msgspec.msgpack.encode(record, order="deterministic")
         return str(_bloom_hash(s))
-
-
-def _get_extension(file_path: str) -> str:
-    for ext in sorted(SUPPORTED_EXTENSIONS, key=len, reverse=True):
-        if file_path.endswith(ext):
-            return ext
-    raise ValueError(f"Unsupported extension: {file_path}.")
 
 
 def build_filter(
@@ -195,7 +145,7 @@ def build_filter(
 
         yield bf.save_bytes()
 
-    all_files = _collect_input_files(input_path)
+    all_files = _collect_input_files(input_paths=input_path, filetypes=DEFAULT_FILETYPES)
     logger.info(f"Building bloom filter from {all_files} into {bloom_path}")
 
     def _merge_bloom(bloom_files: Iterator[str], _):
@@ -265,7 +215,7 @@ def mark_duplicates_bloom(
 
     # Determine base path for rebasing
     base_path = input_path[0] if isinstance(input_path, list) else input_path
-    all_files = _collect_input_files(input_path)
+    all_files = _collect_input_files(input_paths=input_path, filetypes=DEFAULT_FILETYPES)
 
     def process_shard_with_bloom(records: Iterator[dict], _) -> Iterator[dict]:
         """Load bloom filter once per shard and mark duplicates."""

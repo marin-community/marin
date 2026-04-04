@@ -20,7 +20,8 @@ from typing import Protocol
 from iris.cluster.constraints import WellKnownAttribute, accelerator_type_to_string
 from iris.cluster.types import get_tpu_topology
 from iris.rpc import cluster_pb2, config_pb2
-from iris.time_utils import Timestamp
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +232,7 @@ def _build_worker_attributes(
     *,
     accelerator_type: int,
     accelerator_variant: str,
-    preemptible: bool,
+    capacity_type: int,
     tpu_name: str,
     tpu_worker_id: str,
     device: cluster_pb2.DeviceConfig,
@@ -262,7 +263,8 @@ def _build_worker_attributes(
             string_value=accelerator_variant.lower()
         )
 
-    attributes[WellKnownAttribute.PREEMPTIBLE] = cluster_pb2.AttributeValue(string_value=str(preemptible).lower())
+    is_preemptible = capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+    attributes[WellKnownAttribute.PREEMPTIBLE] = cluster_pb2.AttributeValue(string_value=str(is_preemptible).lower())
 
     # TPU multi-host identity from GCP metadata probes
     if tpu_name:
@@ -378,14 +380,14 @@ def build_worker_metadata(
     accelerator_type: int = 0,
     accelerator_variant: str = "",
     gpu_count_override: int = 0,
-    preemptible: bool = False,
+    capacity_type: int = 0,
     worker_attributes: dict[str, str] | None = None,
 ) -> cluster_pb2.WorkerMetadata:
     """Combine hardware probe results with platform-provided config.
 
     Scheduling-relevant attributes (device-type, device-variant, preemptible) are
     derived from WorkerConfig fields (accelerator_type, accelerator_variant,
-    preemptible). Hardware probes populate diagnostic fields on WorkerMetadata
+    capacity_type). Hardware probes populate diagnostic fields on WorkerMetadata
     (gpu_name, tpu_worker_hostnames, etc.) but do not influence the attributes map.
 
     The DeviceConfig oneof on WorkerMetadata is still built from config + probe
@@ -428,7 +430,7 @@ def build_worker_metadata(
     attributes = _build_worker_attributes(
         accelerator_type=accelerator_type,
         accelerator_variant=accelerator_variant,
-        preemptible=preemptible,
+        capacity_type=capacity_type,
         tpu_name=hardware.tpu_name,
         tpu_worker_id=hardware.tpu_worker_id,
         device=device,
@@ -581,7 +583,7 @@ class HostMetricsCollector:
 
     def collect(self) -> cluster_pb2.WorkerResourceSnapshot:
         snapshot = cluster_pb2.WorkerResourceSnapshot()
-        snapshot.timestamp.CopyFrom(Timestamp.now().to_proto())
+        snapshot.timestamp.CopyFrom(timestamp_to_proto(Timestamp.now()))
 
         self._collect_memory(snapshot)
         self._collect_disk(snapshot)

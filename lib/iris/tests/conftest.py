@@ -7,14 +7,38 @@ import logging
 import os
 import subprocess
 import sys
+from pathlib import Path
 import threading
 import time
 import traceback
 import warnings
 
 import pytest
+from iris.cluster.config import load_config, make_local_config
+from iris.rpc import config_pb2
 from iris.test_util import SentinelFile
-from iris.time_utils import Deadline, Duration
+from rigging.timing import Duration, ExponentialBackoff
+
+IRIS_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
+
+
+def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
+    """Build a local config with no auto-scaled workers."""
+    config = load_config(DEFAULT_CONFIG)
+    config.scale_groups.clear()
+    sg = config.scale_groups["placeholder"]
+    sg.name = "placeholder"
+    sg.num_vms = 1
+    sg.min_slices = 0
+    sg.max_slices = 0
+    sg.resources.cpu_millicores = 1000
+    sg.resources.memory_bytes = 1 * 1024**3
+    sg.resources.disk_bytes = 10 * 1024**3
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
+    sg.slice_template.local.SetInParent()
+    return make_local_config(config)
 
 
 def _docker_image_exists(tag: str) -> bool:
@@ -96,16 +120,20 @@ def _thread_cleanup():
     before = {t.ident for t in threading.enumerate()}
     yield
 
-    deadline = Deadline.from_now(Duration.from_seconds(5.0))
-    while not deadline.expired():
-        leaked = [
-            t
+    def _no_leaked_threads() -> bool:
+        return not any(
+            t.is_alive() and not t.daemon and t.name != "MainThread" and t.ident not in before
             for t in threading.enumerate()
-            if t.is_alive() and not t.daemon and t.name != "MainThread" and t.ident not in before
-        ]
-        if not leaked:
-            return
-        time.sleep(0.1)
+        )
+
+    if ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(_no_leaked_threads, timeout=Duration.from_seconds(5.0)):
+        return
+
+    leaked = [
+        t
+        for t in threading.enumerate()
+        if t.is_alive() and not t.daemon and t.name != "MainThread" and t.ident not in before
+    ]
 
     # Generate detailed warning about leaked threads
     thread_info = []

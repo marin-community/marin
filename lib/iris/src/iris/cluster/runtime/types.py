@@ -55,6 +55,13 @@ class ContainerPhase(StrEnum):
     STOPPED = "stopped"
 
 
+class ExecutionStage(StrEnum):
+    """Which pipeline stage a container belongs to (for adoption filtering)."""
+
+    BUILD = "build"
+    RUN = "run"
+
+
 class MountKind(StrEnum):
     WORKDIR = "workdir"  # task working directory (/app); tmpfs on Docker, emptyDir on K8s
     TMPFS = "tmpfs"  # volatile fast storage; tmpfs on Docker, emptyDir on K8s
@@ -85,6 +92,7 @@ class ContainerConfig:
     task_id: str | None = None
     attempt_id: int | None = None
     job_id: str | None = None
+    worker_id: str | None = None
     worker_metadata: cluster_pb2.WorkerMetadata | None = None
 
     def get_cpu_millicores(self) -> int | None:
@@ -256,6 +264,26 @@ class ContainerHandle(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class DiscoveredContainer:
+    """Metadata for a container discovered on the host after a worker restart.
+
+    Extracted from Docker labels + inspect. Provides enough information for
+    a new worker process to adopt the container and resume monitoring.
+    """
+
+    container_id: str
+    task_id: str
+    attempt_id: int
+    job_id: str
+    worker_id: str
+    phase: ExecutionStage
+    running: bool
+    exit_code: int | None
+    started_at: str  # ISO 8601 timestamp from Docker
+    workdir_host_path: str  # host path of the /app mount
+
+
 class ContainerRuntime(Protocol):
     """Protocol for container runtimes (Docker, process, etc.).
 
@@ -305,6 +333,27 @@ class ContainerRuntime(Protocol):
 
     def remove_all_iris_containers(self) -> int:
         """Force remove all iris-managed containers/sandboxes. Returns count removed."""
+        ...
+
+    def remove_containers(self, container_ids: list[str]) -> int:
+        """Force remove specific containers by ID. Returns count removed."""
+        ...
+
+    def discover_containers(self) -> list[DiscoveredContainer]:
+        """Discover iris-managed containers from a previous worker process.
+
+        Returns metadata for containers that can potentially be adopted.
+        Used during worker restart to find running containers that should
+        be monitored instead of killed.
+        """
+        ...
+
+    def adopt_container(self, container_id: str) -> ContainerHandle:
+        """Create a handle wrapping an existing container for adoption.
+
+        Returns a handle that supports status(), stop(), log_reader(), stats(),
+        and cleanup(). build()/run() should not be called on adopted handles.
+        """
         ...
 
     def cleanup(self) -> None:

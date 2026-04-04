@@ -64,7 +64,7 @@ def run_docker_on_pod(
         tpu_type=tpu_type,
         num_slices=num_slices,
         max_retries_failure=retries,
-        max_retries_preemption=10000,
+        max_retries_preemption=1000,
     )
 
 

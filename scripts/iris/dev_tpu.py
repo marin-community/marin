@@ -169,11 +169,12 @@ def find_workspace_root(start: Path) -> Path | None:
 def controller_client(config_file: str) -> Iterable[IrisClient]:
     iris_config = IrisConfig.load(config_file)
     controller_address = iris_config.controller_address()
-    platform = iris_config.platform()
+    providers = iris_config.provider_bundle()
+    controller = providers.controller
     workspace = find_workspace_root(Path.cwd())
     if not controller_address:
-        controller_address = platform.discover_controller(iris_config.proto.controller)
-    with platform.tunnel(address=controller_address) as tunneled:
+        controller_address = controller.discover_controller(iris_config.proto.controller)
+    with controller.tunnel(address=controller_address) as tunneled:
         client = IrisClient.remote(tunneled, workspace=workspace)
         try:
             yield client

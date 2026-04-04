@@ -24,7 +24,7 @@ from iris.cluster.providers.types import (
     SliceStatus,
     WorkerStatus,
 )
-from iris.time_utils import Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 
 @dataclass

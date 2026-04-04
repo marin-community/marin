@@ -50,6 +50,11 @@ def build_kvstore_spec(path: str) -> dict:
             # Custom endpoint with no explicit region: use a placeholder to prevent
             # tensorstore from trying (and failing) to discover the region via HEAD bucket.
             spec["aws_region"] = "us-east-1"
+
+        # Supplying credentials explicitly reduces noisy AWS CRT logs in containers.
+        if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
+            spec["aws_credentials"] = {"type": "environment"}
+
         return spec
     elif parsed.scheme == "gs":
         return {"driver": "gcs", "bucket": parsed.netloc, "path": parsed.path.lstrip("/")}

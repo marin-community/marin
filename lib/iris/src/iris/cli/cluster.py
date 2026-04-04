@@ -19,13 +19,13 @@ from iris.cli.build import (
     build_image,
     find_marin_root,
     get_git_sha,
-    push_to_ghcr,
 )
 from iris.cli.main import require_controller_url
 from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
-from iris.time_utils import Timestamp
+from iris.time_proto import timestamp_from_proto
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 # =============================================================================
 # Helpers
@@ -98,14 +98,12 @@ def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = Fal
     build_image(
         image_type=image_type,
         tag=local_tag,
-        push=False,
+        push=True,
         context=None,
         platform="linux/amd64",
         ghcr_org=org,
         verbose=verbose,
     )
-    click.echo()
-    push_to_ghcr(local_tag, ghcr_org=org, image_name=image_name, version=version, verbose=verbose)
     click.echo()
 
 
@@ -129,14 +127,12 @@ def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
     build_image(
         image_type="task",
         tag=local_tag,
-        push=False,
+        push=True,
         context=marin_root,
         platform="linux/amd64",
         ghcr_org=org,
         verbose=verbose,
     )
-    click.echo()
-    push_to_ghcr(local_tag, ghcr_org=org, image_name=image_name, version=version, verbose=verbose)
     click.echo()
 
 
@@ -291,7 +287,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
 
     # Set ephemeral state dir via marin_temp_bucket, which resolves
     # region-appropriate storage from MARIN_PREFIX.
-    from iris.marin_fs import marin_temp_bucket
+    from rigging.filesystem import marin_temp_bucket
 
     config.storage.remote_state_dir = marin_temp_bucket(ttl_days=7, prefix=f"iris/state/{label_prefix}")
 
@@ -513,7 +509,7 @@ def vm_status(ctx, scale_group):
         click.echo(f"    Initializing: {counts.get('initializing', 0)}")
         click.echo(f"    Failed: {counts.get('failed', 0)}")
         click.echo(f"  Demand: {group.current_demand} (peak: {group.peak_demand})")
-        backoff_ms = Timestamp.from_proto(group.backoff_until).epoch_ms()
+        backoff_ms = timestamp_from_proto(group.backoff_until).epoch_ms()
         if backoff_ms > 0:
             click.echo(f"  Backoff until: {_format_timestamp(backoff_ms)}")
             click.echo(f"  Consecutive failures: {group.consecutive_failures}")
@@ -528,7 +524,7 @@ def vm_status(ctx, scale_group):
                     click.echo(f"      {vi.vm_id}: {vm_state_name(vi.state)} ({vi.address})")
                     if vi.init_error:
                         click.echo(f"        Error: {vi.init_error}")
-    last_eval_ms = Timestamp.from_proto(as_status.last_evaluation).epoch_ms()
+    last_eval_ms = timestamp_from_proto(as_status.last_evaluation).epoch_ms()
     click.echo(f"\nLast evaluation: {_format_timestamp(last_eval_ms)}")
 
 
@@ -573,6 +569,56 @@ def controller(ctx):
     pass
 
 
+@controller.command("serve")
+@click.option("--host", default="0.0.0.0", help="Bind host")
+@click.option("--port", default=10000, type=int, help="Bind port")
+@click.option(
+    "--checkpoint-path",
+    default=None,
+    help="Restore from this specific checkpoint directory (e.g. gs://bucket/.../controller-state/1234567890)",
+)
+@click.option(
+    "--checkpoint-interval",
+    default=None,
+    type=float,
+    help="Periodic checkpoint interval in seconds (default: hourly)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Start in dry-run mode: compute scheduling but suppress all side effects",
+)
+@click.pass_context
+def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_run):
+    """Start a local controller process.
+
+    Loads the cluster config, restores from checkpoint, and runs the full
+    scheduling loop. Use --dry-run to suppress all side effects (no task
+    dispatch, no VM changes, no checkpoint writes) while still serving the
+    dashboard and RPC for inspection.
+
+    Example (dry-run with checkpoint restore)::
+
+        iris --config=cluster.yaml cluster controller serve --dry-run \\
+            --checkpoint-path gs://bucket/controller-state/1234567890
+    """
+    from iris.cluster.controller.main import run_controller_serve
+
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required for controller serve")
+
+    run_controller_serve(
+        config,
+        host=host,
+        port=port,
+        checkpoint_path=checkpoint_path,
+        checkpoint_interval=checkpoint_interval,
+        dry_run=dry_run,
+    )
+
+
 @controller.command("checkpoint")
 @click.option("--stop", is_flag=True, default=False, help="Stop the controller after taking a checkpoint")
 @click.pass_context
@@ -614,8 +660,17 @@ def controller_checkpoint(ctx, stop: bool):
 
 
 @controller.command("restart")
+@click.option(
+    "--skip-checkpoint",
+    is_flag=True,
+    default=False,
+    help="Skip the pre-restart checkpoint (use if checkpoint is timing out).",
+)
+@click.option(
+    "--checkpoint-timeout", type=int, default=300, show_default=True, help="Checkpoint RPC timeout in seconds."
+)
 @click.pass_context
-def controller_restart(ctx):
+def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
     """Restart controller with state preservation (remote platforms only).
 
     Takes a checkpoint, builds fresh images, stops the controller, and starts
@@ -658,15 +713,22 @@ def controller_restart(ctx):
         return
 
     # Checkpoint
-    client = cluster_connect.ControllerServiceClientSync(controller_url)
-    try:
-        resp = client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest(), timeout_ms=60_000)
-    except Exception as e:
-        click.echo(f"Checkpoint failed: {e}", err=True)
-        raise SystemExit(1) from e
-    finally:
-        client.close()
-    click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
+    if skip_checkpoint:
+        click.echo("Skipping pre-restart checkpoint.")
+    else:
+        click.echo(f"Taking checkpoint (timeout {checkpoint_timeout}s)...")
+        client = cluster_connect.ControllerServiceClientSync(controller_url)
+        try:
+            resp = client.begin_checkpoint(
+                cluster_pb2.Controller.BeginCheckpointRequest(),
+                timeout_ms=checkpoint_timeout * 1000,
+            )
+        except Exception as e:
+            click.echo(f"Checkpoint failed: {e}", err=True)
+            raise SystemExit(1) from e
+        finally:
+            client.close()
+        click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
 
     # Build fresh images so the new controller VM gets the latest code
     _pin_latest_images(config)
@@ -683,3 +745,73 @@ def controller_restart(ctx):
         click.echo(f"Failed to restart controller: {e}", err=True)
         raise SystemExit(1) from e
     click.echo(f"Controller restarted at {address}")
+
+
+@controller.command("worker-restart")
+@click.option("--worker-id", default=None, help="Specific worker to restart (default: all)")
+@click.option("--timeout", type=int, default=120, help="Max seconds to wait per worker restart")
+@click.pass_context
+def worker_restart(ctx, worker_id: str | None, timeout: int):
+    """Rolling restart of workers without disrupting running tasks.
+
+    Restarts workers one at a time, waiting for each to re-register before
+    proceeding. Running Docker containers are preserved and adopted by the
+    new worker process.
+    """
+    controller_url = require_controller_url(ctx)
+    client = cluster_connect.ControllerServiceClientSync(controller_url)
+
+    # Get current workers
+    workers_resp = client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+    workers = workers_resp.workers
+
+    if worker_id:
+        workers = [w for w in workers if w.worker_id == worker_id]
+        if not workers:
+            click.echo(f"Worker {worker_id} not found", err=True)
+            raise SystemExit(1)
+
+    if not workers:
+        click.echo("No workers to restart")
+        return
+
+    click.echo(f"Restarting {len(workers)} worker(s) (timeout={timeout}s per worker)")
+
+    succeeded = 0
+    failed = 0
+
+    for worker in workers:
+        wid = worker.worker_id
+        click.echo(f"\nRestarting worker {wid}...")
+
+        resp = client.restart_worker(
+            cluster_pb2.Controller.RestartWorkerRequest(worker_id=wid),
+            timeout_ms=timeout * 1000,
+        )
+
+        if not resp.accepted:
+            click.echo(f"  Failed: {resp.error}", err=True)
+            failed += 1
+            continue
+
+        # Poll until the worker re-registers as healthy
+        def _worker_healthy(target_id: str = wid) -> bool:
+            try:
+                resp = client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+                return any(w.worker_id == target_id and w.healthy for w in resp.workers)
+            except Exception:
+                return False
+
+        reregistered = ExponentialBackoff(initial=5.0, maximum=5.0, jitter=0.0).wait_until(
+            _worker_healthy,
+            timeout=Duration.from_seconds(timeout),
+        )
+
+        if reregistered:
+            click.echo(f"  Worker {wid} restarted successfully")
+            succeeded += 1
+        else:
+            click.echo(f"  Worker {wid} did not re-register within {timeout}s", err=True)
+            failed += 1
+
+    click.echo(f"\nDone: {succeeded} succeeded, {failed} failed")

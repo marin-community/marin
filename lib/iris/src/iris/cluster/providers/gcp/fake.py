@@ -27,6 +27,7 @@ from iris.cluster.providers.types import (
 from iris.cluster.providers.gcp.service import (
     KNOWN_GCP_ZONES,
     KNOWN_TPU_TYPES,
+    QueuedResourceInfo,
     TpuCreateRequest,
     TpuInfo,
     VmCreateRequest,
@@ -41,7 +42,7 @@ from iris.cluster.service_mode import ServiceMode
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
-from iris.time_utils import Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ class InMemoryGcpService:
         # In-memory state for DRY_RUN/LOCAL modes
         self._tpus: dict[tuple[str, str], TpuInfo] = {}
         self._vms: dict[tuple[str, str], VmInfo] = {}
+        self._queued_resources: set[tuple[str, str]] = set()  # TPUs created via queued_resource_create
 
         # Failure injection (DRY_RUN/LOCAL only)
         self._injected_failures: dict[str, InfraError] = {}
@@ -103,6 +105,9 @@ class InMemoryGcpService:
         self._storage_prefix = storage_prefix
         self._label_prefix = label_prefix
         self._iris_labels = Labels(label_prefix) if mode == ServiceMode.LOCAL else None
+
+        # Serial port output injection for testing bootstrap monitoring
+        self._serial_port_output: dict[tuple[str, str], str] = {}
 
         # LOCAL mode: track spawned workers per slice for cleanup
         self._local_slices: dict[str, LocalSliceHandle] = {}
@@ -207,7 +212,9 @@ class InMemoryGcpService:
             zone=request.zone,
             labels=dict(request.labels),
             metadata=dict(request.metadata),
+            service_account=request.service_account,
             network_endpoints=endpoints,
+            external_network_endpoints=[None] * len(endpoints),
             created_at=Timestamp.now(),
         )
         self._tpus[(request.name, request.zone)] = info
@@ -239,6 +246,43 @@ class InMemoryGcpService:
             if labels and not all(info.labels.get(k) == v for k, v in labels.items()):
                 continue
             results.append(info)
+        return results
+
+    # ========================================================================
+    # Queued resource operations (for reserved TPUs)
+    # ========================================================================
+
+    def queued_resource_create(self, request: TpuCreateRequest) -> None:
+        self._check_injected_failure("queued_resource_create")
+        # In DRY_RUN/LOCAL mode, simulate immediate provisioning by creating
+        # the TPU directly (as if the queued resource instantly became ACTIVE).
+        self.tpu_create(request)
+        self._queued_resources.add((request.name, request.zone))
+
+    def queued_resource_describe(self, name: str, zone: str) -> QueuedResourceInfo | None:
+        self._check_injected_failure("queued_resource_describe")
+        if (name, zone) not in self._queued_resources:
+            return None
+        state = "ACTIVE" if (name, zone) in self._tpus else "PROVISIONING"
+        return QueuedResourceInfo(name=name, state=state, zone=zone)
+
+    def queued_resource_delete(self, name: str, zone: str) -> None:
+        self._check_injected_failure("queued_resource_delete")
+        self._queued_resources.discard((name, zone))
+        self.tpu_delete(name, zone)
+
+    def queued_resource_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[QueuedResourceInfo]:
+        self._check_injected_failure("queued_resource_list")
+        results: list[QueuedResourceInfo] = []
+        for name, zone in self._queued_resources:
+            if zones and zone not in zones:
+                continue
+            tpu_info = self._tpus.get((name, zone))
+            tpu_labels = tpu_info.labels if tpu_info else {}
+            if labels and not all(tpu_labels.get(k) == v for k, v in labels.items()):
+                continue
+            state = "ACTIVE" if tpu_info else "PROVISIONING"
+            results.append(QueuedResourceInfo(name=name, state=state, zone=zone, labels=tpu_labels))
         return results
 
     # ========================================================================
@@ -274,6 +318,7 @@ class InMemoryGcpService:
             external_ip=None,
             labels=dict(request.labels),
             metadata=dict(request.metadata),
+            service_account=request.service_account,
             created_at=Timestamp.now(),
         )
         self._vms[(request.name, request.zone)] = info
@@ -321,10 +366,14 @@ class InMemoryGcpService:
             raise InfraError(f"VM {name!r} not found in zone {zone!r}")
         vm.metadata.update(metadata)
 
+    def set_serial_port_output(self, name: str, zone: str, output: str) -> None:
+        """Inject serial port output for a VM. Used by tests to simulate GCE serial console."""
+        self._serial_port_output[(name, zone)] = output
+
     def vm_get_serial_port_output(self, name: str, zone: str, start: int = 0) -> str:
         self._check_injected_failure("vm_get_serial_port_output")
-        # DRY_RUN / LOCAL: return empty string (no serial console)
-        return ""
+        full_output = self._serial_port_output.get((name, zone), "")
+        return full_output[start:]
 
     # ========================================================================
     # LOCAL mode: worker spawning
@@ -413,7 +462,8 @@ class InMemoryGcpService:
                     extra_attrs.setdefault(k, v)
 
             extra_attrs.setdefault("region", "local")
-            preemptible = extra_attrs.pop("preemptible", "false").lower() == "true"
+            # Use the canonical capacity_type from the slice config proto.
+            capacity_type_val = config.capacity_type or config_pb2.CAPACITY_TYPE_ON_DEMAND
 
             gpu_count = 0
             if is_gpu:
@@ -440,7 +490,7 @@ class InMemoryGcpService:
                 accelerator_type=config.accelerator_type,
                 accelerator_variant=config.accelerator_variant,
                 gpu_count_override=gpu_count,
-                preemptible=preemptible,
+                capacity_type=capacity_type_val,
                 worker_attributes=extra_attrs,
             )
 
@@ -452,6 +502,8 @@ class InMemoryGcpService:
                 cache_dir=self._cache_path / worker_id,
                 controller_address=self._controller_address,
                 worker_id=worker_id,
+                slice_id=slice_id,
+                worker_attributes=dict(extra_attrs),
                 default_task_image="process-runtime-unused",
                 poll_interval=Duration.from_seconds(0.1),
                 storage_prefix=self._storage_prefix,

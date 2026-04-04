@@ -14,7 +14,7 @@ import traceback
 import warnings
 from pathlib import Path
 
-from iris.time_utils import ExponentialBackoff
+from rigging.timing import ExponentialBackoff
 
 # Disable Ray's automatic UV runtime env propagation BEFORE importing ray.
 # This prevents Ray from packaging the entire working directory (~38MB) for actors.

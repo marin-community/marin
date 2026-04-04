@@ -40,6 +40,7 @@ MEMORY_FORMAT_MAP: dict[int, tuple[str, str]] = {
     cluster_pb2.MemoryProfile.FLAMEGRAPH: ("flamegraph", "html"),
     cluster_pb2.MemoryProfile.TABLE: ("table", "txt"),
     cluster_pb2.MemoryProfile.STATS: ("stats", "json"),
+    cluster_pb2.MemoryProfile.RAW: ("raw", "bin"),
 }
 
 
@@ -50,7 +51,7 @@ class CpuProfileSpec:
     rate_hz: int
     duration_seconds: int
     pid: str
-    native: bool = False
+    native: bool = True
 
 
 @dataclass(frozen=True)
@@ -62,20 +63,27 @@ class MemoryProfileSpec:
     leaks: bool
 
     @property
+    def is_raw(self) -> bool:
+        """Raw mode returns the .bin trace directly, skipping transform."""
+        return self.reporter == "raw"
+
+    @property
     def output_is_file(self) -> bool:
-        """Flamegraph writes to a file; table/stats write to stdout."""
-        return self.reporter == "flamegraph"
+        """Flamegraph and stats write to a file; table writes to stdout."""
+        return self.reporter in ("flamegraph", "stats")
 
 
 def resolve_cpu_spec(cpu_config: cluster_pb2.CpuProfile, duration_seconds: int, pid: str) -> CpuProfileSpec:
     py_spy_format, ext = CPU_FORMAT_MAP.get(cpu_config.format, ("flamegraph", "svg"))
     rate_hz = cpu_config.rate_hz if cpu_config.rate_hz > 0 else 20
+    native = cpu_config.native if cpu_config.HasField("native") else True
     return CpuProfileSpec(
         py_spy_format=py_spy_format,
         ext=ext,
         rate_hz=rate_hz,
         duration_seconds=duration_seconds,
         pid=pid,
+        native=native,
     )
 
 
@@ -105,13 +113,12 @@ def build_pyspy_cmd(spec: CpuProfileSpec, py_spy_bin: str, output_path: str) -> 
         "--output",
         output_path,
         "--subprocesses",
-        "--nonblocking",
         *(["--native"] if spec.native else []),
     ]
 
 
 def build_memray_attach_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_path: str) -> list[str]:
-    cmd = [memray_bin, "attach", spec.pid, "--duration", str(spec.duration_seconds), "--output", trace_path]
+    cmd = [memray_bin, "attach", "--native", spec.pid, "--duration", str(spec.duration_seconds), "--output", trace_path]
     if spec.leaks:
         cmd.append("--aggregate")
     return cmd
@@ -120,7 +127,7 @@ def build_memray_attach_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_path
 def build_memray_transform_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_path: str, output_path: str) -> list[str]:
     """Build the memray transform command.
 
-    For flamegraph, writes to output_path. For table/stats, output goes to stdout.
+    For flamegraph/stats, writes to output_path. For table, output goes to stdout.
     """
     if spec.reporter == "flamegraph":
         cmd = [memray_bin, "flamegraph"]
@@ -131,7 +138,7 @@ def build_memray_transform_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_p
     elif spec.reporter == "table":
         return [memray_bin, "table", trace_path]
     elif spec.reporter == "stats":
-        return [memray_bin, "stats", "--json", trace_path]
+        return [memray_bin, "stats", "--json", "--force", "-o", output_path, trace_path]
     else:
         raise RuntimeError(f"Unknown memray reporter: {spec.reporter}")
 
@@ -214,8 +221,12 @@ def _run_memray_profile(pid: str, duration_seconds: int, memory_config: cluster_
         os.unlink(trace_path)
 
         # Track allocations in-process for the requested duration.
-        with memray.Tracker(trace_path, file_format=file_format):
+        with memray.Tracker(trace_path, native_traces=True, file_format=file_format):
             time.sleep(duration_seconds)
+
+        # Raw mode: return the .bin trace directly, no transform needed.
+        if spec.is_raw:
+            return Path(trace_path).read_bytes()
 
         if spec.output_is_file:
             with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:

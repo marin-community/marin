@@ -516,7 +516,7 @@ def test_jwt_token_manager_expired(jwt_manager):
 def test_jwt_token_manager_load_revocations(tmp_path):
     from iris.cluster.controller.auth import JwtTokenManager, create_api_key, revoke_api_key
     from iris.cluster.controller.db import ControllerDB
-    from iris.time_utils import Timestamp
+    from rigging.timing import Timestamp
 
     db = ControllerDB(db_dir=tmp_path)
     now = Timestamp.now()
