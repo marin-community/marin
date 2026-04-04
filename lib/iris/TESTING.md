@@ -190,16 +190,4 @@ uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http
 # K8s runtime tests (requires a running cluster — kind, k3d, minikube, etc.)
 uv run pytest lib/iris/tests/e2e/test_coreweave_live_kubernetes_runtime.py \
   -m slow -k lifecycle -v
-
-# Kind (Kubernetes in Docker) local smoke tests
-# Requires kind: https://kind.sigs.k8s.io/docs/user/quick-start/
-uv run pytest lib/iris/tests/e2e/test_k8s_local.py -m kind -v
 ```
-
-### Kind Tests
-
-`@pytest.mark.kind` tests require [kind](https://kind.sigs.k8s.io/docs/user/quick-start/)
-to be installed. They are excluded from the default test run and from CI.
-The test session creates a disposable kind cluster, runs K8s service-layer
-smoke tests against it, and tears the cluster down on exit. Tests skip
-gracefully when `kind` is not on PATH.
