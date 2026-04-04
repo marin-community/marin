@@ -60,6 +60,13 @@ class MarinTokenizer(Protocol):
 
     def get_vocab(self) -> dict[str, int]: ...
 
+    def convert_ids_to_tokens(self, ids: int | list[int]) -> str | list[str]: ...
+
+    def convert_tokens_to_ids(self, tokens: str | list[str]) -> int | list[int]: ...
+
+    @property
+    def all_special_ids(self) -> list[int]: ...
+
     @property
     def chat_template(self) -> str | None: ...
 
@@ -201,6 +208,7 @@ class HfMarinTokenizer:
     _eos_token: str | None
     _chat_template: str | None
     _vocab_size: int
+    _all_special_ids: list[int]
 
     @property
     def name_or_path(self) -> str:
@@ -249,6 +257,23 @@ class HfMarinTokenizer:
 
     def get_vocab(self) -> dict[str, int]:
         return self._tokenizer.get_vocab()
+
+    def convert_ids_to_tokens(self, ids: int | list[int]) -> str | list[str]:
+        vocab = self._tokenizer.get_vocab()
+        id_to_token = {v: k for k, v in vocab.items()}
+        if isinstance(ids, int):
+            return id_to_token.get(ids, f"<unk:{ids}>")
+        return [id_to_token.get(i, f"<unk:{i}>") for i in ids]
+
+    def convert_tokens_to_ids(self, tokens: str | list[str]) -> int | list[int]:
+        vocab = self._tokenizer.get_vocab()
+        if isinstance(tokens, str):
+            return vocab[tokens]
+        return [vocab[t] for t in tokens]
+
+    @property
+    def all_special_ids(self) -> list[int]:
+        return self._all_special_ids
 
     def apply_chat_template(
         self,
@@ -306,6 +331,7 @@ class TokieMarinTokenizer:
     _pad_id: int | None
     _vocab_size: int
     _chat_template: str | None
+    _all_special_ids: list[int]
 
     @property
     def name_or_path(self) -> str:
@@ -357,6 +383,23 @@ class TokieMarinTokenizer:
 
     def get_vocab(self) -> dict[str, int]:
         return self._tokenizer.get_vocab()
+
+    def convert_ids_to_tokens(self, ids: int | list[int]) -> str | list[str]:
+        vocab = self._tokenizer.get_vocab()
+        id_to_token = {v: k for k, v in vocab.items()}
+        if isinstance(ids, int):
+            return id_to_token.get(ids, f"<unk:{ids}>")
+        return [id_to_token.get(i, f"<unk:{i}>") for i in ids]
+
+    def convert_tokens_to_ids(self, tokens: str | list[str]) -> int | list[int]:
+        vocab = self._tokenizer.get_vocab()
+        if isinstance(tokens, str):
+            return vocab[tokens]
+        return [vocab[t] for t in tokens]
+
+    @property
+    def all_special_ids(self) -> list[int]:
+        return self._all_special_ids
 
     def apply_chat_template(
         self,
@@ -414,6 +457,27 @@ def load_tokenizer(
     raise ValueError(f"Unknown backend: {backend}")
 
 
+def _collect_special_ids(
+    config: dict,
+    vocab: dict[str, int],
+    bos_id: int | None,
+    eos_id: int | None,
+    pad_id: int | None,
+) -> list[int]:
+    """Collect all special token IDs from known special tokens and added_tokens_decoder."""
+    ids: set[int] = set()
+    for token_id in (bos_id, eos_id, pad_id):
+        if token_id is not None:
+            ids.add(token_id)
+
+    # Include tokens marked as special in added_tokens_decoder
+    for id_str, token_info in config.get("added_tokens_decoder", {}).items():
+        if isinstance(token_info, dict) and token_info.get("special", False):
+            ids.add(int(id_str))
+
+    return sorted(ids)
+
+
 def _load_hf_base_tokenizer(name_or_path: str) -> HfBaseTokenizer:
     """Load an HfBaseTokenizer, handling both local paths and HF hub names."""
     local_path = os.path.join(name_or_path, "tokenizer.json")
@@ -435,6 +499,8 @@ def _load_hf_tokenizer(name_or_path: str) -> HfMarinTokenizer:
     eos_id = vocab.get(eos_token) if eos_token is not None else None
     pad_id = vocab.get(pad_token) if pad_token is not None else None
 
+    all_special_ids = _collect_special_ids(config, vocab, bos_id, eos_id, pad_id)
+
     return HfMarinTokenizer(
         _tokenizer=tok,
         _name_or_path=name_or_path,
@@ -445,6 +511,7 @@ def _load_hf_tokenizer(name_or_path: str) -> HfMarinTokenizer:
         _eos_token=eos_token,
         _chat_template=config.get("chat_template"),
         _vocab_size=tok.get_vocab_size(),
+        _all_special_ids=all_special_ids,
     )
 
 
@@ -497,6 +564,10 @@ def _load_tokie_tokenizer(name_or_path: str) -> TokieMarinTokenizer:
     # tokie.vocab_size excludes added tokens. The true vocab size includes them.
     vocab_size = tok.vocab_size + len(added_tokens)
 
+    # For tokie, we don't have a complete vocab dict, so pass empty vocab for _collect_special_ids.
+    # The added_tokens_decoder in config + bos/eos/pad are sufficient.
+    all_special_ids = _collect_special_ids(config, {}, bos_id, eos_id, pad_id)
+
     return TokieMarinTokenizer(
         _tokenizer=tok,
         _name_or_path=name_or_path,
@@ -508,6 +579,7 @@ def _load_tokie_tokenizer(name_or_path: str) -> TokieMarinTokenizer:
         _pad_id=pad_id,
         _vocab_size=vocab_size,
         _chat_template=config.get("chat_template"),
+        _all_special_ids=all_special_ids,
     )
 
 

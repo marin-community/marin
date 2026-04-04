@@ -48,6 +48,8 @@ def local_gpt2_marin_tokenizer(tmp_path_factory) -> HfMarinTokenizer:
     eos_token = "<|endoftext|>"
     eos_id = vocab.get(eos_token)
 
+    all_special_ids = [eos_id] if eos_id is not None else []
+
     return HfMarinTokenizer(
         _tokenizer=tok,
         _name_or_path=str(tmpdir),
@@ -58,6 +60,7 @@ def local_gpt2_marin_tokenizer(tmp_path_factory) -> HfMarinTokenizer:
         _eos_token=eos_token,
         _chat_template=None,
         _vocab_size=tok.get_vocab_size(),
+        _all_special_ids=all_special_ids,
     )
 
 

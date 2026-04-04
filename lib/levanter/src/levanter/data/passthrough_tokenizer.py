@@ -56,6 +56,24 @@ class PassthroughTokenizer:
     def get_vocab(self) -> dict[str, int]:
         return {str(i): i for i in range(self._vocab_size)}
 
+    def convert_ids_to_tokens(self, ids: int | list[int]) -> str | list[str]:
+        if isinstance(ids, int):
+            return str(ids)
+        return [str(i) for i in ids]
+
+    def convert_tokens_to_ids(self, tokens: str | list[str]) -> int | list[int]:
+        if isinstance(tokens, str):
+            return int(tokens)
+        return [int(t) for t in tokens]
+
+    @property
+    def all_special_ids(self) -> list[int]:
+        return []
+
+    @property
+    def chat_template(self) -> str | None:
+        return None
+
     def apply_chat_template(
         self,
         conversation: list[dict[str, str]],
@@ -64,4 +82,13 @@ class PassthroughTokenizer:
         add_generation_prompt: bool = False,
         **kwargs,
     ) -> str | list[int]:
+        raise ValueError("PassthroughTokenizer does not support chat templates")
+
+    def apply_chat_template_with_masks(
+        self,
+        conversations: list[list[dict[str, str]]],
+        *,
+        chat_template: str | None = None,
+        **kwargs,
+    ) -> dict[str, list[list[int]]]:
         raise ValueError("PassthroughTokenizer does not support chat templates")

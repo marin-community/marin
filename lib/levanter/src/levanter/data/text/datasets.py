@@ -50,10 +50,8 @@ from levanter.store.cache import CacheOptions, TreeCache
 from levanter.store.jagged_array import JaggedArrayStore
 from levanter.store.tree_store import TreeStore
 from levanter.utils import fsspec_utils
-from levanter.tokenizers import MarinTokenizer
-from levanter.utils.hf_utils import HfTokenizer
+from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.utils.jax_utils import key_iterator
-from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.utils.logging import silence_transformer_nag
 
 
@@ -632,11 +630,11 @@ class LmDataConfig:
             ), "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
 
     @cached_property
-    def the_tokenizer(self) -> HfTokenizer | MarinTokenizer:
+    def the_tokenizer(self) -> MarinTokenizer:
         if self.tokenizer == "passthrough":
             return PassthroughTokenizer(self.vocab_size)
         else:
-            return load_tokenizer(self.tokenizer)
+            return load_marin_tokenizer(self.tokenizer)
 
     def _has_nonzero_weight(self, name: str) -> bool:
         weights = self.train_weights
