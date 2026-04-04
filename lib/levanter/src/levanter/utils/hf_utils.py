@@ -1,21 +1,17 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import re
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 from levanter.utils.logging import silence_transformer_nag
-from levanter.utils.py_utils import logical_cpu_core_count
 
 
 silence_transformer_nag()
 
-_HF_TOKENIZER_OFF_VALUES = {"off", "false", "f", "no", "n", "0"}
-
 # Deprecated: prefer MarinTokenizer from levanter.tokenizers for new code.
 # HfTokenizer is retained for callers that still pass HF transformers tokenizers
-# (ChatProcessor, eval_harness, etc.) and will be removed once they migrate.
+# (eval_harness, hf_checkpoints, main scripts, etc.) and will be removed once they migrate.
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
 
@@ -25,24 +21,6 @@ else:
     # fails on CPU-only workers that lack CUDA libs. HfTokenizer is only used in type
     # annotations (no isinstance checks), so Any is sufficient at runtime.
     HfTokenizer: TypeAlias = Any
-
-
-def num_cpus_used_by_tokenizer(tokenizer: HfTokenizer) -> int:
-    """Estimate CPU usage for an HF transformers tokenizer.
-
-    Legacy helper for callers still using HfTokenizer (e.g. ChatProcessor).
-    MarinTokenizer callers should use BatchTokenizer.num_cpus instead.
-    """
-    if getattr(tokenizer, "is_fast", False):
-        if os.getenv("TOKENIZERS_PARALLELISM", "true").lower() in _HF_TOKENIZER_OFF_VALUES:
-            return 1
-        else:
-            # This is a bit hacky, but HF's fast tokenizers are parallelized under the hood.
-            # we reserve a couple of cores just so Ray has somewhere to run the coordinator.
-            # Empirically it doesn't usually exceed 16-20, and it's useful to have some slack
-            return min(max(1, logical_cpu_core_count() - 4), 12)
-    else:
-        return 1
 
 
 def byte_length_of_token(tokenizer, idx: int) -> int:

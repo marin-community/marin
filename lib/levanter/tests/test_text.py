@@ -5,7 +5,6 @@ import json
 import tempfile
 from pathlib import Path
 
-from transformers import AutoTokenizer
 
 import jax
 import jax.numpy as jnp
@@ -32,6 +31,7 @@ from levanter.data.text import (
     named_lm_example_from_grug,
     preprocessor_for_format,
 )
+from levanter.tokenizers import load_tokenizer
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.schedule import BatchSchedule
@@ -246,15 +246,35 @@ def test_preprocessor_for_format_dispatches_preference_format():
     class _DummyTokenizer:
         chat_template = "{% generation %}"
         name_or_path = "dummy"
+        vocab_size = 128
+        bos_token_id = None
+        eos_token_id = None
+        pad_token_id = None
+        bos_token = None
+        eos_token = None
 
         def __len__(self):
             return 128
 
-        def apply_chat_template(self, messages, **kwargs):
-            del kwargs
+        def encode(self, text, *, add_special_tokens=False):
+            return [11, 12, 13]
+
+        def decode(self, ids, *, skip_special_tokens=False):
+            return "dummy"
+
+        def encode_batch(self, texts, *, add_special_tokens=False):
+            return [[11, 12, 13] for _ in texts]
+
+        def get_vocab(self):
+            return {}
+
+        def apply_chat_template(self, conversation, *, tokenize=True, add_generation_prompt=False, **kwargs):
+            return [11, 12, 13]
+
+        def apply_chat_template_with_masks(self, conversations, *, chat_template=None, **kwargs):
             return {
-                "input_ids": [[11, 12, 13] for _ in messages],
-                "assistant_masks": [[0, 1, 1] for _ in messages],
+                "input_ids": [[11, 12, 13] for _ in conversations],
+                "assistant_masks": [[0, 1, 1] for _ in conversations],
             }
 
     tokenizer = _DummyTokenizer()
@@ -363,9 +383,10 @@ def assert_loss_weight_matches_all_assistants(example, tokenizer):
     tok_arr = np.asarray(example.tokens)
     loss_weight = np.asarray(example.loss_weight)
 
-    start_hdr_id = tokenizer.convert_tokens_to_ids("<|start_header_id|>")
-    end_hdr_id = tokenizer.convert_tokens_to_ids("<|end_header_id|>")
-    eot_id = tokenizer.convert_tokens_to_ids("<|eot_id|>")
+    vocab = tokenizer.get_vocab()
+    start_hdr_id = vocab["<|start_header_id|>"]
+    end_hdr_id = vocab["<|end_header_id|>"]
+    eot_id = vocab["<|eot_id|>"]
     newline_id = tokenizer.encode("\n", add_special_tokens=False)[0]
     assistant_ids: list[int] = tokenizer.encode("assistant", add_special_tokens=False)
 
@@ -405,9 +426,7 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
     with tempfile.TemporaryDirectory() as tmpdir:
         cache_dir = tmpdir
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            "stanford-crfm/marin-tokenizer", revision="49a09e626c220e9daae74124ea41be1bf5cd331d"
-        )
+        tokenizer = load_tokenizer("stanford-crfm/marin-tokenizer")
 
         component = DatasetComponent(
             source=UrlDatasetSourceConfig(train_urls=[dummy_chat_data]),

@@ -18,10 +18,12 @@ import dataclasses
 import functools
 import json
 import os
+import re
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 import jinja2
+import jinja2.ext
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
 from tokenizers import Tokenizer as HfBaseTokenizer
@@ -69,6 +71,121 @@ class MarinTokenizer(Protocol):
         add_generation_prompt: bool = False,
         **kwargs,
     ) -> str | list[int]: ...
+
+    def apply_chat_template_with_masks(
+        self,
+        conversations: list[list[dict[str, str]]],
+        *,
+        chat_template: str | None = None,
+        **kwargs,
+    ) -> dict[str, list[list[int]]]: ...
+
+
+# Sentinel used to mark generation (assistant) boundaries in rendered templates.
+_GENERATION_SENTINEL_START = "__MARIN_GEN_START_7f3a9c__"
+_GENERATION_SENTINEL_END = "__MARIN_GEN_END_7f3a9c__"
+
+
+class _GenerationSentinelExtension(jinja2.ext.Extension):
+    """Jinja2 extension that wraps {% generation %}...{% endgeneration %} block content
+    with sentinel strings, preserving the same whitespace behavior as HF's AssistantTracker."""
+
+    tags = {"generation"}
+
+    def parse(self, parser: jinja2.parser.Parser) -> jinja2.nodes.CallBlock:
+        lineno = next(parser.stream).lineno
+        body = parser.parse_statements(["name:endgeneration"], drop_needle=True)
+        return jinja2.nodes.CallBlock(self.call_method("_wrap_generation"), [], [], body).set_lineno(lineno)
+
+    @staticmethod
+    def _wrap_generation(caller: jinja2.runtime.Macro) -> str:
+        return _GENERATION_SENTINEL_START + caller() + _GENERATION_SENTINEL_END
+
+
+class _GenerationStripExtension(jinja2.ext.Extension):
+    """Jinja2 extension that renders {% generation %}...{% endgeneration %} blocks
+    as plain content (no sentinels), for use in apply_chat_template without masks."""
+
+    tags = {"generation"}
+
+    def parse(self, parser: jinja2.parser.Parser) -> jinja2.nodes.CallBlock:
+        lineno = next(parser.stream).lineno
+        body = parser.parse_statements(["name:endgeneration"], drop_needle=True)
+        return jinja2.nodes.CallBlock(self.call_method("_passthrough"), [], [], body).set_lineno(lineno)
+
+    @staticmethod
+    def _passthrough(caller: jinja2.runtime.Macro) -> str:
+        return caller()
+
+
+def _make_jinja_env(extensions: list[type]) -> jinja2.Environment:
+    """Create a jinja2 environment matching HF's template rendering settings."""
+    return jinja2.Environment(
+        undefined=jinja2.StrictUndefined,
+        trim_blocks=True,
+        lstrip_blocks=True,
+        extensions=extensions,
+    )
+
+
+def _apply_chat_template_with_masks(
+    tokenizer: "MarinTokenizer",
+    conversations: list[list[dict[str, str]]],
+    *,
+    chat_template: str | None = None,
+    **kwargs,
+) -> dict[str, list[list[int]]]:
+    """Render chat template for batched conversations, returning input_ids and assistant_masks.
+
+    Uses a jinja2 extension to wrap {% generation %}...{% endgeneration %} block content
+    with sentinel strings, then uses the sentinel positions to determine which tokens
+    correspond to assistant content.
+    """
+    template_str = chat_template or tokenizer.chat_template
+    if template_str is None:
+        raise ValueError(f"Tokenizer {tokenizer.name_or_path} has no chat template")
+
+    env = _make_jinja_env([_GenerationSentinelExtension])
+    compiled = env.from_string(template_str)
+
+    all_ids: list[list[int]] = []
+    all_masks: list[list[int]] = []
+
+    for conversation in conversations:
+        rendered = compiled.render(
+            messages=conversation,
+            add_generation_prompt=False,
+            bos_token=tokenizer.bos_token or "",
+            eos_token=tokenizer.eos_token or "",
+            **kwargs,
+        )
+
+        ids: list[int] = []
+        mask: list[int] = []
+        is_assistant = False
+
+        parts = re.split(
+            f"({re.escape(_GENERATION_SENTINEL_START)}|{re.escape(_GENERATION_SENTINEL_END)})",
+            rendered,
+        )
+
+        for part in parts:
+            if part == _GENERATION_SENTINEL_START:
+                is_assistant = True
+                continue
+            if part == _GENERATION_SENTINEL_END:
+                is_assistant = False
+                continue
+            if not part:
+                continue
+            segment_ids = tokenizer.encode(part, add_special_tokens=False)
+            ids.extend(segment_ids)
+            mask.extend([1 if is_assistant else 0] * len(segment_ids))
+
+        all_ids.append(ids)
+        all_masks.append(mask)
+
+    return {"input_ids": all_ids, "assistant_masks": all_masks}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -143,7 +260,7 @@ class HfMarinTokenizer:
     ) -> str | list[int]:
         if self._chat_template is None:
             raise ValueError(f"Tokenizer {self._name_or_path} has no chat template")
-        env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+        env = _make_jinja_env([_GenerationStripExtension])
         template = env.from_string(self._chat_template)
         rendered = template.render(
             messages=conversation,
@@ -155,6 +272,15 @@ class HfMarinTokenizer:
         if tokenize:
             return self.encode(rendered, add_special_tokens=False)
         return rendered
+
+    def apply_chat_template_with_masks(
+        self,
+        conversations: list[list[dict[str, str]]],
+        *,
+        chat_template: str | None = None,
+        **kwargs,
+    ) -> dict[str, list[list[int]]]:
+        return _apply_chat_template_with_masks(self, conversations, chat_template=chat_template, **kwargs)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -242,7 +368,7 @@ class TokieMarinTokenizer:
     ) -> str | list[int]:
         if self._chat_template is None:
             raise ValueError(f"Tokenizer {self._name_or_path} has no chat template")
-        env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+        env = _make_jinja_env([_GenerationStripExtension])
         template = env.from_string(self._chat_template)
         rendered = template.render(
             messages=conversation,
@@ -254,6 +380,15 @@ class TokieMarinTokenizer:
         if tokenize:
             return self.encode(rendered, add_special_tokens=False)
         return rendered
+
+    def apply_chat_template_with_masks(
+        self,
+        conversations: list[list[dict[str, str]]],
+        *,
+        chat_template: str | None = None,
+        **kwargs,
+    ) -> dict[str, list[list[int]]]:
+        return _apply_chat_template_with_masks(self, conversations, chat_template=chat_template, **kwargs)
 
 
 class TokenizerBackend(StrEnum):

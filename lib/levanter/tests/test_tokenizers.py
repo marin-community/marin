@@ -1,12 +1,15 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from unittest.mock import patch
+
 import pytest
 
 from levanter.tokenizers import (
     HfMarinTokenizer,
     MarinTokenizer,
     TokenizerBackend,
+    _load_tokenizer_config,
     load_tokenizer,
 )
 
@@ -352,3 +355,139 @@ def test_tokie_get_vocab(tokenizer, tokie_tokenizer):
     assert (
         len(mismatches) < 200
     ), f"{len(mismatches)} vocab ID mismatches (expected <200 due to byte-fallback tokens): {mismatches[:10]}"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for codex findings
+# ---------------------------------------------------------------------------
+
+CHAT_MODEL_WITH_PAD = "mistralai/Mistral-7B-Instruct-v0.2"
+
+
+def test_padding_uses_pad_token_id_not_zero():
+    """Verify BatchTokenizer pads input_ids with pad_token_id, not hardcoded 0."""
+    from levanter.data.text._batch_tokenizer import BatchTokenizer
+
+    tok = load_tokenizer(CHAT_MODEL_WITH_PAD)
+    bt = BatchTokenizer(
+        tok,
+        enforce_bos=False,
+        enforce_eos=False,
+        return_attention_mask=True,
+        padding="max_length",
+        max_length=32,
+    )
+
+    result = bt([{"text": "hi"}])
+    assert len(result) == 1
+    ids = result[0]["input_ids"]
+    mask = result[0]["attention_mask"]
+
+    assert len(ids) == 32
+    assert len(mask) == 32
+
+    # Find where padding starts (attention_mask transitions to 0)
+    pad_start = mask.index(0) if 0 in mask else len(mask)
+    assert pad_start < 32, "Sequence should be shorter than max_length to have padding"
+
+    pad_id = tok.pad_token_id if tok.pad_token_id is not None else 0
+    for i in range(pad_start, 32):
+        assert ids[i] == pad_id, f"Position {i}: expected pad_token_id={pad_id}, got {ids[i]}"
+        assert mask[i] == 0, f"Position {i}: attention_mask should be 0 for padding"
+
+
+def test_local_tokenizer_encode_batch():
+    """Ensure encode_batch works with local tokenizer paths (no hub round-trip)."""
+    from huggingface_hub import hf_hub_download
+
+    # Download tokenizer.json to a local path, then load from that directory.
+    path = hf_hub_download(MODEL_NAME, "tokenizer.json")
+    import os
+
+    local_dir = os.path.dirname(path)
+
+    load_tokenizer.cache_clear()
+    tok = load_tokenizer(local_dir)
+
+    # Use >16 texts to exercise any batch-size code paths
+    texts = [f"sentence number {i}" for i in range(20)]
+    batch_result = tok.encode_batch(texts)
+    individual = [tok.encode(t) for t in texts]
+    assert batch_result == individual
+
+
+_SIMPLE_CHAT_TEMPLATE = """\
+{%- for message in messages -%}
+<|start_header_id|>{{ message['role'] }}<|end_header_id|>
+{%- if message['role'] == 'assistant' -%}
+{% generation %}{{ message['content'] }}{% endgeneration %}
+{%- else -%}
+{{ message['content'] }}
+{%- endif -%}
+<|eot_id|>
+{%- endfor -%}
+"""
+
+
+def test_chat_processor_with_marin_tokenizer():
+    """ChatProcessor must work with MarinTokenizer (not just HfTokenizer)."""
+    from levanter.data.text.formats import ChatProcessor
+
+    tok = load_tokenizer(MODEL_NAME)
+    assert isinstance(tok, MarinTokenizer)
+
+    processor = ChatProcessor(tok, chat_template=_SIMPLE_CHAT_TEMPLATE, mask_user_turns=True)
+
+    conversation = [
+        {"role": "user", "content": "What is 2+2?"},
+        {"role": "assistant", "content": "4"},
+    ]
+    results = processor([{"messages": conversation}])
+    assert len(results) == 1
+    assert "input_ids" in results[0]
+    assert "assistant_masks" in results[0]
+    assert len(results[0]["input_ids"]) > 0
+
+    # The assistant mask should have at least one 1 (for the assistant content)
+    mask = results[0]["assistant_masks"]
+    assert any(m == 1 for m in mask), "assistant_masks should mark assistant content"
+
+
+def test_vocab_size_property():
+    """vocab_size should return the correct count without needing len(tokenizer)."""
+    tok = load_tokenizer(MODEL_NAME)
+    assert tok.vocab_size == 128256
+    vocab = tok.get_vocab()
+    assert tok.vocab_size == len(vocab)
+
+
+def test_exception_propagation_on_network_error():
+    """_load_tokenizer_config should propagate network errors, not swallow them."""
+
+    class FakeNetworkError(OSError):
+        pass
+
+    with patch("levanter.tokenizers.hf_hub_download", side_effect=FakeNetworkError("connection refused")):
+        with pytest.raises(FakeNetworkError, match="connection refused"):
+            _load_tokenizer_config("some-nonexistent-model/that-will-fail")
+
+
+def test_encode_batch_correctness_many_strings(tokenizer):
+    """Verify encode_batch produces correct results for many strings (string-copy workaround coverage)."""
+    texts = [
+        "hello world",
+        "a" * 500,
+        "foo bar " * 50,
+        "",
+        "  leading spaces",
+        "trailing spaces  ",
+        "multi\nline\ntext",
+        "special chars: !@#$%^&*()",
+        "unicode: 日本語テスト",
+        "emoji: 🎉🎊",
+    ]
+    # Filter empty strings (encode_batch may differ from encode on empty)
+    non_empty = [t for t in texts if t]
+    batch = tokenizer.encode_batch(non_empty)
+    individual = [tokenizer.encode(t) for t in non_empty]
+    assert batch == individual, "encode_batch must match individual encode for all strings"

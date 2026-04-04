@@ -247,7 +247,7 @@ class LmDatasetSourceConfigBase(ChoiceRegistry):
         raise NotImplementedError
 
     def load_cache(
-        self, split, tokenizer: HfTokenizer, override_cache_dir: str | None = None, enforce_eos=True
+        self, split, tokenizer: MarinTokenizer, override_cache_dir: str | None = None, enforce_eos=True
     ) -> TreeCache[dict]:
         base_cache = override_cache_dir if override_cache_dir is not None else self.cache_dir
         if base_cache is None:
