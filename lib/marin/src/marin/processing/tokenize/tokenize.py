@@ -28,7 +28,7 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
     preprocessor_for_format,
 )
-from levanter.tokenizers import MarinTokenizer, load_tokenizer
+from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
 from levanter.store.cache import consolidate_shard_caches
 from levanter.store.tree_store import TreeStore
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
@@ -66,6 +66,10 @@ class TokenizeConfigBase(abc.ABC):
     max_workers: int = 4096
     cache_copy_max_workers: int = 128
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
+
+    tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
+    """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly.
+    TOKIE uses the tokie library (experimental)."""
 
     num_shards: int | None = None
     """Override the number tokenize shards. When set, files are grouped to produce approximately
@@ -394,7 +398,7 @@ def tokenize(config: TokenizeConfigBase):
         )
 
         # Broadcast the tokenizer to all workers via ZephyrContext
-        ctx.put("tokenizer", load_tokenizer(config.tokenizer))
+        ctx.put("tokenizer", load_tokenizer(config.tokenizer, backend=config.tokenizer_backend))
 
         tokenize_start = time.monotonic()
         shard_paths = ctx.execute(temp_shards)

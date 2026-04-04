@@ -176,6 +176,10 @@ def _apply_chat_template_with_masks(
             rendered,
         )
 
+        # Each segment is encoded independently. BPE merges that would span a
+        # sentinel boundary are lost, which can produce slightly different token
+        # IDs at the boundary vs encoding the full string. This matches HF's
+        # AssistantTracker behavior which has the same limitation.
         for part in parts:
             if part == _GENERATION_SENTINEL_START:
                 is_assistant = True
@@ -209,6 +213,7 @@ class HfMarinTokenizer:
     _chat_template: str | None
     _vocab_size: int
     _all_special_ids: list[int]
+    _id_to_token: dict[int, str] = dataclasses.field(default_factory=dict, repr=False)
 
     @property
     def name_or_path(self) -> str:
@@ -259,17 +264,15 @@ class HfMarinTokenizer:
         return self._tokenizer.get_vocab()
 
     def convert_ids_to_tokens(self, ids: int | list[int]) -> str | list[str]:
-        vocab = self._tokenizer.get_vocab()
-        id_to_token = {v: k for k, v in vocab.items()}
         if isinstance(ids, int):
-            return id_to_token.get(ids, f"<unk:{ids}>")
-        return [id_to_token.get(i, f"<unk:{i}>") for i in ids]
+            return self._id_to_token.get(ids, f"<unk:{ids}>")
+        return [self._id_to_token.get(i, f"<unk:{i}>") for i in ids]
 
     def convert_tokens_to_ids(self, tokens: str | list[str]) -> int | list[int]:
         vocab = self._tokenizer.get_vocab()
         if isinstance(tokens, str):
-            return vocab[tokens]
-        return [vocab[t] for t in tokens]
+            return vocab.get(tokens, -1)
+        return [vocab.get(t, -1) for t in tokens]
 
     @property
     def all_special_ids(self) -> list[int]:
@@ -332,6 +335,7 @@ class TokieMarinTokenizer:
     _vocab_size: int
     _chat_template: str | None
     _all_special_ids: list[int]
+    _id_to_token: dict[int, str] = dataclasses.field(default_factory=dict, repr=False)
 
     @property
     def name_or_path(self) -> str:
@@ -385,17 +389,15 @@ class TokieMarinTokenizer:
         return self._tokenizer.get_vocab()
 
     def convert_ids_to_tokens(self, ids: int | list[int]) -> str | list[str]:
-        vocab = self._tokenizer.get_vocab()
-        id_to_token = {v: k for k, v in vocab.items()}
         if isinstance(ids, int):
-            return id_to_token.get(ids, f"<unk:{ids}>")
-        return [id_to_token.get(i, f"<unk:{i}>") for i in ids]
+            return self._id_to_token.get(ids, f"<unk:{ids}>")
+        return [self._id_to_token.get(i, f"<unk:{i}>") for i in ids]
 
     def convert_tokens_to_ids(self, tokens: str | list[str]) -> int | list[int]:
         vocab = self._tokenizer.get_vocab()
         if isinstance(tokens, str):
-            return vocab[tokens]
-        return [vocab[t] for t in tokens]
+            return vocab.get(tokens, -1)
+        return [vocab.get(t, -1) for t in tokens]
 
     @property
     def all_special_ids(self) -> list[int]:
@@ -500,6 +502,7 @@ def _load_hf_tokenizer(name_or_path: str) -> HfMarinTokenizer:
     pad_id = vocab.get(pad_token) if pad_token is not None else None
 
     all_special_ids = _collect_special_ids(config, vocab, bos_id, eos_id, pad_id)
+    id_to_token = {v: k for k, v in vocab.items()}
 
     return HfMarinTokenizer(
         _tokenizer=tok,
@@ -512,6 +515,7 @@ def _load_hf_tokenizer(name_or_path: str) -> HfMarinTokenizer:
         _chat_template=config.get("chat_template"),
         _vocab_size=tok.get_vocab_size(),
         _all_special_ids=all_special_ids,
+        _id_to_token=id_to_token,
     )
 
 
@@ -580,6 +584,7 @@ def _load_tokie_tokenizer(name_or_path: str) -> TokieMarinTokenizer:
         _vocab_size=vocab_size,
         _chat_template=config.get("chat_template"),
         _all_special_ids=all_special_ids,
+        _id_to_token={v: k for k, v in tok.get_vocab().items()},
     )
 
 
