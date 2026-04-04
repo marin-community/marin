@@ -135,12 +135,16 @@ def _compute_flops_per_token(cfg: GrugModelConfig) -> float:
     return fpt_with_lm_head - 2 * cfg.hidden_dim * cfg.vocab_size
 
 
+MAX_BATCH_SIZE: int = 256
+
+
 def _compute_tokens_and_batch(
     budget: float, flops_per_token: float, target_steps: int = 2**14, min_batch_size: int = MIN_BATCH_SIZE
 ) -> tuple[float, int, int]:
     tokens = budget / (3 * flops_per_token)
     batch_exact = tokens / (target_steps * SEQ_LEN)
     batch_size = max(min_batch_size, _round_to_power_of_two(batch_exact))
+    batch_size = min(batch_size, MAX_BATCH_SIZE)
     train_steps = max(1, round(tokens / (batch_size * SEQ_LEN)))
     return tokens, batch_size, train_steps
 
@@ -694,8 +698,75 @@ def create_gqa_lr_sweep() -> list[ExecutorStep]:
 gqa_lr_sweep_steps = create_gqa_lr_sweep()
 
 
+def create_d640_d896_sweep() -> list[ExecutorStep]:
+    """d640 and d896 across all compute budgets (intermediate_dim now rounded to 128)."""
+    steps = []
+    extra_dims = [640, 896]
+    extra_excluded = {1e20: {640}}  # skip d640 at 1e20
+
+    for budget in BUDGETS:
+        excluded = extra_excluded.get(budget, set())
+        step_mult, min_bs = BUDGET_CONFIG.get(budget, (1, MIN_BATCH_SIZE))
+        target_steps = 2**14 * step_mult
+        for hidden_dim in extra_dims:
+            if hidden_dim in excluded:
+                continue
+
+            model_cfg = HEURISTIC.build_model_config(hidden_dim)
+            fpt = _compute_flops_per_token(model_cfg)
+            tokens, batch_size, train_steps = _compute_tokens_and_batch(
+                budget, fpt, target_steps=target_steps, min_batch_size=min_bs
+            )
+            optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, hidden_dim)
+
+            run_id = f"isoflop-moe-v16-{budget:.0e}-d{hidden_dim}"
+            eval_bs = 64 if hidden_dim >= 2048 else 512
+            eval_batches = 64 if hidden_dim >= 2048 else 8
+
+            config = GrugMoeLaunchConfig(
+                model=versioned(model_cfg),
+                data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+                output_path=this_output_path(),
+                run_id=run_id,
+                resources=versioned(ResourceConfig.with_tpu("v4-32")),
+                steps=versioned(train_steps),
+                batch_size=versioned(batch_size),
+                seed=versioned(0),
+                mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+                tracker=WandbConfig(
+                    project="dial_moe",
+                    tags=["grug", "moe-core", "isoflop", "v16", "gqa4",
+                          f"budget={budget:.0e}", f"d={hidden_dim}"],
+                    group="isoflop-moe-v16",
+                    name=run_id,
+                ),
+                optimizer=versioned(optimizer),
+                grug_trainer=versioned(
+                    GrugTrainerConfig(
+                        z_loss_weight=HEURISTIC.z_loss_weight,
+                        ema_beta=None,
+                        log_every=1,
+                    )
+                ),
+                eval=versioned(
+                    GrugEvalConfig(
+                        eval_batch_size=eval_bs,
+                        steps_per_eval=1000,
+                        max_eval_batches=eval_batches,
+                        eval_current=True,
+                        eval_ema=False,
+                    )
+                ),
+            )
+            steps.append(ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config))
+    return steps
+
+
+d640_d896_steps = create_d640_d896_sweep()
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=moe_isoflop_steps,
-        description="v15: isoflop sweep 1e18-1e20, 7 dims, GQA 4:1, fitted LR",
+        steps=d640_d896_steps,
+        description="v16: d640/d896 isoflop sweep (rounded intermediate_dim)",
     )

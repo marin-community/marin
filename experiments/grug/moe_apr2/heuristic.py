@@ -171,7 +171,8 @@ class CompletedAdamHHeuristic:
         return GrugModelConfig(
             vocab_size=self.vocab_size,
             hidden_dim=hidden_size,
-            intermediate_dim=hidden_size // 2,
+            # Round up to nearest 128 for Pallas TPU MoE kernel compatibility
+            intermediate_dim=math.ceil(hidden_size / 2 / 128) * 128,
             shared_expert_intermediate_dim=hidden_size,
             num_experts=64,
             num_experts_per_token=4,
