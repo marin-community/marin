@@ -38,6 +38,7 @@ dependencies = [
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
     "tokie>=0.0.8",
+    "kitoken>=0.10.1",
     "transformers>=4.57.1,<5.0",
     "optax>=0.1.9",
     "wandb>=0.17.8",
@@ -103,6 +104,10 @@ tokie = [
     "tokie>=0.0.8",
 ]
 
+kitoken = [
+    "kitoken>=0.10.1",
+]
+
 gcp = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
@@ -121,6 +126,7 @@ test = [
   "chex>=0.1.86",
   "httpx>=0.28.1",
   "pytest-profiling>=1.8.1",
+  "pytest-xdist",
   "trackio>=0.5.0",
   # need this or else the resolver gets a bad version
   "numba>=0.62.1"
@@ -178,6 +184,7 @@ mypy_path = ["src"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
+addopts = "-n auto"
 pythonpath = ["src", "tests"]
 filterwarnings = [
     "ignore:Transparent hugepages are not enabled\\..*:UserWarning:jax._src.cloud_tpu_init",

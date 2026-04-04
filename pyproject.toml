@@ -57,6 +57,8 @@ zephyr = { workspace = true }
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
 # ### BEGIN RUST-DEV SOURCES ###
+tokie = { path = "vendor/tokie/crates/tokie-python", editable = true }
+kitoken = { path = "vendor/kitoken/packages/python", editable = true }
 # ### END RUST-DEV SOURCES ###
 
 

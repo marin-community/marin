@@ -163,8 +163,14 @@ def _get_git_non_ignored_files(
     """Get files that are not ignored by git.
 
     Returns None if git is not available or this isn't a git repo.
+
+    Runs two passes: one for the main repo (including untracked files) and
+    one with ``--recurse-submodules`` to pick up files inside git submodules.
+    The two are merged because ``--recurse-submodules`` is incompatible with
+    ``--others``.
     """
     try:
+        # Main repo: tracked + untracked non-ignored files.
         result = subprocess.run(
             ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
             cwd=workspace,
@@ -173,7 +179,23 @@ def _get_git_non_ignored_files(
             check=True,
         )
         files = [f for f in result.stdout.splitlines() if f and not _should_exclude(f, exclude)]
-        return {workspace / f for f in files}
+        out = {workspace / f for f in files}
+
+        # Submodule contents: --recurse-submodules enumerates files inside
+        # submodules but cannot be combined with --others.
+        sub = subprocess.run(
+            ["git", "ls-files", "--cached", "--recurse-submodules"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if sub.returncode == 0:
+            for f in sub.stdout.splitlines():
+                if f and not _should_exclude(f, exclude):
+                    out.add(workspace / f)
+
+        return out
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         logger.debug("Git not available, using pattern-based exclusion: %s", e)
         return None

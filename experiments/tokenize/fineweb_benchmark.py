@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Benchmark HF vs tokie tokenizer backends on fineweb-edu 10BT sample.
+"""Benchmark HF vs tokie vs kitoken tokenizer backends on fineweb-edu 10BT sample.
 
-Runs two tokenization jobs over the same data — one with the HF backend,
-one with tokie — so throughput and memory behavior can be compared.
+Runs three tokenization jobs over the same data — one per backend —
+so throughput and memory behavior can be compared.
 
 Usage (local, tiny synthetic dataset for smoke testing):
     MARIN_PREFIX=/tmp/marin BENCHMARK_TINY=1 uv run python experiments/tokenize/fineweb_benchmark.py
@@ -79,6 +79,7 @@ def build_steps() -> list[StepSpec]:
     return [
         _tokenize_spec("benchmark-hf", train_path, TokenizerBackend.HF, sample_count=sample_count),
         _tokenize_spec("benchmark-tokie", train_path, TokenizerBackend.TOKIE, sample_count=sample_count),
+        _tokenize_spec("benchmark-kitoken", train_path, TokenizerBackend.KITOKEN, sample_count=sample_count),
     ]
 
 

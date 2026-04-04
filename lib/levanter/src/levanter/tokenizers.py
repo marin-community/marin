@@ -446,9 +446,141 @@ class TokieMarinTokenizer:
         return _apply_chat_template_with_masks(self, conversations, chat_template=chat_template, **kwargs)
 
 
+@dataclasses.dataclass(frozen=True)
+class KitokenMarinTokenizer:
+    """MarinTokenizer backed by kitoken.
+
+    Kitoken is a fast tokenizer supporting BPE, Unigram, and WordPiece models,
+    compatible with SentencePiece, HuggingFace Tokenizers, Tiktoken, and Tekken formats.
+
+    Limitations vs HfMarinTokenizer:
+    - add_special_tokens manually prepends BOS (kitoken's encode_specials is different)
+    - decode() returns bytes from kitoken; we convert to str with utf-8
+    """
+
+    _tokenizer: Any  # kitoken.Kitoken (optional dep, no top-level import)
+    _name_or_path: str
+    _bos_token: str | None
+    _eos_token: str | None
+    _pad_token: str | None
+    _bos_id: int | None
+    _eos_id: int | None
+    _pad_id: int | None
+    _vocab_size: int
+    _chat_template: str | None
+    _all_special_ids: list[int]
+    _id_to_token: dict[int, str] = dataclasses.field(default_factory=dict, repr=False)
+
+    @property
+    def name_or_path(self) -> str:
+        return self._name_or_path
+
+    @property
+    def vocab_size(self) -> int:
+        return self._vocab_size
+
+    @property
+    def bos_token_id(self) -> int | None:
+        return self._bos_id
+
+    @property
+    def eos_token_id(self) -> int | None:
+        return self._eos_id
+
+    @property
+    def pad_token_id(self) -> int | None:
+        return self._pad_id
+
+    @property
+    def bos_token(self) -> str | None:
+        return self._bos_token
+
+    @property
+    def eos_token(self) -> str | None:
+        return self._eos_token
+
+    @property
+    def chat_template(self) -> str | None:
+        return self._chat_template
+
+    def __len__(self) -> int:
+        return self._vocab_size
+
+    def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
+        ids = self._tokenizer.encode(text, False)
+        if add_special_tokens and self._bos_id is not None:
+            ids = [self._bos_id] + ids
+        return ids
+
+    def decode(self, ids: list[int], *, skip_special_tokens: bool = False) -> str:
+        if skip_special_tokens:
+            special_ids = {self._bos_id, self._eos_id, self._pad_id} - {None}
+            ids = [i for i in ids if i not in special_ids]
+        raw = self._tokenizer.decode(ids, False)
+        return raw.decode("utf-8", errors="replace")
+
+    def encode_batch(self, texts: list[str], *, add_special_tokens: bool = False) -> list[list[int]]:
+        texts = ["".join(s) for s in texts]
+        results = self._tokenizer.encode_all(texts, False)
+        if add_special_tokens and self._bos_id is not None:
+            return [[self._bos_id] + ids for ids in results]
+        return results
+
+    def get_vocab(self) -> dict[str, int]:
+        return self._tokenizer.get_vocab()
+
+    def convert_ids_to_tokens(self, ids: int | list[int]) -> str | list[str]:
+        if isinstance(ids, int):
+            return self._id_to_token.get(ids, f"<unk:{ids}>")
+        return [self._id_to_token.get(i, f"<unk:{i}>") for i in ids]
+
+    def convert_tokens_to_ids(self, tokens: str | list[str]) -> int | list[int]:
+        vocab = self._tokenizer.get_vocab()
+        if isinstance(tokens, str):
+            return vocab.get(tokens, -1)
+        return [vocab.get(t, -1) for t in tokens]
+
+    @property
+    def all_special_ids(self) -> list[int]:
+        return self._all_special_ids
+
+    def apply_chat_template(
+        self,
+        conversation: list[dict[str, str]],
+        *,
+        tokenize: bool = True,
+        add_generation_prompt: bool = False,
+        **kwargs,
+    ) -> str | list[int]:
+        if self._chat_template is None:
+            raise ValueError(f"Tokenizer {self._name_or_path} has no chat template")
+        env = _make_jinja_env([_GenerationStripExtension])
+        template = env.from_string(self._chat_template)
+        rendered = template.render(
+            messages=conversation,
+            add_generation_prompt=add_generation_prompt,
+            bos_token=self._bos_token or "",
+            eos_token=self._eos_token or "",
+            **kwargs,
+        )
+        if tokenize:
+            return self.encode(rendered, add_special_tokens=False)
+        return rendered
+
+    def apply_chat_template_with_masks(
+        self,
+        conversations: list[list[dict[str, str]]],
+        *,
+        chat_template: str | None = None,
+        **kwargs,
+    ) -> dict[str, list[list[int]]]:
+        return _apply_chat_template_with_masks(self, conversations, chat_template=chat_template, **kwargs)
+
+
 class TokenizerBackend(StrEnum):
     HF = "hf"
     TOKIE = "tokie"
+    KITOKEN = "kitoken"
 
 
 @functools.lru_cache(maxsize=32)
@@ -466,6 +598,8 @@ def load_tokenizer(
         return _load_hf_tokenizer(name_or_path)
     if backend == TokenizerBackend.TOKIE:
         return _load_tokie_tokenizer(name_or_path)
+    if backend == TokenizerBackend.KITOKEN:
+        return _load_kitoken_tokenizer(name_or_path)
     raise ValueError(f"Unknown backend: {backend}")
 
 
@@ -624,3 +758,44 @@ def _resolve_special_token_id_from_config(
     if token_str is not None:
         return added_tokens.get(token_str)
     return None
+
+
+def _load_kitoken_tokenizer(name_or_path: str) -> KitokenMarinTokenizer:
+    import kitoken
+
+    local_json = os.path.join(name_or_path, "tokenizer.json")
+    if not os.path.isfile(local_json):
+        local_json = hf_hub_download(name_or_path, "tokenizer.json")
+    tok = kitoken.Kitoken.from_tokenizers_file(local_json)
+    config = _load_tokenizer_config(name_or_path)
+
+    bos_token = _resolve_special_token(config, "bos_token")
+    eos_token = _resolve_special_token(config, "eos_token")
+    pad_token = _resolve_special_token(config, "pad_token")
+
+    # kitoken's get_vocab includes both regular and special tokens.
+    # Resolve special token IDs from the config, falling back to the vocab.
+    added_tokens = _build_added_token_map(config)
+    bos_id = _resolve_special_token_id_from_config(config, "bos_token_id", bos_token, added_tokens)
+    eos_id = _resolve_special_token_id_from_config(config, "eos_token_id", eos_token, added_tokens)
+    pad_id = _resolve_special_token_id_from_config(config, "pad_token_id", pad_token, added_tokens)
+
+    vocab = tok.get_vocab()
+    vocab_size = tok.vocab_size
+
+    all_special_ids = _collect_special_ids(config, vocab, bos_id, eos_id, pad_id)
+
+    return KitokenMarinTokenizer(
+        _tokenizer=tok,
+        _name_or_path=name_or_path,
+        _bos_token=bos_token,
+        _eos_token=eos_token,
+        _pad_token=pad_token,
+        _bos_id=bos_id,
+        _eos_id=eos_id,
+        _pad_id=pad_id,
+        _vocab_size=vocab_size,
+        _chat_template=config.get("chat_template"),
+        _all_special_ids=all_special_ids,
+        _id_to_token={v: k for k, v in vocab.items()},
+    )
