@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 TOKENIZER = "meta-llama/Llama-3.1-8B"
 TINY = os.environ.get("BENCHMARK_TINY", "") == "1"
 
-# Pre-downloaded fineweb-edu 10BT sample.
+# Pre-downloaded fineweb-edu 10BT sample (revision 87f0914).
 FINEWEB_10BT = "gs://marin-us-central1/raw/fineweb-edu-87f0914/sample/10BT"
 
 
