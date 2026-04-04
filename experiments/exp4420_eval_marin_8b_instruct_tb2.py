@@ -44,9 +44,12 @@ import json
 import logging
 import os
 
-from experiments.evals.evals import evaluate_harbor
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.evaluation.evaluation_config import EvaluationConfig
+from marin.evaluation.evaluators.harbor_evaluator import HARBOR_FORWARDED_ENV_KEYS, _env_vars_from_keys
+from marin.evaluation.run import evaluate
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.remote import remote
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -122,19 +125,42 @@ logger.info("Output: %s", OUTPUT_DIR)
 logger.info("=" * 80)
 
 
-if __name__ == "__main__":
-    step = evaluate_harbor(
-        model_name=MODEL_NAME,
-        model_path=MODEL_PATH,
-        dataset=DATASET,
-        version=VERSION,
-        resource_config=ResourceConfig.with_tpu("v5p-8"),
-        wandb_tags=["harbor", DATASET, "terminus-2", ENV_TYPE, MODEL_NAME, "vllm", "exp4420", BENCHMARK],
-        agent=HARBOR_AGENT,
-        n_concurrent=HARBOR_N_CONCURRENT,
-        env=ENV_TYPE,
-        agent_kwargs=HARBOR_AGENT_KWARGS,
-        task_names=HARBOR_TASK_NAMES,
-    ).with_output_path(OUTPUT_DIR)
+def _build_harbor_step() -> ExecutorStep:
+    forwarded_env_vars = _env_vars_from_keys(HARBOR_FORWARDED_ENV_KEYS)
+    engine_kwargs = {
+        "harbor_config": {
+            "dataset": DATASET,
+            "version": VERSION,
+            "agent": HARBOR_AGENT,
+            "n_concurrent": HARBOR_N_CONCURRENT,
+            "env": ENV_TYPE,
+            "agent_kwargs": HARBOR_AGENT_KWARGS,
+            "task_names": HARBOR_TASK_NAMES,
+        },
+        "forwarded_env_vars": forwarded_env_vars,
+    }
+    tpu_resources = ResourceConfig.with_tpu("v5p-8")
+    wandb_tags = ["harbor", DATASET, "terminus-2", ENV_TYPE, MODEL_NAME, "vllm", "exp4420", BENCHMARK]
+    return ExecutorStep(
+        name=f"evaluation/harbor/{MODEL_NAME}-{DATASET}-{VERSION}",
+        fn=remote(evaluate, resources=tpu_resources, pip_dependency_groups=["harbor", "vllm", "tpu"]),
+        config=EvaluationConfig(
+            evaluator="harbor",
+            model_name=MODEL_NAME,
+            model_path=MODEL_PATH,
+            evaluation_path=this_output_path(),
+            evals=[],
+            max_eval_instances=None,
+            launch_with_ray=False,
+            discover_latest_checkpoint=False,
+            engine_kwargs=engine_kwargs,
+            resource_config=tpu_resources,
+            apply_chat_template=False,
+            wandb_tags=wandb_tags,
+        ),
+    )
 
+
+if __name__ == "__main__":
+    step = _build_harbor_step().with_output_path(OUTPUT_DIR)
     executor_main(steps=[step])
