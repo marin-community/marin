@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "e0f070af01ac",
+  "session_id": "b865f733-4731-43a3-9a4b-a541823fbebc",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-04T14:48:21.952632982Z",
+  "branch": "kevin/harbor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "experiments/exp4420_eval_marin_8b_instruct_tb2.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "30782f219d89",
+  "transcript_identifier_at_start": "1edfac3a-0301-4587-b419-8a220d86e431",
+  "token_usage": {
+    "input_tokens": 1739,
+    "cache_creation_tokens": 18904988,
+    "cache_read_tokens": 550072199,
+    "output_tokens": 406676,
+    "api_call_count": 1247
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-04T14:48:19.207344111Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-home-kevin-marin-harbor/b865f733-4731-43a3-9a4b-a541823fbebc.jsonl"
+}
