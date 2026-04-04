@@ -36,7 +36,6 @@ Assistant response (expected):
 import re
 from typing import Any
 
-import dspy
 from dspy import Adapter
 from dspy.signatures.signature import Signature
 
@@ -86,7 +85,7 @@ class ToonAdapter(Adapter):
 
         # ---- User message ----
         user_lines: list[str] = []
-        for name, field in signature.input_fields.items():
+        for name, _field in signature.input_fields.items():
             value = inputs.get(name, "")
             if isinstance(value, list):
                 value = "\n".join(f"- {v}" for v in value)
@@ -171,10 +170,10 @@ class ToonAdapter(Adapter):
 
         # Handle list types (e.g. list[str] or bare list) — parse bullet lines
         try:
-            from typing import get_origin, get_args
+            from typing import get_origin
             if annotation is list or get_origin(annotation) is list:
-                lines = [l.lstrip("-•* ").strip() for l in value.splitlines()]
-                return [l for l in lines if l]
+                lines = [line.lstrip("-•* ").strip() for line in value.splitlines()]
+                return [line for line in lines if line]
         except Exception:
             pass
 

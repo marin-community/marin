@@ -7,23 +7,22 @@ from typing import Any
 
 import dspy
 import requests
-
-
-class _EnumSafeEncoder(json.JSONEncoder):
-    """JSON encoder that converts Enum values to their .value string."""
-    def default(self, obj: Any) -> Any:
-        if isinstance(obj, enum.Enum):
-            return obj.value
-        return super().default(obj)
-
-
 from experiments.dspy.adapters.baml import BAMLAdapter
 from experiments.dspy.adapters.toon import ToonAdapter
-from experiments.dspy.programs.hover import HoVer, HoverLabel
+from experiments.dspy.programs.hover import HoVer
 from experiments.dspy.programs.hotpotqa import HotpotQA
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 
 logger = logging.getLogger(__name__)
+
+
+class _EnumSafeEncoder(json.JSONEncoder):
+    """JSON encoder that converts Enum values to their .value string."""
+
+    def default(self, obj: Any) -> Any:
+        if isinstance(obj, enum.Enum):
+            return obj.value
+        return super().default(obj)
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +210,7 @@ def _build_bm25s_retriever():
     def rm(query: str, k: int = 3, **kwargs) -> dict[str, float]:
         tokens = bm25s.tokenize(query, stopwords="en", stemmer=stemmer, show_progress=False)
         results, scores = retriever.retrieve(tokens, k=min(k, len(corpus)), n_threads=1, show_progress=False)
-        return {corpus[idx]: float(sc) for idx, sc in zip(results[0], scores[0])}
+        return {corpus[idx]: float(sc) for idx, sc in zip(results[0], scores[0], strict=False)}
 
     return rm
 
