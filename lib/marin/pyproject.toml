@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "braceexpand",
     "cryptography>=45",
-    "datasets<4.0.0",
+    "datasets<5.0.0",
     "ddsketch",
     "deepdiff",
     "draccus>=0.11.5",
@@ -26,7 +26,7 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "haliax",
-    "jax==0.8.0",  # vllm-tpu currently requires this exact version
+    "jax==0.9.2",
     "jaxopt>=0.8.3",
     "levanter[serve]",
     "lxml[html_clean]",
@@ -125,18 +125,18 @@ conflicts = [
 
 [project.optional-dependencies]
 
-gpu = ["jax[cuda12]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
-tpu = ["jax[tpu]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
+gpu = ["jax[cuda12]==0.9.2", "torch==2.10.0", "torchvision==0.25.0"]
+tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.38", "torch==2.10.0", "torchvision==0.25.0"]
 
 cpu = [
-  "jax==0.8.0",
-  "torch==2.9.0",
+  "jax==0.9.2",
+  "torch==2.10.0",
   # Linux x86_64
-  "torchvision==0.24.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "torchvision==0.25.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
   # Windows x86_64 (AMD64)
-  "torchvision==0.24.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  "torchvision==0.25.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
   # Linux aarch64, macOS arm64: PyPI default wheel
-  "torchvision==0.24.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+  "torchvision==0.25.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
 rl = [
@@ -170,8 +170,9 @@ vizier = [
 ]
 
 vllm =[
-    "vllm-tpu==0.13.2.post6",
-    "triton==3.5.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
+    "vllm @ https://github.com/marin-community/vllm/releases/download/marin-9e3db15a7/vllm-0.0.0.dev20260402%2B9e3db15a7-py3-none-any.whl",
+    "tpu-inference @ https://github.com/marin-community/tpu-inference/releases/download/marin-4cfc17bc/tpu_inference-0.0.0.dev20260402%2B4cfc17bc-py3-none-any.whl",
+    "triton==3.6.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
 ]
 
 harbor = [

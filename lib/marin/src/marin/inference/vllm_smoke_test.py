@@ -13,7 +13,7 @@ import requests
 from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
+from marin.inference.vllm_server import VllmEnvironment, resolve_vllm_mode
 from marin.utils import remove_tpu_lockfile_on_exit
 
 
@@ -189,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             elapsed = time.time() - start
             print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
-            print(output)
+            print(f"output={output!r}")
         return 0
 
     mode_str = resolve_vllm_mode(args.mode)
@@ -223,17 +223,17 @@ def main(argv: list[str] | None = None) -> int:
                     raise
                 elapsed = time.time() - start
                 print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
-                print(output)
+                print(f"output={output!r}")
 
     cluster = current_cluster()
     resources = ResourceConfig.with_tpu(args.tpu_type)
+    extras = ["eval", "tpu", "vllm"] if mode_str == "native" else ["eval", "tpu"]
     job_request = JobRequest(
         name=f"vllm-smoke:{args.tpu_type}",
         entrypoint=Entrypoint.from_callable(_run),
         resources=resources,
         environment=EnvironmentConfig.create(
-            extras=["eval", "tpu"],
-            pip_packages=VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else (),
+            extras=extras,
             env_vars=env_vars or None,
         ),
     )

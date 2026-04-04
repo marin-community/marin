@@ -17,7 +17,7 @@ from rigging.filesystem import open_url, url_to_fs
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
-from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
+from marin.inference.vllm_server import VllmEnvironment, resolve_vllm_mode
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
         """Launch the evaluation run with Fray."""
 
         mode_str = resolve_vllm_mode(None)
-        pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
+        extras = ("eval", "tpu", "vllm") if mode_str == "native" else ("eval", "tpu")
         launch_evaluate_with_ray(
             evaluator=self,
             job_name="lm-eval",
@@ -97,8 +97,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
             resource_config=resource_config,
             max_eval_instances=max_eval_instances,
             wandb_tags=wandb_tags,
-            extras=("eval", "tpu"),
-            pip_packages=pip_packages,
+            extras=extras,
             env_vars={"HF_ALLOW_CODE_EVAL": "1"},
         )
 

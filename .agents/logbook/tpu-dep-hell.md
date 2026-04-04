@@ -12,6 +12,524 @@ Anyone picking this work up should read this document first.
 
 ---
 
+## 2026-04-01 Codex Session: `marin-community/vllm` Fork Activation
+
+### Scope
+
+- Turn the newly created `marin-community/vllm` fork into the active Marin TPU
+  packaging path.
+- Add TPU wheel build/release automation in the fork.
+- Replace Marin's `vllm-tpu` pin with a direct `vllm` wheel pin.
+- Keep the `marin-community/tpu-inference` override separate.
+- Validate with:
+  - a CPU-only job that imports `vllm` and prints its version
+  - one cheap TPU smoke test, preferring a 1B model and falling back to 8B
+
+### Baseline At Session Start
+
+- Current worktree branch: `worktree-tpu-dep-hell`
+- `marin-community/vllm` fork exists as a public fork of `vllm-project/vllm`
+  with default branch `main`
+- `lib/marin/pyproject.toml` still pins `vllm-tpu==0.13.2.post6`
+- root `pyproject.toml` does not yet carry the working `tpu-inference` fork
+  override from `vllm_load_fast`
+- Existing logbook evidence still points to the same packaging conclusion:
+  owning the TPU vLLM wheel is cleaner than staying pinned to Google's release
+  cadence
+
+### Plan For This Session
+
+1. Inspect `marin-community/vllm` and `marin-community/tpu-inference` to copy
+   the fork/release pattern.
+2. Add wheel build/release automation to `marin-community/vllm`.
+3. Update Marin packaging to consume the forked TPU wheel and separate
+   `tpu-inference` override.
+4. Run a CPU-only import/version verification job.
+5. Run one TPU smoke test on the smallest practical model path available.
+
+### Open Assumptions
+
+- It is acceptable to use `main` as the release branch for `marin-community/vllm`
+  unless a dedicated `marin` branch becomes necessary.
+- GitHub Releases are the distribution channel; no PyPI publication is needed.
+- For the TPU smoke test, "whatever compute is available" means preferring the
+  standard Iris dev TPU workflow over building a larger one-off job wrapper.
+
+### Progress Log
+
+#### 2026-04-01 22:05 PDT - Fork release path wired
+
+- Cloned `marin-community/vllm` and `marin-community/tpu-inference` locally to
+  compare release setup.
+- Confirmed `tpu-inference` uses a dedicated `marin` branch plus a simple
+  GitHub Actions wheel release workflow.
+- Confirmed upstream vLLM already contains `tools/vllm-tpu/build.sh` and, more
+  importantly, that `setup.py` selects `requirements/tpu.txt` when
+  `VLLM_TARGET_DEVICE=tpu`.
+- Confirmed the smallest standard dev TPU path available in
+  `lib/iris/examples/marin.yaml` is `v6e-4`, which is the leading candidate for
+  the smoke test.
+
+Actions taken:
+
+1. Created branch `marin` in `marin-community/vllm`
+2. Added `.github/workflows/release.yml` on that branch
+3. Pushed commit `7754c1ebd8777355609c8b14f816f8e2f238f5d6`
+
+Workflow state:
+
+- GitHub Actions workflow id: `255184423`
+- First run id: `23884849235`
+- Status at log update: `in_progress`
+- Current live step: `Build TPU wheel`
+
+Current blocker:
+
+- Need the first wheel build to finish so Marin can pin a real release URL
+  rather than a placeholder.
+
+#### 2026-04-01 22:12 PDT - First wheel published, Marin patched locally
+
+Fork result:
+
+- `marin-community/vllm` Actions run `23884849235` completed successfully
+- Release tag: `marin-7754c1ebd`
+- Wheel asset:
+  `https://github.com/marin-community/vllm/releases/download/marin-7754c1ebd/vllm-0.0.0.dev20260402+7754c1ebd-py3-none-any.whl`
+
+Local Marin changes applied:
+
+- `lib/marin/pyproject.toml`
+  - replaced `vllm-tpu==0.13.2.post6` with the direct `marin-community/vllm`
+    wheel URL
+- `pyproject.toml`
+  - ported the working `tpu-inference` override from `vllm_load_fast`
+    (`marin-4abb68f4`)
+- native eval/smoke job wiring
+  - removed the hardcoded runtime reinstall path that pointed at `vllm-tpu`
+  - changed native evaluator/smoke jobs to include the repo `vllm` extra
+    directly when `MARIN_VLLM_MODE=native`
+
+Local validation result:
+
+- Command: `uv sync --package marin --extra vllm`
+- Result: resolution succeeded, install failed on macOS because
+  `nixl==0.3.0` only publishes Linux wheels
+- Interpretation: local macOS sync is not a valid validation surface for this
+  TPU stack; continue with Linux CPU/TPU remote validation
+
+#### 2026-04-01 22:19 PDT - CPU-only import/version gate passed
+
+Remote validation result:
+
+- Job: `/ahmed/vllm-import-cpu-v6`
+- State: `JOB_STATE_SUCCEEDED`
+- Command shape:
+  `python -c 'import importlib.metadata, platform, vllm; print(platform.platform()); print(vllm.__file__); print(importlib.metadata.version("vllm"))'`
+- Environment: Iris CPU job with extras `vllm,tpu`
+
+Observed output:
+
+- Platform: `Linux-6.5.0-1013-gcp-x86_64-with-glibc2.41`
+- Module path: `/app/.venv/lib/python3.11/site-packages/vllm/__init__.py`
+- Installed version: `0.0.0.dev20260402+7754c1ebd`
+
+Interpretation:
+
+- Marin is now resolving and importing the forked `marin-community/vllm` wheel
+  on a remote Linux worker.
+- The earlier `torch==2.9.0+cpu` / `GraphCaptureOutput` mismatch is gone after
+  aligning the lockfile with `torch==2.10.0`, `torchvision==0.25.0`, and
+  `triton==3.6.0`.
+- The next experiment is the smallest practical native TPU smoke test on
+  `v6e-4`, aiming for a public ~1B Llama-family model first and falling back
+  only if the model path itself is unsupported.
+
+#### 2026-04-01 22:21 PDT - Next experiment queued
+
+Planned command:
+
+`uv run --no-sync python -m marin.inference.vllm_smoke_test --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --mode native --tpu-type v6e-4 --max-model-len 1024 --use-completions --prompt "Write a short haiku about TPUs."`
+
+Rationale:
+
+- `TinyLlama/TinyLlama-1.1B-Chat-v1.0` is public, small, and Llama-family, so
+  it exercises the same general TPU model path without requiring gated HF
+  access.
+- `--mode native` ensures the test hits the newly wired forked `vllm` wheel
+  rather than the Docker sidecar.
+- `--tpu-type v6e-4` is the smallest standard TPU slice currently exposed in
+  the Marin Iris config for this path.
+- `--max-model-len 1024` keeps the smoke bounded; the goal here is package and
+  startup validation, not throughput.
+
+#### 2026-04-01 22:23 PDT - First TPU launch surface was wrong
+
+Attempted command:
+
+`uv run --no-sync python -m marin.inference.vllm_smoke_test --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --mode native --tpu-type v6e-4 --max-model-len 1024 --use-completions --prompt "Write a short haiku about TPUs."`
+
+Failure:
+
+- The smoke harness called `current_cluster()` from Fray v1.
+- Outside a Ray or explicit cluster context, Fray v1 defaults to
+  `LocalCluster`, so the job ran on the local macOS host instead of Iris.
+- Native startup then failed immediately with
+  `FileNotFoundError: [Errno 2] No such file or directory: 'vllm'`.
+
+Interpretation:
+
+- This is not a packaging regression on the remote path.
+- It is a launch-surface mismatch: the smoke harness can launch local or Ray
+  jobs, but not Iris-backed remote jobs directly from the laptop.
+
+Next command:
+
+`uv run --no-sync iris --config=lib/iris/examples/marin.yaml job run --tpu v6e-4 --memory 32GB --disk 100GB --job-name vllm-smoke-tinyllama-v1 --extra eval --extra tpu --extra vllm -- python -m marin.inference.vllm_smoke_test --local --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --mode native --max-model-len 1024 --use-completions --prompt "Write a short haiku about TPUs."`
+
+Adjustment rationale:
+
+- Iris owns the remote TPU scheduling and environment setup here.
+- `--local` makes the smoke script start vLLM directly inside the remote TPU
+  job rather than trying to submit a second nested cluster job.
+
+#### 2026-04-01 22:24 PDT - First real TPU smoke found a missing dependency edge
+
+Job:
+
+- `/ahmed/vllm-smoke-tinyllama-v1`
+- launch surface: Iris TPU job on `v6e-4`
+- command:
+  `python -m marin.inference.vllm_smoke_test --local --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --mode native --max-model-len 1024 --use-completions --prompt "Write a short haiku about TPUs."`
+
+Observed failure:
+
+- The remote job reached the TPU host and started `/app/.venv/bin/vllm`.
+- vLLM detected the TPU worker correctly.
+- Startup then failed with:
+  - `ERROR ... tpu_inference not found, please install tpu_inference to run vllm on TPU`
+  - `ImportError: cannot import name 'current_platform' from 'vllm.platforms'`
+
+Interpretation:
+
+- The forked `vllm` wheel is present and the native TPU entry path is executing.
+- The remote Iris environment is not ending up with an importable
+  `tpu_inference` package, even though the workspace lock contains the forked
+  `tpu-inference` wheel via root override.
+- Wheel metadata confirms the `marin-community/vllm` wheel still declares
+  `Requires-Dist: tpu-inference==0.12.0`, so relying on a root-level override
+  alone is too implicit for this remote install surface.
+
+Local fix applied:
+
+- Added the forked `tpu-inference` wheel URL directly to `marin[vllm]` in
+  `lib/marin/pyproject.toml`.
+- Kept the root `override-dependencies` entry in place.
+- Regenerated `uv.lock`.
+
+Next command:
+
+`uv run --no-sync iris --config=lib/iris/examples/marin.yaml job run --cpu 2 --memory 8GB --disk 20GB --job-name tpu-inference-import-cpu-v1 --extra vllm --extra tpu -- python -c 'import importlib.metadata, importlib.util; print(importlib.util.find_spec("tpu_inference")); print(importlib.metadata.version("tpu-inference"))'`
+
+Why this probe first:
+
+- It isolates the packaging question from TPU startup cost.
+- If this CPU probe sees the fork wheel, the next TPU retry is worth running.
+
+#### 2026-04-01 22:25 PDT - CPU probe confirmed forked `tpu-inference` install
+
+Job:
+
+- `/ahmed/tpu-inference-import-cpu-v1`
+- state: `JOB_STATE_SUCCEEDED`
+
+Observed output:
+
+- `ModuleSpec(... origin='/app/.venv/lib/python3.11/site-packages/tpu_inference/__init__.py', ...)`
+- `0.0.0.dev20260322+4abb68f4`
+
+Interpretation:
+
+- The remote Iris environment now installs the forked `tpu-inference` wheel
+  when `marin[vllm,tpu]` is requested.
+- The explicit `marin[vllm]` dependency edge fixed the gap that the first TPU
+  smoke exposed.
+
+Next command:
+
+`uv run --no-sync iris --config=lib/iris/examples/marin.yaml job run --tpu v6e-4 --memory 32GB --disk 100GB --job-name vllm-smoke-tinyllama-v2 --extra eval --extra tpu --extra vllm -- python -m marin.inference.vllm_smoke_test --local --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --mode native --max-model-len 1024 --use-completions --prompt "Write a short haiku about TPUs."`
+
+#### 2026-04-01 22:29 PDT - TPU retry exposed an API mismatch, not a missing wheel
+
+Jobs:
+
+- `/ahmed/vllm-smoke-tinyllama-v2` on `v6e-4`: failed
+- `/ahmed/tpu-platform-import-cpu-v3`: cheap CPU reproduction of the platform import
+
+Key evidence:
+
+- The CPU probe can import top-level `tpu_inference` and reports the correct
+  fork version.
+- The TPU smoke still logs `tpu_inference not found`, but `vllm.platforms.tpu`
+  only emits that message for any `ImportError` raised by
+  `from tpu_inference.platforms import TpuPlatform`.
+- The targeted CPU reproduction surfaced the real exception:
+  `ImportError: cannot import name 'ProcessorInputs' from 'vllm.inputs'`
+
+Root cause:
+
+- The current `marin-community/vllm` fork is on a newer vLLM API surface where
+  `ProcessorInputs` moved out of `vllm.inputs`.
+- The released `marin-community/tpu-inference` wheel still expects the older
+  location and also uses the older `Platform.validate_request(...)` signature.
+
+Fix in flight:
+
+- Patched `marin-community/tpu-inference` on branch `marin` at commit
+  `42fb81da8a775ed772d6b1b87d7048829a53c283` to:
+  - import `ProcessorInputs` from `vllm.multimodal.processing`
+  - import `EngineInput` from `vllm.inputs`
+  - update `validate_request(...)` to the current two-argument vLLM interface
+- The `tpu-inference` release workflow started automatically after push.
+
+Next step:
+
+- Wait for the new `tpu-inference` wheel release.
+- Re-pin Marin to that wheel.
+- Re-run the cheap `tpu_inference.platforms` CPU import before spending TPU
+  time on another smoke.
+
+#### 2026-04-01 22:33 PDT - User redirected to upstream-aligned fork mains
+
+New directive:
+
+- Stop leaning on the old `marin` branch for `tpu-inference`.
+- Make both Marin forks track upstream `main` as closely as possible.
+- Undo the local Marin packaging changes that pinned branch-built wheels.
+
+GitHub fork state after redirect:
+
+- `marin-community/tpu-inference`
+  - created/updated `main` to upstream `vllm-project/tpu-inference` `main`
+    at `cd1c7bfea4ac57324ce7bffe451110fec195447b`
+  - changed default branch from `marin` to `main`
+- `marin-community/vllm`
+  - fast-forwarded `main` to upstream `vllm-project/vllm` `main`
+    at `9bd72311068919b8f3430278d47859cf312039fa`
+  - deleted the temporary `marin` branch that was added for the TPU wheel
+    workflow experiment
+
+Local workspace cleanup:
+
+- Reverted the Marin packaging/runtime edits in:
+  - `lib/marin/pyproject.toml`
+  - `pyproject.toml`
+  - `lib/marin/src/marin/inference/vllm_server.py`
+  - `lib/marin/src/marin/inference/vllm_smoke_test.py`
+  - native evaluator files that had been rewired to install the repo `vllm`
+    extra directly
+  - `uv.lock`
+- Removed the temporary `.agents/logbook/tpu-dep-hell-codex.md` plan file
+
+Current state:
+
+- The worktree is back to clean code/package state except for this logbook.
+- The GitHub forks now have upstream-aligned `main` branches, with
+  `tpu-inference` no longer defaulting to `marin`.
+
+Next step from the new direction:
+
+- If Marin still needs custom wheel publication, reintroduce the smallest
+  possible fork-only delta on `main` rather than on `marin`.
+- Otherwise, treat this session's branch-built wheel experiment as closed.
+
+#### 2026-04-01 22:37 PDT - Minimal main-branch release workflows added
+
+Implementation strategy:
+
+- Keep both forks as close as possible to upstream `main`.
+- Add one new workflow file on each fork's `main` branch rather than mutating
+  upstream-managed release files.
+- Trigger only on pushes to `main`.
+
+Fork commits:
+
+- `marin-community/vllm` `main`: `9e3db15a75e4c5e285c2fae8ffcc3b60f2c4c8d6`
+  - adds `.github/workflows/marin-release.yml`
+  - builds a TPU wheel with `VLLM_TARGET_DEVICE=tpu`
+- `marin-community/tpu-inference` `main`: `4cfc17bcc2ef5bb3c7f5b23883fc925ee92729f7`
+  - adds `.github/workflows/marin-release.yml`
+  - builds the regular wheel
+
+Workflow runs started automatically on push:
+
+- `marin-community/vllm`
+  - workflow file: `marin-release.yml`
+  - run id: `23885749797`
+- `marin-community/tpu-inference`
+  - workflow file: `marin-release.yml`
+  - run id: `23885749572`
+
+Current state at log update:
+
+- Both runs are in progress.
+- Fork `main` remains the only active path; no `marin` branch was recreated.
+
+#### 2026-04-01 22:39 PDT - Main-branch release path validated
+
+`tpu-inference` result:
+
+- Run `23885749572` completed successfully.
+- Release tag: `marin-4cfc17bc`
+- Wheel URL:
+  `https://github.com/marin-community/tpu-inference/releases/download/marin-4cfc17bc/tpu_inference-0.0.0.dev20260402+4cfc17bc-py3-none-any.whl`
+
+`vllm` result:
+
+- Run `23885749797` started successfully from `main`.
+- The workflow is still in the `Build TPU wheel` step at the time of this log
+  update.
+- Live run URL:
+  `https://github.com/marin-community/vllm/actions/runs/23885749797`
+
+Interpretation:
+
+- The fork topology is now what the user requested: upstream-aligned `main`
+  branches with a minimal Marin-only release workflow layered on top.
+- `tpu-inference` is already publishing from `main`.
+- `vllm` is using the same `main`-only model; the only outstanding item is the
+  heavier wheel build finishing.
+
+#### 2026-04-01 22:43 PDT - Marin cannot lock against upstream `main` wheels yet
+
+Attempt:
+
+- Re-pointed local Marin packaging to the new `main`-branch wheel URLs:
+  - `marin-community/vllm` release `marin-9e3db15a7`
+  - `marin-community/tpu-inference` release `marin-4cfc17bc`
+- Reapplied the native-mode runtime wiring so jobs would use the repo `vllm`
+  extra instead of reinstalling `vllm-tpu`.
+
+Result:
+
+- `uv lock` failed before any import smoke could run.
+
+Exact blocker from resolver:
+
+- `tpu-inference==0.0.0.dev20260402+4cfc17bc` depends on `jax==0.9.2`
+- Marin is still pinned to `jax==0.8.0`
+- Therefore `marin[vllm]` is unsatisfiable against upstream `tpu-inference`
+  `main`
+
+Interpretation:
+
+- The new fork topology is correct.
+- But upstream `tpu-inference` `main` has already moved past Marin's current
+  JAX baseline.
+- So "use fork `main` as-is in Marin" is blocked at dependency resolution,
+  before runtime import checks.
+
+Local cleanup after confirming the blocker:
+
+- Reverted the attempted local packaging/runtime edits so the worktree stays
+  clean except for this logbook.
+
+Decision boundary:
+
+- To use upstream-aligned `main` wheels in Marin, Marin likely needs a JAX
+  uplift to `0.9.2` (or a separate compatibility strategy).
+- If Marin must stay on `jax==0.8.0`, then `tpu-inference` cannot be taken from
+  upstream `main` verbatim.
+
+#### 2026-04-01 22:48 PDT - JAX uplift path resolved the workspace lock
+
+Applied dependency updates:
+
+- Marin JAX baseline: `0.8.0` -> `0.9.2`
+- Marin TPU extra: switched from `jax[tpu]` to explicit
+  `jax==0.9.2`, `jaxlib==0.9.2`, `libtpu==0.0.38`
+- Levanter TPU extra: same explicit TPU runtime shape
+- Fray TPU test extra: same explicit TPU runtime shape
+- Levanter storage caps:
+  - `gcsfs<2026` -> `gcsfs<2027`
+  - `fsspec[http]<2026` -> `fsspec[http]<2027`
+- Marin/root datasets cap:
+  - `<4.0.0` -> `<5.0.0`
+
+Result:
+
+- `uv lock` now succeeds.
+- The lock now contains:
+  - `jax==0.9.2`
+  - `jaxlib==0.9.2`
+  - `libtpu==0.0.38`
+  - `tpu-inference==0.0.0.dev20260402+4cfc17bc`
+  - `vllm==0.0.0.dev20260402+9e3db15a7`
+
+Next command:
+
+- Run a CPU-only Iris import smoke that verifies:
+  - `import vllm`
+  - `import tpu_inference`
+  - `from tpu_inference.platforms import TpuPlatform`
+
+#### 2026-04-01 22:49 PDT - CPU import smoke passed with `main`-branch wheels
+
+Job:
+
+- `/ahmed/vllm-tpu-main-import-cpu-v1`
+- state: `JOB_STATE_SUCCEEDED`
+
+Command surface:
+
+- Iris CPU job with extras `vllm,tpu`
+- user command imported:
+  - `vllm`
+  - `tpu_inference`
+  - `from tpu_inference.platforms import TpuPlatform`
+
+Observed output:
+
+- Platform: `Linux-6.5.0-1013-gcp-x86_64-with-glibc2.41`
+- `vllm` module path:
+  `/app/.venv/lib/python3.11/site-packages/vllm/__init__.py`
+- `tpu_inference` module path:
+  `/app/.venv/lib/python3.11/site-packages/tpu_inference/__init__.py`
+- `vllm` version: `0.0.0.dev20260402+9e3db15a7`
+- `tpu-inference` version: `0.0.0.dev20260402+4cfc17bc`
+- `find_spec("tpu_inference")`: present
+- imported symbol: `TpuPlatform`
+
+Non-blocking note:
+
+- The CPU worker logs a TPU detection warning (`/dev/vfio` missing) and a
+  TensorFlow GCS shim warning, but neither blocked imports.
+
+Bottom line:
+
+- Marin now resolves, installs, and imports the upstream-aligned fork `main`
+  wheels for both `vllm` and `tpu-inference`.
+
+#### 2026-04-01 22:55 PDT - Smallest idle TPU smoke queued
+
+Selection:
+
+- Model: `TinyLlama/TinyLlama-1.1B-Chat-v1.0`
+- TPU: `v6e-4`
+- Zone: `us-east1-d`
+
+Why this target:
+
+- `v6e-4` is one of the smallest TPU shapes in the current Marin config.
+- The cluster currently shows an idle ready `v6e-4` slice in `us-east1-d`.
+- TinyLlama 1.1B is public and small enough for a bounded native bring-up test.
+
+Planned command:
+
+`uv run --no-sync iris --config=lib/iris/examples/marin.yaml job run --tpu v6e-4 --zone us-east1-d --memory 32GB --disk 100GB --job-name vllm-smoke-tinyllama-main-v3 --extra eval --extra tpu --extra vllm -- python -m marin.inference.vllm_smoke_test --local --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --mode native --max-model-len 1024 --use-completions --prompt "Write a short haiku about TPUs."`
+
+---
+
 ## Table of Contents
 
 1. [Background: Why We Need a Fork](#1-background-why-we-need-a-fork)
@@ -803,3 +1321,223 @@ fsspec's advantage is **bounded host RAM**, not speed. For 70B models:
 | `.agents/projects/vllm_serving_analysis.md` | Canonical map of all vLLM paths in Marin |
 | `.agents/projects/vllm-docker.md` | Docker sidecar design |
 | `.agents/projects/runai_vs_fsspec_benchmark.md` | Benchmark methodology and results |
+
+#### 2026-04-01 22:56 PDT - TinyLlama 1.1B TPU smoke submitted on smallest idle slice
+
+- Goal: validate that the new `main`-branch `vllm` and `tpu-inference` wheels do more than import on CPU by bringing up the smallest practical native TPU vLLM server.
+- Chosen compute: `v6e-4` in `us-east1-d` because it was the smallest idle ready slice visible in Iris at submission time.
+- Chosen model: `TinyLlama/TinyLlama-1.1B-Chat-v1.0` as the lightest plausible HF causal LM path for a first native TPU smoke.
+- Iris job: `/ahmed/vllm-smoke-tinyllama-main-v3`
+- Exact command:
+
+```bash
+uv run --no-sync iris --config=lib/iris/examples/marin.yaml job run \
+  --tpu v6e-4 \
+  --zone us-east1-d \
+  --memory 32GB \
+  --disk 100GB \
+  --job-name vllm-smoke-tinyllama-main-v3 \
+  --extra eval \
+  --extra tpu \
+  --extra vllm \
+  -- python -m marin.inference.vllm_smoke_test \
+    --local \
+    --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+    --mode native \
+    --max-model-len 1024 \
+    --use-completions \
+    --prompt "Write a short haiku about TPUs."
+```
+
+- Submission result: Iris accepted the job and started dependency sync on the worker.
+- Immediate next check: wait for native server startup logs, then capture either the generated completion or the first blocking crash.
+
+#### 2026-04-01 23:01 PDT - TinyLlama 1.1B native TPU smoke succeeded on `v6e-4`
+
+- Final Iris state: `JOB_STATE_SUCCEEDED`
+- Job: `/ahmed/vllm-smoke-tinyllama-main-v3`
+- TPU: `v6e-4` in `us-east1-d`
+- End-to-end smoke timing from the script: `[run 1/1] 245.4s`
+- The task exited cleanly with code `0`, so the native `VllmEnvironment` reached readiness, served the request, and shut down normally.
+
+Key evidence from the native vLLM subprocess logs:
+- vLLM version in use: `0.0.0.dev20260402+9e3db15a7`
+- `tpu-inference` loaders registered successfully, including `tpu_streaming_loader`
+- TPU engine initialized on `v6e-4`
+- Weight download for `TinyLlama/TinyLlama-1.1B-Chat-v1.0`: `2.115s`
+- Total time to load model weights from storage to TPU: `10.85s`
+- TPU precompile ran through sampling, gather-logprobs, KV cache init, and backbone shapes up to `num_tokens=1024`
+
+Caveat:
+- The final printed completion body was empty. This is not a startup failure, because the job still completed successfully after the request returned, but it is worth a follow-up smoke with a different prompt or `/chat/completions` to confirm output quality rather than just server bring-up.
+
+Conclusion:
+- The new `main`-branch Marin forks for `vllm` and `tpu-inference`, together with the JAX `0.9.2` uplift and local packaging changes, are sufficient to boot a native TPU vLLM server and complete a request on a small `v6e-4` slice.
+
+#### 2026-04-01 23:08 PDT - Functional follow-up smoke queued after empty TinyLlama output
+
+- Problem with the first functional smoke: server startup succeeded, but the final completion body was empty, which is not a convincing end-to-end pass.
+- Immediate mitigation: make `vllm_smoke_test.py` print `output={output!r}` so whitespace-only or empty generations are explicit in Iris logs.
+- New hypothesis: the empty TinyLlama result was caused by the specific model/API combination (`Chat` model with `/completions`), not by the `main`-branch packaging stack.
+- Follow-up model: `HuggingFaceTB/SmolLM2-360M-Instruct`
+- Reason for this choice: open weights, small footprint, `LlamaForCausalLM` architecture in `config.json`, and better alignment with `/chat/completions`.
+- Planned command:
+
+```bash
+uv run --no-sync iris --config=lib/iris/examples/marin.yaml job run \
+  --tpu v6e-4 \
+  --zone us-east1-d \
+  --memory 32GB \
+  --disk 100GB \
+  --job-name vllm-smoke-smollm2-main-v1 \
+  --extra eval \
+  --extra tpu \
+  --extra vllm \
+  -- python -m marin.inference.vllm_smoke_test \
+    --local \
+    --model HuggingFaceTB/SmolLM2-360M-Instruct \
+    --mode native \
+    --max-model-len 1024 \
+    --prompt "Reply with exactly TPU_SMOKE_OK and nothing else."
+```
+
+#### 2026-04-01 23:12 PDT - SmolLM2 functional TPU smoke passed with visible output
+
+- Job: `/ahmed/vllm-smoke-smollm2-main-v1`
+- Final state: `JOB_STATE_SUCCEEDED`
+- TPU: `v6e-4` in `us-east1-d`
+- Model: `HuggingFaceTB/SmolLM2-360M-Instruct`
+- API path: `/chat/completions` (the smoke did not pass `--use-completions`)
+- Prompt: `Reply with exactly TPU_SMOKE_OK and nothing else.`
+- End-to-end timing from the script: `[run 1/1] 220.5s`
+- Logged response: `output='"TPU_SMOKE_OK"'`
+
+Interpretation:
+- The `main`-branch `marin-community/vllm` wheel plus the `main`-branch `marin-community/tpu-inference` wheel are not just importable and bootable; they can complete a real native TPU chat request on a small `v6e-4` slice.
+- The earlier empty TinyLlama result is best explained by the model/API pairing used in that run rather than a packaging or startup regression.
+
+Useful secondary observation:
+- The smoke-script change to print `output={output!r}` turned an ambiguous blank line into a definitive pass/fail signal and should stay.
+
+#### 2026-04-01 23:16 PDT - Consolidated session summary
+
+This section summarizes the full set of actions completed in this session so the logbook is self-contained.
+
+GitHub fork state:
+- `marin-community/tpu-inference`
+  - reset to track upstream `vllm-project/tpu-inference` `main`
+  - default branch set to `main`
+  - minimal `marin-release.yml` workflow added on `main`
+  - current release wheel:
+    - commit/tag lineage: `4cfc17bc`
+    - URL: `https://github.com/marin-community/tpu-inference/releases/download/marin-4cfc17bc/tpu_inference-0.0.0.dev20260402+4cfc17bc-py3-none-any.whl`
+- `marin-community/vllm`
+  - reset to track upstream `vllm-project/vllm` `main`
+  - deleted the temporary `marin` branch so `main` stays as close to upstream as possible
+  - minimal `marin-release.yml` workflow added on `main`
+  - current release wheel:
+    - commit/tag lineage: `9e3db15a7`
+    - URL: `https://github.com/marin-community/vllm/releases/download/marin-9e3db15a7/vllm-0.0.0.dev20260402+9e3db15a7-py3-none-any.whl`
+
+Local Marin packaging and runtime changes:
+- `lib/marin/pyproject.toml`
+  - uplifted the JAX baseline from `0.8.0` to `0.9.2`
+  - uplifted Torch/Torchvision from `2.9.0`/`0.24.0` to `2.10.0`/`0.25.0`
+  - replaced `vllm-tpu` with direct wheel pins to the new `marin-community/vllm` and `marin-community/tpu-inference` `main` releases
+  - widened `datasets` from `<4.0.0` to `<5.0.0`
+- root `pyproject.toml`
+  - added an explicit `override-dependencies` pin for the `marin-community/tpu-inference` `main` release wheel
+  - widened the root `datasets` cap to `<5.0.0`
+- `lib/levanter/pyproject.toml`
+  - widened `gcsfs` and `fsspec[http]` caps to allow the newer TPU stack
+  - replaced `jax[tpu]>=0.8.0` with explicit `jax==0.9.2`, `jaxlib==0.9.2`, `libtpu==0.0.38`
+- `lib/fray/pyproject.toml`
+  - aligned `fray_tpu_test` to the same explicit JAX/TPU versions
+- native vLLM launch paths
+  - removed the old `VLLM_NATIVE_PIP_PACKAGES = ("vllm-tpu",)` path from `lib/marin/src/marin/inference/vllm_server.py`
+  - changed evaluators and smoke jobs to use extras-based environment construction:
+    - native mode: include `vllm` extra
+    - docker mode: keep plain `eval`/`harbor` + `tpu`
+  - touched:
+    - `lib/marin/src/marin/evaluation/evaluators/lm_evaluation_harness_evaluator.py`
+    - `lib/marin/src/marin/evaluation/evaluators/simple_evaluator.py`
+    - `lib/marin/src/marin/evaluation/evaluators/harbor_evaluator.py`
+    - `lib/marin/src/marin/inference/vllm_smoke_test.py`
+- smoke instrumentation
+  - changed `vllm_smoke_test.py` to print `output={output!r}` so empty or whitespace-only generations are visible in job logs
+
+Locking and environment validation:
+- `uv lock` now succeeds with the new stack
+- resolved package set includes:
+  - `jax==0.9.2`
+  - `jaxlib==0.9.2`
+  - `libtpu==0.0.38`
+  - `vllm==0.0.0.dev20260402+9e3db15a7`
+  - `tpu-inference==0.0.0.dev20260402+4cfc17bc`
+  - `torch==2.10.0`
+  - `torchvision==0.25.0`
+  - `triton==3.6.0`
+
+Executed validation runs:
+- CPU import smoke:
+  - job: `/ahmed/vllm-tpu-main-import-cpu-v1`
+  - result: `JOB_STATE_SUCCEEDED`
+  - imported `vllm`, `tpu_inference`, and `TpuPlatform`
+  - observed versions:
+    - `vllm`: `0.0.0.dev20260402+9e3db15a7`
+    - `tpu-inference`: `0.0.0.dev20260402+4cfc17bc`
+- first TPU smoke:
+  - job: `/ahmed/vllm-smoke-tinyllama-main-v3`
+  - model: `TinyLlama/TinyLlama-1.1B-Chat-v1.0`
+  - result: `JOB_STATE_SUCCEEDED`
+  - native TPU server booted and served a request, but the logged completion body was empty
+- second TPU smoke:
+  - job: `/ahmed/vllm-smoke-smollm2-main-v1`
+  - model: `HuggingFaceTB/SmolLM2-360M-Instruct`
+  - result: `JOB_STATE_SUCCEEDED`
+  - logged response: `output='"TPU_SMOKE_OK"'`
+
+Bottom line:
+- The upstream-aligned `main` forks are working as the Marin source of truth for TPU `vllm` and `tpu-inference`.
+- The local workspace is now wired to those `main` wheels.
+- Import on CPU passes.
+- Native TPU serving on a small `v6e-4` slice passes with a real generated response.
+
+#### 2026-04-03 15:08 PDT - Why `lm_eval`, `simple`, and `harbor` changed
+
+These evaluator edits were not made to change evaluation semantics. They were
+necessary because native TPU eval jobs used to rely on a special ad hoc install
+path for `vllm-tpu`, and that path no longer exists in the fork-based setup.
+
+Old behavior:
+- native evaluator jobs launched with extras like `("eval", "tpu")` or
+  `("harbor", "tpu")`
+- those same jobs also passed `pip_packages=("vllm-tpu",)` through
+  `VLLM_NATIVE_PIP_PACKAGES`
+- this worked only because native workers were separately pip-installing the
+  Google TPU wheel outside Marin's normal dependency graph
+
+New behavior:
+- `lib/marin/src/marin/inference/vllm_server.py` no longer defines
+  `VLLM_NATIVE_PIP_PACKAGES = ("vllm-tpu",)`
+- native evaluator jobs now request the repo `vllm` extra directly:
+  - `lm_evaluation_harness_evaluator.py`: native uses `("eval", "tpu", "vllm")`
+  - `simple_evaluator.py`: native uses `("eval", "tpu", "vllm")`
+  - `harbor_evaluator.py`: native uses `("harbor", "tpu", "vllm")`
+- docker-mode jobs intentionally do not add the `vllm` extra, because the
+  worker does not need in-process vLLM when the server is running in Docker
+
+Why this was required:
+- `launch_evaluate_with_ray(...)` builds a remote worker environment from
+  `extras` and `pip_packages`
+- Fray installs exactly those packages into the remote runtime environment
+- once `vllm-tpu` was removed as the special pip-installed package, native TPU
+  evaluator jobs needed some other way to get vLLM onto the worker
+- the correct replacement is to include Marin's `vllm` extra, which now pins
+  the forked `marin-community/vllm` and `marin-community/tpu-inference` wheels
+
+Practical effect:
+- native eval/smoke jobs keep working under the new fork-based dependency model
+- docker eval jobs avoid an unnecessary in-process vLLM install
+- the change is about dependency plumbing for remote workers, not about how the
+  evaluators score examples or call model APIs
