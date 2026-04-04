@@ -5320,7 +5320,7 @@ requires-dist = [
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "openai", marker = "extra == 'serve'", specifier = ">=1.0.0" },
-    { name = "optax", specifier = ">=0.1.9" },
+    { name = "optax", specifier = ">=0.1.9,<0.2.7" },
     { name = "peft", marker = "extra == 'torch-test'", specifier = ">=0.12.0" },
     { name = "protobuf", specifier = ">=6,<7" },
     { name = "pyarrow", specifier = ">=11.0.0" },
