@@ -435,25 +435,27 @@ def consolidate_shard_caches(
     shard_info: list[dict] = []
     total_rows = 0
 
-    shard_ledgers = [CacheLedger.load(p, metadata) for p in shard_cache_paths]
-
-    # Distributed: open each TreeStore to read data_size (dominates wall time on remote storage).
-    # Runs as a zephyr pipeline so S3 open calls are distributed across workers
-    # instead of concentrating all connections in the coordinator process.
-    def _get_data_sizes(shard_path):
+    # Distributed: load ledger + read data_size for each shard in parallel.
+    # Both operations are S3 I/O-bound; distributing across zephyr workers
+    # avoids serializing thousands of S3 calls in the coordinator process.
+    def _probe_shard(shard_path):
+        ledger = CacheLedger.load(shard_path, metadata)
         store = TreeStore.open(exemplar, shard_path, mode="r", cache_metadata=True)
-        return jax.tree.map(lambda x: x.data_size, store.tree)
+        data_sizes = jax.tree.map(lambda x: x.data_size, store.tree)
+        return (data_sizes, ledger)
 
     probe_ctx = ZephyrContext(
         resources=ResourceConfig(ram="5g", cpu=2),
         max_workers=min(CONSOLIDATE_DATA_SIZE_WORKERS, len(shard_cache_paths)),
         name="levanter-cache-probe",
     )
-    per_shard_sizes = list(
+    probe_results = list(
         probe_ctx.execute(
-            Dataset.from_list(shard_cache_paths).map(_get_data_sizes),
+            Dataset.from_list(shard_cache_paths).map(_probe_shard),
         )
     )
+    per_shard_sizes = [r[0] for r in probe_results]
+    shard_ledgers = [r[1] for r in probe_results]
 
     # Serial: accumulate row_offset and data_offset_tree (order-dependent)
     for shard_path, ledger, this_offsets in zip(shard_cache_paths, shard_ledgers, per_shard_sizes):
