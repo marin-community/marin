@@ -29,12 +29,6 @@ from iris.cluster.controller.db import (
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
-from iris.cluster.controller.queries import (
-    delete_task_endpoints,
-    enqueue_kill_dispatch,
-    enqueue_run_dispatch,
-    insert_task_attempt,
-)
 from iris.cluster.controller.schema import (
     JOB_DETAIL_PROJECTION,
     TASK_DETAIL_PROJECTION,
@@ -298,6 +292,54 @@ class DirectProviderSyncResult:
 def _has_reservation_flag(request: cluster_pb2.Controller.LaunchJobRequest) -> int:
     """Return 1 if the request carries reservation entries, else 0."""
     return 1 if request.HasField("reservation") and request.reservation.entries else 0
+
+
+def delete_task_endpoints(cur: TransactionCursor, task_id: str) -> None:
+    """Remove all registered endpoints for a task."""
+    cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id,))
+
+
+def enqueue_run_dispatch(
+    cur: TransactionCursor,
+    worker_id: str,
+    payload_proto: bytes,
+    now_ms: int,
+) -> None:
+    """Queue a 'run' dispatch entry for delivery on the next heartbeat."""
+    cur.execute(
+        "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
+        "VALUES (?, 'run', ?, NULL, ?)",
+        (worker_id, payload_proto, now_ms),
+    )
+
+
+def enqueue_kill_dispatch(
+    cur: TransactionCursor,
+    worker_id: str | None,
+    task_id: str,
+    now_ms: int,
+) -> None:
+    """Queue a 'kill' dispatch entry for delivery on the next heartbeat."""
+    cur.execute(
+        "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
+        "VALUES (?, 'kill', NULL, ?, ?)",
+        (worker_id, task_id, now_ms),
+    )
+
+
+def insert_task_attempt(
+    cur: TransactionCursor,
+    task_id: str,
+    attempt_id: int,
+    worker_id: str | None,
+    state: int,
+    now_ms: int,
+) -> None:
+    """Record a new task attempt row."""
+    cur.execute(
+        "INSERT INTO task_attempts(task_id, attempt_id, worker_id, state, created_at_ms) " "VALUES (?, ?, ?, ?, ?)",
+        (task_id, attempt_id, worker_id, state, now_ms),
+    )
 
 
 def _decommit_worker_resources(
