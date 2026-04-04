@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "618b5f2963e8",
+  "session_id": "0bc8148b-2e5a-476e-be1e-cf08b88d6fd8",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-04T07:47:14.616449084Z",
+  "branch": "agent/20260402-fix-4307",
+  "checkpoints_count": 29,
+  "files_touched": [
+    "lib/marin/src/marin/processing/tokenize/data_configs.py",
+    "tests/test_nemotron_terminal_reproduction.py",
+    "experiments/exp4307_sft_nemotron_terminal_corpus_qwen3_32b.py",
+    "experiments/exp4420_sft_marin_8b_instruct_terminal_corpus.py",
+    "experiments/qwen3.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7d64dc3013bb",
+  "transcript_identifier_at_start": "a14dcfbc-65a3-433d-8bfb-95d03c0a1a93",
+  "token_usage": {
+    "input_tokens": 1362,
+    "cache_creation_tokens": 18202948,
+    "cache_read_tokens": 383850184,
+    "output_tokens": 272554,
+    "api_call_count": 926
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-04T07:47:11.269751763Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 633,
+    "human_removed": 75381,
+    "total_committed": 0,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-home-kevin-marin-agentic-sft/0bc8148b-2e5a-476e-be1e-cf08b88d6fd8.jsonl"
+}

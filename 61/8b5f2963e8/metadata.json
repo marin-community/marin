@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "618b5f2963e8",
+  "strategy": "manual-commit",
+  "branch": "agent/20260402-fix-4307",
+  "checkpoints_count": 29,
+  "files_touched": [
+    "experiments/exp4307_sft_nemotron_terminal_corpus_qwen3_32b.py",
+    "experiments/exp4420_sft_marin_8b_instruct_terminal_corpus.py",
+    "experiments/qwen3.py",
+    "lib/marin/src/marin/processing/tokenize/data_configs.py",
+    "tests/test_nemotron_terminal_reproduction.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/61/8b5f2963e8/0/metadata.json",
+      "transcript": "/61/8b5f2963e8/0/full.jsonl",
+      "context": "/61/8b5f2963e8/0/context.md",
+      "content_hash": "/61/8b5f2963e8/0/content_hash.txt",
+      "prompt": "/61/8b5f2963e8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1362,
+    "cache_creation_tokens": 18202948,
+    "cache_read_tokens": 383850184,
+    "output_tokens": 272554,
+    "api_call_count": 926
+  }
+}
