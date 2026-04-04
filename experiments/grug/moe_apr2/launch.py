@@ -611,8 +611,91 @@ def _create_v13_retry_step(dim, tok_ratio, adam_lr, batch_size, train_steps):
     return [ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config)]
 
 
+# ============================================================
+# CWD sweep: cautious weight decay on embeddings
+# lr = 6.03 * tokens^(-0.274) * dim^(-0.326) * sqrt(bs/32)
+# ============================================================
+
+CWD_CONFIGS = [
+    # (dim, budget_flops, batch_size, steps, adam_lr, adamh_lr)
+    (768, 1e18, 64, 5658, 0.003001, 0.013005),
+    (1024, 1e19, 128, 13056, 0.002542, 0.011013),
+]
+
+CWD_VALUES = [0.0, 0.001, 0.005, 0.01, 0.05, 0.1]
+
+
+def create_cwd_sweep() -> list[ExecutorStep]:
+    """Sweep cautious weight decay on embeddings at 2 compute budgets."""
+    steps = []
+
+    for dim, budget, batch_size, train_steps, adam_lr, adamh_lr in CWD_CONFIGS:
+        model_cfg = HEURISTIC.build_model_config(dim)
+        fpt = _compute_flops_per_token(model_cfg)
+        tokens = budget / (3 * fpt)
+
+        for cwd in CWD_VALUES:
+            optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, fpt)
+            optimizer = dataclasses.replace(
+                optimizer,
+                learning_rate=adamh_lr,
+                adam_lr=adam_lr,
+                embed_cautious_wd=cwd,
+            )
+
+            cwd_str = f"{cwd:.3f}".rstrip("0").rstrip(".")
+            run_id = f"cwd-d{dim}-{budget:.0e}-cwd{cwd_str}"
+            eval_bs = 64 if dim >= 2048 else 512
+            eval_batches = 64 if dim >= 2048 else 8
+
+            config = GrugMoeLaunchConfig(
+                model=versioned(model_cfg),
+                data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+                output_path=this_output_path(),
+                run_id=run_id,
+                resources=versioned(ResourceConfig.with_tpu("v4-32")),
+                steps=versioned(train_steps),
+                batch_size=versioned(batch_size),
+                seed=versioned(0),
+                mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+                tracker=WandbConfig(
+                    project="dial_moe",
+                    tags=[
+                        "grug", "moe-core", "cwd-sweep",
+                        f"d={dim}", f"budget={budget:.0e}",
+                        f"cwd={cwd}", f"adam_lr={adam_lr}",
+                    ],
+                    group="cwd-sweep",
+                    name=run_id,
+                ),
+                optimizer=versioned(optimizer),
+                grug_trainer=versioned(
+                    GrugTrainerConfig(
+                        z_loss_weight=HEURISTIC.z_loss_weight,
+                        ema_beta=None,
+                        log_every=1,
+                    )
+                ),
+                eval=versioned(
+                    GrugEvalConfig(
+                        eval_batch_size=eval_bs,
+                        steps_per_eval=1000,
+                        max_eval_batches=eval_batches,
+                        eval_current=True,
+                        eval_ema=False,
+                    )
+                ),
+            )
+            steps.append(ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config))
+
+    return steps
+
+
+cwd_sweep_steps = create_cwd_sweep()
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=_create_v13_retry_step(1280, 50.0, 0.008, 128, 42057),
-        description="v13-retry: d1280-t50x-adam0.008",
+        steps=cwd_sweep_steps,
+        description="CWD sweep: d768@1e18 + d1024@1e19, 6 decay values each",
     )
