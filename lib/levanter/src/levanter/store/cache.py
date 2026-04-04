@@ -10,7 +10,6 @@ import operator
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, TypeVar, Union
 
@@ -438,13 +437,23 @@ def consolidate_shard_caches(
 
     shard_ledgers = [CacheLedger.load(p, metadata) for p in shard_cache_paths]
 
-    # Parallel: open each TreeStore to read data_size (dominates wall time on remote storage)
+    # Distributed: open each TreeStore to read data_size (dominates wall time on remote storage).
+    # Runs as a zephyr pipeline so S3 open calls are distributed across workers
+    # instead of concentrating all connections in the coordinator process.
     def _get_data_sizes(shard_path):
         store = TreeStore.open(exemplar, shard_path, mode="r", cache_metadata=True)
         return jax.tree.map(lambda x: x.data_size, store.tree)
 
-    with ThreadPoolExecutor(max_workers=CONSOLIDATE_DATA_SIZE_WORKERS) as executor:
-        per_shard_sizes = list(executor.map(_get_data_sizes, shard_cache_paths))
+    probe_ctx = ZephyrContext(
+        resources=ResourceConfig(ram="5g", cpu=2),
+        max_workers=min(CONSOLIDATE_DATA_SIZE_WORKERS, len(shard_cache_paths)),
+        name="levanter-cache-probe",
+    )
+    per_shard_sizes = list(
+        probe_ctx.execute(
+            Dataset.from_list(shard_cache_paths).map(_get_data_sizes),
+        )
+    )
 
     # Serial: accumulate row_offset and data_offset_tree (order-dependent)
     for shard_path, ledger, this_offsets in zip(shard_cache_paths, shard_ledgers, per_shard_sizes):
