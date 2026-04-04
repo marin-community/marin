@@ -29,6 +29,12 @@ from iris.cluster.controller.db import (
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
+from iris.cluster.controller.queries import (
+    delete_task_endpoints,
+    enqueue_kill_dispatch,
+    enqueue_run_dispatch,
+    insert_task_attempt,
+)
 from iris.cluster.controller.schema import (
     JOB_DETAIL_PROJECTION,
     TASK_DETAIL_PROJECTION,
@@ -357,7 +363,7 @@ def _kill_non_terminal_tasks(
             _decommit_worker_resources(cur, str(worker_id), req.resources)
             task_kill_workers[task_name] = WorkerId(str(worker_id))
         tasks_to_kill.add(task_name)
-        cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id,))
+        delete_task_endpoints(cur, task_id)
     return tasks_to_kill, task_kill_workers
 
 
@@ -492,7 +498,7 @@ def _terminate_coscheduled_siblings(
         if sib.worker_id is not None:
             _decommit_worker_resources(cur, sib.worker_id, job_req.resources)
             task_kill_workers[JobName.from_wire(sib.task_id)] = WorkerId(sib.worker_id)
-        cur.execute("DELETE FROM endpoints WHERE task_id = ?", (sib.task_id,))
+        delete_task_endpoints(cur, sib.task_id)
         tasks_to_kill.add(JobName.from_wire(sib.task_id))
 
     return tasks_to_kill, task_kill_workers
@@ -1252,16 +1258,13 @@ class ControllerTransitions:
                     job_cache[job_id_wire] = decoded_job
                 job = job_cache[job_id_wire]
                 attempt_id = int(task_row["current_attempt_id"]) + 1
-                cur.execute(
-                    "INSERT INTO task_attempts(task_id, attempt_id, worker_id, state, created_at_ms) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (
-                        assignment.task_id.to_wire(),
-                        attempt_id,
-                        str(assignment.worker_id),
-                        cluster_pb2.TASK_STATE_ASSIGNED,
-                        now_ms,
-                    ),
+                insert_task_attempt(
+                    cur,
+                    assignment.task_id.to_wire(),
+                    attempt_id,
+                    str(assignment.worker_id),
+                    cluster_pb2.TASK_STATE_ASSIGNED,
+                    now_ms,
                 )
                 cur.execute(
                     "UPDATE tasks SET state = ?, current_attempt_id = ?, "
@@ -1301,11 +1304,7 @@ class ControllerTransitions:
                         attempt_id=attempt_id,
                         constraints=list(job.request.constraints),
                     )
-                    cur.execute(
-                        "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
-                        "VALUES (?, 'run', ?, NULL, ?)",
-                        (str(assignment.worker_id), run_request.SerializeToString(), now_ms),
-                    )
+                    enqueue_run_dispatch(cur, str(assignment.worker_id), run_request.SerializeToString(), now_ms)
                     has_real_dispatch = True
                 cur.execute(
                     "INSERT INTO worker_task_history(worker_id, task_id, assigned_at_ms) VALUES (?, ?, ?)",
@@ -1527,7 +1526,7 @@ class ControllerTransitions:
                     _decommit_worker_resources(cur, str(worker_id), job_req.resources)
 
             if update.new_state in TERMINAL_TASK_STATES:
-                cur.execute("DELETE FROM endpoints WHERE task_id = ?", (update.task_id.to_wire(),))
+                delete_task_endpoints(cur, update.task_id.to_wire())
 
             # Coscheduled jobs: a terminal host failure should cascade to siblings.
             if job_req is not None and task_state in FAILURE_TASK_STATES:
@@ -1757,7 +1756,7 @@ class ControllerTransitions:
                         tid,
                     ),
                 )
-            cur.execute("DELETE FROM endpoints WHERE task_id = ?", (tid,))
+            delete_task_endpoints(cur, tid)
             task_id = JobName.from_wire(tid)
             parent_job_id, _ = task_id.require_task()
             new_job_state = self._recompute_job_state(cur, parent_job_id)
@@ -1823,17 +1822,9 @@ class ControllerTransitions:
             task_kill_workers.update(removal.task_kill_workers)
         else:
             for req in drained_dispatch.tasks_to_run:
-                cur.execute(
-                    "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
-                    "VALUES (?, 'run', ?, NULL, ?)",
-                    (str(worker_id), req.SerializeToString(), now_ms),
-                )
+                enqueue_run_dispatch(cur, str(worker_id), req.SerializeToString(), now_ms)
             for task_id in drained_dispatch.tasks_to_kill:
-                cur.execute(
-                    "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
-                    "VALUES (?, 'kill', NULL, ?, ?)",
-                    (str(worker_id), task_id, now_ms),
-                )
+                enqueue_kill_dispatch(cur, str(worker_id), task_id, now_ms)
         action = HeartbeatAction.WORKER_FAILED if should_remove else HeartbeatAction.TRANSIENT_FAILURE
         return HeartbeatFailureResult(
             tasks_to_kill=tasks_to_kill,
@@ -1949,7 +1940,7 @@ class ControllerTransitions:
                 "current_worker_id = NULL, current_worker_address = NULL WHERE task_id = ?",
                 (cluster_pb2.TASK_STATE_UNSCHEDULABLE, reason, now_ms, task_id.to_wire()),
             )
-            cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id.to_wire(),))
+            delete_task_endpoints(cur, task_id.to_wire())
             self._recompute_job_state(cur, JobName.from_wire(str(row["job_id"])))
             self._record_transaction(
                 cur, "mark_task_unschedulable", [("task_unschedulable", task_id.to_wire(), {"reason": reason})]
@@ -2018,7 +2009,7 @@ class ControllerTransitions:
                 job_req.ParseFromString(row["request_proto"])
                 _decommit_worker_resources(cur, str(attempt_row["worker_id"]), job_req.resources)
 
-            cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id.to_wire(),))
+            delete_task_endpoints(cur, task_id.to_wire())
 
             # Recompute job state and cascade if terminal
             job_id = JobName.from_wire(str(row["job_id"]))
@@ -2132,7 +2123,7 @@ class ControllerTransitions:
                         "WHERE task_id = ? AND attempt_id = ?",
                         (cluster_pb2.TASK_STATE_FAILED, reason, now_ms, task_id_wire, int(attempt_id)),
                     )
-                cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id_wire,))
+                delete_task_endpoints(cur, task_id_wire)
                 jobs_to_update.add(job_id_wire)
 
             # Terminate coscheduled siblings (deduplicated, all reads already done).
@@ -2323,17 +2314,9 @@ class ControllerTransitions:
         with self._db.transaction() as cur:
             now_ms = Timestamp.now().epoch_ms()
             for req in batch.tasks_to_run:
-                cur.execute(
-                    "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
-                    "VALUES (?, 'run', ?, NULL, ?)",
-                    (str(batch.worker_id), req.SerializeToString(), now_ms),
-                )
+                enqueue_run_dispatch(cur, str(batch.worker_id), req.SerializeToString(), now_ms)
             for task_id in batch.tasks_to_kill:
-                cur.execute(
-                    "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
-                    "VALUES (?, 'kill', NULL, ?, ?)",
-                    (str(batch.worker_id), task_id, now_ms),
-                )
+                enqueue_kill_dispatch(cur, str(batch.worker_id), task_id, now_ms)
 
     def remove_finished_job(self, job_id: JobName) -> bool:
         """Remove a finished job and its tasks from state.
@@ -2572,11 +2555,8 @@ class ControllerTransitions:
         Called by the scheduling thread after committing resources via TaskAssignedEvent.
         The dispatch will be delivered when begin_heartbeat() drains the buffer.
         """
-        self._db.execute(
-            "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
-            "VALUES (?, 'run', ?, NULL, ?)",
-            (str(worker_id), task_request.SerializeToString(), Timestamp.now().epoch_ms()),
-        )
+        with self._db.transaction() as cur:
+            enqueue_run_dispatch(cur, str(worker_id), task_request.SerializeToString(), Timestamp.now().epoch_ms())
 
     def buffer_kill(self, worker_id: WorkerId, task_id: str) -> None:
         """Buffer a task kill for the next heartbeat.
@@ -2584,11 +2564,8 @@ class ControllerTransitions:
         Called when a task needs to be terminated on a worker. The kill will be
         delivered when begin_heartbeat() drains the buffer.
         """
-        self._db.execute(
-            "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
-            "VALUES (?, 'kill', NULL, ?, ?)",
-            (str(worker_id), task_id, Timestamp.now().epoch_ms()),
-        )
+        with self._db.transaction() as cur:
+            enqueue_kill_dispatch(cur, str(worker_id), task_id, Timestamp.now().epoch_ms())
 
     def begin_heartbeat(self, worker_id: WorkerId) -> DispatchBatch | None:
         """Drain dispatch for a worker and snapshot expected running attempts."""
@@ -2850,11 +2827,7 @@ class ControllerTransitions:
                 job_req.ParseFromString(row["request_proto"])
                 resources = job_req.resources
 
-                cur.execute(
-                    "INSERT INTO task_attempts(task_id, attempt_id, worker_id, state, created_at_ms) "
-                    "VALUES (?, ?, NULL, ?, ?)",
-                    (task_id, attempt_id, cluster_pb2.TASK_STATE_ASSIGNED, now_ms),
-                )
+                insert_task_attempt(cur, task_id, attempt_id, None, cluster_pb2.TASK_STATE_ASSIGNED, now_ms)
                 cur.execute(
                     "UPDATE tasks SET state = ?, current_attempt_id = ?, "
                     "started_at_ms = COALESCE(started_at_ms, ?) WHERE task_id = ?",
@@ -3086,7 +3059,7 @@ class ControllerTransitions:
                     job_req.ParseFromString(job_row["request_proto"])
 
                 if update.new_state in TERMINAL_TASK_STATES:
-                    cur.execute("DELETE FROM endpoints WHERE task_id = ?", (update.task_id.to_wire(),))
+                    delete_task_endpoints(cur, update.task_id.to_wire())
 
                 # Coscheduled sibling cascade.
                 if job_req is not None and task_state in FAILURE_TASK_STATES:
@@ -3124,11 +3097,8 @@ class ControllerTransitions:
         Inserts a kill entry into dispatch_queue with worker_id=NULL.
         Drained by drain_for_direct_provider().
         """
-        self._db.execute(
-            "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
-            "VALUES (NULL, 'kill', NULL, ?, ?)",
-            (task_id, Timestamp.now().epoch_ms()),
-        )
+        with self._db.transaction() as cur:
+            enqueue_kill_dispatch(cur, None, task_id, Timestamp.now().epoch_ms())
 
     # =========================================================================
     # Test helpers
@@ -3171,19 +3141,18 @@ class ControllerTransitions:
         worker_address = str(worker_row["address"]) if worker_row is not None else str(worker_id)
         next_attempt_id = int(task["current_attempt_id"]) + 1
         now_ms = Timestamp.now().epoch_ms()
-        self._db.execute(
-            "INSERT INTO task_attempts(task_id, attempt_id, worker_id, state, created_at_ms) VALUES (?, ?, ?, ?, ?)",
-            (
+        with self._db.transaction() as cur:
+            insert_task_attempt(
+                cur,
                 task_id.to_wire(),
                 next_attempt_id,
                 str(worker_id),
                 cluster_pb2.TASK_STATE_ASSIGNED,
                 now_ms,
-            ),
-        )
-        self._db.execute(
-            "UPDATE tasks SET current_attempt_id = ?, state = ?, "
-            "current_worker_id = ?, current_worker_address = ? WHERE task_id = ?",
-            (next_attempt_id, cluster_pb2.TASK_STATE_ASSIGNED, str(worker_id), worker_address, task_id.to_wire()),
-        )
+            )
+            cur.execute(
+                "UPDATE tasks SET current_attempt_id = ?, state = ?, "
+                "current_worker_id = ?, current_worker_address = ? WHERE task_id = ?",
+                (next_attempt_id, cluster_pb2.TASK_STATE_ASSIGNED, str(worker_id), worker_address, task_id.to_wire()),
+            )
         return next_attempt_id
