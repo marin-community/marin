@@ -29,10 +29,25 @@ we use GCS's native **soft-delete** feature:
 This is cheaper (no duplicate storage for the protect set), simpler (no STS jobs, temp
 buckets, or temp holds), and uses GCS's own undo mechanism for recovery.
 
+## Architecture: SQLite object catalog
+
+All object metadata is stored in a normalized SQLite database at
+`scripts/storage/purge/cache.sqlite3`. The schema has four main tables:
+
+- **`storage_classes`** — pricing per GiB/month for US and EU regions
+- **`protect_prefixes`** — the merged protect set (bucket + prefix)
+- **`scanned_prefixes`** — tracks which top-level prefixes have been scanned
+- **`objects`** — every object in every bucket (name, size, storage class)
+
+Protection checks and savings estimates are computed as SQL queries against these
+tables, replacing the old in-memory aggregation. The `listing_cache` table is
+retained for wildcard prefix resolution (step 1).
+
 ## Cost accounting
 
-The estimate step scans every object in each bucket and groups by storage class.
-Monthly savings are computed using per-class GCS list prices with a 50% CUD discount:
+The estimate step queries the SQLite catalog and groups by storage class.
+Monthly savings are computed using per-class GCS list prices (stored in the
+`storage_classes` table) with a 50% CUD discount:
 
 | Class    | US ($/GiB/mo) | EU ($/GiB/mo) | After 50% discount |
 |----------|---------------|---------------|---------------------|
@@ -48,10 +63,11 @@ see exactly where the savings come from.
 
 ```
 prep.resolve_listing_prefixes    Resolve wildcard protect prefixes → concrete lists
-prep.build_protect_inputs        Merge direct + resolved prefixes into per-region protect set
-prep.estimate_deletion_savings   Scan buckets, classify objects, compute savings by class
+prep.load_protect_set            Merge direct + resolved prefixes into DB + per-region CSVs
+prep.scan_objects                Scan bucket objects into the SQLite catalog
+prep.estimate_savings            Estimate deletion savings via SQL queries
 cleanup.enable_soft_delete       Enable 3-day soft-delete on each source bucket
-cleanup.delete_cold_objects      Delete non-STANDARD unprotected objects (batch)
+cleanup.delete_cold_objects      Delete non-STANDARD unprotected objects (batch, DB-driven)
 cleanup.wait_for_safety_window   Checkpoint: wait for soft-delete retention to pass
 cleanup.disable_soft_delete      Turn off soft-delete (finalizes the purge) [optional]
 ```
@@ -63,7 +79,10 @@ cleanup.disable_soft_delete      Turn off soft-delete (finalizes the purge) [opt
 uv run scripts/storage/purge.py plan
 
 # Run all prep steps (read-only against buckets)
-uv run scripts/storage/purge.py run --to prep.estimate_deletion_savings
+uv run scripts/storage/purge.py run --to prep.estimate_savings
+
+# Scan objects with more workers
+uv run scripts/storage/purge.py prep scan-objects --scan-workers 64
 
 # Dry-run the deletion to see what would be removed
 uv run scripts/storage/purge.py cleanup delete-cold-objects --dry-run
@@ -86,23 +105,32 @@ Reads `protect/protect_prefixes_classified.csv`.  For entries classified as
 and matches them against the wildcard glob to produce concrete prefix URLs.
 Caches listings in SQLite for fast reruns.
 
-**prep.build_protect_inputs**
+**prep.load_protect_set**
 Merges direct prefixes (from `protect_prefixes_direct.csv`) with the resolved
-wildcard prefixes into a single `protect_prefixes_{region}.csv` per region and
-writes `cleanup_plan.csv` as the manifest for downstream steps.
+wildcard prefixes into a single `protect_prefixes_{region}.csv` per region,
+writes `cleanup_plan.csv` as the manifest for downstream steps, and populates
+the `protect_prefixes` table in SQLite. Clears and repopulates the table each run.
 
-**prep.estimate_deletion_savings**
-Scans every object in each bucket, classifies it as protected or deletable by
-storage class, and writes per-region JSON estimates plus a summary CSV.
-This is the most expensive prep step (full bucket listing) but is read-only.
+**prep.scan_objects**
+Discovers top-level prefixes in each bucket, then fans out workers to list every
+object and insert into the `objects` table. Skips already-scanned prefixes
+(tracked in `scanned_prefixes`) unless `--force` is given. Uses WAL mode and
+batched inserts for throughput.
+
+**prep.estimate_savings**
+Pure SQL queries against the `objects` and `protect_prefixes` tables. Joins with
+`storage_classes` for pricing, uses `NOT EXISTS` to find unprotected cold objects,
+and computes monthly savings with the 50% discount. Writes per-region JSON
+estimates and a summary CSV.
 
 **cleanup.enable_soft_delete**
 Sets `--soft-delete-duration=259200s` (3 days) on each source bucket.
 If soft-delete is already enabled with sufficient retention, this is a no-op.
 
 **cleanup.delete_cold_objects**
-Lists every object, skips STANDARD-class and protected objects, and batch-deletes
-the rest.  Writes a `deletion_log_{region}.json` with counts and class breakdowns.
+Queries the SQLite catalog for cold unprotected objects per top-level prefix,
+then batch-deletes from GCS with workers for throughput. Writes a
+`deletion_log_{region}.json` with counts and class breakdowns.
 
 **cleanup.wait_for_safety_window**
 Records a settle deadline (default 72 hours from deletion).  Refuses to proceed
@@ -128,12 +156,13 @@ After `cleanup.disable_soft_delete` runs, deletions are permanent.
 
 ## Differences from previous approach (STS + lifecycle)
 
-| Aspect | Old (STS + lifecycle) | New (soft-delete) |
-|--------|----------------------|-------------------|
+| Aspect | Old (STS + lifecycle) | New (soft-delete + SQLite) |
+|--------|----------------------|----------------------------|
 | Safety mechanism | Copy protect set to temp buckets via STS | GCS native soft-delete |
+| Object catalog | In-memory aggregation per scan | Normalized SQLite database |
 | What gets deleted | Non-STANDARD objects (via lifecycle rule) | Non-STANDARD unprotected objects (explicit delete) |
 | Autoclass impact | Must disable/re-enable (resets learned tiering) | No disruption |
 | Extra storage cost | Full copy of protect set | Soft-deleted objects retained 3 days |
 | Recovery | Manual restore from backup bucket | `gcloud storage restore` |
-| Complexity | ~2300 lines, 13 steps, STS + holds + lifecycle | ~900 lines, 7 steps |
+| Complexity | ~2300 lines, 13 steps, STS + holds + lifecycle | ~900 lines, 8 steps, SQLite queries |
 | Cleanup after | Delete temp buckets | Disable soft-delete |

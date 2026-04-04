@@ -6,11 +6,13 @@
 
 Approach:
   1. Resolve the protect-set (wildcard and direct prefixes) into concrete prefix lists.
-  2. Estimate deletion savings by scanning objects and grouping by storage class.
-  3. Enable soft-delete on each source bucket (3-day retention window).
-  4. Delete non-STANDARD objects that fall outside the protect set.
-  5. Wait for the soft-delete safety window to elapse.
-  6. Disable soft-delete to finalize the purge.
+  2. Load the merged protect set into a SQLite database.
+  3. Scan bucket objects into the SQLite database for fast querying.
+  4. Estimate deletion savings via SQL queries against the object catalog.
+  5. Enable soft-delete on each source bucket (3-day retention window).
+  6. Delete non-STANDARD objects that fall outside the protect set.
+  7. Wait for the soft-delete safety window to elapse.
+  8. Disable soft-delete to finalize the purge.
 
 Objects in STANDARD storage class are presumed recently-accessed (Autoclass promotes active
 objects) and are never deleted.  The protect-set is always preserved regardless of class.
@@ -85,23 +87,12 @@ NON_STANDARD_STORAGE_CLASSES = frozenset({"NEARLINE", "COLDLINE", "ARCHIVE"})
 
 SOFT_DELETE_RETENTION_SECONDS = 3 * 24 * 3600  # 3 days
 
-# GCS storage pricing (USD / GiB / month).  Source: cloud.google.com/storage/pricing
-# We apply a 50 % CUD/negotiated discount.
-GCS_PRICE_PER_GIB_MONTH: dict[str, dict[str, float]] = {
-    "US": {
-        "STANDARD": 0.020,
-        "NEARLINE": 0.010,
-        "COLDLINE": 0.004,
-        "ARCHIVE": 0.0012,
-    },
-    "EUROPE": {
-        "STANDARD": 0.023,
-        "NEARLINE": 0.013,
-        "COLDLINE": 0.006,
-        "ARCHIVE": 0.0025,
-    },
-}
+GCS_MAX_PAGE_SIZE = 5000
+
 GCS_DISCOUNT = 0.50
+
+SCAN_INSERT_BATCH_SIZE = 5000
+DELETE_BATCH_SIZE = 1000
 
 # ---------------------------------------------------------------------------
 # Step spec
@@ -121,8 +112,7 @@ class StepSpec:
     predecessors: tuple[str, ...] = ()
     requirements: tuple[str, ...] = ()
     listing_workers: bool = False
-    estimate_workers: bool = False
-    delete_workers: bool = False
+    scan_workers: bool = False
     settle_hours: bool = False
     optional: bool = False
 
@@ -131,17 +121,8 @@ class StepSpec:
 
 
 # ---------------------------------------------------------------------------
-# Data types
+# Context
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class PrefixEstimate:
-    prefix: str
-    object_count: int
-    total_bytes: int
-    bytes_by_class: dict[str, int]
-    count_by_class: dict[str, int]
 
 
 @dataclass
@@ -150,8 +131,7 @@ class Context:
     force: bool
     include_optional: bool
     listing_workers: int
-    estimate_workers: int
-    delete_workers: int
+    scan_workers: int
     settle_hours: int
     selected_regions: set[str] | None
     log_path: Path
@@ -188,7 +168,7 @@ def cache_connection() -> sqlite3.Connection:
     return connection
 
 
-CACHE_SCHEMA_VERSION = 2  # bump to invalidate stale caches
+CACHE_SCHEMA_VERSION = 4
 
 
 def init_cache_db() -> None:
@@ -206,10 +186,16 @@ def init_cache_db() -> None:
         if current_version < CACHE_SCHEMA_VERSION:
             conn.execute("DROP TABLE IF EXISTS listing_cache")
             conn.execute("DROP TABLE IF EXISTS prefix_estimate_cache")
+            conn.execute("DROP TABLE IF EXISTS prefix_scan_cache")
+            conn.execute("DROP TABLE IF EXISTS storage_classes")
+            conn.execute("DROP TABLE IF EXISTS protect_prefixes")
+            conn.execute("DROP TABLE IF EXISTS scanned_prefixes")
+            conn.execute("DROP TABLE IF EXISTS objects")
             conn.execute(
                 "INSERT OR REPLACE INTO cache_meta (key, value) VALUES ('schema_version', ?)",
                 (str(CACHE_SCHEMA_VERSION),),
             )
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS listing_cache (
@@ -221,18 +207,71 @@ def init_cache_db() -> None:
         )
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS prefix_estimate_cache (
-                bucket_name TEXT NOT NULL,
-                prefix TEXT NOT NULL,
-                object_count INTEGER NOT NULL,
-                total_bytes INTEGER NOT NULL,
-                bytes_by_class_json TEXT NOT NULL DEFAULT '{}',
-                count_by_class_json TEXT NOT NULL DEFAULT '{}',
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (bucket_name, prefix)
+            CREATE TABLE IF NOT EXISTS storage_classes (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                price_per_gib_month_us REAL NOT NULL,
+                price_per_gib_month_eu REAL NOT NULL
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS protect_prefixes (
+                bucket TEXT NOT NULL,
+                prefix TEXT NOT NULL,
+                owners TEXT,
+                reasons TEXT,
+                sources TEXT,
+                PRIMARY KEY (bucket, prefix)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scanned_prefixes (
+                bucket TEXT NOT NULL,
+                prefix TEXT NOT NULL,
+                object_count INTEGER NOT NULL,
+                scanned_at TEXT NOT NULL,
+                PRIMARY KEY (bucket, prefix)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS objects (
+                bucket TEXT NOT NULL,
+                name TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                storage_class_id INTEGER NOT NULL REFERENCES storage_classes(id),
+                updated TEXT,
+                PRIMARY KEY (bucket, name)
+            )
+            """
+        )
+
+        # Seed storage classes
+        for sc_id, name, us_price, eu_price in [
+            (1, "STANDARD", 0.020, 0.023),
+            (2, "NEARLINE", 0.010, 0.013),
+            (3, "COLDLINE", 0.004, 0.006),
+            (4, "ARCHIVE", 0.0012, 0.0025),
+        ]:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO storage_classes (id, name, price_per_gib_month_us, price_per_gib_month_eu)
+                VALUES (?, ?, ?, ?)
+                """,
+                (sc_id, name, us_price, eu_price),
+            )
+
+
+def storage_class_id_map() -> dict[str, int]:
+    """Return a mapping from storage class name to its DB id."""
+    with cache_connection() as conn:
+        rows = conn.execute("SELECT id, name FROM storage_classes").fetchall()
+    return {row["name"]: row["id"] for row in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -461,39 +500,9 @@ def continent_for_region(region: str) -> str:
     return "EUROPE" if region.startswith("eu-") else "US"
 
 
-def estimate_monthly_cost_by_class(bytes_by_class: dict[str, int], region: str) -> float:
-    continent = continent_for_region(region)
-    prices = GCS_PRICE_PER_GIB_MONTH.get(continent, GCS_PRICE_PER_GIB_MONTH["US"])
-    total = 0.0
-    for storage_class, num_bytes in bytes_by_class.items():
-        price = prices.get(storage_class, prices["STANDARD"])
-        total += (num_bytes / (1024**3)) * price * (1.0 - GCS_DISCOUNT)
-    return total
-
-
 # ---------------------------------------------------------------------------
 # Prefix utilities
 # ---------------------------------------------------------------------------
-
-
-def collapse_overlapping_prefixes(prefixes: list[str]) -> tuple[list[str], list[str]]:
-    normalized = sorted(
-        {normalize_relative_prefix(p) for p in prefixes},
-        key=lambda p: (len(p), p),
-    )
-    kept: list[str] = []
-    skipped: list[str] = []
-    for prefix in normalized:
-        if any(prefix.startswith(existing) for existing in kept):
-            skipped.append(prefix)
-            continue
-        kept.append(prefix)
-    return kept, skipped
-
-
-def relative_object_paths_for_bucket(prefix_rows: list[dict[str, str]], bucket: str) -> list[str]:
-    values = [relative_prefix(row["prefix_url"], bucket) for row in prefix_rows if row["bucket"] == bucket]
-    return sorted(dict.fromkeys(values))
 
 
 def filter_rows_by_region(rows: list[dict[str, str]], ctx: Context, bucket_key: str = "bucket") -> list[dict[str, str]]:
@@ -530,58 +539,6 @@ def write_listing_cache(listing_prefix: str, entries: list[str]) -> None:
                 updated_at = excluded.updated_at
             """,
             (listing_prefix, json.dumps(entries), now_utc().isoformat()),
-        )
-
-
-# ---------------------------------------------------------------------------
-# Estimate cache (v2: per-class breakdowns)
-# ---------------------------------------------------------------------------
-
-
-def estimate_cache_lookup(bucket_name: str, prefix: str) -> PrefixEstimate | None:
-    with cache_connection() as conn:
-        row = conn.execute(
-            """
-            SELECT object_count, total_bytes, bytes_by_class_json, count_by_class_json
-            FROM prefix_estimate_cache
-            WHERE bucket_name = ? AND prefix = ?
-            """,
-            (bucket_name, prefix),
-        ).fetchone()
-    if row is None:
-        return None
-    return PrefixEstimate(
-        prefix=prefix,
-        object_count=int(row["object_count"]),
-        total_bytes=int(row["total_bytes"]),
-        bytes_by_class=json.loads(row["bytes_by_class_json"]),
-        count_by_class=json.loads(row["count_by_class_json"]),
-    )
-
-
-def write_estimate_cache(estimate: PrefixEstimate, bucket_name: str) -> None:
-    with cache_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO prefix_estimate_cache
-                (bucket_name, prefix, object_count, total_bytes, bytes_by_class_json, count_by_class_json, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(bucket_name, prefix) DO UPDATE SET
-                object_count = excluded.object_count,
-                total_bytes = excluded.total_bytes,
-                bytes_by_class_json = excluded.bytes_by_class_json,
-                count_by_class_json = excluded.count_by_class_json,
-                updated_at = excluded.updated_at
-            """,
-            (
-                bucket_name,
-                estimate.prefix,
-                estimate.object_count,
-                estimate.total_bytes,
-                json.dumps(estimate.bytes_by_class),
-                json.dumps(estimate.count_by_class),
-                now_utc().isoformat(),
-            ),
         )
 
 
@@ -625,7 +582,7 @@ def bucket_soft_delete_seconds(metadata: dict[str, Any]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Prefix resolution (shared with old script)
+# Prefix resolution
 # ---------------------------------------------------------------------------
 
 
@@ -793,7 +750,8 @@ def resolve_listing_prefixes(ctx: Context, action: StepSpec) -> None:
     write_marker(ctx, action, fingerprint, outputs=written_outputs or expected_outputs, remote_summary=remote_summary)
 
 
-def build_protect_inputs(ctx: Context, action: StepSpec) -> None:
+def load_protect_set(ctx: Context, action: StepSpec) -> None:
+    """Merge direct + resolved prefixes into the protect_prefixes DB table and write cleanup_plan.csv."""
     direct_rows = filter_rows_by_region(read_csv_rows(PROTECT_DIR / "protect_prefixes_direct.csv"), ctx)
     fingerprint = hashlib.sha256(
         (
@@ -831,6 +789,8 @@ def build_protect_inputs(ctx: Context, action: StepSpec) -> None:
 
     written_outputs: list[Path] = []
     plan_rows: list[dict[str, str]] = []
+    all_db_rows: list[tuple[str, str, str, str, str]] = []
+
     for region in selected_regions(ctx):
         resolved_path = RESOLVE_DIR / f"resolved_prefixes_{region}.csv"
         resolved_rows = read_csv_rows(resolved_path) if resolved_path.exists() else []
@@ -853,6 +813,8 @@ def build_protect_inputs(ctx: Context, action: StepSpec) -> None:
         ]
         deduped = list({(row["prefix_url"], row["bucket"]): row for row in combined_rows}.values())
         deduped.sort(key=lambda row: row["prefix_url"])
+
+        # Write per-region CSV (same as before)
         output_path = BACKUP_DIR / f"protect_prefixes_{region}.csv"
         write_csv_rows(
             output_path,
@@ -870,6 +832,12 @@ def build_protect_inputs(ctx: Context, action: StepSpec) -> None:
             ],
         )
         written_outputs.append(output_path)
+
+        # Collect rows for DB insert
+        for row in deduped:
+            rel = normalize_relative_prefix(url_object_path(row["prefix_url"]))
+            all_db_rows.append((row["bucket"], rel, row["owners"], row["reasons"], row["sources"]))
+
         bucket = region_bucket(region)
         plan_rows.append(
             {
@@ -880,6 +848,7 @@ def build_protect_inputs(ctx: Context, action: StepSpec) -> None:
                 "prefix_count": str(len(deduped)),
             }
         )
+
     plan_path = BACKUP_DIR / "cleanup_plan.csv"
     write_csv_rows(
         plan_path,
@@ -887,35 +856,190 @@ def build_protect_inputs(ctx: Context, action: StepSpec) -> None:
         fieldnames=["region", "bucket", "location", "protect_prefix_csv", "prefix_count"],
     )
     written_outputs.append(plan_path)
-    print_summary(f"{action.action_id}: wrote merged protect inputs for {len(plan_rows)} regions")
+
+    # Populate protect_prefixes table (clear and repopulate)
+    with cache_connection() as conn:
+        conn.execute("DELETE FROM protect_prefixes")
+        conn.executemany(
+            "INSERT OR REPLACE INTO protect_prefixes (bucket, prefix, owners, reasons, sources) VALUES (?, ?, ?, ?, ?)",
+            all_db_rows,
+        )
+
+    print_summary(
+        f"{action.action_id}: wrote merged protect inputs for {len(plan_rows)} regions, "
+        f"{len(all_db_rows)} prefixes loaded into DB"
+    )
     write_marker(ctx, action, fingerprint, outputs=written_outputs, extra={"regions": plan_rows})
 
 
-def build_protect_prefix_set(ctx: Context) -> dict[str, set[str]]:
-    """Load the merged protect prefix set per bucket, for matching during deletion."""
+# ===========================================================================
+# PREP: scan objects into SQLite
+# ===========================================================================
+
+
+def _scan_prefix(
+    ctx: Context,
+    bucket_name: str,
+    prefix: str,
+    sc_id_map: dict[str, int],
+) -> list[tuple[str, str, int, int, str | None]]:
+    """Scan all objects under a single top-level prefix. Returns rows for DB insert.
+
+    For prefix="" (root-level objects), uses delimiter="/" to avoid re-scanning the
+    entire bucket — only blobs returned directly (not under sub-prefixes) are included.
+    """
+    client = storage_client(ctx)
+    rows: list[tuple[str, str, int, int, str | None]] = []
+
+    if prefix == "":
+        # Root-level objects only: delimiter prevents descending into sub-prefixes
+        for blob in client.list_blobs(bucket_name, delimiter="/", page_size=GCS_MAX_PAGE_SIZE):
+            size = int(blob.size or 0)
+            sc = blob.storage_class or "STANDARD"
+            sc_id = sc_id_map.get(sc, sc_id_map["STANDARD"])
+            updated = blob.updated.isoformat() if blob.updated else None
+            rows.append((bucket_name, blob.name, size, sc_id, updated))
+    else:
+        for blob in client.list_blobs(bucket_name, prefix=prefix, page_size=GCS_MAX_PAGE_SIZE):
+            size = int(blob.size or 0)
+            sc = blob.storage_class or "STANDARD"
+            sc_id = sc_id_map.get(sc, sc_id_map["STANDARD"])
+            updated = blob.updated.isoformat() if blob.updated else None
+            rows.append((bucket_name, blob.name, size, sc_id, updated))
+
+    return rows
+
+
+def _flush_scan_rows(
+    conn: sqlite3.Connection,
+    rows: list[tuple[str, str, int, int, str | None]],
+    bucket_name: str,
+    prefix: str,
+) -> None:
+    """Write scanned rows to DB and mark the prefix as scanned. Must be called from the main thread."""
+    conn.executemany(
+        "INSERT OR REPLACE INTO objects (bucket, name, size_bytes, storage_class_id, updated) VALUES (?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO scanned_prefixes (bucket, prefix, object_count, scanned_at) VALUES (?, ?, ?, ?)",
+        (bucket_name, prefix, len(rows), now_utc().isoformat()),
+    )
+    conn.commit()
+
+
+def scan_objects(ctx: Context, action: StepSpec) -> None:
+    """Scan bucket objects into the SQLite database for subsequent querying."""
     plan_path = BACKUP_DIR / "cleanup_plan.csv"
+    if not plan_path.exists():
+        raise RuntimeError("Missing cleanup_plan.csv. Run `prep load-protect-set` first.")
     plan_rows = read_csv_rows(plan_path)
-    result: dict[str, set[str]] = {}
-    for row in plan_rows:
-        region = row["region"]
+    fingerprint = hashlib.sha256((file_digest(plan_path) + ctx.region_key).encode()).hexdigest()
+    if not ctx.force and marker_matches(ctx, action, fingerprint):
+        print_summary(f"skip {action.action_id}: outputs and marker are current")
+        return
+
+    sc_id_map = storage_class_id_map()
+    remote_summary: dict[str, Any] = {"project": resolved_project(ctx), "regions": {}}
+
+    for plan_row in plan_rows:
+        region = plan_row["region"]
         if ctx.selected_regions and region not in ctx.selected_regions:
             continue
-        prefix_rows = read_csv_rows(REPO_ROOT / row["protect_prefix_csv"])
-        bucket = row["bucket"]
-        prefixes = {normalize_relative_prefix(url_object_path(r["prefix_url"])) for r in prefix_rows}
-        result[bucket] = prefixes
-    return result
+        bucket_name = plan_row["bucket"]
 
+        # Discover top-level prefixes
+        print_summary(f"{action.action_id}: discovering top-level prefixes in {bucket_name}")
+        client = storage_client(ctx)
+        iterator = client.list_blobs(bucket_name, delimiter="/")
+        top_level_prefixes: list[str] = []
+        has_root_objects = False
+        for page in iterator.pages:
+            top_level_prefixes.extend(page.prefixes)
+            if not has_root_objects:
+                for _ in page:
+                    has_root_objects = True
+                    break
 
-def object_is_protected(object_name: str, protect_prefixes: set[str]) -> bool:
-    for prefix in protect_prefixes:
-        if object_name.startswith(prefix):
-            return True
-    return False
+        scan_prefixes = sorted(set(top_level_prefixes))
+        if has_root_objects:
+            scan_prefixes = ["", *scan_prefixes]
+
+        # Check which prefixes are already scanned (skip unless --force)
+        if not ctx.force:
+            with cache_connection() as conn:
+                already = {
+                    r["prefix"]
+                    for r in conn.execute(
+                        "SELECT prefix FROM scanned_prefixes WHERE bucket = ?", (bucket_name,)
+                    ).fetchall()
+                }
+            pending = [p for p in scan_prefixes if p not in already]
+            skipped = len(scan_prefixes) - len(pending)
+            if skipped:
+                print_summary(f"{action.action_id}: {bucket_name}: {skipped} prefixes already scanned, skipping")
+        else:
+            pending = scan_prefixes
+
+        if not pending:
+            # All prefixes cached — tally from DB
+            with cache_connection() as conn:
+                total_row = conn.execute(
+                    "SELECT COALESCE(SUM(object_count), 0) as total FROM scanned_prefixes WHERE bucket = ?",
+                    (bucket_name,),
+                ).fetchone()
+            total_objects = int(total_row["total"])
+            remote_summary["regions"][region] = {
+                "bucket": bucket_name,
+                "prefixes_scanned": len(scan_prefixes),
+                "total_objects": total_objects,
+            }
+            print_summary(f"{region}: {total_objects} objects across {len(scan_prefixes)} prefixes (all cached)")
+            continue
+
+        print_summary(
+            f"{action.action_id}: scanning {bucket_name}: {len(pending)} prefixes " f"with {ctx.scan_workers} workers"
+        )
+
+        # Fan out GCS listing to threads, but do all DB writes on the main thread
+        db_conn = cache_connection()
+        total_objects = 0
+        progress = tqdm(total=len(pending), desc=f"scan {bucket_name}", unit="prefix", leave=True)
+        workers = max(1, min(ctx.scan_workers, len(pending)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_prefix = {executor.submit(_scan_prefix, ctx, bucket_name, p, sc_id_map): p for p in pending}
+            for future in as_completed(future_to_prefix):
+                p = future_to_prefix[future]
+                rows = future.result()
+                _flush_scan_rows(db_conn, rows, bucket_name, p)
+                total_objects += len(rows)
+                progress.set_postfix_str(f"{p[:50]} ({len(rows)} obj)")
+                progress.update(1)
+        progress.close()
+        db_conn.close()
+
+        # Include cached prefixes in the total
+        with cache_connection() as conn:
+            total_row = conn.execute(
+                "SELECT COALESCE(SUM(object_count), 0) as total FROM scanned_prefixes WHERE bucket = ?",
+                (bucket_name,),
+            ).fetchone()
+        grand_total = int(total_row["total"])
+
+        remote_summary["regions"][region] = {
+            "bucket": bucket_name,
+            "prefixes_scanned": len(scan_prefixes),
+            "total_objects": grand_total,
+        }
+        print_summary(
+            f"{region}: scanned {total_objects} new objects, {grand_total} total across {len(scan_prefixes)} prefixes"
+        )
+
+    write_marker(ctx, action, fingerprint, outputs=[], remote_summary=remote_summary)
 
 
 # ===========================================================================
-# PREP: estimate deletion savings (per-class pricing)
+# PREP: estimate deletion savings (SQL-based)
 # ===========================================================================
 
 
@@ -923,40 +1047,17 @@ def size_estimate_path(region: str) -> Path:
     return BACKUP_DIR / f"deletion_estimate_{region}.json"
 
 
-def estimate_prefix_with_classes(ctx: Context, bucket_name: str, prefix: str) -> PrefixEstimate:
-    client = storage_client(ctx)
-    object_count = 0
-    total_bytes = 0
-    bytes_by_class: dict[str, int] = defaultdict(int)
-    count_by_class: dict[str, int] = defaultdict(int)
-    for blob in client.list_blobs(bucket_name, prefix=prefix):
-        size = int(blob.size or 0)
-        sc = blob.storage_class or "STANDARD"
-        object_count += 1
-        total_bytes += size
-        bytes_by_class[sc] += size
-        count_by_class[sc] += 1
-    return PrefixEstimate(
-        prefix=prefix,
-        object_count=object_count,
-        total_bytes=total_bytes,
-        bytes_by_class=dict(bytes_by_class),
-        count_by_class=dict(count_by_class),
-    )
-
-
-def estimate_deletion_savings(ctx: Context, action: StepSpec) -> None:
-    """Estimate how much data will be deleted and the monthly savings by storage class."""
+def estimate_savings(ctx: Context, action: StepSpec) -> None:
+    """Estimate deletion savings using SQL queries against the scanned object catalog."""
     plan_path = BACKUP_DIR / "cleanup_plan.csv"
     if not plan_path.exists():
-        raise RuntimeError("Missing cleanup_plan.csv. Run `prep build-protect-inputs` first.")
+        raise RuntimeError("Missing cleanup_plan.csv. Run `prep load-protect-set` first.")
     plan_rows = read_csv_rows(plan_path)
-    fingerprint = hashlib.sha256((file_digest(plan_path) + ctx.region_key).encode()).hexdigest()
+    fingerprint = hashlib.sha256((file_digest(plan_path) + ctx.region_key + "scan").encode()).hexdigest()
     if not ctx.force and marker_matches(ctx, action, fingerprint):
         print_summary(f"skip {action.action_id}: outputs and marker are current")
         return
 
-    protect_set = build_protect_prefix_set(ctx)
     summary_rows: list[dict[str, str]] = []
     outputs: list[Path] = []
     remote_summary: dict[str, Any] = {"project": resolved_project(ctx), "regions": {}}
@@ -966,40 +1067,75 @@ def estimate_deletion_savings(ctx: Context, action: StepSpec) -> None:
         if ctx.selected_regions and region not in ctx.selected_regions:
             continue
         bucket_name = plan_row["bucket"]
-        bucket_protect = protect_set.get(bucket_name, set())
+        continent = continent_for_region(region)
+        price_column = "price_per_gib_month_us" if continent == "US" else "price_per_gib_month_eu"
 
-        # Scan the entire bucket, tallying protected vs deletable by class
-        print_summary(f"{action.action_id}: scanning {bucket_name} (this may take a while)")
-        client = storage_client(ctx)
-        delete_bytes_by_class: dict[str, int] = defaultdict(int)
-        delete_count_by_class: dict[str, int] = defaultdict(int)
-        protect_bytes_by_class: dict[str, int] = defaultdict(int)
-        protect_count_by_class: dict[str, int] = defaultdict(int)
-        total_objects = 0
-        total_bytes = 0
+        with cache_connection() as conn:
+            # Total scanned
+            totals = conn.execute(
+                "SELECT COUNT(*) as cnt, COALESCE(SUM(size_bytes), 0) as total_bytes FROM objects WHERE bucket = ?",
+                (bucket_name,),
+            ).fetchone()
+            total_objects = int(totals["cnt"])
+            total_bytes = int(totals["total_bytes"])
 
-        progress = tqdm(desc=f"scan {bucket_name}", unit=" obj", leave=True)
-        for blob in client.list_blobs(bucket_name):
-            size = int(blob.size or 0)
-            sc = blob.storage_class or "STANDARD"
-            total_objects += 1
-            total_bytes += size
-            progress.update(1)
+            # Objects to delete: non-STANDARD and not protected
+            delete_rows = conn.execute(
+                f"""
+                SELECT sc.name as storage_class,
+                       COUNT(*) as cnt,
+                       COALESCE(SUM(o.size_bytes), 0) as total_bytes,
+                       COALESCE(SUM(o.size_bytes), 0) / (1024.0*1024.0*1024.0) * sc.{price_column} * ? as monthly_cost
+                FROM objects o
+                JOIN storage_classes sc ON o.storage_class_id = sc.id
+                WHERE o.bucket = ?
+                  AND sc.name != 'STANDARD'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM protect_prefixes p
+                    WHERE o.bucket = p.bucket AND o.name LIKE p.prefix || '%'
+                  )
+                GROUP BY sc.name
+                """,
+                (1.0 - GCS_DISCOUNT, bucket_name),
+            ).fetchall()
 
-            protected = object_is_protected(blob.name, bucket_protect)
-            is_cold = sc in NON_STANDARD_STORAGE_CLASSES
+            # Protected / kept objects
+            protect_rows = conn.execute(
+                """
+                SELECT sc.name as storage_class,
+                       COUNT(*) as cnt,
+                       COALESCE(SUM(o.size_bytes), 0) as total_bytes
+                FROM objects o
+                JOIN storage_classes sc ON o.storage_class_id = sc.id
+                WHERE o.bucket = ?
+                  AND (sc.name = 'STANDARD'
+                       OR EXISTS (
+                         SELECT 1 FROM protect_prefixes p
+                         WHERE o.bucket = p.bucket AND o.name LIKE p.prefix || '%'
+                       ))
+                GROUP BY sc.name
+                """,
+                (bucket_name,),
+            ).fetchall()
 
-            if protected or not is_cold:
-                protect_bytes_by_class[sc] += size
-                protect_count_by_class[sc] += 1
-            else:
-                delete_bytes_by_class[sc] += size
-                delete_count_by_class[sc] += 1
-        progress.close()
+        delete_bytes_by_class: dict[str, int] = {}
+        delete_count_by_class: dict[str, int] = {}
+        monthly_savings = 0.0
+        for row in delete_rows:
+            sc = row["storage_class"]
+            delete_bytes_by_class[sc] = int(row["total_bytes"])
+            delete_count_by_class[sc] = int(row["cnt"])
+            monthly_savings += float(row["monthly_cost"])
+
+        protect_bytes_by_class: dict[str, int] = {}
+        protect_count_by_class: dict[str, int] = {}
+        for row in protect_rows:
+            sc = row["storage_class"]
+            protect_bytes_by_class[sc] = int(row["total_bytes"])
+            protect_count_by_class[sc] = int(row["cnt"])
 
         delete_total_bytes = sum(delete_bytes_by_class.values())
         delete_total_count = sum(delete_count_by_class.values())
-        monthly_savings = estimate_monthly_cost_by_class(delete_bytes_by_class, region)
 
         region_output = size_estimate_path(region)
         write_json(
@@ -1014,11 +1150,11 @@ def estimate_deletion_savings(ctx: Context, action: StepSpec) -> None:
                 "delete_object_count": delete_total_count,
                 "delete_total_bytes": delete_total_bytes,
                 "delete_human_bytes": human_bytes(delete_total_bytes),
-                "delete_bytes_by_class": dict(delete_bytes_by_class),
-                "delete_count_by_class": dict(delete_count_by_class),
+                "delete_bytes_by_class": delete_bytes_by_class,
+                "delete_count_by_class": delete_count_by_class,
                 "protect_object_count": sum(protect_count_by_class.values()),
                 "protect_total_bytes": sum(protect_bytes_by_class.values()),
-                "protect_bytes_by_class": dict(protect_bytes_by_class),
+                "protect_bytes_by_class": protect_bytes_by_class,
                 "estimated_monthly_savings_usd": round(monthly_savings, 2),
             },
         )
@@ -1040,7 +1176,7 @@ def estimate_deletion_savings(ctx: Context, action: StepSpec) -> None:
             "delete_objects": delete_total_count,
             "delete_bytes": delete_total_bytes,
             "delete_human_bytes": human_bytes(delete_total_bytes),
-            "delete_bytes_by_class": dict(delete_bytes_by_class),
+            "delete_bytes_by_class": delete_bytes_by_class,
             "estimated_monthly_savings_usd": round(monthly_savings, 2),
         }
         print_summary(
@@ -1129,15 +1265,69 @@ def enable_soft_delete(ctx: Context, action: StepSpec) -> None:
         write_marker(ctx, action, fingerprint, outputs=[], remote_summary=remote_summary)
 
 
+def _delete_prefix_objects(
+    ctx: Context,
+    bucket_name: str,
+    prefix: str,
+) -> tuple[int, int, dict[str, int]]:
+    """Delete cold unprotected objects under a single prefix. Returns (count, bytes, by_class)."""
+    with cache_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT o.name, o.size_bytes, sc.name as storage_class
+            FROM objects o
+            JOIN storage_classes sc ON o.storage_class_id = sc.id
+            WHERE o.bucket = ?
+              AND o.name LIKE ? || '%'
+              AND sc.name != 'STANDARD'
+              AND NOT EXISTS (
+                SELECT 1 FROM protect_prefixes p
+                WHERE o.bucket = p.bucket AND o.name LIKE p.prefix || '%'
+              )
+            ORDER BY o.name
+            """,
+            (bucket_name, prefix),
+        ).fetchall()
+
+    if not rows:
+        return 0, 0, {}
+
+    client = storage_client(ctx)
+    bucket_obj = client.bucket(bucket_name)
+    deleted_count = 0
+    deleted_bytes = 0
+    deleted_by_class: dict[str, int] = defaultdict(int)
+    batch: list[storage.Blob] = []
+
+    for row in rows:
+        deleted_count += 1
+        deleted_bytes += int(row["size_bytes"])
+        deleted_by_class[row["storage_class"]] += 1
+        batch.append(bucket_obj.blob(row["name"]))
+
+        if len(batch) >= DELETE_BATCH_SIZE:
+            if not ctx.dry_run:
+                with client.batch():
+                    for b in batch:
+                        b.delete()
+            batch.clear()
+
+    if batch and not ctx.dry_run:
+        with client.batch():
+            for b in batch:
+                b.delete()
+
+    return deleted_count, deleted_bytes, dict(deleted_by_class)
+
+
 def delete_cold_unprotected(ctx: Context, action: StepSpec) -> None:
-    """Delete non-STANDARD objects outside the protect set."""
+    """Delete non-STANDARD objects outside the protect set, driven by the objects DB."""
     plan_rows = read_csv_rows(BACKUP_DIR / "cleanup_plan.csv")
     fingerprint = hashlib.sha256((file_digest(BACKUP_DIR / "cleanup_plan.csv") + ctx.region_key).encode()).hexdigest()
     if not ctx.force and marker_matches(ctx, action, fingerprint):
         print_summary(f"skip {action.action_id}: already completed")
         return
 
-    protect_set = build_protect_prefix_set(ctx)
     remote_summary: dict[str, Any] = {"regions": {}}
     outputs: list[Path] = []
 
@@ -1146,51 +1336,66 @@ def delete_cold_unprotected(ctx: Context, action: StepSpec) -> None:
         if ctx.selected_regions and region not in ctx.selected_regions:
             continue
         bucket_name = row["bucket"]
-        bucket_protect = protect_set.get(bucket_name, set())
-        client = storage_client(ctx)
-        bucket_obj = client.bucket(bucket_name)
 
-        deleted_count = 0
-        deleted_bytes = 0
-        skipped_protected = 0
-        skipped_standard = 0
-        deleted_by_class: dict[str, int] = defaultdict(int)
+        # Get all top-level prefixes from the scanned_prefixes table
+        with cache_connection() as conn:
+            prefix_rows = conn.execute(
+                "SELECT prefix FROM scanned_prefixes WHERE bucket = ? ORDER BY prefix",
+                (bucket_name,),
+            ).fetchall()
+        prefixes = [r["prefix"] for r in prefix_rows]
 
-        print_summary(f"{action.action_id}: scanning {bucket_name} for cold unprotected objects")
-        progress = tqdm(desc=f"delete {bucket_name}", unit=" obj", leave=True)
+        print_summary(
+            f"{action.action_id}: deleting cold unprotected objects from {bucket_name} "
+            f"({len(prefixes)} prefixes, {ctx.scan_workers} workers)"
+        )
 
-        delete_batch: list[storage.Blob] = []
-        BATCH_SIZE = 1000
+        total_deleted_count = 0
+        total_deleted_bytes = 0
+        total_deleted_by_class: dict[str, int] = defaultdict(int)
+        total_skipped_protected = 0
+        total_skipped_standard = 0
 
-        for blob in client.list_blobs(bucket_name):
-            sc = blob.storage_class or "STANDARD"
-            size = int(blob.size or 0)
-            progress.update(1)
+        # Count protected/standard for reporting
+        with cache_connection() as conn:
+            standard_row = conn.execute(
+                """
+                SELECT COUNT(*) as cnt FROM objects o
+                JOIN storage_classes sc ON o.storage_class_id = sc.id
+                WHERE o.bucket = ? AND sc.name = 'STANDARD'
+                """,
+                (bucket_name,),
+            ).fetchone()
+            total_skipped_standard = int(standard_row["cnt"])
 
-            if sc not in NON_STANDARD_STORAGE_CLASSES:
-                skipped_standard += 1
-                continue
-            if object_is_protected(blob.name, bucket_protect):
-                skipped_protected += 1
-                continue
+            protected_row = conn.execute(
+                """
+                SELECT COUNT(*) as cnt FROM objects o
+                JOIN storage_classes sc ON o.storage_class_id = sc.id
+                WHERE o.bucket = ?
+                  AND sc.name != 'STANDARD'
+                  AND EXISTS (
+                    SELECT 1 FROM protect_prefixes p
+                    WHERE o.bucket = p.bucket AND o.name LIKE p.prefix || '%'
+                  )
+                """,
+                (bucket_name,),
+            ).fetchone()
+            total_skipped_protected = int(protected_row["cnt"])
 
-            deleted_count += 1
-            deleted_bytes += size
-            deleted_by_class[sc] += 1
-            delete_batch.append(bucket_obj.blob(blob.name))
-
-            if len(delete_batch) >= BATCH_SIZE:
-                if not ctx.dry_run:
-                    with client.batch():
-                        for b in delete_batch:
-                            b.delete()
-                delete_batch.clear()
-
-        if delete_batch and not ctx.dry_run:
-            with client.batch():
-                for b in delete_batch:
-                    b.delete()
-            delete_batch.clear()
+        progress = tqdm(total=len(prefixes), desc=f"delete {bucket_name}", unit="prefix", leave=True)
+        workers = max(1, min(ctx.scan_workers, len(prefixes) or 1))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_prefix = {executor.submit(_delete_prefix_objects, ctx, bucket_name, p): p for p in prefixes}
+            for future in as_completed(future_to_prefix):
+                p = future_to_prefix[future]
+                count, nbytes, by_class = future.result()
+                total_deleted_count += count
+                total_deleted_bytes += nbytes
+                for sc, c in by_class.items():
+                    total_deleted_by_class[sc] += c
+                progress.set_postfix_str(f"{p[:50]} ({count} del)")
+                progress.update(1)
         progress.close()
 
         deletion_log_path = BACKUP_DIR / f"deletion_log_{region}.json"
@@ -1199,26 +1404,26 @@ def delete_cold_unprotected(ctx: Context, action: StepSpec) -> None:
             {
                 "region": region,
                 "bucket": bucket_name,
-                "deleted_count": deleted_count,
-                "deleted_bytes": deleted_bytes,
-                "deleted_human_bytes": human_bytes(deleted_bytes),
-                "deleted_by_class": dict(deleted_by_class),
-                "skipped_protected": skipped_protected,
-                "skipped_standard": skipped_standard,
+                "deleted_count": total_deleted_count,
+                "deleted_bytes": total_deleted_bytes,
+                "deleted_human_bytes": human_bytes(total_deleted_bytes),
+                "deleted_by_class": dict(total_deleted_by_class),
+                "skipped_protected": total_skipped_protected,
+                "skipped_standard": total_skipped_standard,
                 "dry_run": ctx.dry_run,
             },
         )
         outputs.append(deletion_log_path)
         remote_summary["regions"][region] = {
-            "deleted_count": deleted_count,
-            "deleted_bytes": deleted_bytes,
-            "skipped_protected": skipped_protected,
-            "skipped_standard": skipped_standard,
+            "deleted_count": total_deleted_count,
+            "deleted_bytes": total_deleted_bytes,
+            "skipped_protected": total_skipped_protected,
+            "skipped_standard": total_skipped_standard,
         }
         verb = "would delete" if ctx.dry_run else "deleted"
         print_summary(
-            f"{region}: {verb} {deleted_count} objects ({human_bytes(deleted_bytes)}), "
-            f"skipped {skipped_protected} protected + {skipped_standard} STANDARD"
+            f"{region}: {verb} {total_deleted_count} objects ({human_bytes(total_deleted_bytes)}), "
+            f"skipped {total_skipped_protected} protected + {total_skipped_standard} STANDARD"
         )
     if not ctx.dry_run:
         write_marker(ctx, action, fingerprint, outputs=outputs, remote_summary=remote_summary)
@@ -1316,13 +1521,13 @@ STEPS = [
         requirements=(str(PROTECT_DIR / "protect_prefixes_classified.csv"),),
     ),
     StepSpec(
-        action_id="prep.build_protect_inputs",
+        action_id="prep.load_protect_set",
         group_name="prep",
-        command_name="build-protect-inputs",
-        description="Merge direct and resolved prefixes into the protect set.",
+        command_name="load-protect-set",
+        description="Merge direct and resolved prefixes into the protect set (DB + CSV).",
         help_text=(
             "Merge direct keep prefixes with resolved wildcard prefixes into one protect-set per region. "
-            "This step is local-only and produces the CSVs that later cleanup steps consume."
+            "Populates the protect_prefixes DB table and writes per-region CSVs and cleanup_plan.csv."
         ),
         outputs=tuple(
             [
@@ -1331,17 +1536,34 @@ STEPS = [
             ]
         ),
         mutating=False,
-        runner=build_protect_inputs,
+        runner=load_protect_set,
         predecessors=("prep.resolve_listing_prefixes",),
         requirements=(str(PROTECT_DIR / "protect_prefixes_direct.csv"),),
     ),
     StepSpec(
-        action_id="prep.estimate_deletion_savings",
+        action_id="prep.scan_objects",
         group_name="prep",
-        command_name="estimate-deletion-savings",
-        description="Estimate deletion savings by scanning objects and their storage classes.",
+        command_name="scan-objects",
+        description="Scan bucket objects into the SQLite catalog.",
         help_text=(
-            "Scan each source bucket, classify every object as protected/deletable by storage class, "
+            "List every object in each bucket and insert into the local SQLite database. "
+            "Fans out over top-level prefixes with `--scan-workers` concurrent threads. "
+            "Skips already-scanned prefixes unless `--force` is given."
+        ),
+        outputs=(),
+        mutating=False,
+        runner=scan_objects,
+        predecessors=("prep.load_protect_set",),
+        requirements=(str(BACKUP_DIR / "cleanup_plan.csv"),),
+        scan_workers=True,
+    ),
+    StepSpec(
+        action_id="prep.estimate_savings",
+        group_name="prep",
+        command_name="estimate-savings",
+        description="Estimate deletion savings via SQL queries against the object catalog.",
+        help_text=(
+            "Query the SQLite object catalog to classify every object as protected/deletable by storage class, "
             "and compute the monthly cost savings from deletion. Produces per-region JSON estimates "
             "and a summary CSV."
         ),
@@ -1352,10 +1574,9 @@ STEPS = [
             ]
         ),
         mutating=False,
-        runner=estimate_deletion_savings,
-        predecessors=("prep.build_protect_inputs",),
+        runner=estimate_savings,
+        predecessors=("prep.scan_objects",),
         requirements=(str(BACKUP_DIR / "cleanup_plan.csv"),),
-        estimate_workers=True,
     ),
     StepSpec(
         action_id="cleanup.enable_soft_delete",
@@ -1369,7 +1590,7 @@ STEPS = [
         outputs=(),
         mutating=True,
         runner=enable_soft_delete,
-        predecessors=("prep.estimate_deletion_savings",),
+        predecessors=("prep.estimate_savings",),
         requirements=(str(BACKUP_DIR / "cleanup_plan.csv"),),
     ),
     StepSpec(
@@ -1378,8 +1599,8 @@ STEPS = [
         command_name="delete-cold-objects",
         description="Delete non-STANDARD objects outside the protect set.",
         help_text=(
-            "Scan each source bucket and delete objects whose storage class is NEARLINE, COLDLINE, or "
-            "ARCHIVE and that do not fall under any protected prefix. Uses batch deletes for throughput. "
+            "Query the SQLite catalog for cold unprotected objects and batch-delete them from GCS. "
+            "Fans out over top-level prefixes with workers for throughput. "
             "Soft-delete must be enabled first so deletions are recoverable during the safety window."
         ),
         outputs=tuple(BACKUP_DIR / f"deletion_log_{r}.json" for r in ALL_REGIONS),
@@ -1387,7 +1608,7 @@ STEPS = [
         runner=delete_cold_unprotected,
         predecessors=("cleanup.enable_soft_delete",),
         requirements=(str(BACKUP_DIR / "cleanup_plan.csv"),),
-        delete_workers=True,
+        scan_workers=True,
     ),
     StepSpec(
         action_id="cleanup.wait_for_safety_window",
@@ -1476,8 +1697,7 @@ def build_context(
     force: bool,
     include_optional: bool,
     listing_workers: int,
-    estimate_workers: int,
-    delete_workers: int,
+    scan_workers: int,
     settle_hours: int,
     regions: tuple[str, ...],
     log_prefix: str,
@@ -1489,8 +1709,7 @@ def build_context(
         force=force,
         include_optional=include_optional,
         listing_workers=listing_workers,
-        estimate_workers=estimate_workers,
-        delete_workers=delete_workers,
+        scan_workers=scan_workers,
         settle_hours=settle_hours,
         selected_regions=parse_regions(list(regions) or None),
         log_path=LOG_DIR / f"{log_prefix}_{timestamp_string()}.log",
@@ -1502,8 +1721,7 @@ def build_context(
 def runtime_options(
     *,
     listing_workers: bool = False,
-    estimate_workers: bool = False,
-    delete_workers: bool = False,
+    scan_workers: bool = False,
     settle_hours: bool = False,
     include_optional: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -1522,16 +1740,10 @@ def runtime_options(
                     "--listing-workers", default=32, show_default=True, type=int, help="Concurrent listing fetches."
                 )
             )
-        if estimate_workers:
+        if scan_workers:
             options.append(
                 click.option(
-                    "--estimate-workers", default=32, show_default=True, type=int, help="Concurrent prefix scans."
-                )
-            )
-        if delete_workers:
-            options.append(
-                click.option(
-                    "--delete-workers", default=16, show_default=True, type=int, help="Concurrent delete workers."
+                    "--scan-workers", default=32, show_default=True, type=int, help="Concurrent scan/delete workers."
                 )
             )
         if settle_hours:
@@ -1572,8 +1784,7 @@ def plan_cli(regions: tuple[str, ...]) -> None:
             force=False,
             include_optional=False,
             listing_workers=32,
-            estimate_workers=32,
-            delete_workers=16,
+            scan_workers=32,
             settle_hours=72,
             selected_regions=parsed,
             log_path=LOG_DIR / "plan.log",
@@ -1588,9 +1799,7 @@ def plan_cli(regions: tuple[str, ...]) -> None:
     "run",
     help="Execute a contiguous slice of the ordered workflow.",
 )
-@runtime_options(
-    listing_workers=True, estimate_workers=True, delete_workers=True, settle_hours=True, include_optional=True
-)
+@runtime_options(listing_workers=True, scan_workers=True, settle_hours=True, include_optional=True)
 @click.option("--from", "from_action", type=click.Choice(sorted(STEP_INDEX)), help="Start from this step.")
 @click.option("--to", "to_action", type=click.Choice(sorted(STEP_INDEX)), help="Stop after this step.")
 @click.option("--only", "only_action", type=click.Choice(sorted(STEP_INDEX)), help="Run exactly one step.")
@@ -1600,8 +1809,7 @@ def run_cli(
     force: bool,
     include_optional: bool,
     listing_workers: int,
-    estimate_workers: int,
-    delete_workers: int,
+    scan_workers: int,
     settle_hours: int,
     project: str | None,
     from_action: str | None,
@@ -1613,8 +1821,7 @@ def run_cli(
         force=force,
         include_optional=include_optional,
         listing_workers=listing_workers,
-        estimate_workers=estimate_workers,
-        delete_workers=delete_workers,
+        scan_workers=scan_workers,
         settle_hours=settle_hours,
         regions=regions,
         log_prefix="run",
@@ -1634,7 +1841,7 @@ def run_cli(
     print_summary("completed selected steps")
 
 
-@cli.group(help="Preparation commands: resolve protect set, estimate savings. Read-only against buckets.")
+@cli.group(help="Preparation commands: resolve protect set, scan objects, estimate savings. Read-only against buckets.")
 def prep() -> None:
     pass
 
@@ -1650,8 +1857,7 @@ GROUPS: dict[str, click.Group] = {"prep": prep, "cleanup": cleanup}
 def register_step_command(group: click.Group, step: StepSpec) -> None:
     @runtime_options(
         listing_workers=step.listing_workers,
-        estimate_workers=step.estimate_workers,
-        delete_workers=step.delete_workers,
+        scan_workers=step.scan_workers,
         settle_hours=step.settle_hours,
     )
     def command(
@@ -1660,8 +1866,7 @@ def register_step_command(group: click.Group, step: StepSpec) -> None:
         force: bool,
         project: str | None,
         listing_workers: int = 32,
-        estimate_workers: int = 32,
-        delete_workers: int = 16,
+        scan_workers: int = 32,
         settle_hours: int = 72,
     ) -> None:
         ctx = build_context(
@@ -1669,8 +1874,7 @@ def register_step_command(group: click.Group, step: StepSpec) -> None:
             force=force,
             include_optional=False,
             listing_workers=listing_workers,
-            estimate_workers=estimate_workers,
-            delete_workers=delete_workers,
+            scan_workers=scan_workers,
             settle_hours=settle_hours,
             regions=regions,
             log_prefix=step.action_id.replace(".", "__"),
