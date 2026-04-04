@@ -45,6 +45,7 @@ dependencies = [
     "tokenizers>=0.15.2",
     "kitoken>=0.10.2",
     "transformers>=4.57.1,<5.0",
+    "chex>=0.1.86",
     "optax>=0.1.9",
     "wandb>=0.17.8",
     "draccus>=0.11.5",
