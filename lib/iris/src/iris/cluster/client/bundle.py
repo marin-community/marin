@@ -38,6 +38,8 @@ DEFAULT_EXCLUDE = re.compile(
     | (^|/)docs/reports(/|$)
     | (^|/)docs/static(/|$)
     | (^|/)tests/snapshots(/|$)
+    | ^vendor/[^/]+/tests(/|$)      # vendored submodule test fixtures (large model files)
+    | ^vendor/[^/]+/\.github(/|$)   # vendored submodule CI configs
     """,
     re.VERBOSE,
 )
