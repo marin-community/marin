@@ -868,8 +868,54 @@ def create_attn_gate_sweep() -> list[ExecutorStep]:
 attn_gate_sweep_steps = create_attn_gate_sweep()
 
 
+def create_x0_skip_run() -> list[ExecutorStep]:
+    """Single 1e18 d768 run with learned x0 skip connections (resid_lambda + x0_lambda per layer)."""
+    dim = 768
+    model_cfg = HEURISTIC.build_model_config(dim)
+    fpt = _compute_flops_per_token(model_cfg)
+    tokens, batch_size, train_steps = _compute_tokens_and_batch(1e18, fpt)
+    optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, dim)
+
+    run_id = "moe-exp-x0skip-d768-1e18"
+    config = GrugMoeLaunchConfig(
+        model=versioned(model_cfg),
+        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        output_path=this_output_path(),
+        run_id=run_id,
+        resources=versioned(ResourceConfig.with_tpu("v4-32")),
+        steps=versioned(train_steps),
+        batch_size=versioned(batch_size),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["grug", "moe-core", "x0-skip", "d=768", "budget=1e+18", "gqa4"],
+            group="moe-exp",
+            name=run_id,
+        ),
+        optimizer=versioned(optimizer),
+        grug_trainer=versioned(
+            GrugTrainerConfig(
+                z_loss_weight=HEURISTIC.z_loss_weight,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            GrugEvalConfig(
+                eval_batch_size=512,
+                steps_per_eval=1000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+    )
+    return [ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config)]
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=attn_gate_sweep_steps,
-        description="moe-exp: attn gate width sweep d768 1e18",
+        steps=create_x0_skip_run(),
+        description="moe-exp: d768 1e18 with learned x0 skip connections",
     )

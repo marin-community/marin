@@ -457,6 +457,8 @@ class Transformer(eqx.Module):
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
     blocks: tuple[Block, ...]
+    resid_lambdas: jax.Array  # (num_layers,) per-layer residual scaling
+    x0_lambdas: jax.Array  # (num_layers,) per-layer x0 skip connection scaling
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
@@ -475,6 +477,8 @@ class Transformer(eqx.Module):
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
             blocks=blocks,
+            resid_lambdas=jnp.ones((cfg.num_layers,)),
+            x0_lambdas=jnp.zeros((cfg.num_layers,)),
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
@@ -498,8 +502,10 @@ class Transformer(eqx.Module):
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
+        x0 = hidden
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
+            hidden = self.resid_lambdas[i] * hidden + self.x0_lambdas[i] * x0
             layer_mask = long_mask if i % 4 == 3 else short_mask
             hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
             moe_router_stats.append(router_stats)
