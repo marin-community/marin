@@ -44,11 +44,11 @@ class CompletedAdamHHeuristic:
     C = 3 * flops_per_token * tokens  (flops_per_token excludes lm_head)
     """
 
-    # --- LR scaling (from empirical fit, 186 runs, R²=0.995) ---
+    # --- LR scaling (from empirical fit, 192 runs, R²=0.995) ---
     # adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * bs^0.5
-    lr_coeff: float = 1.63
-    lr_tokens_exp: float = -0.2813
-    lr_dim_exp: float = -0.3678
+    lr_coeff: float = 1.48
+    lr_tokens_exp: float = -0.2781
+    lr_dim_exp: float = -0.3633
     adamh_ratio: float = 13 / 3
 
     # --- Base hyperparameters ---
