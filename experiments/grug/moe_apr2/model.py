@@ -142,6 +142,12 @@ class CausalSelfAttention(eqx.Module):
         q = rms_norm(q)
         k = rms_norm(k)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope, partial_rotary_factor=self.partial_rotary_factor)
+        # Partial key offset: shift stationary key dims forward 1 position on partial-rope layers.
+        # Enables 1-layer induction heads.
+        if self.partial_rotary_factor < 1.0:
+            rotary_dim = int(head_dim * self.partial_rotary_factor)
+            rotary_dim = rotary_dim - (rotary_dim % 2)
+            k = k.at[:, 1:, :, rotary_dim:].set(k[:, :-1, :, rotary_dim:])
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])

@@ -1025,7 +1025,7 @@ def create_partial_rope_run() -> list[ExecutorStep]:
     tokens, batch_size, train_steps = _compute_tokens_and_batch(1e18, fpt)
     optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, dim)
 
-    run_id = "moe-exp-partial-rope-d768-1e18"
+    run_id = "moe-exp-partial-rope-keyshift-d768-1e18"
     config = GrugMoeLaunchConfig(
         model=versioned(model_cfg),
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
@@ -1038,7 +1038,7 @@ def create_partial_rope_run() -> list[ExecutorStep]:
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
             project="dial_moe",
-            tags=["grug", "moe-core", "partial-rope", "d=768", "budget=1e+18", "gqa4"],
+            tags=["grug", "moe-core", "partial-rope", "key-shift", "d=768", "budget=1e+18", "gqa4"],
             group="moe-exp",
             name=run_id,
         ),
