@@ -72,6 +72,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     attn_gate_width: int | None = None  # None = full hidden_dim
+    backout_layer: int | None = None  # Layer index to save and subtract before final norm
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -459,6 +460,7 @@ class Transformer(eqx.Module):
     blocks: tuple[Block, ...]
     resid_lambdas: jax.Array  # (num_layers,) per-layer residual scaling
     x0_lambdas: jax.Array  # (num_layers,) per-layer x0 skip connection scaling
+    backout_lambda: jax.Array  # scalar for subtracting saved layer activation
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
@@ -479,6 +481,7 @@ class Transformer(eqx.Module):
             blocks=blocks,
             resid_lambdas=jnp.ones((cfg.num_layers,)),
             x0_lambdas=jnp.zeros((cfg.num_layers,)),
+            backout_lambda=jnp.array(0.5),
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
@@ -503,12 +506,18 @@ class Transformer(eqx.Module):
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
         x0 = hidden
+        saved_activation = None
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
             hidden = self.resid_lambdas[i] * hidden + self.x0_lambdas[i] * x0
             layer_mask = long_mask if i % 4 == 3 else short_mask
             hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            if cfg.backout_layer is not None and i == cfg.backout_layer:
+                saved_activation = hidden
             moe_router_stats.append(router_stats)
+
+        if saved_activation is not None:
+            hidden = hidden - self.backout_lambda * saved_activation
 
         router_metrics = {
             "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
