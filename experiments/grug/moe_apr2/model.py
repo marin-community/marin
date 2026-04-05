@@ -71,8 +71,6 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
-    attn_gate_width: int | None = None  # None = full hidden_dim
-    backout_layer: int | None = None  # Layer index to save and subtract before final norm
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -115,20 +113,19 @@ class CausalSelfAttention(eqx.Module):
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
-    attn_gate: Float[Array, "G N"]  # G = attn_gate_width or hidden_dim
+    attn_gate: Float[Array, "D N"]
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
-        gate_width = cfg.attn_gate_width or d
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
-            attn_gate=reshard(jnp.zeros((gate_width, n)), P(None, None)),
+            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             cfg=cfg,
         )
 
@@ -153,9 +150,8 @@ class CausalSelfAttention(eqx.Module):
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-        # Headwise gating: sigmoid(x[:gate_width] @ attn_gate) produces one scalar per head.
-        gate_width = self.attn_gate.shape[0]
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x[..., :gate_width], self.attn_gate))[..., None]
+        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
+        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
@@ -412,8 +408,6 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
-    lambda_routed: jax.Array  # per-layer scalar for routed expert output
-    lambda_shared: jax.Array  # per-layer scalar for shared expert output
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -431,8 +425,6 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
-            lambda_routed=jnp.array(1.0),
-            lambda_shared=jnp.array(1.0),
         )
 
     @named_call
@@ -444,10 +436,9 @@ class Block(eqx.Module):
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        routed_out, router_stats = self.mlp(mlp_in)
-        mlp_out = self.lambda_routed * routed_out
+        mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
-            mlp_out = mlp_out + self.lambda_shared * self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
         return x, router_stats
 
@@ -458,9 +449,6 @@ class Transformer(eqx.Module):
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
     blocks: tuple[Block, ...]
-    resid_lambdas: jax.Array  # (num_layers,) per-layer residual scaling
-    x0_lambdas: jax.Array  # (num_layers,) per-layer x0 skip connection scaling
-    backout_lambda: jax.Array  # scalar for subtracting saved layer activation
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
@@ -479,9 +467,6 @@ class Transformer(eqx.Module):
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
             blocks=blocks,
-            resid_lambdas=jnp.ones((cfg.num_layers,)),
-            x0_lambdas=jnp.zeros((cfg.num_layers,)),
-            backout_lambda=jnp.array(0.5),
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
@@ -505,19 +490,11 @@ class Transformer(eqx.Module):
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
-        x0 = hidden
-        saved_activation = None
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
-            hidden = self.resid_lambdas[i] * hidden + self.x0_lambdas[i] * x0
             layer_mask = long_mask if i % 4 == 3 else short_mask
             hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
-            if cfg.backout_layer is not None and i == cfg.backout_layer:
-                saved_activation = hidden
             moe_router_stats.append(router_stats)
-
-        if saved_activation is not None:
-            hidden = hidden - self.backout_lambda * saved_activation
 
         router_metrics = {
             "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
