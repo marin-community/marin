@@ -1041,7 +1041,6 @@ class Controller:
 
         self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
 
-        controller_url = f"http://{config.host}:{config.port}"
         self._service = ControllerServiceImpl(
             self._transitions,
             self._db,
@@ -1049,9 +1048,7 @@ class Controller:
             bundle_store=self._bundle_store,
             log_service=self._log_service,
             auth=config.auth,
-            system_endpoints={
-                "/system/log-server": controller_url,
-            },
+            system_endpoints={},
         )
         self._dashboard = ControllerDashboard(
             self._service,
@@ -1172,6 +1169,10 @@ class Controller:
             lambda: self._server is not None and self._server.started,
             timeout=Duration.from_seconds(5.0),
         )
+
+        # Register system endpoints now that the server is running and self.url
+        # reflects the actual bound address (not 0.0.0.0).
+        self._service._system_endpoints["/system/log-server"] = self.url
 
     def stop(self) -> None:
         """Stop all background components gracefully.
