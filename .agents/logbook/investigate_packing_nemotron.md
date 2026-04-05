@@ -1136,3 +1136,27 @@ All reads still happen inside a `ts.Batch()` context, so tensorstore batches the
   - Generalized `get_batch()` for non-contiguous doc reads
 - `lib/levanter/src/levanter/data/text/datasets.py`:
   - Threaded `packing_strategy` through `PackedTokenDataset`, `ChatDataset`, `dataset_for_component()`
+
+### CLAUDE 2026-04-04 20:00 - Final recommendation: BFD only, discard sorted greedy
+
+#### Head-to-head comparison
+
+| | Sorted Greedy (A) | BFD (B) |
+|---|---|---|
+| **Speed** (226k docs) | ~1.3s | ~1.8s |
+| **dataset_adapters padding** | 11.7% (improved) | **0.0%** (optimal) |
+| **skill_based_easy padding** | 26.4% (**worse** than greedy) | **0.2%** |
+| **skill_based_medium padding** | 30.8% (**worse** than greedy) | **14.7%** |
+| **skill_based_mixed padding** | 26.7% (**worse** than greedy) | **1.6%** |
+
+#### Why sorted greedy fails
+
+Sorting by length descending puts similar-length docs adjacent. For this corpus where docs cluster around 13-18k tokens, that means the greedy packer repeatedly tries to pair two ~16k docs — which don't fit in 32k. The random cache order in the baseline accidentally creates better length diversity within local neighborhoods, allowing the greedy packer to stumble into complementary pairings (e.g., 20k + 10k).
+
+BFD doesn't have this problem because it explicitly searches for the best-fit bin across all open bins, regardless of document order.
+
+#### Decision
+
+- **`pack_documents_sorted()` should be removed or deprecated.** It is worse than the baseline for 3 of 4 subsets and offers no advantage over BFD.
+- **`pack_documents_bfd()` is the recommended packing strategy** for chat datasets. It is near-optimal on packing efficiency and runs at comparable speed to greedy (~1.8s vs ~1.2s for 226k docs).
+- The ~0.6s overhead of BFD vs greedy is negligible compared to training time and is more than offset by the ~20% reduction in total sequences per epoch.
