@@ -162,6 +162,45 @@ class PreemptionCandidate:
     band: int  # proto PriorityBand value
 
 
+@dataclass
+class _SyncFailureAccumulator:
+    """Mutable accumulator for tracking failures during provider sync."""
+
+    fail_count: int = 0
+    failed_workers: list[str] = field(default_factory=list)
+    all_tasks_to_kill: set[JobName] = field(default_factory=set)
+    all_task_kill_workers: dict[JobName, WorkerId] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _SchedulingStateRead:
+    """Snapshot of pending tasks and workers read at the start of a scheduling cycle."""
+
+    pending_tasks: list[TaskRow]
+    workers: list[WorkerRow]
+    state_read_ms: int
+
+
+@dataclass(frozen=True)
+class _GatedCandidates:
+    """Tasks that passed deadline, reservation, and per-job-cap gates."""
+
+    schedulable_task_ids: list[JobName]
+    jobs: dict[JobName, JobRequirements]
+    has_reservation: set[JobName]
+    has_direct_reservation: set[JobName]
+
+
+@dataclass(frozen=True)
+class _SchedulingOrder:
+    """Priority-ordered task list with budget context for preemption."""
+
+    ordered_task_ids: list[JobName]
+    task_band_map: dict[JobName, int]
+    user_spend: dict[str, int]
+    user_budget_limits: dict[str, int]
+
+
 def job_requirements_from_job(job: JobSchedulingRow) -> JobRequirements:
     """Convert a job row to scheduler-compatible JobRequirements."""
     return JobRequirements(
@@ -1028,9 +1067,10 @@ class Controller:
         # are only valid before the controller loops begin (e.g. LoadCheckpoint).
         self._started = False
 
-        # Checkpoint coordination flag. When set, scheduling and autoscaler
-        # loops skip their work so the snapshot captures a quiescent state.
-        self._checkpoint_in_progress = False
+        # Checkpoint coordination: when set, scheduling and autoscaler loops
+        # skip their work so the snapshot captures a quiescent state.
+        # threading.Event (not a bare bool) for cross-thread memory ordering.
+        self._checkpoint_paused = threading.Event()
         self._atexit_registered = False
 
         # Serializes heartbeat rounds against checkpoint snapshots so that
@@ -1178,7 +1218,7 @@ class Controller:
             if stop_event.is_set():
                 break
 
-            if self._checkpoint_in_progress:
+            if self._checkpoint_paused.is_set():
                 continue
 
             if woken:
@@ -1227,7 +1267,7 @@ class Controller:
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
                 break
-            if self._checkpoint_in_progress:
+            if self._checkpoint_paused.is_set():
                 continue
             try:
                 self._run_autoscaler_once()
@@ -1250,7 +1290,7 @@ class Controller:
             limiter.mark_run()
             if stop_event.is_set():
                 break
-            if self._checkpoint_in_progress:
+            if self._checkpoint_paused.is_set():
                 continue
             try:
                 with self._heartbeat_lock:
@@ -1267,7 +1307,7 @@ class Controller:
             limiter.mark_run()
             if stop_event.is_set():
                 break
-            if self._checkpoint_in_progress:
+            if self._checkpoint_paused.is_set():
                 continue
             try:
                 self._sync_direct_provider()
@@ -1310,7 +1350,7 @@ class Controller:
             if stop_event.is_set():
                 break
             limiter.mark_run()
-            if self._checkpoint_in_progress:
+            if self._checkpoint_paused.is_set():
                 continue
             try:
                 self._profile_all_running_tasks()
@@ -1533,10 +1573,43 @@ class Controller:
         is serialized by ControllerDB._lock with multi-statement mutations
         wrapped in BEGIN IMMEDIATE transactions.
         """
-        # Reservation claims are read and updated outside the scheduling transaction.
-        # This creates a narrow race window where a worker could be removed between
-        # claim reads and scheduling, but it's benign: queue_assignments() re-validates
-        # all assignments transactionally, and stale claims are cleaned up next cycle.
+        claims = self._refresh_reservation_claims()
+
+        timer = Timer()
+        state = self._read_scheduling_state()
+
+        if not state.pending_tasks:
+            self._scheduling_diagnostics = {}
+            return SchedulingOutcome.NO_PENDING_TASKS
+
+        gated = self._apply_scheduling_gates(state.pending_tasks, claims)
+
+        if not gated.schedulable_task_ids:
+            self._scheduling_diagnostics = {}
+            return SchedulingOutcome.NO_PENDING_TASKS
+
+        order = self._compute_scheduling_order(
+            gated.schedulable_task_ids,
+            state.pending_tasks,
+            gated.jobs,
+        )
+
+        all_assignments, context, tainted_jobs = self._run_scheduler_pass(order, gated, state, claims, timer)
+
+        preemptions = self._apply_preemptions(order, tainted_jobs, all_assignments, claims, context)
+
+        self._cache_scheduling_diagnostics(context, tainted_jobs, all_assignments, order.ordered_task_ids)
+
+        if all_assignments or preemptions:
+            return SchedulingOutcome.ASSIGNMENTS_MADE
+        return SchedulingOutcome.NO_ASSIGNMENTS
+
+    def _refresh_reservation_claims(self) -> dict[WorkerId, ReservationClaim]:
+        """Read, clean up, and refresh reservation claims. Returns updated claims."""
+        # Claims are read outside the scheduling transaction. This creates a
+        # narrow race window where a worker could be removed between claim reads
+        # and scheduling, but it's benign: queue_assignments() re-validates all
+        # assignments transactionally, and stale claims are cleaned up next cycle.
         claims = _read_reservation_claims(self._db)
         claims_changed = self._cleanup_stale_claims(claims)
         claims_changed = self._claim_workers_for_reservations(claims) or claims_changed
@@ -1545,20 +1618,26 @@ class Controller:
                 logger.info("[DRY-RUN] Would update %d reservation claims", len(claims))
             else:
                 self._transitions.replace_reservation_claims(claims)
+        return claims
 
+    def _read_scheduling_state(self) -> _SchedulingStateRead:
+        """Fetch pending tasks and healthy workers from the DB."""
         timer = Timer()
         with slow_log(logger, "scheduling state reads", threshold_ms=50):
             pending_tasks = _schedulable_tasks(self._db)
             workers = healthy_active_workers_with_attributes(self._db)
-        state_read_ms = timer.elapsed_ms()
+        return _SchedulingStateRead(
+            pending_tasks=pending_tasks,
+            workers=workers,
+            state_read_ms=timer.elapsed_ms(),
+        )
 
-        if not pending_tasks:
-            self._scheduling_diagnostics = {}
-            return SchedulingOutcome.NO_PENDING_TASKS
-
-        # Handle timeouts and reservation gates before scheduling.
-        # Holder tasks participate in scheduling like normal tasks.
-        # Cap non-coscheduled tasks per job to bound scheduling CPU time.
+    def _apply_scheduling_gates(
+        self,
+        pending_tasks: list[TaskRow],
+        claims: dict[WorkerId, ReservationClaim],
+    ) -> _GatedCandidates:
+        """Filter tasks by deadline, reservation satisfaction, and per-job cap."""
         schedulable_task_ids: list[JobName] = []
         jobs: dict[JobName, JobRequirements] = {}
         has_reservation: set[JobName] = set()
@@ -1591,15 +1670,24 @@ class Controller:
                     has_direct_reservation.add(task.job_id)
                 elif _find_reservation_ancestor(self._db, task.job_id) is not None:
                     has_reservation.add(task.job_id)
+        return _GatedCandidates(
+            schedulable_task_ids=schedulable_task_ids,
+            jobs=jobs,
+            has_reservation=has_reservation,
+            has_direct_reservation=has_direct_reservation,
+        )
 
-        if not schedulable_task_ids:
-            self._scheduling_diagnostics = {}
-            return SchedulingOutcome.NO_PENDING_TASKS
+    def _compute_scheduling_order(
+        self,
+        schedulable_task_ids: list[JobName],
+        pending_tasks: list[TaskRow],
+        jobs: dict[JobName, JobRequirements],
+    ) -> _SchedulingOrder:
+        """Compute priority-band interleaving and per-user cap.
 
-        # Per-band interleaving: group tasks by priority band, round-robin
-        # users within each band ordered by ascending budget spend.
-        # Budget down-weighting: users over budget have non-PRODUCTION tasks
-        # treated as BATCH for both scheduling order and preemption eligibility.
+        Maps tasks to effective bands (down-weighting over-budget users),
+        round-robins users within each band, and applies the per-user cap.
+        """
         with self._db.read_snapshot() as budget_snapshot:
             user_spend = compute_user_spend(budget_snapshot)
         user_budget_limits = self._db.get_all_user_budget_limits()
@@ -1617,7 +1705,6 @@ class Controller:
             band_tasks = tasks_by_band[band_key]
             user_tasks = [UserTask(user_id=tid.user, task=tid) for tid in band_tasks]
             interleaved.extend(interleave_by_user(user_tasks, user_spend))
-        schedulable_task_ids = interleaved
 
         # Per-user cap: limit how many tasks a single user can have considered
         # per scheduling cycle, ensuring fairness.
@@ -1625,31 +1712,44 @@ class Controller:
         if user_cap > 0:
             tasks_per_user: dict[str, int] = defaultdict(int)
             capped: list[JobName] = []
-            for task_id in schedulable_task_ids:
+            for task_id in interleaved:
                 if tasks_per_user[task_id.user] < user_cap:
                     capped.append(task_id)
                     tasks_per_user[task_id.user] += 1
-            schedulable_task_ids = capped
+            interleaved = capped
 
-        # Inject reservation taints: claimed workers get a taint attribute,
-        # non-reservation jobs get a NOT_EXISTS constraint for it.
-        modified_workers = _inject_reservation_taints(workers, claims)
-        jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+        return _SchedulingOrder(
+            ordered_task_ids=interleaved,
+            task_band_map=task_band_map,
+            user_spend=user_spend,
+            user_budget_limits=user_budget_limits,
+        )
+
+    def _run_scheduler_pass(
+        self,
+        order: _SchedulingOrder,
+        gated: _GatedCandidates,
+        state: _SchedulingStateRead,
+        claims: dict[WorkerId, ReservationClaim],
+        timer: Timer,
+    ) -> tuple[list[tuple[JobName, WorkerId]], SchedulingContext, dict[JobName, JobRequirements]]:
+        """Run preference + normal assignment passes. Returns (assignments, context, taint-injected jobs)."""
+        modified_workers = _inject_reservation_taints(state.workers, claims)
+        modified_jobs = _inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
 
         with slow_log(logger, "building_counts", threshold_ms=50):
-            building_counts = _building_counts(self._db, workers=workers)
+            building_counts = _building_counts(self._db, workers=state.workers)
         context = self._scheduler.create_scheduling_context(
             modified_workers,
             building_counts=building_counts,
-            pending_tasks=schedulable_task_ids,
-            jobs=jobs,
+            pending_tasks=order.ordered_task_ids,
+            jobs=modified_jobs,
         )
 
-        # Phase 1: soft preference — steer reservation tasks toward claimed workers.
+        # Soft preference — steer reservation tasks toward claimed workers.
         # Skips coscheduled jobs (they need atomic all-or-nothing via find_assignments).
-        preference_assignments = _preference_pass(context, has_reservation, claims)
+        preference_assignments = _preference_pass(context, gated.has_reservation, claims)
 
-        # Phase 2: normal scheduler for all remaining tasks.
         result = self._scheduler.find_assignments(context)
 
         all_assignments = preference_assignments + result.assignments
@@ -1662,26 +1762,34 @@ class Controller:
                 len(preference_assignments),
                 len(result.assignments),
                 timer.elapsed_ms(),
-                state_read_ms,
+                state.state_read_ms,
             )
+        return all_assignments, context, modified_jobs
 
-        # Phase 3: preemption — evict lower-priority running tasks for
-        # higher-priority unscheduled work.
+    def _apply_preemptions(
+        self,
+        order: _SchedulingOrder,
+        jobs: dict[JobName, JobRequirements],
+        all_assignments: list[tuple[JobName, WorkerId]],
+        claims: dict[WorkerId, ReservationClaim],
+        context: SchedulingContext,
+    ) -> list[tuple[JobName, JobName]]:
+        """Evict lower-priority running tasks for higher-priority unscheduled work."""
         assigned_ids = {task_id for task_id, _ in all_assignments}
         unscheduled = [
             PreemptionCandidate(
                 job_name=tid,
                 requirements=jobs[tid.parent],
-                band=task_band_map.get(tid, cluster_pb2.PRIORITY_BAND_INTERACTIVE),
+                band=order.task_band_map.get(tid, cluster_pb2.PRIORITY_BAND_INTERACTIVE),
             )
-            for tid in schedulable_task_ids
+            for tid in order.ordered_task_ids
             if tid not in assigned_ids and tid.parent is not None and tid.parent in jobs
         ]
         preemptions: list[tuple[JobName, JobName]] = []
         if unscheduled:
             claimed_workers = set(claims.keys())
             running_info = _get_running_tasks_with_band_and_value(
-                self._db, claimed_workers, user_spend=user_spend, user_budget_limits=user_budget_limits
+                self._db, claimed_workers, user_spend=order.user_spend, user_budget_limits=order.user_budget_limits
             )
             preemptions = _run_preemption_pass(unscheduled, running_info, context)
             for preemptor_name, victim_id in preemptions:
@@ -1689,14 +1797,7 @@ class Controller:
                 self.kill_tasks_on_workers(preempt_result.tasks_to_kill)
             if preemptions:
                 logger.info("Preemption pass: %d tasks preempted", len(preemptions))
-
-        # Cache diagnostics for jobs that still have unassigned tasks.
-        # RPCs read from this cache instead of recomputing per request.
-        self._cache_scheduling_diagnostics(context, jobs, all_assignments, schedulable_task_ids)
-
-        if all_assignments or preemptions:
-            return SchedulingOutcome.ASSIGNMENTS_MADE
-        return SchedulingOutcome.NO_ASSIGNMENTS
+        return preemptions
 
     def _cache_scheduling_diagnostics(
         self,
@@ -1897,88 +1998,124 @@ class Controller:
             return
         round_timer = Timer()
 
-        # Phase 0: fail workers whose last heartbeat exceeds the staleness
-        # threshold.  This catches workers restored from a checkpoint whose
-        # backing VMs no longer exist.
         self._reap_stale_workers()
 
-        # Phase 1: drain dispatch for all healthy workers.
         with slow_log(logger, "provider sync phase 1 (snapshot)", threshold_ms=100):
             batches = self._transitions.drain_dispatch_all()
 
         if not batches:
             return
 
-        # Phase 2: sync with the execution backend.
+        # Sync with the execution backend (ThreadPoolExecutor inside provider).
         results = self._provider.sync(batches)
 
-        # Phase 3: apply results.
-        fail_count = 0
-        failed_workers: list[str] = []
-        with slow_log(logger, "provider sync phase 3 (apply results)", threshold_ms=500):
-            # Separate successes from failures so we can batch the common case.
-            success_reqs = []
-            failure_entries = []
-            for batch, apply_req, error in results:
-                if apply_req is not None:
-                    success_reqs.append(apply_req)
-                else:
-                    failure_entries.append((batch, error or "unknown error"))
+        acc = _SyncFailureAccumulator()
+        with slow_log(logger, "provider sync (apply results)", threshold_ms=500):
+            success_reqs, failure_entries = self._separate_sync_results(results)
+            self._apply_successful_heartbeats(success_reqs, acc)
+            primary_failed_workers = self._handle_failed_heartbeats(failure_entries, acc)
+            self._handle_sibling_worker_failures(primary_failed_workers, acc)
 
-            # Batch all successful heartbeats in one transaction.
-            all_tasks_to_kill: set[JobName] = set()
-            all_task_kill_workers: dict[JobName, WorkerId] = {}
-            if success_reqs:
-                batch_results = self._transitions.apply_heartbeats_batch(success_reqs)
-                for result in batch_results:
-                    all_tasks_to_kill.update(result.tasks_to_kill)
-                    all_task_kill_workers.update(result.task_kill_workers)
+            if acc.all_tasks_to_kill:
+                self.kill_tasks_on_workers(acc.all_tasks_to_kill, acc.all_task_kill_workers)
 
-            failure_result = self._transitions.fail_heartbeats_batch(failure_entries)
-            all_tasks_to_kill.update(failure_result.tasks_to_kill)
-            all_task_kill_workers.update(failure_result.task_kill_workers)
+        self._log_sync_health_summary(
+            batch_count=len(batches),
+            fail_count=acc.fail_count,
+            failed_workers=acc.failed_workers,
+            elapsed_ms=round_timer.elapsed_ms(),
+        )
 
-            primary_failed_workers: list[str] = []
-            for (batch, error), result in zip(failure_entries, failure_result.results, strict=False):
-                logger.debug("Sync error for %s: %s", batch.worker_id, error)
-                if result.action == HeartbeatAction.WORKER_FAILED:
-                    fail_count += 1
-                    failed_workers.append(batch.worker_id)
-                    self._provider.on_worker_failed(batch.worker_id, batch.worker_address)
-                    primary_failed_workers.append(str(batch.worker_id))
-                elif result.action == HeartbeatAction.TRANSIENT_FAILURE:
-                    fail_count += 1
-                    failed_workers.append(batch.worker_id)
+    def _separate_sync_results(
+        self,
+        results: list,
+    ) -> tuple[list, list[tuple]]:
+        """Partition provider sync results into successes and failures."""
+        success_reqs = []
+        failure_entries = []
+        for batch, apply_req, error in results:
+            if apply_req is not None:
+                success_reqs.append(apply_req)
+            else:
+                failure_entries.append((batch, error or "unknown error"))
+        return success_reqs, failure_entries
 
-            if self._autoscaler and primary_failed_workers:
-                sibling_worker_ids = self._autoscaler.terminate_slices_for_workers(primary_failed_workers)
-                # TODO(#3425): This prunes sibling workers before their in-flight
-                # results are processed, causing apply_heartbeat() to
-                # silently drop any logs/states those workers reported this round.
-                sibling_failures = self._transitions.fail_workers_batch(
-                    sibling_worker_ids,
-                    reason="sibling worker failed, slice terminated",
-                )
-                all_tasks_to_kill.update(sibling_failures.tasks_to_kill)
-                all_task_kill_workers.update(sibling_failures.task_kill_workers)
-                for wid, addr in sibling_failures.removed_workers:
-                    self._provider.on_worker_failed(wid, addr)
-                if sibling_failures.removed_workers:
-                    fail_count += len(sibling_failures.removed_workers)
-                    failed_workers.extend(wid for wid, _ in sibling_failures.removed_workers)
-                    logger.info(
-                        "Failed %d sibling workers from slices: %s",
-                        len(sibling_failures.removed_workers),
-                        [wid for wid, _ in sibling_failures.removed_workers],
-                    )
+    def _apply_successful_heartbeats(
+        self,
+        success_reqs: list,
+        acc: _SyncFailureAccumulator,
+    ) -> None:
+        """Batch-apply successful heartbeat results, accumulating kill targets."""
+        if not success_reqs:
+            return
+        batch_results = self._transitions.apply_heartbeats_batch(success_reqs)
+        for result in batch_results:
+            acc.all_tasks_to_kill.update(result.tasks_to_kill)
+            acc.all_task_kill_workers.update(result.task_kill_workers)
 
-            if all_tasks_to_kill:
-                self.kill_tasks_on_workers(all_tasks_to_kill, all_task_kill_workers)
+    def _handle_failed_heartbeats(
+        self,
+        failure_entries: list[tuple],
+        acc: _SyncFailureAccumulator,
+    ) -> list[str]:
+        """Process failed heartbeats: update accumulator and return primary failed worker IDs."""
+        failure_result = self._transitions.fail_heartbeats_batch(failure_entries)
+        acc.all_tasks_to_kill.update(failure_result.tasks_to_kill)
+        acc.all_task_kill_workers.update(failure_result.task_kill_workers)
 
-        elapsed = round_timer.elapsed_ms()
-        level = logging.WARNING if elapsed > _SLOW_HEARTBEAT_MS else logging.DEBUG
+        primary_failed_workers: list[str] = []
+        for (batch, error), result in zip(failure_entries, failure_result.results, strict=False):
+            logger.debug("Sync error for %s: %s", batch.worker_id, error)
+            if result.action == HeartbeatAction.WORKER_FAILED:
+                acc.fail_count += 1
+                acc.failed_workers.append(batch.worker_id)
+                self._provider.on_worker_failed(batch.worker_id, batch.worker_address)
+                primary_failed_workers.append(str(batch.worker_id))
+            elif result.action == HeartbeatAction.TRANSIENT_FAILURE:
+                acc.fail_count += 1
+                acc.failed_workers.append(batch.worker_id)
+        return primary_failed_workers
+
+    def _handle_sibling_worker_failures(
+        self,
+        primary_failed_workers: list[str],
+        acc: _SyncFailureAccumulator,
+    ) -> None:
+        """Terminate slices containing failed workers and fail their siblings."""
+        if not self._autoscaler or not primary_failed_workers:
+            return
+        sibling_worker_ids = self._autoscaler.terminate_slices_for_workers(primary_failed_workers)
+        # TODO(#3425): This prunes sibling workers before their in-flight
+        # results are processed, causing apply_heartbeat() to
+        # silently drop any logs/states those workers reported this round.
+        sibling_failures = self._transitions.fail_workers_batch(
+            sibling_worker_ids,
+            reason="sibling worker failed, slice terminated",
+        )
+        acc.all_tasks_to_kill.update(sibling_failures.tasks_to_kill)
+        acc.all_task_kill_workers.update(sibling_failures.task_kill_workers)
+        for wid, addr in sibling_failures.removed_workers:
+            self._provider.on_worker_failed(wid, addr)
+        if sibling_failures.removed_workers:
+            acc.fail_count += len(sibling_failures.removed_workers)
+            acc.failed_workers.extend(wid for wid, _ in sibling_failures.removed_workers)
+            logger.info(
+                "Failed %d sibling workers from slices: %s",
+                len(sibling_failures.removed_workers),
+                [wid for wid, _ in sibling_failures.removed_workers],
+            )
+
+    def _log_sync_health_summary(
+        self,
+        batch_count: int,
+        fail_count: int,
+        failed_workers: list[str],
+        elapsed_ms: int,
+    ) -> None:
+        """Log provider sync timing and periodic cluster health summary."""
+        level = logging.WARNING if elapsed_ms > _SLOW_HEARTBEAT_MS else logging.DEBUG
         fmt = "Provider sync: %d workers, %d failed, %dms"
-        args: list[object] = [len(batches), fail_count, elapsed]
+        args: list[object] = [batch_count, fail_count, elapsed_ms]
         if failed_workers:
             fmt += " failed=[%s]"
             args.append(", ".join(failed_workers))
@@ -2047,7 +2184,7 @@ class Controller:
         if self._config.dry_run:
             logger.info("[DRY-RUN] Skipping checkpoint write")
             return ("dry-run", CheckpointResult(created_at=Timestamp.now(), job_count=0, task_count=0, worker_count=0))
-        self._checkpoint_in_progress = True
+        self._checkpoint_paused.set()
         try:
             # Hold the heartbeat lock only for the SQLite backup (consistent
             # snapshot). Compression and GCS upload run outside the lock so
@@ -2067,7 +2204,7 @@ class Controller:
             )
             return path, result
         finally:
-            self._checkpoint_in_progress = False
+            self._checkpoint_paused.clear()
 
     def launch_job(
         self,

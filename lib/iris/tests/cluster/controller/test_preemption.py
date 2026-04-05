@@ -3,7 +3,6 @@
 
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
-
 from iris.cluster.controller.budget import compute_effective_band
 from iris.cluster.controller.transitions import _resolve_task_failure_state
 from iris.cluster.controller.controller import (
@@ -20,8 +19,14 @@ from iris.cluster.controller.transitions import Assignment
 
 from .conftest import (
     ControllerTestHarness,
+    dispatch_task,
     make_controller_state,
+    make_test_entrypoint,
+    make_worker_metadata,
+    query_attempt,
     query_task,
+    register_worker,
+    submit_job,
 )
 
 
@@ -672,3 +677,121 @@ def test_resolve_failure_building_terminal_when_exhausted():
     )
     assert new_state == cluster_pb2.TASK_STATE_WORKER_FAILED
     assert count == 2
+
+
+# ---------------------------------------------------------------------------
+# Integration tests: preempt_task attempt state and coscheduled cascade
+# ---------------------------------------------------------------------------
+
+
+def test_preempt_task_retries_when_budget_remains():
+    """Preempted running task retries to PENDING with attempt marked PREEMPTED."""
+    with make_controller_state() as state:
+        harness = ControllerTestHarness(state)
+        w1 = harness.add_worker("w1", cpu=4)
+
+        tasks = harness.submit(
+            "/alice/batch-job",
+            cpu=1,
+            replicas=1,
+            max_retries_preemption=3,
+        )
+        task = tasks[0]
+        harness.dispatch(task, w1)
+        assert query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_RUNNING
+
+        attempt_id_before = query_task(state, task.task_id).current_attempt_id
+        state.preempt_task(task.task_id, reason="Evicted by /bob/prod:0")
+
+        # Task retries to PENDING
+        updated = query_task(state, task.task_id)
+        assert updated.state == cluster_pb2.TASK_STATE_PENDING
+        assert updated.preemption_count == 1
+
+        # The attempt is marked PREEMPTED even though the task retries
+        attempt = query_attempt(state, task.task_id, attempt_id_before)
+        assert attempt is not None
+        assert attempt.state == cluster_pb2.TASK_STATE_PREEMPTED
+
+
+def test_preempt_task_terminal_when_budget_exhausted():
+    """Preempted running task becomes terminal PREEMPTED when budget is spent."""
+    with make_controller_state() as state:
+        harness = ControllerTestHarness(state)
+        w1 = harness.add_worker("w1", cpu=4)
+
+        tasks = harness.submit(
+            "/alice/batch-job",
+            cpu=1,
+            replicas=1,
+            max_retries_preemption=0,
+        )
+        task = tasks[0]
+        harness.dispatch(task, w1)
+
+        result = state.preempt_task(task.task_id, reason="budget gone")
+
+        updated = query_task(state, task.task_id)
+        assert updated.state == cluster_pb2.TASK_STATE_PREEMPTED
+        assert updated.preemption_count == 1
+        assert updated.finished_at is not None
+
+        # The preempted task is included in tasks_to_kill so the controller
+        # can send a kill RPC to the worker.
+        assert task.task_id in result.tasks_to_kill
+
+        # Attempt is also PREEMPTED
+        attempt = query_attempt(state, task.task_id, updated.current_attempt_id)
+        assert attempt is not None
+        assert attempt.state == cluster_pb2.TASK_STATE_PREEMPTED
+
+
+def test_preempt_task_cascades_coscheduled_siblings():
+    """When all coscheduled tasks are preempted to terminal, the job finalizes and kills survivors.
+
+    preempt_task does not directly cascade coscheduled siblings (unlike
+    WORKER_FAILED via heartbeat). Instead, siblings are killed when the job
+    reaches a terminal state through _finalize_terminal_job.
+    """
+    from iris.cluster.constraints import WellKnownAttribute
+
+    with make_controller_state() as state:
+        # Register 2 workers with TPU attributes for coscheduling
+        for i in range(2):
+            meta = make_worker_metadata()
+            meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+            meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+            register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+        # Submit a coscheduled job with 2 replicas, no preemption retries
+        req = cluster_pb2.Controller.LaunchJobRequest(
+            name="cosched-preempt",
+            entrypoint=make_test_entrypoint(),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            replicas=2,
+            environment=cluster_pb2.EnvironmentConfig(),
+            max_retries_preemption=0,
+        )
+        req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+        tasks = submit_job(state, "cosched-preempt", req)
+        assert len(tasks) == 2
+
+        # Dispatch both tasks
+        for i, task in enumerate(tasks):
+            dispatch_task(state, task, WorkerId(f"w{i}"))
+
+        # Preempt the first task — it goes terminal PREEMPTED
+        result0 = state.preempt_task(tasks[0].task_id, reason="preempted by prod")
+        assert query_task(state, tasks[0].task_id).state == cluster_pb2.TASK_STATE_PREEMPTED
+
+        # Second task is still running (preempt_task doesn't directly cascade siblings)
+        assert query_task(state, tasks[1].task_id).state == cluster_pb2.TASK_STATE_RUNNING
+
+        # Preempt the second task — now ALL tasks are terminal, job finalizes
+        result1 = state.preempt_task(tasks[1].task_id, reason="preempted by prod")
+        assert query_task(state, tasks[1].task_id).state == cluster_pb2.TASK_STATE_PREEMPTED
+
+        # Both tasks should be in the combined kill set
+        all_kills = result0.tasks_to_kill | result1.tasks_to_kill
+        assert tasks[0].task_id in all_kills
+        assert tasks[1].task_id in all_kills
