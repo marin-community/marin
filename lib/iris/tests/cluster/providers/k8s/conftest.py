@@ -8,7 +8,6 @@ from __future__ import annotations
 import pytest
 
 from iris.cluster.controller.transitions import DirectProviderBatch
-from iris.cluster.log_store.mem_store import MemStore
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.providers.k8s.fake import InMemoryK8sService
 from iris.cluster.providers.k8s.tasks import (
@@ -18,7 +17,19 @@ from iris.cluster.providers.k8s.tasks import (
     _LABEL_RUNTIME,
     _RUNTIME_LABEL_VALUE,
 )
-from iris.rpc import cluster_pb2
+from iris.log_server.server import LogServiceImpl
+from iris.rpc import cluster_pb2, logging_pb2
+
+
+class InProcessLogPusher:
+    """Test-friendly log pusher that calls LogServiceImpl directly."""
+
+    def __init__(self, log_service: LogServiceImpl) -> None:
+        self._log_service = log_service
+
+    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
+        if entries:
+            self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries), ctx=None)
 
 
 @pytest.fixture
@@ -27,18 +38,23 @@ def k8s() -> InMemoryK8sService:
 
 
 @pytest.fixture
-def log_store() -> MemStore:
-    return MemStore()
+def log_service() -> LogServiceImpl:
+    return LogServiceImpl()
 
 
 @pytest.fixture
-def provider(k8s, log_store):
+def log_pusher(log_service) -> InProcessLogPusher:
+    return InProcessLogPusher(log_service)
+
+
+@pytest.fixture
+def provider(k8s, log_pusher):
     p = K8sTaskProvider(
         kubectl=k8s,
         namespace="iris",
         default_image="myrepo/iris:latest",
         cache_dir="/cache",
-        log_store=log_store,
+        log_pusher=log_pusher,
     )
     yield p
     p.close()

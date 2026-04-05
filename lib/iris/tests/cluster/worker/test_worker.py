@@ -12,7 +12,6 @@ from unittest.mock import Mock
 import pytest
 from connectrpc.request import RequestContext
 
-from iris.cluster.log_store import LogStore
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import (
     ContainerErrorKind,
@@ -826,7 +825,6 @@ def test_stop_preserve_containers_does_not_kill_tasks(mock_worker, mock_runtime)
 
 def test_task_attempt_adopt_factory():
     """TaskAttempt.adopt() creates a properly initialized attempt."""
-    log_store = LogStore()
     port_allocator = PortAllocator(port_range=(50000, 50100))
     container = _make_discovered_container()
     handle = create_mock_container_handle()
@@ -834,7 +832,7 @@ def test_task_attempt_adopt_factory():
     attempt = TaskAttempt.adopt(
         discovered=container,
         container_handle=handle,
-        log_store=log_store,
+        log_pusher=None,
         port_allocator=port_allocator,
     )
 
@@ -850,8 +848,6 @@ def test_task_attempt_adopt_factory():
     proto = attempt.to_proto()
     assert proto.state == cluster_pb2.TASK_STATE_RUNNING
     assert proto.current_attempt_id == container.attempt_id
-
-    log_store.close()
 
 
 # ============================================================================

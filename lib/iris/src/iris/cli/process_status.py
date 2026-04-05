@@ -13,9 +13,10 @@ import click
 import humanfriendly
 
 from iris.cli.main import require_controller_url, rpc_client
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc.logging_connect import LogServiceClientSync
 
-_CONTROLLER_TARGET = "/system/process"
+_CONTROLLER_LOG_TARGET = "/system/controller"
 
 
 def _print_status(resp: cluster_pb2.GetProcessStatusResponse, label: str) -> None:
@@ -81,36 +82,36 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
     from datetime import datetime, timezone
 
     url = require_controller_url(ctx)
-    source = target or _CONTROLLER_TARGET
+    log_client = LogServiceClientSync(url)
+    source = target or _CONTROLLER_LOG_TARGET
 
-    with rpc_client(url) as client:
-        cursor = 0
-        first = True
-        while True:
-            req = cluster_pb2.FetchLogsRequest(
-                source=source,
-                max_lines=max_lines if first else 100,
-                tail=first,
-                min_level=level,
-                cursor=cursor if not first else 0,
-            )
-            if substring:
-                req.substring = substring
+    cursor = 0
+    first = True
+    while True:
+        req = logging_pb2.FetchLogsRequest(
+            source=source,
+            max_lines=max_lines if first else 100,
+            tail=first,
+            min_level=level,
+            cursor=cursor if not first else 0,
+        )
+        if substring:
+            req.substring = substring
 
-            resp = client.fetch_logs(req)
-            for entry in resp.entries:
-                ts = ""
-                if entry.timestamp and entry.timestamp.epoch_ms:
-                    dt = datetime.fromtimestamp(entry.timestamp.epoch_ms / 1000, tz=timezone.utc)
-                    ts = dt.strftime("%H:%M:%S")
-                click.echo(f"[{ts}] {entry.data}")
+        resp = log_client.fetch_logs(req)
+        for entry in resp.entries:
+            ts = ""
+            if entry.timestamp and entry.timestamp.epoch_ms:
+                dt = datetime.fromtimestamp(entry.timestamp.epoch_ms / 1000, tz=timezone.utc)
+                ts = dt.strftime("%H:%M:%S")
+            click.echo(f"[{ts}] {entry.data}")
 
-            cursor = resp.cursor
-            first = False
+        cursor = resp.cursor
+        first = False
 
-            if not follow:
-                break
-            time.sleep(2)
+        if not follow:
+            break
+        time.sleep(2)
 
 
 @process_group.command()
@@ -139,7 +140,7 @@ def profile(
     /system/worker/<id> for a worker, /alice/job/0 for a task container.
     """
     url = require_controller_url(ctx)
-    rpc_target = target or _CONTROLLER_TARGET
+    rpc_target = target or ""
     label = target or "Controller"
 
     if profiler == "threads":

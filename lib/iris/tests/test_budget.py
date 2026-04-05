@@ -10,7 +10,6 @@ from iris.cluster.controller.budget import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.cluster.log_store import LogStore
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.rpc.proto_utils import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
@@ -158,21 +157,18 @@ def test_priority_band_values_are_ordered():
 def test_compute_user_spend_empty(tmp_path):
     """No active tasks → empty spend dict."""
     db = ControllerDB(db_dir=tmp_path)
-    log_store = LogStore(log_dir=tmp_path / "logs")
     try:
         with db.snapshot() as snap:
             spend = compute_user_spend(snap)
         assert spend == {}
     finally:
-        log_store.close()
         db.close()
 
 
 def test_compute_user_spend_counts_running_tasks(tmp_path):
     """Active tasks contribute to user spend based on resource value."""
     db = ControllerDB(db_dir=tmp_path)
-    log_store = LogStore(log_dir=tmp_path / "logs")
-    state = ControllerTransitions(db=db, log_store=log_store)
+    state = ControllerTransitions(db=db)
     try:
         # Submit a job with 2 tasks
         job_id = JobName.root("alice", "test-job")
@@ -221,15 +217,13 @@ def test_compute_user_spend_counts_running_tasks(tmp_path):
         expected_per_task = resource_value(4000, 16 * GiB, 0)
         assert spend["alice"] == expected_per_task * 2
     finally:
-        log_store.close()
         db.close()
 
 
 def test_compute_user_spend_only_counts_active_states(tmp_path):
     """Completed tasks do not contribute to spend."""
     db = ControllerDB(db_dir=tmp_path)
-    log_store = LogStore(log_dir=tmp_path / "logs")
-    state = ControllerTransitions(db=db, log_store=log_store)
+    state = ControllerTransitions(db=db)
     try:
         job_id = JobName.root("bob", "done-job")
         request = cluster_pb2.Controller.LaunchJobRequest(
@@ -247,12 +241,11 @@ def test_compute_user_spend_only_counts_active_states(tmp_path):
             spend = compute_user_spend(snap)
         assert spend.get("bob", 0) == 0
     finally:
-        log_store.close()
         db.close()
 
 
 # ---------------------------------------------------------------------------
-# interleave_by_user — three-user round-robin
+# interleave_by_user ��� three-user round-robin
 # ---------------------------------------------------------------------------
 
 
@@ -263,8 +256,7 @@ def test_compute_user_spend_null_resources_proto(tmp_path):
     the resources field. compute_user_spend must treat that as zero spend.
     """
     db = ControllerDB(db_dir=tmp_path)
-    log_store = LogStore(log_dir=tmp_path / "logs")
-    state = ControllerTransitions(db=db, log_store=log_store)
+    state = ControllerTransitions(db=db)
     try:
         job_id = JobName.root("carol", "no-resources")
         # Intentionally omit the `resources` field
@@ -308,7 +300,6 @@ def test_compute_user_spend_null_resources_proto(tmp_path):
         # Zero resources → zero spend, but must not crash
         assert spend.get("carol", 0) == 0
     finally:
-        log_store.close()
         db.close()
 
 

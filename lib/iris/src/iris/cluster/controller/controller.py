@@ -73,6 +73,7 @@ from iris.cluster.controller.budget import (
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.controller.provider import TaskProvider
+from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
@@ -94,7 +95,8 @@ from iris.cluster.controller.transitions import (
     ReservationClaim,
     SchedulingEvent,
 )
-from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
+from iris.cluster.log_store import CONTROLLER_LOG_KEY, LogStoreHandler
+from iris.log_server.server import LogServiceImpl
 from iris.cluster.types import (
     JobName,
     WorkerStatus,
@@ -105,7 +107,7 @@ from iris.cluster.types import (
 )
 from rigging.log_setup import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.auth import TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp, TokenBucket
 
@@ -121,6 +123,21 @@ _SLOW_HEARTBEAT_MS = 5000
 # How often the prune loop trims worker_task_history (independent of the
 # full data-prune interval, which is typically 1 hour).
 _HISTORY_CLEANUP_INTERVAL_S = 60.0
+
+
+class _InProcessLogPusher:
+    """Adapts LogServiceImpl to the LogPusherProtocol for in-process use.
+
+    Avoids a network round-trip when the K8s provider is co-hosted with
+    the controller: calls push_logs() directly on the service impl.
+    """
+
+    def __init__(self, log_service: LogServiceImpl) -> None:
+        self._log_service = log_service
+
+    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
+        if entries:
+            self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries), ctx=None)
 
 
 class SchedulingOutcome(enum.Enum):
@@ -998,19 +1015,25 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
-        self._log_store = LogStore(
+
+        self._log_service = LogServiceImpl(
             log_dir=config.local_state_dir / "logs",
             remote_log_dir=f"{config.remote_state_dir.rstrip('/')}/logs",
         )
 
-        # Wire log store into the K8s provider so its LogCollector can write logs directly.
-        # Collectors are created lazily on first sync(), so just setting the field is enough.
+        # Wire an in-process log pusher into providers so log entries are
+        # forwarded through the LogService without a network hop.
+        # - K8sTaskProvider: its LogCollector pushes logs directly.
+        # - WorkerProvider: forwards log_entries piggybacked on heartbeat
+        #   responses from old workers that predate push-based logging.
+        in_process_log_pusher = _InProcessLogPusher(self._log_service)
         if isinstance(self._provider, K8sTaskProvider):
-            self._provider.log_store = self._log_store
+            self._provider.log_pusher = in_process_log_pusher
+        elif isinstance(self._provider, WorkerProvider):
+            self._provider.log_pusher = in_process_log_pusher
 
         self._transitions = ControllerTransitions(
             db=self._db,
-            log_store=self._log_store,
             heartbeat_failure_threshold=config.heartbeat_failure_threshold,
             user_budget_defaults=config.user_budget_defaults,
         )
@@ -1023,11 +1046,13 @@ class Controller:
             self._db,
             controller=self,
             bundle_store=self._bundle_store,
-            log_store=self._log_store,
+            log_service=self._log_service,
             auth=config.auth,
+            system_endpoints={},
         )
         self._dashboard = ControllerDashboard(
             self._service,
+            log_service=self._log_service,
             host=config.host,
             port=config.port,
             auth_verifier=config.auth_verifier,
@@ -1035,8 +1060,9 @@ class Controller:
             auth_optional=config.auth.optional if config.auth else False,
         )
 
-        # Ingest process logs into the LogStore so they are available via FetchLogs.
-        self._log_store_handler = LogStoreHandler(self._log_store, key=PROCESS_LOG_KEY)
+        # Ingest controller process logs into the LogStore via LogStoreHandler.
+        # This writes directly to the co-hosted LogStore (no RPC round-trip).
+        self._log_store_handler = LogStoreHandler(self._log_service.log_store, key=CONTROLLER_LOG_KEY)
         self._log_store_handler.setLevel(logging.DEBUG)
         self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_store_handler)
@@ -1144,6 +1170,12 @@ class Controller:
             timeout=Duration.from_seconds(5.0),
         )
 
+        # Register system endpoints. The address here is used for in-process
+        # and local-network callers (e.g. CLI, tests). Remote workers fall back
+        # to their configured controller_address when the resolved endpoint
+        # is unreachable, since the log service is co-hosted on the controller.
+        self._service._system_endpoints["/system/log-server"] = self.url
+
     def stop(self) -> None:
         """Stop all background components gracefully.
 
@@ -1183,7 +1215,7 @@ class Controller:
         # sqlite3.ProgrammingError spam from late log records.
         logging.getLogger("iris").removeHandler(self._log_store_handler)
         self._log_store_handler.close()
-        self._log_store.close()
+        self._log_service.close()
         self._db.close()
         self._bundle_store.close()
 
