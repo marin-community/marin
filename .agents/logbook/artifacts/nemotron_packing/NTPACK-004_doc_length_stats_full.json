@@ -1,0 +1,29 @@
+{
+  "experiment_id": "NTPACK-004",
+  "results": {
+    "nvidia/Nemotron-Terminal-Corpus/dataset_adapters": {
+      "docs": 226313, "total_tokens": 3992592464,
+      "mean": 17641.9, "median": 13986.0, "min": 960, "max": 137124, "std": 12576.8,
+      "pct_gt_1024": 1.0, "pct_gt_4096": 0.940, "pct_gt_8192": 0.717, "pct_gt_16384": 0.437, "pct_gt_32768": 0.140,
+      "percentiles": {"p10": 4835, "p25": 7532, "p50": 13986, "p75": 24436, "p90": 37091, "p95": 42977, "p99": 53808, "p99_5": 57126, "p99_9": 65566}
+    },
+    "nvidia/Nemotron-Terminal-Corpus/skill_based_easy": {
+      "docs": 44809, "total_tokens": 597515934,
+      "mean": 13334.7, "median": 12381.0, "min": 1385, "max": 70829, "std": 5729.1,
+      "pct_gt_1024": 1.0, "pct_gt_4096": 0.993, "pct_gt_8192": 0.818, "pct_gt_16384": 0.280, "pct_gt_32768": 0.009,
+      "percentiles": {"p10": 6945, "p25": 9067, "p50": 12381, "p75": 16945, "p90": 20277, "p95": 22530, "p99": 32345, "p99_5": 37296, "p99_9": 44211}
+    },
+    "nvidia/Nemotron-Terminal-Corpus/skill_based_medium": {
+      "docs": 89343, "total_tokens": 1661263733,
+      "mean": 18594.2, "median": 18079.0, "min": 1405, "max": 72316, "std": 5420.3,
+      "pct_gt_1024": 1.0, "pct_gt_4096": 0.994, "pct_gt_8192": 0.980, "pct_gt_16384": 0.665, "pct_gt_32768": 0.011,
+      "percentiles": {"p10": 12487, "p25": 15376, "p50": 18079, "p75": 21267, "p90": 25958, "p95": 28617, "p99": 32888, "p99_5": 34695, "p99_9": 43590}
+    },
+    "nvidia/Nemotron-Terminal-Corpus/skill_based_mixed": {
+      "docs": 5689, "total_tokens": 74312459,
+      "mean": 13062.5, "median": 12196.0, "min": 1459, "max": 27961, "std": 4137.5,
+      "pct_gt_1024": 1.0, "pct_gt_4096": 0.986, "pct_gt_8192": 0.931, "pct_gt_16384": 0.217, "pct_gt_32768": 0.0,
+      "percentiles": {"p10": 8681, "p25": 10275, "p50": 12196, "p75": 15721, "p90": 19126, "p95": 20808, "p99": 23296, "p99_5": 24406, "p99_9": 26491}
+    }
+  }
+}

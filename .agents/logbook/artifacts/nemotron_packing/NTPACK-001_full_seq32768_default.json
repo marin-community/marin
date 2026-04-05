@@ -1,0 +1,40 @@
+{
+  "auto_build_caches": false,
+  "experiment_id": "NTPACK-001",
+  "read_only_cache_inspection": true,
+  "seq_len": 32768,
+  "stats": {
+    "train/nvidia/Nemotron-Terminal-Corpus/dataset_adapters/padding_fraction": 0.1598860091054708,
+    "train/nvidia/Nemotron-Terminal-Corpus/dataset_adapters/total_docs": 226313,
+    "train/nvidia/Nemotron-Terminal-Corpus/dataset_adapters/total_seqs": 145033,
+    "train/nvidia/Nemotron-Terminal-Corpus/dataset_adapters/total_tokens": 3992592464,
+    "train/nvidia/Nemotron-Terminal-Corpus/dataset_adapters/weight": 0.6181675648656253,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_easy/padding_fraction": 0.2324800405430868,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_easy/total_docs": 44809,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_easy/total_seqs": 23758,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_easy/total_tokens": 597515934,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_easy/weight": 0.12236993414421625,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_medium/padding_fraction": 0.3056339863030332,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_medium/total_docs": 89343,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_medium/total_seqs": 73013,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_medium/total_tokens": 1661263733,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_medium/weight": 0.24392042676514533,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_mixed/padding_fraction": 0.22254498690663027,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_mixed/total_docs": 5689,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_mixed/total_seqs": 2917,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_mixed/total_tokens": 74312459,
+    "train/nvidia/Nemotron-Terminal-Corpus/skill_based_mixed/weight": 0.01554207422501318
+  },
+  "train_cache_paths": {
+    "nvidia/Nemotron-Terminal-Corpus/dataset_adapters": "gs://marin-us-east5/tokenized/dataset_adapters_qwen3_8b_tokenizer-c319d9/train",
+    "nvidia/Nemotron-Terminal-Corpus/skill_based_easy": "gs://marin-us-east5/tokenized/skill_based_easy_qwen3_8b_tokenizer-a5dd6f/train",
+    "nvidia/Nemotron-Terminal-Corpus/skill_based_medium": "gs://marin-us-east5/tokenized/skill_based_medium_qwen3_8b_tokenizer-045f3b/train",
+    "nvidia/Nemotron-Terminal-Corpus/skill_based_mixed": "gs://marin-us-east5/tokenized/skill_based_mixed_qwen3_8b_tokenizer-3d0352/train"
+  },
+  "weights": {
+    "nvidia/Nemotron-Terminal-Corpus/dataset_adapters": 226313.0,
+    "nvidia/Nemotron-Terminal-Corpus/skill_based_easy": 44800.0,
+    "nvidia/Nemotron-Terminal-Corpus/skill_based_medium": 89300.0,
+    "nvidia/Nemotron-Terminal-Corpus/skill_based_mixed": 5690.0
+  }
+}

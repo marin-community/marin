@@ -1,0 +1,51 @@
+{
+  "experiment_id": "NTPACK-005",
+  "seq_len": 32768,
+  "slice_strategy": "left",
+  "results": {
+    "nvidia/Nemotron-Terminal-Corpus/dataset_adapters": {
+      "total_docs": 226313,
+      "docs_gt_seq_len": 31753,
+      "assistant_tokens_kept": 713825224,
+      "assistant_tokens_lost": 186202867,
+      "assistant_loss_fraction": 0.2069,
+      "tail_heavy_docs": 520,
+      "tail_heavy_fraction": 0.0164,
+      "total_tokens_lost": 291541244,
+      "mean_tokens_lost_per_long_doc": 9181.5
+    },
+    "nvidia/Nemotron-Terminal-Corpus/skill_based_easy": {
+      "total_docs": 44809,
+      "docs_gt_seq_len": 423,
+      "assistant_tokens_kept": 8923808,
+      "assistant_tokens_lost": 1486362,
+      "assistant_loss_fraction": 0.1428,
+      "tail_heavy_docs": 2,
+      "tail_heavy_fraction": 0.0047,
+      "total_tokens_lost": 2455178,
+      "mean_tokens_lost_per_long_doc": 5804.2
+    },
+    "nvidia/Nemotron-Terminal-Corpus/skill_based_medium": {
+      "total_docs": 89343,
+      "docs_gt_seq_len": 941,
+      "assistant_tokens_kept": 15184302,
+      "assistant_tokens_lost": 2057117,
+      "assistant_loss_fraction": 0.1193,
+      "tail_heavy_docs": 11,
+      "tail_heavy_fraction": 0.0117,
+      "total_tokens_lost": 3588437,
+      "mean_tokens_lost_per_long_doc": 3813.4
+    },
+    "nvidia/Nemotron-Terminal-Corpus/skill_based_mixed": {
+      "total_docs": 5689,
+      "docs_gt_seq_len": 0,
+      "assistant_tokens_kept": 0,
+      "assistant_tokens_lost": 0,
+      "assistant_loss_fraction": 0.0,
+      "tail_heavy_docs": 0,
+      "tail_heavy_fraction": 0.0,
+      "total_tokens_lost": 0,
+      "mean_tokens_lost_per_long_doc": 0.0
+    }
+  }
+}

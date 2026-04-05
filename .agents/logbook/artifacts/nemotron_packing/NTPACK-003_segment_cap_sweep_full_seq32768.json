@@ -1,0 +1,34 @@
+{
+  "experiment_id": "NTPACK-003",
+  "seq_len": 32768,
+  "segment_caps": [1, 4, 8, 16, 32, 64, 128],
+  "results": {
+    "1": {
+      "nvidia/Nemotron-Terminal-Corpus/dataset_adapters": {"padding_fraction": 0.4616, "total_docs": 226313, "total_seqs": 226313},
+      "nvidia/Nemotron-Terminal-Corpus/skill_based_easy": {"padding_fraction": 0.5931, "total_docs": 44809, "total_seqs": 44809},
+      "nvidia/Nemotron-Terminal-Corpus/skill_based_medium": {"padding_fraction": 0.4325, "total_docs": 89343, "total_seqs": 89343},
+      "nvidia/Nemotron-Terminal-Corpus/skill_based_mixed": {"padding_fraction": 0.6014, "total_docs": 5689, "total_seqs": 5689}
+    },
+    "4": {
+      "nvidia/Nemotron-Terminal-Corpus/dataset_adapters": {"padding_fraction": 0.1619, "total_docs": 226313, "total_seqs": 145377},
+      "nvidia/Nemotron-Terminal-Corpus/skill_based_easy": {"padding_fraction": 0.2325, "total_docs": 44809, "total_seqs": 23759},
+      "nvidia/Nemotron-Terminal-Corpus/skill_based_medium": {"padding_fraction": 0.3056, "total_docs": 89343, "total_seqs": 73013},
+      "nvidia/Nemotron-Terminal-Corpus/skill_based_mixed": {"padding_fraction": 0.2228, "total_docs": 5689, "total_seqs": 2918}
+    },
+    "8": {
+      "nvidia/Nemotron-Terminal-Corpus/dataset_adapters": {"padding_fraction": 0.1599, "total_docs": 226313, "total_seqs": 145033},
+      "nvidia/Nemotron-Terminal-Corpus/skill_based_easy": {"padding_fraction": 0.2325, "total_docs": 44809, "total_seqs": 23758},
+      "nvidia/Nemotron-Terminal-Corpus/skill_based_medium": {"padding_fraction": 0.3056, "total_docs": 89343, "total_seqs": 73013},
+      "nvidia/Nemotron-Terminal-Corpus/skill_based_mixed": {"padding_fraction": 0.2225, "total_docs": 5689, "total_seqs": 2917}
+    },
+    "16": "identical to 64",
+    "32": "identical to 64",
+    "64": {
+      "nvidia/Nemotron-Terminal-Corpus/dataset_adapters": {"padding_fraction": 0.1599, "total_docs": 226313, "total_seqs": 145033},
+      "nvidia/Nemotron-Terminal-Corpus/skill_based_easy": {"padding_fraction": 0.2325, "total_docs": 44809, "total_seqs": 23758},
+      "nvidia/Nemotron-Terminal-Corpus/skill_based_medium": {"padding_fraction": 0.3056, "total_docs": 89343, "total_seqs": 73013},
+      "nvidia/Nemotron-Terminal-Corpus/skill_based_mixed": {"padding_fraction": 0.2225, "total_docs": 5689, "total_seqs": 2917}
+    },
+    "128": "identical to 64"
+  }
+}

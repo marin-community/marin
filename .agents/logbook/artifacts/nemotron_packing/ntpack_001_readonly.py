@@ -19,7 +19,12 @@ from typing import Final
 
 from experiments.chat_templates.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
 from levanter.data.text import ChatLmDatasetFormat
-from levanter.data.text.datasets import DatasetComponent, LmDataConfig, count_corpus_sizes
+from levanter.data.text.datasets import (
+    DatasetComponent,
+    LmDataConfig,
+    _get_token_key_for_component,
+    dataset_for_component,
+)
 from levanter.utils import fsspec_utils
 
 logger = logging.getLogger("ntpack_001")
@@ -85,6 +90,49 @@ def verify_cache_roots() -> dict[str, str]:
     return train_paths
 
 
+def count_train_only(config: LmDataConfig, seq_len: int) -> dict:
+    """Train-only variant of count_corpus_sizes that skips validation caches."""
+    from haliax import Axis
+
+    stats: dict[str, object] = {}
+    train_caches = config.build_caches("train")
+    Pos = Axis("position", seq_len)
+
+    train_weights = config.train_weights or {name: 1.0 for name in train_caches}
+    if isinstance(train_weights, list):
+        train_weights = train_weights[0][1]
+    total_weight = sum(train_weights.values()) if train_weights else 1.0
+    weights = {name: weight / total_weight for name, weight in train_weights.items()}
+
+    for name, cache in train_caches.items():
+        prefix = f"train/{name}/"
+        component = config.components[name]
+        token_key = _get_token_key_for_component(component)
+        total_tokens = cache.store.tree[token_key].data_size
+        total_docs = cache.store.tree[token_key].num_rows
+        train_set = dataset_for_component(
+            component,
+            Pos,
+            cache,
+            eos_id=None,
+            block_cross_document_attention=config.block_cross_document_attention,
+        )
+        train_seqs = len(train_set.as_sync_dataset())
+        padding_fraction = 1 - (total_tokens / (train_seqs * seq_len))
+
+        stats[f"{prefix}total_tokens"] = total_tokens
+        stats[f"{prefix}total_docs"] = total_docs
+        stats[f"{prefix}total_seqs"] = train_seqs
+        if padding_fraction < 0:
+            stats[f"{prefix}truncation_fraction"] = -padding_fraction
+        else:
+            stats[f"{prefix}padding_fraction"] = padding_fraction
+        if name in weights:
+            stats[f"{prefix}weight"] = weights[name]
+
+    return stats
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -93,8 +141,8 @@ def main() -> None:
     train_paths = verify_cache_roots()
     config = build_config()
     logger.info("auto_build_caches=%s", config.auto_build_caches)
-    logger.info("Counting corpus sizes at seq_len=%s", SEQ_LEN)
-    stats = count_corpus_sizes(config, prefix="", seq_len=SEQ_LEN)
+    logger.info("Counting corpus sizes at seq_len=%s (train only)", SEQ_LEN)
+    stats = count_train_only(config, seq_len=SEQ_LEN)
 
     payload = {
         "experiment_id": "NTPACK-001",
