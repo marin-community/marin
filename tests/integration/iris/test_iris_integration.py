@@ -125,8 +125,8 @@ def test_log_levels_populated(integration_cluster, verbose_job):
     deadline = time.monotonic() + integration_cluster.job_timeout
     entries = []
     while time.monotonic() < deadline:
-        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
-        response = integration_cluster.controller_client.fetch_logs(request)
+        request = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        response = integration_cluster.log_client.fetch_logs(request)
         entries = list(response.entries)
         if any("info-marker" in e.data for e in entries):
             break
@@ -148,8 +148,8 @@ def test_log_level_filter(integration_cluster, verbose_job):
     """min_level=WARNING excludes INFO."""
     task_id = verbose_job.job_id.task(0).to_wire()
 
-    request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*", min_level="WARNING")
-    response = integration_cluster.controller_client.fetch_logs(request)
+    request = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*", min_level="WARNING")
+    response = integration_cluster.log_client.fetch_logs(request)
     filtered = list(response.entries)
 
     filtered_data = [e.data for e in filtered]

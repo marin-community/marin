@@ -50,6 +50,7 @@ class K8sService(Protocol):
         resource: str,
         *,
         labels: dict[str, str] | None = None,
+        field_selector: str | None = None,
         cluster_scoped: bool = False,
     ) -> list[dict]: ...
 
@@ -68,7 +69,7 @@ class K8sService(Protocol):
         pod_name: str,
         *,
         container: str | None = None,
-        byte_offset: int = 0,
+        since_time: datetime | None = None,
     ) -> KubectlLogResult: ...
 
     def exec(
@@ -204,13 +205,16 @@ class CloudK8sService:
         resource: str,
         *,
         labels: dict[str, str] | None = None,
+        field_selector: str | None = None,
         cluster_scoped: bool = False,
     ) -> list[dict]:
-        """List Kubernetes resources, optionally filtered by labels."""
+        """List Kubernetes resources, optionally filtered by labels and/or field selectors."""
         args = ["get", resource, "-o", "json"]
         if labels:
             selector = ",".join(f"{k}={v}" for k, v in labels.items())
             args.extend(["-l", selector])
+        if field_selector:
+            args.extend(["--field-selector", field_selector])
         result = self._run(args, namespaced=not cluster_scoped)
         if result.returncode != 0:
             raise KubectlError(f"kubectl get {resource} failed: {result.stderr.strip()}")
@@ -337,30 +341,30 @@ class CloudK8sService:
         pod_name: str,
         *,
         container: str | None = None,
-        byte_offset: int = 0,
+        since_time: datetime | None = None,
     ) -> KubectlLogResult:
-        """Fetch new log lines from a pod using byte-offset deduplication."""
+        """Fetch new log lines from a pod, bounded by ``--since-time``."""
         args = ["logs", pod_name, "--timestamps=true"]
         if container:
             args.extend(["-c", container])
+        if since_time is not None:
+            args.append(f"--since-time={since_time.strftime('%Y-%m-%dT%H:%M:%S.%f')}Z")
         result = self._run(args, namespaced=True)
         if result.returncode != 0:
-            return KubectlLogResult(lines=[], byte_offset=byte_offset)
-
-        raw_bytes = result.stdout.encode("utf-8")
-        if len(raw_bytes) <= byte_offset:
-            return KubectlLogResult(lines=[], byte_offset=byte_offset)
-
-        new_content = raw_bytes[byte_offset:].decode("utf-8", errors="replace")
-        new_offset = len(raw_bytes)
+            return KubectlLogResult(lines=[], last_timestamp=since_time)
 
         lines: list[KubectlLogLine] = []
-        for line in new_content.splitlines():
-            if not line.strip():
+        for line_str in result.stdout.splitlines():
+            if not line_str.strip():
                 continue
-            lines.append(_parse_kubectl_log_line(line))
+            parsed = _parse_kubectl_log_line(line_str)
+            # --since-time is inclusive; skip already-seen boundary lines
+            if since_time is not None and parsed.timestamp <= since_time:
+                continue
+            lines.append(parsed)
 
-        return KubectlLogResult(lines=lines, byte_offset=new_offset)
+        last_ts = lines[-1].timestamp if lines else since_time
+        return KubectlLogResult(lines=lines, last_timestamp=last_ts)
 
     def top_pod(self, pod_name: str) -> tuple[int, int] | None:
         """Get (cpu_millicores, memory_bytes) for a pod."""

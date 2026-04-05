@@ -13,6 +13,7 @@ from connectrpc.errors import ConnectError
 
 from iris.cluster.constraints import WellKnownAttribute, device_variant_constraint
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import cluster_pb2
@@ -548,7 +549,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
         state._db,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
-        log_store=state._log_store,
+        log_service=LogServiceImpl(),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -579,7 +580,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
         state._db,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
-        log_store=state._log_store,
+        log_service=LogServiceImpl(),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -988,7 +989,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
         db,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
+        log_service=LogServiceImpl(),
         auth=auth,
     )
 
@@ -1024,7 +1025,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
         db,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
+        log_service=LogServiceImpl(),
         auth=auth,
     )
 
@@ -1039,5 +1040,52 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
             None,
         )
         assert resp.accepted
+    finally:
+        _verified_identity.reset(token)
+
+
+def test_get_scheduler_state_with_running_task(controller_service, state):
+    """get_scheduler_state must not crash when there are running tasks.
+
+    Regression: JobName has no `.job` attribute — the code must use `.parent`.
+    """
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
+
+    # Submit a job and move a task to RUNNING
+    job_id = JobName.root("alice", "sched-test")
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name=job_id.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    state.submit_job(job_id, request, Timestamp.now())
+
+    w1 = WorkerId("w1")
+    state.register_or_refresh_worker(
+        worker_id=w1,
+        address="w1:8080",
+        metadata=cluster_pb2.WorkerMetadata(
+            hostname="w1",
+            ip_address="127.0.0.1",
+            cpu_count=8,
+            memory_bytes=16 * 1024**3,
+            disk_bytes=100 * 1024**3,
+        ),
+        ts=Timestamp.now(),
+    )
+    task_id = job_id.task(0)
+    _assign_and_transition(state, task_id, w1, cluster_pb2.TASK_STATE_RUNNING)
+
+    token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
+    try:
+        resp = controller_service.get_scheduler_state(
+            cluster_pb2.Controller.GetSchedulerStateRequest(),
+            None,
+        )
+        assert resp.total_running == 1
+        assert resp.running_tasks[0].job_id == job_id.to_wire()
+        assert resp.running_tasks[0].user_id == "alice"
     finally:
         _verified_identity.reset(token)

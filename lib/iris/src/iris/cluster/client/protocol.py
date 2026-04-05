@@ -6,7 +6,7 @@
 from typing import Protocol
 
 from iris.cluster.types import Entrypoint, JobName, TaskAttempt
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from rigging.timing import Duration
 
 
@@ -29,7 +29,7 @@ class ClusterClient(Protocol):
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
-        max_retries_preemption: int = 100,
+        max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
         reservation: cluster_pb2.ReservationConfig | None = None,
         preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
@@ -91,7 +91,7 @@ class ClusterClient(Protocol):
         substring: str = "",
         min_level: str = "",
         tail: bool = False,
-    ) -> cluster_pb2.FetchLogsResponse: ...
+    ) -> logging_pb2.FetchLogsResponse: ...
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse: ...
 

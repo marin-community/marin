@@ -88,12 +88,14 @@ class AuthzAction(StrEnum):
 
     REGISTER_WORKER = "register_worker"
     MANAGE_OTHER_KEYS = "manage_other_keys"
+    MANAGE_BUDGETS = "manage_budgets"
 
 
 # Action → frozenset of roles allowed. Admin is implicitly always allowed.
 POLICY: dict[AuthzAction, frozenset[str]] = {
     AuthzAction.REGISTER_WORKER: frozenset({"worker"}),
     AuthzAction.MANAGE_OTHER_KEYS: frozenset(),  # admin only
+    AuthzAction.MANAGE_BUDGETS: frozenset(),  # admin only
 }
 
 

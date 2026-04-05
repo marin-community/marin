@@ -17,7 +17,11 @@ import pytest
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.db import ControllerDB, TaskDetail, WorkerDetail, decode_one, decode_rows
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import (
+    TASK_DETAIL_PROJECTION,
+    WORKER_DETAIL_PROJECTION,
+)
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -25,7 +29,7 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.log_store import LogStore
+from iris.log_server.server import LogServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.types import JobName, WorkerId
@@ -256,12 +260,11 @@ class ServiceTestHarness:
 
     def _query_tasks(self, job_id: JobName):
         with self.db.snapshot() as q:
-            return decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (job_id.to_wire(),)))
+            return TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (job_id.to_wire(),)))
 
     def _query_task(self, task_id: JobName):
         with self.db.snapshot() as q:
-            return decode_one(
-                TaskDetail,
+            return TASK_DETAIL_PROJECTION.decode_one(
                 q.fetchall("SELECT * FROM tasks WHERE task_id = ? LIMIT 1", (task_id.to_wire(),)),
             )
 
@@ -316,7 +319,7 @@ class ServiceTestHarness:
         """Read current worker_id and attempt_id from the task_attempts table.
 
         SELECT * FROM tasks doesn't join with task_attempts, so
-        TaskDetail.worker_id is always None when read via _query_task. We read
+        TaskDetailRow.current_worker_id may be None when read via _query_task. We read
         the attempt row directly instead.
         """
         with self.db.snapshot() as q:
@@ -337,7 +340,7 @@ class ServiceTestHarness:
         # If still PENDING, assign to an available worker.
         if task.state == cluster_pb2.TASK_STATE_PENDING:
             with self.db.snapshot() as q:
-                workers = decode_rows(WorkerDetail, q.fetchall("SELECT * FROM workers"))
+                workers = WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers"))
             if not workers:
                 raise ValueError("No GCP workers registered -- call register_gcp_worker first")
             self.state.queue_assignments([Assignment(task_id=task_id, worker_id=WorkerId(workers[0].worker_id))])
@@ -392,8 +395,7 @@ class ServiceTestHarness:
 
 def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "k8s_db")
-    log_store = LogStore(log_dir=tmp_path / "k8s_logs")
-    state = ControllerTransitions(db=db, log_store=log_store)
+    state = ControllerTransitions(db=db)
 
     k8s = InMemoryK8sService()
     k8s.add_node_pool(
@@ -418,7 +420,7 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
         db,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "k8s_bundles")),
-        log_store=log_store,
+        log_service=LogServiceImpl(),
     )
 
     return ServiceTestHarness(
@@ -433,8 +435,7 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
 
 def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "gcp_db")
-    log_store = LogStore(log_dir=tmp_path / "gcp_logs")
-    state = ControllerTransitions(db=db, log_store=log_store)
+    state = ControllerTransitions(db=db)
 
     ctrl = _HarnessController()
     ctrl.has_direct_provider = False
@@ -444,7 +445,7 @@ def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
         db,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "gcp_bundles")),
-        log_store=log_store,
+        log_service=LogServiceImpl(),
     )
 
     return ServiceTestHarness(

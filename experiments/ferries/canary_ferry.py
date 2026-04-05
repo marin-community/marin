@@ -9,6 +9,7 @@ to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 
     CANARY_ACCELERATOR   tpu | gpu
     CANARY_BATCH_SIZE    per-device batch size
+    CANARY_CACHE_COPY_MAX_WORKERS gpu-only cache-copy worker cap
     CANARY_TARGET_TOKENS total training tokens
     RUN_ID               unique run identifier
 """
@@ -81,6 +82,7 @@ def _build_step_from_env() -> ExecutorStep:
     else:
         multi_host = os.environ.get("CANARY_MULTI_HOST", "").lower() in ("1", "true")
         batch_size = _env_int("CANARY_BATCH_SIZE", 32)
+        cache_copy_max_workers = _env_int("CANARY_CACHE_COPY_MAX_WORKERS", 12)
         target_tokens = _env_int("CANARY_TARGET_TOKENS", batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len * 50)
         # SlimPajama-6B with block-shuffle — small dataset, re-tokenized on first run.
         tokenize_step = default_tokenize(
@@ -95,6 +97,7 @@ def _build_step_from_env() -> ExecutorStep:
                 tokenize_step.config,
                 # SlimPajama-6B tokenization OOMs at the default 10g worker_resources.
                 worker_resources=ResourceConfig(ram="64g", disk="64g"),
+                cache_copy_max_workers=cache_copy_max_workers,
             ),
         )
         data = lm_data_config(

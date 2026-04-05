@@ -18,8 +18,9 @@ from iris.cluster.client.bundle import BundleCreator
 from iris.cluster.log_store._types import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.logging_connect import LogServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
 from iris.time_proto import duration_to_proto
 from rigging.timing import Deadline, Duration, ExponentialBackoff
@@ -65,6 +66,11 @@ class RemoteClusterClient:
             timeout_ms=timeout_ms,
             interceptors=interceptors,
         )
+        self._log_client = LogServiceClientSync(
+            address=controller_address,
+            timeout_ms=timeout_ms,
+            interceptors=interceptors,
+        )
 
     def submit_job(
         self,
@@ -78,7 +84,7 @@ class RemoteClusterClient:
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
-        max_retries_preemption: int = 100,
+        max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
         reservation: cluster_pb2.ReservationConfig | None = None,
         preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
@@ -246,7 +252,7 @@ class RemoteClusterClient:
             state_name = cluster_pb2.JobState.Name(state)
 
             try:
-                log_response = self.fetch_logs(source, cursor=cursor, min_level=min_level)
+                log_response = self.fetch_logs(source, since_ms=since_ms, cursor=cursor, min_level=min_level)
             except Exception as e:
                 msg = format_connect_error(e) if isinstance(e, ConnectError) else str(e)
                 logger.warning("Failed to fetch logs for %s, will retry: %s", job_id, msg)
@@ -343,6 +349,7 @@ class RemoteClusterClient:
 
     def shutdown(self, wait: bool = True) -> None:
         del wait
+        self._log_client.close()
         self._client.close()
 
     def get_task_status(self, task_name: JobName) -> cluster_pb2.TaskStatus:
@@ -390,8 +397,8 @@ class RemoteClusterClient:
         substring: str = "",
         min_level: str = "",
         tail: bool = False,
-    ) -> cluster_pb2.FetchLogsResponse:
-        request = cluster_pb2.FetchLogsRequest(
+    ) -> logging_pb2.FetchLogsResponse:
+        request = logging_pb2.FetchLogsRequest(
             source=source,
             since_ms=since_ms,
             cursor=cursor,
@@ -402,7 +409,7 @@ class RemoteClusterClient:
         )
 
         def _call():
-            return self._client.fetch_logs(request)
+            return self._log_client.fetch_logs(request)
 
         return call_with_retry(f"fetch_logs({source})", _call)
 

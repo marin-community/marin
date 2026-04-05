@@ -27,7 +27,7 @@ class KubectlLogResult:
     """Result of an incremental log fetch."""
 
     lines: list[KubectlLogLine]
-    byte_offset: int
+    last_timestamp: datetime | None
 
 
 @dataclass(frozen=True)

@@ -21,7 +21,6 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 from iris.cluster.config import config_to_dict
-from iris.cluster.providers.k8s.constants import CW_INTERRUPTABLE_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.types import InfraError, Labels
 from iris.rpc import config_pb2
@@ -159,7 +158,6 @@ def _build_controller_deployment(
                 "spec": {
                     "serviceAccountName": "iris-controller",
                     "nodeSelector": node_selector,
-                    "tolerations": [CW_INTERRUPTABLE_TOLERATION],
                     "containers": [
                         {
                             "name": "iris-controller",
@@ -176,6 +174,7 @@ def _build_controller_deployment(
                             ],
                             "ports": [{"containerPort": port}],
                             "env": s3_env_vars,
+                            "securityContext": {"capabilities": {"add": ["SYS_PTRACE"]}},
                             "resources": controller_resources,
                             "volumeMounts": [
                                 {"name": "config", "mountPath": "/etc/iris", "readOnly": True},

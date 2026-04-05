@@ -426,7 +426,11 @@ def should_allow_eval(expr: str):
         if bad_string in expr:
             return False
 
-    return all(re.search(bad_regex, expr) is not None for bad_regex in BAD_REGEXES)
+    for bad_regex in BAD_REGEXES:
+        if re.search(bad_regex, expr) is not None:
+            return False
+
+    return True
 
 
 def _sympy_simplify_with_timeout(expr, timeout=_SYMPY_TIMEOUT):

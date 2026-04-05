@@ -236,7 +236,7 @@ class RayCluster(Cluster):
             remote_fn,
             tpu_type=device.variant,
             num_slices=request.resources.replicas,
-            max_retries_preemption=10000,
+            max_retries_preemption=1000,
             max_retries_failure=1,
             runtime_env=tpu_runtime_env,
         )

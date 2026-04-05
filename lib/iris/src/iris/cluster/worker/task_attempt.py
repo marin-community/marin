@@ -36,14 +36,16 @@ from iris.cluster.types import (
 )
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.log_store import LogCursor, LogStore, task_log_key
+from iris.cluster.worker.worker_types import LogLine
+from iris.cluster.log_store._types import task_log_key
+from iris.log_server.client import LogPusher
 from iris.logging import str_to_log_level
 from rigging.log_setup import parse_log_level
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
 from iris.time_proto import timestamp_to_proto
-from rigging.timing import Deadline, Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +196,7 @@ class TaskAttempt:
         default_task_image: str | None,
         resolve_image: Callable[[str], str] | None,
         port_allocator: PortAllocator,
-        log_store: LogStore,
+        log_pusher: LogPusher | None,
         poll_interval_seconds: float = 5.0,
         *,
         container_handle: ContainerHandle | None = None,
@@ -222,7 +224,7 @@ class TaskAttempt:
             default_task_image: Fully-qualified task container image from cluster config
             resolve_image: Resolves image tags for the current platform (None for adopted tasks)
             port_allocator: Port allocator for releasing ports on cleanup
-            log_store: Shared LogStore for appending and querying task logs
+            log_pusher: Pushes log entries to the central LogService.
             poll_interval_seconds: How often to poll container status
             container_handle: Pre-existing container handle for adopted tasks
             initial_status: Starting status (default PENDING, use RUNNING for adopted tasks)
@@ -237,7 +239,7 @@ class TaskAttempt:
         self._resolve_image_fn = resolve_image or (lambda x: x)
         self._port_allocator = port_allocator
         self._poll_interval_seconds = poll_interval_seconds
-        self._log_store = log_store
+        self._log_pusher = log_pusher
         self._log_key = task_log_key(config.task_attempt)
 
         # Task identity (from config)
@@ -276,14 +278,13 @@ class TaskAttempt:
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
-        self._heartbeat_cursor: LogCursor = log_store.cursor(self._log_key)
 
     @classmethod
     def adopt(
         cls,
         discovered: DiscoveredContainer,
         container_handle: ContainerHandle,
-        log_store: LogStore,
+        log_pusher: LogPusher | None,
         port_allocator: PortAllocator,
         poll_interval_seconds: float = 5.0,
     ) -> "TaskAttempt":
@@ -320,7 +321,7 @@ class TaskAttempt:
             default_task_image=None,
             resolve_image=None,
             port_allocator=port_allocator,
-            log_store=log_store,
+            log_pusher=log_pusher,
             poll_interval_seconds=poll_interval_seconds,
             container_handle=container_handle,
             initial_status=cluster_pb2.TASK_STATE_RUNNING,
@@ -347,10 +348,8 @@ class TaskAttempt:
         )
 
         try:
-            # Deadline: adopted tasks may have had a timeout, but we don't
-            # have the original timeout value. Monitor without deadline.
             log_reader = handle.log_reader()
-            self._monitor_loop(handle, log_reader, deadline=None)
+            self._monitor_loop(handle, log_reader)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
             self._append_log(source="error", data=f"Monitoring failed:\n{error_msg}")
@@ -381,32 +380,6 @@ class TaskAttempt:
         if self._container_handle:
             return self._container_handle.container_id
         return None
-
-    def recent_logs(self, max_entries: int = 0) -> list[logging_pb2.LogEntry]:
-        """Return recent logs for this task attempt."""
-        return self._log_store.get_logs(self._log_key, tail=True, max_lines=max_entries or 1000).entries
-
-    def drain_heartbeat_logs(self, max_entries: int = 5000, final: bool = False) -> list[logging_pb2.LogEntry]:
-        """Return log entries appended since the last call, for delta forwarding.
-
-        Args:
-            max_entries: Maximum number of entries to return per call.
-            final: When True (terminal heartbeat), reads all pending entries and
-                truncates locally to *max_entries* with a marker.  When False
-                (normal heartbeat), uses the bounded cursor so undelivered rows
-                remain available for subsequent heartbeats.
-        """
-        if final:
-            entries = self._heartbeat_cursor.read(max_entries=0)
-            if len(entries) > max_entries:
-                marker = logging_pb2.LogEntry(
-                    source="iris",
-                    data=f"<logs truncated — {len(entries) - max_entries} earlier entries exceeded heartbeat log quota>",
-                )
-                marker.timestamp.epoch_ms = entries[-max_entries].timestamp.epoch_ms
-                entries = [marker, *entries[-max_entries:]]
-            return entries
-        return self._heartbeat_cursor.read(max_entries=max_entries)
 
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""
@@ -756,11 +729,11 @@ class TaskAttempt:
             self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="syncing dependencies")
             self.build_started = Timestamp.now()
 
-        build_logs = self._container_handle.build()
+        def on_build_logs(lines: list[LogLine]) -> None:
+            entries = [self._make_log_entry(source=line.source, data=line.data) for line in lines]
+            self._push_logs(entries)
 
-        # Capture build logs into log store
-        for log_line in build_logs:
-            self._append_log(source=log_line.source, data=log_line.data)
+        self._container_handle.build(on_logs=on_build_logs)
 
         self.build_finished = Timestamp.now()
         if self.request.entrypoint.setup_commands:
@@ -779,33 +752,27 @@ class TaskAttempt:
         )
 
     def _monitor(self) -> None:
-        """Monitor task execution: check status, collect stats, stream logs, handle timeouts.
+        """Monitor task execution: check status, collect stats, stream logs.
 
         Polls container status at regular intervals until the container stops.
         Streams logs incrementally into task.logs (single source of truth).
-        Collects runtime statistics (CPU, memory, disk) and handles timeout enforcement.
+        Collects runtime statistics (CPU, memory, disk).
         Updates task state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
 
+        Execution timeouts are enforced by the controller, not the worker.
         Profiling is handled centrally by the controller's profile loop thread.
         """
         assert self._container_handle is not None
         assert self.workdir is not None
         handle = self._container_handle
 
-        # Create deadline from timeout if specified (0 or unset means no timeout)
-        deadline = None
-        if self.request.HasField("timeout") and self.request.timeout.milliseconds > 0:
-            timeout_seconds = self.request.timeout.milliseconds / 1000
-            deadline = Deadline.from_seconds(timeout_seconds)
-
         log_reader = handle.log_reader()
-        self._monitor_loop(handle, log_reader, deadline)
+        self._monitor_loop(handle, log_reader)
 
     def _monitor_loop(
         self,
         handle: ContainerHandle,
         log_reader: RuntimeLogReader,
-        deadline: Deadline | None,
     ) -> None:
         last_disk_check = 0.0
         while True:
@@ -820,17 +787,6 @@ class TaskAttempt:
                 logger.info("Task %s requested stop; killing container %s", self.task_id, self.container_id)
                 self._stream_logs(log_reader)  # Capture final logs
                 self.transition_to(cluster_pb2.TASK_STATE_KILLED)
-                break
-
-            # Check timeout
-            if deadline and deadline.expired():
-                handle.stop(force=True)
-                self._stream_logs(log_reader)  # Capture final logs
-                self.transition_to(
-                    cluster_pb2.TASK_STATE_FAILED,
-                    error="Timeout exceeded",
-                    exit_code=-1,
-                )
                 break
 
             # Check container status
@@ -901,19 +857,32 @@ class TaskAttempt:
             # Sleep before next poll
             time.sleep(self._poll_interval_seconds)
 
-    def _append_log(self, *, source: str, data: str) -> None:
-        """Append a single log entry to the log store, parsing the level prefix if present."""
+    def _make_log_entry(self, *, source: str, data: str) -> logging_pb2.LogEntry:
+        """Build a LogEntry proto from a source/data pair, parsing the level prefix."""
         level_name = parse_log_level(data)
         level = str_to_log_level(level_name) if level_name else 0
         entry = logging_pb2.LogEntry(source=source, data=data, level=level)
         entry.timestamp.epoch_ms = Timestamp.now().epoch_ms()
-        self._log_store.append(self._log_key, [entry])
+        return entry
+
+    def _push_logs(self, entries: list[logging_pb2.LogEntry]) -> None:
+        """Push a batch of log entries to the central LogService."""
+        if not self._log_pusher or not entries:
+            return
+        try:
+            self._log_pusher.push(self._log_key, entries)
+        except Exception:
+            logger.debug("Failed to push %d logs for task %s", len(entries), self.task_id, exc_info=True)
+
+    def _append_log(self, *, source: str, data: str) -> None:
+        """Push a single log entry (for rare events like errors)."""
+        self._push_logs([self._make_log_entry(source=source, data=data)])
 
     def _stream_logs(self, reader: RuntimeLogReader) -> None:
-        """Fetch new logs from container and append to log store."""
+        """Fetch new logs from container and push as a batch."""
         try:
-            for log_line in reader.read():
-                self._append_log(source=log_line.source, data=log_line.data)
+            entries = [self._make_log_entry(source=line.source, data=line.data) for line in reader.read()]
+            self._push_logs(entries)
         except Exception:
             logger.debug("Log streaming failed for task %s", self.task_id, exc_info=True)
 

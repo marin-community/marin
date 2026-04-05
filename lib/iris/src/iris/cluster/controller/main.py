@@ -36,7 +36,6 @@ def run_controller_serve(
     *,
     host: str = "0.0.0.0",
     port: int = 10000,
-    scheduler_interval: float = 0.5,
     checkpoint_path: str | None = None,
     checkpoint_interval: float | None = None,
     dry_run: bool = False,
@@ -108,6 +107,7 @@ def run_controller_serve(
     elif not isinstance(provider, K8sTaskProvider):
         bundle = create_provider_bundle(
             platform_config=cluster_config.platform,
+            cluster_config=cluster_config,
             ssh_config=cluster_config.defaults.ssh,
         )
         workers = bundle.workers
@@ -145,7 +145,6 @@ def run_controller_serve(
         logger.info("Defaulting to hourly checkpointing")
 
     logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
-    logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
 
     auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
     if auth.worker_token and base_worker_config is not None:
@@ -155,7 +154,6 @@ def run_controller_serve(
         host=host,
         port=port,
         remote_state_dir=remote_state_dir,
-        scheduler_interval=Duration.from_seconds(scheduler_interval),
         heartbeat_failure_threshold=heartbeat_failure_threshold,
         checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
         local_state_dir=local_state_dir,
@@ -223,7 +221,6 @@ def cli():
 @cli.command()
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=10000, type=int, help="Bind port")
-@click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
 @click.option("--config", "config_file", type=click.Path(exists=True), required=True, help="Cluster config YAML")
 @click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]), help="Log level")
 @click.option(
@@ -246,7 +243,6 @@ def cli():
 def serve(
     host: str,
     port: int,
-    scheduler_interval: float,
     config_file: str,
     log_level: str,
     checkpoint_path: str | None,
@@ -266,7 +262,6 @@ def serve(
         cluster_config,
         host=host,
         port=port,
-        scheduler_interval=scheduler_interval,
         checkpoint_path=checkpoint_path,
         checkpoint_interval=checkpoint_interval,
         dry_run=dry_run,

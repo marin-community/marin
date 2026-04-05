@@ -334,3 +334,12 @@ def test_token_bucket_acquire_multiple():
     assert bucket.try_acquire(n=7, now=now)
     assert bucket.try_acquire(n=3, now=now)
     assert not bucket.try_acquire(n=1, now=now)
+
+
+def test_token_bucket_available_refills():
+    """available property triggers refill from elapsed time."""
+    bucket = TokenBucket(capacity=10, refill_period=Duration.from_minutes(1))
+
+    # Drain the bucket using wall-clock time (available uses Timestamp.now()).
+    assert bucket.try_acquire(n=10)
+    assert bucket.available == 0

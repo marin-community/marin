@@ -15,11 +15,13 @@ from starlette.testclient import TestClient
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.db import (
-    Endpoint,
-    JobDetail,
-    decode_rows,
     healthy_active_workers_with_attributes,
+)
+from iris.cluster.controller.schema import (
+    JOB_DETAIL_PROJECTION,
+    EndpointRow,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -31,6 +33,7 @@ from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
 
 from .conftest import (
+    check_task_can_be_scheduled,
     make_test_entrypoint,
     make_worker_metadata,
     query_tasks_with_attempts as _query_tasks_with_attempts,
@@ -120,7 +123,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     def _get_job_scheduling_diagnostics(job_wire_id):
         """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
         with state._db.snapshot() as q:
-            rows = decode_rows(JobDetail, q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire_id,)))
+            rows = JOB_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire_id,)))
         if not rows:
             return None
         job = rows[0]
@@ -129,11 +132,11 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         req = JobRequirements(
             resources=job.request.resources,
             constraints=list(job.request.constraints),
-            is_coscheduled=job.is_coscheduled,
-            coscheduling_group_by=job.coscheduling_group_by,
+            is_coscheduled=job.request.HasField("coscheduling"),
+            coscheduling_group_by=job.request.coscheduling.group_by if job.request.HasField("coscheduling") else None,
         )
         tasks = _query_tasks_with_attempts(state, job.job_id)
-        schedulable_task_id = next((t.task_id for t in tasks if t.can_be_scheduled()), None)
+        schedulable_task_id = next((t.task_id for t in tasks if check_task_can_be_scheduled(t)), None)
         workers = healthy_active_workers_with_attributes(state._db)
         context = _create_scheduling_context(workers)
         return scheduler.get_job_scheduling_diagnostics(req, context, schedulable_task_id, num_tasks=len(tasks))
@@ -151,18 +154,19 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 @pytest.fixture
 def service(state, scheduler, tmp_path):
     controller_mock = _make_controller_mock(state, scheduler)
+    log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
         state._db,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
+        log_service=log_service,
     )
 
 
 @pytest.fixture
 def client(service):
-    dashboard = ControllerDashboard(service)
+    dashboard = ControllerDashboard(service, log_service=service._log_service)
     return TestClient(dashboard.app)
 
 
@@ -170,12 +174,13 @@ def client(service):
 def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
     """Service with autoscaler enabled for tests."""
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
+    log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
         state._db,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
+        log_service=log_service,
     )
 
 
@@ -284,7 +289,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
 
     # Add endpoints only for non-terminal jobs
     state.add_endpoint(
-        Endpoint(
+        EndpointRow(
             endpoint_id="ep1",
             name="pending-svc",
             address="h:1",
@@ -295,7 +300,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
         task_id=pending_id.task(0),
     )
     state.add_endpoint(
-        Endpoint(
+        EndpointRow(
             endpoint_id="ep2",
             name="running-svc",
             address="h:2",
@@ -546,7 +551,7 @@ def mock_autoscaler():
 @pytest.fixture
 def client_with_autoscaler(service_with_autoscaler):
     """Dashboard test client with autoscaler enabled."""
-    dashboard = ControllerDashboard(service_with_autoscaler)
+    dashboard = ControllerDashboard(service_with_autoscaler, log_service=service_with_autoscaler._log_service)
     return TestClient(dashboard.app)
 
 
@@ -792,7 +797,20 @@ def test_health_endpoint_returns_ok(client):
 
 
 def test_fetch_logs_for_missing_task_returns_empty_entries(client):
-    """FetchLogs returns empty entries for a nonexistent task."""
+    """FetchLogs on LogService returns empty entries for a nonexistent task."""
+    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
+    resp = client.post(
+        "/iris.logging.LogService/FetchLogs",
+        json={"source": re.escape(task_id) + ":.*"},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("entries", []) == []
+
+
+def test_fetch_logs_backward_compat_proxy(client):
+    """The old ControllerService/FetchLogs path proxies to LogService."""
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
         "/iris.cluster.ControllerService/FetchLogs",
@@ -946,7 +964,9 @@ def test_auth_config_returns_enabled_when_verifier_set(service):
     from iris.rpc.auth import StaticTokenVerifier
 
     verifier = StaticTokenVerifier({"test-token": "test-user"})
-    dashboard = ControllerDashboard(service, auth_verifier=verifier, auth_provider="gcp")
+    dashboard = ControllerDashboard(
+        service, log_service=service._log_service, auth_verifier=verifier, auth_provider="gcp"
+    )
     authed_client = TestClient(dashboard.app)
 
     resp = authed_client.get("/auth/config")
@@ -968,14 +988,15 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
     """auth/config returns provider_kind=kubernetes when controller has direct provider."""
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.has_direct_provider = True
+    log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
         state,
         state._db,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
+        log_service=log_service,
     )
-    dashboard = ControllerDashboard(svc)
+    dashboard = ControllerDashboard(svc, log_service=svc._log_service)
     k8s_client = TestClient(dashboard.app)
 
     resp = k8s_client.get("/auth/config")

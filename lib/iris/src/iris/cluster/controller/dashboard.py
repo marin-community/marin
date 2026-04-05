@@ -30,6 +30,7 @@ from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
 import httpx
+from google.protobuf.json_format import MessageToDict, ParseDict
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
@@ -40,9 +41,12 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from iris.cluster.controller.actor_proxy import PROXY_ROUTE, ActorProxy
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, on_shutdown, static_files_mount
+from iris.log_server.server import LogServiceImpl
+from iris.rpc import logging_pb2
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
+from iris.rpc.logging_connect import LogServiceWSGIApplication
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +232,7 @@ class ControllerDashboard:
     def __init__(
         self,
         service: ControllerServiceImpl,
+        log_service: LogServiceImpl,
         host: str = "0.0.0.0",
         port: int = 8080,
         auth_verifier: TokenVerifier | None = None,
@@ -235,6 +240,7 @@ class ControllerDashboard:
         auth_optional: bool = False,
     ):
         self._service = service
+        self._log_service = log_service
         self._host = host
         self._port = port
         self._auth_verifier = auth_verifier
@@ -261,11 +267,22 @@ class ControllerDashboard:
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
+        log_wsgi_app = LogServiceWSGIApplication(service=self._log_service, interceptors=interceptors)
+        log_app = WSGIMiddleware(log_wsgi_app)
+
         self._actor_proxy = ActorProxy(self._service._db)
 
         @requires_auth
         async def _proxy_actor_rpc(request: Request) -> Response:
             return await self._actor_proxy.handle(request)
+
+        @requires_auth
+        async def _fetch_logs_compat(request: Request) -> JSONResponse:
+            """Backward-compat proxy: old clients POST to ControllerService/FetchLogs."""
+            body = await request.json()
+            req = ParseDict(body, logging_pb2.FetchLogsRequest())
+            resp = self._log_service.fetch_logs(req, None)
+            return JSONResponse(MessageToDict(resp, preserving_proto_field_name=True))
 
         routes = [
             Route("/", self._dashboard),
@@ -279,6 +296,8 @@ class ControllerDashboard:
             Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
             Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
+            Route("/iris.cluster.ControllerService/FetchLogs", _fetch_logs_compat, methods=["POST"]),
+            Mount(log_wsgi_app.path, app=log_app),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
         ]
@@ -439,6 +458,7 @@ class ProxyControllerDashboard:
             Route("/blobs/{blob_id:str}", self._proxy_blob),
             Route("/health", self._health),
             Route("/iris.cluster.ControllerService/{method}", self._proxy_rpc, methods=["POST"]),
+            Route("/iris.logging.LogService/{method}", self._proxy_log_rpc, methods=["POST"]),
             static_files_mount(),
         ]
 
@@ -472,6 +492,20 @@ class ProxyControllerDashboard:
         body = await request.body()
         upstream_resp = await self._client.post(
             f"/iris.cluster.ControllerService/{method}",
+            content=body,
+            headers={"content-type": request.headers.get("content-type", "application/json")},
+        )
+        return Response(
+            content=upstream_resp.content,
+            status_code=upstream_resp.status_code,
+            media_type=upstream_resp.headers.get("content-type"),
+        )
+
+    async def _proxy_log_rpc(self, request: Request) -> Response:
+        method = request.path_params["method"]
+        body = await request.body()
+        upstream_resp = await self._client.post(
+            f"/iris.logging.LogService/{method}",
             content=body,
             headers={"content-type": request.headers.get("content-type", "application/json")},
         )
