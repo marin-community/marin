@@ -311,8 +311,7 @@ class MoEMLP(eqx.Module):
 
     router: jax.Array
     router_bias: jax.Array
-    w_gate: jax.Array
-    w_up: jax.Array
+    w_gate_up: jax.Array
     w_down: jax.Array
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -326,12 +325,14 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e, i = cfg.hidden_dim, cfg.num_experts, cfg.intermediate_dim
+        w_gate = _init_weight(k_gate, (e, d, i), cfg.initializer_std)
+        w_up = _init_weight(k_up, (e, d, i), cfg.initializer_std)
+        w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
 
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
-            w_gate=reshard(_init_weight(k_gate, (e, d, i), cfg.initializer_std), P("expert", "data", "model")),
-            w_up=reshard(_init_weight(k_up, (e, d, i), cfg.initializer_std), P("expert", "data", "model")),
+            w_gate_up=reshard(w_gate_up, P("expert", "data", "model")),
             w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
             cfg=cfg,
         )
@@ -383,12 +384,11 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         routed_flat = moe_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
-            w_gate_up,
+            self.w_gate_up,
             self.w_down,
             activation=ActivationFunctionEnum.silu,
             mesh=get_abstract_mesh(),
@@ -408,6 +408,8 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    lambda_routed: jax.Array  # per-layer scalar for routed expert output
+    lambda_shared: jax.Array  # per-layer scalar for shared expert output
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -425,6 +427,8 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            lambda_routed=jnp.array(1.0),
+            lambda_shared=jnp.array(1.0),
         )
 
     @named_call
@@ -436,9 +440,10 @@ class Block(eqx.Module):
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
+        routed_out, router_stats = self.mlp(mlp_in)
+        mlp_out = self.lambda_routed * routed_out
         if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            mlp_out = mlp_out + self.lambda_shared * self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
         return x, router_stats
 

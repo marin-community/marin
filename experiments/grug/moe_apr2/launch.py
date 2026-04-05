@@ -765,15 +765,15 @@ def create_d640_d896_sweep() -> list[ExecutorStep]:
 d640_d896_steps = create_d640_d896_sweep()
 
 
-def create_untied_expert_run() -> list[ExecutorStep]:
-    """Single 1e18 d768 run with untied expert gate/up projections."""
+def create_lambda_expert_run() -> list[ExecutorStep]:
+    """Single 1e18 d768 run with per-layer lambda scaling on routed/shared outputs."""
     dim = 768
     model_cfg = HEURISTIC.build_model_config(dim)
     fpt = _compute_flops_per_token(model_cfg)
     tokens, batch_size, train_steps = _compute_tokens_and_batch(1e18, fpt)
     optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, dim)
 
-    run_id = "moe-exp-untied-d768-1e18"
+    run_id = "moe-exp-lambda-d768-1e18"
     config = GrugMoeLaunchConfig(
         model=versioned(model_cfg),
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
@@ -786,7 +786,7 @@ def create_untied_expert_run() -> list[ExecutorStep]:
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
             project="dial_moe",
-            tags=["grug", "moe-core", "untied-expert", "d=768", "budget=1e+18", "gqa4"],
+            tags=["grug", "moe-core", "lambda-scale", "d=768", "budget=1e+18", "gqa4"],
             group="moe-exp",
             name=run_id,
         ),
@@ -813,6 +813,6 @@ def create_untied_expert_run() -> list[ExecutorStep]:
 
 if __name__ == "__main__":
     executor_main(
-        steps=create_untied_expert_run(),
-        description="moe-exp: d768 1e18 with untied expert gate/up",
+        steps=create_lambda_expert_run(),
+        description="moe-exp: d768 1e18 with per-layer lambda routed/shared",
     )
