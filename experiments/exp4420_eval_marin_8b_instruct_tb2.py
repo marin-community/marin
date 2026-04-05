@@ -139,7 +139,8 @@ def _build_harbor_step() -> ExecutorStep:
         },
         "forwarded_env_vars": forwarded_env_vars,
     }
-    tpu_resources = ResourceConfig.with_tpu("v5p-8")
+    tpu_variant = os.environ.get("HARBOR_TPU_VARIANT", "v5p-8")
+    tpu_resources = ResourceConfig.with_tpu(tpu_variant)
     wandb_tags = ["harbor", DATASET, "terminus-2", ENV_TYPE, MODEL_NAME, "vllm", "exp4420", BENCHMARK]
     return ExecutorStep(
         name=f"evaluation/harbor/{MODEL_NAME}-{DATASET}-{VERSION}",
