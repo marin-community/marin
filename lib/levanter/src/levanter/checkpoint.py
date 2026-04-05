@@ -10,6 +10,7 @@ import logging
 import os
 import pathlib
 import queue
+import resource
 import sys
 import threading
 import time
@@ -23,6 +24,7 @@ from typing import Any, Callable, List, Optional, ParamSpec, Sequence, TypeVar, 
 import equinox
 import fsspec
 import haliax.partitioning
+import humanfriendly
 import jax
 import jax.numpy as jnp
 from draccus import field
@@ -47,26 +49,19 @@ M = TypeVar("M", bound=PyTree)
 Sig = ParamSpec("Sig")
 
 
-try:
-    import psutil
-except ImportError:  # pragma: no cover - optional dependency for richer checkpoint diagnostics
-    psutil = None
-
-
-def _format_gib_from_bytes(num_bytes: int | None) -> str | None:
+def _format_bytes_human_readable(num_bytes: int | None) -> str | None:
     if num_bytes is None:
         return None
-    return f"{num_bytes / (1024**3):.2f}GiB"
+    return humanfriendly.format_size(num_bytes, binary=True)
 
 
 def _current_process_rss_bytes() -> int | None:
-    if psutil is None:
-        return None
-
     try:
-        return int(psutil.Process().memory_info().rss)
+        rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     except Exception:
         return None
+
+    return rss * 1024
 
 
 CheckpointDebugStateProvider = Callable[[], Mapping[str, Any]]
@@ -160,8 +155,8 @@ def _tracemalloc_memory_state() -> dict[str, str]:
 
     current_bytes, peak_bytes = tracemalloc.get_traced_memory()
     return {
-        "python_tracemalloc_current": _format_gib_from_bytes(current_bytes),
-        "python_tracemalloc_peak": _format_gib_from_bytes(peak_bytes),
+        "python_tracemalloc_current": _format_bytes_human_readable(current_bytes),
+        "python_tracemalloc_peak": _format_bytes_human_readable(peak_bytes),
     }
 
 
@@ -174,7 +169,7 @@ def _format_tracemalloc_growth(snapshot: tracemalloc.Snapshot | None, limit: int
     return [
         (
             f"{stat.traceback[0].filename}:{stat.traceback[0].lineno} "
-            f"size_diff={_format_gib_from_bytes(stat.size_diff)} count_diff={stat.count_diff}"
+            f"size_diff={_format_bytes_human_readable(stat.size_diff)} count_diff={stat.count_diff}"
         )
         for stat in stats
         if stat.traceback
@@ -182,14 +177,14 @@ def _format_tracemalloc_growth(snapshot: tracemalloc.Snapshot | None, limit: int
 
 
 def _run_debug_gc() -> dict[str, Any]:
-    rss_before = _format_gib_from_bytes(_current_process_rss_bytes())
+    rss_before = _format_bytes_human_readable(_current_process_rss_bytes())
     gc_counts_before = gc.get_count()
     tracked_objects_before = len(gc.get_objects())
     tracemalloc_before = _tracemalloc_memory_state()
 
     collected = gc.collect()
 
-    rss_after = _format_gib_from_bytes(_current_process_rss_bytes())
+    rss_after = _format_bytes_human_readable(_current_process_rss_bytes())
     gc_counts_after = gc.get_count()
     tracked_objects_after = len(gc.get_objects())
     tracemalloc_after = _tracemalloc_memory_state()
@@ -245,7 +240,7 @@ class _CheckpointProgressLogger:
         state: dict[str, Any] = {
             "event": event,
             "phase": self.phase,
-            "rss": _format_gib_from_bytes(_current_process_rss_bytes()),
+            "rss": _format_bytes_human_readable(_current_process_rss_bytes()),
             "gc_counts": gc.get_count(),
             "gc_garbage_len": len(gc.garbage),
             **_tracemalloc_memory_state(),
@@ -340,7 +335,7 @@ class _CheckpointProgressLogger:
                 phase_elapsed = time.time() - self.phase_started_at
 
             total_elapsed = time.time() - self.started_at
-            rss = _format_gib_from_bytes(_current_process_rss_bytes())
+            rss = _format_bytes_human_readable(_current_process_rss_bytes())
             rss_suffix = f", rss={rss}" if rss is not None else ""
             self._log(
                 logging.INFO,
