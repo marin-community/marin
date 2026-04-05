@@ -1,0 +1,121 @@
+# PR 4297 vs Nemotron GPU Gap: Research Logbook
+
+## Scope
+- Goal: quantify the remaining GPU performance gap between current Grug MoE on top of PR 4297 and the earlier Nemotron-or-Megatron exact-cap baselines, then localize the residual root causes with enough detail to guide the next optimization tranche.
+- Primary metric(s): `tokens_per_s`, `time_s`, `throughput/examples_per_second`, `throughput/tokens_per_second`, `throughput/mfu`, matched shape-by-shape deltas against prior Nemotron-or-Megatron anchors, and stage-local deltas where probe harnesses exist.
+- Constraints:
+  - start from PR 4297 commit `7c80b0e633c8d26517aa95db83902c250d2bce07`
+  - use CoreWeave `iris-ci` (`iris-ci-cpu-erapids`, `iris-ci-h100-8x`)
+  - keep comparisons apples-to-apples on the overlapping H100x8 exact-cap and training-harness surfaces
+  - Grug stays pure JAX; this thread is diagnostic, not a torch port
+  - post GitHub comments only for major milestones
+- GitHub issue: `https://github.com/marin-community/marin/issues/4427`
+- Relevant references:
+  - #4297: Triton `ragged_dot` for GPU grouped matmul
+  - #4406: padded `w13` no longer helps on top of 4297 Triton on the shared exact-cap surface
+  - #3821: `w13` expert padding was the winning pre-4297 local-compute fix
+  - #3841: residual post-`w13` gap narrowed to communication / synchronization / overlap work
+  - #3752 and #3677: earlier JAX vs Nemotron-or-Megatron gap localization on H100x8
+- Stop criteria:
+  - establish a fresh PR 4297 exact-cap anchor on H100x8
+  - compare that anchor to the strongest prior Nemotron-or-Megatron baselines on the same cell
+  - if the residual gap is still material, run enough follow-up probes to distinguish local-compute residuals from transport / overlap residuals
+  - stop only after the next optimization target is narrowed to a concrete ranked list rather than a broad bucket
+
+## Baseline
+- Date: 2026-04-05
+- Code refs:
+  - `lib/haliax/src/haliax/nn/ragged_dot.py`
+  - `lib/levanter/src/levanter/grug/grug_moe.py`
+  - `experiments/grug/moe/launch.py`
+  - `experiments/ferries/canary_ferry.py`
+- Fixed comparison surfaces:
+  - exact-cap-style H100x8 microbenchmark:
+    - `tokens=262144`
+    - `hidden=2048`
+    - `mlp_dim=768`
+    - `experts=128`
+    - `topk=2`
+    - `shared_expert_dim=0`
+    - `distribution=random`
+    - `ep_size=8`
+    - `warmup=5`
+    - `iters=20`
+  - PR 4297 training repro harness:
+    - approximate `256M` Grug MoE model on H100x8
+    - 100 training steps
+    - compare `RAGGED_DOT_IMPL=xla` vs `triton`
+- Prior anchors carried in:
+  - #4406 shared exact-cap surface:
+    - `triton`: `26065183.53 tok/s`
+    - `triton + w13 padded`: `25209636.97 tok/s`
+  - #3752 / #3677 matched Nemotron-or-Megatron exact-cap forward at `262144`:
+    - Megatron `deepep` forward component: `33094416.78 tok/s` (`7.921 ms`)
+  - #4297 training-harness validation:
+    - `xla`: `463640.70 tok/s`
+    - `triton`: `504399.46 tok/s`
+
+## Experiment Log
+### 2026-04-05 02:01 UTC - Kickoff
+- Hypothesis:
+  - PR 4297 should materially shrink the old `w13` local-compute gap relative to the Nemotron-or-Megatron exact-cap baseline, so the remaining residual should concentrate more in transport, synchronization, and overlap than in routed FC1 lowering itself.
+- Command:
+  - scaffolding only
+- Config:
+  - worktree: `/home/ubuntu/dev/marin-wt/pr-4297-ragged-dot`
+  - branch: `research/pr-4297-vs-nemotron-gpu-gap`
+  - base commit: `7c80b0e633c8d26517aa95db83902c250d2bce07`
+- Result:
+  - created a dedicated research branch for the AFK comparison thread
+  - collected the strongest prior findings from #4406, #3821, #3841, #3752, #3677, and #3633
+  - confirmed the current PR 4297 worktree does not carry the earlier research-only H100 benchmark harnesses, so the first setup task is to transplant the minimal ones needed for fresh measurement
+- Interpretation:
+  - the exact-cap H100x8 surface is still the cleanest place to compare current Grug MoE against the earlier Nemotron-or-Megatron anchors without conflating the result with full training-pipeline noise
+  - the best first run is a fresh `triton` anchor on the shared `262144` exact-cap cell, followed by a comparison against the sealed Megatron anchor and, if needed, stage-local follow-up
+- Next action:
+  - create the GitHub experiment issue
+  - transplant the minimal PR 4297 H100 harnesses from the adjacent research worktree
+  - launch the first H100x8 exact-cap comparison on `iris-ci`
+
+### 2026-04-05 02:08 UTC - Replicated exact-cap PR 4297 re-anchor on H100x8
+- Hypothesis:
+  - if PR 4297 really removes most of the old routed FC1 bottleneck on the shared exact-cap surface, `triton` should land near the earlier #4406 result and cut the old Megatron exact-cap gap from the `2.7x`-to-`3.3x` range down toward `~1.3x`.
+- Command:
+  - `KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run iris --config=lib/iris/examples/coreweave-ci.yaml job run --job-name pr4297-vs-nemotron-xla-triton-20260405-0208 --gpu H100x8 --cpu 32 --memory 256GB --disk 128GB --timeout 7200 -- bash -lc 'set -euo pipefail; export UV_LINK_MODE=copy; for seed in 0 1 2; do for impl in xla triton; do uv run --python 3.11 --package levanter --extra gpu python lib/levanter/scripts/bench/bench_pr4297_w13_current.py --seed "$seed" --ragged-dot-impl "$impl"; done; done'`
+- Config:
+  - Iris job id: `/ubuntu/pr4297-vs-nemotron-xla-triton-20260405-0208`
+  - hardware: CoreWeave `iris-ci` / `h100-8x`
+  - benchmark script: `lib/levanter/scripts/bench/bench_pr4297_w13_current.py`
+  - fixed cell:
+    - `tokens=262144`
+    - `hidden=2048`
+    - `mlp_dim=768`
+    - `experts=128`
+    - `topk=2`
+    - `shared_expert_dim=0`
+    - `distribution=random`
+    - `ep_size=8`
+    - `warmup=5`
+    - `iters=20`
+    - seeds: `0,1,2`
+- Result:
+  - per-seed exact-cap anchors:
+    - seed `0`: `xla=10141268.90 tok/s`, `triton=26151689.55 tok/s`, delta `+157.87%`
+    - seed `1`: `xla=9677908.90 tok/s`, `triton=26037873.37 tok/s`, delta `+169.04%`
+    - seed `2`: `xla=10106179.28 tok/s`, `triton=26174142.60 tok/s`, delta `+158.99%`
+  - aggregate means:
+    - `xla`: `9975119.03 tok/s`
+    - `triton`: `26121235.17 tok/s`
+    - `triton` vs `xla`: `+161.86%`
+  - comparison to the matched prior Megatron exact-cap forward anchor at the same `262144` cell:
+    - Megatron forward anchor: `33094416.78 tok/s`
+    - PR 4297 `triton`: `26121235.17 tok/s`
+    - residual gap: Megatron is still `1.267x` faster, or `21.07%` ahead in throughput
+- Interpretation:
+  - the PR 4297 Triton path cleanly replicates on the current worktree and matches the earlier #4406 surface almost exactly
+  - the old pre-4297 exact-cap `current` anchor was around `10.19M tok/s`; the new `26.12M tok/s` result removes most of that earlier gap
+  - the surviving exact-cap forward gap is now much smaller than in #3752 / #3677, which is strong evidence that the dominant old `w13` local-compute bottleneck has been substantially flattened
+  - because #4406 already showed that the old padded-`w13` trick is not additive on top of Triton, the next residual is unlikely to be best attacked by replaying the #3821 `w13` idea directly
+- Next action:
+  - start the full training-path Triton repro on the verified CoreWeave parent-job submission path
+  - decide whether the next microbenchmark should be a new stage-probe script on the 4297 branch or a second end-to-end training anchor
