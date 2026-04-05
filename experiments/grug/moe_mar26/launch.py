@@ -270,7 +270,6 @@ def create_1e22_run() -> list[ExecutorStep]:
                 eval_ema=False,
             )
         ),
-        load_checkpoint_path="gs://marin-us-central2/grug/test-21c1bc/checkpoints",
     )
 
     return [
