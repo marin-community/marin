@@ -34,6 +34,7 @@ from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2, config_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.logging_connect import LogServiceClientSync
 from rigging.timing import Duration, ExponentialBackoff
 
 from .conftest import (
@@ -145,10 +146,12 @@ def smoke_cluster(request):
     if controller_url:
         client = IrisClient.remote(controller_url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
+        log_client = LogServiceClientSync(address=controller_url, timeout_ms=30000)
         tc = IrisTestCluster(
             url=controller_url,
             client=client,
             controller_client=controller_client,
+            log_client=log_client,
             job_timeout=600.0,
             is_cloud=True,
         )
@@ -165,7 +168,8 @@ def smoke_cluster(request):
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
+        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client, log_client=log_client)
         tc.wait_for_workers(SMOKE_WORKER_COUNT, timeout=60)
         yield tc
         controller_client.close()
@@ -796,7 +800,8 @@ def test_checkpoint_restore():
         # Phase 1: complete a job, write checkpoint, restart controller.
         client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
+        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client, log_client=log_client)
         tc.wait_for_workers(1, timeout=30)
 
         job = tc.submit(TestJobs.quick, "pre-restart")
@@ -812,8 +817,12 @@ def test_checkpoint_restore():
 
         # Phase 2: verify restored state and submit new work.
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(
-            url=url, client=IrisClient.remote(url, workspace=MARIN_ROOT), controller_client=controller_client
+            url=url,
+            client=IrisClient.remote(url, workspace=MARIN_ROOT),
+            controller_client=controller_client,
+            log_client=log_client,
         )
 
         resp = controller_client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=saved_job_id))
