@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import jmp
 from fray.v2.types import ResourceConfig
-from levanter.checkpoint import CheckpointerConfig
+from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.layers.attention import AttentionBackend
 from levanter.distributed import RayConfig
@@ -80,9 +80,7 @@ class RLExperimentConfig:
     steps_per_eval: int = 100
     checkpointer_save_interval: int = 600
     delete_previous_temporary_checkpoint_after_save: bool = True
-    debug_checkpointer: bool = False
-    debug_checkpointer_log_interval: float = 60.0
-    debug_checkpointer_dump_stacks_after: float | None = 60.0
+    checkpoint_debug: CheckpointDebugConfig = dataclasses.field(default_factory=CheckpointDebugConfig)
 
     # wandb
     project_name: str = "marin_post_training"
@@ -241,9 +239,7 @@ def _build_rl_job_config(
             base_path=checkpoints_path,
             save_interval=datetime.timedelta(seconds=config.checkpointer_save_interval),
             delete_previous_temporary_checkpoint_after_save=config.delete_previous_temporary_checkpoint_after_save,
-            debug_checkpointer=config.debug_checkpointer,
-            debug_checkpointer_log_interval=config.debug_checkpointer_log_interval,
-            debug_checkpointer_dump_stacks_after=config.debug_checkpointer_dump_stacks_after,
+            debug=config.checkpoint_debug,
         ),
         mesh=MeshConfig(
             axes={"context": 1, "model": 1},

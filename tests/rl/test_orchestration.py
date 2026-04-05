@@ -100,7 +100,7 @@ class _FakeWorkerConfig:
     weight_transfer: object = dataclasses.field(default_factory=lambda: SimpleNamespace(debug_weight_transfer=False))
     trainer: object = dataclasses.field(
         default_factory=lambda: SimpleNamespace(
-            checkpointer=SimpleNamespace(debug_checkpointer=False),
+            checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=False)),
         )
     )
 
@@ -260,7 +260,7 @@ def test_run_rl_coordinator_enables_unbuffered_logs_for_debug_checkpointer(monke
 
     class _DebugRLJob(_FakeRLJob):
         def to_worker_configs(self):
-            trainer = SimpleNamespace(checkpointer=SimpleNamespace(debug_checkpointer=True))
+            trainer = SimpleNamespace(checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=True)))
             return _FakeWorkerConfig(seed=7, run_id="train", trainer=trainer), _FakeWorkerConfig(
                 seed=11, run_id="rollout"
             )
@@ -310,7 +310,7 @@ def test_run_rl_coordinator_enables_transfer_debug_env_vars(monkeypatch):
 
     class _DebugRLJob(_FakeRLJob):
         def to_worker_configs(self):
-            trainer = SimpleNamespace(checkpointer=SimpleNamespace(debug_checkpointer=False))
+            trainer = SimpleNamespace(checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=False)))
             weight_transfer = SimpleNamespace(debug_weight_transfer=True)
             return _FakeWorkerConfig(
                 seed=7,

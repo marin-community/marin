@@ -30,7 +30,7 @@ from marin.rl.run_state import RLRunState
 from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
 from marin.rl.weight_transfer import WeightTransferMode
 from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
-from marin.training.training import _add_run_env_variables
+from marin.training.run_environment import add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 from rigging.log_setup import configure_logging
 
@@ -87,7 +87,7 @@ def submit_rl_job(config: RLJobConfig) -> JobHandle:
     client = current_client()
 
     env = {"EQX_ON_ERROR": "nan"}
-    env = _add_run_env_variables(env)
+    env = add_run_env_variables(env)
     coordinator_extras = _coordinator_extras(config)
 
     # Use extras so uv source rules in lib/marin/pyproject.toml apply.
@@ -133,9 +133,9 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         rollout_extras = _rollout_worker_extras(config)
 
         env = {"EQX_ON_ERROR": "nan"}
-        if train_config.trainer.checkpointer.debug_checkpointer or train_config.weight_transfer.debug_weight_transfer:
+        if train_config.trainer.checkpointer.debug.enabled or train_config.weight_transfer.debug_weight_transfer:
             env["PYTHONUNBUFFERED"] = "1"
-        if train_config.trainer.checkpointer.debug_checkpointer:
+        if train_config.trainer.checkpointer.debug.enabled:
             env["JAX_TRACEBACK_FILTERING"] = "off"
             env["JAX_LOGGING_LEVEL"] = "INFO"
             env["JAX_DEBUG_LOG_MODULES"] = JAX_CHECKPOINT_DEBUG_MODULES
@@ -146,7 +146,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         if train_config.weight_transfer.debug_weight_transfer:
             env["JAX_TRACEBACK_FILTERING"] = "off"
             env["TF_CPP_MIN_LOG_LEVEL"] = "0"
-        env = _add_run_env_variables(env)
+        env = add_run_env_variables(env)
         train_worker_env = create_environment(
             env_vars=env,
             extras=train_extras,

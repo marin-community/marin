@@ -17,6 +17,7 @@ import logging
 import os
 
 from experiments.models import llama_3_1_8b_instruct
+from levanter.checkpoint import CheckpointDebugConfig
 from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
@@ -230,9 +231,11 @@ def build_experiment_config(args: argparse.Namespace) -> RLExperimentConfig:
         num_train_steps=args.num_train_steps,
         checkpointer_save_interval=args.checkpointer_save_interval,
         delete_previous_temporary_checkpoint_after_save=args.delete_previous_temporary_checkpoint_after_save,
-        debug_checkpointer=args.debug_checkpointer,
-        debug_checkpointer_log_interval=args.debug_checkpointer_log_interval,
-        debug_checkpointer_dump_stacks_after=args.debug_checkpointer_dump_stacks_after,
+        checkpoint_debug=CheckpointDebugConfig(
+            enabled=args.debug_checkpointer,
+            log_interval=args.debug_checkpointer_log_interval,
+            dump_stacks_after=args.debug_checkpointer_dump_stacks_after,
+        ),
         train_batch_size=1024,
         per_device_parallelism=16,
         learning_rate=2e-6,

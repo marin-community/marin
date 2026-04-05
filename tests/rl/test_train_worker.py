@@ -156,7 +156,7 @@ def test_train_bootstraps_fresh_run_with_step_minus_one(monkeypatch):
     worker.config = SimpleNamespace(
         run_id="resume-test",
         trainer=SimpleNamespace(
-            checkpointer=SimpleNamespace(debug_checkpointer=False),
+            checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=False)),
             num_train_steps=10,
             seed=0,
         ),
@@ -234,7 +234,7 @@ def test_train_reuses_recovered_step_on_resume(monkeypatch):
     worker.config = SimpleNamespace(
         run_id="resume-test",
         trainer=SimpleNamespace(
-            checkpointer=SimpleNamespace(debug_checkpointer=False),
+            checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=False)),
             num_train_steps=100,
             seed=0,
         ),

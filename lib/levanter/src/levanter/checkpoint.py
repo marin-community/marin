@@ -367,6 +367,27 @@ class CheckpointInterval:
     until: Optional[int] = None  # until what step to save checkpoints with this policy, None means forever
 
 
+@dataclass
+class CheckpointDebugConfig:
+    enabled: bool = False
+    log_interval: float = 60.0
+    dump_stacks_after: float | None = None
+    tracemalloc_frames: int = 25
+    top_allocations: int = 8
+    force_gc_before_serialize: bool = True
+    flush_logs: bool = True
+
+    def validate(self) -> None:
+        assert self.log_interval > 0, "checkpoint debug log_interval must be positive"
+        if self.dump_stacks_after is not None:
+            assert self.dump_stacks_after > 0, "checkpoint debug dump_stacks_after must be positive when set"
+        assert self.tracemalloc_frames > 0, "checkpoint debug tracemalloc_frames must be positive"
+        assert self.top_allocations >= 0, "checkpoint debug top_allocations must be non-negative"
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+
 class Checkpointer:
     """
     A checkpointer class that saves checkpoints with two different, but overlapping policies: time and step.
@@ -393,13 +414,7 @@ class Checkpointer:
         dt_now_injection: Optional[Callable[[], datetime.datetime]] = None,
         delete_old_temp_checkpoints: bool = True,
         delete_previous_temporary_checkpoint_after_save: bool = True,
-        debug_checkpointer: bool = False,
-        debug_checkpointer_log_interval: float = 60.0,
-        debug_checkpointer_dump_stacks_after: float | None = None,
-        debug_checkpointer_tracemalloc_frames: int = 25,
-        debug_checkpointer_top_allocations: int = 8,
-        debug_checkpointer_force_gc_before_serialize: bool = True,
-        debug_checkpointer_flush_logs: bool = True,
+        debug: CheckpointDebugConfig | None = None,
     ):
         """
         Class for managing checkpoints. Saves checkpoints according to two policies: time and step.
@@ -428,13 +443,7 @@ class Checkpointer:
         self._last_save_time = self._dt_now_injection()
         self._last_save_step = 0
         self.delete_previous_temporary_checkpoint_after_save = delete_previous_temporary_checkpoint_after_save
-        self.debug_checkpointer = debug_checkpointer
-        self.debug_checkpointer_log_interval = debug_checkpointer_log_interval
-        self.debug_checkpointer_dump_stacks_after = debug_checkpointer_dump_stacks_after
-        self.debug_checkpointer_tracemalloc_frames = debug_checkpointer_tracemalloc_frames
-        self.debug_checkpointer_top_allocations = debug_checkpointer_top_allocations
-        self.debug_checkpointer_force_gc_before_serialize = debug_checkpointer_force_gc_before_serialize
-        self.debug_checkpointer_flush_logs = debug_checkpointer_flush_logs
+        self.debug = debug or CheckpointDebugConfig()
 
         # ensure that the step_policies are sorted. We could sort, but instead we'll just insist that they are sorted
         # since it's probably a typo if they aren't
@@ -646,13 +655,7 @@ class Checkpointer:
             manager=self._manager,
             commit_callback=commit_callback,
             is_temporary=is_temporary,
-            debug_checkpointer=self.debug_checkpointer,
-            debug_checkpointer_log_interval=self.debug_checkpointer_log_interval,
-            debug_checkpointer_dump_stacks_after=self.debug_checkpointer_dump_stacks_after,
-            debug_checkpointer_tracemalloc_frames=self.debug_checkpointer_tracemalloc_frames,
-            debug_checkpointer_top_allocations=self.debug_checkpointer_top_allocations,
-            debug_checkpointer_force_gc_before_serialize=self.debug_checkpointer_force_gc_before_serialize,
-            debug_checkpointer_flush_logs=self.debug_checkpointer_flush_logs,
+            debug=self.debug,
         )
         self._last_save_step = step
         self._last_save_time = self._dt_now_injection()
@@ -673,13 +676,7 @@ def save_checkpoint(
     *,
     commit_callback: Optional[Callable[[], None]] = None,
     is_temporary: bool = True,
-    debug_checkpointer: bool = False,
-    debug_checkpointer_log_interval: float = 60.0,
-    debug_checkpointer_dump_stacks_after: float | None = None,
-    debug_checkpointer_tracemalloc_frames: int = 25,
-    debug_checkpointer_top_allocations: int = 8,
-    debug_checkpointer_force_gc_before_serialize: bool = True,
-    debug_checkpointer_flush_logs: bool = True,
+    debug: CheckpointDebugConfig | None = None,
 ):
     """
     Save a checkpoint to a given path using TensorStore with OCDBT.
@@ -699,19 +696,20 @@ def save_checkpoint(
     """
     step = int(step)
     checkpoint_path = str(checkpoint_path)
+    checkpoint_debug = debug or CheckpointDebugConfig()
     logger.info(f"Saving checkpoint to {checkpoint_path} for step {step}")
     progress_logger: _CheckpointProgressLogger | None = None
-    if debug_checkpointer:
+    if checkpoint_debug.enabled:
         if not tracemalloc.is_tracing():
-            tracemalloc.start(debug_checkpointer_tracemalloc_frames)
+            tracemalloc.start(checkpoint_debug.tracemalloc_frames)
         progress_logger = _CheckpointProgressLogger(
             step=step,
             checkpoint_path=checkpoint_path,
             manager=manager,
-            interval=debug_checkpointer_log_interval,
-            dump_stacks_after=debug_checkpointer_dump_stacks_after,
-            top_allocations=debug_checkpointer_top_allocations,
-            flush_logs=debug_checkpointer_flush_logs,
+            interval=checkpoint_debug.log_interval,
+            dump_stacks_after=checkpoint_debug.dump_stacks_after,
+            top_allocations=checkpoint_debug.top_allocations,
+            flush_logs=checkpoint_debug.flush_logs,
         )
         progress_logger.start()
 
@@ -742,7 +740,7 @@ def save_checkpoint(
 
     try:
         if progress_logger is not None:
-            if debug_checkpointer_force_gc_before_serialize:
+            if checkpoint_debug.force_gc_before_serialize:
                 progress_logger.log_gc_snapshot("pre_tensorstore_serialize")
                 progress_logger.reset_tracemalloc_baseline("post_gc_pre_tensorstore_serialize")
             progress_logger.set_phase("tensorstore_serialize")
@@ -751,7 +749,7 @@ def save_checkpoint(
             tree,
             manager,
             commit_callback=my_callback,
-            debug_checkpointer=debug_checkpointer,
+            debug_checkpointer=checkpoint_debug.enabled,
         )
         if progress_logger is not None:
             progress_logger.set_phase("async_commit_in_flight")
@@ -1004,20 +1002,8 @@ class CheckpointerConfig:
     """
     delete_previous_temporary_checkpoint_after_save: bool = True
     """If True, delete the previously saved temporary checkpoint after a successful new save."""
-    debug_checkpointer: bool = False
-    """Enable verbose checkpoint diagnostics for debugging checkpoint-path failures."""
-    debug_checkpointer_log_interval: float = 60.0
-    """Seconds between checkpoint progress logs when ``debug_checkpointer`` is enabled."""
-    debug_checkpointer_dump_stacks_after: float | None = None
-    """If set, dump Python thread stacks after this many seconds in one checkpoint phase."""
-    debug_checkpointer_tracemalloc_frames: int = 25
-    """Number of Python frames to retain for tracemalloc snapshots when debug logging is enabled."""
-    debug_checkpointer_top_allocations: int = 8
-    """How many tracemalloc growth entries to log per checkpoint debug snapshot."""
-    debug_checkpointer_force_gc_before_serialize: bool = True
-    """If True, run ``gc.collect()`` and log reclaimed state before checkpoint serialization starts."""
-    debug_checkpointer_flush_logs: bool = True
-    """If True, flush Python logging handlers/stdout/stderr after checkpoint debug logs."""
+    debug: CheckpointDebugConfig = field(default_factory=CheckpointDebugConfig)
+    """Checkpoint-path diagnostics. Disabled by default."""
 
     def expanded_path(self, run_id) -> str:
         if self.append_run_id_to_base_path:
@@ -1032,19 +1018,15 @@ class CheckpointerConfig:
             step_policies=keeps,
             delete_old_temp_checkpoints=self.delete_old_temp_checkpoints,
             delete_previous_temporary_checkpoint_after_save=self.delete_previous_temporary_checkpoint_after_save,
-            debug_checkpointer=self.debug_checkpointer,
-            debug_checkpointer_log_interval=self.debug_checkpointer_log_interval,
-            debug_checkpointer_dump_stacks_after=self.debug_checkpointer_dump_stacks_after,
-            debug_checkpointer_tracemalloc_frames=self.debug_checkpointer_tracemalloc_frames,
-            debug_checkpointer_top_allocations=self.debug_checkpointer_top_allocations,
-            debug_checkpointer_force_gc_before_serialize=self.debug_checkpointer_force_gc_before_serialize,
-            debug_checkpointer_flush_logs=self.debug_checkpointer_flush_logs,
+            debug=self.debug,
         )
 
     def __post_init__(self):
         # Workaround for Executor using placeholder types.
         if isinstance(self.base_path, str):
             self.base_path = os.path.expanduser(self.base_path)
+        if isinstance(self.debug, dict):
+            self.debug = CheckpointDebugConfig(**self.debug)
 
         # validate the checkpoint intervals.
         # we want to make sure that the intervals are monotonic. only the last one can be None
@@ -1057,13 +1039,7 @@ class CheckpointerConfig:
                 ), "Checkpoint intervals must be monotonic"
             prev_interval = interval
 
-        assert self.debug_checkpointer_log_interval > 0, "debug_checkpointer_log_interval must be positive"
-        if self.debug_checkpointer_dump_stacks_after is not None:
-            assert (
-                self.debug_checkpointer_dump_stacks_after > 0
-            ), "debug_checkpointer_dump_stacks_after must be positive when set"
-        assert self.debug_checkpointer_tracemalloc_frames > 0, "debug_checkpointer_tracemalloc_frames must be positive"
-        assert self.debug_checkpointer_top_allocations >= 0, "debug_checkpointer_top_allocations must be non-negative"
+        self.debug.validate()
 
 
 def is_checkpoint_path(path: str) -> bool:

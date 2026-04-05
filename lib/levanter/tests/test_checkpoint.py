@@ -26,6 +26,7 @@ from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import (
+    CheckpointDebugConfig,
     Checkpointer,
     CheckpointerConfig,
     CheckpointInterval,
@@ -268,25 +269,27 @@ def test_checkpointer_config_propagates_debug_settings():
     config = CheckpointerConfig(
         base_path="/tmp/checkpoints",
         delete_previous_temporary_checkpoint_after_save=False,
-        debug_checkpointer=True,
-        debug_checkpointer_log_interval=12.5,
-        debug_checkpointer_dump_stacks_after=45.0,
-        debug_checkpointer_tracemalloc_frames=17,
-        debug_checkpointer_top_allocations=5,
-        debug_checkpointer_force_gc_before_serialize=False,
-        debug_checkpointer_flush_logs=False,
+        debug=CheckpointDebugConfig(
+            enabled=True,
+            log_interval=12.5,
+            dump_stacks_after=45.0,
+            tracemalloc_frames=17,
+            top_allocations=5,
+            force_gc_before_serialize=False,
+            flush_logs=False,
+        ),
     )
 
     checkpointer = config.create("run-1")
 
     assert checkpointer.delete_previous_temporary_checkpoint_after_save is False
-    assert checkpointer.debug_checkpointer is True
-    assert checkpointer.debug_checkpointer_log_interval == 12.5
-    assert checkpointer.debug_checkpointer_dump_stacks_after == 45.0
-    assert checkpointer.debug_checkpointer_tracemalloc_frames == 17
-    assert checkpointer.debug_checkpointer_top_allocations == 5
-    assert checkpointer.debug_checkpointer_force_gc_before_serialize is False
-    assert checkpointer.debug_checkpointer_flush_logs is False
+    assert checkpointer.debug.enabled is True
+    assert checkpointer.debug.log_interval == 12.5
+    assert checkpointer.debug.dump_stacks_after == 45.0
+    assert checkpointer.debug.tracemalloc_frames == 17
+    assert checkpointer.debug.top_allocations == 5
+    assert checkpointer.debug.force_gc_before_serialize is False
+    assert checkpointer.debug.flush_logs is False
 
 
 def test_debug_checkpointer_state_providers_register_and_unregister():
@@ -303,8 +306,8 @@ def test_debug_checkpointer_state_providers_register_and_unregister():
 
 
 def test_checkpointer_config_rejects_invalid_debug_tracemalloc_settings():
-    with pytest.raises(AssertionError, match="debug_checkpointer_tracemalloc_frames must be positive"):
-        CheckpointerConfig(debug_checkpointer_tracemalloc_frames=0)
+    with pytest.raises(AssertionError, match="checkpoint debug tracemalloc_frames must be positive"):
+        CheckpointerConfig(debug=CheckpointDebugConfig(tracemalloc_frames=0))
 
 
 def test_checkpointer_deletes_previous_checkpoints():

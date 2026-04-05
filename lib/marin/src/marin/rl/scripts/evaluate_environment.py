@@ -38,7 +38,7 @@ from marin.rl.environments.inference_ctx import LevanterInferenceContextConfig
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.rollout_worker import create_inference_context
 from marin.rl.types import RolloutGroup
-from marin.training.training import _add_run_env_variables
+from marin.training.run_environment import add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 from transformers import AutoTokenizer
 from rigging.log_setup import configure_logging
@@ -121,7 +121,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
     )
 
     # Setup environment variables
-    env_vars = _add_run_env_variables({})
+    env_vars = add_run_env_variables({})
     env_vars["EQX_ON_ERROR"] = "nan"
 
     checkpoint_path = config.checkpoint

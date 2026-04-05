@@ -440,7 +440,7 @@ class TrainWorker:
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
         faulthandler.enable()
-        debug_checkpointer = self.config.trainer.checkpointer.debug_checkpointer
+        debug_checkpointer = self.config.trainer.checkpointer.debug.enabled
         debug_weight_transfer = self.config.weight_transfer.debug_weight_transfer
         if (debug_checkpointer or debug_weight_transfer) and hasattr(signal, "SIGUSR2"):
             faulthandler.register(signal.SIGUSR2, file=sys.stderr, all_threads=True)
