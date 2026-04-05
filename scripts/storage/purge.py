@@ -6,8 +6,8 @@
 
 Approach:
   1. Resolve the protect-set (wildcard and direct prefixes) into concrete prefix lists.
-  2. Load the merged protect set into a SQLite database.
-  3. Scan bucket objects into the SQLite database for fast querying.
+  2. Load the merged protect set into a DuckDB database.
+  3. Scan bucket objects into the DuckDB database for fast querying.
   4. Estimate deletion savings via SQL queries against the object catalog.
   5. Enable soft-delete on each source bucket (3-day retention window).
   6. Delete non-STANDARD objects that fall outside the protect set.
@@ -27,13 +27,16 @@ import json
 import logging
 import os
 import shlex
-import sqlite3
+import duckdb
 import subprocess
 import sys
+import queue
+import threading
+import time
 from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
@@ -41,7 +44,13 @@ from typing import Any
 
 import click
 import google.auth
+import pyarrow as pa
 from google.cloud import storage
+from rich.console import Console, Group
+from rich.live import Live
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.table import Table
+from rich.text import Text
 from tqdm.auto import tqdm
 
 log = logging.getLogger(__name__)
@@ -59,7 +68,7 @@ RESOLVE_DIR = OUTPUT_ROOT / "resolve"
 BACKUP_DIR = OUTPUT_ROOT / "backup"
 STATE_DIR = OUTPUT_ROOT / "state"
 LOG_DIR = OUTPUT_ROOT / "logs"
-CACHE_DB_PATH = OUTPUT_ROOT / "cache.sqlite3"
+CACHE_DB_PATH = OUTPUT_ROOT / "cache.duckdb"
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -89,9 +98,14 @@ SOFT_DELETE_RETENTION_SECONDS = 3 * 24 * 3600  # 3 days
 
 GCS_MAX_PAGE_SIZE = 5000
 
-GCS_DISCOUNT = 0.50
+# Partial response fields for list_blobs — only fetch what _blob_to_scanned needs.
+_BLOB_FIELDS = "items(name,size,storageClass,timeCreated,updated),prefixes,nextPageToken"
+ADAPTIVE_SPLIT_THRESHOLD = 10000  # scan flat if <= this many objects; split otherwise
+ADAPTIVE_SCAN_MAX_DEPTH = 2
 
-SCAN_INSERT_BATCH_SIZE = 5000
+GCS_DISCOUNT = 0.30
+
+OBJECT_FLUSH_THRESHOLD = 500_000
 DELETE_BATCH_SIZE = 1000
 
 # ---------------------------------------------------------------------------
@@ -126,7 +140,8 @@ class ScannedObject:
     name: str
     size_bytes: int
     storage_class_id: int
-    updated: str | None
+    created: datetime | None
+    updated: datetime | None
 
 
 # ---------------------------------------------------------------------------
@@ -169,19 +184,29 @@ def ensure_output_dirs() -> None:
     init_cache_db()
 
 
-def cache_connection() -> sqlite3.Connection:
-    connection = sqlite3.connect(CACHE_DB_PATH)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA journal_mode=WAL")
-    connection.execute("PRAGMA synchronous=NORMAL")
-    return connection
+def cache_connection() -> duckdb.DuckDBPyConnection:
+    return duckdb.connect(str(CACHE_DB_PATH))
 
 
-CACHE_SCHEMA_VERSION = 4
+def _fetchone_dict(result: duckdb.DuckDBPyConnection) -> dict[str, Any] | None:
+    row = result.fetchone()
+    if row is None:
+        return None
+    return dict(zip([d[0] for d in result.description], row, strict=False))
+
+
+def _fetchall_dicts(result: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
+    cols = [d[0] for d in result.description]
+    return [dict(zip(cols, row, strict=False)) for row in result.fetchall()]
+
+
+CACHE_SCHEMA_VERSION = 6
 
 
 def init_cache_db() -> None:
-    with cache_connection() as conn:
+    print_summary(f"opening DuckDB catalog: {CACHE_DB_PATH}")
+    conn = cache_connection()
+    try:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS cache_meta (
@@ -190,9 +215,10 @@ def init_cache_db() -> None:
             )
             """
         )
-        row = conn.execute("SELECT value FROM cache_meta WHERE key = 'schema_version'").fetchone()
+        row = _fetchone_dict(conn.execute("SELECT value FROM cache_meta WHERE key = 'schema_version'"))
         current_version = int(row["value"]) if row else 0
         if current_version < CACHE_SCHEMA_VERSION:
+            print_summary(f"schema upgrade {current_version} → {CACHE_SCHEMA_VERSION}, rebuilding tables")
             conn.execute("DROP TABLE IF EXISTS listing_cache")
             conn.execute("DROP TABLE IF EXISTS prefix_estimate_cache")
             conn.execute("DROP TABLE IF EXISTS prefix_scan_cache")
@@ -252,9 +278,10 @@ def init_cache_db() -> None:
             CREATE TABLE IF NOT EXISTS objects (
                 bucket TEXT NOT NULL,
                 name TEXT NOT NULL,
-                size_bytes INTEGER NOT NULL,
+                size_bytes BIGINT NOT NULL,
                 storage_class_id INTEGER NOT NULL REFERENCES storage_classes(id),
-                updated TEXT,
+                created TIMESTAMPTZ,
+                updated TIMESTAMPTZ,
                 PRIMARY KEY (bucket, name)
             )
             """
@@ -269,17 +296,23 @@ def init_cache_db() -> None:
         ]:
             conn.execute(
                 """
-                INSERT OR IGNORE INTO storage_classes (id, name, price_per_gib_month_us, price_per_gib_month_eu)
+                INSERT INTO storage_classes (id, name, price_per_gib_month_us, price_per_gib_month_eu)
                 VALUES (?, ?, ?, ?)
+                ON CONFLICT DO NOTHING
                 """,
                 (sc_id, name, us_price, eu_price),
             )
+    finally:
+        conn.close()
 
 
 def storage_class_id_map() -> dict[str, int]:
     """Return a mapping from storage class name to its DB id."""
-    with cache_connection() as conn:
-        rows = conn.execute("SELECT id, name FROM storage_classes").fetchall()
+    conn = cache_connection()
+    try:
+        rows = _fetchall_dicts(conn.execute("SELECT id, name FROM storage_classes"))
+    finally:
+        conn.close()
     return {row["name"]: row["id"] for row in rows}
 
 
@@ -525,10 +558,12 @@ def filter_rows_by_region(rows: list[dict[str, str]], ctx: Context, bucket_key: 
 
 def listing_cache_lookup(listing_prefix: str) -> list[str] | None:
     with cache_connection() as conn:
-        row = conn.execute(
-            "SELECT entries_json FROM listing_cache WHERE listing_prefix = ?",
-            (listing_prefix,),
-        ).fetchone()
+        row = _fetchone_dict(
+            conn.execute(
+                "SELECT entries_json FROM listing_cache WHERE listing_prefix = ?",
+                (listing_prefix,),
+            )
+        )
     if row is None:
         return None
     entries = json.loads(row["entries_json"])
@@ -567,7 +602,7 @@ def cached_child_prefixes(ctx: Context, listing_prefix: str) -> list[str]:
     prefix = url_object_path(normalized_prefix_url(listing_prefix))
     print_summary(f"$ storage.list bucket={bucket} prefix={prefix!r} delimiter='/' project={resolved_project(ctx)!r}")
     client = storage_client(ctx)
-    iterator = client.list_blobs(bucket, prefix=prefix, delimiter="/")
+    iterator = client.list_blobs(bucket, prefix=prefix, delimiter="/", fields="prefixes,nextPageToken")
     child_prefixes: set[str] = set()
     for page in iterator.pages:
         child_prefixes.update(page.prefixes)
@@ -869,10 +904,24 @@ def load_protect_set(ctx: Context, action: StepSpec) -> None:
     # Populate protect_prefixes table (clear and repopulate)
     with cache_connection() as conn:
         conn.execute("DELETE FROM protect_prefixes")
-        conn.executemany(
-            "INSERT OR REPLACE INTO protect_prefixes (bucket, prefix, owners, reasons, sources) VALUES (?, ?, ?, ?, ?)",
-            all_db_rows,
-        )
+        if all_db_rows:
+            arrow_table = pa.table(
+                {
+                    "bucket": [r[0] for r in all_db_rows],
+                    "prefix": [r[1] for r in all_db_rows],
+                    "owners": [r[2] for r in all_db_rows],
+                    "reasons": [r[3] for r in all_db_rows],
+                    "sources": [r[4] for r in all_db_rows],
+                }
+            )
+            conn.register("_protect_stage", arrow_table)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO protect_prefixes (bucket, prefix, owners, reasons, sources)
+                SELECT bucket, prefix, owners, reasons, sources FROM _protect_stage
+                """
+            )
+            conn.unregister("_protect_stage")
 
     print_summary(
         f"{action.action_id}: wrote merged protect inputs for {len(plan_rows)} regions, "
@@ -882,63 +931,603 @@ def load_protect_set(ctx: Context, action: StepSpec) -> None:
 
 
 # ===========================================================================
-# PREP: scan objects into SQLite
+# PREP: scan objects into DuckDB
 # ===========================================================================
 
 
-def _scan_prefix(
+@dataclass(frozen=True)
+class ScanEvent:
+    """Event pushed from a scan worker to the main-thread event loop.
+
+    Kinds:
+      progress   — non-terminal status update (object_count is running total)
+      leaf_done  — terminal, prefix fully scanned, objects contains all blobs
+      split_page — non-terminal, one page of delimiter listing results;
+                   objects = root-level blobs, sub_prefixes = discovered children
+      split_done — terminal, delimiter listing complete for this prefix
+    """
+
+    prefix: str
+    depth: int
+    worker_id: int  # threading.get_ident()
+    kind: str
+    objects: list[ScannedObject] = field(default_factory=list)
+    object_count: int = 0
+    sub_prefixes: list[str] | None = None
+
+
+def _blob_to_scanned(blob: Any, bucket_name: str, sc_id_map: dict[str, int]) -> ScannedObject:
+    sc = blob.storage_class or "STANDARD"
+    return ScannedObject(
+        bucket=bucket_name,
+        name=blob.name,
+        size_bytes=int(blob.size or 0),
+        storage_class_id=sc_id_map.get(sc, sc_id_map["STANDARD"]),
+        created=blob.time_created,
+        updated=blob.updated,
+    )
+
+
+_SENTINEL = (None, -1)  # poison pill for worker shutdown
+
+
+def _scan_one_prefix(
+    client: storage.Client,
+    bucket_name: str,
+    prefix: str,
+    depth: int,
+    sc_id_map: dict[str, int],
+    wid: int,
+    eq: queue.Queue[ScanEvent],
+) -> None:
+    """Scan a single prefix, pushing ScanEvents to the queue."""
+
+    def _put(kind: str, **kwargs: Any) -> None:
+        eq.put(ScanEvent(prefix=prefix, depth=depth, worker_id=wid, kind=kind, **kwargs))
+
+    _put("progress", object_count=0)
+
+    if prefix == "":
+        objects: list[ScannedObject] = []
+        for blob in client.list_blobs(bucket_name, delimiter="/", page_size=GCS_MAX_PAGE_SIZE, fields=_BLOB_FIELDS):
+            objects.append(_blob_to_scanned(blob, bucket_name, sc_id_map))
+        _put("leaf_done", objects=objects, object_count=len(objects))
+        return
+
+    # Optimistic flat scan — read pages up to ADAPTIVE_SPLIT_THRESHOLD.
+    # If the prefix has fewer objects than the threshold, scan it flat
+    # even if it spans multiple pages (avoids needless splitting on
+    # prefixes like SpatialVID/videos/group_0030 with ~5k objects).
+    iterator = client.list_blobs(bucket_name, prefix=prefix, page_size=GCS_MAX_PAGE_SIZE, fields=_BLOB_FIELDS)
+    pages_iter = iterator.pages
+    probe_objects: list[ScannedObject] = []
+    is_small = False
+    for page in pages_iter:
+        probe_objects.extend(_blob_to_scanned(blob, bucket_name, sc_id_map) for blob in page)
+        if len(probe_objects) < GCS_MAX_PAGE_SIZE:
+            # Partial page means we've exhausted the prefix.
+            is_small = True
+            break
+        if len(probe_objects) >= ADAPTIVE_SPLIT_THRESHOLD:
+            break
+
+    if is_small:
+        _put("leaf_done", objects=probe_objects, object_count=len(probe_objects))
+        return
+
+    if depth >= ADAPTIVE_SCAN_MAX_DEPTH:
+        # At max depth — continue the flat scan from where the probe left off.
+        all_objects = probe_objects
+        for page in pages_iter:
+            all_objects.extend(_blob_to_scanned(blob, bucket_name, sc_id_map) for blob in page)
+            _put("progress", object_count=len(all_objects))
+        _put("leaf_done", objects=all_objects, object_count=len(all_objects))
+        return
+
+    # Large prefix, can still split. Discard probe_objects and do a
+    # delimiter listing, yielding sub-prefixes page-by-page.
+    sub_iterator = client.list_blobs(
+        bucket_name, prefix=prefix, delimiter="/", page_size=GCS_MAX_PAGE_SIZE, fields=_BLOB_FIELDS
+    )
+    all_root_objects: list[ScannedObject] = []
+    any_sub_prefixes = False
+    for page in sub_iterator.pages:
+        page_roots = [_blob_to_scanned(blob, bucket_name, sc_id_map) for blob in page]
+        page_subs = list(page.prefixes)
+        all_root_objects.extend(page_roots)
+        if page_subs:
+            any_sub_prefixes = True
+            _put("split_page", objects=page_roots, object_count=len(all_root_objects), sub_prefixes=page_subs)
+        else:
+            _put("progress", object_count=len(all_root_objects))
+
+    if not any_sub_prefixes:
+        _put("leaf_done", objects=all_root_objects, object_count=len(all_root_objects))
+    else:
+        _put("split_done", object_count=len(all_root_objects))
+
+
+def _scan_worker_loop(
     ctx: Context,
     bucket_name: str,
-    prefix: str,
     sc_id_map: dict[str, int],
-) -> list[ScannedObject]:
-    """Scan all objects under a single top-level prefix.
+    work_queue: queue.Queue[tuple[str | None, int]],
+    event_queue: queue.Queue[ScanEvent],
+) -> None:
+    """Long-lived worker: pull (prefix, depth) from work_queue, scan, repeat.
 
-    For prefix="" (root-level objects), uses delimiter="/" to avoid re-scanning the
-    entire bucket — only blobs returned directly (not under sub-prefixes) are included.
+    Exits when it receives _SENTINEL.
     """
+    wid = threading.get_ident()
     client = storage_client(ctx)
-    objects: list[ScannedObject] = []
-    kwargs: dict[str, Any] = {"page_size": GCS_MAX_PAGE_SIZE}
-    if prefix == "":
-        kwargs["delimiter"] = "/"
-    else:
-        kwargs["prefix"] = prefix
 
-    for blob in client.list_blobs(bucket_name, **kwargs):
-        sc = blob.storage_class or "STANDARD"
-        objects.append(
-            ScannedObject(
-                bucket=bucket_name,
-                name=blob.name,
-                size_bytes=int(blob.size or 0),
-                storage_class_id=sc_id_map.get(sc, sc_id_map["STANDARD"]),
-                updated=blob.updated.isoformat() if blob.updated else None,
-            )
-        )
-    return objects
+    while True:
+        item = work_queue.get()
+        if item == _SENTINEL:
+            return
+        prefix, depth = item
+        try:
+            _scan_one_prefix(client, bucket_name, prefix, depth, sc_id_map, wid, event_queue)
+        except Exception:
+            log.exception("worker error scanning %s/%s", bucket_name, prefix)
+            event_queue.put(ScanEvent(prefix=prefix, depth=depth, worker_id=wid, kind="error"))
 
 
-def _flush_scanned_objects(
-    conn: sqlite3.Connection,
-    objects: list[ScannedObject],
+METADATA_FLUSH_THRESHOLD = 500
+
+
+@dataclass
+class ScanBuffer:
+    objects: list[ScannedObject] = field(default_factory=list)
+    prefixes: list[tuple[str, str, int, str]] = field(default_factory=list)
+    split_cache: list[tuple[str, str, str]] = field(default_factory=list)
+
+
+def _flush_objects(
+    conn: duckdb.DuckDBPyConnection, buf: ScanBuffer, objects: list[ScannedObject], *, force: bool = False
+) -> None:
+    """Buffer scanned objects and bulk-insert when the buffer is large enough.
+
+    Uses PyArrow tables registered as virtual views for fast columnar inserts.
+    Plain INSERT (no conflict resolution) is safe because scanned_prefixes
+    tracking prevents re-scanning the same prefix within a single run.
+    """
+    buf.objects.extend(objects)
+    if len(buf.objects) < OBJECT_FLUSH_THRESHOLD and not force:
+        return
+    if not buf.objects:
+        return
+    buf.objects.sort(key=lambda o: (o.bucket, o.name))
+    arrow_table = pa.table(
+        {
+            "bucket": [o.bucket for o in buf.objects],
+            "name": [o.name for o in buf.objects],
+            "size_bytes": [o.size_bytes for o in buf.objects],
+            "storage_class_id": [o.storage_class_id for o in buf.objects],
+            "created": [o.created for o in buf.objects],
+            "updated": [o.updated for o in buf.objects],
+        },
+        schema=pa.schema(
+            [
+                ("bucket", pa.string()),
+                ("name", pa.string()),
+                ("size_bytes", pa.int64()),
+                ("storage_class_id", pa.int32()),
+                ("created", pa.timestamp("us", tz="UTC")),
+                ("updated", pa.timestamp("us", tz="UTC")),
+            ]
+        ),
+    )
+    conn.register("_obj_stage", arrow_table)
+    conn.execute("INSERT INTO objects SELECT * FROM _obj_stage")
+    conn.unregister("_obj_stage")
+    buf.objects.clear()
+
+
+def _buffer_prefix_scanned(buf: ScanBuffer, bucket_name: str, prefix: str, object_count: int) -> None:
+    buf.prefixes.append((bucket_name, prefix, object_count, now_utc().isoformat()))
+
+
+def _buffer_split_cache(
+    buf: ScanBuffer,
+    cache: dict[str, list[str]],
     bucket_name: str,
     prefix: str,
+    children: list[str],
 ) -> None:
-    """Write scanned objects to DB and mark the prefix as scanned. Must be called from the main thread."""
-    conn.executemany(
-        "INSERT OR REPLACE INTO objects (bucket, name, size_bytes, storage_class_id, updated) VALUES (?, ?, ?, ?, ?)",
-        [(o.bucket, o.name, o.size_bytes, o.storage_class_id, o.updated) for o in objects],
-    )
-    conn.execute(
-        "INSERT OR REPLACE INTO scanned_prefixes (bucket, prefix, object_count, scanned_at) VALUES (?, ?, ?, ?)",
-        (bucket_name, prefix, len(objects), now_utc().isoformat()),
-    )
-    conn.commit()
+    key = _split_cache_key(bucket_name, prefix)
+    cache[key] = children
+    buf.split_cache.append((key, json.dumps(children), now_utc().isoformat()))
+
+
+def _flush_metadata(conn: duckdb.DuckDBPyConnection, buf: ScanBuffer, *, force: bool = False) -> None:
+    """Batch-flush buffered prefix and split-cache writes via PyArrow staging."""
+    total = len(buf.prefixes) + len(buf.split_cache)
+    if total < METADATA_FLUSH_THRESHOLD and not force:
+        return
+    if buf.prefixes:
+        arrow_table = pa.table(
+            {
+                "bucket": [r[0] for r in buf.prefixes],
+                "prefix": [r[1] for r in buf.prefixes],
+                "object_count": [r[2] for r in buf.prefixes],
+                "scanned_at": [r[3] for r in buf.prefixes],
+            }
+        )
+        conn.register("_pfx_stage", arrow_table)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO scanned_prefixes (bucket, prefix, object_count, scanned_at)
+            SELECT bucket, prefix, object_count, scanned_at FROM _pfx_stage
+            """
+        )
+        conn.unregister("_pfx_stage")
+        buf.prefixes.clear()
+    if buf.split_cache:
+        arrow_table = pa.table(
+            {
+                "listing_prefix": [r[0] for r in buf.split_cache],
+                "entries_json": [r[1] for r in buf.split_cache],
+                "updated_at": [r[2] for r in buf.split_cache],
+            }
+        )
+        conn.register("_sc_stage", arrow_table)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO listing_cache (listing_prefix, entries_json, updated_at)
+            SELECT listing_prefix, entries_json, updated_at FROM _sc_stage
+            """
+        )
+        conn.unregister("_sc_stage")
+        buf.split_cache.clear()
+
+
+@dataclass
+class WorkerSlot:
+    """State of a single worker thread as seen by the display."""
+
+    slot_id: int
+    prefix: str = ""
+    start_time: float = 0.0
+    object_count: int = 0
+    sub_prefix_count: int = 0  # sub-prefixes found during split phase
+
+
+@dataclass
+class ScanProgress:
+    """Rich Live display for the adaptive scan loop with per-worker tracking."""
+
+    bucket_name: str
+    num_workers: int
+    total_objects: int = 0
+    prefixes_completed: int = 0
+    prefixes_expanded: int = 0
+    prefixes_queued: int = 0
+    _start_time: float = field(default_factory=time.monotonic)
+    # Maps thread_ident -> stable display slot
+    _thread_slots: dict[int, WorkerSlot] = field(default_factory=dict)
+    _next_slot: int = 0
+    _progress: Progress = field(init=False)
+    _task_id: Any = field(init=False)
+    _live: Live = field(init=False)
+    _console: Console = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._console = Console()
+        self._progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(bar_width=40),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total})"),
+            TimeElapsedColumn(),
+            console=self._console,
+        )
+        self._task_id = self._progress.add_task(f"scan {self.bucket_name}", total=0)
+        self._live = Live(self._render(), console=self._console, refresh_per_second=4)
+
+    def _slot(self, worker_id: int) -> WorkerSlot:
+        if worker_id not in self._thread_slots:
+            self._thread_slots[worker_id] = WorkerSlot(slot_id=self._next_slot)
+            self._next_slot += 1
+        return self._thread_slots[worker_id]
+
+    def start(self) -> None:
+        self._live.start()
+
+    def stop(self) -> None:
+        self._live.stop()
+
+    def set_total(self, total: int) -> None:
+        self.prefixes_queued = total
+        self._progress.update(self._task_id, total=total)
+
+    def add_to_total(self, n: int) -> None:
+        self.prefixes_queued += n
+        self._progress.update(self._task_id, total=self.prefixes_queued)
+
+    def handle_event(self, event: ScanEvent) -> None:
+        slot = self._slot(event.worker_id)
+        # Use delta-based counting so total_objects updates incrementally
+        # from every event type, not just terminal ones.
+        delta = event.object_count - slot.object_count
+        if event.kind == "progress":
+            self.total_objects += delta
+            slot.object_count = event.object_count
+        elif event.kind == "split_page":
+            self.total_objects += delta
+            slot.object_count = event.object_count
+            slot.sub_prefix_count += len(event.sub_prefixes or [])
+        elif event.kind == "leaf_done":
+            self.prefixes_completed += 1
+            self.total_objects += delta
+            self._clear_slot(slot)
+            self._progress.advance(self._task_id)
+        elif event.kind == "split_done":
+            self.prefixes_expanded += 1
+            self._clear_slot(slot)
+            self._progress.advance(self._task_id)
+        elif event.kind == "error":
+            self.prefixes_completed += 1  # count as done so we don't hang
+            self._clear_slot(slot)
+            self._progress.advance(self._task_id)
+
+    def _clear_slot(self, slot: WorkerSlot) -> None:
+        slot.prefix = ""
+        slot.object_count = 0
+        slot.sub_prefix_count = 0
+
+    def mark_worker_start(self, worker_id: int, prefix: str) -> None:
+        slot = self._slot(worker_id)
+        slot.prefix = prefix
+        slot.start_time = time.monotonic()
+        slot.object_count = 0
+        slot.sub_prefix_count = 0
+
+    def mark_queued_split(self, children_count: int, already_done: int = 0) -> None:
+        """Account for a cached split expansion (no worker involved)."""
+        self.prefixes_expanded += 1
+        self.prefixes_completed += already_done
+        self.add_to_total(children_count - 1)
+        # Advance for the parent + already-done children
+        self._progress.advance(self._task_id, advance=1 + already_done)
+
+    def _refresh(self) -> None:
+        self._live.update(self._render())
+
+    def _format_duration(self, seconds: float) -> str:
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        if seconds < 3600:
+            m, s = divmod(int(seconds), 60)
+            return f"{m}m{s:02d}s"
+        h, remainder = divmod(int(seconds), 3600)
+        m, _ = divmod(remainder, 60)
+        return f"{h}h{m:02d}m"
+
+    def _render(self) -> Group:
+        done = self.prefixes_completed + self.prefixes_expanded
+        pending = self.prefixes_queued - done
+        elapsed = time.monotonic() - self._start_time
+
+        # ETA based on completion rate
+        eta_str = ""
+        if done > 0 and pending > 0 and elapsed > 5:
+            rate = done / elapsed
+            eta_seconds = pending / rate
+            eta_str = self._format_duration(eta_seconds)
+
+        stats = Text()
+        stats.append("  objects: ", style="dim")
+        stats.append(f"{self.total_objects:,}", style="bold green")
+        stats.append("    splits: ", style="dim")
+        stats.append(f"{self.prefixes_expanded}", style="yellow")
+        stats.append("    queued: ", style="dim")
+        stats.append(f"{pending:,}")
+
+        active_slots = [s for s in self._thread_slots.values() if s.prefix]
+        stats.append("    workers: ", style="dim")
+        stats.append(f"{len(active_slots)}/{self.num_workers}")
+
+        if eta_str:
+            stats.append("    eta: ", style="dim")
+            stats.append(eta_str, style="bold cyan")
+
+        table = Table(show_header=True, header_style="dim", box=None, padding=(0, 1))
+        table.add_column("w", style="dim", width=3)
+        table.add_column("prefix", style="cyan", no_wrap=True, max_width=50)
+        table.add_column("objects", style="green", justify="right", width=9)
+        table.add_column("subs", style="magenta", justify="right", width=6)
+        table.add_column("elapsed", style="yellow", justify="right", width=8)
+
+        now = time.monotonic()
+        # Show all slots sorted by slot_id; active first, then idle
+        all_slots = sorted(self._thread_slots.values(), key=lambda s: (not s.prefix, s.slot_id))
+        for slot in all_slots[: self.num_workers]:
+            slot_label = f"w{slot.slot_id}"
+            if not slot.prefix:
+                table.add_row(slot_label, "(idle)", "", "", "", style="dim")
+                continue
+            elapsed = now - slot.start_time
+            mins, secs = divmod(int(elapsed), 60)
+            time_str = f"{mins}m{secs:02d}s" if mins else f"{secs}s"
+            display_prefix = slot.prefix.rstrip("/") if slot.prefix else "(root)"
+            obj_str = f"{slot.object_count:,}" if slot.object_count else ""
+            sub_str = f"{slot.sub_prefix_count:,}" if slot.sub_prefix_count else ""
+            table.add_row(slot_label, display_prefix, obj_str, sub_str, time_str)
+
+        return Group(self._progress, stats, table)
+
+
+def _split_cache_key(bucket_name: str, prefix: str) -> str:
+    return f"scan://{bucket_name}/{prefix}"
+
+
+def _load_split_cache(conn: duckdb.DuckDBPyConnection) -> dict[str, list[str]]:
+    """Load the entire listing_cache table into memory for fast lookups."""
+    rows = conn.execute("SELECT listing_prefix, entries_json FROM listing_cache").fetchall()
+    cache: dict[str, list[str]] = {}
+    for listing_prefix, entries_json in rows:
+        entries = json.loads(entries_json)
+        if isinstance(entries, list):
+            cache[listing_prefix] = entries
+    return cache
+
+
+def _read_split_cache(cache: dict[str, list[str]], bucket_name: str, prefix: str) -> list[str] | None:
+    return cache.get(_split_cache_key(bucket_name, prefix))
+
+
+def _run_adaptive_scan(
+    ctx: Context,
+    bucket_name: str,
+    sc_id_map: dict[str, int],
+    pending: list[tuple[str, int]],
+    num_workers: int,
+    already_scanned: set[str],
+    db_conn: duckdb.DuckDBPyConnection,
+    progress: ScanProgress,
+    buf: ScanBuffer,
+) -> None:
+    """Two-queue adaptive scan: workers are self-scheduling.
+
+    work_queue:  (prefix, depth) items — workers pull from this autonomously
+    event_queue: ScanEvent items — workers push status here
+
+    Workers are long-lived loops that pull work, scan, push events, repeat.
+    The main thread drains events, does DB writes, and puts new work
+    (from splits or cache) onto the work queue.  Workers never wait on
+    the main thread for dispatch.
+    """
+    work_queue: queue.Queue[tuple[str | None, int]] = queue.Queue()
+    event_queue: queue.Queue[ScanEvent] = queue.Queue()
+    in_flight = 0
+    split_children: dict[str, list[str]] = {}
+    split_cache = _load_split_cache(db_conn)
+
+    def _enqueue(prefix: str, depth: int) -> None:
+        nonlocal in_flight
+        in_flight += 1
+        work_queue.put((prefix, depth))
+
+    def _expand_cached_or_enqueue(prefix: str, depth: int) -> None:
+        """Use cached split children if available, otherwise enqueue for workers."""
+        cached_children = _read_split_cache(split_cache, bucket_name, prefix)
+        if cached_children is not None:
+            new_children = [sp for sp in cached_children if sp not in already_scanned]
+            skipped = len(cached_children) - len(new_children)
+            # Only count un-scanned children in the total.
+            # Already-scanned children count as both queued and completed.
+            progress.mark_queued_split(len(cached_children), already_done=skipped)
+            for sp in new_children:
+                _expand_cached_or_enqueue(sp, depth + 1)
+        else:
+            _enqueue(prefix, depth)
+
+    def _process_event(event: ScanEvent) -> None:
+        nonlocal in_flight
+
+        slot = progress._slot(event.worker_id)
+        if not slot.prefix:
+            progress.mark_worker_start(event.worker_id, event.prefix)
+
+        if event.kind == "progress":
+            progress.handle_event(event)
+            return
+
+        if event.kind == "split_page":
+            if event.objects:
+                _flush_objects(db_conn, buf, event.objects)
+            page_subs = event.sub_prefixes or []
+            split_children.setdefault(event.prefix, []).extend(page_subs)
+            new_children = [sp for sp in page_subs if sp not in already_scanned]
+            progress.add_to_total(len(new_children))
+            progress.handle_event(event)
+            for sp in new_children:
+                _expand_cached_or_enqueue(sp, event.depth + 1)
+            return
+
+        if event.kind == "split_done":
+            all_children = split_children.pop(event.prefix, [])
+            _buffer_split_cache(buf, split_cache, bucket_name, event.prefix, sorted(all_children))
+            _flush_metadata(db_conn, buf)
+            progress.handle_event(event)
+            in_flight -= 1
+            return
+
+        if event.kind == "leaf_done":
+            if event.objects:
+                _flush_objects(db_conn, buf, event.objects)
+            _buffer_prefix_scanned(buf, bucket_name, event.prefix, event.object_count)
+            _flush_metadata(db_conn, buf)
+            already_scanned.add(event.prefix)
+            progress.handle_event(event)
+            in_flight -= 1
+            return
+
+        if event.kind == "error":
+            log.warning("scan failed for %s/%s — will retry on next run", bucket_name, event.prefix)
+            # Don't mark as scanned — it'll be retried on resume.
+            # Clean up any partial split state.
+            split_children.pop(event.prefix, None)
+            progress.handle_event(event)
+            in_flight -= 1
+
+    # Seed the work queue
+    for p, d in pending:
+        _expand_cached_or_enqueue(p, d)
+
+    # Start worker threads
+    worker_threads = []
+    for _ in range(num_workers):
+        t = threading.Thread(
+            target=_scan_worker_loop,
+            args=(ctx, bucket_name, sc_id_map, work_queue, event_queue),
+            daemon=True,
+        )
+        t.start()
+        worker_threads.append(t)
+
+    try:
+        while in_flight > 0:
+            try:
+                event = event_queue.get(timeout=0.25)
+            except queue.Empty:
+                progress._refresh()
+                continue
+
+            # Drain all available events
+            batch = [event]
+            while True:
+                try:
+                    batch.append(event_queue.get_nowait())
+                except queue.Empty:
+                    break
+
+            for ev in batch:
+                _process_event(ev)
+
+            progress._refresh()
+    finally:
+        # Flush any remaining buffered objects and metadata
+        _flush_objects(db_conn, buf, [], force=True)
+        _flush_metadata(db_conn, buf, force=True)
+        # Shut down workers
+        for _ in worker_threads:
+            work_queue.put(_SENTINEL)
+        for t in worker_threads:
+            t.join(timeout=5)
 
 
 def scan_objects(ctx: Context, action: StepSpec) -> None:
-    """Scan bucket objects into the SQLite database for subsequent querying."""
+    """Scan bucket objects into the DuckDB database for subsequent querying.
+
+    Uses adaptive prefix splitting: each prefix is optimistically scanned with
+    a single page. If the page is full (prefix is large), the prefix is split
+    into sub-prefixes via a delimiter listing and those are enqueued for
+    parallel scanning.  This avoids single-thread bottlenecks on giant flat
+    extractions like SpatialVID/.
+    """
     plan_path = BACKUP_DIR / "cleanup_plan.csv"
     if not plan_path.exists():
         raise RuntimeError("Missing cleanup_plan.csv. Run `prep load-protect-set` first.")
@@ -951,98 +1540,110 @@ def scan_objects(ctx: Context, action: StepSpec) -> None:
     sc_id_map = storage_class_id_map()
     remote_summary: dict[str, Any] = {"project": resolved_project(ctx), "regions": {}}
 
-    for plan_row in plan_rows:
-        region = plan_row["region"]
-        if ctx.selected_regions and region not in ctx.selected_regions:
-            continue
-        bucket_name = plan_row["bucket"]
+    db_conn = cache_connection()
+    try:
+        for plan_row in plan_rows:
+            region = plan_row["region"]
+            if ctx.selected_regions and region not in ctx.selected_regions:
+                continue
+            bucket_name = plan_row["bucket"]
 
-        # Discover top-level prefixes
-        print_summary(f"{action.action_id}: discovering top-level prefixes in {bucket_name}")
-        client = storage_client(ctx)
-        iterator = client.list_blobs(bucket_name, delimiter="/")
-        top_level_prefixes: list[str] = []
-        has_root_objects = False
-        for page in iterator.pages:
-            top_level_prefixes.extend(page.prefixes)
-            if not has_root_objects:
-                for _ in page:
-                    has_root_objects = True
-                    break
+            # Discover top-level prefixes
+            print_summary(f"{action.action_id}: discovering top-level prefixes in {bucket_name}")
+            client = storage_client(ctx)
+            iterator = client.list_blobs(bucket_name, delimiter="/", fields="items(name),prefixes,nextPageToken")
+            top_level_prefixes: list[str] = []
+            has_root_objects = False
+            for page in iterator.pages:
+                top_level_prefixes.extend(page.prefixes)
+                if not has_root_objects:
+                    for _ in page:
+                        has_root_objects = True
+                        break
 
-        scan_prefixes = sorted(set(top_level_prefixes))
-        if has_root_objects:
-            scan_prefixes = ["", *scan_prefixes]
+            initial_prefixes: list[tuple[str, int]] = [(p, 0) for p in sorted(set(top_level_prefixes))]
+            if has_root_objects:
+                initial_prefixes = [("", 0), *initial_prefixes]
 
-        # Check which prefixes are already scanned (skip unless --force)
-        if not ctx.force:
-            with cache_connection() as conn:
-                already = {
+            # Load already-scanned prefixes for resume support
+            already_scanned: set[str] = set()
+            if not ctx.force:
+                already_scanned = {
                     r["prefix"]
-                    for r in conn.execute(
-                        "SELECT prefix FROM scanned_prefixes WHERE bucket = ?", (bucket_name,)
-                    ).fetchall()
+                    for r in _fetchall_dicts(
+                        db_conn.execute("SELECT prefix FROM scanned_prefixes WHERE bucket = ?", (bucket_name,))
+                    )
                 }
-            pending = [p for p in scan_prefixes if p not in already]
-            skipped = len(scan_prefixes) - len(pending)
-            if skipped:
-                print_summary(f"{action.action_id}: {bucket_name}: {skipped} prefixes already scanned, skipping")
-        else:
-            pending = scan_prefixes
 
-        if not pending:
-            # All prefixes cached — tally from DB
-            with cache_connection() as conn:
-                total_row = conn.execute(
+            pending: list[tuple[str, int]] = [(p, d) for p, d in initial_prefixes if p not in already_scanned]
+            if len(pending) < len(initial_prefixes):
+                skipped = len(initial_prefixes) - len(pending)
+                print_summary(f"{action.action_id}: {bucket_name}: {skipped} prefixes already scanned, skipping")
+
+            if not pending:
+                total_row = _fetchone_dict(
+                    db_conn.execute(
+                        "SELECT COALESCE(SUM(object_count), 0) as total FROM scanned_prefixes WHERE bucket = ?",
+                        (bucket_name,),
+                    )
+                )
+                total_objects = int(total_row["total"])
+                remote_summary["regions"][region] = {
+                    "bucket": bucket_name,
+                    "prefixes_scanned": len(already_scanned),
+                    "total_objects": total_objects,
+                }
+                print_summary(f"{region}: {total_objects} objects across {len(already_scanned)} prefixes (all cached)")
+                continue
+
+            print_summary(
+                f"{action.action_id}: scanning {bucket_name}: {len(pending)} initial prefixes "
+                f"with {ctx.scan_workers} workers (adaptive splitting, max depth {ADAPTIVE_SCAN_MAX_DEPTH})"
+            )
+
+            workers = max(1, ctx.scan_workers)
+            progress = ScanProgress(bucket_name=bucket_name, num_workers=workers)
+            progress.set_total(len(pending))
+            progress.start()
+            buf = ScanBuffer()
+
+            try:
+                _run_adaptive_scan(
+                    ctx, bucket_name, sc_id_map, pending, workers, already_scanned, db_conn, progress, buf
+                )
+            finally:
+                progress.stop()
+
+            if progress.prefixes_expanded:
+                n = progress.prefixes_expanded
+                print_summary(f"{action.action_id}: {bucket_name}: {n} prefixes expanded via adaptive splitting")
+
+            total_row = _fetchone_dict(
+                db_conn.execute(
                     "SELECT COALESCE(SUM(object_count), 0) as total FROM scanned_prefixes WHERE bucket = ?",
                     (bucket_name,),
-                ).fetchone()
-            total_objects = int(total_row["total"])
+                )
+            )
+            grand_total = int(total_row["total"])
+
+            prefix_count = _fetchone_dict(
+                db_conn.execute(
+                    "SELECT COUNT(*) as cnt FROM scanned_prefixes WHERE bucket = ?",
+                    (bucket_name,),
+                )
+            )
+
             remote_summary["regions"][region] = {
                 "bucket": bucket_name,
-                "prefixes_scanned": len(scan_prefixes),
-                "total_objects": total_objects,
+                "prefixes_scanned": int(prefix_count["cnt"]),
+                "total_objects": grand_total,
             }
-            print_summary(f"{region}: {total_objects} objects across {len(scan_prefixes)} prefixes (all cached)")
-            continue
-
-        print_summary(
-            f"{action.action_id}: scanning {bucket_name}: {len(pending)} prefixes " f"with {ctx.scan_workers} workers"
-        )
-
-        # Fan out GCS listing to threads, but do all DB writes on the main thread
-        db_conn = cache_connection()
-        total_objects = 0
-        progress = tqdm(total=len(pending), desc=f"scan {bucket_name}", unit="prefix", leave=True)
-        workers = max(1, min(ctx.scan_workers, len(pending)))
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_prefix = {executor.submit(_scan_prefix, ctx, bucket_name, p, sc_id_map): p for p in pending}
-            for future in as_completed(future_to_prefix):
-                p = future_to_prefix[future]
-                objects = future.result()
-                _flush_scanned_objects(db_conn, objects, bucket_name, p)
-                total_objects += len(objects)
-                progress.set_postfix_str(f"{p[:50]} ({len(objects)} obj)")
-                progress.update(1)
-        progress.close()
+            print_summary(
+                f"{region}: scanned {progress.total_objects} new objects, {grand_total} total "
+                f"across {int(prefix_count['cnt'])} prefixes"
+            )
+    finally:
         db_conn.close()
-
-        # Include cached prefixes in the total
-        with cache_connection() as conn:
-            total_row = conn.execute(
-                "SELECT COALESCE(SUM(object_count), 0) as total FROM scanned_prefixes WHERE bucket = ?",
-                (bucket_name,),
-            ).fetchone()
-        grand_total = int(total_row["total"])
-
-        remote_summary["regions"][region] = {
-            "bucket": bucket_name,
-            "prefixes_scanned": len(scan_prefixes),
-            "total_objects": grand_total,
-        }
-        print_summary(
-            f"{region}: scanned {total_objects} new objects, {grand_total} total across {len(scan_prefixes)} prefixes"
-        )
 
     write_marker(ctx, action, fingerprint, outputs=[], remote_summary=remote_summary)
 
@@ -1070,27 +1671,29 @@ def estimate_savings(ctx: Context, action: StepSpec) -> None:
     summary_rows: list[dict[str, str]] = []
     outputs: list[Path] = []
     remote_summary: dict[str, Any] = {"project": resolved_project(ctx), "regions": {}}
+    conn = cache_connection()
 
-    for plan_row in plan_rows:
-        region = plan_row["region"]
-        if ctx.selected_regions and region not in ctx.selected_regions:
-            continue
-        bucket_name = plan_row["bucket"]
-        continent = continent_for_region(region)
-        price_column = "price_per_gib_month_us" if continent == "US" else "price_per_gib_month_eu"
+    try:
+        for plan_row in plan_rows:
+            region = plan_row["region"]
+            if ctx.selected_regions and region not in ctx.selected_regions:
+                continue
+            bucket_name = plan_row["bucket"]
+            continent = continent_for_region(region)
+            price_column = "price_per_gib_month_us" if continent == "US" else "price_per_gib_month_eu"
 
-        with cache_connection() as conn:
-            # Total scanned
-            totals = conn.execute(
-                "SELECT COUNT(*) as cnt, COALESCE(SUM(size_bytes), 0) as total_bytes FROM objects WHERE bucket = ?",
-                (bucket_name,),
-            ).fetchone()
+            totals = _fetchone_dict(
+                conn.execute(
+                    "SELECT COUNT(*) as cnt, COALESCE(SUM(size_bytes), 0) as total_bytes FROM objects WHERE bucket = ?",
+                    (bucket_name,),
+                )
+            )
             total_objects = int(totals["cnt"])
             total_bytes = int(totals["total_bytes"])
 
-            # Objects to delete: non-STANDARD and not protected
-            delete_rows = conn.execute(
-                f"""
+            delete_rows = _fetchall_dicts(
+                conn.execute(
+                    f"""
                 SELECT sc.name as storage_class,
                        COUNT(*) as cnt,
                        COALESCE(SUM(o.size_bytes), 0) as total_bytes,
@@ -1105,12 +1708,13 @@ def estimate_savings(ctx: Context, action: StepSpec) -> None:
                   )
                 GROUP BY sc.name
                 """,
-                (1.0 - GCS_DISCOUNT, bucket_name),
-            ).fetchall()
+                    (1.0 - GCS_DISCOUNT, bucket_name),
+                )
+            )
 
-            # Protected / kept objects
-            protect_rows = conn.execute(
-                """
+            protect_rows = _fetchall_dicts(
+                conn.execute(
+                    """
                 SELECT sc.name as storage_class,
                        COUNT(*) as cnt,
                        COALESCE(SUM(o.size_bytes), 0) as total_bytes
@@ -1124,78 +1728,82 @@ def estimate_savings(ctx: Context, action: StepSpec) -> None:
                        ))
                 GROUP BY sc.name
                 """,
-                (bucket_name,),
-            ).fetchall()
+                    (bucket_name,),
+                )
+            )
 
-        delete_bytes_by_class: dict[str, int] = {}
-        delete_count_by_class: dict[str, int] = {}
-        monthly_savings = 0.0
-        for row in delete_rows:
-            sc = row["storage_class"]
-            delete_bytes_by_class[sc] = int(row["total_bytes"])
-            delete_count_by_class[sc] = int(row["cnt"])
-            monthly_savings += float(row["monthly_cost"])
+            delete_bytes_by_class: dict[str, int] = {}
+            delete_count_by_class: dict[str, int] = {}
+            monthly_savings = 0.0
+            for row in delete_rows:
+                sc = row["storage_class"]
+                delete_bytes_by_class[sc] = int(row["total_bytes"])
+                delete_count_by_class[sc] = int(row["cnt"])
+                monthly_savings += float(row["monthly_cost"])
 
-        protect_bytes_by_class: dict[str, int] = {}
-        protect_count_by_class: dict[str, int] = {}
-        for row in protect_rows:
-            sc = row["storage_class"]
-            protect_bytes_by_class[sc] = int(row["total_bytes"])
-            protect_count_by_class[sc] = int(row["cnt"])
+            protect_bytes_by_class: dict[str, int] = {}
+            protect_count_by_class: dict[str, int] = {}
+            for row in protect_rows:
+                sc = row["storage_class"]
+                protect_bytes_by_class[sc] = int(row["total_bytes"])
+                protect_count_by_class[sc] = int(row["cnt"])
 
-        delete_total_bytes = sum(delete_bytes_by_class.values())
-        delete_total_count = sum(delete_count_by_class.values())
+            delete_total_bytes = sum(delete_bytes_by_class.values())
+            delete_total_count = sum(delete_count_by_class.values())
 
-        region_output = size_estimate_path(region)
-        write_json(
-            region_output,
-            {
-                "region": region,
-                "project": resolved_project(ctx),
+            region_output = size_estimate_path(region)
+            write_json(
+                region_output,
+                {
+                    "region": region,
+                    "project": resolved_project(ctx),
+                    "bucket": bucket_name,
+                    "total_objects_scanned": total_objects,
+                    "total_bytes_scanned": total_bytes,
+                    "total_human_bytes_scanned": human_bytes(total_bytes),
+                    "delete_object_count": delete_total_count,
+                    "delete_total_bytes": delete_total_bytes,
+                    "delete_human_bytes": human_bytes(delete_total_bytes),
+                    "delete_bytes_by_class": delete_bytes_by_class,
+                    "delete_count_by_class": delete_count_by_class,
+                    "protect_object_count": sum(protect_count_by_class.values()),
+                    "protect_total_bytes": sum(protect_bytes_by_class.values()),
+                    "protect_bytes_by_class": protect_bytes_by_class,
+                    "estimated_monthly_savings_usd": round(monthly_savings, 2),
+                },
+            )
+            outputs.append(region_output)
+            summary_rows.append(
+                {
+                    "region": region,
+                    "bucket": bucket_name,
+                    "total_objects": str(total_objects),
+                    "delete_objects": str(delete_total_count),
+                    "delete_bytes": str(delete_total_bytes),
+                    "delete_human_bytes": human_bytes(delete_total_bytes),
+                    "estimated_monthly_savings_usd": f"{monthly_savings:.2f}",
+                }
+            )
+            remote_summary["regions"][region] = {
                 "bucket": bucket_name,
-                "total_objects_scanned": total_objects,
-                "total_bytes_scanned": total_bytes,
-                "total_human_bytes_scanned": human_bytes(total_bytes),
-                "delete_object_count": delete_total_count,
-                "delete_total_bytes": delete_total_bytes,
+                "total_objects": total_objects,
+                "delete_objects": delete_total_count,
+                "delete_bytes": delete_total_bytes,
                 "delete_human_bytes": human_bytes(delete_total_bytes),
                 "delete_bytes_by_class": delete_bytes_by_class,
-                "delete_count_by_class": delete_count_by_class,
-                "protect_object_count": sum(protect_count_by_class.values()),
-                "protect_total_bytes": sum(protect_bytes_by_class.values()),
-                "protect_bytes_by_class": protect_bytes_by_class,
                 "estimated_monthly_savings_usd": round(monthly_savings, 2),
-            },
-        )
-        outputs.append(region_output)
-        summary_rows.append(
-            {
-                "region": region,
-                "bucket": bucket_name,
-                "total_objects": str(total_objects),
-                "delete_objects": str(delete_total_count),
-                "delete_bytes": str(delete_total_bytes),
-                "delete_human_bytes": human_bytes(delete_total_bytes),
-                "estimated_monthly_savings_usd": f"{monthly_savings:.2f}",
             }
-        )
-        remote_summary["regions"][region] = {
-            "bucket": bucket_name,
-            "total_objects": total_objects,
-            "delete_objects": delete_total_count,
-            "delete_bytes": delete_total_bytes,
-            "delete_human_bytes": human_bytes(delete_total_bytes),
-            "delete_bytes_by_class": delete_bytes_by_class,
-            "estimated_monthly_savings_usd": round(monthly_savings, 2),
-        }
-        print_summary(
-            f"{region}: will delete {human_bytes(delete_total_bytes)} ({delete_total_count} objects) "
-            f"~${monthly_savings:,.2f}/mo savings"
-        )
-        for sc in sorted(delete_bytes_by_class):
             print_summary(
-                f"  {sc:>12}: {human_bytes(delete_bytes_by_class[sc]):>12}  " f"{delete_count_by_class[sc]:>8} objects"
+                f"{region}: will delete {human_bytes(delete_total_bytes)} ({delete_total_count} objects) "
+                f"~${monthly_savings:,.2f}/mo savings"
             )
+            for sc in sorted(delete_bytes_by_class):
+                print_summary(
+                    f"  {sc:>12}: {human_bytes(delete_bytes_by_class[sc]):>12}  "
+                    f"{delete_count_by_class[sc]:>8} objects"
+                )
+    finally:
+        conn.close()
 
     summary_path = BACKUP_DIR / "deletion_estimate_summary.csv"
     write_csv_rows(
@@ -1281,8 +1889,9 @@ def _delete_prefix_objects(
 ) -> tuple[int, int, dict[str, int]]:
     """Delete cold unprotected objects under a single prefix. Returns (count, bytes, by_class)."""
     with cache_connection() as conn:
-        rows = conn.execute(
-            """
+        rows = _fetchall_dicts(
+            conn.execute(
+                """
             SELECT o.name, o.size_bytes, sc.name as storage_class
             FROM objects o
             JOIN storage_classes sc ON o.storage_class_id = sc.id
@@ -1295,8 +1904,9 @@ def _delete_prefix_objects(
               )
             ORDER BY o.name
             """,
-            (bucket_name, prefix),
-        ).fetchall()
+                (bucket_name, prefix),
+            )
+        )
 
     if not rows:
         return 0, 0, {}
@@ -1339,46 +1949,47 @@ def delete_cold_unprotected(ctx: Context, action: StepSpec) -> None:
 
     remote_summary: dict[str, Any] = {"regions": {}}
     outputs: list[Path] = []
+    conn = cache_connection()
 
-    for row in plan_rows:
-        region = row["region"]
-        if ctx.selected_regions and region not in ctx.selected_regions:
-            continue
-        bucket_name = row["bucket"]
+    try:
+        for row in plan_rows:
+            region = row["region"]
+            if ctx.selected_regions and region not in ctx.selected_regions:
+                continue
+            bucket_name = row["bucket"]
 
-        # Get all top-level prefixes from the scanned_prefixes table
-        with cache_connection() as conn:
-            prefix_rows = conn.execute(
-                "SELECT prefix FROM scanned_prefixes WHERE bucket = ? ORDER BY prefix",
-                (bucket_name,),
-            ).fetchall()
-        prefixes = [r["prefix"] for r in prefix_rows]
+            prefix_rows = _fetchall_dicts(
+                conn.execute(
+                    "SELECT prefix FROM scanned_prefixes WHERE bucket = ? ORDER BY prefix",
+                    (bucket_name,),
+                )
+            )
+            prefixes = [r["prefix"] for r in prefix_rows]
 
-        print_summary(
-            f"{action.action_id}: deleting cold unprotected objects from {bucket_name} "
-            f"({len(prefixes)} prefixes, {ctx.scan_workers} workers)"
-        )
+            print_summary(
+                f"{action.action_id}: deleting cold unprotected objects from {bucket_name} "
+                f"({len(prefixes)} prefixes, {ctx.scan_workers} workers)"
+            )
 
-        total_deleted_count = 0
-        total_deleted_bytes = 0
-        total_deleted_by_class: dict[str, int] = defaultdict(int)
-        total_skipped_protected = 0
-        total_skipped_standard = 0
+            total_deleted_count = 0
+            total_deleted_bytes = 0
+            total_deleted_by_class: dict[str, int] = defaultdict(int)
 
-        # Count protected/standard for reporting
-        with cache_connection() as conn:
-            standard_row = conn.execute(
-                """
+            standard_row = _fetchone_dict(
+                conn.execute(
+                    """
                 SELECT COUNT(*) as cnt FROM objects o
                 JOIN storage_classes sc ON o.storage_class_id = sc.id
                 WHERE o.bucket = ? AND sc.name = 'STANDARD'
                 """,
-                (bucket_name,),
-            ).fetchone()
+                    (bucket_name,),
+                )
+            )
             total_skipped_standard = int(standard_row["cnt"])
 
-            protected_row = conn.execute(
-                """
+            protected_row = _fetchone_dict(
+                conn.execute(
+                    """
                 SELECT COUNT(*) as cnt FROM objects o
                 JOIN storage_classes sc ON o.storage_class_id = sc.id
                 WHERE o.bucket = ?
@@ -1388,52 +1999,55 @@ def delete_cold_unprotected(ctx: Context, action: StepSpec) -> None:
                     WHERE o.bucket = p.bucket AND o.name LIKE p.prefix || '%'
                   )
                 """,
-                (bucket_name,),
-            ).fetchone()
+                    (bucket_name,),
+                )
+            )
             total_skipped_protected = int(protected_row["cnt"])
 
-        progress = tqdm(total=len(prefixes), desc=f"delete {bucket_name}", unit="prefix", leave=True)
-        workers = max(1, min(ctx.scan_workers, len(prefixes) or 1))
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_prefix = {executor.submit(_delete_prefix_objects, ctx, bucket_name, p): p for p in prefixes}
-            for future in as_completed(future_to_prefix):
-                p = future_to_prefix[future]
-                count, nbytes, by_class = future.result()
-                total_deleted_count += count
-                total_deleted_bytes += nbytes
-                for sc, c in by_class.items():
-                    total_deleted_by_class[sc] += c
-                progress.set_postfix_str(f"{p[:50]} ({count} del)")
-                progress.update(1)
-        progress.close()
+            progress = tqdm(total=len(prefixes), desc=f"delete {bucket_name}", unit="prefix", leave=True)
+            workers = max(1, min(ctx.scan_workers, len(prefixes) or 1))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                future_to_prefix = {executor.submit(_delete_prefix_objects, ctx, bucket_name, p): p for p in prefixes}
+                for future in as_completed(future_to_prefix):
+                    p = future_to_prefix[future]
+                    count, nbytes, by_class = future.result()
+                    total_deleted_count += count
+                    total_deleted_bytes += nbytes
+                    for sc, c in by_class.items():
+                        total_deleted_by_class[sc] += c
+                    progress.set_postfix_str(f"{p[:50]} ({count} del)")
+                    progress.update(1)
+            progress.close()
 
-        deletion_log_path = BACKUP_DIR / f"deletion_log_{region}.json"
-        write_json(
-            deletion_log_path,
-            {
-                "region": region,
-                "bucket": bucket_name,
+            deletion_log_path = BACKUP_DIR / f"deletion_log_{region}.json"
+            write_json(
+                deletion_log_path,
+                {
+                    "region": region,
+                    "bucket": bucket_name,
+                    "deleted_count": total_deleted_count,
+                    "deleted_bytes": total_deleted_bytes,
+                    "deleted_human_bytes": human_bytes(total_deleted_bytes),
+                    "deleted_by_class": dict(total_deleted_by_class),
+                    "skipped_protected": total_skipped_protected,
+                    "skipped_standard": total_skipped_standard,
+                    "dry_run": ctx.dry_run,
+                },
+            )
+            outputs.append(deletion_log_path)
+            remote_summary["regions"][region] = {
                 "deleted_count": total_deleted_count,
                 "deleted_bytes": total_deleted_bytes,
-                "deleted_human_bytes": human_bytes(total_deleted_bytes),
-                "deleted_by_class": dict(total_deleted_by_class),
                 "skipped_protected": total_skipped_protected,
                 "skipped_standard": total_skipped_standard,
-                "dry_run": ctx.dry_run,
-            },
-        )
-        outputs.append(deletion_log_path)
-        remote_summary["regions"][region] = {
-            "deleted_count": total_deleted_count,
-            "deleted_bytes": total_deleted_bytes,
-            "skipped_protected": total_skipped_protected,
-            "skipped_standard": total_skipped_standard,
-        }
-        verb = "would delete" if ctx.dry_run else "deleted"
-        print_summary(
-            f"{region}: {verb} {total_deleted_count} objects ({human_bytes(total_deleted_bytes)}), "
-            f"skipped {total_skipped_protected} protected + {total_skipped_standard} STANDARD"
-        )
+            }
+            verb = "would delete" if ctx.dry_run else "deleted"
+            print_summary(
+                f"{region}: {verb} {total_deleted_count} objects ({human_bytes(total_deleted_bytes)}), "
+                f"skipped {total_skipped_protected} protected + {total_skipped_standard} STANDARD"
+            )
+    finally:
+        conn.close()
     if not ctx.dry_run:
         write_marker(ctx, action, fingerprint, outputs=outputs, remote_summary=remote_summary)
 
@@ -1553,9 +2167,9 @@ STEPS = [
         action_id="prep.scan_objects",
         group_name="prep",
         command_name="scan-objects",
-        description="Scan bucket objects into the SQLite catalog.",
+        description="Scan bucket objects into the DuckDB catalog.",
         help_text=(
-            "List every object in each bucket and insert into the local SQLite database. "
+            "List every object in each bucket and insert into the local DuckDB database. "
             "Fans out over top-level prefixes with `--scan-workers` concurrent threads. "
             "Skips already-scanned prefixes unless `--force` is given."
         ),
@@ -1572,7 +2186,7 @@ STEPS = [
         command_name="estimate-savings",
         description="Estimate deletion savings via SQL queries against the object catalog.",
         help_text=(
-            "Query the SQLite object catalog to classify every object as protected/deletable by storage class, "
+            "Query the DuckDB object catalog to classify every object as protected/deletable by storage class, "
             "and compute the monthly cost savings from deletion. Produces per-region JSON estimates "
             "and a summary CSV."
         ),
@@ -1608,7 +2222,7 @@ STEPS = [
         command_name="delete-cold-objects",
         description="Delete non-STANDARD objects outside the protect set.",
         help_text=(
-            "Query the SQLite catalog for cold unprotected objects and batch-delete them from GCS. "
+            "Query the DuckDB catalog for cold unprotected objects and batch-delete them from GCS. "
             "Fans out over top-level prefixes with workers for throughput. "
             "Soft-delete must be enabled first so deletions are recoverable during the safety window."
         ),
@@ -1752,7 +2366,7 @@ def runtime_options(
         if scan_workers:
             options.append(
                 click.option(
-                    "--scan-workers", default=32, show_default=True, type=int, help="Concurrent scan/delete workers."
+                    "--scan-workers", default=64, show_default=True, type=int, help="Concurrent scan/delete workers."
                 )
             )
         if settle_hours:
@@ -1793,7 +2407,7 @@ def plan_cli(regions: tuple[str, ...]) -> None:
             force=False,
             include_optional=False,
             listing_workers=32,
-            scan_workers=32,
+            scan_workers=64,
             settle_hours=72,
             selected_regions=parsed,
             log_path=LOG_DIR / "plan.log",
@@ -1875,7 +2489,7 @@ def register_step_command(group: click.Group, step: StepSpec) -> None:
         force: bool,
         project: str | None,
         listing_workers: int = 32,
-        scan_workers: int = 32,
+        scan_workers: int = 64,
         settle_hours: int = 72,
     ) -> None:
         ctx = build_context(
