@@ -765,8 +765,82 @@ def create_d640_d896_sweep() -> list[ExecutorStep]:
 d640_d896_steps = create_d640_d896_sweep()
 
 
+# ============================================================
+# Critical batch size sweep
+# For each (dim, budget), sweep batch sizes at compute-optimal token count.
+# ============================================================
+
+CBS_CONFIGS = [
+    # (dim, budget) — budget where this dim is isoflop-optimal (from N*(C) scaling law)
+    (512, 4.9e17),   # C* where d512 is optimal: 1.87e9 tokens
+    (768, 1.9e18),   # C* where d768 is optimal: 3.01e9 tokens
+    (1024, 6.5e18),  # C* where d1024 is optimal: 4.76e9 tokens
+]
+
+CBS_BATCH_SIZES = [32, 64, 128, 256]
+
+
+def create_cbs_sweep() -> list[ExecutorStep]:
+    """Critical batch size sweep: 3 dims × 8 batch sizes = 24 runs."""
+    steps = []
+
+    for dim, budget in CBS_CONFIGS:
+        model_cfg = HEURISTIC.build_model_config(dim)
+        fpt = _compute_flops_per_token(model_cfg)
+        tokens = budget / (3 * fpt)
+
+        for bs in CBS_BATCH_SIZES:
+            train_steps = max(1, round(tokens / (bs * SEQ_LEN)))
+            optimizer = HEURISTIC.build_optimizer_config(bs, tokens, dim)
+
+            run_id = f"cbs-d{dim}-{budget:.0e}-bs{bs}"
+            config = GrugMoeLaunchConfig(
+                model=versioned(model_cfg),
+                data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+                output_path=this_output_path(),
+                run_id=run_id,
+                resources=versioned(ResourceConfig.with_tpu("v4-32")),
+                steps=versioned(train_steps),
+                batch_size=versioned(bs),
+                seed=versioned(0),
+                mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+                tracker=WandbConfig(
+                    project="dial_moe",
+                    tags=[
+                        "grug", "moe-core", "cbs-sweep",
+                        f"d={dim}", f"budget={budget:.0e}", f"bs={bs}",
+                    ],
+                    group="cbs-sweep",
+                    name=run_id,
+                ),
+                optimizer=versioned(optimizer),
+                grug_trainer=versioned(
+                    GrugTrainerConfig(
+                        z_loss_weight=HEURISTIC.z_loss_weight,
+                        ema_beta=None,
+                        log_every=1,
+                    )
+                ),
+                eval=versioned(
+                    GrugEvalConfig(
+                        eval_batch_size=min(bs, 512),
+                        steps_per_eval=1000,
+                        max_eval_batches=8,
+                        eval_current=True,
+                        eval_ema=False,
+                    )
+                ),
+            )
+            steps.append(ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config))
+
+    return steps
+
+
+cbs_sweep_steps = create_cbs_sweep()
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=d640_d896_steps,
-        description="v16: d640/d896 isoflop sweep (rounded intermediate_dim)",
+        steps=cbs_sweep_steps,
+        description="Critical batch size sweep: d512/d768/d1024 × 8 batch sizes",
     )
