@@ -139,7 +139,7 @@ def _compare_spec(
     def run(output_path: str) -> None:
         ctx = ZephyrContext(
             max_workers=32,
-            resources=ResourceConfig(cpu=1, ram="4g", regions=[DATA_REGION]),
+            resources=ResourceConfig(cpu=1, ram="16g", regions=[DATA_REGION]),
             name=name,
         )
         ctx.put("tokenizer_name", TOKENIZER)
