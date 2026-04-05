@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from functools import cache, partial
 
@@ -39,6 +40,7 @@ from experiments.domain_phase_mix.weight_sampler import (
     compute_unimax_weights,
 )
 from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_PRO_5_SHOT, MMLU_SL_VERB_5_SHOT
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from experiments.marin_models import marin_tokenizer
 from experiments.pretraining_datasets.dolma3_dolmino_pool import tokenize_dolmino_pool_subset
 from experiments.pretraining_datasets.dolma3_pool import tokenize_dolma3_pool_subset
@@ -338,6 +340,7 @@ def create_two_phase_dolma3_dolmino_top_level_experiment(
     model_config: LmConfig | None = None,
     optimizer_config: MuonHConfig | None = None,
     resources: ResourceConfig | None = None,
+    eval_harness_tasks: Sequence[EvalTaskConfig] | None = None,
 ) -> MixtureExperiment:
     """Create the top-level Dolma 3 + Dolmino two-phase nextgen experiment."""
     phase_schedule = PhaseSchedule.from_boundaries(
@@ -361,7 +364,7 @@ def create_two_phase_dolma3_dolmino_top_level_experiment(
         num_train_steps=experiment_budget // (batch_size * seq_len),
         target_budget=target_budget,
         resources=resources or ResourceConfig.with_tpu("v5p-8"),
-        eval_harness_tasks=EVAL_TASKS,
+        eval_harness_tasks=tuple(eval_harness_tasks) if eval_harness_tasks is not None else EVAL_TASKS,
         sampling_params=SAMPLING_PARAMS,
         optimizer_config=optimizer_config,
         eval_datasets_cache_path=eval_datasets_cache_path,

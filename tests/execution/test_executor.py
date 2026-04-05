@@ -12,6 +12,7 @@ from threading import Thread
 
 import pytest
 from draccus.utils import Dataclass
+from fray.v2.client import _current_client_var
 from marin.execution import THIS_OUTPUT_PATH
 from marin.execution.executor import (
     Executor,
@@ -25,6 +26,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from marin.execution.remote import remote
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
@@ -149,6 +151,32 @@ def test_status_file_reads_legacy_format(tmp_path):
 
     status_file = StatusFile(str(output_dir), worker_id="legacy-reader")
     assert status_file.status == "SUCCESS"
+
+
+def test_executor_seeds_auto_detected_fray_client_for_remote_steps(monkeypatch, tmp_path):
+    class FakeClient:
+        pass
+
+    fake_client = FakeClient()
+    observed_clients: list[object | None] = []
+
+    @remote
+    def remote_step(_config):
+        return None
+
+    def fake_current_client():
+        return fake_client
+
+    def fake_run(self, steps, **kwargs):
+        observed_clients.append(_current_client_var.get())
+
+    monkeypatch.setattr("marin.execution.executor.current_client", fake_current_client)
+    monkeypatch.setattr("marin.execution.executor.StepRunner.run", fake_run)
+
+    executor = Executor(prefix=str(tmp_path), executor_info_base_path=str(tmp_path))
+    executor.run([ExecutorStep(name="remote_step", fn=remote_step, config=None)])
+
+    assert observed_clients == [fake_client]
 
 
 def test_force_run_failed():

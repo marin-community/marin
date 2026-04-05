@@ -77,6 +77,7 @@ might be:
 """
 
 import copy
+import contextlib
 import dataclasses
 import hashlib
 import inspect
@@ -96,7 +97,7 @@ from urllib.parse import urlparse
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray.v2.client import current_client
+from fray.v2.client import current_client, set_current_client
 from fray.v2.iris_backend import FrayIrisClient
 from fray.v2.types import TpuConfig
 from iris.cluster.client.job_info import get_job_info
@@ -1263,12 +1264,24 @@ class Executor:
             logger.info(f"### Max concurrent steps: {max_concurrent} ###")
 
         resolved_steps = self._resolve_steps(steps_to_run)
-        StepRunner().run(
-            resolved_steps,
-            dry_run=dry_run,
-            force_run_failed=force_run_failed,
-            max_concurrent=max_concurrent,
+        shared_fray_client = None
+        if any(isinstance(step.fn, RemoteCallable) for step in resolved_steps):
+            shared_fray_client = current_client()
+            logger.info(
+                "Executor captured fray client %s for remote step submissions",
+                type(shared_fray_client).__name__,
+            )
+
+        client_scope = (
+            set_current_client(shared_fray_client) if shared_fray_client is not None else contextlib.nullcontext()
         )
+        with client_scope:
+            StepRunner().run(
+                resolved_steps,
+                dry_run=dry_run,
+                force_run_failed=force_run_failed,
+                max_concurrent=max_concurrent,
+            )
 
     def _resolve_steps(self, steps: list[ExecutorStep]) -> list[StepSpec]:
         """Convert computed ExecutorStep state into a flat list of StepSpec."""
