@@ -24,6 +24,7 @@ from experiments.dna.defaults import (
 )
 from experiments.llama import llama_50m
 from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2
+from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main
 
 # =============================================================================
@@ -43,6 +44,7 @@ tokenized = dna_tokenize_rw_v1(
 
 train_config = dataclasses.replace(
     SHORT_RUN_CONFIG_V1,
+    resources=ResourceConfig.with_tpu("v4-32"),
     num_train_steps=20,
     train_batch_size=32,
     steps_per_eval=10,
