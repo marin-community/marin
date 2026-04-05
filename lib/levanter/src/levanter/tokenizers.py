@@ -507,7 +507,10 @@ class KitokenMarinTokenizer:
         return self._vocab_size
 
     def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
-        ids = self._tokenizer.encode(text, False)
+        # encode_specials=True tells kitoken to recognize special token strings
+        # (e.g. "<|end_of_text|>") in the input, matching HF's default behavior.
+        # This is orthogonal to add_special_tokens which controls BOS/EOS wrapping.
+        ids = self._tokenizer.encode(text, True)
         if add_special_tokens and self._bos_id is not None:
             ids = [self._bos_id] + ids
         return ids
@@ -521,7 +524,7 @@ class KitokenMarinTokenizer:
 
     def encode_batch(self, texts: list[str], *, add_special_tokens: bool = False) -> list[list[int]]:
         texts = ["".join(s) for s in texts]
-        results = self._tokenizer.encode_all(texts, False)
+        results = self._tokenizer.encode_all(texts, True)
         if add_special_tokens and self._bos_id is not None:
             return [[self._bos_id] + ids for ids in results]
         return results
@@ -760,6 +763,110 @@ def _resolve_special_token_id_from_config(
     return None
 
 
+def _fix_kitoken_priority_specials(tok: Any, tokenizer_json_path: str) -> None:
+    """Fix kitoken's handling of Priority specials that should be BPE vocab entries.
+
+    Some tokenizers (Gemma, Qwen, DeepSeek, Phi, OLMo) mark large portions of
+    their vocabulary as "added tokens" in tokenizer.json. kitoken's Rust
+    converter classifies these as Priority specials, but a bug in its
+    drop_priority_from_specials heuristic causes them to remain as specials
+    instead of BPE vocab entries. This prevents BPE merges from forming
+    multi-character tokens (e.g. repeated spaces or newlines).
+
+    A secondary issue: when byte_fallback is enabled, kitoken converts byte
+    rune tokens (e.g. <0x0A>) to raw bytes. If the "real" token (e.g. newline
+    id=107) was misclassified as a Priority special, the byte rune takes its
+    place in the vocab with the wrong ID (e.g. id=248). This function corrects
+    both issues: missing vocab entries and wrong IDs from byte rune collisions.
+    """
+    defn = tok.definition()
+    model_key = next(iter(defn["model"]))
+    if model_key != "BytePair":
+        return
+
+    specials = defn["specials"]
+    priority_specials = [s for s in specials if s["kind"] == "Priority"]
+    if not priority_specials:
+        return
+
+    vocab = defn["model"]["BytePair"]["vocab"]
+    vocab_bytes_to_idx: dict[tuple, int] = {}
+    for i, e in enumerate(vocab):
+        vocab_bytes_to_idx[tuple(e["bytes"])] = i
+
+    # Build the canonical ID map from the original tokenizer.json.
+    with open(tokenizer_json_path) as f:
+        raw = json.load(f)
+
+    canonical_ids: dict[bytes, int] = {}
+    for token_str, tid in raw["model"]["vocab"].items():
+        canonical_ids[token_str.encode("utf-8")] = tid
+
+    # Build merge rank map for correct BPE ordering.
+    merge_map: dict[bytes, int] = {}
+    for i, m in enumerate(raw["model"].get("merges", [])):
+        if isinstance(m, list):
+            left, right = m
+        else:
+            left, right = m.split(" ", 1)
+        key = (left + right).encode("utf-8")
+        if key not in merge_map:
+            merge_map[key] = i
+
+    # Determine which Priority specials should move to the BPE vocab.
+    # A token belongs in the BPE vocab if it's a single-byte base character or
+    # if it's the product of a BPE merge.  Everything else (template tokens like
+    # <s>, <mask>, <unused*>) stays as a special for pattern matching.
+    merge_products: set[bytes] = set()
+    for m in raw["model"].get("merges", []):
+        if isinstance(m, list):
+            left, right = m
+        else:
+            left, right = m.split(" ", 1)
+        merge_products.add((left + right).encode("utf-8"))
+
+    modified = False
+    remaining_priority = []
+    for s in priority_specials:
+        s_bytes = bytes(s["bytes"])
+        is_bpe_token = len(s_bytes) == 1 or s_bytes in merge_products
+        if not is_bpe_token:
+            remaining_priority.append(s)
+            continue
+
+        key = tuple(s["bytes"])
+        idx = vocab_bytes_to_idx.get(key)
+        if idx is not None:
+            # Bytes exist in vocab. Fix the ID if it was overwritten by a byte
+            # rune conversion (e.g. <0x0A> id=248 replaced real \n id=107).
+            if vocab[idx]["id"] != s["id"]:
+                vocab[idx]["id"] = s["id"]
+                modified = True
+        else:
+            # Bytes missing from vocab entirely. Add them.
+            vocab.append({"id": s["id"], "bytes": s["bytes"]})
+            modified = True
+
+    if not modified:
+        return
+
+    # Re-sort entire vocab by merge rank (tokens without merges go to the end)
+    def _rank_key(entry: dict) -> tuple:
+        r = merge_map.get(bytes(entry["bytes"]))
+        if r is not None:
+            return (0, r, entry["id"])
+        return (1, entry["id"], entry["id"])
+
+    vocab.sort(key=_rank_key)
+    defn["model"]["BytePair"]["vocab"] = vocab
+
+    # Keep non-Priority specials and Priority specials not moved to vocab
+    non_priority = [s for s in specials if s["kind"] != "Priority"]
+    defn["specials"] = non_priority + remaining_priority
+
+    tok.set_definition(defn)
+
+
 def _load_kitoken_tokenizer(name_or_path: str) -> KitokenMarinTokenizer:
     import kitoken
 
@@ -767,6 +874,7 @@ def _load_kitoken_tokenizer(name_or_path: str) -> KitokenMarinTokenizer:
     if not os.path.isfile(local_json):
         local_json = hf_hub_download(name_or_path, "tokenizer.json")
     tok = kitoken.Kitoken.from_tokenizers_file(local_json)
+    _fix_kitoken_priority_specials(tok, local_json)
     config = _load_tokenizer_config(name_or_path)
 
     bos_token = _resolve_special_token(config, "bos_token")
