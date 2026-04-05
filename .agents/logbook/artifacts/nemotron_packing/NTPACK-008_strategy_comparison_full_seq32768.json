@@ -1,0 +1,25 @@
+{
+  "experiment_id": "NTPACK-008",
+  "seq_len": 32768,
+  "strategies": ["greedy", "sorted", "bfd"],
+  "results": {
+    "greedy": {
+      "dataset_adapters": {"padding": 0.1599, "seqs": 145033, "time": 1.24},
+      "skill_based_easy": {"padding": 0.2325, "seqs": 23758, "time": 0.38},
+      "skill_based_medium": {"padding": 0.3056, "seqs": 73013, "time": 0.63},
+      "skill_based_mixed": {"padding": 0.2225, "seqs": 2917, "time": 0.17}
+    },
+    "sorted": {
+      "dataset_adapters": {"padding": 0.1172, "seqs": 138020, "time": 1.26},
+      "skill_based_easy": {"padding": 0.2642, "seqs": 24783, "time": 0.34},
+      "skill_based_medium": {"padding": 0.3077, "seqs": 73231, "time": 0.54},
+      "skill_based_mixed": {"padding": 0.2665, "seqs": 3092, "time": 0.04}
+    },
+    "bfd": {
+      "dataset_adapters": {"padding": 0.0, "truncation": 0.0761, "seqs": 113232, "time": 575.98},
+      "skill_based_easy": {"padding": 0.0020, "seqs": 18271, "time": 17.23},
+      "skill_based_medium": {"padding": 0.1468, "seqs": 59422, "time": 118.72},
+      "skill_based_mixed": {"padding": 0.0157, "seqs": 2304, "time": 0.26}
+    }
+  }
+}

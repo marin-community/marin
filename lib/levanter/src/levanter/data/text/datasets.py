@@ -368,12 +368,14 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         max_segments_per_example: int = 64,
         slice_strategy: Literal["left", "right", "raise"] = "left",
         block_cross_document_attention: bool = True,
+        packing_strategy: Literal["greedy", "sorted", "bfd"] = "greedy",
     ):
         self.packed: GreedyPrepackedDataset[dict] = GreedyPrepackedDataset(
             cache.store.tree,
             Pos.size,
             max_segments_per_example=max_segments_per_example,
             slice_strategy=slice_strategy,
+            packing_strategy=packing_strategy,
         )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
@@ -411,12 +413,14 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
         slice_strategy: Literal["left", "right", "raise"] = "left",
         mask_user_turns: bool = True,
         block_cross_document_attention: bool = True,
+        packing_strategy: Literal["greedy", "sorted", "bfd"] = "greedy",
     ):
         self.packed: GreedyPrepackedDataset[ProcessedChatDict] = GreedyPrepackedDataset(
             cache.store.tree,
             Pos.size,
             max_segments_per_example=max_segments_per_example,
             slice_strategy=slice_strategy,
+            packing_strategy=packing_strategy,
         )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
@@ -457,6 +461,7 @@ def dataset_for_component(
     *,
     eos_id: int | None,
     block_cross_document_attention: bool,
+    packing_strategy: Literal["greedy", "sorted", "bfd"] = "greedy",
 ) -> AsyncDataset[GrugLmExample]:
     pack = _effective_pack(component)
     fmt = component.format
@@ -470,6 +475,7 @@ def dataset_for_component(
                 Pos,
                 max_segments_per_example=max_segments,
                 block_cross_document_attention=block_cross_document_attention,
+                packing_strategy=packing_strategy,
             )
         else:
             return CausalLmDataset(
@@ -492,6 +498,7 @@ def dataset_for_component(
             max_segments_per_example=max_segments,
             mask_user_turns=mask_user_turns,
             block_cross_document_attention=block_cross_document_attention,
+            packing_strategy=packing_strategy,
         )  # type: ignore
     elif isinstance(fmt, PrebuiltLmDatasetFormat):
         return PrebuiltLmDataset(

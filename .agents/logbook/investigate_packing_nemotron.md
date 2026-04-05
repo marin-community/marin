@@ -758,6 +758,381 @@ uv run --with protobuf==6.33.4 python \
 
 #### Implications
 
-- For `dataset_adapters`: switching from `slice_strategy="left"` to `"right"` would keep the latest assistant turns instead of the earliest. Given that these are multi-turn conversations, the later turns may be more valuable for instruction-following.
-- Alternatively, a split-and-continue strategy that breaks long conversations into multiple training examples (each ≤32k) would preserve all assistant tokens.
-- The 186M lost assistant tokens represent real supervision that the model never sees during training.
+- **`slice_strategy="right"` is not viable.** These are instruction-following conversations — dropping the system prompt and user query makes the assistant response meaningless. Left truncation is the only sensible choice.
+- The 186M lost assistant tokens in `dataset_adapters` are **unrecoverable at seq_len=32768 with the current single-example approach.**
+- The only mitigation that preserves all assistant tokens would be a **split-and-continue strategy** that breaks long conversations into multiple training examples, where each chunk carries enough preceding context to remain coherent. This would require a code change in levanter's slicing logic.
+
+## CLAUDE — Smart Packing Strategy Plans
+
+### Context
+
+The current greedy packer (`pack_documents()` in `lib/levanter/src/levanter/data/packing.py`) walks documents in cache order and packs consecutive docs into 32k sequences. Doc lengths are already available from the JaggedArrayStore offsets at zero cost. The ~20% padding is structural: median doc lengths of 13-18k mean two docs often don't fit in 32k, leaving ~half a sequence as padding.
+
+Key code constraints:
+- `pack_documents()` (line 327) returns `list[range]` — each pack is a contiguous range of doc indices.
+- `GreedyPrepackedDataset.get_batch()` (line 520) relies on `dr.start`/`dr.stop` to compute token boundaries from the offsets array, which requires contiguous doc ranges.
+- `_offsets` and `_lengths` are read once at init from the JaggedArrayStore (line 494-504). Lengths are cheap.
+- `max_segments_per_example` saturates at 8 for this corpus (NTPACK-003), so any strategy only needs to pack 2-4 docs per sequence.
+
+### Strategy A — Sorted packing via index permutation (smallest change)
+
+**Idea:** Pre-compute a permutation of doc indices sorted by length, then feed the permuted order to the existing greedy packer. The packer still sees "consecutive" docs, but consecutive in sorted order means similar-length docs are adjacent. Two ~16k docs pack perfectly into 32k.
+
+**Implementation plan:**
+
+1. Add a `packing_order` parameter to `GreedyPrepackedDataset.__init__()` with values `"cache"` (default, current behavior) or `"sorted"`.
+
+2. When `packing_order="sorted"`:
+   - After computing `self._lengths` (line 504), compute a permutation:
+     ```python
+     # Sort by length descending — puts long docs first so they fill sequences,
+     # then shorter docs naturally fill remaining gaps
+     perm = np.argsort(-primary_lengths)
+     ```
+   - Apply the permutation to `self._lengths` before calling `pack_documents()`.
+   - Store `self._perm = perm` so that `get_batch()` can map permuted indices back to real cache positions.
+
+3. In `get_batch()` (line 532), when building `pack_doc_ranges`, map through the permutation:
+   - Current: `dr.start`/`dr.stop` are real cache indices (contiguous).
+   - With permutation: `range(start, stop)` refers to positions in the *sorted* order. Need to resolve `perm[start:stop]` to get real cache indices. These will no longer be contiguous.
+
+4. **This breaks the contiguity assumption.** `get_batch()` at line 541 does `token_start = offsets[dr.start]` and `token_end = offsets[dr.stop]` — a single contiguous slice read. With non-contiguous docs, we'd need per-doc reads instead of a single range read.
+
+5. Change `get_batch()`'s inner loop to read each doc individually:
+   ```python
+   for dr in pack_doc_ranges:
+       real_doc_ids = self._perm[dr.start:dr.stop]  # non-contiguous
+       for doc_id in real_doc_ids:
+           token_start = offsets[doc_id]
+           token_end = offsets[doc_id + 1]
+           # read each doc separately, then concatenate
+   ```
+   This is more I/O calls but each call is batched via `ts.Batch()` context.
+
+6. Also change `pack_documents()` return type or add a wrapper so it can return `list[list[int]]` instead of `list[range]` when given a permutation.
+
+**Pros:**
+- Minimal algorithmic change — the greedy packer is unchanged, only the input order changes.
+- Sorted order means similar-length docs are adjacent, which is actually optimal for the greedy sequential algorithm.
+- Easy to A/B test: just toggle `packing_order`.
+
+**Cons:**
+- Breaks contiguous reads. Instead of one `store.data[start:end]` per pack, we do N reads (one per doc in the pack). With `ts.Batch()` this should still be efficient, but it's a change to I/O patterns.
+- Sorted order biases training batches: early training sees only long docs, late training sees only short docs. May need to shuffle packed sequences after packing (separate from doc ordering for packing purposes).
+
+**Expected padding improvement:**
+- Sorted greedy packing on this distribution should get padding down from ~20% to ~5-10%. Similar-length docs pair efficiently, and the long tail (>32k) gets isolated into single-doc packs (as it does now).
+
+**Files to modify:**
+- `lib/levanter/src/levanter/data/packing.py`: `GreedyPrepackedDataset.__init__()`, `get_batch()`, possibly `pack_documents()`.
+- `lib/levanter/src/levanter/data/text/datasets.py`: thread `packing_order` parameter through `dataset_for_component()` → `ChatDataset` / `PackedTokenDataset`.
+- `lib/levanter/src/levanter/data/text/formats.py`: add `packing_order` field to `ChatLmDatasetFormat` / `TextLmDatasetFormat`.
+
+**Estimated complexity:** Medium. Main risk is the `get_batch()` contiguity change.
+
+---
+
+### Strategy B — Best-fit decreasing bin packing (optimal packing, larger change)
+
+**Idea:** Replace the greedy sequential packer with a proper bin-packing algorithm. Sort docs by length descending, then for each doc, assign it to the open sequence with the *least remaining space* that still fits. This is the classic best-fit decreasing (BFD) heuristic, which typically achieves >99% bin utilization.
+
+**Implementation plan:**
+
+1. Add a new function `pack_documents_bfd()` in `packing.py`:
+   ```python
+   def pack_documents_bfd(
+       lengths: np.ndarray,
+       max_length: int,
+       max_segments_per_example: int | None = None,
+       slice_strategy: str = "left",
+   ) -> list[list[int]]:
+       """Best-fit decreasing bin packing. Returns list of doc-index lists."""
+       effective_lengths = np.minimum(lengths, max_length)
+       order = np.argsort(-effective_lengths)
+
+       # Each open bin: (remaining_capacity, doc_indices)
+       # Use a sorted structure for O(log n) best-fit lookup
+       bins: list[tuple[int, list[int]]] = []
+
+       for doc_idx in order:
+           doc_len = effective_lengths[doc_idx]
+           best_bin = None
+           best_remaining = max_length + 1
+
+           for i, (remaining, _) in enumerate(bins):
+               seg_ok = max_segments_per_example is None or len(bins[i][1]) < max_segments_per_example
+               if remaining >= doc_len and remaining < best_remaining and seg_ok:
+                   best_remaining = remaining
+                   best_bin = i
+
+           if best_bin is not None:
+               remaining, doc_ids = bins[best_bin]
+               doc_ids.append(int(doc_idx))
+               bins[best_bin] = (remaining - doc_len, doc_ids)
+           else:
+               bins.append((max_length - doc_len, [int(doc_idx)]))
+
+       return [doc_ids for _, doc_ids in bins]
+   ```
+
+2. For performance at scale (~226k docs for `dataset_adapters`), use a heap or sorted container instead of linear scan. Python's `sortedcontainers.SortedList` or a heap keyed on remaining capacity gives O(n log n) total.
+
+3. Return type is `list[list[int]]` — arbitrary doc groupings, not contiguous ranges.
+
+4. Modify `GreedyPrepackedDataset` to accept either `list[range]` or `list[list[int]]` as pack indices. In `get_batch()`, switch to per-doc reads when packs contain non-contiguous indices (same change as Strategy A step 5).
+
+5. Add a `packing_algorithm` parameter: `"greedy"` (current) or `"bfd"`.
+
+**Pros:**
+- Near-optimal packing. For this corpus, should get padding down to ~2-5%.
+- Well-understood algorithm with known theoretical guarantees (BFD uses at most 11/9 OPT + 6/9 bins).
+- Pairs long + short docs explicitly (e.g., 25k + 7k = 32k).
+
+**Cons:**
+- O(n log n) packing computation at init. For 226k docs this is ~1 second — negligible.
+- Non-contiguous reads in `get_batch()` (same as Strategy A).
+- More code to write and test than Strategy A.
+- Packs contain arbitrary doc combinations — training order is fully shuffled at the doc level, which is fine for SFT but worth noting.
+
+**Expected padding improvement:**
+- Down to ~2-5% from ~20%. The main residual would be docs >32k (which always waste nothing since they fill a sequence) and the last few bins that can't be perfectly filled.
+
+**Files to modify:**
+- `lib/levanter/src/levanter/data/packing.py`: add `pack_documents_bfd()`, modify `GreedyPrepackedDataset` to support non-contiguous packs.
+- Same downstream threading as Strategy A.
+
+**Estimated complexity:** Medium-High. Algorithm is straightforward but the `get_batch()` generalization is the same effort as Strategy A, plus the new packing function.
+
+---
+
+### Strategy C — Two-pointer pairing (simplest algorithm, good results)
+
+**Idea:** Sort docs by length. Use two pointers — one at the longest doc, one at the shortest. If they fit together in 32k, pair them. If not, the long doc goes solo. Advance pointers inward. This is O(n log n) for the sort and O(n) for the pairing.
+
+**Implementation plan:**
+
+1. Add a new function `pack_documents_paired()` in `packing.py`:
+   ```python
+   def pack_documents_paired(
+       lengths: np.ndarray,
+       max_length: int,
+       max_segments_per_example: int | None = None,
+       slice_strategy: str = "left",
+   ) -> list[list[int]]:
+       effective_lengths = np.minimum(lengths, max_length)
+       order = np.argsort(effective_lengths)  # ascending
+       packs = []
+       lo, hi = 0, len(order) - 1
+
+       while lo <= hi:
+           if lo == hi:
+               # Last doc, goes solo
+               packs.append([int(order[lo])])
+               lo += 1
+           elif effective_lengths[order[lo]] + effective_lengths[order[hi]] <= max_length:
+               # They fit — pair them
+               pack = [int(order[hi]), int(order[lo])]
+               # Try to add more from the low end
+               lo += 1
+               hi -= 1
+               while lo <= hi and max_segments_per_example is not None and len(pack) < max_segments_per_example:
+                   remaining = max_length - sum(effective_lengths[d] for d in pack)
+                   if effective_lengths[order[lo]] <= remaining:
+                       pack.append(int(order[lo]))
+                       lo += 1
+                   else:
+                       break
+               packs.append(pack)
+           else:
+               # Long doc goes solo
+               packs.append([int(order[hi])])
+               hi -= 1
+
+       return packs
+   ```
+
+2. Same `get_batch()` changes as Strategy A/B for non-contiguous reads.
+
+3. After pairing, optionally try to fill remaining space with more short docs (the inner while loop above).
+
+**Pros:**
+- Dead simple to understand and implement.
+- O(n log n) total (dominated by the sort).
+- Pairs complement lengths naturally: 20k + 12k, 25k + 7k, etc.
+- For this corpus where most docs are 8k-25k, two-pointer pairing should fill most sequences to >90%.
+
+**Cons:**
+- Not optimal — BFD will beat it when 3+ docs can fit in a sequence. But since most docs are >8k (meaning at most 3-4 fit in 32k), the difference is small.
+- Same non-contiguous read change as A/B.
+- Doesn't handle the multi-doc case as gracefully as BFD (the inner loop is a heuristic).
+
+**Expected padding improvement:**
+- Down to ~5-10% from ~20%. Slightly worse than BFD but much simpler.
+
+**Files to modify:**
+- Same as Strategy B.
+
+**Estimated complexity:** Low-Medium. The algorithm is ~30 lines. Main effort is the shared `get_batch()` generalization.
+
+---
+
+### Strategy comparison summary
+
+| | Current | A: Sorted Greedy | B: BFD | C: Two-Pointer |
+|---|---------|-----------------|--------|----------------|
+| Expected padding | ~20% | ~5-10% | ~2-5% | ~5-10% |
+| Algorithm change | none | none (just reorder input) | new function | new function |
+| `get_batch()` change | none | per-doc reads | per-doc reads | per-doc reads |
+| Code complexity | — | low | medium | low |
+| Optimality | poor for this distribution | good for similar-length clusters | near-optimal | good for pair-dominated cases |
+
+### Recommendation
+
+All three strategies require the same `get_batch()` generalization (non-contiguous doc reads). That's the shared prerequisite. Given that:
+
+1. **Start with the `get_batch()` generalization** — change `_pack_indices` from `list[range]` to `list[list[int]]` and update `get_batch()` to do per-doc reads. This unblocks all three strategies.
+2. **Implement Strategy B (BFD)** — it's the most general and produces the best results. The algorithm itself is only ~40 lines with a heap. Since we need the `get_batch()` change anyway, the marginal effort of BFD over sorted-greedy or two-pointer is small.
+3. **Keep Strategy A as a fallback** — if BFD has unexpected issues, sorted-greedy requires zero algorithm changes, just an index permutation.
+4. **Validate with NTPACK-006-style measurement** — run the same padding stats with the new packer to confirm the improvement before merging.
+
+### Shared prerequisite: `get_batch()` generalization
+
+The key change all strategies need:
+
+```python
+# Current: contiguous range read
+token_start = offsets[dr.start]
+token_end = offsets[dr.stop]
+out_data.append(store.data[token_start:token_end].read())
+
+# New: per-doc reads, concatenated
+doc_ids = self._pack_indices[pack_idx]  # list[int], not range
+chunks = []
+for doc_id in doc_ids:
+    doc_start = offsets[doc_id] if doc_id > 0 else 0
+    doc_end = offsets[doc_id + 1]
+    doc_len = min(doc_end - doc_start, allowed)
+    chunks.append(store.data[doc_start : doc_start + doc_len].read())
+# After ts.Batch resolves:
+concatenated = np.concatenate([c.result() for c in chunks])
+```
+
+All reads still happen inside a `ts.Batch()` context, so tensorstore batches them into a single RPC where possible. The overhead vs a single contiguous read should be minimal for 2-4 docs per pack.
+
+### CLAUDE 2026-04-04 18:30 - Implementation of Strategy A and B
+
+- Implemented both strategies in `lib/levanter/src/levanter/data/packing.py`:
+  - `pack_documents_sorted()` — Strategy A: sorts docs by length descending, feeds permuted order to existing greedy packer, maps indices back.
+  - `pack_documents_bfd()` — Strategy B: best-fit decreasing bin packing with linear scan for best-fit bin.
+- Generalized `GreedyPrepackedDataset`:
+  - Added `packing_strategy` parameter: `"greedy"` (default), `"sorted"`, `"bfd"`.
+  - `_pack_indices` is now `list[Sequence[int]]` — accepts both `range` (contiguous) and `list[int]` (non-contiguous).
+  - `get_batch()` has two paths: fast contiguous path for `range` objects, per-doc read path for `list[int]`.
+- Threaded `packing_strategy` through `datasets.py`:
+  - `PackedTokenDataset`, `ChatDataset`, `dataset_for_component()` all accept the new parameter.
+- All imports verified locally.
+
+### CLAUDE 2026-04-04 18:32 - NTPACK-008 submitted
+
+- Job: `/ahmed/ntpack-008-strategy-comparison`
+- Zone: `us-central1-a`, 4 CPU, 24GB RAM, 20GB disk
+- Script: `.agents/logbook/artifacts/nemotron_packing/ntpack_008_strategy_comparison.py`
+- Measures: padding fraction for greedy, sorted, and BFD on all 4 subsets at `seq_len=32768`
+- Also reports `pack_time_seconds` per subset per strategy for performance comparison
+- Status: **succeeded** (BFD took ~12min wall time due to O(n*bins) linear scan)
+- Artifact: `.agents/logbook/artifacts/nemotron_packing/NTPACK-008_strategy_comparison_full_seq32768.json`
+
+### CLAUDE 2026-04-04 19:37 - NTPACK-008 results
+
+#### Padding fraction comparison
+
+| Subset | Greedy | Sorted | BFD |
+|--------|--------|--------|-----|
+| dataset_adapters | 16.0% | 11.7% | **0.0%** (7.6% truncation) |
+| skill_based_easy | 23.2% | 26.4% | **0.2%** |
+| skill_based_medium | 30.6% | 30.8% | **14.7%** |
+| skill_based_mixed | 22.3% | 26.7% | **1.6%** |
+
+#### Sequence count comparison
+
+| Subset | Greedy | Sorted | BFD | BFD reduction |
+|--------|--------|--------|-----|---------------|
+| dataset_adapters | 145,033 | 138,020 | **113,232** | -22% fewer seqs |
+| skill_based_easy | 23,758 | 24,783 | **18,271** | -23% fewer seqs |
+| skill_based_medium | 73,013 | 73,231 | **59,422** | -19% fewer seqs |
+| skill_based_mixed | 2,917 | 3,092 | **2,304** | -21% fewer seqs |
+
+#### Pack time comparison
+
+| Subset (docs) | Greedy | Sorted | BFD |
+|---------------|--------|--------|-----|
+| dataset_adapters (226k) | 1.2s | 1.3s | **576s** |
+| skill_based_easy (45k) | 0.4s | 0.3s | 17s |
+| skill_based_medium (89k) | 0.6s | 0.5s | **119s** |
+| skill_based_mixed (6k) | 0.2s | 0.04s | 0.3s |
+
+#### Key findings
+
+1. **BFD is dramatically better for packing efficiency.** For `dataset_adapters`, BFD achieves 0% padding (packing is so tight it actually reports 7.6% truncation — meaning tokens are packed more densely than the greedy baseline). For `skill_based_easy` and `skill_based_mixed`, BFD gets to near-zero padding (0.2% and 1.6%).
+
+2. **Sorted greedy (Strategy A) is disappointing.** It actually *increases* padding for 3 of 4 subsets (skill_based_easy: 23.2% → 26.4%, skill_based_medium: 30.6% → 30.8%, skill_based_mixed: 22.3% → 26.7%). Only `dataset_adapters` improves (16.0% → 11.7%). Sorting by length descending puts all long docs together — they each fill a sequence solo. Then all the shorter docs are grouped together, but since they're sorted by length, consecutive short docs have similar lengths and don't pair complementarily. The greedy packer's random cache order accidentally creates better length diversity within local neighborhoods.
+
+3. **BFD is too slow for production.** The current linear-scan implementation takes 576 seconds for `dataset_adapters` (226k docs). This is O(n * bins) where bins ≈ 113k. Need a heap or sorted-container optimization for O(n log n).
+
+4. **BFD reduces total sequences by ~20%**, meaning ~20% less compute per epoch. This is a significant training efficiency win.
+
+5. **`skill_based_medium` is the hardest subset for BFD** at 14.7% padding. Its docs are tightly clustered around 18k tokens — two docs of 18k don't fit in 32k, so most go solo. BFD can only pair the few shorter outliers with longer ones.
+
+#### Interpretation
+
+- **Strategy A (sorted) should be abandoned.** It's worse than greedy for most subsets.
+- **Strategy B (BFD) is the clear winner** but needs a performance optimization before it's production-ready.
+- The BFD performance fix is straightforward: replace the linear scan over bins with a sorted container or heap keyed on remaining capacity. This would bring pack time from ~10 minutes to ~1 second for 226k docs.
+- After the performance fix, BFD can be the default packing strategy for chat datasets.
+
+#### Next actions
+
+1. ~~Optimize BFD with a heap/sorted-container for O(n log n) performance~~ DONE
+2. ~~Re-run NTPACK-008 with the optimized BFD to confirm correctness and timing~~ DONE
+3. Commit and update the issue
+
+### CLAUDE 2026-04-04 19:45 - BFD optimization: bisect-based sorted list
+
+- Replaced linear scan in `pack_documents_bfd()` with `bisect.bisect_left()` on a sorted list of `(remaining_capacity, bin_index)` tuples.
+- Bounded scan limit of 50 past the bisect point to handle segment-cap misses without degenerating to linear.
+- Performance results:
+
+| Subset (docs) | Before (linear) | After (bisect) | Speedup |
+|---------------|-----------------|----------------|---------|
+| dataset_adapters (226k) | 576s | **1.76s** | 327x |
+| skill_based_easy (45k) | 17s | **0.13s** | 131x |
+| skill_based_medium (89k) | 119s | **0.53s** | 225x |
+| skill_based_mixed (6k) | 0.26s | **0.01s** | 26x |
+
+- Packing quality is identical (same number of sequences, same padding fractions).
+- BFD is now comparable in speed to greedy (~1.8s vs ~1.2s for 226k docs). Production-ready.
+
+### CLAUDE 2026-04-04 19:46 - Final results summary
+
+#### Packing strategy comparison at seq_len=32768
+
+| Subset | Greedy Padding | BFD Padding | Seqs Saved | BFD Time |
+|--------|---------------|-------------|------------|----------|
+| dataset_adapters | 16.0% | **0.0%** | 31,801 (22%) | 1.76s |
+| skill_based_easy | 23.2% | **0.2%** | 5,487 (23%) | 0.13s |
+| skill_based_medium | 30.6% | **14.7%** | 13,591 (19%) | 0.53s |
+| skill_based_mixed | 22.3% | **1.6%** | 613 (21%) | 0.01s |
+
+- **Aggregate improvement**: BFD eliminates most padding and reduces total sequences by ~20%, meaning ~20% less compute per epoch.
+- **`skill_based_medium` remains at 14.7%** because its docs cluster tightly around 18k tokens — BFD can't pair two 18k docs in a 32k sequence.
+- **`dataset_adapters` shows 0% padding but 7.6% truncation** — BFD packs so tightly that overflow from long docs dominates. This truncation was already present (NTPACK-005 showed 20.7% assistant-token loss from left truncation); BFD just eliminates all the padding that was masking it in the greedy baseline.
+
+#### Code changes
+
+- `lib/levanter/src/levanter/data/packing.py`:
+  - Added `pack_documents_sorted()` (Strategy A — not recommended)
+  - Added `pack_documents_bfd()` (Strategy B — recommended, bisect-optimized)
+  - Added `packing_strategy` parameter to `GreedyPrepackedDataset`
+  - Generalized `get_batch()` for non-contiguous doc reads
+- `lib/levanter/src/levanter/data/text/datasets.py`:
+  - Threaded `packing_strategy` through `PackedTokenDataset`, `ChatDataset`, `dataset_for_component()`

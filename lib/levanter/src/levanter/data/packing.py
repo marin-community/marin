@@ -444,6 +444,122 @@ def pack_documents(
     return pack_doc_ranges
 
 
+def pack_documents_sorted(
+    lengths: PyTree[np.ndarray],
+    max_length: PyTree[int],
+    max_segments_per_example: int | None = None,
+    slice_strategy: Literal["left", "right", "raise", "drop"] = "raise",
+) -> list[list[int]]:
+    """Pack documents using sorted greedy: sort by length descending, then greedily pack consecutive docs.
+
+    This reorders documents so that similar-length docs are adjacent, which improves greedy packing
+    efficiency. Returns non-contiguous doc index lists.
+    """
+    max_length_tree = tree_broadcast_to(max_length, lengths)
+    lengths_leaves = jax.tree.leaves(lengths)
+    max_length_leaves = jax.tree.leaves(max_length_tree)
+
+    # Use the first leaf's lengths as the primary sort key
+    primary_lengths = lengths_leaves[0].copy()
+    primary_max = max_length_leaves[0]
+
+    # Clamp lengths for sorting (oversized docs treated as max_length)
+    effective_lengths = np.minimum(primary_lengths, primary_max)
+
+    # Sort descending by length
+    perm = np.argsort(-effective_lengths)
+
+    # Apply permutation to all length leaves
+    permuted_lengths = jax.tree.map(lambda lens: lens[perm], lengths)
+
+    # Run the standard greedy packer on the permuted order
+    contiguous_packs = pack_documents(
+        permuted_lengths,
+        max_length,
+        max_segments_per_example=max_segments_per_example,
+        slice_strategy=slice_strategy,
+    )
+
+    # Map permuted indices back to original doc indices
+    return [perm[list(r)].tolist() for r in contiguous_packs]
+
+
+def pack_documents_bfd(
+    lengths: PyTree[np.ndarray],
+    max_length: PyTree[int],
+    max_segments_per_example: int | None = None,
+    slice_strategy: Literal["left", "right", "raise", "drop"] = "raise",
+) -> list[list[int]]:
+    """Best-fit decreasing bin packing for documents.
+
+    Sort documents by length descending. For each document, find the open bin with the least
+    remaining capacity that still fits. Uses a bisect-based sorted list for O(n log n) performance.
+
+    Returns a list of doc-index lists (non-contiguous).
+    """
+    import bisect
+
+    max_length_tree = tree_broadcast_to(max_length, lengths)
+    lengths_leaves = jax.tree.leaves(lengths)
+    max_length_leaves = jax.tree.leaves(max_length_tree)
+
+    primary_lengths = lengths_leaves[0].copy()
+    primary_max = max_length_leaves[0]
+
+    # Clamp oversized docs to max_length (they'll be sliced later)
+    effective_lengths = np.minimum(primary_lengths, primary_max)
+
+    # Sort descending by length
+    order = np.argsort(-effective_lengths)
+
+    bins: list[list[int]] = []  # bin_index -> list of doc indices
+    bin_remaining: list[int] = []  # bin_index -> remaining capacity
+    bin_segments: list[int] = []  # bin_index -> number of segments
+
+    # Sorted list of (remaining_capacity, bin_index) for O(log n) best-fit lookup
+    # We maintain this sorted so we can bisect to find the smallest remaining >= doc_len
+    sorted_bins: list[tuple[int, int]] = []  # sorted by remaining capacity
+
+    for doc_idx_sorted in order:
+        doc_idx = int(doc_idx_sorted)
+        doc_len = int(effective_lengths[doc_idx])
+
+        # Binary search for the smallest remaining capacity >= doc_len
+        search_pos = bisect.bisect_left(sorted_bins, (doc_len, -1))
+
+        best_bin = -1
+        # Scan forward from search_pos to find a valid bin (respecting segment cap)
+        scan_limit = min(search_pos + 50, len(sorted_bins))  # bounded scan for segment-cap misses
+        for i in range(search_pos, scan_limit):
+            remaining, b = sorted_bins[i]
+            if remaining < doc_len:
+                continue
+            if max_segments_per_example is not None and bin_segments[b] >= max_segments_per_example:
+                continue
+            best_bin = b
+            # Remove old entry from sorted list
+            sorted_bins.pop(i)
+            break
+
+        if best_bin >= 0:
+            bins[best_bin].append(doc_idx)
+            bin_remaining[best_bin] -= doc_len
+            bin_segments[best_bin] += 1
+            new_remaining = bin_remaining[best_bin]
+            # Re-insert with updated remaining capacity
+            bisect.insort(sorted_bins, (new_remaining, best_bin))
+        else:
+            # Open a new bin
+            new_bin_idx = len(bins)
+            bins.append([doc_idx])
+            new_remaining = primary_max - doc_len
+            bin_remaining.append(new_remaining)
+            bin_segments.append(1)
+            bisect.insort(sorted_bins, (new_remaining, new_bin_idx))
+
+    return bins
+
+
 class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
     """
     Prepacks a dataset into a new dataset where examples are packed into a single example.
@@ -460,6 +576,10 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
             - "right": Slice from the end of the example
             - "raise": Raise an error when an example exceeds max_length
             - "drop": Drop examples that exceed max_length
+        packing_strategy: One of "greedy" (default), "sorted", or "bfd".
+            - "greedy": Pack consecutive documents in cache order (current behavior).
+            - "sorted": Sort documents by length descending, then pack greedily.
+            - "bfd": Best-fit decreasing bin packing for near-optimal utilization.
     """
 
     def __init__(
@@ -469,6 +589,7 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         max_segments_per_example: int | None = None,
         pad_with_zeros: bool = True,
         slice_strategy: Literal["left", "right", "raise", "drop"] = "raise",
+        packing_strategy: Literal["greedy", "sorted", "bfd"] = "greedy",
     ):
         """
         Args:
@@ -477,6 +598,7 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
             max_segments_per_example: Maximum number of documents that can be packed into a single example.
             pad_with_zeros: If True, pad examples to max_length with zeros. If False, return examples as-is.
             slice_strategy: One of "left", "right", "raise", or "drop". Determines how to handle examples that exceed max_length.
+            packing_strategy: One of "greedy", "sorted", or "bfd". Controls how documents are assigned to packs.
         """
         super().__init__()
 
@@ -485,11 +607,15 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
                 f"slice_strategy must be one of 'left', 'right', 'raise', or 'drop', got {slice_strategy}"
             )
 
+        if packing_strategy not in ["greedy", "sorted", "bfd"]:
+            raise ValueError(f"packing_strategy must be one of 'greedy', 'sorted', or 'bfd', got {packing_strategy}")
+
         self.dataset = dataset
         self.max_length = max_length
         self.max_segments_per_example = max_segments_per_example
         self.pad_with_zeros = pad_with_zeros
         self.slice_strategy = slice_strategy
+        self.packing_strategy = packing_strategy
 
         _offsets = jax.tree.map(lambda store: store.offsets[0 : store.num_rows + 1].read(), self.dataset)
         self._offsets = jax.tree.map(lambda fut: fut.result(), _offsets)
@@ -503,13 +629,30 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         # Convert offsets to lengths
         self._lengths = jax.tree.map(diff_offsets, self._offsets)
 
-        # Build pack indices
-        self._pack_indices = pack_documents(
-            self._lengths,
-            max_length,
-            max_segments_per_example,
-            slice_strategy=slice_strategy,
-        )
+        # Build pack indices using the selected strategy
+        # Type is list[range] for greedy, list[list[int]] for sorted/bfd
+        self._pack_indices: list
+        if packing_strategy == "sorted":
+            self._pack_indices = pack_documents_sorted(
+                self._lengths,
+                max_length,
+                max_segments_per_example,
+                slice_strategy=slice_strategy,
+            )
+        elif packing_strategy == "bfd":
+            self._pack_indices = pack_documents_bfd(
+                self._lengths,
+                max_length,
+                max_segments_per_example,
+                slice_strategy=slice_strategy,
+            )
+        else:
+            self._pack_indices = pack_documents(
+                self._lengths,
+                max_length,
+                max_segments_per_example,
+                slice_strategy=slice_strategy,
+            )
 
     def is_finite(self) -> bool:
         return True
@@ -520,62 +663,97 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
     async def get_batch(self, indices: Sequence[int]) -> Sequence[tuple[PyTree[np.ndarray], PyTree[np.ndarray]]]:
         """
         For each requested packed example (by index into self._pack_indices), reconstruct the
-        token data on the fly from the underlying dataset. In our packing scheme the pack holds, for each leaf,
-        a range of document IDs. Using the JaggedArrayStore's offsets and allowed maximum (from self.max_length),
-        we compute the corresponding token slice (data range) and then read that slice using tensorstore's ts.Batch context.
-        We then pad the data (if pad_with_zeros is set) up to allowed length.
+        token data on the fly from the underlying dataset.
+
+        Supports both contiguous packs (range objects from greedy packing) and non-contiguous packs
+        (list[int] from sorted or BFD packing). For contiguous packs, reads a single slice. For
+        non-contiguous packs, reads each document individually and concatenates.
 
         Returns a list of tuples (data, segment_ids), where each is a PyTree (with the same structure as self.dataset),
         and each leaf is a numpy array representing the data or segment IDs for that packed example.
         """
 
-        pack_doc_ranges = [self._pack_indices[i] for i in indices]
+        pack_doc_indices = [self._pack_indices[i] for i in indices]
 
         async def get_data_for_leaf(store, offsets, allowed: int) -> tuple[list[np.ndarray], list[np.ndarray]]:
             out_data = []
             out_segment_ids = []
             # Using ts.Batch to group reads.
             with ts.Batch():
-                for dr in pack_doc_ranges:
-                    # Compute token boundaries using the store's offsets.
-                    token_start = offsets[dr.start] if dr.start > 0 else 0
-                    token_end = offsets[dr.stop]
-                    token_count = token_end - token_start
-                    if token_count > allowed:
-                        if self.slice_strategy != "raise":
-                            assert len(dr) == 1, "We shouldn't have packed two examples together if one is too long."
+                for doc_ids in pack_doc_indices:
+                    is_contiguous = isinstance(doc_ids, range)
+
+                    if is_contiguous and len(doc_ids) > 0:
+                        # Fast path: contiguous range — single slice read
+                        token_start = offsets[doc_ids.start] if doc_ids.start > 0 else 0
+                        token_end = offsets[doc_ids.stop]
+                        token_count = token_end - token_start
+                        if token_count > allowed:
+                            if self.slice_strategy == "raise":
+                                raise ValueError(
+                                    f"Token count {token_count} exceeds allowed maximum {allowed} for documents "
+                                    f"{list(doc_ids)}. Consider using slice_strategy='left', 'right', or 'drop', or "
+                                    "increasing max_length."
+                                )
+                            assert (
+                                len(doc_ids) == 1
+                            ), "We shouldn't have packed two examples together if one is too long."
                             if self.slice_strategy == "right":
-                                # slice from the right
                                 token_start = token_end - allowed
                             else:  # left
-                                # slice from the left
                                 token_end = token_start + allowed
-                        else:
-                            raise ValueError(
-                                f"Token count {token_count} exceeds allowed maximum {allowed} for documents "
-                                f"{list(dr)}. Consider using slice_strategy='left', 'right', or 'drop', or "
-                                "increasing max_length."
-                            )
-                    # Read the slice from the underlying data.
-                    out_data.append(store.data[token_start:token_end].read())
+                        out_data.append(store.data[token_start:token_end].read())
+                    else:
+                        # Non-contiguous path: read each doc individually, will concatenate after await
+                        doc_reads = []
+                        total_tokens = 0
+                        for doc_id in doc_ids:
+                            doc_start = offsets[doc_id] if doc_id > 0 else 0
+                            doc_end = offsets[doc_id + 1]
+                            doc_len = doc_end - doc_start
+                            if doc_len > allowed and len(doc_ids) == 1:
+                                # Single oversized doc — apply slice strategy
+                                if self.slice_strategy == "raise":
+                                    raise ValueError(
+                                        f"Document {doc_id} has length {doc_len} which exceeds maximum {allowed}."
+                                    )
+                                if self.slice_strategy == "right":
+                                    doc_start = doc_end - allowed
+                                else:  # left
+                                    doc_end = doc_start + allowed
+                                doc_len = doc_end - doc_start
+                            read_len = min(doc_len, allowed - total_tokens)
+                            if read_len > 0:
+                                doc_reads.append(store.data[doc_start : doc_start + read_len].read())
+                                total_tokens += read_len
+                        # Store the list of futures; we'll concatenate after resolving
+                        out_data.append(doc_reads)
 
-                    # Create segment IDs for this pack
+                    # Build segment IDs for this pack
                     segment_ids = []
-                    for doc_idx in range(len(dr)):
-                        doc_start = offsets[dr.start + doc_idx] if dr.start + doc_idx > 0 else 0
-                        doc_end = offsets[dr.start + doc_idx + 1]
+                    for doc_id in doc_ids:
+                        doc_start = offsets[doc_id] if doc_id > 0 else 0
+                        doc_end = offsets[doc_id + 1]
                         doc_length = doc_end - doc_start
-                        # Use the global document index as the segment ID
-                        global_doc_idx = dr.start + doc_idx
-                        # If this is a sliced document, adjust the segment IDs to match the sliced portion
                         if doc_length > allowed and self.slice_strategy != "raise":
-                            segment_ids.extend([global_doc_idx] * allowed)
+                            segment_ids.extend([doc_id] * min(doc_length, allowed))
                         else:
-                            segment_ids.extend([global_doc_idx] * doc_length)
+                            segment_ids.extend([doc_id] * doc_length)
+                    # Truncate segment_ids to allowed length
+                    segment_ids = segment_ids[:allowed]
                     out_segment_ids.append(np.array(segment_ids))
 
             # Await all reads concurrently.
-            out_data = await asyncio.gather(*out_data)
+            resolved_data = []
+            for item in out_data:
+                if isinstance(item, list):
+                    # Non-contiguous: list of futures -> concatenate
+                    chunks = await asyncio.gather(*item)
+                    resolved_data.append(np.concatenate(chunks) if len(chunks) > 0 else np.array([], dtype=np.uint32))
+                else:
+                    # Contiguous: single future
+                    resolved_data.append(await item)
+            out_data = resolved_data
 
             if self.pad_with_zeros:
                 out_data = [np.pad(x, (0, allowed - x.shape[0])) for x in out_data]
