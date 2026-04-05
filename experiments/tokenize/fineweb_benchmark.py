@@ -32,6 +32,7 @@ from fray.v2 import ResourceConfig
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.processing.tokenize.tokenize import _get_filepaths_to_tokenize
 from levanter.data.text import TextLmDatasetFormat
 
 logger = logging.getLogger(__name__)
@@ -39,10 +40,14 @@ logger = logging.getLogger(__name__)
 TOKENIZER = "meta-llama/Llama-3.1-8B"
 TINY = os.environ.get("BENCHMARK_TINY", "") == "1"
 
+# All data and outputs live in us-central1. Force the prefix so that
+# orchestrator and workers all write to the same region regardless of
+# where Iris initially places the parent task.
+DATA_REGION = "us-central1"
+os.environ.setdefault("MARIN_PREFIX", f"gs://marin-{DATA_REGION}")
+
 # Pre-downloaded fineweb-edu 10BT sample (revision 87f0914).
-FINEWEB_10BT = "gs://marin-us-central1/raw/fineweb-edu-87f0914/sample/10BT"
-# Pin workers to us-central1 where the data lives.
-DATA_REGIONS = ["us-central1"]
+FINEWEB_10BT = f"gs://marin-{DATA_REGION}/raw/fineweb-edu-87f0914/sample/10BT"
 
 
 def _make_tiny_dataset() -> str:
@@ -74,7 +79,7 @@ def _tokenize_spec(
                 tokenizer_backend=backend,
                 format=TextLmDatasetFormat(),
                 sample_count=sample_count,
-                worker_resources=ResourceConfig(ram="16g", disk="5g", regions=DATA_REGIONS),
+                worker_resources=ResourceConfig(ram="16g", disk="5g", regions=[DATA_REGION]),
             )
         ),
     )
@@ -134,13 +139,14 @@ def _compare_spec(
     def run(output_path: str) -> None:
         ctx = ZephyrContext(
             max_workers=32,
-            resources=ResourceConfig(cpu=1, ram="4g", regions=DATA_REGIONS),
+            resources=ResourceConfig(cpu=1, ram="4g", regions=[DATA_REGION]),
             name=name,
         )
         ctx.put("tokenizer_name", TOKENIZER)
         ctx.put("alt_backend", alt_backend)
 
-        ds = Dataset.from_list([train_path]).flat_map(load_file)
+        files = _get_filepaths_to_tokenize([train_path])
+        ds = Dataset.from_list(files).flat_map(load_file)
         if sample_count is not None:
             ds = ds.take_per_shard(sample_count)
 
