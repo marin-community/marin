@@ -33,6 +33,7 @@ from haliax.jax_utils import is_in_jit, is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 from jaxtyping import PyTree
 
+from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
@@ -79,26 +80,6 @@ def unregister_debug_checkpointer_state_provider(name: str) -> None:
     """Unregister a previously registered checkpoint debug state provider."""
     with _DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK:
         _DEBUG_CHECKPOINTER_STATE_PROVIDERS.pop(name, None)
-
-
-def _flush_debug_checkpointer_output() -> None:
-    seen_handlers: set[int] = set()
-    for candidate in (logger, logging.getLogger()):
-        for handler in candidate.handlers:
-            handler_id = id(handler)
-            if handler_id in seen_handlers:
-                continue
-            seen_handlers.add(handler_id)
-            try:
-                handler.flush()
-            except Exception:
-                pass
-
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.flush()
-        except Exception:
-            pass
 
 
 def _collect_debug_checkpointer_state() -> dict[str, Any]:
@@ -234,7 +215,7 @@ class _CheckpointProgressLogger:
     def _log(self, level: int, message: str, *args: Any) -> None:
         logger.log(level, message, *args)
         if self._flush_logs:
-            _flush_debug_checkpointer_output()
+            flush_debug_output(logger)
 
     def _log_memory_state(self, event: str, *, include_top_allocations: bool = False) -> None:
         state: dict[str, Any] = {
@@ -358,7 +339,7 @@ class _CheckpointProgressLogger:
                 )
                 faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
                 if self._flush_logs:
-                    _flush_debug_checkpointer_output()
+                    flush_debug_output(logger)
 
 
 @dataclass(frozen=True)
