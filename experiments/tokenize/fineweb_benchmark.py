@@ -41,6 +41,8 @@ TINY = os.environ.get("BENCHMARK_TINY", "") == "1"
 
 # Pre-downloaded fineweb-edu 10BT sample (revision 87f0914).
 FINEWEB_10BT = "gs://marin-us-central1/raw/fineweb-edu-87f0914/sample/10BT"
+# Pin workers to us-central1 where the data lives.
+DATA_REGIONS = ["us-central1"]
 
 
 def _make_tiny_dataset() -> str:
@@ -72,7 +74,7 @@ def _tokenize_spec(
                 tokenizer_backend=backend,
                 format=TextLmDatasetFormat(),
                 sample_count=sample_count,
-                worker_resources=ResourceConfig(ram="16g", disk="5g"),
+                worker_resources=ResourceConfig(ram="16g", disk="5g", regions=DATA_REGIONS),
             )
         ),
     )
@@ -132,7 +134,7 @@ def _compare_spec(
     def run(output_path: str) -> None:
         ctx = ZephyrContext(
             max_workers=32,
-            resources=ResourceConfig(cpu=1, ram="4g"),
+            resources=ResourceConfig(cpu=1, ram="4g", regions=DATA_REGIONS),
             name=name,
         )
         ctx.put("tokenizer_name", TOKENIZER)
