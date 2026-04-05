@@ -39,15 +39,13 @@ from iris.cluster.controller.schema import (
     proto_cache,
     proto_decoder,
 )
-from iris.cluster.log_store import LogStore, task_log_key
 from iris.cluster.types import (
     JobName,
-    TaskAttempt,
     WorkerId,
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import cluster_pb2
 from iris.time_proto import duration_from_proto
 from rigging.timing import Duration, Timestamp
 
@@ -158,7 +156,6 @@ class TaskUpdate:
     error: str | None = None
     exit_code: int | None = None
     resource_usage: cluster_pb2.ResourceUsage | None = None
-    log_entries: list[logging_pb2.LogEntry] = field(default_factory=list)
     container_id: str | None = None
 
 
@@ -821,12 +818,10 @@ class ControllerTransitions:
     def __init__(
         self,
         db: ControllerDB,
-        log_store: LogStore,
         heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD,
         user_budget_defaults: UserBudgetDefaults | None = None,
     ):
         self._db = db
-        self._log_store = log_store
         self._heartbeat_failure_threshold = heartbeat_failure_threshold
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
 
@@ -1470,16 +1465,13 @@ class ControllerTransitions:
         cur: TransactionCursor,
         req: HeartbeatApplyRequest,
         now_ms: int,
-    ) -> tuple[TxResult, list[tuple[str, list[logging_pb2.LogEntry]]]]:
+    ) -> TxResult:
         """Apply task state updates for one worker within an existing transaction.
 
         Handles the full state machine: state transitions, retry logic,
         coscheduled cascade, resource decommit, endpoint cleanup, and
         deduplicated job recompute.
-
-        Returns (TxResult, pending_logs) so the caller can flush logs after commit.
         """
-        pending_logs: list[tuple[str, list[logging_pb2.LogEntry]]] = []
         tasks_to_kill: set[JobName] = set()
         task_kill_workers: dict[JobName, WorkerId] = {}
         cascaded_jobs: set[JobName] = set()
@@ -1514,12 +1506,7 @@ class ControllerTransitions:
             prior_state = int(task_row["state"])
 
             # Fast path: task already in the reported state with no new data to apply.
-            has_new_data = (
-                update.error is not None
-                or update.exit_code is not None
-                or update.resource_usage is not None
-                or update.log_entries
-            )
+            has_new_data = update.error is not None or update.exit_code is not None or update.resource_usage is not None
             if update.new_state == prior_state and not has_new_data:
                 continue
 
@@ -1530,13 +1517,6 @@ class ControllerTransitions:
             if attempt_row is None:
                 continue
             worker_id = attempt_row["worker_id"]
-            if update.log_entries and self._log_store is not None:
-                pending_logs.append(
-                    (
-                        task_log_key(TaskAttempt(task_id=update.task_id, attempt_id=update.attempt_id)),
-                        update.log_entries,
-                    )
-                )
             usage_payload = update.resource_usage.SerializeToString() if update.resource_usage is not None else None
             if usage_payload is not None:
                 cur.execute(
@@ -1689,7 +1669,7 @@ class ControllerTransitions:
                 actions.append(("job_terminated", job_id.to_wire(), {}))
             self._record_transaction(cur, "apply_task_updates", actions)
 
-        return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers), pending_logs
+        return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
     def apply_task_updates(self, req: HeartbeatApplyRequest) -> TxResult:
         """Apply a batch of worker task updates atomically."""
@@ -1697,10 +1677,7 @@ class ControllerTransitions:
             now_ms = Timestamp.now().epoch_ms()
             if not self._update_worker_health(cur, req, now_ms):
                 return TxResult()
-            result, pending_logs = self._apply_task_transitions(cur, req, now_ms)
-
-        if pending_logs and self._log_store is not None:
-            self._log_store.append_batch(pending_logs)
+            result = self._apply_task_transitions(cur, req, now_ms)
 
         return result
 
@@ -1717,7 +1694,6 @@ class ControllerTransitions:
 
         Worker health updates are also batched via ``executemany``.
         """
-        all_pending_logs: list[tuple[str, list[logging_pb2.LogEntry]]] = []
         _empty = HeartbeatApplyResult(tasks_to_kill=set(), action=HeartbeatAction.OK)
         results: list[HeartbeatApplyResult] = [_empty] * len(requests)
 
@@ -1772,13 +1748,6 @@ class ControllerTransitions:
                             continue
                         if update.resource_usage is not None:
                             resource_usage_params.append((update.resource_usage.SerializeToString(), task_id_wire))
-                        if update.log_entries and self._log_store is not None:
-                            all_pending_logs.append(
-                                (
-                                    task_log_key(TaskAttempt(task_id=update.task_id, attempt_id=update.attempt_id)),
-                                    update.log_entries,
-                                )
-                            )
 
                 if transition_updates:
                     transition_entries.append(
@@ -1801,15 +1770,11 @@ class ControllerTransitions:
 
             # ── Pass 2b: transitions via existing state machine ───────────
             for req_idx, treq in transition_entries:
-                tx_result, pending_logs = self._apply_task_transitions(cur, treq, now_ms)
-                all_pending_logs.extend(pending_logs)
+                tx_result = self._apply_task_transitions(cur, treq, now_ms)
                 results[req_idx] = HeartbeatApplyResult(
                     tasks_to_kill=tx_result.tasks_to_kill,
                     action=HeartbeatAction.OK,
                 )
-
-        if all_pending_logs and self._log_store is not None:
-            self._log_store.append_batch(all_pending_logs)
 
         return results
 
@@ -2695,7 +2660,6 @@ class ControllerTransitions:
                     error=entry.error or None,
                     exit_code=entry.exit_code if entry.HasField("exit_code") else None,
                     resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
-                    log_entries=list(entry.log_entries),
                     container_id=entry.container_id or None,
                 )
             )
@@ -2974,7 +2938,6 @@ class ControllerTransitions:
         Same state machine as apply_task_updates but without worker lookup,
         health updates, or resource decommit (no committed resources tracked).
         """
-        pending_logs: list[tuple[str, list[logging_pb2.LogEntry]]] = []
         tasks_to_kill: set[JobName] = set()
         task_kill_workers: dict[JobName, WorkerId] = {}
 
@@ -3013,13 +2976,6 @@ class ControllerTransitions:
                 if attempt_row is None:
                     continue
 
-                if update.log_entries and self._log_store is not None:
-                    pending_logs.append(
-                        (
-                            task_log_key(TaskAttempt(task_id=update.task_id, attempt_id=update.attempt_id)),
-                            update.log_entries,
-                        )
-                    )
                 usage_payload = update.resource_usage.SerializeToString() if update.resource_usage is not None else None
                 if usage_payload is not None:
                     cur.execute(
@@ -3169,9 +3125,6 @@ class ControllerTransitions:
                 for job_id in cascaded_jobs:
                     actions.append(("job_terminated", job_id.to_wire(), {}))
                 self._record_transaction(cur, "apply_direct_provider_updates", actions)
-
-        if pending_logs and self._log_store is not None:
-            self._log_store.append_batch(pending_logs)
 
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 

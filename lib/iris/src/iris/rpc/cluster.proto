@@ -142,27 +142,6 @@ message ProfileTaskResponse {
   string error = 2;             // Non-empty if profiling failed
 }
 
-// Unified log fetching request, shared by controller and worker services.
-// The source key identifies the log stream and supports regex patterns:
-//   /system/process                - exact: local process logs (controller or worker)
-//   /user/job/.*                   - pattern: all task logs under a job
-//   /user/job/0:.*                 - pattern: all attempts of a single task
-//   /user/job/0:3                  - exact: specific task attempt
-message FetchLogsRequest {
-  string source = 1;           // Log source key or regex pattern
-  int64 since_ms = 2;          // Only return entries after this timestamp (exclusive)
-  int64 cursor = 3;            // Autoincrement id cursor (resume after this id)
-  string substring = 4;        // Literal substring match on log data
-  int32 max_lines = 5;         // Max entries to return (0 = default 1000)
-  bool tail = 6;               // Return last N entries instead of first N
-  string min_level = 7;        // Minimum log level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
-}
-
-message FetchLogsResponse {
-  repeated iris.logging.LogEntry entries = 1;
-  int64 cursor = 2;            // Max autoincrement id seen (cursor for next poll)
-}
-
 // --- Process Status ---
 // Shared by both ControllerService and WorkerService.
 // Returns local process info (host, resource usage) and recent process logs.
@@ -763,7 +742,9 @@ message Controller {
     iris.time.Timestamp finished_at = 6;
     // field 7 was log_directory, removed
     ResourceUsage resource_usage = 8;
-    // Delta log entries since last heartbeat (capped per heartbeat)
+    // Carried by old workers that predate push-based LogService.
+    // New workers push logs directly; this field is only populated during
+    // rolling upgrades and will be removed once all workers are updated.
     repeated iris.logging.LogEntry log_entries = 9;
     string container_id = 10;         // Platform container identifier (Docker container ID, K8s pod name)
   }
@@ -1218,12 +1199,9 @@ service ControllerService {
 
   rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
 
-  // DEPRECATED: use FetchLogs with regex patterns instead.
-  // Forwards to FetchLogs internally. Scheduled for removal 2026-05-01.
+  // DEPRECATED: use LogService.FetchLogs with regex patterns instead.
+  // Forwards to LogService.FetchLogs internally. Scheduled for removal 2026-05-01.
   rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
-
-  // Unified log fetching (process logs, task logs, etc. by key)
-  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
 
   // Profiling (proxied to worker)
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
@@ -1273,7 +1251,6 @@ service WorkerService {
   rpc GetTaskStatus(Worker.GetTaskStatusRequest) returns (TaskStatus);
   rpc ListTasks(Worker.ListTasksRequest) returns (Worker.ListTasksResponse);
   rpc HealthCheck(Empty) returns (Worker.HealthResponse);
-  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
 

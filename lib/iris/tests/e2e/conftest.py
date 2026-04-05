@@ -36,8 +36,9 @@ from iris.cluster.types import (
     ResourceSpec,
     is_job_finished,
 )
-from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc import cluster_pb2, config_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.logging_connect import LogServiceClientSync
 from rigging.timing import Duration
 
 from .chronos import VirtualClock
@@ -122,6 +123,7 @@ class IrisTestCluster:
     url: str
     client: IrisClient
     controller_client: ControllerServiceClientSync
+    log_client: LogServiceClientSync
     job_timeout: float = 60.0
     is_cloud: bool = False
 
@@ -259,8 +261,8 @@ class IrisTestCluster:
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
         """Fetch log lines for a task."""
         task_id = job.job_id.task(task_index).to_wire()
-        request = cluster_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
-        response = self.controller_client.fetch_logs(request)
+        request = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        response = self.log_client.fetch_logs(request)
         return [f"{e.source}: {e.data}" for e in response.entries]
 
 
@@ -350,7 +352,9 @@ def cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        yield IrisTestCluster(url=url, client=client, controller_client=controller_client)
+        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
+        yield IrisTestCluster(url=url, client=client, controller_client=controller_client, log_client=log_client)
+        log_client.close()
         controller_client.close()
 
 
@@ -384,9 +388,11 @@ def multi_worker_cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
+        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client, log_client=log_client)
         tc.wait_for_workers(num_workers, timeout=60)
         yield tc
+        log_client.close()
         controller_client.close()
 
 

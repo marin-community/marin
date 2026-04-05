@@ -6,7 +6,7 @@
 from typing import Protocol
 
 from iris.cluster.types import Entrypoint, JobName, TaskAttempt
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from rigging.timing import Duration
 
 
@@ -91,7 +91,7 @@ class ClusterClient(Protocol):
         substring: str = "",
         min_level: str = "",
         tail: bool = False,
-    ) -> cluster_pb2.FetchLogsResponse: ...
+    ) -> logging_pb2.FetchLogsResponse: ...
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse: ...
 

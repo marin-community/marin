@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from iris.client.client import IrisClient
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.logging_connect import LogServiceClientSync
 
 from .cluster import IrisIntegrationCluster
 
@@ -52,11 +53,14 @@ def integration_cluster(request):
         pytest.skip("--controller-url not provided")
     client = IrisClient.remote(url, workspace=MARIN_ROOT)
     controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+    log_client = LogServiceClientSync(address=url, timeout_ms=30000)
     tc = IrisIntegrationCluster(
         url=url,
         client=client,
         controller_client=controller_client,
+        log_client=log_client,
         job_timeout=120.0,
     )
     yield tc
+    log_client.close()
     controller_client.close()

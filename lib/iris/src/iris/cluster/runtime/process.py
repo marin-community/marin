@@ -30,6 +30,7 @@ import tempfile
 import threading
 import uuid
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -425,7 +426,7 @@ class ProcessContainerHandle:
         """Return the container ID, if any."""
         return self._container_id
 
-    def build(self) -> list[LogLine]:
+    def build(self, on_logs: Callable[[list[LogLine]], None] | None = None) -> list[LogLine]:
         """No-op for local execution - host is already configured.
 
         In local/test mode, the environment is already set up with the

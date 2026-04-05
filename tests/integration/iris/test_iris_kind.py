@@ -32,7 +32,7 @@ from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.cluster.log_store import LogStore
+from iris.log_server.server import LogServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.service import CloudK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider, _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
@@ -136,8 +136,8 @@ def _get_iris_pods(k8s: InMemoryK8sService) -> list[dict]:
 
 def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "cw_db")
-    log_store = LogStore(log_dir=tmp_path / "cw_logs")
-    state = ControllerTransitions(db=db, log_store=log_store)
+    log_service = LogServiceImpl(log_dir=tmp_path / "cw_logs")
+    state = ControllerTransitions(db=db)
 
     k8s = InMemoryK8sService()
     k8s.add_node_pool(
@@ -182,7 +182,7 @@ def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
         db,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "cw_bundles")),
-        log_store=log_store,
+        log_service=log_service,
     )
 
     return ServiceTestHarness(
