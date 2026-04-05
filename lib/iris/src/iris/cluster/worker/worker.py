@@ -440,21 +440,13 @@ class Worker:
         return None
 
     def _resolve_log_service(self) -> str | None:
-        """Resolve the LogService address via the /system/log-server endpoint."""
-        if not self._controller_client:
-            return None
-        try:
-            resp = self._controller_client.list_endpoints(
-                cluster_pb2.Controller.ListEndpointsRequest(
-                    prefix="/system/log-server",
-                    exact=True,
-                ),
-            )
-            if resp.endpoints:
-                return resp.endpoints[0].address
-        except Exception:
-            logger.warning("Failed to resolve /system/log-server endpoint", exc_info=True)
-        # Fall back to controller address if endpoint resolution fails.
+        """Resolve the LogService address.
+
+        Today the log service is co-hosted on the controller, so we use
+        controller_address directly. The /system/log-server endpoint is
+        registered for future use when the log service moves to a separate
+        process.
+        """
         return self._config.controller_address
 
     def _attach_log_handler(self) -> None:

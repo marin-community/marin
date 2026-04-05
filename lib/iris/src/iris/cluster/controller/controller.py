@@ -1170,8 +1170,10 @@ class Controller:
             timeout=Duration.from_seconds(5.0),
         )
 
-        # Register system endpoints now that the server is running and self.url
-        # reflects the actual bound address (not 0.0.0.0).
+        # Register system endpoints. The address here is used for in-process
+        # and local-network callers (e.g. CLI, tests). Remote workers fall back
+        # to their configured controller_address when the resolved endpoint
+        # is unreachable, since the log service is co-hosted on the controller.
         self._service._system_endpoints["/system/log-server"] = self.url
 
     def stop(self) -> None:
