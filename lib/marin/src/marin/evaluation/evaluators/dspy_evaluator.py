@@ -7,13 +7,17 @@ from typing import Any
 
 import dspy
 import requests
+from dspy.utils.exceptions import AdapterParseError
 from experiments.dspy.adapters.baml import BAMLAdapter
 from experiments.dspy.adapters.toon import ToonAdapter
 from experiments.dspy.programs.hover import HoVer
 from experiments.dspy.programs.hotpotqa import HotpotQA
+from experiments.dspy.programs.prime_intellect import PrimeIntellectSolver
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 
 logger = logging.getLogger(__name__)
+
+PRIME_INTELLECT_PREFIX = "prime_intellect:"
 
 
 class _EnumSafeEncoder(json.JSONEncoder):
@@ -40,6 +44,7 @@ ADAPTER_MAP: dict[str, type[dspy.Adapter]] = {
 # Metrics
 # ---------------------------------------------------------------------------
 
+
 def _hover_metric(example: dspy.Example, pred: dspy.Prediction, trace=None) -> float:
     """Compare HoVer gold string label with predicted HoverLabel enum.
 
@@ -62,24 +67,88 @@ def _hotpotqa_metric(example: dspy.Example, pred: dspy.Prediction, trace=None) -
 
 
 # ---------------------------------------------------------------------------
+# Prime Intellect environment metric
+# ---------------------------------------------------------------------------
+
+
+def _normalize_numeric(s: str) -> str | None:
+    """Try to normalize a string to a canonical numeric form for comparison."""
+    s = s.strip().rstrip(".")
+    s = s.replace(",", "")
+    try:
+        val = float(s)
+        if val == int(val):
+            return str(int(val))
+        return str(val)
+    except ValueError:
+        return None
+
+
+def _prime_intellect_metric(example: dspy.Example, pred: dspy.Prediction, trace=None) -> float:
+    """Score a Prime Intellect environment prediction against the gold answer.
+
+    Tries extraction heuristics (boxed, hash) on the predicted answer, then
+    falls back to exact string comparison. Numeric values are compared after
+    normalization so that "400.0" matches "400".
+    """
+    import verifiers as vf
+
+    if pred is None:
+        return 0.0
+
+    gold = str(getattr(example, "answer", "")).strip()
+    predicted_raw = str(getattr(pred, "answer", "") or "").strip()
+
+    # Try extracting structured answers from the raw prediction
+    candidates: list[str] = [predicted_raw]
+    boxed = vf.extract_boxed_answer(predicted_raw)
+    if boxed:
+        candidates.append(boxed)
+    hashed = vf.extract_hash_answer(predicted_raw)
+    if hashed:
+        candidates.append(hashed)
+
+    gold_norm = _normalize_numeric(gold)
+
+    for candidate in candidates:
+        if candidate.lower().strip() == gold.lower():
+            return 1.0
+        cand_norm = _normalize_numeric(candidate)
+        if gold_norm is not None and cand_norm is not None and gold_norm == cand_norm:
+            return 1.0
+
+    return 0.0
+
+
+# ---------------------------------------------------------------------------
 # Task registry
 # ---------------------------------------------------------------------------
 
 TASK_MAP: dict[str, dict] = {
     "hover": {
         "program": HoVer,
-        "metric":  _hover_metric,
+        "metric": _hover_metric,
     },
     "hotpotqa": {
         "program": HotpotQA,
-        "metric":  _hotpotqa_metric,
+        "metric": _hotpotqa_metric,
     },
 }
+
+
+def _is_prime_intellect_task(task_name: str) -> bool:
+    return task_name.startswith(PRIME_INTELLECT_PREFIX)
+
+
+def _parse_prime_intellect_env_id(task_name: str) -> str:
+    """Extract the environment/dataset name from a 'prime_intellect:<name>' task."""
+    return task_name[len(PRIME_INTELLECT_PREFIX) :]
 
 
 # ---------------------------------------------------------------------------
 # Data loaders
 # ---------------------------------------------------------------------------
+
 
 def _load_hover(split: str, max_examples: int | None) -> list[dspy.Example]:
     """Load HoVer examples from *vincentkoc/hover-parquet* on HuggingFace.
@@ -106,17 +175,14 @@ def _load_hover(split: str, max_examples: int | None) -> list[dspy.Example]:
 
     hpqa_ids: set = set()
     full = [
-        ex for ex in full
-        if ex["num_hops"] == 2
-        and ex["hpqa_id"] not in hpqa_ids
-        and not hpqa_ids.add(ex["hpqa_id"])
+        ex for ex in full if ex["num_hops"] == 2 and ex["hpqa_id"] not in hpqa_ids and not hpqa_ids.add(ex["hpqa_id"])
     ]
 
     n = len(full)
     boundaries = {
-        "train": (0,             int(0.8 * n)),
-        "dev":   (int(0.8 * n), int(0.9 * n)),
-        "test":  (int(0.9 * n), n),
+        "train": (0, int(0.8 * n)),
+        "dev": (int(0.8 * n), int(0.9 * n)),
+        "test": (int(0.9 * n), n),
     }
     if split not in boundaries:
         raise ValueError(f"Unknown split '{split}'. Choose from {list(boundaries)}")
@@ -149,9 +215,9 @@ def _load_hotpotqa(split: str, max_examples: int | None) -> list[dspy.Example]:
 
     n = len(full)
     boundaries = {
-        "train": (0,             int(0.8 * n)),
-        "dev":   (int(0.8 * n), int(0.9 * n)),
-        "test":  (int(0.9 * n), n),
+        "train": (0, int(0.8 * n)),
+        "dev": (int(0.8 * n), int(0.9 * n)),
+        "test": (int(0.9 * n), n),
     }
     if split not in boundaries:
         raise ValueError(f"Unknown split '{split}'. Choose from {list(boundaries)}")
@@ -166,11 +232,78 @@ def _load_hotpotqa(split: str, max_examples: int | None) -> list[dspy.Example]:
     return examples
 
 
+def _load_prime_intellect(
+    env_id: str,
+    split: str,
+    max_examples: int | None,
+    env_args: dict | None = None,
+) -> list[dspy.Example]:
+    """Load examples from a Prime Intellect environment or built-in verifiers dataset.
+
+    Tries ``vf.load_example_dataset`` first (built-in datasets like gsm8k, math500,
+    aime2024, gpqa_diamond, etc.). If the dataset name is not built-in, falls back
+    to ``vf.load_environment`` which requires the environment package to be installed
+    via ``prime env install <env_id>``.
+
+    Returns a list of ``dspy.Example`` with ``question`` as input and ``answer`` as
+    the gold label.
+    """
+    import verifiers as vf
+
+    dataset = None
+
+    # Map our split names to what verifiers expects
+    vf_split_map = {"dev": "test", "train": "train", "test": "test"}
+    vf_split = vf_split_map.get(split, split)
+
+    # Try built-in example datasets first
+    try:
+        dataset = vf.load_example_dataset(
+            name=env_id,
+            split=vf_split,
+            n=max_examples,
+        )
+        logger.info(f"Loaded {len(dataset)} examples from built-in dataset '{env_id}' (split={vf_split})")
+    except ValueError:
+        logger.info(f"'{env_id}' not a built-in dataset, trying vf.load_environment()")
+
+    # Fall back to installed PI environment
+    if dataset is None:
+        try:
+            env = vf.load_environment(env_id, **(env_args or {}))
+            if split == "train" and env.dataset is not None:
+                dataset = env.get_dataset(n=max_examples)
+            elif env.eval_dataset is not None:
+                dataset = env.get_eval_dataset(n=max_examples)
+            elif env.dataset is not None:
+                dataset = env.get_dataset(n=max_examples)
+            else:
+                raise ValueError(f"No dataset available for environment '{env_id}'")
+            logger.info(f"Loaded {len(dataset)} examples from PI environment '{env_id}' (split={split})")
+        except (ValueError, RuntimeError) as e:
+            raise ValueError(
+                f"Could not load Prime Intellect dataset '{env_id}'. "
+                f"Ensure it is a valid built-in dataset name (gsm8k, math, math500, "
+                f"aime2024, gpqa_diamond, mmlu, etc.) or that the environment package "
+                f"is installed via 'prime env install <env_id>'. Error: {e}"
+            ) from e
+
+    # Convert HuggingFace Dataset rows to dspy.Example objects
+    examples = []
+    for row in dataset:
+        question = row.get("question", "")
+        answer = row.get("answer", "")
+        ex = dspy.Example(question=question, answer=answer).with_inputs("question")
+        examples.append(ex)
+
+    return examples
+
+
 # ---------------------------------------------------------------------------
 # BM25S retriever
 # ---------------------------------------------------------------------------
 
-_WIKI_URL  = "https://huggingface.co/dspy/cache/resolve/main/wiki.abstracts.2017.tar.gz"
+_WIKI_URL = "https://huggingface.co/dspy/cache/resolve/main/wiki.abstracts.2017.tar.gz"
 _WIKI_FILE = "wiki.abstracts.2017.jsonl"
 
 
@@ -191,6 +324,7 @@ def _build_bm25s_retriever():
         logger.info("Downloading Wikipedia abstracts corpus (~500 MB)...")
         download(_WIKI_URL)
         import subprocess
+
         subprocess.run(["tar", "-xzvf", "wiki.abstracts.2017.tar.gz"], check=True)
 
     logger.info("Loading Wikipedia abstracts corpus...")
@@ -202,6 +336,7 @@ def _build_bm25s_retriever():
 
     logger.info(f"Building BM25S index over {len(corpus):,} Wikipedia passages...")
     import Stemmer
+
     stemmer = Stemmer.Stemmer("english")
     retriever = bm25s.BM25(k1=0.9, b=0.4)
     retriever.index(bm25s.tokenize(corpus, stopwords="en", stemmer=stemmer))
@@ -219,20 +354,36 @@ def _build_bm25s_retriever():
 # Format-error detection
 # ---------------------------------------------------------------------------
 
+# Required output fields per task.  For PI tasks the solver always produces
+# ``answer``; for static tasks the fields are task-specific.
+_REQUIRED_OUTPUT_FIELDS: dict[str, tuple[str, ...]] = {
+    "hover": ("label",),
+    "hotpotqa": ("answer",),
+}
+_PI_REQUIRED_OUTPUT_FIELDS: tuple[str, ...] = ("answer",)
+
+
 def _detect_format_error(pred: dspy.Prediction, task_name: str) -> bool:
-    """Return True if the prediction is missing expected output fields."""
+    """Return True when the prediction is missing any required output field.
+
+    This catches the *silent* failure mode of ToonAdapter which sets missing
+    fields to ``None`` instead of raising ``AdapterParseError``.  The
+    explicit ``AdapterParseError`` raised by ChatAdapter / BAMLAdapter is
+    caught separately in the evaluation loop.
+    """
     if pred is None:
         return True
-    if task_name == "hover":
-        return getattr(pred, "label", None) is None
-    if task_name == "hotpotqa":
-        return not getattr(pred, "answer", None)
-    return False
+
+    required = (
+        _PI_REQUIRED_OUTPUT_FIELDS if _is_prime_intellect_task(task_name) else _REQUIRED_OUTPUT_FIELDS.get(task_name, ())
+    )
+    return any(not getattr(pred, field, None) for field in required)
 
 
 # ---------------------------------------------------------------------------
 # DspyEvaluator
 # ---------------------------------------------------------------------------
+
 
 class DspyEvaluator(Evaluator):
     """Evaluates a DSPy program on a structured task across different adapters.
@@ -241,18 +392,28 @@ class DspyEvaluator(Evaluator):
     (including per-passage BM25S scores) to a JSONL file for downstream
     analysis, SFT data generation, and Bayesian optimisation.
 
+    Supports both built-in tasks (hover, hotpotqa) and Prime Intellect
+    environment hub datasets. Use the ``prime_intellect:<env_id>`` task name
+    format to evaluate on any PI environment (e.g., ``prime_intellect:gsm8k``,
+    ``prime_intellect:math500``, ``prime_intellect:gpqa_diamond``).
+
     Args:
         model: Model configuration (name, path, engine kwargs).
         endpoint: URL of a running OpenAI-compatible inference server.
         output_path: Directory where results and trajectories are saved.
         adapter_name: DSPy adapter to use. One of 'baml', 'chat', 'toon'.
-        task_name: Task to evaluate. One of 'hover', 'hotpotqa'.
+        task_name: Task to evaluate. One of 'hover', 'hotpotqa', or
+            'prime_intellect:<env_id>' for PI environments.
         split: Dataset split. One of 'train', 'dev', 'test'.
         max_eval_instances: Cap on examples to evaluate (None = full split).
+        num_hops: Number of retrieval hops for PI tasks (0 = single-turn CoT).
+        pi_env_args: Extra keyword arguments forwarded to ``vf.load_environment``
+            when loading installed PI environment packages.
         wandb_tags: Optional W&B tags (reserved for future use).
 
     Example usage::
 
+        # Built-in multi-hop task
         evaluator = DspyEvaluator(
             model=ModelConfig(name="Qwen/Qwen2.5-7B-Instruct", path=None, engine_kwargs={}),
             endpoint="http://localhost:8000",
@@ -262,6 +423,18 @@ class DspyEvaluator(Evaluator):
             split="test",
             max_eval_instances=100,
         )
+
+        # Prime Intellect environment (single-turn CoT)
+        evaluator = DspyEvaluator(
+            model=ModelConfig(name="Qwen/Qwen2.5-7B-Instruct", path=None, engine_kwargs={}),
+            endpoint="http://localhost:8000",
+            output_path="outputs/gsm8k_chat_test",
+            adapter_name="chat",
+            task_name="prime_intellect:gsm8k",
+            split="test",
+            max_eval_instances=200,
+        )
+
         results = evaluator.evaluate()
         print(results)
     """
@@ -276,18 +449,19 @@ class DspyEvaluator(Evaluator):
         max_eval_instances: int | None = 1000,
         endpoint: str | None = None,
         api_key: str | None = None,
+        num_hops: int = 0,
+        pi_env_args: dict | None = None,
         wandb_tags: list[str] | None = None,
         **kwargs,
     ):
         super().__init__()
 
         if adapter_name not in ADAPTER_MAP:
+            raise ValueError(f"Unknown adapter '{adapter_name}'. Choose from {list(ADAPTER_MAP)}")
+        if task_name not in TASK_MAP and not _is_prime_intellect_task(task_name):
             raise ValueError(
-                f"Unknown adapter '{adapter_name}'. Choose from {list(ADAPTER_MAP)}"
-            )
-        if task_name not in TASK_MAP:
-            raise ValueError(
-                f"Unknown task '{task_name}'. Choose from {list(TASK_MAP)}"
+                f"Unknown task '{task_name}'. Choose from {list(TASK_MAP)} "
+                f"or use '{PRIME_INTELLECT_PREFIX}<env_id>' for PI environments."
             )
 
         self.model = model
@@ -297,6 +471,8 @@ class DspyEvaluator(Evaluator):
         self.split = split
         self.max_eval_instances = max_eval_instances
         self.api_key = api_key
+        self.num_hops = num_hops
+        self.pi_env_args = pi_env_args
         self.wandb_tags = wandb_tags
 
         self.endpoint = self._resolve_endpoint(endpoint)
@@ -350,9 +526,9 @@ class DspyEvaluator(Evaluator):
         * ``<task>_<adapter>_<split>_results.json``
           Aggregate metrics (accuracy, format_error_rate, elapsed_seconds, …).
         """
-        task_cfg = TASK_MAP[self.task_name]
+        is_pi = _is_prime_intellect_task(self.task_name)
 
-        # Configure DSPy — temperature=0 and cache=False for reproducibility
+        # Configure DSPy -- temperature=0 and cache=False for reproducibility
         lm = dspy.LM(
             model=f"openai/{self.model.name}",
             base_url=self.endpoint,
@@ -361,42 +537,58 @@ class DspyEvaluator(Evaluator):
             cache=False,
         )
         adapter = ADAPTER_MAP[self.adapter_name]()
-
-        # Load dataset
-        if self.task_name == "hover":
-            examples = _load_hover(self.split, self.max_eval_instances)
-        else:
-            examples = _load_hotpotqa(self.split, self.max_eval_instances)
-
-        # BM25S retriever — fully offline over 2017 Wikipedia abstracts.
-        rm = _build_bm25s_retriever()
         dspy.configure(lm=lm, adapter=adapter)
 
-        program = task_cfg["program"](search=rm)
-        metric  = task_cfg["metric"]
+        if is_pi:
+            env_id = _parse_prime_intellect_env_id(self.task_name)
+            examples = _load_prime_intellect(
+                env_id,
+                self.split,
+                self.max_eval_instances,
+                self.pi_env_args,
+            )
+            metric = _prime_intellect_metric
+
+            # Build retriever only when multi-hop is requested
+            search = _build_bm25s_retriever() if self.num_hops > 0 else None
+            program = PrimeIntellectSolver(
+                search=search,
+                num_hops=self.num_hops,
+            )
+        else:
+            task_cfg = TASK_MAP[self.task_name]
+            metric = task_cfg["metric"]
+
+            if self.task_name == "hover":
+                examples = _load_hover(self.split, self.max_eval_instances)
+            else:
+                examples = _load_hotpotqa(self.split, self.max_eval_instances)
+
+            rm = _build_bm25s_retriever()
+            program = task_cfg["program"](search=rm)
 
         trajectories: list[dict] = []
-        total_score         = 0.0
+        total_score = 0.0
         total_format_errors = 0
-        start_time          = time.time()
+        start_time = time.time()
 
         for i, example in enumerate(examples):
             traj: dict = {
-                "sample_id":   i,
-                "input":       example.toDict() if hasattr(example, "toDict") else vars(example),
-                "output":      None,
-                "score":       None,
+                "sample_id": i,
+                "input": example.toDict() if hasattr(example, "toDict") else vars(example),
+                "output": None,
+                "score": None,
                 "parsing_error": False,
-                "hop_traces":  [],
+                "hop_traces": [],
             }
 
             try:
-                pred      = program(**example.inputs())
+                pred = program(**example.inputs())
                 has_error = _detect_format_error(pred, self.task_name)
-                score     = float(metric(example, pred))
+                score = float(metric(example, pred))
 
-                traj["output"]        = pred.toDict() if hasattr(pred, "toDict") else str(pred)
-                traj["score"]         = score
+                traj["output"] = pred.toDict() if hasattr(pred, "toDict") else str(pred)
+                traj["score"] = score
                 traj["parsing_error"] = has_error
 
                 # Save per-hop traces for SFT data generation
@@ -406,39 +598,49 @@ class DspyEvaluator(Evaluator):
                 if has_error:
                     total_format_errors += 1
 
+            except AdapterParseError as exc:
+                # ChatAdapter / BAMLAdapter could not parse the LM output
+                # into the expected signature fields.
+                traj["parsing_error"] = True
+                traj["error"] = str(exc)
+                traj["adapter_parse_error"] = True
+                if exc.parsed_result is not None:
+                    traj["partial_output"] = exc.parsed_result
+                total_format_errors += 1
+                logger.warning(f"Example {i}: adapter parse error: {exc}")
+
             except Exception as exc:
                 traj["parsing_error"] = True
-                traj["error"]         = str(exc)
-                total_format_errors  += 1
+                traj["error"] = str(exc)
+                total_format_errors += 1
                 logger.warning(f"Example {i} failed: {exc}")
 
             trajectories.append(traj)
 
             if (i + 1) % 50 == 0:
-                logger.info(
-                    f"Progress: {i + 1}/{len(examples)} "
-                    f"({(i + 1) / len(examples):.1%})"
-                )
+                logger.info(f"Progress: {i + 1}/{len(examples)} ({(i + 1) / len(examples):.1%})")
 
         elapsed = time.time() - start_time
         n = len(examples)
 
         results = {
-            "task":              self.task_name,
-            "adapter":           self.adapter_name,
-            "split":             self.split,
-            "model":             self.model.name,
-            "total_examples":    n,
-            "accuracy":          round(total_score / n, 4) if n > 0 else 0.0,
+            "task": self.task_name,
+            "adapter": self.adapter_name,
+            "split": self.split,
+            "model": self.model.name,
+            "total_examples": n,
+            "accuracy": round(total_score / n, 4) if n > 0 else 0.0,
             "format_error_rate": round(total_format_errors / n, 4) if n > 0 else 0.0,
-            "elapsed_seconds":   round(elapsed, 2),
+            "elapsed_seconds": round(elapsed, 2),
         }
 
         # ---- Persist outputs ----
         out_dir = Path(self.output_path)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        stem = f"{self.task_name}_{self.adapter_name}_{self.split}"
+        # Use a filesystem-safe stem: replace colons and slashes
+        safe_task = self.task_name.replace(":", "_").replace("/", "_")
+        stem = f"{safe_task}_{self.adapter_name}_{self.split}"
 
         traj_file = out_dir / f"{stem}_trajectories.jsonl"
         with open(traj_file, "w", encoding="utf-8") as f:
@@ -466,6 +668,4 @@ class DspyEvaluator(Evaluator):
         return results
 
     def launch_evaluate_with_ray(self, model, evals, output_path, **kwargs):
-        raise NotImplementedError(
-            "Ray-based evaluation is not supported for DspyEvaluator."
-        )
+        raise NotImplementedError("Ray-based evaluation is not supported for DspyEvaluator.")
