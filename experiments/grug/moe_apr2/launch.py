@@ -872,6 +872,7 @@ def create_x0_skip_run() -> list[ExecutorStep]:
     """Single 1e18 d768 run with learned x0 skip connections (resid_lambda + x0_lambda per layer)."""
     dim = 768
     model_cfg = HEURISTIC.build_model_config(dim)
+    model_cfg = dataclasses.replace(model_cfg, use_x0_skip=True)
     fpt = _compute_flops_per_token(model_cfg)
     tokens, batch_size, train_steps = _compute_tokens_and_batch(1e18, fpt)
     optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, dim)
@@ -969,8 +970,101 @@ def create_backout_sweep() -> list[ExecutorStep]:
 backout_sweep_steps = create_backout_sweep()
 
 
+def create_no_gate_run() -> list[ExecutorStep]:
+    """Single 1e18 d768 run with no attention gate (attn_gate_width=0)."""
+    dim = 768
+    model_cfg = HEURISTIC.build_model_config(dim)
+    model_cfg = dataclasses.replace(model_cfg, attn_gate_width=0)
+    fpt = _compute_flops_per_token(model_cfg)
+    tokens, batch_size, train_steps = _compute_tokens_and_batch(1e18, fpt)
+    optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, dim)
+
+    run_id = "moe-exp-nogate-d768-1e18"
+    config = GrugMoeLaunchConfig(
+        model=versioned(model_cfg),
+        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        output_path=this_output_path(),
+        run_id=run_id,
+        resources=versioned(ResourceConfig.with_tpu("v4-32")),
+        steps=versioned(train_steps),
+        batch_size=versioned(batch_size),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["grug", "moe-core", "no-gate", "d=768", "budget=1e+18", "gqa4"],
+            group="moe-exp",
+            name=run_id,
+        ),
+        optimizer=versioned(optimizer),
+        grug_trainer=versioned(
+            GrugTrainerConfig(
+                z_loss_weight=HEURISTIC.z_loss_weight,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            GrugEvalConfig(
+                eval_batch_size=512,
+                steps_per_eval=1000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+    )
+    return [ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config)]
+
+
+def create_partial_rope_run() -> list[ExecutorStep]:
+    """Single 1e18 d768 run with partial rope (0.5) on every 4th layer."""
+    dim = 768
+    model_cfg = HEURISTIC.build_model_config(dim)
+    fpt = _compute_flops_per_token(model_cfg)
+    tokens, batch_size, train_steps = _compute_tokens_and_batch(1e18, fpt)
+    optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, dim)
+
+    run_id = "moe-exp-partial-rope-d768-1e18"
+    config = GrugMoeLaunchConfig(
+        model=versioned(model_cfg),
+        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        output_path=this_output_path(),
+        run_id=run_id,
+        resources=versioned(ResourceConfig.with_tpu("v4-32")),
+        steps=versioned(train_steps),
+        batch_size=versioned(batch_size),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["grug", "moe-core", "partial-rope", "d=768", "budget=1e+18", "gqa4"],
+            group="moe-exp",
+            name=run_id,
+        ),
+        optimizer=versioned(optimizer),
+        grug_trainer=versioned(
+            GrugTrainerConfig(
+                z_loss_weight=HEURISTIC.z_loss_weight,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            GrugEvalConfig(
+                eval_batch_size=512,
+                steps_per_eval=1000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+    )
+    return [ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config)]
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=backout_sweep_steps,
-        description="moe-exp: backout layer sweep d768 1e18 (8 layers)",
+        steps=create_partial_rope_run(),
+        description="moe-exp: d768 1e18 with partial rope every 4th layer",
     )

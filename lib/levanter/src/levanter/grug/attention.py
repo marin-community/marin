@@ -122,12 +122,21 @@ def apply_rotary_embedding(
     seq_len: int,
     head_dim: int,
     rope: RotaryConfig,
+    partial_rotary_factor: float = 1.0,
 ) -> tuple[Float[Array, "B S H D"], Float[Array, "B S H D"]]:
-    cos, sin = _rotary_cache(seq_len, head_dim, rope)
+    rotary_dim = int(head_dim * partial_rotary_factor)
+    # Round down to even for the split
+    rotary_dim = rotary_dim - (rotary_dim % 2)
+    cos, sin = _rotary_cache(seq_len, rotary_dim, rope)
     cos = cos[None, :, None, :]
     sin = sin[None, :, None, :]
 
     def _apply(x: Float[Array, "B S H D"]) -> Float[Array, "B S H D"]:
+        if rotary_dim < head_dim:
+            x_rot, x_pass = x[..., :rotary_dim], x[..., rotary_dim:]
+            x1, x2 = jnp.split(x_rot, 2, axis=-1)
+            x_rot = jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
+            return jnp.concatenate([x_rot, x_pass], axis=-1)
         x1, x2 = jnp.split(x, 2, axis=-1)
         return jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
 
