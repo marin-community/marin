@@ -84,8 +84,18 @@ Initial hypotheses:
   - largest pre-op gaps:
     - before `all-gather`: `131003.183` total
     - before `reduce-scatter`: `103636.604` total
+- The first direct follow-up probe on that residual says gather-metadata cleanup is real but small:
+  - `production_current`: `26144435.07 tok/s` (`10.027 ms`)
+  - `harness_current`: `26099086.43 tok/s` (`10.044 ms`)
+  - `packed_meta`: `26312299.37 tok/s` (`9.963 ms`)
+  - `packed_meta` vs `harness_current`: `+0.82%`
+- A collectives-only rung says the gather/scatter stack itself already dominates a large share of the forward:
+  - `collectives_only_current`: `45871598.17 tok/s` (`5.715 ms`)
+  - `collectives_only_packed_meta`: `45952027.56 tok/s` (`5.705 ms`)
+  - metadata packing moves the collectives-only floor by only `+0.18%`
+  - the collectives-only current rung is already `56.9%` of the full `harness_current` forward time
 - Working conclusion:
   - PR #4297 has largely removed the old routed FC1 bottleneck on the exact-cap surface
-  - the next pure-JAX optimization tranche should target ring communication / synchronization / overlap rather than replaying the old `w13` local-compute fix
+  - the next pure-JAX optimization tranche should target ring communication / synchronization / overlap rather than replaying the old `w13` local-compute fix or continuing with gather-metadata cleanup
 - Operational note:
   - one fresh live Triton training repro on `iris-ci` died before the first useful throughput sample because the child GPU job was killed while the parent ended `Pod not found`; it was not a usable training anchor, so the paired W&B runs remain the authoritative end-to-end reference for this thread

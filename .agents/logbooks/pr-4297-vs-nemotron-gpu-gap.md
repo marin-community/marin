@@ -240,3 +240,96 @@
 - Next action:
   - post this localization milestone on issue `#4427`
   - rank the next experiments around ring collective overlap and pre-collective dependency reduction rather than reopening the old FC1-only path
+
+### 2026-04-05 16:10 UTC - Packing ring gather metadata into one collective only buys `~0.8%`, so metadata bytes are not the main residual
+- Hypothesis:
+  - if the surviving `all-gather` cost on the PR 4297 exact-cap trace is materially driven by the two routing-metadata collectives themselves, then packing `selected_experts` and `combine_weights` into a single gathered `uint16` buffer should yield a meaningful forward win on the same H100x8 cell.
+- Harness change:
+  - extended `lib/levanter/scripts/bench/bench_pr4297_w13_current.py` with ring-harness variants:
+    - `harness_current`: a benchmark-local copy of the current ring path
+    - `packed_meta`: the same ring path, but gather metadata through one packed `uint16` all-gather instead of separate `selected_experts` and `combine_weights` all-gathers
+  - also kept `production_current` in the same script to verify the copied harness stayed aligned with the real branch implementation
+- Command:
+  - `source /home/ubuntu/.config/yoblin/env >/dev/null 2>&1 || true`
+  - `KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run iris --config=lib/iris/examples/coreweave-ci.yaml job run --job-name pr4297-packed-meta-bench-20260405-0234 --gpu H100x8 --cpu 32 --memory 256GB --disk 128GB --timeout 7200 -- bash -lc 'set -euo pipefail; export UV_LINK_MODE=copy; for seed in 0 1 2; do for kernel in production_current harness_current packed_meta; do uv run --python 3.11 --package levanter --extra gpu python lib/levanter/scripts/bench/bench_pr4297_w13_current.py --seed "$seed" --ragged-dot-impl triton --kernel "$kernel"; done; done'`
+- Config:
+  - job id: `/ubuntu/pr4297-packed-meta-bench-20260405-0234`
+  - fixed cell:
+    - `tokens=262144`
+    - `hidden=2048`
+    - `mlp_dim=768`
+    - `experts=128`
+    - `topk=2`
+    - `shared_expert_dim=0`
+    - `distribution=random`
+    - `ep_size=8`
+    - `ragged_dot_impl=triton`
+    - seeds: `0,1,2`
+- Result:
+  - per-seed results:
+    - seed `0`:
+      - `production_current`: `26046559.10 tok/s` (`10.064 ms`)
+      - `harness_current`: `26140372.57 tok/s` (`10.028 ms`)
+      - `packed_meta`: `26310857.83 tok/s` (`9.963 ms`)
+    - seed `1`:
+      - `production_current`: `26201737.49 tok/s` (`10.005 ms`)
+      - `harness_current`: `26015385.16 tok/s` (`10.076 ms`)
+      - `packed_meta`: `26313172.41 tok/s` (`9.962 ms`)
+    - seed `2`:
+      - `production_current`: `26185008.63 tok/s` (`10.011 ms`)
+      - `harness_current`: `26141501.55 tok/s` (`10.028 ms`)
+      - `packed_meta`: `26312867.87 tok/s` (`9.963 ms`)
+  - aggregate means:
+    - `production_current`: `26144435.07 tok/s` (`10.027 ms`)
+    - `harness_current`: `26099086.43 tok/s` (`10.044 ms`)
+    - `packed_meta`: `26312299.37 tok/s` (`9.963 ms`)
+  - deltas:
+    - `harness_current` vs `production_current`: `-0.17%` throughput, `+0.17%` time
+    - `packed_meta` vs `harness_current`: `+0.82%` throughput, `-0.81%` time
+    - `packed_meta` vs `production_current`: `+0.64%` throughput, `-0.64%` time
+- Interpretation:
+  - the copied ring harness stayed close enough to production that the probe is trustworthy
+  - packing the metadata into one collective is a real positive, but only a small one
+  - that is too small to explain the remaining `21.07%` gap to the Megatron forward anchor, so the main residual is not “routing metadata is too wide” or “one extra metadata all-gather”
+- Next action:
+  - measure the collectives-only floor on the same cell to decide how much of the forward is already consumed by the gather/scatter stack before any routed compute or dispatch compaction work
+
+### 2026-04-05 16:15 UTC - Collectives alone already consume `~57%` of the full forward, and metadata packing barely moves that floor
+- Hypothesis:
+  - if the next tranche should really pivot to communication / overlap rather than metadata cleanup, then a collectives-only rung with the same H100x8 shapes should already account for a large share of the full `current` forward time, and packing metadata should move that collectives-only floor only slightly.
+- Harness change:
+  - extended `lib/levanter/scripts/bench/bench_pr4297_w13_current.py` with:
+    - `collectives_only_current`
+    - `collectives_only_packed_meta`
+  - these variants keep the same `all-gather` and `psum_scatter` shape surface while stripping out dispatch compaction and expert compute
+- Commands:
+  - current collectives-only:
+    - `source /home/ubuntu/.config/yoblin/env >/dev/null 2>&1 || true`
+    - `KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run iris --config=lib/iris/examples/coreweave-ci.yaml job run --job-name pr4297-collectives-only-bench-20260405-0246 --gpu H100x8 --cpu 32 --memory 256GB --disk 128GB --timeout 7200 -- bash -lc 'set -euo pipefail; export UV_LINK_MODE=copy; uv run --python 3.11 --package levanter --extra gpu python lib/levanter/scripts/bench/bench_pr4297_w13_current.py --seed 0 --ragged-dot-impl triton --kernel collectives_only_current'`
+  - packed-meta collectives-only rerun:
+    - `source /home/ubuntu/.config/yoblin/env >/dev/null 2>&1 || true`
+    - `KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run iris --config=lib/iris/examples/coreweave-ci.yaml job run --job-name pr4297-collectives-only-packedmeta-20260405-0248 --gpu H100x8 --cpu 32 --memory 256GB --disk 128GB --timeout 7200 -- bash -lc 'set -euo pipefail; export UV_LINK_MODE=copy; uv run --python 3.11 --package levanter --extra gpu python lib/levanter/scripts/bench/bench_pr4297_w13_current.py --seed 0 --ragged-dot-impl triton --kernel collectives_only_packed_meta'`
+- Config:
+  - jobs:
+    - `/ubuntu/pr4297-collectives-only-bench-20260405-0246`
+    - `/ubuntu/pr4297-collectives-only-packedmeta-20260405-0248`
+  - same fixed `262144 / 2048 / 768 / 128 / topk=2 / ep=8 / triton` cell
+  - operational note:
+    - the first job was torn down before I could recover the second kernel log line, so I reran `collectives_only_packed_meta` as its own short job
+- Result:
+  - `collectives_only_current`: `45871598.17 tok/s` (`5.715 ms`)
+  - `collectives_only_packed_meta`: `45952027.56 tok/s` (`5.705 ms`)
+  - `collectives_only_packed_meta` vs `collectives_only_current`: `+0.18%` throughput, `-0.17%` time
+  - relative to the full `harness_current` mean of `10.044 ms`, the collectives-only current rung already accounts for `56.9%` of the full forward time
+- Interpretation:
+  - this makes the remaining picture much sharper:
+    - the gather/scatter stack by itself already consumes more than half of the full forward on the authoritative exact-cap cell
+    - packing metadata into one collective barely changes that collectives-only floor
+  - so the next high-value target is no longer gather metadata cleanup
+  - the next branch should focus on:
+    - reducing the raw ring collective cost itself
+    - overlapping collectives better with surrounding work
+    - or removing the synchronization / dependency chain that leaves such large pre-collective gaps in the full trace
+- Next action:
+  - treat gather-metadata cleanup as explored-and-rejected for the main residual
+  - pivot the next probe set toward `all-gather` / `reduce-scatter` overlap and pre-collective dependency reduction
