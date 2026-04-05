@@ -771,11 +771,12 @@ def create_partial_rope_run() -> list[ExecutorStep]:
     """Single 1e18 d768 run with partial rope (0.5) on every 4th layer."""
     dim = 768
     model_cfg = HEURISTIC.build_model_config(dim)
+    model_cfg = dataclasses.replace(model_cfg, partial_rope_key_shift=True)
     fpt = _compute_flops_per_token(model_cfg)
     tokens, batch_size, train_steps = _compute_tokens_and_batch(1e18, fpt)
     optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, dim)
 
-    run_id = "moe-exp-partial-rope-keyshift-d768-1e18"
+    run_id = "moe-exp-partial-rope-keyshift-v2-d768-1e18"
     config = GrugMoeLaunchConfig(
         model=versioned(model_cfg),
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,

@@ -72,6 +72,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    partial_rope_key_shift: bool = False  # Shift stationary key dims on partial-rope layers
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -145,10 +146,14 @@ class CausalSelfAttention(eqx.Module):
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope, partial_rotary_factor=self.partial_rotary_factor)
         # Partial key offset: shift stationary key dims forward 1 position on partial-rope layers.
         # Enables 1-layer induction heads.
-        if self.partial_rotary_factor < 1.0:
+        if self.partial_rotary_factor < 1.0 and self.cfg.partial_rope_key_shift:
             rotary_dim = int(head_dim * self.partial_rotary_factor)
             rotary_dim = rotary_dim - (rotary_dim % 2)
-            k = k.at[:, 1:, :, rotary_dim:].set(k[:, :-1, :, rotary_dim:])
+            k_rot = k[..., :rotary_dim]
+            k_stat = k[..., rotary_dim:]
+            # Shift stationary dims: position i gets position i-1's values
+            k_stat_shifted = jnp.concatenate([k_stat[:, :1, :, :], k_stat[:, :-1, :, :]], axis=1)
+            k = jnp.concatenate([k_rot, k_stat_shifted], axis=-1)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
