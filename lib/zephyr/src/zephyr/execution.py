@@ -25,6 +25,7 @@ import threading
 import time
 import uuid
 from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
@@ -826,10 +827,17 @@ class ZephyrCoordinator:
                     scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{output_stage_name}",
                 )
 
-            # Flatten final results
+            # Flatten final results — each shard may involve I/O (unpickling from
+            # remote storage), so parallelize across shards with a thread pool.
+            def _materialize_shard(shard):
+                return list(shard)
+
+            with ThreadPoolExecutor(max_workers=min(32, len(shards))) as flatten_pool:
+                materialized = flatten_pool.map(_materialize_shard, shards)
+
             flat_result = []
-            for shard in shards:
-                flat_result.extend(shard)
+            for items in materialized:
+                flat_result.extend(items)
 
             # Signal workers to shut down now that all stages are complete.
             self.shutdown()
