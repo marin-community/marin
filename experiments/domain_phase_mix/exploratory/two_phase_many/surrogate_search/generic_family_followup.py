@@ -104,6 +104,63 @@ def family_shares(packet: GenericFamilyPacket, weights: np.ndarray) -> dict[str,
     return shares
 
 
+def optimize_generic_family_convex_hull(
+    model: GenericFamilyRetainedTotalSurrogate,
+    anchors: np.ndarray,
+    *,
+    maxiter: int = 100,
+    start_indices: np.ndarray | None = None,
+    linear_penalty: np.ndarray | None = None,
+    pairwise_penalty: np.ndarray | None = None,
+) -> tuple[float, np.ndarray, np.ndarray]:
+    """Optimize the model over convex combinations of anchor schedules."""
+    if model.coef_ is None or model.intercept_ is None:
+        raise RuntimeError("Model must be fit before convex-hull optimization")
+
+    num_anchors = anchors.shape[0]
+    if linear_penalty is not None and linear_penalty.shape != (num_anchors,):
+        raise ValueError(f"linear_penalty shape {linear_penalty.shape} != ({num_anchors},)")
+    if pairwise_penalty is not None and pairwise_penalty.shape != (num_anchors, num_anchors):
+        raise ValueError(f"pairwise_penalty shape {pairwise_penalty.shape} != ({num_anchors}, {num_anchors})")
+
+    def objective(z: np.ndarray) -> float:
+        shifted = z - np.max(z)
+        coeffs = np.exp(shifted)
+        coeffs /= np.sum(coeffs)
+        weights = np.tensordot(coeffs, anchors, axes=1)[None, :, :]
+        value = float(model.predict(weights)[0])
+        if linear_penalty is not None:
+            value += float(linear_penalty @ coeffs)
+        if pairwise_penalty is not None:
+            value += float(coeffs @ pairwise_penalty @ coeffs)
+        return value
+
+    if start_indices is None:
+        vertex_indices = range(num_anchors)
+    else:
+        vertex_indices = np.asarray(start_indices, dtype=int).tolist()
+    starts = [np.zeros(num_anchors, dtype=float)] + [
+        np.eye(num_anchors, dtype=float)[idx] * 4.0 for idx in vertex_indices
+    ]
+    best_result = None
+    best_value = float("inf")
+    for start in starts:
+        result = minimize(objective, start, method="L-BFGS-B", options={"maxiter": maxiter})
+        if float(result.fun) < best_value:
+            best_value = float(result.fun)
+            best_result = result
+
+    if best_result is None:
+        raise RuntimeError("Generic-family convex-hull optimization failed")
+
+    shifted = np.asarray(best_result.x, dtype=float) - np.max(best_result.x)
+    best_coeffs = np.exp(shifted)
+    best_coeffs /= np.sum(best_coeffs)
+    best_weights = np.tensordot(best_coeffs, anchors, axes=1)
+    predicted_value = float(model.predict(best_weights[None, :, :])[0])
+    return predicted_value, best_coeffs, best_weights
+
+
 class GenericFamilyRetainedTotalSurrogate:
     """Generic family retained-total surrogate with paired CC buckets."""
 
@@ -115,12 +172,14 @@ class GenericFamilyRetainedTotalSurrogate:
         family_totals: tuple[str, ...] = GENERIC_FAMILY_NAMES,
         quality_discount: bool = True,
         pair_cc_domains: bool = True,
+        include_penalty: bool = True,
     ):
         self.packet = packet
         self.params = dict(TUNED_GENERIC_FAMILY_PARAMS if params is None else params)
         self.family_totals = tuple(family_totals)
         self.quality_discount = bool(quality_discount)
         self.pair_cc_domains = bool(pair_cc_domains)
+        self.include_penalty = bool(include_penalty)
         self.coef_: np.ndarray | None = None
         self.intercept_: float | None = None
 
@@ -159,9 +218,10 @@ class GenericFamilyRetainedTotalSurrogate:
             family_total = np.sum(x[:, family_indices], axis=1)
             features.append(np.log1p(alpha * family_total)[:, None])
 
-        penalty_inputs = np.stack(group_totals, axis=1)
-        penalty = np.sum(softplus(np.log1p(penalty_inputs) - tau) ** 2, axis=1, keepdims=True)
-        features.append(penalty)
+        if self.include_penalty:
+            penalty_inputs = np.stack(group_totals, axis=1)
+            penalty = np.sum(softplus(np.log1p(penalty_inputs) - tau) ** 2, axis=1, keepdims=True)
+            features.append(penalty)
 
         design = np.hstack(features)
         num_signal = design.shape[1] - 1
@@ -216,7 +276,7 @@ def fitted_generic_family_components(
         )
     }
     offset += n_families
-    penalty_coef = float(model.coef_[offset])
+    penalty_coef = float(model.coef_[offset]) if model.include_penalty else 0.0
     return {
         "singleton_coef": singleton_coef,
         "pair_coef": pair_coef,

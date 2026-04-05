@@ -69,6 +69,7 @@ MODEL_ORDER = (
     "GRP",
     "GRP w/o family signals",
     "GRP w/o retention",
+    "GRP w/o overexposure penalty",
     "GRP w/o retention or family signals",
     "GRP w/o quality splits",
     "GRP w/o quality splits or family signals",
@@ -98,12 +99,7 @@ VALIDATED_RUN_SPECS: tuple[ValidatedRunSpec, ...] = (
     ),
     ValidatedRunSpec(
         model_name="GRP w/o family signals",
-        eval_metrics_jsonl=(
-            "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/"
-            "ngd3dm2_genericfamily_no_groups_uncheatable_bpb/"
-            "baseline_genericfamily_no_groups_uncheatable_bpb-573c71/"
-            "checkpoints/eval_metrics.jsonl"
-        ),
+        wandb_run_id="baseline_genericfamily_no_groups_uncheatable_bpb-573c71",
     ),
     ValidatedRunSpec(
         model_name="GRP w/o retention",
@@ -201,6 +197,7 @@ def compute_grp_metrics(
     params: dict[str, float] | None = None,
     active_shape_parameters: int = SHAPE_PARAMETER_COUNT,
     pair_cc_domains: bool = True,
+    include_penalty: bool = True,
     notes: str | None = None,
 ) -> dict[str, Any]:
     """Compute GRP-family train and CV metrics in-repo."""
@@ -217,6 +214,7 @@ def compute_grp_metrics(
         family_totals=family_totals,
         quality_discount=True,
         pair_cc_domains=pair_cc_domains,
+        include_penalty=include_penalty,
     ).fit(weights, y)
     train_pred = model.predict(weights)
     train = regression_metrics(frame, name_col, y, train_pred)
@@ -233,6 +231,7 @@ def compute_grp_metrics(
             family_totals=family_totals,
             quality_discount=True,
             pair_cc_domains=pair_cc_domains,
+            include_penalty=include_penalty,
         ).fit(weights[tr], y[tr])
         pred = fold_model.predict(weights[te])
         oof[te] = pred
@@ -474,6 +473,7 @@ def _slide_frame(full: pd.DataFrame) -> pd.DataFrame:
             "cv_regret_at_1",
             "cv_foldmean_regret_at_1",
             "validated_bpb",
+            "validated_wandb_url",
         ]
     ].copy()
 
@@ -490,6 +490,7 @@ def _fetch_validated_optima() -> dict[str, dict[str, Any]]:
             out[spec.model_name] = {
                 "validated_bpb": float(actual),
                 "validated_wandb_run_id": spec.wandb_run_id,
+                "validated_wandb_url": str(run.url),
                 "validated_wandb_name": str(run.name),
                 "validated_wandb_state": str(run.state),
             }
@@ -508,6 +509,7 @@ def _fetch_validated_optima() -> dict[str, dict[str, Any]]:
             out[spec.model_name] = {
                 "validated_bpb": float(actual),
                 "validated_wandb_run_id": "",
+                "validated_wandb_url": "",
                 "validated_wandb_name": spec.eval_metrics_jsonl,
                 "validated_wandb_state": "artifact",
             }
@@ -522,6 +524,7 @@ def _attach_validated_optima(full: pd.DataFrame) -> pd.DataFrame:
     out = full.copy()
     out["validated_bpb"] = np.nan
     out["validated_wandb_run_id"] = ""
+    out["validated_wandb_url"] = ""
     out["validated_wandb_name"] = ""
     out["validated_wandb_state"] = ""
     for idx, model_name in enumerate(out["model"]):
@@ -530,6 +533,7 @@ def _attach_validated_optima(full: pd.DataFrame) -> pd.DataFrame:
             continue
         out.at[idx, "validated_bpb"] = float(payload["validated_bpb"])
         out.at[idx, "validated_wandb_run_id"] = str(payload["validated_wandb_run_id"])
+        out.at[idx, "validated_wandb_url"] = str(payload["validated_wandb_url"])
         out.at[idx, "validated_wandb_name"] = str(payload["validated_wandb_name"])
         out.at[idx, "validated_wandb_state"] = str(payload["validated_wandb_state"])
     return out
@@ -546,6 +550,9 @@ def _existing_row(path: Path, model_name: str) -> dict[str, Any]:
 def _latex_rows(slide: pd.DataFrame) -> str:
     lines = []
     for row in slide.itertuples(index=False):
+        validated_value = _display_float(row.validated_bpb, ".4f")
+        if validated_value != "--" and row.validated_wandb_url:
+            validated_value = f"\\href{{{row.validated_wandb_url}}}{{{validated_value}}}"
         lines.append(
             f"{row.model} & "
             f"{int(row.n_params)} & "
@@ -555,7 +562,7 @@ def _latex_rows(slide: pd.DataFrame) -> str:
             f"{_display_float(row.cv_spearman, '.3f')} & "
             f"{_display_float(row.cv_regret_at_1, '.4f')} & "
             f"{_display_float(row.cv_foldmean_regret_at_1, '.4f')} & "
-            f"{_display_float(row.validated_bpb, '.4f')} \\\\"
+            f"{validated_value} \\\\"
         )
     return "\n".join(lines) + "\n"
 
@@ -600,6 +607,17 @@ def main() -> None:
         notes=(
             "Computed from the same fixed tuned GRP nonlinear parameters, "
             "but with retention disabled by fixing lambda = 0."
+        ),
+    )
+    grp_no_penalty_row = compute_grp_metrics(
+        cv_seed=args.cv_seed,
+        model_name="GRP w/o overexposure penalty",
+        family_totals=GENERIC_FAMILY_NAMES,
+        include_penalty=False,
+        active_shape_parameters=SHAPE_PARAMETER_COUNT - 1,
+        notes=(
+            "Computed from the same fixed tuned GRP nonlinear parameters, "
+            "but with the overexposure penalty feature removed."
         ),
     )
     grp_no_retention_no_groups_row = compute_grp_metrics(
@@ -656,6 +674,7 @@ def main() -> None:
             grp_row,
             grp_ablation_row,
             grp_no_retention_row,
+            grp_no_penalty_row,
             grp_no_retention_no_groups_row,
             grp_no_quality_splits_row,
             grp_no_quality_splits_no_groups_row,

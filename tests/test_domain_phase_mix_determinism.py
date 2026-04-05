@@ -11,7 +11,27 @@ import pytest
 from fray.cluster import ResourceConfig
 
 import experiments.domain_phase_mix.determinism_analysis as determinism_analysis
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_genericfamily_subset_optima as genericfamily_subset_optima_launch,
+)
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_genericfamily_retuned_subset_optima as genericfamily_retuned_subset_optima_launch,
+)
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_genericfamily_recovered_hull_subset_optima as genericfamily_recovered_hull_launch,
+)
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_genericfamily_top8actual_hull_subset_optima as genericfamily_top8actual_hull_launch,
+)
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_genericfamily_observed_only_trustblend_baseline as obs_trustblend_baseline_launch,
+    launch_two_phase_many_genericfamily_observed_only_trustblend_subset_optima as obs_trustblend_subset_launch,
+)
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_genericfamily_no_penalty_baseline as genericfamily_no_penalty_launch,
+)
 import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3 as qsplit240_seedpanel
+import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b as qsplit240_300m
 from experiments.domain_phase_mix import (
     launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3_mmlu_sl_verb_rerun as qsplit240_seedpanel_slverb_rerun,
 )
@@ -46,6 +66,7 @@ from experiments.domain_phase_mix.determinism_analysis import (
 from experiments.defaults import default_train
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.domain_phase_mix.config import WeightConfig
+from marin.execution.executor import InputName, collect_dependencies_and_version
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_seed_study import (
     EXACT_CONTROL_DATA_SEED,
     EXACT_CONTROL_NAMES,
@@ -69,6 +90,14 @@ from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_s
     NAME as QSPLIT240_SEEDPANEL_NAME,
     TRAINER_SEEDS,
     build_run_specs as build_qsplit240_seedpanel_run_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import (
+    EXPERIMENT_BUDGET as QSPLIT240_300M_6B_BUDGET,
+    MODEL_FAMILY as QSPLIT240_300M_6B_MODEL_FAMILY,
+    NUM_TRAIN_STEPS as QSPLIT240_300M_6B_NUM_TRAIN_STEPS,
+    QSPLIT240_300M_EVAL_TASKS,
+    build_run_specs as build_qsplit240_300m_run_specs,
+    create_experiment as create_qsplit240_300m_experiment,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_mmlu_sl_verb_rerun import (
     build_run_specs as build_qsplit240_mmlu_sl_verb_rerun_specs,
@@ -166,6 +195,35 @@ from experiments.domain_phase_mix.two_phase_many_genericfamily_tuned_baseline im
     GENERICFAMILY_TUNED_SOURCE_EXPERIMENT,
     create_genericfamily_tuned_weight_config,
     genericfamily_tuned_summary,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_subset_optima import (
+    GENERICFAMILY_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
+    genericfamily_subset_optimum_run_name,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_retuned_subset_optima import (
+    GENERICFAMILY_RETUNED_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
+    genericfamily_retuned_subset_optimum_run_name,
+    parse_subset_sizes as parse_retuned_subset_sizes,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_recovered_hull_subset_optima import (
+    GENERICFAMILY_RECOVERED_HULL_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
+    genericfamily_recovered_hull_subset_optimum_run_name,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_top8actual_hull_subset_optima import (
+    GENERICFAMILY_TOP8ACTUAL_HULL_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
+    genericfamily_top8actual_hull_subset_optimum_run_name,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_observed_only_trustblend_subset_optima import (
+    GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
+    genericfamily_observed_only_trustblend_subset_optimum_run_name,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_observed_only_trustblend_baseline import (
+    GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_RUN_NAME,
+    GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_SOURCE_EXPERIMENT,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_no_penalty_baseline import (
+    GENERICFAMILY_NO_PENALTY_RUN_NAME,
+    GENERICFAMILY_NO_PENALTY_SOURCE_EXPERIMENT,
 )
 from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import TOP_LEVEL_DOMAIN_TOKEN_COUNTS
 from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_sl_verb import (
@@ -438,6 +496,92 @@ def test_qsplit240_seedpanel_builds_expected_manifest():
     candidate_counts = pd.Series([spec.candidate_run_name for spec in run_specs]).value_counts()
     assert candidate_counts.nunique() == 1
     assert int(candidate_counts.iloc[0]) == 3
+
+
+def test_two_phase_many_experiment_allows_eval_task_override():
+    experiment = create_two_phase_dolma3_dolmino_top_level_experiment(
+        name="unit-test",
+        eval_harness_tasks=QSPLIT240_300M_EVAL_TASKS,
+    )
+
+    assert tuple(task.task_alias for task in experiment.eval_harness_tasks) == tuple(
+        task.task_alias for task in QSPLIT240_300M_EVAL_TASKS
+    )
+
+
+def test_qsplit240_300m_6b_builds_expected_manifest_and_weights():
+    run_specs = build_qsplit240_300m_run_specs()
+    observed_runs = load_original_qsplit240_with_core_baselines()
+    observed_by_name = {run.run_name: run for run in observed_runs}
+
+    assert len(run_specs) == 240
+    assert [spec.run_id for spec in run_specs] == list(range(240))
+    assert {spec.cohort for spec in run_specs} == {"original_swarm_300m"}
+    assert run_specs[0].run_name == "baseline_proportional"
+    assert run_specs[1].run_name == "baseline_unimax"
+    assert run_specs[2].run_name == "run_00002"
+    assert run_specs[-1].run_name == "run_00239"
+    assert {spec.model_family for spec in run_specs} == {QSPLIT240_300M_6B_MODEL_FAMILY}
+    assert {spec.experiment_budget for spec in run_specs} == {QSPLIT240_300M_6B_BUDGET}
+    assert {spec.num_train_steps for spec in run_specs} == {QSPLIT240_300M_6B_NUM_TRAIN_STEPS}
+    assert all(spec.trainer_seed is None for spec in run_specs)
+    assert all(spec.data_seed == spec.run_id for spec in run_specs)
+    assert all(spec.simulated_epoch_subset_seed is None for spec in run_specs)
+    assert all(spec.candidate_run_id == spec.run_id for spec in run_specs)
+    assert all(spec.candidate_run_name == spec.run_name for spec in run_specs)
+    assert all(
+        spec.candidate_source_experiment == observed_by_name[spec.run_name].source_experiment for spec in run_specs
+    )
+    assert all(spec.phase_weights == observed_by_name[spec.run_name].phase_weights for spec in run_specs)
+
+
+def test_qsplit240_300m_6b_experiment_uses_expected_model_resources_and_tasks():
+    experiment = create_qsplit240_300m_experiment(name=qsplit240_300m.NAME, tpu_type="v5p-8")
+
+    assert experiment.name == qsplit240_300m.NAME
+    assert experiment.model_config is regmix_300m_proxy
+    assert experiment.num_train_steps == QSPLIT240_300M_6B_NUM_TRAIN_STEPS
+    assert experiment.experiment_budget == QSPLIT240_300M_6B_NUM_TRAIN_STEPS * experiment.tokens_per_step
+    assert experiment.optimizer_config.learning_rate == pytest.approx(regmix_300m_muonh_base.learning_rate)
+    assert experiment.optimizer_config.adam_lr == pytest.approx(regmix_300m_muonh_base.adam_lr)
+    assert experiment.optimizer_config.momentum == pytest.approx(regmix_300m_muonh_base.momentum)
+    assert list(experiment.resources.regions or []) == ["us-east5"]
+    assert experiment.resources.zone == "us-east5-a"
+    assert tuple(task.task_alias for task in experiment.eval_harness_tasks) == tuple(
+        task.task_alias for task in QSPLIT240_300M_EVAL_TASKS
+    )
+
+
+def test_qsplit240_300m_6b_training_step_blocks_on_eval_dataset_cache():
+    experiment = create_qsplit240_300m_experiment(name=qsplit240_300m.NAME, tpu_type="v5p-8")
+    run_spec = build_qsplit240_300m_run_specs()[0]
+    cache_step = qsplit240_300m.create_cache_eval_datasets_step(
+        eval_tasks=QSPLIT240_300M_EVAL_TASKS,
+        gcs_path=qsplit240_300m.EVAL_DATASETS_CACHE_PATH,
+        name_prefix=qsplit240_300m.NAME,
+    )
+    training_step = experiment.create_training_step(
+        weight_config=WeightConfig(run_id=run_spec.run_id, phase_weights=run_spec.phase_weights),
+        name_prefix=qsplit240_300m.NAME,
+        run_name=run_spec.run_name,
+        data_seed=run_spec.data_seed,
+    )
+    base_step_executor = qsplit240_300m.Executor(
+        prefix=qsplit240_300m.marin_prefix(),
+        executor_info_base_path=f"{qsplit240_300m.marin_prefix()}/experiments",
+    )
+    base_step_executor.compute_version(training_step, is_pseudo_dep=False)
+    original_output_path = base_step_executor.output_paths[training_step]
+
+    dependent_step = qsplit240_300m.add_eval_cache_dependency_to_training_step(training_step, cache_step)
+
+    dep_marker = dependent_step.config.env_vars[qsplit240_300m.EVAL_DATASETS_CACHE_DEP_ENV_VAR]
+    assert isinstance(dep_marker, InputName)
+    assert dep_marker.step is cache_step
+    assert dependent_step.override_output_path == original_output_path
+
+    deps = collect_dependencies_and_version(dependent_step.config)
+    assert cache_step in deps.dependencies
 
 
 def test_qsplit240_mmlu_sl_verb_rerun_builds_expected_manifest():
@@ -1169,6 +1313,539 @@ def test_qsplit240_seedpanel_mmlu_sl_verb_rerun_main_wires_max_concurrent(monkey
     assert len(captured["steps"]) == 8
     assert "fixed-subset seedpanel" in captured["description"]
     assert qsplit240_seedpanel_slverb_rerun.DEFAULT_MAX_CONCURRENT == 24
+
+
+def test_genericfamily_subset_optimum_run_name_formats_subset_size():
+    assert genericfamily_subset_optimum_run_name(20) == "baseline_genericfamily_k020_uncheatable_bpb"
+    assert genericfamily_subset_optimum_run_name(220) == "baseline_genericfamily_k220_uncheatable_bpb"
+    assert GENERICFAMILY_SUBSET_OPTIMA_SOURCE_EXPERIMENT.endswith("genericfamily_subset_optima_uncheatable_bpb")
+
+
+def test_genericfamily_subset_optima_main_wires_max_concurrent_and_training_steps(monkeypatch):
+    captured: dict[str, object] = {}
+
+    fake_summaries = [
+        SimpleNamespace(
+            subset_size=20,
+            run_id=320,
+            run_name="baseline_genericfamily_k020_uncheatable_bpb",
+            phase_weights={"phase_0": {"a": 1.0}, "phase_1": {"a": 1.0}},
+            predicted_optimum_value=1.01,
+            nearest_observed_tv_distance=0.4,
+            optimum_move_mean_phase_tv_vs_prev=None,
+        ),
+        SimpleNamespace(
+            subset_size=40,
+            run_id=321,
+            run_name="baseline_genericfamily_k040_uncheatable_bpb",
+            phase_weights={"phase_0": {"a": 1.0}, "phase_1": {"a": 1.0}},
+            predicted_optimum_value=1.02,
+            nearest_observed_tv_distance=0.3,
+            optimum_move_mean_phase_tv_vs_prev=0.2,
+        ),
+    ]
+
+    class DummyExperiment:
+        def create_training_step(self, **kwargs):
+            return SimpleNamespace(name=kwargs["run_name"], kwargs=kwargs)
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(
+        genericfamily_subset_optima_launch,
+        "create_two_phase_dolma3_dolmino_top_level_experiment",
+        lambda **_: DummyExperiment(),
+    )
+    monkeypatch.setattr(
+        genericfamily_subset_optima_launch,
+        "genericfamily_subset_optima_summaries",
+        lambda: tuple(fake_summaries),
+    )
+    monkeypatch.setattr(
+        genericfamily_subset_optima_launch,
+        "genericfamily_subset_optima_summaries_json",
+        lambda: "[]",
+    )
+    monkeypatch.setattr(
+        genericfamily_subset_optima_launch,
+        "genericfamily_subset_optima_summaries_frame",
+        lambda: pd.DataFrame([{"subset_size": 20}, {"subset_size": 40}]),
+    )
+
+    def fake_executor_main(config=None, *, steps, description):
+        captured["config"] = config
+        captured["steps"] = steps
+        captured["description"] = description
+
+    monkeypatch.setattr(genericfamily_subset_optima_launch, "executor_main", fake_executor_main)
+    monkeypatch.setattr(
+        genericfamily_subset_optima_launch.sys,
+        "argv",
+        ["launcher", "--max-concurrent", "5"],
+    )
+
+    genericfamily_subset_optima_launch.main()
+
+    assert captured["config"].max_concurrent == 5
+    assert len(captured["steps"]) == 3
+    assert "subset-fit predicted optima" in captured["description"]
+    assert genericfamily_subset_optima_launch.DEFAULT_MAX_CONCURRENT == 4
+
+
+def test_genericfamily_retuned_subset_optimum_run_name_and_parse_subset_sizes():
+    assert genericfamily_retuned_subset_optimum_run_name(40) == "baseline_genericfamily_retuned_k040_uncheatable_bpb"
+    assert genericfamily_retuned_subset_optimum_run_name(220) == "baseline_genericfamily_retuned_k220_uncheatable_bpb"
+    assert parse_retuned_subset_sizes("40,100,180,220") == (40, 100, 180, 220)
+    assert parse_retuned_subset_sizes("all") == tuple(range(20, 240, 20))
+    assert GENERICFAMILY_RETUNED_SUBSET_OPTIMA_SOURCE_EXPERIMENT.endswith(
+        "genericfamily_retuned_subset_optima_rep_uncheatable_bpb"
+    )
+
+
+def test_genericfamily_retuned_subset_optima_main_wires_subset_sizes_and_training_steps(monkeypatch):
+    captured: dict[str, object] = {}
+
+    fake_summaries = [
+        SimpleNamespace(
+            subset_size=40,
+            run_id=341,
+            run_name="baseline_genericfamily_retuned_k040_uncheatable_bpb",
+            phase_weights={"phase_0": {"a": 1.0}, "phase_1": {"a": 1.0}},
+            predicted_optimum_value=1.01,
+            tuning_objective=0.02,
+            nearest_observed_tv_distance=0.4,
+        ),
+        SimpleNamespace(
+            subset_size=180,
+            run_id=348,
+            run_name="baseline_genericfamily_retuned_k180_uncheatable_bpb",
+            phase_weights={"phase_0": {"a": 1.0}, "phase_1": {"a": 1.0}},
+            predicted_optimum_value=1.02,
+            tuning_objective=0.03,
+            nearest_observed_tv_distance=0.3,
+        ),
+    ]
+
+    class DummyExperiment:
+        def create_training_step(self, **kwargs):
+            return SimpleNamespace(name=kwargs["run_name"], kwargs=kwargs)
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(
+        genericfamily_retuned_subset_optima_launch,
+        "create_two_phase_dolma3_dolmino_top_level_experiment",
+        lambda **_: DummyExperiment(),
+    )
+    monkeypatch.setattr(
+        genericfamily_retuned_subset_optima_launch,
+        "genericfamily_retuned_subset_optima_summaries",
+        lambda subset_sizes: tuple(fake_summaries),
+    )
+    monkeypatch.setattr(
+        genericfamily_retuned_subset_optima_launch,
+        "genericfamily_retuned_subset_optima_summaries_json",
+        lambda subset_sizes: "[]",
+    )
+    monkeypatch.setattr(
+        genericfamily_retuned_subset_optima_launch,
+        "genericfamily_retuned_subset_optima_summaries_frame",
+        lambda subset_sizes: pd.DataFrame([{"subset_size": 40}, {"subset_size": 180}]),
+    )
+
+    def fake_executor_main(config=None, *, steps, description):
+        captured["config"] = config
+        captured["steps"] = steps
+        captured["description"] = description
+
+    monkeypatch.setattr(genericfamily_retuned_subset_optima_launch, "executor_main", fake_executor_main)
+    monkeypatch.setattr(
+        genericfamily_retuned_subset_optima_launch.sys,
+        "argv",
+        ["launcher", "--subset-sizes", "40,180", "--max-concurrent", "3"],
+    )
+
+    genericfamily_retuned_subset_optima_launch.main()
+
+    assert captured["config"].max_concurrent == 3
+    assert len(captured["steps"]) == 3
+    assert "retuned GRP subset-fit predicted optima" in captured["description"]
+    assert genericfamily_retuned_subset_optima_launch.DEFAULT_MAX_CONCURRENT == 4
+
+
+def test_genericfamily_recovered_hull_subset_optimum_run_name_and_source_experiment():
+    assert (
+        genericfamily_recovered_hull_subset_optimum_run_name(20)
+        == "baseline_genericfamily_recovered_hull_k020_uncheatable_bpb"
+    )
+    assert (
+        genericfamily_recovered_hull_subset_optimum_run_name(220)
+        == "baseline_genericfamily_recovered_hull_k220_uncheatable_bpb"
+    )
+    assert GENERICFAMILY_RECOVERED_HULL_SUBSET_OPTIMA_SOURCE_EXPERIMENT.endswith(
+        "genericfamily_recovered_hull_subset_optima_uncheatable_bpb"
+    )
+
+
+def test_genericfamily_recovered_hull_subset_optima_main_wires_subset_sizes_and_training_steps(monkeypatch):
+    captured: dict[str, object] = {}
+
+    fake_summaries = [
+        SimpleNamespace(
+            subset_size=40,
+            run_id=361,
+            run_name="baseline_genericfamily_recovered_hull_k040_uncheatable_bpb",
+            phase_weights={"phase_0": {"a": 1.0}, "phase_1": {"a": 1.0}},
+            predicted_optimum_value=1.04,
+            tuning_objective=0.02,
+            nearest_observed_tv_distance=0.4,
+        ),
+        SimpleNamespace(
+            subset_size=180,
+            run_id=368,
+            run_name="baseline_genericfamily_recovered_hull_k180_uncheatable_bpb",
+            phase_weights={"phase_0": {"a": 1.0}, "phase_1": {"a": 1.0}},
+            predicted_optimum_value=1.05,
+            tuning_objective=0.03,
+            nearest_observed_tv_distance=0.3,
+        ),
+    ]
+
+    class DummyExperiment:
+        def create_training_step(self, **kwargs):
+            return SimpleNamespace(name=kwargs["run_name"], kwargs=kwargs)
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(
+        genericfamily_recovered_hull_launch,
+        "create_two_phase_dolma3_dolmino_top_level_experiment",
+        lambda **_: DummyExperiment(),
+    )
+    monkeypatch.setattr(
+        genericfamily_recovered_hull_launch,
+        "genericfamily_recovered_hull_subset_optima_summaries",
+        lambda subset_sizes: tuple(fake_summaries),
+    )
+    monkeypatch.setattr(
+        genericfamily_recovered_hull_launch,
+        "genericfamily_recovered_hull_subset_optima_summaries_json",
+        lambda subset_sizes: "[]",
+    )
+    monkeypatch.setattr(
+        genericfamily_recovered_hull_launch,
+        "genericfamily_recovered_hull_subset_optima_summaries_frame",
+        lambda subset_sizes: pd.DataFrame([{"subset_size": 40}, {"subset_size": 180}]),
+    )
+
+    def fake_executor_main(config=None, *, steps, description):
+        captured["config"] = config
+        captured["steps"] = steps
+        captured["description"] = description
+
+    monkeypatch.setattr(genericfamily_recovered_hull_launch, "executor_main", fake_executor_main)
+    monkeypatch.setattr(
+        genericfamily_recovered_hull_launch.sys,
+        "argv",
+        ["launcher", "--subset-sizes", "40,180", "--max-concurrent", "3"],
+    )
+
+    genericfamily_recovered_hull_launch.main()
+
+    assert captured["config"].max_concurrent == 3
+    assert len(captured["steps"]) == 3
+    assert "recovered-hull GRP subset-fit predicted optima" in captured["description"]
+
+
+def test_genericfamily_top8actual_hull_subset_optimum_run_name_and_source_experiment():
+    assert (
+        genericfamily_top8actual_hull_subset_optimum_run_name(40)
+        == "baseline_genericfamily_top8actual_hull_k040_uncheatable_bpb"
+    )
+    assert (
+        genericfamily_top8actual_hull_subset_optimum_run_name(220)
+        == "baseline_genericfamily_top8actual_hull_k220_uncheatable_bpb"
+    )
+    assert GENERICFAMILY_TOP8ACTUAL_HULL_SUBSET_OPTIMA_SOURCE_EXPERIMENT.endswith(
+        "genericfamily_top8actual_hull_subset_optima_rep_uncheatable_bpb"
+    )
+
+
+def test_genericfamily_top8actual_hull_subset_optima_main_wires_subset_sizes_and_training_steps(monkeypatch):
+    captured: dict[str, object] = {}
+
+    fake_summaries = [
+        SimpleNamespace(
+            subset_size=40,
+            run_id=381,
+            run_name="baseline_genericfamily_top8actual_hull_k040_uncheatable_bpb",
+            phase_weights={"phase_0": {"a": 1.0}, "phase_1": {"a": 1.0}},
+            predicted_optimum_value=1.04,
+            tuning_objective=0.02,
+            nearest_observed_tv_distance=0.4,
+        ),
+        SimpleNamespace(
+            subset_size=180,
+            run_id=388,
+            run_name="baseline_genericfamily_top8actual_hull_k180_uncheatable_bpb",
+            phase_weights={"phase_0": {"a": 1.0}, "phase_1": {"a": 1.0}},
+            predicted_optimum_value=1.05,
+            tuning_objective=0.03,
+            nearest_observed_tv_distance=0.3,
+        ),
+    ]
+
+    class DummyExperiment:
+        def create_training_step(self, **kwargs):
+            return SimpleNamespace(name=kwargs["run_name"], kwargs=kwargs)
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(
+        genericfamily_top8actual_hull_launch,
+        "create_two_phase_dolma3_dolmino_top_level_experiment",
+        lambda **_: DummyExperiment(),
+    )
+    monkeypatch.setattr(
+        genericfamily_top8actual_hull_launch,
+        "genericfamily_top8actual_hull_subset_optima_summaries",
+        lambda subset_sizes: tuple(fake_summaries),
+    )
+    monkeypatch.setattr(
+        genericfamily_top8actual_hull_launch,
+        "genericfamily_top8actual_hull_subset_optima_summaries_json",
+        lambda subset_sizes: "[]",
+    )
+    monkeypatch.setattr(
+        genericfamily_top8actual_hull_launch,
+        "genericfamily_top8actual_hull_subset_optima_summaries_frame",
+        lambda subset_sizes: pd.DataFrame([{"subset_size": 40}, {"subset_size": 180}]),
+    )
+
+    def fake_executor_main(config=None, *, steps, description):
+        captured["config"] = config
+        captured["steps"] = steps
+        captured["description"] = description
+
+    monkeypatch.setattr(genericfamily_top8actual_hull_launch, "executor_main", fake_executor_main)
+    monkeypatch.setattr(
+        genericfamily_top8actual_hull_launch.sys,
+        "argv",
+        ["launcher", "--subset-sizes", "40,180", "--max-concurrent", "3"],
+    )
+
+    genericfamily_top8actual_hull_launch.main()
+
+    assert captured["config"].max_concurrent == 3
+    assert len(captured["steps"]) == 3
+    assert "top-8-actual-hull GRP subset-fit predicted optima" in captured["description"]
+    assert genericfamily_recovered_hull_launch.DEFAULT_MAX_CONCURRENT == 4
+
+
+def test_genericfamily_observed_only_trustblend_subset_optimum_run_name_and_source_experiment():
+    assert (
+        genericfamily_observed_only_trustblend_subset_optimum_run_name(20)
+        == "baseline_genericfamily_trustblend_top8actual_cap_k020_uncheatable_bpb"
+    )
+    assert (
+        genericfamily_observed_only_trustblend_subset_optimum_run_name(220)
+        == "baseline_genericfamily_trustblend_top8actual_cap_k220_uncheatable_bpb"
+    )
+    assert GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_SUBSET_OPTIMA_SOURCE_EXPERIMENT.endswith(
+        "genericfamily_observed_only_trustblend_top8actual_cap_subset_optima_rep_uncheatable_bpb"
+    )
+
+
+def test_genericfamily_observed_only_trustblend_subset_optima_main_wires_subset_sizes_and_training_steps(
+    monkeypatch,
+):
+    captured: dict[str, object] = {}
+
+    fake_summaries = [
+        SimpleNamespace(
+            subset_size=20,
+            run_id=400,
+            run_name="baseline_genericfamily_trustblend_top8actual_cap_k020_uncheatable_bpb",
+            phase_weights={"phase_0": {"a": 1.0}, "phase_1": {"a": 1.0}},
+            predicted_optimum_value=1.05,
+            deployment_delta=0.05,
+            deployment_gain_budget=0.01,
+            nearest_observed_tv_distance=0.2,
+        ),
+        SimpleNamespace(
+            subset_size=80,
+            run_id=403,
+            run_name="baseline_genericfamily_trustblend_top8actual_cap_k080_uncheatable_bpb",
+            phase_weights={"phase_0": {"a": 1.0}, "phase_1": {"a": 1.0}},
+            predicted_optimum_value=1.04,
+            deployment_delta=0.12,
+            deployment_gain_budget=0.02,
+            nearest_observed_tv_distance=0.3,
+        ),
+    ]
+
+    class DummyExperiment:
+        def create_training_step(self, **kwargs):
+            return SimpleNamespace(name=kwargs["run_name"], kwargs=kwargs)
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(
+        obs_trustblend_subset_launch,
+        "create_two_phase_dolma3_dolmino_top_level_experiment",
+        lambda **_: DummyExperiment(),
+    )
+    monkeypatch.setattr(
+        obs_trustblend_subset_launch,
+        "genericfamily_observed_only_trustblend_subset_optima_summaries",
+        lambda subset_sizes: tuple(fake_summaries),
+    )
+    monkeypatch.setattr(
+        obs_trustblend_subset_launch,
+        "genericfamily_observed_only_trustblend_subset_optima_summaries_json",
+        lambda subset_sizes: "[]",
+    )
+    monkeypatch.setattr(
+        obs_trustblend_subset_launch,
+        "genericfamily_observed_only_trustblend_subset_optima_summaries_frame",
+        lambda subset_sizes: pd.DataFrame([{"subset_size": 20}, {"subset_size": 80}]),
+    )
+
+    def fake_executor_main(config=None, *, steps, description):
+        captured["config"] = config
+        captured["steps"] = steps
+        captured["description"] = description
+
+    monkeypatch.setattr(obs_trustblend_subset_launch, "executor_main", fake_executor_main)
+    monkeypatch.setattr(
+        obs_trustblend_subset_launch.sys,
+        "argv",
+        ["launcher", "--subset-sizes", "20,80", "--max-concurrent", "3"],
+    )
+
+    obs_trustblend_subset_launch.main()
+
+    assert captured["config"].max_concurrent == 3
+    assert len(captured["steps"]) == 3
+    assert "observed-only trustblend GRP subset-fit predicted optima" in captured["description"]
+    assert obs_trustblend_subset_launch.DEFAULT_MAX_CONCURRENT == 4
+
+
+def test_genericfamily_observed_only_trustblend_baseline_run_name_and_source_experiment():
+    assert (
+        GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_RUN_NAME
+        == "baseline_genericfamily_observed_only_trustblend_top8actual_cap"
+    )
+    assert GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_SOURCE_EXPERIMENT.endswith(
+        "genericfamily_observed_only_trustblend_top8actual_cap_uncheatable_bpb"
+    )
+
+
+def test_genericfamily_observed_only_trustblend_baseline_main_wires_training_step(monkeypatch):
+    captured: dict[str, object] = {}
+
+    fake_summary = SimpleNamespace(
+        run_name="baseline_genericfamily_observed_only_trustblend_top8actual_cap",
+        predicted_optimum_value=1.04,
+        deployment_delta=0.12,
+        deployment_gain_budget=0.01,
+        nearest_observed_tv_distance=0.2,
+    )
+    fake_weight_config = WeightConfig(run_id=407, phase_weights={"phase_0": {"a": 1.0}, "phase_1": {"a": 1.0}})
+
+    class DummyExperiment:
+        def create_training_step(self, **kwargs):
+            return SimpleNamespace(name=kwargs["run_name"], kwargs=kwargs)
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(
+        obs_trustblend_baseline_launch,
+        "create_two_phase_dolma3_dolmino_top_level_experiment",
+        lambda **_: DummyExperiment(),
+    )
+    monkeypatch.setattr(
+        obs_trustblend_baseline_launch,
+        "genericfamily_observed_only_trustblend_summary",
+        lambda: fake_summary,
+    )
+    monkeypatch.setattr(
+        obs_trustblend_baseline_launch,
+        "create_genericfamily_observed_only_trustblend_weight_config",
+        lambda: fake_weight_config,
+    )
+
+    def fake_executor_main(config=None, *, steps, description):
+        captured["config"] = config
+        captured["steps"] = steps
+        captured["description"] = description
+
+    monkeypatch.setattr(obs_trustblend_baseline_launch, "executor_main", fake_executor_main)
+    monkeypatch.setattr(
+        obs_trustblend_baseline_launch.sys,
+        "argv",
+        ["launcher"],
+    )
+
+    obs_trustblend_baseline_launch.main()
+
+    assert captured["config"].max_concurrent == 1
+    assert len(captured["steps"]) == 1
+    assert "observed-only trustblend GRP baseline" in captured["description"]
+
+
+def test_genericfamily_no_penalty_baseline_run_name_and_source_experiment():
+    assert GENERICFAMILY_NO_PENALTY_RUN_NAME == "baseline_genericfamily_no_penalty_uncheatable_bpb"
+    assert GENERICFAMILY_NO_PENALTY_SOURCE_EXPERIMENT.endswith("genericfamily_no_penalty_uncheatable_bpb")
+
+
+def test_genericfamily_no_penalty_baseline_main_wires_training_step(monkeypatch):
+    captured: dict[str, object] = {}
+
+    fake_summary = {
+        "run_name": "baseline_genericfamily_no_penalty_uncheatable_bpb",
+        "predicted_optimum_value": 1.04,
+        "nearest_observed_tv_distance": 0.2,
+    }
+    fake_weight_config = WeightConfig(run_id=258, phase_weights={"phase_0": {"a": 1.0}, "phase_1": {"a": 1.0}})
+
+    class DummyExperiment:
+        def create_training_step(self, **kwargs):
+            return SimpleNamespace(name=kwargs["run_name"], kwargs=kwargs)
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(
+        genericfamily_no_penalty_launch,
+        "create_two_phase_dolma3_dolmino_top_level_experiment",
+        lambda **_: DummyExperiment(),
+    )
+    monkeypatch.setattr(
+        genericfamily_no_penalty_launch,
+        "genericfamily_no_penalty_summary",
+        lambda: fake_summary,
+    )
+    monkeypatch.setattr(
+        genericfamily_no_penalty_launch,
+        "genericfamily_no_penalty_summary_json",
+        lambda: "{}",
+    )
+    monkeypatch.setattr(
+        genericfamily_no_penalty_launch,
+        "create_genericfamily_no_penalty_weight_config",
+        lambda: fake_weight_config,
+    )
+
+    def fake_executor_main(config=None, *, steps, description):
+        captured["config"] = config
+        captured["steps"] = steps
+        captured["description"] = description
+
+    monkeypatch.setattr(genericfamily_no_penalty_launch, "executor_main", fake_executor_main)
+    monkeypatch.setattr(
+        genericfamily_no_penalty_launch.sys,
+        "argv",
+        ["launcher"],
+    )
+
+    genericfamily_no_penalty_launch.main()
+
+    assert captured["config"] is None
+    assert len(captured["steps"]) == 2
+    assert "genericfamily_no_penalty_uncheatable_bpb" in captured["description"]
 
 
 def test_collect_manifest_results_prefers_exact_truncated_display_name_when_suffixes_collide(tmp_path, monkeypatch):
