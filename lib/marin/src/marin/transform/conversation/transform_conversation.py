@@ -32,6 +32,7 @@ import fsspec
 from iris.marin_fs import url_to_fs
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
+from fray.cluster import ResourceConfig
 from zephyr import Dataset, ZephyrContext, load_jsonl, write_jsonl_file
 
 from .adapters import TransformAdapter
@@ -475,7 +476,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
         .map(process_shard_task)
         .write_jsonl(f"{metrics_path}/{{shard:05d}}-transform.jsonl", skip_existing=True)
     )
-    ctx = ZephyrContext(name="transform-conversation")
+    ctx = ZephyrContext(name="transform-conversation", resources=ResourceConfig(cpu=1, ram="4g"))
     metric_files = ctx.execute(pipeline)
 
     # Log summary by subset/split
