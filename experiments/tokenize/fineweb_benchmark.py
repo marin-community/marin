@@ -167,11 +167,11 @@ def build_steps() -> list[StepSpec]:
     train_path = _make_tiny_dataset() if TINY else FINEWEB_10BT
     sample_count = 200 if TINY else None
     return [
-        _tokenize_spec("benchmark-hf", train_path, TokenizerBackend.HF, sample_count=sample_count),
-        _tokenize_spec("benchmark-tokie", train_path, TokenizerBackend.TOKIE, sample_count=sample_count),
-        _tokenize_spec("benchmark-kitoken", train_path, TokenizerBackend.KITOKEN, sample_count=sample_count),
+        # _tokenize_spec("benchmark-hf", train_path, TokenizerBackend.HF, sample_count=sample_count),
+        # _tokenize_spec("benchmark-tokie", train_path, TokenizerBackend.TOKIE, sample_count=sample_count),
+        # _tokenize_spec("benchmark-kitoken", train_path, TokenizerBackend.KITOKEN, sample_count=sample_count),
         _compare_spec("compare-kitoken-vs-hf", train_path, TokenizerBackend.KITOKEN, sample_count=sample_count),
-        _compare_spec("compare-tokie-vs-hf", train_path, TokenizerBackend.TOKIE, sample_count=sample_count),
+        # _compare_spec("compare-tokie-vs-hf", train_path, TokenizerBackend.TOKIE, sample_count=sample_count),
     ]
 
 

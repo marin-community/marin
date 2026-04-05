@@ -14,6 +14,7 @@ Usage:
     uv run scripts/tokenizer_compare.py --fuzz              # rotate across all models
     uv run scripts/tokenizer_compare.py --fuzz -n 5000      # 5000 iterations
     uv run scripts/tokenizer_compare.py --fuzz --model X    # fuzz single model
+    uv run scripts/tokenizer_compare.py --fuzz --tests chat_template,decode_roundtrip
 """
 
 import argparse
@@ -36,6 +37,7 @@ LOG_DIR = "logs/tokenizer"
 # Gated models (Llama) require HF auth; the fuzzer skips models that fail to load.
 FUZZ_MODELS = [
     "meta-llama/Llama-3.1-8B",
+    "meta-llama/Llama-3.1-8B-Instruct",
     "google/gemma-3-4b-it",
     "google/gemma-4-E4B-it",
     "openai-community/gpt2",
@@ -43,7 +45,7 @@ FUZZ_MODELS = [
     "Qwen/Qwen2.5-0.5B-Instruct",
     "deepseek-ai/DeepSeek-R1",
     "microsoft/Phi-4-mini-instruct",
-    "tiiuae/falcon-7b",
+    # "tiiuae/falcon-7b",
     "allenai/OLMo-2-0325-32B",
 ]
 
@@ -66,6 +68,7 @@ def _write_error(
     other_tok,
     *,
     tag: str = "",
+    extra: dict | None = None,
 ):
     os.makedirs(LOG_DIR, exist_ok=True)
     suffix = f"_{tag}" if tag else ""
@@ -96,6 +99,8 @@ def _write_error(
         "other_length": len(other_ids),
         "first_divergence": first_diff,
     }
+    if extra:
+        record.update(extra)
 
     with open(path, "w") as f:
         json.dump(record, f, indent=2, ensure_ascii=False)
@@ -113,6 +118,167 @@ def _compare_one(
         ids = tok.encode(text)
         if ids != hf_ids:
             path = _write_error(name, model, text, hf_ids, ids, hf_tok, tok, tag=tag)
+            failures.append((name, path))
+    return failures
+
+
+# ---------------------------------------------------------------------------
+# Additional comparison functions
+# ---------------------------------------------------------------------------
+
+
+def _compare_encode_special_tokens(
+    text: str, model: str, hf_tok, backends: list[tuple[str, object]], *, tag: str = ""
+) -> list[tuple[str, str]]:
+    """Compare encode(text, add_special_tokens=True) across backends."""
+    hf_ids = hf_tok.encode(text, add_special_tokens=True)
+    failures = []
+    for name, tok in backends:
+        ids = tok.encode(text, add_special_tokens=True)
+        if ids != hf_ids:
+            path = _write_error(name, model, text, hf_ids, ids, hf_tok, tok, tag=f"special_{tag}")
+            failures.append((name, path))
+    return failures
+
+
+def _compare_decode_roundtrip(
+    text: str, model: str, hf_tok, backends: list[tuple[str, object]], *, tag: str = ""
+) -> list[tuple[str, str]]:
+    """Check decode(encode(text)) roundtrip fidelity vs HF."""
+    hf_ids = hf_tok.encode(text)
+    hf_decoded = hf_tok.decode(hf_ids)
+    failures = []
+    for name, tok in backends:
+        ids = tok.encode(text)
+        decoded = tok.decode(ids)
+        if decoded != hf_decoded:
+            path = _write_error(
+                name,
+                model,
+                text,
+                hf_ids,
+                ids,
+                hf_tok,
+                tok,
+                tag=f"roundtrip_{tag}",
+                extra={"hf_decoded": hf_decoded, "other_decoded": decoded},
+            )
+            failures.append((name, path))
+    return failures
+
+
+def _compare_decode_skip_special(
+    ids_with_specials: list[int], model: str, hf_tok, backends: list[tuple[str, object]], *, tag: str = ""
+) -> list[tuple[str, str]]:
+    """Compare decode(ids, skip_special_tokens=True) with mixed special/normal token sequences."""
+    hf_decoded = hf_tok.decode(ids_with_specials, skip_special_tokens=True)
+    failures = []
+    for name, tok in backends:
+        try:
+            decoded = tok.decode(ids_with_specials, skip_special_tokens=True)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as e:
+            path = _write_error(
+                name,
+                model,
+                f"decode_skip_special_CRASH:{e}",
+                ids_with_specials,
+                ids_with_specials,
+                hf_tok,
+                tok,
+                tag=f"decode_skip_{tag}",
+                extra={"hf_decoded": hf_decoded, "error": str(e)},
+            )
+            failures.append((name, path))
+            continue
+        if decoded != hf_decoded:
+            path = _write_error(
+                name,
+                model,
+                f"decode_skip_special:{ids_with_specials[:50]}...",
+                ids_with_specials,
+                ids_with_specials,
+                hf_tok,
+                tok,
+                tag=f"decode_skip_{tag}",
+                extra={"hf_decoded": hf_decoded, "other_decoded": decoded},
+            )
+            failures.append((name, path))
+    return failures
+
+
+def _compare_chat_template(
+    conversation: list[dict],
+    model: str,
+    hf_tok,
+    backends: list[tuple[str, object]],
+    *,
+    add_generation_prompt: bool = True,
+    tag: str = "",
+) -> list[tuple[str, str]]:
+    """Compare apply_chat_template(conv, tokenize=True) across backends."""
+    if hf_tok.chat_template is None:
+        return []
+    try:
+        hf_ids = hf_tok.apply_chat_template(
+            conversation,
+            tokenize=True,
+            add_generation_prompt=add_generation_prompt,
+        )
+    except Exception:
+        return []
+    failures = []
+    for name, tok in backends:
+        try:
+            ids = tok.apply_chat_template(
+                conversation,
+                tokenize=True,
+                add_generation_prompt=add_generation_prompt,
+            )
+        except Exception:
+            continue
+        if ids != hf_ids:
+            text_repr = json.dumps(conversation, ensure_ascii=False)[:5000]
+            path = _write_error(
+                name,
+                model,
+                text_repr,
+                hf_ids,
+                ids,
+                hf_tok,
+                tok,
+                tag=f"chat_{tag}",
+                extra={"conversation": conversation, "add_generation_prompt": add_generation_prompt},
+            )
+            failures.append((name, path))
+    return failures
+
+
+def _compare_vocab_token_roundtrip(
+    token_ids: list[int], model: str, hf_tok, backends: list[tuple[str, object]], *, tag: str = ""
+) -> list[tuple[str, str]]:
+    """Compare convert_ids_to_tokens consistency for sampled token IDs."""
+    failures = []
+    for name, tok in backends:
+        mismatches = []
+        for tid in token_ids:
+            hf_token = hf_tok.convert_ids_to_tokens(tid)
+            other_token = tok.convert_ids_to_tokens(tid)
+            if hf_token != other_token:
+                mismatches.append({"id": tid, "hf": hf_token, "other": other_token})
+        if mismatches:
+            path = _write_error(
+                name,
+                model,
+                f"vocab_roundtrip:{len(mismatches)}_mismatches",
+                [m["id"] for m in mismatches],
+                [m["id"] for m in mismatches],
+                hf_tok,
+                tok,
+                tag=f"vocab_{tag}",
+                extra={"mismatches": mismatches[:20]},
+            )
             failures.append((name, path))
     return failures
 
@@ -170,6 +336,76 @@ _TEMPLATE_FRAGMENTS = [
     "<|im_end|>",
 ]
 
+# Model-family special token strings that might appear in user text.
+_MODEL_SPECIAL_TOKENS = [
+    "<|begin_of_text|>",
+    "<|end_of_text|>",
+    "<|start_header_id|>",
+    "<|end_header_id|>",
+    "<|eot_id|>",
+    "<|finetune_right_pad_id|>",
+    "<|im_start|>",
+    "<|im_end|>",
+    "<|endoftext|>",
+    "<bos>",
+    "<eos>",
+    "<start_of_turn>",
+    "<end_of_turn>",
+    "<s>",
+    "</s>",
+    "[INST]",
+    "[/INST]",
+    "<|pad|>",
+    "<|unk|>",
+    "<think>",
+    "</think>",
+    "<tool_call>",
+    "</tool_call>",
+]
+
+_SYSTEM_PROMPTS = [
+    "You are a helpful assistant.",
+    "You are a coding assistant. Respond with code when possible.",
+    "You are Qwen, created by Alibaba Cloud.",
+    "",
+    "Answer concisely.",
+]
+
+_USER_MESSAGES = [
+    "What is 2+2?",
+    "Write a Python function to sort a list.",
+    "Explain quantum computing in simple terms.",
+    "```python\ndef foo():\n    pass\n```\nWhat does this do?",
+    "What is the capital of France?",
+    "Translate 'hello world' to Japanese.",
+    'Fix this JSON: {"key": "value",}',
+]
+
+_ASSISTANT_MESSAGES = [
+    "4",
+    "The capital of France is Paris.",
+    "```python\ndef sort_list(lst):\n    return sorted(lst)\n```",
+    "I'd be happy to help!",
+    "Here's a brief explanation:",
+]
+
+_CODE_TEMPLATES = [
+    "```python\n{code}\n```",
+    "```json\n{code}\n```",
+    "```\n{code}\n```",
+    "```sql\n{code}\n```",
+]
+
+_CODE_SNIPPETS = [
+    "def foo(x):\n    return x + 1",
+    '{"key": "value", "nested": {"a": 1}}',
+    "SELECT * FROM users WHERE id = ?;",
+    "import numpy as np\narr = np.zeros((3, 4))",
+    "for i in range(10):\n    print(i)",
+    "class Foo:\n    def __init__(self):\n        self.x = 1",
+    "const f = async () => await fetch('/api');",
+]
+
 
 def _random_unicode_char(rng: random.Random) -> str:
     lo, hi = rng.choice(_UNICODE_RANGES)
@@ -183,7 +419,7 @@ def _gen_random_unicode(rng: random.Random) -> str:
 
 
 def _gen_random_bytes(rng: random.Random) -> str:
-    """Random bytes decoded as utf-8 with replacement — tests the garbage-in path."""
+    """Random bytes decoded as utf-8 with replacement -- tests the garbage-in path."""
     length = rng.randint(1, 200)
     raw = bytes(rng.randint(0, 255) for _ in range(length))
     return raw.decode("utf-8", errors="replace")
@@ -211,7 +447,7 @@ def _gen_mixed(rng: random.Random) -> str:
 
 
 def _gen_repeated(rng: random.Random) -> str:
-    """Repeated patterns — stress-tests BPE merge behavior."""
+    """Repeated patterns -- stress-tests BPE merge behavior."""
     base = "".join(_random_unicode_char(rng) for _ in range(rng.randint(1, 10)))
     return base * rng.randint(2, 200)
 
@@ -221,12 +457,125 @@ def _gen_boundary(rng: random.Random) -> str:
     return "".join(_random_unicode_char(rng) for _ in range(rng.randint(1, 3)))
 
 
-_GENERATORS = [_gen_random_unicode, _gen_random_bytes, _gen_mixed, _gen_repeated, _gen_boundary]
+def _gen_special_token_text(rng: random.Random) -> str:
+    """Text with embedded special token strings from various model families."""
+    parts = []
+    for _ in range(rng.randint(2, 8)):
+        if rng.random() < 0.4:
+            parts.append(rng.choice(_MODEL_SPECIAL_TOKENS))
+        else:
+            word_len = rng.randint(1, 20)
+            parts.append("".join(chr(rng.randint(0x61, 0x7A)) for _ in range(word_len)))
+    return " ".join(parts)
+
+
+def _gen_code_block(rng: random.Random) -> str:
+    """Code/JSON/SQL wrapped in markdown fences."""
+    template = rng.choice(_CODE_TEMPLATES)
+    code = rng.choice(_CODE_SNIPPETS)
+    return template.format(code=code)
+
+
+_GENERATORS = [
+    _gen_random_unicode,
+    _gen_random_bytes,
+    _gen_mixed,
+    _gen_repeated,
+    _gen_boundary,
+    _gen_special_token_text,
+    _gen_code_block,
+]
 
 
 def generate_fuzz_input(rng: random.Random) -> str:
     gen = rng.choice(_GENERATORS)
     return gen(rng)
+
+
+# ---------------------------------------------------------------------------
+# Conversation generators (for chat template tests)
+# ---------------------------------------------------------------------------
+
+
+def _gen_conversation(rng: random.Random) -> list[dict[str, str]]:
+    """Generate a realistic multi-turn chat conversation."""
+    messages: list[dict[str, str]] = []
+    if rng.random() < 0.4:
+        messages.append({"role": "system", "content": rng.choice(_SYSTEM_PROMPTS)})
+    num_turns = rng.randint(1, 5)
+    for i in range(num_turns):
+        messages.append({"role": "user", "content": rng.choice(_USER_MESSAGES)})
+        if i < num_turns - 1 or rng.random() < 0.5:
+            messages.append({"role": "assistant", "content": rng.choice(_ASSISTANT_MESSAGES)})
+    return messages
+
+
+def _gen_conversation_with_fuzz_content(rng: random.Random) -> list[dict[str, str]]:
+    """Chat conversation with fuzzed content (special tokens, unicode, etc.)."""
+    messages: list[dict[str, str]] = []
+    num_turns = rng.randint(1, 3)
+    for i in range(num_turns):
+        messages.append({"role": "user", "content": generate_fuzz_input(rng)})
+        if i < num_turns - 1:
+            messages.append({"role": "assistant", "content": generate_fuzz_input(rng)})
+    return messages
+
+
+def _gen_tool_call_conversation(rng: random.Random) -> list[dict]:
+    """Chat conversation with tool_call/tool role messages."""
+    tools = [
+        {"name": "get_weather", "args": '{"city": "Paris"}', "result": "Sunny, 22C"},
+        {"name": "calculate", "args": '{"expr": "2+2"}', "result": "4"},
+        {"name": "search", "args": '{"query": "python sort"}', "result": "Use sorted()"},
+    ]
+    tool = rng.choice(tools)
+    messages: list[dict] = []
+    if rng.random() < 0.3:
+        messages.append({"role": "system", "content": "You have access to tools."})
+    messages.append({"role": "user", "content": rng.choice(_USER_MESSAGES)})
+    messages.append(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": f"call_{rng.randint(1, 9999)}",
+                    "type": "function",
+                    "function": {"name": tool["name"], "arguments": tool["args"]},
+                }
+            ],
+        }
+    )
+    messages.append(
+        {
+            "role": "tool",
+            "name": tool["name"],
+            "tool_call_id": messages[-1]["tool_calls"][0]["id"],
+            "content": tool["result"],
+        }
+    )
+    messages.append({"role": "assistant", "content": rng.choice(_ASSISTANT_MESSAGES)})
+    return messages
+
+
+def _gen_ids_with_specials(rng: random.Random, hf_tok, backends: list[tuple[str, object]]) -> list[int]:
+    """Token ID sequence mixing normal tokens with special token IDs.
+
+    Uses minimum vocab_size across all backends to avoid out-of-range panics.
+    """
+    min_vocab = hf_tok.vocab_size
+    for _, tok in backends:
+        min_vocab = min(min_vocab, tok.vocab_size)
+    special_ids = list(hf_tok.all_special_ids) if hf_tok.all_special_ids else []
+    # Filter special IDs to those within all backends' vocab range
+    special_ids = [sid for sid in special_ids if sid < min_vocab]
+    ids = []
+    for _ in range(rng.randint(5, 50)):
+        if rng.random() < 0.3 and special_ids:
+            ids.append(rng.choice(special_ids))
+        else:
+            ids.append(rng.randint(256, min(min_vocab - 1, 50000)))
+    return ids
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +634,7 @@ def _print_status(
     model: str,
     *,
     num_iterations: int | None,
+    test_type: str = "",
 ):
     rate = i / elapsed if elapsed > 0 else 0
     progress = f"{i}/{num_iterations}" if num_iterations else str(i)
@@ -292,9 +642,84 @@ def _print_status(
     short_model = model.rsplit("/", 1)[-1]
     line = (
         f"\r  {progress}{pct} fuzzes | {rate:.0f}/s | "
-        f"{total_failures} fail | {_format_duration(elapsed)} | {short_model}"
+        f"{total_failures} fail | {_format_duration(elapsed)} | {short_model} | {test_type}"
     )
-    print(f"{line:<80}", end="", file=sys.stderr, flush=True)
+    print(f"{line:<90}", end="", file=sys.stderr, flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Weighted test type selection
+# ---------------------------------------------------------------------------
+
+_FUZZ_TESTS = [
+    ("encode", 40),
+    ("encode_special", 15),
+    ("decode_roundtrip", 15),
+    ("decode_skip_special", 10),
+    ("chat_template", 15),
+    ("vocab_roundtrip", 5),
+]
+
+
+def _pick_test_type(rng: random.Random, tests: list[tuple[str, int]]) -> str:
+    total = sum(w for _, w in tests)
+    r = rng.randint(1, total)
+    cumulative = 0
+    for name, weight in tests:
+        cumulative += weight
+        if r <= cumulative:
+            return name
+    return tests[-1][0]
+
+
+def _run_fuzz_iteration(
+    rng: random.Random,
+    test_type: str,
+    model: str,
+    hf_tok,
+    backends: list[tuple[str, object]],
+    tag_prefix: str,
+) -> list[tuple[str, str]]:
+    """Run a single fuzz iteration of the given test type. Returns failure list."""
+    if test_type == "encode":
+        text = generate_fuzz_input(rng)
+        return _compare_one(text, model, hf_tok, backends, tag=tag_prefix)
+
+    elif test_type == "encode_special":
+        text = generate_fuzz_input(rng)
+        return _compare_encode_special_tokens(text, model, hf_tok, backends, tag=tag_prefix)
+
+    elif test_type == "decode_roundtrip":
+        text = generate_fuzz_input(rng)
+        return _compare_decode_roundtrip(text, model, hf_tok, backends, tag=tag_prefix)
+
+    elif test_type == "decode_skip_special":
+        ids = _gen_ids_with_specials(rng, hf_tok, backends)
+        return _compare_decode_skip_special(ids, model, hf_tok, backends, tag=tag_prefix)
+
+    elif test_type == "chat_template":
+        choice = rng.random()
+        if choice < 0.35:
+            conv = _gen_conversation(rng)
+        elif choice < 0.7:
+            conv = _gen_conversation_with_fuzz_content(rng)
+        else:
+            conv = _gen_tool_call_conversation(rng)
+        gen_prompt = rng.choice([True, False])
+        return _compare_chat_template(
+            conv,
+            model,
+            hf_tok,
+            backends,
+            add_generation_prompt=gen_prompt,
+            tag=tag_prefix,
+        )
+
+    elif test_type == "vocab_roundtrip":
+        sample_ids = [rng.randint(256, min(hf_tok.vocab_size - 1, 50000)) for _ in range(20)]
+        return _compare_vocab_token_roundtrip(sample_ids, model, hf_tok, backends, tag=tag_prefix)
+
+    return []
 
 
 def run_fuzz(
@@ -302,38 +727,39 @@ def run_fuzz(
     *,
     num_iterations: int | None,
     seed: int,
+    active_tests: list[tuple[str, int]],
 ):
     rng = random.Random(seed)
     i = 0
     total_failures = 0
     t0 = time.monotonic()
-    last_status = 0.0
 
     try:
         while num_iterations is None or i < num_iterations:
             model, hf_tok, backends = rng.choice(model_set)
-            text = generate_fuzz_input(rng)
+            test_type = _pick_test_type(rng, active_tests)
             model_slug = model.replace("/", "_")
-            failures = _compare_one(text, model, hf_tok, backends, tag=f"fuzz_{model_slug}_{i:06d}")
+            tag = f"fuzz_{model_slug}_{i:06d}"
+
+            failures = _run_fuzz_iteration(rng, test_type, model, hf_tok, backends, tag)
+
             if failures:
                 total_failures += 1
-                # Clear status line before printing mismatch
-                print(f"\r{' ' * 80}\r", end="", file=sys.stderr)
+                print(f"\r{' ' * 90}\r", end="", file=sys.stderr)
                 for name, path in failures:
-                    print(f"[iter {i}] {model} MISMATCH {name} — {path}", file=sys.stderr)
+                    print(f"[iter {i}] {model} MISMATCH {name} ({test_type}) — {path}", file=sys.stderr)
                 if num_iterations is None:
                     break
             i += 1
-            now = time.monotonic()
-            if now - last_status >= 0.25:
-                _print_status(i, total_failures, now - t0, model, num_iterations=num_iterations)
-                last_status = now
+            if i % 100 == 0:
+                now = time.monotonic()
+                _print_status(i, total_failures, now - t0, model, num_iterations=num_iterations, test_type=test_type)
     except KeyboardInterrupt:
         pass
 
     elapsed = time.monotonic() - t0
     rate = i / elapsed if elapsed > 0 else 0
-    print(f"\r{' ' * 80}\r", end="", file=sys.stderr)
+    print(f"\r{' ' * 90}\r", end="", file=sys.stderr)
     print(f"{i} iterations in {_format_duration(elapsed)} ({rate:.0f}/s), {total_failures} failure(s)", file=sys.stderr)
     return total_failures
 
@@ -349,11 +775,28 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=42, help="RNG seed for fuzz mode")
     parser.add_argument("--backend", choices=["tokie", "kitoken", "all"], default="all", help="Which backend(s) to test")
+    parser.add_argument(
+        "--tests",
+        default="all",
+        help="Comma-separated test types: encode,encode_special,decode_roundtrip,"
+        "decode_skip_special,chat_template,vocab_roundtrip (default: all)",
+    )
     args = parser.parse_args()
 
     if args.backend != "all":
         global BACKENDS
         BACKENDS = [(n, b) for n, b in BACKENDS if n == args.backend]
+
+    active_tests = _FUZZ_TESTS
+    if args.tests != "all":
+        requested = set(args.tests.split(","))
+        valid_names = {name for name, _ in _FUZZ_TESTS}
+        unknown = requested - valid_names
+        if unknown:
+            print(f"error: unknown test type(s): {', '.join(unknown)}", file=sys.stderr)
+            print(f"valid types: {', '.join(valid_names)}", file=sys.stderr)
+            sys.exit(1)
+        active_tests = [(n, w) for n, w in _FUZZ_TESTS if n in requested]
 
     if args.fuzz:
         models = [args.model] if args.model else FUZZ_MODELS
@@ -364,8 +807,9 @@ def main():
             sys.exit(1)
         for model, _, backends in model_set:
             print(f"  {model}: {', '.join(n for n, _ in backends)}", file=sys.stderr)
-        print(f"seed: {args.seed}, iterations: {args.n or '∞'}", file=sys.stderr)
-        failures = run_fuzz(model_set, num_iterations=args.n, seed=args.seed)
+        test_names = ", ".join(n for n, _ in active_tests)
+        print(f"seed: {args.seed}, iterations: {args.n or '∞'}, tests: {test_names}", file=sys.stderr)
+        failures = run_fuzz(model_set, num_iterations=args.n, seed=args.seed, active_tests=active_tests)
         sys.exit(1 if failures else 0)
 
     # Stdin mode — requires --model
