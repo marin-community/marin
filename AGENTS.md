@@ -6,6 +6,9 @@ Start with the shared practices below. Consult subproject manuals for directory-
 - `lib/marin/AGENTS.md` — Marin (pipeline framework)
 - `lib/iris/AGENTS.md` — Iris (job orchestration)
 
+For API reference, read package docs on demand: `@docs/agent/packages/<package>.md`.
+Run `uv run --script scripts/agent_docs/main.py --stats` to list all available packages.
+
 ## Workflow Playbooks
 
 Skills are task-focused playbooks in `.agents/skills/` (also accessible as
