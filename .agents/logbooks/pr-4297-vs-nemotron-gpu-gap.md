@@ -119,3 +119,124 @@
 - Next action:
   - start the full training-path Triton repro on the verified CoreWeave parent-job submission path
   - decide whether the next microbenchmark should be a new stage-probe script on the 4297 branch or a second end-to-end training anchor
+
+### 2026-04-05 02:17 UTC - Live Triton training repro died in Iris before the first useful throughput sample
+- Hypothesis:
+  - a fresh H100x8 end-to-end Triton repro on the current worktree would either confirm the earlier `~+8.8%` training uplift from #4297 or reveal a branch-local regression worth chasing before deeper exact-cap profiling.
+- Command:
+  - parent submission:
+    - `source /home/ubuntu/.config/yoblin/env >/dev/null 2>&1 || true`
+    - `KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run iris --config=lib/iris/examples/coreweave-ci.yaml job run --no-wait --job-name pr4297-train-triton-20260405-0212 --cpu 1 --memory 16G --disk 16G --extra cpu -e MARIN_PREFIX "s3://marin-na/marin/" -e GRUG_RUN_ID "pr4297-vs-nemotron-triton-20260405-0212" -e RAGGED_DOT_IMPL "triton" -e WANDB_ENTITY "marin-community" -e WANDB_PROJECT "marin" -e WANDB_API_KEY "${WANDB_API_KEY}" -e HF_TOKEN "${HF_TOKEN}" -e R2_ACCESS_KEY_ID "${R2_ACCESS_KEY_ID}" -e R2_SECRET_ACCESS_KEY "${R2_SECRET_ACCESS_KEY}" -e AWS_ACCESS_KEY_ID "${R2_ACCESS_KEY_ID}" -e AWS_SECRET_ACCESS_KEY "${R2_SECRET_ACCESS_KEY}" -e AWS_ENDPOINT_URL "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com" -e FSSPEC_S3 '{"endpoint_url":"https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com","client_kwargs":{"region_name":"auto"}}' -- python -m experiments.grug.moe.launch_h100_pr4297 --force_run_failed false`
+  - parent bug report:
+    - `KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run iris --config=lib/iris/examples/coreweave-ci.yaml job bug-report /ubuntu/pr4297-train-triton-20260405-0212`
+  - child bug report:
+    - `KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run iris --config=lib/iris/examples/coreweave-ci.yaml job bug-report /ubuntu/pr4297-train-triton-20260405-0212/grug-train-pr4297-vs-nemotron-triton-20260405-0212`
+- Config:
+  - parent job id: `/ubuntu/pr4297-train-triton-20260405-0212`
+  - child GPU job id: `/ubuntu/pr4297-train-triton-20260405-0212/grug-train-pr4297-vs-nemotron-triton-20260405-0212`
+  - W&B run URL observed from logs:
+    - `https://wandb.ai/marin-community/marin/runs/pr4297-vs-nemotron-triton-20260405-0212`
+- Result:
+  - the child reached JAX distributed init, W&B startup, cache loading, checkpoint miss, and `Progress on:train -/100`, but never emitted a first throughput-bearing training step
+  - shortly after repeated loader stalls, the child received `SIGTERM`:
+    - `W0405 02:16:35.745420     227 preemption_notifier.cc:89] SIGTERM caught at 2026-04-05T02:16:35.745419915+00:00`
+  - Iris final states:
+    - child: `killed`, error `Job exceeded max_task_failures`, exit `0`
+    - parent: `failed`, error `Pod not found`, exit `0`
+  - notable non-fatal runtime observations before the kill:
+    - cache-ledger metadata mismatch warnings on the prebuilt token caches
+    - Pallas fused cross-entropy autotune miss followed by fallback to XLA
+    - repeated `Data loading is taking a long time` / `Data loader stalled` messages
+- Interpretation:
+  - this was not a clean model-code crash and it did not yield a usable throughput anchor
+  - the most useful interpretation is operational: the direct live rerun is currently confounded by Iris / pod-lifecycle failure on this attempt, so the authoritative training-path signal should come from the already-completed paired H100 runs rather than from this aborted repro
+- Next action:
+  - summarize the earlier completed PR 4297 H100 training pairs from W&B
+  - move the next fresh H100 spend to exact-cap profiling, where the residual Megatron gap is currently best localized
+
+### 2026-04-05 02:18 UTC - Existing paired H100 training runs still support the original `~+8.8%` Triton uplift
+- Hypothesis:
+  - even though the fresh live repro died in infrastructure, the sealed PR 4297 H100 training pairs already in W&B should still quantify the end-to-end `xla` vs `triton` delta on the intended 100-step repro harness.
+- Command:
+  - `source /home/ubuntu/.config/yoblin/env >/dev/null 2>&1 || true`
+  - `uv run python experiments/grug/moe/summarize_h100_pr4297.py`
+- Config:
+  - compared W&B run pairs:
+    - `pair1`: `pr4297-grug-moe-256m-xla-20260402-024606` vs `pr4297-grug-moe-256m-triton-20260402-030301`
+    - `pair2`: `pr4297-grug-moe-256m-xla-p2-20260402-032629` vs `pr4297-grug-moe-256m-triton-p2-20260402-033540`
+    - `pair3`: `pr4297-grug-moe-256m-xla-p3-20260402-034620` vs `pr4297-grug-moe-256m-triton-p3-20260402-035616`
+  - shared comparison window: steps `20-94`
+- Result:
+  - run coverage:
+    - `pair1 xla` ended `crashed` at step `94`, but still contributed a full shared `20-94` window
+    - the other five runs finished to step `99`
+  - aggregate medians over the shared window:
+    - `xla`: `463640.70 tok/s`, `5.55% MFU`, `0.2827 s/step`
+    - `triton`: `504399.46 tok/s`, `6.04% MFU`, `0.2599 s/step`
+    - delta: `+8.8% tok/s`, `+0.49 MFU points`, `-8.1% duration`
+  - loss tracked identically within `0.00002`
+- Interpretation:
+  - the earlier sealed H100 training pairs still support the original PR 4297 story: the end-to-end training uplift is real but modest compared with the much larger exact-cap forward uplift
+  - this strengthens the case that the remaining gap to the Megatron exact-cap anchor is not best explained by a missing gross end-to-end correctness fix on the PR 4297 branch
+- Next action:
+  - profile the exact-cap Triton forward on H100x8 and inspect whether the surviving residual is now mostly collective / overlap / synchronization cost
+
+### 2026-04-05 02:21 UTC - Fresh PR 4297 Triton profile says the residual exact-cap gap is now collective-plus-gap dominated
+- Hypothesis:
+  - if PR 4297 has already flattened the old routed FC1 bottleneck, then a fresh H100x8 Triton exact-cap trace on the current branch should no longer be dominated by the old `w13`-heavy local compute path; instead it should show collectives and pre-collective waiting as the largest remaining buckets.
+- Command:
+  - harness patch:
+    - added `--profile-dir` / `--profile-name` support to `lib/levanter/scripts/bench/bench_pr4297_w13_current.py` so the exact-cap script can emit a JAX trace directly
+  - profile job:
+    - `source /home/ubuntu/.config/yoblin/env >/dev/null 2>&1 || true`
+    - `KUBECONFIG=/home/ubuntu/.kube/coreweave-iris uv run iris --config=lib/iris/examples/coreweave-ci.yaml job run --job-name pr4297-current-triton-profile-20260405-0223 --gpu H100x8 --cpu 32 --memory 256GB --disk 128GB --timeout 7200 -- bash -lc 'set -euo pipefail; export UV_LINK_MODE=copy; PROFILE_DIR=/tmp/pr4297-current-triton-profile; SUMMARY_JSON=/tmp/pr4297-current-triton-profile-summary.json; uv run --python 3.11 --package levanter --extra gpu python lib/levanter/scripts/bench/bench_pr4297_w13_current.py --seed 0 --ragged-dot-impl triton --warmup 2 --iters 3 --profile-dir "$PROFILE_DIR" --profile-name pr4297_current_triton; uv run --python 3.11 --package marin python -m marin.profiling.cli summarize --profile-dir "$PROFILE_DIR" --warmup-steps 0 --hot-op-limit 12 --output "$SUMMARY_JSON"; uv run --python 3.11 --package marin python -m marin.profiling.cli report --summary "$SUMMARY_JSON" --top-k 12'`
+  - direct pod-log fallback:
+    - Iris log streaming for this job returned controller-side `Internal Server Error`, so I read the report via:
+    - `kubectl --kubeconfig=/home/ubuntu/.kube/coreweave-iris -n iris-ci logs iris-ubuntu-pr4297-current-triton-profile-20260405-0-c65f7727-0`
+- Config:
+  - job id: `/ubuntu/pr4297-current-triton-profile-20260405-0223`
+  - pod: `iris-ubuntu-pr4297-current-triton-profile-20260405-0-c65f7727-0`
+  - fixed cell:
+    - `tokens=262144`
+    - `hidden=2048`
+    - `mlp_dim=768`
+    - `experts=128`
+    - `topk=2`
+    - `shared_expert_dim=0`
+    - `distribution=random`
+    - `ep_size=8`
+    - `ragged_dot_impl=triton`
+  - profiling note:
+    - the trace-run `RESULT ... tokens_per_s=6748253.37` is tracing overhead and must not be compared to the earlier timing-only `26.12M tok/s` anchor
+- Result:
+  - exclusive time breakdown:
+    - compute: `28.96%`
+    - communication: `35.11%`
+    - host: `35.72%`
+    - stall: `0.21%`
+  - top ops by exclusive duration:
+    - `ncclDevKernel_AllGather_RING_LL(...)`: `66791.946` across `48` calls
+    - `ncclDevKernel_ReduceScatter_Sum_bf16_RING_LL(...)`: `65684.934` across `24` calls
+    - `input_scatter_fusion`: `35529.460`
+    - `_lambda___1`: `29380.086`
+  - communication collectives:
+    - `all-gather`: `66791.946` total exclusive, `1391.499` avg
+    - `reduce-scatter`: `65684.934` total exclusive, `2736.872` avg
+  - largest pre-op gaps:
+    - before `all-gather`: `131003.183` total, `5458.466` avg, `10388.044` max
+    - before `reduce-scatter`: `103636.604` total, `4318.192` avg, `4343.679` max
+    - before `loop_select_fusion`: `55750.357` total, `2322.932` avg
+  - profiler-generated optimization candidates:
+    - communication appears dominant
+    - single oversized op: `all-gather`
+    - large idle gaps before `all-gather`
+- Interpretation:
+  - this fresh PR 4297 trace matches the direction suggested by the old post-`w13` residual thread: the remaining exact-cap gap is no longer centered on the old routed FC1 local-compute path
+  - the leading residual on the current PR 4297 branch is now the ring EP communication stack itself plus the waiting immediately before those collectives:
+    - `all-gather`
+    - `reduce-scatter`
+    - the pre-collective synchronization / host-gap region ahead of them
+  - combined with #4406's negative result for padded `w13` on top of PR 4297 Triton, this is strong evidence that the next optimization tranche should pivot away from local `w13` replay and toward ring communication / overlap / synchronization
+- Next action:
+  - post this localization milestone on issue `#4427`
+  - rank the next experiments around ring collective overlap and pre-collective dependency reduction rather than reopening the old FC1-only path

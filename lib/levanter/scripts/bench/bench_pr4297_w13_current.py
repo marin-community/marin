@@ -19,6 +19,7 @@ import inspect
 import math
 import os
 import time
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -219,6 +220,31 @@ def _time_fn(fn, *args, warmup: int, iters: int) -> float:
     return (time.perf_counter() - start) / iters
 
 
+def _profile_fn(
+    fn,
+    *args,
+    warmup: int,
+    iters: int,
+    profile_dir: Path,
+    profile_name: str,
+) -> float:
+    compiled = jax.jit(fn)
+    jax.block_until_ready(compiled(*args))
+    for _ in range(warmup):
+        jax.block_until_ready(compiled(*args))
+
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    jax.profiler.start_trace(str(profile_dir), create_perfetto_link=False, create_perfetto_trace=True)
+    start = time.perf_counter()
+    try:
+        for step in range(iters):
+            with jax.profiler.StepTraceAnnotation(profile_name, step_num=step):
+                jax.block_until_ready(compiled(*args))
+    finally:
+        jax.profiler.stop_trace()
+    return (time.perf_counter() - start) / iters
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tokens", type=int, default=262_144)
@@ -237,6 +263,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--w13-expert-padded", action="store_true")
     parser.add_argument("--ragged-dot-impl", choices=["xla", "triton"], default="xla")
+    parser.add_argument("--profile-dir", type=Path)
+    parser.add_argument("--profile-name", type=str, default="bench_pr4297_current")
     return parser.parse_args()
 
 
@@ -297,17 +325,17 @@ def main() -> None:
             )
             print(f"W13_CAP local_expert_capacity={w13_local_expert_capacity}", flush=True)
 
-        dt = _time_fn(
-            lambda x_, s_, c_, w13_, w2_, sw13_, sw2_: _forward_current(
-                x_,
-                s_,
-                c_,
-                w13_,
-                w2_,
-                sw13_,
-                sw2_,
-                w13_local_expert_capacity=w13_local_expert_capacity,
-            ),
+        bench_fn = lambda x_, s_, c_, w13_, w2_, sw13_, sw2_: _forward_current(
+            x_,
+            s_,
+            c_,
+            w13_,
+            w2_,
+            sw13_,
+            sw2_,
+            w13_local_expert_capacity=w13_local_expert_capacity,
+        )
+        bench_args = (
             x_sharded,
             selected_sharded,
             weights_sharded,
@@ -315,9 +343,24 @@ def main() -> None:
             w2_sharded,
             shared_w13_sharded,
             shared_w2_sharded,
-            warmup=args.warmup,
-            iters=args.iters,
         )
+        if args.profile_dir is not None:
+            print(f"PROFILE path={args.profile_dir} name={args.profile_name}", flush=True)
+            dt = _profile_fn(
+                bench_fn,
+                *bench_args,
+                warmup=args.warmup,
+                iters=args.iters,
+                profile_dir=args.profile_dir,
+                profile_name=args.profile_name,
+            )
+        else:
+            dt = _time_fn(
+                bench_fn,
+                *bench_args,
+                warmup=args.warmup,
+                iters=args.iters,
+            )
 
     tokens_per_s = args.tokens / dt
     print(

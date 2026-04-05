@@ -66,4 +66,26 @@ Initial hypotheses:
 
 ## Results
 
-Pending. First milestone is a fresh PR #4297 H100x8 re-anchor followed by residual-gap localization.
+- Fresh PR #4297 exact-cap H100x8 re-anchor on the shared `262144` cell:
+  - `xla`: `9975119.03 tok/s`
+  - `triton`: `26121235.17 tok/s`
+  - `triton` vs `xla`: `+161.86%`
+  - matched Megatron forward anchor: `33094416.78 tok/s`
+  - residual gap after PR #4297 Triton: Megatron still `1.267x` faster, or `21.07%` ahead in throughput
+- Existing sealed PR #4297 H100 training pairs still support the original end-to-end story:
+  - `xla`: `463640.70 tok/s`, `5.55% MFU`, `0.2827 s/step`
+  - `triton`: `504399.46 tok/s`, `6.04% MFU`, `0.2599 s/step`
+  - delta: `+8.8% tok/s`, `+0.49` MFU points, `-8.1%` duration
+- A fresh exact-cap Triton trace on the current PR #4297 branch localizes the surviving residual away from the old `w13` explanation:
+  - exclusive breakdown: `28.96%` compute, `35.11%` communication, `35.72%` host
+  - top collective ops:
+    - `all-gather`: `66791.946` exclusive across `48` calls
+    - `reduce-scatter`: `65684.934` exclusive across `24` calls
+  - largest pre-op gaps:
+    - before `all-gather`: `131003.183` total
+    - before `reduce-scatter`: `103636.604` total
+- Working conclusion:
+  - PR #4297 has largely removed the old routed FC1 bottleneck on the exact-cap surface
+  - the next pure-JAX optimization tranche should target ring communication / synchronization / overlap rather than replaying the old `w13` local-compute fix
+- Operational note:
+  - one fresh live Triton training repro on `iris-ci` died before the first useful throughput sample because the child GPU job was killed while the parent ended `Pod not found`; it was not a usable training anchor, so the paired W&B runs remain the authoritative end-to-end reference for this thread
