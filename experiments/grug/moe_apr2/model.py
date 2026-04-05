@@ -114,8 +114,8 @@ class CausalSelfAttention(eqx.Module):
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
-    partial_rotary_factor: float = eqx.field(static=True, default=1.0)
     cfg: GrugModelConfig = eqx.field(static=True)
+    partial_rotary_factor: float = eqx.field(static=True, default=1.0)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
