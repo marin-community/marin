@@ -3,10 +3,11 @@
 
 """Clients for the push-based LogService.
 
-LogPusher: low-level client for pushing log entries (used by workers for
-    task stdout/stderr and process logs).
-RemoteLogHandler: Python logging.Handler that batches and pushes log
-    records to the LogService via RPC.
+LogPusher: buffered client for pushing log entries. Batches entries and
+    flushes every ``flush_interval`` seconds or ``batch_size`` entries,
+    whichever comes first.
+RemoteLogHandler: Python logging.Handler that formats records and pushes
+    them through a LogPusher.
 """
 
 from __future__ import annotations
@@ -18,49 +19,30 @@ from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
 from iris.rpc.logging_connect import LogServiceClientSync
 
+logger = logging.getLogger(__name__)
+
 
 class LogPusher:
-    """Pushes log entries to a remote LogService via Connect/RPC."""
+    """Buffered client for pushing log entries to a remote LogService.
 
-    def __init__(self, server_url: str, timeout_ms: int = 10_000) -> None:
-        self._client = LogServiceClientSync(address=server_url, timeout_ms=timeout_ms)
-
-    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-        if entries:
-            self._client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
-
-    def close(self) -> None:
-        self._client.close()
-
-
-class RemoteLogHandler(logging.Handler):
-    """Python logging.Handler that batches records and pushes to a LogService.
-
-    Records are buffered in memory and flushed either when the buffer reaches
-    ``batch_size`` or when ``flush_interval`` seconds elapse, whichever comes
-    first. A background daemon thread handles periodic flushing.
-
-    Push failures are logged locally (via handleError) and never raise.
+    Entries are buffered per-key and flushed when either ``batch_size``
+    entries accumulate or ``flush_interval`` seconds elapse.
     """
 
     def __init__(
         self,
-        pusher: LogPusher,
-        key: str,
-        batch_size: int = 50,
+        server_url: str,
+        timeout_ms: int = 10_000,
+        batch_size: int = 1000,
         flush_interval: float = 1.0,
     ) -> None:
-        super().__init__()
-        self._pusher = pusher
-        self._key = key
+        self._client = LogServiceClientSync(address=server_url, timeout_ms=timeout_ms)
         self._batch_size = batch_size
         self._flush_interval = flush_interval
-        self._buffer: list[logging_pb2.LogEntry] = []
+        self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
         self._lock = threading.Lock()
-        self._flushing = False
         self._closed = False
 
-        # Periodic flush thread
         self._flush_timer: threading.Timer | None = None
         self._schedule_flush()
 
@@ -72,12 +54,72 @@ class RemoteLogHandler(logging.Handler):
         self._flush_timer.start()
 
     def _periodic_flush(self) -> None:
-        with self._lock:
-            self._do_flush()
+        self._flush_all()
         self._schedule_flush()
 
+    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
+        if not entries:
+            return
+        with self._lock:
+            buf = self._buffers.get(key)
+            if buf is None:
+                buf = []
+                self._buffers[key] = buf
+            buf.extend(entries)
+            if len(buf) >= self._batch_size:
+                self._flush_key_locked(key)
+
+    def _flush_key_locked(self, key: str) -> None:
+        """Flush a single key's buffer. Caller must hold self._lock."""
+        entries = self._buffers.pop(key, None)
+        if not entries:
+            return
+        try:
+            self._client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
+        except Exception:
+            logger.debug("Failed to push %d log entries for key %s", len(entries), key, exc_info=True)
+
+    def _flush_all(self) -> None:
+        with self._lock:
+            keys = list(self._buffers.keys())
+            for key in keys:
+                self._flush_key_locked(key)
+
+    def flush(self) -> None:
+        """Force-flush all buffered entries."""
+        self._flush_all()
+
+    def close(self) -> None:
+        self._closed = True
+        if self._flush_timer is not None:
+            self._flush_timer.cancel()
+        self.flush()
+        self._client.close()
+
+
+class RemoteLogHandler(logging.Handler):
+    """Python logging.Handler that pushes records through a LogPusher.
+
+    The LogPusher handles batching and periodic flushing, so this handler
+    simply converts each record to a LogEntry and pushes it.
+    """
+
+    def __init__(self, pusher: LogPusher, key: str) -> None:
+        super().__init__()
+        self._pusher = pusher
+        self._key = key
+        self._closed = False
+
+    @property
+    def key(self) -> str:
+        return self._key
+
+    @key.setter
+    def key(self, value: str) -> None:
+        self._key = value
+
     def emit(self, record: logging.LogRecord) -> None:
-        if self._closed or self._flushing:
+        if self._closed:
             return
         try:
             entry = logging_pb2.LogEntry(
@@ -86,39 +128,14 @@ class RemoteLogHandler(logging.Handler):
                 level=str_to_log_level(record.levelname),
             )
             entry.timestamp.epoch_ms = int(record.created * 1000)
-            with self._lock:
-                self._buffer.append(entry)
-                if len(self._buffer) >= self._batch_size:
-                    self._do_flush()
+            self._pusher.push(self._key, [entry])
         except Exception:
             self.handleError(record)
 
-    def _do_flush(self) -> None:
-        """Flush buffered entries. Caller must hold self._lock."""
-        if not self._buffer:
-            return
-        entries = self._buffer
-        self._buffer = []
-        # Guard against re-entrancy: the debug log below propagates through
-        # the root logger, which may route back to this handler's emit().
-        # Without this flag, emit() would block on self._lock -> deadlock.
-        self._flushing = True
-        try:
-            self._pusher.push(self._key, entries)
-        except Exception:
-            logging.getLogger(__name__).debug(
-                "Failed to push %d log entries for key %s", len(entries), self._key, exc_info=True
-            )
-        finally:
-            self._flushing = False
-
     def flush(self) -> None:
-        with self._lock:
-            self._do_flush()
+        self._pusher.flush()
 
     def close(self) -> None:
         self._closed = True
-        if self._flush_timer is not None:
-            self._flush_timer.cancel()
         self.flush()
         super().close()

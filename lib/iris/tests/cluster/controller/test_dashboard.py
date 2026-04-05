@@ -154,19 +154,19 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 @pytest.fixture
 def service(state, scheduler, tmp_path):
     controller_mock = _make_controller_mock(state, scheduler)
+    log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
         state._db,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
-        log_service=LogServiceImpl(state._log_store),
+        log_service=log_service,
     )
 
 
 @pytest.fixture
 def client(service):
-    dashboard = ControllerDashboard(service, log_service=LogServiceImpl(service._log_store))
+    dashboard = ControllerDashboard(service, log_service=service._log_service)
     return TestClient(dashboard.app)
 
 
@@ -174,13 +174,13 @@ def client(service):
 def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
     """Service with autoscaler enabled for tests."""
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
+    log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
         state._db,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
-        log_service=LogServiceImpl(state._log_store),
+        log_service=log_service,
     )
 
 
@@ -551,9 +551,7 @@ def mock_autoscaler():
 @pytest.fixture
 def client_with_autoscaler(service_with_autoscaler):
     """Dashboard test client with autoscaler enabled."""
-    dashboard = ControllerDashboard(
-        service_with_autoscaler, log_service=LogServiceImpl(service_with_autoscaler._log_store)
-    )
+    dashboard = ControllerDashboard(service_with_autoscaler, log_service=service_with_autoscaler._log_service)
     return TestClient(dashboard.app)
 
 
@@ -967,7 +965,7 @@ def test_auth_config_returns_enabled_when_verifier_set(service):
 
     verifier = StaticTokenVerifier({"test-token": "test-user"})
     dashboard = ControllerDashboard(
-        service, log_service=LogServiceImpl(service._log_store), auth_verifier=verifier, auth_provider="gcp"
+        service, log_service=service._log_service, auth_verifier=verifier, auth_provider="gcp"
     )
     authed_client = TestClient(dashboard.app)
 
@@ -990,15 +988,15 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
     """auth/config returns provider_kind=kubernetes when controller has direct provider."""
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.has_direct_provider = True
+    log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
         state,
         state._db,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
-        log_service=LogServiceImpl(state._log_store),
+        log_service=log_service,
     )
-    dashboard = ControllerDashboard(svc, log_service=LogServiceImpl(svc._log_store))
+    dashboard = ControllerDashboard(svc, log_service=svc._log_service)
     k8s_client = TestClient(dashboard.app)
 
     resp = k8s_client.get("/auth/config")

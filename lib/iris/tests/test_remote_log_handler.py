@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for RemoteLogHandler, particularly the re-entrancy deadlock fix."""
+"""Tests for LogPusher buffering and RemoteLogHandler."""
 
 import logging
 import threading
@@ -12,53 +12,72 @@ from iris.log_server.client import LogPusher, RemoteLogHandler
 from iris.rpc import logging_pb2
 
 
-class FakeLogPusher(LogPusher):
-    """LogPusher that records calls instead of making RPCs."""
+class FakeLogPusher:
+    """Implements the LogPusherProtocol interface, recording calls."""
 
     def __init__(self, *, fail: bool = False) -> None:
-        # Skip real __init__ — we don't need a real RPC client.
-        self.pushed: list[list[logging_pb2.LogEntry]] = []
+        self.pushed: list[tuple[str, list[logging_pb2.LogEntry]]] = []
         self._fail = fail
 
     def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-        self.pushed.append(list(entries))
+        self.pushed.append((key, list(entries)))
         if self._fail:
             raise ConnectionError("server unavailable")
 
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
 
 @pytest.fixture()
-def handler():
-    pusher = FakeLogPusher()
-    h = RemoteLogHandler(pusher, key="test", batch_size=100, flush_interval=999)
+def fake_pusher():
+    return FakeLogPusher()
+
+
+@pytest.fixture()
+def handler(fake_pusher):
+    h = RemoteLogHandler(fake_pusher, key="test")
     yield h
     h.close()
 
 
-def test_flush_sends_buffered_entries(handler: RemoteLogHandler):
-    logger = logging.getLogger("test_flush_sends")
+def test_handler_pushes_entries(handler: RemoteLogHandler, fake_pusher: FakeLogPusher):
+    logger = logging.getLogger("test_handler_push")
     logger.addHandler(handler)
     logger.setLevel(logging.DEBUG)
     try:
         logger.info("hello")
-        handler.flush()
-        assert len(handler._pusher.pushed) == 1
-        assert len(handler._pusher.pushed[0]) == 1
-        assert handler._pusher.pushed[0][0].data.endswith("hello")
+        assert len(fake_pusher.pushed) == 1
+        assert fake_pusher.pushed[0][1][0].data.endswith("hello")
     finally:
         logger.removeHandler(handler)
+
+
+def test_handler_flush_delegates_to_pusher():
+    """RemoteLogHandler.flush() calls pusher.flush()."""
+    pusher = FakeLogPusher()
+    handler = RemoteLogHandler(pusher, key="test")
+    logger = logging.getLogger("test_handler_flush")
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    try:
+        logger.info("msg")
+        handler.flush()
+        assert len(pusher.pushed) == 1
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
 
 
 def test_no_deadlock_on_push_failure():
     """When push fails, the error log must not deadlock by re-entering emit().
 
-    Before the fix, _do_flush logged via the root logger while holding
-    self._lock. If this handler was on the root logger, the log call would
-    re-enter emit() and block on the same non-reentrant lock.
-
     We verify this completes within 2 seconds (a deadlock would hang forever).
     """
     pusher = FakeLogPusher(fail=True)
-    handler = RemoteLogHandler(pusher, key="test", batch_size=1, flush_interval=999)
+    handler = RemoteLogHandler(pusher, key="test")
     handler.setLevel(logging.DEBUG)
 
     root = logging.getLogger()
@@ -69,9 +88,6 @@ def test_no_deadlock_on_push_failure():
 
     def log_one():
         try:
-            # batch_size=1 means emit() will call _do_flush() immediately.
-            # _do_flush() will fail and try to log the error via root logger,
-            # which would re-enter emit(). Without the fix, this deadlocks.
             logging.getLogger("test_deadlock").info("trigger flush")
         finally:
             done.set()
@@ -83,3 +99,68 @@ def test_no_deadlock_on_push_failure():
     handler.close()
     t.join(timeout=1.0)
     assert finished, "RemoteLogHandler deadlocked on push failure"
+
+
+def test_log_pusher_buffers_and_flushes():
+    """LogPusher buffers entries and flushes on flush() call."""
+    sent: list[tuple[str, int]] = []
+
+    class RecordingPusher(LogPusher):
+        """Override _flush_key_locked to record without RPC."""
+
+        def __init__(self):
+            # Skip real __init__ to avoid RPC client setup.
+            self._batch_size = 1000
+            self._flush_interval = 999.0
+            self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
+            self._lock = threading.Lock()
+            self._closed = False
+            self._flush_timer = None
+
+        def _flush_key_locked(self, key: str) -> None:
+            entries = self._buffers.pop(key, None)
+            if entries:
+                sent.append((key, len(entries)))
+
+    pusher = RecordingPusher()
+
+    entry = logging_pb2.LogEntry(source="test", data="line1")
+    pusher.push("key-a", [entry])
+    pusher.push("key-a", [entry, entry])
+    pusher.push("key-b", [entry])
+
+    assert len(sent) == 0  # Still buffered
+
+    pusher.flush()
+
+    assert ("key-a", 3) in sent
+    assert ("key-b", 1) in sent
+
+
+def test_log_pusher_flushes_at_batch_size():
+    """LogPusher flushes automatically when batch_size is reached."""
+    sent: list[tuple[str, int]] = []
+
+    class RecordingPusher(LogPusher):
+        def __init__(self):
+            self._batch_size = 2
+            self._flush_interval = 999.0
+            self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
+            self._lock = threading.Lock()
+            self._closed = False
+            self._flush_timer = None
+
+        def _flush_key_locked(self, key: str) -> None:
+            entries = self._buffers.pop(key, None)
+            if entries:
+                sent.append((key, len(entries)))
+
+    pusher = RecordingPusher()
+    entry = logging_pb2.LogEntry(source="test", data="line")
+
+    pusher.push("k", [entry])
+    assert len(sent) == 0
+
+    pusher.push("k", [entry])  # Hits batch_size=2
+    assert len(sent) == 1
+    assert sent[0] == ("k", 2)

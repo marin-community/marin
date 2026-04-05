@@ -63,7 +63,6 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.log_store import LogStore
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import CloudSliceState
@@ -162,15 +161,22 @@ def mock_controller() -> MockController:
 
 
 @pytest.fixture
-def controller_service(state, mock_controller, tmp_path) -> ControllerServiceImpl:
-    """ControllerServiceImpl with fresh DB, log store, and mock controller."""
+def log_service(state, tmp_path) -> LogServiceImpl:
+    """LogServiceImpl with its own internal log store."""
+    svc = LogServiceImpl(log_dir=tmp_path / "log_service_logs")
+    yield svc
+    svc.close()
+
+
+@pytest.fixture
+def controller_service(state, log_service, mock_controller, tmp_path) -> ControllerServiceImpl:
+    """ControllerServiceImpl with fresh DB, log service, and mock controller."""
     return ControllerServiceImpl(
         state,
         state._db,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
-        log_service=LogServiceImpl(state._log_store),
+        log_service=log_service,
     )
 
 
@@ -181,13 +187,11 @@ def controller_service(state, mock_controller, tmp_path) -> ControllerServiceImp
 
 @contextmanager
 def make_controller_state(**kwargs):
-    """Yield a ControllerTransitions with a fresh temp DB and log store, cleaning up on exit."""
+    """Yield a ControllerTransitions with a fresh temp DB, cleaning up on exit."""
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     try:
         db = ControllerDB(db_dir=tmp)
-        log_store = LogStore(log_dir=tmp / "logs")
-        yield ControllerTransitions(db=db, log_store=log_store, **kwargs)
-        log_store.close()
+        yield ControllerTransitions(db=db, **kwargs)
         db.close()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

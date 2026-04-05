@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -320,7 +321,7 @@ class DockerContainerHandle:
         """Return the Docker container ID (hash), if any."""
         return self._run_container_id
 
-    def build(self) -> list[LogLine]:
+    def build(self, on_logs: Callable[[list[LogLine]], None] | None = None) -> list[LogLine]:
         """Run setup_commands (uv sync, pip install, etc) in a temporary container.
 
         Creates a temporary container that runs setup_commands, waits for completion,
@@ -328,6 +329,10 @@ class DockerContainerHandle:
         and will be available to the run container.
 
         If there are no setup_commands, this is a no-op.
+
+        Args:
+            on_logs: Optional callback invoked with each incremental batch of
+                log lines during the build. Enables streaming to LogService.
 
         Returns:
             List of log lines captured during the build phase.
@@ -372,6 +377,8 @@ class DockerContainerHandle:
                 if new_logs:
                     build_logs.extend(new_logs)
                     last_log_time = Timestamp.from_seconds(new_logs[-1].timestamp.timestamp()).add_ms(1)
+                    if on_logs:
+                        on_logs(new_logs)
 
                 if status.phase == ContainerPhase.STOPPED:
                     break
@@ -379,7 +386,10 @@ class DockerContainerHandle:
 
             # Final log fetch after container stops
             final_logs = _docker_logs(build_container_id, since=last_log_time)
-            build_logs.extend(final_logs)
+            if final_logs:
+                build_logs.extend(final_logs)
+                if on_logs:
+                    on_logs(final_logs)
 
             if status.exit_code != 0:
                 log_text = "\n".join(f"[{entry.source}] {entry.data}" for entry in build_logs[-50:])

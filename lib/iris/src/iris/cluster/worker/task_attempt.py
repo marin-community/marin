@@ -36,6 +36,7 @@ from iris.cluster.types import (
 )
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.port_allocator import PortAllocator
+from iris.cluster.worker.worker_types import LogLine
 from iris.cluster.log_store._types import task_log_key
 from iris.log_server.client import LogPusher
 from iris.logging import str_to_log_level
@@ -728,11 +729,11 @@ class TaskAttempt:
             self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="syncing dependencies")
             self.build_started = Timestamp.now()
 
-        build_logs = self._container_handle.build()
+        def on_build_logs(lines: list[LogLine]) -> None:
+            entries = [self._make_log_entry(source=line.source, data=line.data) for line in lines]
+            self._push_logs(entries)
 
-        # Capture build logs into log store
-        for log_line in build_logs:
-            self._append_log(source=log_line.source, data=log_line.data)
+        self._container_handle.build(on_logs=on_build_logs)
 
         self.build_finished = Timestamp.now()
         if self.request.entrypoint.setup_commands:

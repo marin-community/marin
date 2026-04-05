@@ -86,7 +86,7 @@ from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.log_store import CONTROLLER_LOG_KEY, LogStore, build_log_source, worker_log_key
+from iris.cluster.log_store import CONTROLLER_LOG_KEY, build_log_source, worker_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, WorkerId, get_gpu_count, get_tpu_count
@@ -750,7 +750,7 @@ class ControllerServiceImpl:
         db: Query interface for direct DB reads
         controller: Controller runtime for scheduling and worker management
         bundle_store: Bundle store for zip storage.
-        log_store: Log store for task and process logs.
+        log_service: LogService that owns the log store.
     """
 
     def __init__(
@@ -759,18 +759,18 @@ class ControllerServiceImpl:
         db: ControllerDB,
         controller: ControllerProtocol,
         bundle_store: BundleStore,
-        log_store: LogStore,
-        log_service: LogServiceImpl | None = None,
+        log_service: LogServiceImpl,
         auth: ControllerAuth | None = None,
+        system_endpoints: dict[str, str] | None = None,
     ):
         self._transitions = transitions
         self._db = db
         self._controller = controller
         self._bundle_store = bundle_store
-        self._log_store = log_store
-        self._log_service = log_service or LogServiceImpl(log_store)
+        self._log_service = log_service
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
+        self._system_endpoints: dict[str, str] = system_endpoints or {}
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -1326,12 +1326,21 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.ListEndpointsRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ListEndpointsResponse:
-        """List endpoints by name prefix (or exact name when request.exact is set)."""
+        """List endpoints by name prefix (or exact name when request.exact is set).
+
+        System endpoints (names starting with ``/system/``) are resolved from
+        an in-memory map rather than the DB.  This allows system services like
+        the LogService to be discovered via the same API as job-scoped actors.
+        """
+        prefix = request.prefix
+        if prefix.startswith("/system/"):
+            return self._list_system_endpoints(prefix, exact=request.exact)
+
         endpoints = _query_endpoints(
             self._db,
             EndpointQuery(
-                exact_name=request.prefix if request.exact else None,
-                name_prefix=None if request.exact else request.prefix,
+                exact_name=prefix if request.exact else None,
+                name_prefix=None if request.exact else prefix,
             ),
         )
         return cluster_pb2.Controller.ListEndpointsResponse(
@@ -1346,6 +1355,28 @@ class ControllerServiceImpl:
                 for e in endpoints
             ]
         )
+
+    def _list_system_endpoints(self, prefix: str, *, exact: bool) -> cluster_pb2.Controller.ListEndpointsResponse:
+        """Resolve system endpoints from the in-memory map."""
+        results: list[cluster_pb2.Controller.Endpoint] = []
+        for name, address in self._system_endpoints.items():
+            if exact and name == prefix:
+                results.append(
+                    cluster_pb2.Controller.Endpoint(
+                        endpoint_id=name,
+                        name=name,
+                        address=address,
+                    )
+                )
+            elif not exact and name.startswith(prefix):
+                results.append(
+                    cluster_pb2.Controller.Endpoint(
+                        endpoint_id=name,
+                        name=name,
+                        address=address,
+                    )
+                )
+        return cluster_pb2.Controller.ListEndpointsResponse(endpoints=results)
 
     # --- Autoscaler ---
 
@@ -1654,15 +1685,18 @@ class ControllerServiceImpl:
             status_message=worker_status_message(worker),
         )
 
-        # Fetch worker daemon logs from the central LogStore
+        # Fetch worker daemon logs via LogService
         worker_log_entries: list[logging_pb2.LogEntry] = []
         try:
-            result = self._log_store.get_logs(
-                worker_log_key(worker.worker_id),
-                max_lines=200,
-                tail=True,
+            fetch_resp = self._log_service.fetch_logs(
+                logging_pb2.FetchLogsRequest(
+                    source=worker_log_key(worker.worker_id),
+                    max_lines=200,
+                    tail=True,
+                ),
+                ctx,
             )
-            worker_log_entries = list(result.entries)
+            worker_log_entries = list(fetch_resp.entries)
         except Exception:
             logger.debug("Failed to fetch worker logs for %s", request.id, exc_info=True)
 
@@ -1710,7 +1744,7 @@ class ControllerServiceImpl:
         """
         target = request.target
         if not target or target == "/system/process":
-            return get_process_status(request, self._log_store, self._timer, log_key=CONTROLLER_LOG_KEY)
+            return get_process_status(request, self._log_service, self._timer, log_key=CONTROLLER_LOG_KEY)
 
         # Parse /system/worker/<worker_id>
         worker_id = _parse_worker_target(target)

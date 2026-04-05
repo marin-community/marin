@@ -13,9 +13,9 @@ import resource
 import sys
 import threading
 
-from iris.cluster.log_store import LogStore
 from iris.cluster.runtime.process import _read_proc_cpu_percent
-from iris.rpc import cluster_pb2
+from iris.log_server.server import LogServiceImpl
+from iris.rpc import cluster_pb2, logging_pb2
 from rigging.timing import Timer
 
 # Persistent CPU sampling state so delta-based measurement works across requests.
@@ -92,7 +92,7 @@ def collect_process_info(timer: Timer) -> cluster_pb2.ProcessInfo:
 
 def get_process_status(
     request: cluster_pb2.GetProcessStatusRequest,
-    log_store: LogStore | None,
+    log_service: LogServiceImpl | None,
     timer: Timer,
     log_key: str = "",
 ) -> cluster_pb2.GetProcessStatusResponse:
@@ -103,18 +103,18 @@ def get_process_status(
     """
     process_info = collect_process_info(timer)
 
-    # Fetch recent process logs
-    log_entries = []
-    if log_store and log_key:
+    log_entries: list[logging_pb2.LogEntry] = []
+    if log_service and log_key:
         max_lines = request.max_log_lines if request.max_log_lines > 0 else 200
-        result = log_store.get_logs(
-            log_key,
-            substring_filter=request.log_substring or "",
+        fetch_req = logging_pb2.FetchLogsRequest(
+            source=log_key,
+            substring=request.log_substring or "",
             max_lines=max_lines,
             tail=True,
             min_level=request.min_log_level or "",
         )
-        log_entries = list(result.entries)
+        fetch_resp = log_service.fetch_logs(fetch_req, None)
+        log_entries = list(fetch_resp.entries)
 
     return cluster_pb2.GetProcessStatusResponse(
         process_info=process_info,

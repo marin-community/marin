@@ -24,7 +24,6 @@ from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.cluster.log_store import LogStore
 from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token, resolve_auth
 from rigging.timing import Timestamp
 
@@ -45,10 +44,8 @@ def db(tmp_path):
 
 @pytest.fixture
 def state(db, tmp_path):
-    log_store = LogStore(log_dir=tmp_path / "logs")
-    s = ControllerTransitions(db=db, log_store=log_store)
+    s = ControllerTransitions(db=db)
     yield s
-    log_store.close()
 
 
 @pytest.fixture
@@ -63,8 +60,7 @@ def service(state, tmp_path):
         state._db,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
-        log_service=LogServiceImpl(state._log_store),
+        log_service=LogServiceImpl(),
     )
 
 
@@ -76,14 +72,14 @@ def verifier():
 @pytest.fixture
 def authed_client(service, verifier):
     dashboard = ControllerDashboard(
-        service, log_service=LogServiceImpl(service._log_store), auth_verifier=verifier, auth_provider="gcp"
+        service, log_service=service._log_service, auth_verifier=verifier, auth_provider="gcp"
     )
     return TestClient(dashboard.app)
 
 
 @pytest.fixture
 def noauth_client(service):
-    dashboard = ControllerDashboard(service, log_service=LogServiceImpl(service._log_store))
+    dashboard = ControllerDashboard(service, log_service=service._log_service)
     return TestClient(dashboard.app)
 
 
@@ -337,7 +333,7 @@ def optional_auth_client(service, verifier):
     """Dashboard with auth configured but optional — tokens verified if present, anonymous fallback."""
     dashboard = ControllerDashboard(
         service,
-        log_service=LogServiceImpl(service._log_store),
+        log_service=service._log_service,
         auth_verifier=verifier,
         auth_provider="static",
         auth_optional=True,
@@ -468,7 +464,7 @@ def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optio
 
     dashboard = ControllerDashboard(
         service,
-        log_service=LogServiceImpl(service._log_store),
+        log_service=service._log_service,
         auth_verifier=verifier,
         auth_provider="static",
         auth_optional=optional,

@@ -171,21 +171,10 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        # Push logs to the central LogService co-hosted on the controller.
-        # Attach a handler immediately with a placeholder key so that logs
-        # emitted during registration (before worker_id is known) are captured.
-        # _attach_log_handler() replaces this with the real key after registration.
+        # LogPusher and RemoteLogHandler are created after registration, once
+        # the worker can resolve /system/log-server via ListEndpoints.
         self._log_pusher: LogPusher | None = None
         self._log_handler: RemoteLogHandler | None = None
-        if config.controller_address:
-            self._log_pusher = LogPusher(config.controller_address)
-            self._log_handler = RemoteLogHandler(
-                self._log_pusher,
-                key=worker_log_key("unregistered"),
-            )
-            self._log_handler.setLevel(logging.INFO)
-            self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-            logging.getLogger().addHandler(self._log_handler)
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
@@ -450,24 +439,50 @@ class Worker:
 
         return None
 
-    def _attach_log_handler(self) -> None:
-        """Attach a RemoteLogHandler for worker process logs once worker_id is known."""
-        self._detach_log_handler()
-        if self._log_pusher and self._worker_id:
-            self._log_handler = RemoteLogHandler(
-                self._log_pusher,
-                key=worker_log_key(self._worker_id),
+    def _resolve_log_service(self) -> str | None:
+        """Resolve the LogService address via the /system/log-server endpoint."""
+        if not self._controller_client:
+            return None
+        try:
+            resp = self._controller_client.list_endpoints(
+                cluster_pb2.Controller.ListEndpointsRequest(
+                    prefix="/system/log-server",
+                    exact=True,
+                ),
             )
-            self._log_handler.setLevel(logging.INFO)
-            self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-            logging.getLogger().addHandler(self._log_handler)
+            if resp.endpoints:
+                return resp.endpoints[0].address
+        except Exception:
+            logger.warning("Failed to resolve /system/log-server endpoint", exc_info=True)
+        # Fall back to controller address if endpoint resolution fails.
+        return self._config.controller_address
+
+    def _attach_log_handler(self) -> None:
+        """Create LogPusher and attach RemoteLogHandler after registration."""
+        self._detach_log_handler()
+        if not self._worker_id:
+            return
+        log_addr = self._resolve_log_service()
+        if not log_addr:
+            return
+        self._log_pusher = LogPusher(log_addr)
+        self._log_handler = RemoteLogHandler(
+            self._log_pusher,
+            key=worker_log_key(self._worker_id),
+        )
+        self._log_handler.setLevel(logging.INFO)
+        self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        logging.getLogger().addHandler(self._log_handler)
 
     def _detach_log_handler(self) -> None:
-        """Remove and close the current RemoteLogHandler if any."""
+        """Remove and close the current RemoteLogHandler and LogPusher if any."""
         if self._log_handler is not None:
             logging.getLogger().removeHandler(self._log_handler)
             self._log_handler.close()
             self._log_handler = None
+        if self._log_pusher is not None:
+            self._log_pusher.close()
+            self._log_pusher = None
 
     def _resolve_address(self) -> str:
         """Resolve the address to advertise to the controller."""

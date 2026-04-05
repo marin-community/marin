@@ -39,7 +39,6 @@ from iris.cluster.controller.schema import (
     proto_cache,
     proto_decoder,
 )
-from iris.cluster.log_store import LogStore
 from iris.cluster.types import (
     JobName,
     WorkerId,
@@ -819,12 +818,10 @@ class ControllerTransitions:
     def __init__(
         self,
         db: ControllerDB,
-        log_store: LogStore,
         heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD,
         user_budget_defaults: UserBudgetDefaults | None = None,
     ):
         self._db = db
-        self._log_store = log_store
         self._heartbeat_failure_threshold = heartbeat_failure_threshold
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
 

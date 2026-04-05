@@ -3,6 +3,7 @@
 
 """Shared fixtures for worker tests (both mock and Docker-based)."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from unittest.mock import Mock
 
@@ -80,7 +81,7 @@ class FakeContainerHandle:
     def container_id(self) -> str | None:
         return "container123"
 
-    def build(self) -> list[LogLine]:
+    def build(self, on_logs: Callable[[list[LogLine]], None] | None = None) -> list[LogLine]:
         if self.build_error is not None:
             raise self.build_error
         return []
