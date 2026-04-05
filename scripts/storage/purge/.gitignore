@@ -1,7 +1,8 @@
 cache.sqlite3
 cache.sqlite3-shm
 cache.sqlite3-wal
-state/
-backup/
+storage.duckdb
+storage.duckdb.wal
+objects_parquet/
 resolve/
 logs/
