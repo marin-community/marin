@@ -894,7 +894,7 @@
     "dim": 1024,
     "tok_ratio": 50.0,
     "adam_lr": 0.0064,
-    "bpb": 1.1740773916244507,
+    "bpb": 1.174077391624451,
     "batch_size": 128,
     "steps": 40054,
     "last_step": 2689
@@ -2178,7 +2178,7 @@
     "dim": 1024,
     "tok_ratio": 22.0,
     "adam_lr": 0.0024,
-    "bpb": 0.9385069012641907,
+    "bpb": 0.9385069012641908,
     "batch_size": 128,
     "steps": 17624,
     "last_step": 17623
@@ -2190,7 +2190,7 @@
     "dim": 1024,
     "tok_ratio": 50.0,
     "adam_lr": 0.0048,
-    "bpb": 0.9254831075668335,
+    "bpb": 0.9254831075668336,
     "batch_size": 128,
     "steps": 40054,
     "last_step": 40053
@@ -2202,7 +2202,7 @@
     "dim": 1024,
     "tok_ratio": 22.0,
     "adam_lr": 0.008,
-    "bpb": 0.9795123934745789,
+    "bpb": 0.9795123934745787,
     "batch_size": 128,
     "steps": 17624,
     "last_step": 17623
@@ -2214,7 +2214,7 @@
     "dim": 1024,
     "tok_ratio": 50.0,
     "adam_lr": 0.0008,
-    "bpb": 0.9234016537666321,
+    "bpb": 0.923401653766632,
     "batch_size": 128,
     "steps": 40054,
     "last_step": 40053
@@ -2238,7 +2238,7 @@
     "dim": 512,
     "tok_ratio": 4.5,
     "adam_lr": 0.0036,
-    "bpb": 1.1595755815505981,
+    "bpb": 1.159575581550598,
     "batch_size": 32,
     "steps": 5287,
     "last_step": 5286
@@ -2250,7 +2250,7 @@
     "dim": 512,
     "tok_ratio": 4.5,
     "adam_lr": 0.0016,
-    "bpb": 1.1729762554168701,
+    "bpb": 1.17297625541687,
     "batch_size": 32,
     "steps": 5287,
     "last_step": 5286
@@ -2330,14 +2330,14 @@
   {
     "name": "isoflop-moe-v12-retry-d1280-t50.0x-adam0.0016",
     "group": "isoflop-moe-v12-retry",
-    "state": "running",
+    "state": "finished",
     "dim": 1280,
     "tok_ratio": 50.0,
     "adam_lr": 0.0016,
-    "bpb": 0.9441493153572083,
+    "bpb": 0.8862160444259644,
     "batch_size": 128,
     "steps": 42057,
-    "last_step": 26080
+    "last_step": 42056
   },
   {
     "name": "isoflop-moe-v12-retry-d1024-t22.0x-adam0.0088",
@@ -2358,7 +2358,7 @@
     "dim": 1024,
     "tok_ratio": 4.5,
     "adam_lr": 0.0056,
-    "bpb": 1.0283257961273193,
+    "bpb": 1.0283257961273191,
     "batch_size": 128,
     "steps": 3605,
     "last_step": 3604
@@ -2378,14 +2378,14 @@
   {
     "name": "isoflop-moe-v12-retry-d1280-t50.0x-adam0.0072",
     "group": "isoflop-moe-v12-retry",
-    "state": "running",
+    "state": "finished",
     "dim": 1280,
     "tok_ratio": 50.0,
     "adam_lr": 0.0072,
-    "bpb": 1.1268699169158936,
+    "bpb": 0.9558625221252441,
     "batch_size": 128,
     "steps": 42057,
-    "last_step": 26013
+    "last_step": 42056
   },
   {
     "name": "isoflop-moe-v12-retry-d512-t50.0x-adam0.0028",
@@ -2430,7 +2430,7 @@
     "dim": 1024,
     "tok_ratio": 22.0,
     "adam_lr": 0.0072,
-    "bpb": 0.9690196514129639,
+    "bpb": 0.969019651412964,
     "batch_size": 128,
     "steps": 17624,
     "last_step": 17623
@@ -2442,7 +2442,7 @@
     "dim": 1024,
     "tok_ratio": 10.0,
     "adam_lr": 0.0072,
-    "bpb": 0.9953609704971313,
+    "bpb": 0.9953609704971312,
     "batch_size": 128,
     "steps": 8011,
     "last_step": 8010
@@ -2490,7 +2490,7 @@
     "dim": 1024,
     "tok_ratio": 22.0,
     "adam_lr": 0.0056,
-    "bpb": 0.9559489488601685,
+    "bpb": 0.9559489488601683,
     "batch_size": 128,
     "steps": 17624,
     "last_step": 17623
@@ -2502,7 +2502,7 @@
     "dim": 1024,
     "tok_ratio": 10.0,
     "adam_lr": 0.0056,
-    "bpb": 0.9845308065414429,
+    "bpb": 0.9845308065414428,
     "batch_size": 128,
     "steps": 8011,
     "last_step": 8010
@@ -2514,7 +2514,7 @@
     "dim": 1280,
     "tok_ratio": 10.0,
     "adam_lr": 0.0016,
-    "bpb": 0.9566740393638611,
+    "bpb": 0.9566740393638612,
     "batch_size": 128,
     "steps": 8411,
     "last_step": 8410
@@ -2526,7 +2526,7 @@
     "dim": 512,
     "tok_ratio": 50.0,
     "adam_lr": 0.0012,
-    "bpb": 1.0429946184158325,
+    "bpb": 1.0429946184158323,
     "batch_size": 32,
     "steps": 58746,
     "last_step": 58745
@@ -2534,38 +2534,38 @@
   {
     "name": "isoflop-moe-v12-retry-d1280-t50.0x-adam0.0032",
     "group": "isoflop-moe-v12-retry",
-    "state": "running",
+    "state": "finished",
     "dim": 1280,
     "tok_ratio": 50.0,
     "adam_lr": 0.0032,
-    "bpb": 0.9882274866104126,
+    "bpb": 0.8925578594207764,
     "batch_size": 128,
     "steps": 42057,
-    "last_step": 26021
+    "last_step": 42056
   },
   {
     "name": "isoflop-moe-v12-retry-d1280-t50.0x-adam0.0056",
     "group": "isoflop-moe-v12-retry",
-    "state": "running",
+    "state": "finished",
     "dim": 1280,
     "tok_ratio": 50.0,
     "adam_lr": 0.0056,
-    "bpb": 1.0548325777053833,
+    "bpb": 0.9146207571029663,
     "batch_size": 128,
     "steps": 42057,
-    "last_step": 26182
+    "last_step": 42056
   },
   {
     "name": "isoflop-moe-v12-retry-d1280-t50.0x-adam0.0088",
     "group": "isoflop-moe-v12-retry",
-    "state": "running",
+    "state": "finished",
     "dim": 1280,
     "tok_ratio": 50.0,
     "adam_lr": 0.0088,
-    "bpb": 1.1543514728546143,
+    "bpb": 0.9858460426330566,
     "batch_size": 128,
     "steps": 42057,
-    "last_step": 26160
+    "last_step": 42056
   },
   {
     "name": "isoflop-moe-v12-retry-d768-t2.0x-adam0.00226",
@@ -2634,7 +2634,7 @@
     "dim": 768,
     "tok_ratio": 4.5,
     "adam_lr": 0.00057,
-    "bpb": 1.1813864707946777,
+    "bpb": 1.1813864707946775,
     "batch_size": 64,
     "steps": 4498,
     "last_step": 4497
@@ -2706,7 +2706,7 @@
     "dim": 768,
     "tok_ratio": 50.0,
     "adam_lr": 0.0017,
-    "bpb": 0.9669400453567505,
+    "bpb": 0.9669400453567504,
     "batch_size": 64,
     "steps": 49973,
     "last_step": 49972
@@ -2742,7 +2742,7 @@
     "dim": 1280,
     "tok_ratio": 10.0,
     "adam_lr": 0.0008,
-    "bpb": 0.9860349297523499,
+    "bpb": 0.98603492975235,
     "batch_size": 128,
     "steps": 8411,
     "last_step": 8410
@@ -2766,7 +2766,7 @@
     "dim": 1280,
     "tok_ratio": 10.0,
     "adam_lr": 0.0008,
-    "bpb": 0.9860349297523499,
+    "bpb": 0.98603492975235,
     "batch_size": 128,
     "steps": 8411,
     "last_step": 8410
@@ -2802,7 +2802,7 @@
     "dim": 1280,
     "tok_ratio": 10.0,
     "adam_lr": 0.0048,
-    "bpb": 0.9583733677864075,
+    "bpb": 0.9583733677864076,
     "batch_size": 128,
     "steps": 8411,
     "last_step": 8410
@@ -2814,7 +2814,7 @@
     "dim": 1280,
     "tok_ratio": 10.0,
     "adam_lr": 0.0064,
-    "bpb": 0.9717515707015991,
+    "bpb": 0.9717515707015992,
     "batch_size": 128,
     "steps": 8411,
     "last_step": 8410
@@ -2826,7 +2826,7 @@
     "dim": 1280,
     "tok_ratio": 22.0,
     "adam_lr": 0.0008,
-    "bpb": 0.9350645542144775,
+    "bpb": 0.9350645542144777,
     "batch_size": 128,
     "steps": 18504,
     "last_step": 18503
@@ -2834,14 +2834,14 @@
   {
     "name": "isoflop-moe-v12-retry-d1280-t50.0x-adam0.0008",
     "group": "isoflop-moe-v12-retry",
-    "state": "running",
+    "state": "finished",
     "dim": 1280,
     "tok_ratio": 50.0,
     "adam_lr": 0.0008,
-    "bpb": 0.949609100818634,
+    "bpb": 0.8964554071426392,
     "batch_size": 128,
     "steps": 42057,
-    "last_step": 21626
+    "last_step": 42056
   },
   {
     "name": "isoflop-moe-v12-retry-d1280-t2.0x-adam0.0048",
@@ -2850,7 +2850,7 @@
     "dim": 1280,
     "tok_ratio": 2.0,
     "adam_lr": 0.0048,
-    "bpb": 3.6301937103271484,
+    "bpb": 3.630193710327149,
     "batch_size": 128,
     "steps": 1682,
     "last_step": 328
@@ -2862,7 +2862,7 @@
     "dim": 1280,
     "tok_ratio": 4.5,
     "adam_lr": 0.0008,
-    "bpb": 1.0591744184494019,
+    "bpb": 1.059174418449402,
     "batch_size": 128,
     "steps": 3784,
     "last_step": 3783
@@ -2870,14 +2870,14 @@
   {
     "name": "isoflop-moe-v12-retry-d1280-t50.0x-adam0.0048",
     "group": "isoflop-moe-v12-retry",
-    "state": "running",
+    "state": "finished",
     "dim": 1280,
     "tok_ratio": 50.0,
     "adam_lr": 0.0048,
-    "bpb": 1.0520762205123901,
+    "bpb": 0.9058688282966614,
     "batch_size": 128,
     "steps": 42057,
-    "last_step": 23351
+    "last_step": 42056
   },
   {
     "name": "isoflop-moe-v12-retry-d1280-t22.0x-adam0.008",
@@ -2906,14 +2906,14 @@
   {
     "name": "isoflop-moe-v12-retry-d1280-t50.0x-adam0.0064",
     "group": "isoflop-moe-v12-retry",
-    "state": "running",
+    "state": "finished",
     "dim": 1280,
     "tok_ratio": 50.0,
     "adam_lr": 0.0064,
-    "bpb": 1.1039965152740479,
+    "bpb": 0.9366611242294312,
     "batch_size": 128,
     "steps": 42057,
-    "last_step": 23145
+    "last_step": 42056
   },
   {
     "name": "isoflop-moe-v12-retry-d1280-t22.0x-adam0.0048",
@@ -2934,7 +2934,7 @@
     "dim": 1280,
     "tok_ratio": 22.0,
     "adam_lr": 0.0064,
-    "bpb": 0.9441050291061401,
+    "bpb": 0.94410502910614,
     "batch_size": 128,
     "steps": 18504,
     "last_step": 18503
@@ -2942,14 +2942,14 @@
   {
     "name": "isoflop-moe-v12-retry-d1024-t50.0x-adam0.008",
     "group": "isoflop-moe-v12-retry",
-    "state": "running",
+    "state": "finished",
     "dim": 1024,
     "tok_ratio": 50.0,
     "adam_lr": 0.008,
-    "bpb": 1.0612428188323975,
+    "bpb": 0.9704716801643372,
     "batch_size": 128,
     "steps": 40054,
-    "last_step": 32158
+    "last_step": 40053
   },
   {
     "name": "isoflop-moe-v12-retry-d1280-t4.5x-adam0.0048",
@@ -2994,7 +2994,7 @@
     "dim": 1280,
     "tok_ratio": 2.0,
     "adam_lr": 0.0064,
-    "bpb": 1.0783727169036865,
+    "bpb": 1.0783727169036863,
     "batch_size": 128,
     "steps": 1682,
     "last_step": 1681
@@ -3002,14 +3002,14 @@
   {
     "name": "isoflop-moe-v12-retry-d1280-t50.0x-adam0.0024",
     "group": "isoflop-moe-v12-retry",
-    "state": "running",
+    "state": "crashed",
     "dim": 1280,
     "tok_ratio": 50.0,
     "adam_lr": 0.0024,
-    "bpb": 0.9954703450202942,
+    "bpb": 0.9696220755577087,
     "batch_size": 128,
     "steps": 42057,
-    "last_step": 20028
+    "last_step": 25568
   },
   {
     "name": "isoflop-moe-v12-retry-d1280-t10.0x-adam0.0024",

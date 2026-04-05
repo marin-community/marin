@@ -39,6 +39,8 @@ for r in results:
         continue
     if r['dim'] == 1280 and r['tok_ratio'] == 22.0 and r['adam_lr'] >= 0.0072:
         continue
+    if r['dim'] == 1280 and r['tok_ratio'] == 50.0 and r['adam_lr'] >= 0.0064:
+        continue
     if r['dim'] == 1280 and r['tok_ratio'] == 10.0 and r['adam_lr'] >= 0.0088:
         continue
     key = (r['dim'], r['tok_ratio'], r['adam_lr'])
@@ -159,9 +161,9 @@ for i, dim in enumerate(dims):
 
 fig.suptitle("BPB vs Adam LR (log-space quadratic fit)", fontsize=12)
 fig.tight_layout()
-fig.savefig(f"{PLOT_DIR}/all_dims_c4bpb_vs_lr.png", dpi=150)
+fig.savefig(f"{PLOT_DIR}/v3_all_dims_c4bpb_vs_lr.png", dpi=150)
 plt.close(fig)
-print("Saved all_dims_c4bpb_vs_lr.png")
+print("Saved v3_all_dims_c4bpb_vs_lr.png")
 
 # ============================================================
 # Plot 2: Optimal LR and BPB vs token ratio
@@ -199,9 +201,9 @@ ax2.set_title("Best BPB vs Token Ratio")
 ax2.grid(True, alpha=0.3)
 
 fig.tight_layout()
-fig.savefig(f"{PLOT_DIR}/opt_lr_and_bpb_vs_tokens.png", dpi=150)
+fig.savefig(f"{PLOT_DIR}/v3_opt_lr_and_bpb_vs_tokens.png", dpi=150)
 plt.close(fig)
-print("Saved opt_lr_and_bpb_vs_tokens.png")
+print("Saved v3_opt_lr_and_bpb_vs_tokens.png")
 
 # ============================================================
 # Plot 3: Optimal LR vs Compute (all points)
@@ -242,9 +244,9 @@ ax.set_ylabel("Optimal Adam LR (normalized to bs=32)")
 ax.set_title("Optimal LR vs Compute (all points)")
 ax.grid(True, alpha=0.3)
 fig.tight_layout()
-fig.savefig(f"{PLOT_DIR}/opt_lr_vs_compute_all.png", dpi=150)
+fig.savefig(f"{PLOT_DIR}/v3_opt_lr_vs_compute_all.png", dpi=150)
 plt.close(fig)
-print("Saved opt_lr_vs_compute_all.png")
+print("Saved v3_opt_lr_vs_compute_all.png")
 
 # ============================================================
 # Plot 4: Optimal LR vs Compute (filtered)
@@ -291,9 +293,9 @@ ax.set_ylabel("Optimal Adam LR (normalized to bs=32)")
 ax.set_title("Optimal LR vs Compute (filtered)")
 ax.grid(True, alpha=0.3)
 fig.tight_layout()
-fig.savefig(f"{PLOT_DIR}/opt_lr_vs_compute_filtered.png", dpi=150)
+fig.savefig(f"{PLOT_DIR}/v3_opt_lr_vs_compute_filtered.png", dpi=150)
 plt.close(fig)
-print("Saved opt_lr_vs_compute_filtered.png")
+print("Saved v3_opt_lr_vs_compute_filtered.png")
 
 # ============================================================
 # Plot 5: LR = A * tokens^tx * dim^dx fit (3 panels)
@@ -377,9 +379,9 @@ if len(fit_data) >= 3:
 
     fig.suptitle(f"lr = {A * 32**-0.5:.2f} * tokens^({tx:.4f}) * dim^({dx:.4f}) * bs^(0.5)", fontsize=13)
     fig.tight_layout()
-    fig.savefig(f"{PLOT_DIR}/lr_tokens_dim_fit.png", dpi=150)
+    fig.savefig(f"{PLOT_DIR}/v3_lr_tokens_dim_fit.png", dpi=150)
     plt.close(fig)
-    print(f"Saved lr_tokens_dim_fit.png  (A={A:.2f}, tx={tx:.4f}, dx={dx:.4f}, R²={r2:.3f})")
+    print(f"Saved v3_lr_tokens_dim_fit.png  (A={A:.2f}, tx={tx:.4f}, dx={dx:.4f}, R²={r2:.3f})")
 else:
     print("Not enough data for tokens+dim fit")
 
