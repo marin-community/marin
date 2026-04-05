@@ -118,7 +118,7 @@ class CausalSelfAttention(eqx.Module):
     partial_rotary_factor: float = eqx.field(static=True, default=1.0)
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, partial_rotary_factor: float = 1.0) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
         return CausalSelfAttention(
@@ -128,6 +128,7 @@ class CausalSelfAttention(eqx.Module):
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             cfg=cfg,
+            partial_rotary_factor=partial_rotary_factor,
         )
 
     @named_call
@@ -426,8 +427,7 @@ class Block(eqx.Module):
             )
         # Partial rope on every 4th layer (half rotation)
         partial_rotary = 0.5 if layer_index % 4 == 3 else 1.0
-        attn = CausalSelfAttention.init(cfg, key=attn_key)
-        attn = eqx.tree_at(lambda a: a.partial_rotary_factor, attn, partial_rotary)
+        attn = CausalSelfAttention.init(cfg, key=attn_key, partial_rotary_factor=partial_rotary)
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
