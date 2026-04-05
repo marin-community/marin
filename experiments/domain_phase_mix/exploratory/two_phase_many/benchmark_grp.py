@@ -36,6 +36,8 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.ge
 )
 from experiments.domain_phase_mix.static_batch_selection import retrospective_generic_selection
 
+plt.rcParams["text.usetex"] = False
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 CSV_PATH = SCRIPT_DIR / "two_phase_many.csv"
 OBJECTIVE_METRIC = "eval/uncheatable_eval/bpb"
@@ -45,8 +47,8 @@ GRP_MODEL_NAME = "GRP"
 OLMIX_MODEL_NAME = "Olmix loglinear"
 CURVE_POINTS_CSV = SCRIPT_DIR / "two_phase_many_grp_vs_olmix_curve_points.csv"
 SUMMARY_JSON = SCRIPT_DIR / "two_phase_many_grp_summary.json"
-GRP_PLOT_PATH = SCRIPT_DIR / "two_phase_many_grp_predicted_bpb_regret.png"
-COMPARISON_PLOT_PATH = SCRIPT_DIR / "two_phase_many_grp_vs_olmix_predicted_bpb_regret.png"
+GRP_PLOT_PATH = SCRIPT_DIR / "two_phase_many_grp_convergence_tracks.png"
+OLMIX_PLOT_PATH = SCRIPT_DIR / "two_phase_many_olmix_convergence_tracks.png"
 
 _SCRIPT_START = perf_counter()
 
@@ -93,6 +95,23 @@ def _phase_weights_from_point(point: np.ndarray, packet: GenericFamilyPacket) ->
         }
         for phase_idx in range(point.shape[0])
     }
+
+
+def _phase_weight_matrix(
+    phase_weights: dict[str, dict[str, float]],
+    *,
+    phase_names: tuple[str, ...],
+    domain_names: tuple[str, ...],
+) -> np.ndarray:
+    return np.asarray(
+        [[float(phase_weights[phase_name][domain_name]) for domain_name in domain_names] for phase_name in phase_names],
+        dtype=float,
+    )
+
+
+def _mean_phase_tv_distance(lhs: np.ndarray, rhs: np.ndarray) -> float:
+    """Return mean per-phase total-variation distance between two phase schedules."""
+    return 0.5 * float(np.mean(np.sum(np.abs(lhs - rhs), axis=1)))
 
 
 def _fit_grp(packet: GenericFamilyPacket) -> GenericFamilyRetainedTotalSurrogate:
@@ -265,6 +284,9 @@ def _subset_curve_rows(
 ) -> pd.DataFrame:
     rows: list[dict[str, float | int | str]] = []
     best_observed_bpb = float(np.min(packet.base.y))
+    phase_names = tuple(spec.phase_names)
+    domain_names = tuple(spec.domain_names)
+    previous_optima: dict[str, np.ndarray] = {}
 
     for subset_size in SUBSET_SIZES:
         start = perf_counter()
@@ -277,6 +299,16 @@ def _subset_curve_rows(
         grp_predictions = grp_model.predict(packet.base.w)
         grp_chosen_idx = int(np.argmin(grp_predictions))
         grp_optimum = _predicted_optimum_grp(grp_model, train_packet)
+        grp_optimum_matrix = _phase_weight_matrix(
+            grp_optimum.phase_weights,
+            phase_names=phase_names,
+            domain_names=domain_names,
+        )
+        grp_optimum_move = (
+            np.nan
+            if GRP_MODEL_NAME not in previous_optima
+            else _mean_phase_tv_distance(grp_optimum_matrix, previous_optima[GRP_MODEL_NAME])
+        )
         rows.append(
             {
                 "subset_size": subset_size,
@@ -284,14 +316,26 @@ def _subset_curve_rows(
                 "model_name": GRP_MODEL_NAME,
                 "predicted_bpb": float(grp_optimum.predicted_objective),
                 "regret_at_1": float(packet.base.y[grp_chosen_idx] - best_observed_bpb),
+                "optimum_move_mean_phase_tv": float(grp_optimum_move),
                 "n_params": int(1 + len(grp_model.coef_) if grp_model.coef_ is not None else 1),
             }
         )
+        previous_optima[GRP_MODEL_NAME] = grp_optimum_matrix
 
         olmix_fit = _fit_olmix_loglinear(train_spec, seed=0)
         olmix_predictions = np.asarray(olmix_fit.predict_fn(spec.weights), dtype=float)
         olmix_chosen_idx = int(np.argmin(olmix_predictions))
         olmix_optimum = olmix_fit.info["fit"].optimum(spec)
+        olmix_optimum_matrix = _phase_weight_matrix(
+            olmix_optimum.phase_weights,
+            phase_names=phase_names,
+            domain_names=domain_names,
+        )
+        olmix_optimum_move = (
+            np.nan
+            if OLMIX_MODEL_NAME not in previous_optima
+            else _mean_phase_tv_distance(olmix_optimum_matrix, previous_optima[OLMIX_MODEL_NAME])
+        )
         rows.append(
             {
                 "subset_size": subset_size,
@@ -299,9 +343,11 @@ def _subset_curve_rows(
                 "model_name": OLMIX_MODEL_NAME,
                 "predicted_bpb": float(olmix_optimum.predicted_objective),
                 "regret_at_1": float(packet.base.y[olmix_chosen_idx] - best_observed_bpb),
+                "optimum_move_mean_phase_tv": float(olmix_optimum_move),
                 "n_params": int(olmix_fit.n_params),
             }
         )
+        previous_optima[OLMIX_MODEL_NAME] = olmix_optimum_matrix
 
         pd.DataFrame(rows).to_csv(CURVE_POINTS_CSV, index=False)
         _log(f"Finished subset size k={subset_size} in {perf_counter() - start:.1f}s")
@@ -309,11 +355,24 @@ def _subset_curve_rows(
     return pd.DataFrame(rows)
 
 
-def _plot_grp_only(curves: pd.DataFrame, best_observed_bpb: float) -> None:
-    frame = curves[curves["model_name"] == GRP_MODEL_NAME].sort_values("subset_size")
+def _plot_model_convergence(
+    curves: pd.DataFrame,
+    *,
+    model_name: str,
+    best_observed_bpb: float,
+    output_path: Path,
+) -> None:
+    frame = curves[curves["model_name"] == model_name].sort_values("subset_size")
     cmap = plt.colormaps["RdYlGn_r"]
-    fig, ax_bpb = plt.subplots(figsize=(10, 6), dpi=180)
-    ax_regret = ax_bpb.twinx()
+    fig, (ax_bpb, ax_regret, ax_move) = plt.subplots(
+        3,
+        1,
+        figsize=(10.2, 8.4),
+        dpi=180,
+        sharex=True,
+        constrained_layout=True,
+        gridspec_kw={"height_ratios": [1.3, 1.0, 1.0], "hspace": 0.08},
+    )
 
     ax_bpb.plot(
         frame["subset_size"],
@@ -321,8 +380,8 @@ def _plot_grp_only(curves: pd.DataFrame, best_observed_bpb: float) -> None:
         color=cmap(0.18),
         marker="o",
         linewidth=2.2,
-        linestyle="--",
-        label="GRP predicted BPB",
+        linestyle="-",
+        label="Predicted BPB",
     )
     ax_bpb.axhline(
         best_observed_bpb,
@@ -338,88 +397,37 @@ def _plot_grp_only(curves: pd.DataFrame, best_observed_bpb: float) -> None:
         marker="s",
         linewidth=2.2,
         linestyle="-",
-        label="GRP Regret@1",
+        label="Regret@1",
     )
+    ax_move.plot(
+        frame["subset_size"],
+        frame["optimum_move_mean_phase_tv"],
+        color=cmap(0.36),
+        marker="D",
+        linewidth=2.2,
+        linestyle="-",
+        label="Optimum movement (mean phase TV)",
+    )
+    ax_move.axhline(0.0, color="0.55", linewidth=1.0, linestyle=":")
 
-    ax_bpb.set_title("Two-phase many-domain: GRP predicted BPB and Regret@1")
-    ax_bpb.set_xlabel("Observed runs used for fitting")
+    ax_bpb.set_title(f"Two-phase many-domain: {model_name} convergence")
     ax_bpb.set_ylabel("Predicted BPB")
     ax_regret.set_ylabel("Regret@1")
-    ax_bpb.set_xticks(list(SUBSET_SIZES))
-    ax_bpb.set_xlim(min(SUBSET_SIZES), max(SUBSET_SIZES))
+    ax_move.set_ylabel("Mean phase TV")
+    ax_move.set_xlabel("Observed runs used for fitting")
+    ax_move.set_xticks(list(SUBSET_SIZES))
+    ax_move.set_xlim(min(SUBSET_SIZES), max(SUBSET_SIZES))
     ax_bpb.grid(True, alpha=0.25)
+    ax_regret.grid(True, alpha=0.25)
+    ax_move.grid(True, alpha=0.25)
 
-    handles = ax_bpb.get_lines() + ax_regret.get_lines()
-    labels = [handle.get_label() for handle in handles]
-    ax_bpb.legend(handles, labels, loc="lower right", bbox_to_anchor=(0.99, 0.22), frameon=True)
-    fig.tight_layout()
-    fig.savefig(GRP_PLOT_PATH, bbox_inches="tight")
-    plt.close(fig)
+    for axis in (ax_bpb, ax_regret, ax_move):
+        handles = axis.get_lines()
+        labels = [handle.get_label() for handle in handles if not handle.get_label().startswith("_")]
+        if handles:
+            axis.legend(handles, labels, loc="best", frameon=True)
 
-
-def _plot_comparison(curves: pd.DataFrame, best_observed_bpb: float) -> None:
-    cmap = plt.colormaps["RdYlGn_r"]
-    fig, ax_bpb = plt.subplots(figsize=(10.5, 6.2), dpi=180)
-    ax_regret = ax_bpb.twinx()
-
-    styles = {
-        GRP_MODEL_NAME: {
-            "pred_color": cmap(0.18),
-            "regret_color": cmap(0.82),
-            "pred_marker": "o",
-            "regret_marker": "s",
-        },
-        OLMIX_MODEL_NAME: {
-            "pred_color": cmap(0.35),
-            "regret_color": cmap(0.95),
-            "pred_marker": "^",
-            "regret_marker": "D",
-        },
-    }
-
-    for model_name in (GRP_MODEL_NAME, OLMIX_MODEL_NAME):
-        frame = curves[curves["model_name"] == model_name].sort_values("subset_size")
-        style = styles[model_name]
-        ax_bpb.plot(
-            frame["subset_size"],
-            frame["predicted_bpb"],
-            color=style["pred_color"],
-            marker=style["pred_marker"],
-            linewidth=2.1,
-            linestyle="--",
-            label=f"{model_name} predicted BPB",
-        )
-        ax_regret.plot(
-            frame["subset_size"],
-            frame["regret_at_1"],
-            color=style["regret_color"],
-            marker=style["regret_marker"],
-            linewidth=2.1,
-            linestyle="-",
-            label=f"{model_name} Regret@1",
-        )
-
-    ax_bpb.axhline(
-        best_observed_bpb,
-        color=cmap(0.58),
-        linewidth=1.8,
-        linestyle=":",
-        label=f"Best observed BPB ({best_observed_bpb:.4f})",
-    )
-
-    ax_bpb.set_title("Two-phase many-domain: GRP vs Olmix loglinear")
-    ax_bpb.set_xlabel("Observed runs used for fitting")
-    ax_bpb.set_ylabel("Predicted BPB")
-    ax_regret.set_ylabel("Regret@1")
-    ax_bpb.set_xticks(list(SUBSET_SIZES))
-    ax_bpb.set_xlim(min(SUBSET_SIZES), max(SUBSET_SIZES))
-    ax_bpb.grid(True, alpha=0.25)
-
-    handles = ax_bpb.get_lines() + ax_regret.get_lines()
-    labels = [handle.get_label() for handle in handles]
-    ax_bpb.legend(handles, labels, loc="lower right", bbox_to_anchor=(0.99, 0.22), frameon=True, ncol=1)
-    fig.tight_layout()
-    fig.savefig(COMPARISON_PLOT_PATH, bbox_inches="tight")
+    fig.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -431,15 +439,25 @@ def main() -> None:
     _log(f"Wrote {CURVE_POINTS_CSV}")
 
     best_observed_bpb = float(np.min(packet.base.y))
-    _plot_grp_only(curve_points, best_observed_bpb)
-    _plot_comparison(curve_points, best_observed_bpb)
+    _plot_model_convergence(
+        curve_points,
+        model_name=GRP_MODEL_NAME,
+        best_observed_bpb=best_observed_bpb,
+        output_path=GRP_PLOT_PATH,
+    )
+    _plot_model_convergence(
+        curve_points,
+        model_name=OLMIX_MODEL_NAME,
+        best_observed_bpb=best_observed_bpb,
+        output_path=OLMIX_PLOT_PATH,
+    )
 
     summary = {
         "objective_metric": OBJECTIVE_METRIC,
         "subset_sizes": list(SUBSET_SIZES),
         "curve_points_csv": str(CURVE_POINTS_CSV),
         "grp_plot": str(GRP_PLOT_PATH),
-        "comparison_plot": str(COMPARISON_PLOT_PATH),
+        "olmix_plot": str(OLMIX_PLOT_PATH),
         "best_observed_bpb": best_observed_bpb,
         "models": {
             model_name: [
@@ -447,6 +465,9 @@ def main() -> None:
                     "subset_size": int(row["subset_size"]),
                     "predicted_bpb": float(row["predicted_bpb"]),
                     "regret_at_1": float(row["regret_at_1"]),
+                    "optimum_move_mean_phase_tv": (
+                        None if pd.isna(row["optimum_move_mean_phase_tv"]) else float(row["optimum_move_mean_phase_tv"])
+                    ),
                     "n_params": int(row["n_params"]),
                 }
                 for _, row in (
