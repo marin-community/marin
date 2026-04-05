@@ -476,7 +476,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
         .map(process_shard_task)
         .write_jsonl(f"{metrics_path}/{{shard:05d}}-transform.jsonl", skip_existing=True)
     )
-    ctx = ZephyrContext(name="transform-conversation", resources=ResourceConfig(cpu=1, ram="4g"))
+    ctx = ZephyrContext(name="transform-conversation", resources=ResourceConfig(cpu=1, ram="8g"))
     metric_files = ctx.execute(pipeline)
 
     # Log summary by subset/split
