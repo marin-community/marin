@@ -1170,11 +1170,10 @@ class Controller:
             timeout=Duration.from_seconds(5.0),
         )
 
-        # Register system endpoints. The address here is used for in-process
-        # and local-network callers (e.g. CLI, tests). Remote workers fall back
-        # to their configured controller_address when the resolved endpoint
-        # is unreachable, since the log service is co-hosted on the controller.
+        # Register system endpoints with the externally-reachable URL so
+        # workers can resolve them via ListEndpoints.
         self._service._system_endpoints["/system/log-server"] = self.url
+        logger.info("Registered system endpoint /system/log-server -> %s", self.url)
 
     def stop(self) -> None:
         """Stop all background components gracefully.
@@ -2292,8 +2291,27 @@ class Controller:
         return self._config.port
 
     @property
+    def external_host(self) -> str:
+        """Externally-reachable host address.
+
+        When bound to 0.0.0.0, probes for the real network IP (same technique
+        workers use in env_probe._get_ip_address).
+        """
+        host = self._config.host
+        if host == "0.0.0.0":
+            import socket
+
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                    s.connect(("8.8.8.8", 80))
+                    return s.getsockname()[0]
+            except Exception:
+                return "127.0.0.1"
+        return host
+
+    @property
     def url(self) -> str:
-        return f"http://{self._config.host}:{self.port}"
+        return f"http://{self.external_host}:{self.port}"
 
     @property
     def reservation_claims(self) -> dict[WorkerId, ReservationClaim]:
