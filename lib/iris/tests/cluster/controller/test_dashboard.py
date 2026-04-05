@@ -822,6 +822,23 @@ def test_fetch_logs_backward_compat_proxy(client):
     assert data.get("entries", []) == []
 
 
+def test_fetch_logs_backward_compat_proxy_proto_binary(client):
+    """Old clients using default Connect proto encoding hit the compat endpoint."""
+    from iris.rpc import logging_pb2
+
+    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
+    req = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+    resp = client.post(
+        "/iris.cluster.ControllerService/FetchLogs",
+        content=req.SerializeToString(),
+        headers={"Content-Type": "application/proto"},
+    )
+    assert resp.status_code == 200
+    parsed = logging_pb2.FetchLogsResponse()
+    parsed.ParseFromString(resp.content)
+    assert list(parsed.entries) == []
+
+
 # =============================================================================
 # Coscheduling Diagnostic Tests
 # =============================================================================

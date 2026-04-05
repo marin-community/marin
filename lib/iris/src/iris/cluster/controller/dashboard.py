@@ -30,7 +30,6 @@ from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
 import httpx
-from google.protobuf.json_format import MessageToDict, ParseDict
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
@@ -42,7 +41,6 @@ from iris.cluster.controller.actor_proxy import PROXY_ROUTE, ActorProxy
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, on_shutdown, static_files_mount
 from iris.log_server.server import LogServiceImpl
-from iris.rpc import logging_pb2
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
@@ -265,24 +263,25 @@ class ControllerDashboard:
             # when present but treat everything as anonymous/admin.
             interceptors.insert(0, NullAuthInterceptor(verifier=self._auth_verifier))
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
-        rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         log_wsgi_app = LogServiceWSGIApplication(service=self._log_service, interceptors=interceptors)
         log_app = WSGIMiddleware(log_wsgi_app)
+
+        # Backward-compat: old clients call ControllerService/FetchLogs (removed
+        # from the proto in the LogService migration).  Register the already-
+        # intercepted LogService FetchLogs endpoint under the old path so the
+        # Connect protocol handles encoding, compression, and auth correctly.
+        _LOG_FETCH_ENDPOINT = "/iris.logging.LogService/FetchLogs"
+        _COMPAT_FETCH_ENDPOINT = "/iris.cluster.ControllerService/FetchLogs"
+        rpc_wsgi_app._endpoints[_COMPAT_FETCH_ENDPOINT] = log_wsgi_app._endpoints[_LOG_FETCH_ENDPOINT]
+
+        rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         self._actor_proxy = ActorProxy(self._service._db)
 
         @requires_auth
         async def _proxy_actor_rpc(request: Request) -> Response:
             return await self._actor_proxy.handle(request)
-
-        @requires_auth
-        async def _fetch_logs_compat(request: Request) -> JSONResponse:
-            """Backward-compat proxy: old clients POST to ControllerService/FetchLogs."""
-            body = await request.json()
-            req = ParseDict(body, logging_pb2.FetchLogsRequest())
-            resp = self._log_service.fetch_logs(req, None)
-            return JSONResponse(MessageToDict(resp, preserving_proto_field_name=True))
 
         routes = [
             Route("/", self._dashboard),
@@ -296,7 +295,6 @@ class ControllerDashboard:
             Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
             Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
-            Route("/iris.cluster.ControllerService/FetchLogs", _fetch_logs_compat, methods=["POST"]),
             Mount(log_wsgi_app.path, app=log_app),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
