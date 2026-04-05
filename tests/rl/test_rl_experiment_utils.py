@@ -48,6 +48,11 @@ def _noop(_config: _EmptyConfig) -> None:
     return None
 
 
+@pytest.fixture(autouse=True)
+def _default_launcher_region(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+
+
 def _test_config(
     *,
     train_tpu_type: str,
