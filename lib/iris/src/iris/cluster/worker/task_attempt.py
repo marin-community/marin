@@ -900,6 +900,15 @@ class TaskAttempt:
             return
         self.cleanup_done = True
 
+        # Flush buffered log entries so they reach the server before the task
+        # is reported as complete. The pusher is shared across tasks so we
+        # flush rather than close.
+        if self._log_pusher is not None:
+            try:
+                self._log_pusher.flush()
+            except Exception as e:
+                logger.debug("Failed to flush logs for task %s: %s", self.task_id, e)
+
         # Clean up container handle (logs already captured in monitor loop)
         if self._container_handle:
             try:
