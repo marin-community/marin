@@ -234,6 +234,13 @@ class GBNFAdapter(Adapter):
 
     @staticmethod
     def _coerce(value: str, annotation: Any) -> Any:
+        # Unwrap Optional / Union — use the first non-None type
+        origin = get_origin(annotation)
+        if origin in (Union, UnionType):
+            non_none = [a for a in get_args(annotation) if a is not type(None)]
+            if non_none:
+                return GBNFAdapter._coerce(value, non_none[0])
+
         if annotation is bool:
             v_lower = value.lower().strip()
             if v_lower == "true":
