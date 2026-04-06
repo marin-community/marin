@@ -429,8 +429,9 @@ def consolidate_shard_caches(
 
     logger.info(f"Consolidating {len(shard_cache_paths)} shard caches into {output_path}")
 
-    first_cache = TreeStore.open(exemplar, shard_cache_paths[0], mode="r", cache_metadata=True)
-    data_offset_tree = jax.tree.map(lambda x: 0, first_cache.tree)
+    with _no_cache_read_context():
+        first_cache = TreeStore.open(exemplar, shard_cache_paths[0], mode="r", cache_metadata=True)
+        data_offset_tree = jax.tree.map(lambda x: 0, first_cache.tree)
 
     shard_info: list[dict] = []
     total_rows = 0
@@ -635,7 +636,8 @@ async def _consolidate_metadata(dest_path: str, exemplar: dict, shard_infos: lis
         try:
             async with ts.Transaction() as txn:
                 for info in shard_infos:
-                    source = TreeStore.open(exemplar, info["path"], mode="r", cache_metadata=True)
+                    with _no_cache_read_context():
+                        source = TreeStore.open(exemplar, info["path"], mode="r", cache_metadata=True)
                     source_num_rows = info["ledger"].total_num_rows
                     row_offset = info["row_offset"]
 
