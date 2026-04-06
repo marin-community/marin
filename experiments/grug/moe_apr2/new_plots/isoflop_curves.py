@@ -170,7 +170,7 @@ def main():
             continue
         by_budget.setdefault(r["budget"], []).append(r)
 
-    target_budgets = [1e18, 3e18, 1e19]
+    target_budgets = [1e18, 3e18, 1e19, 3e19]
     colors = {1e18: "C0", 3e18: "C1", 1e19: "C2", 3e19: "C3", 1e20: "C4"}
 
     # ---- Plot 1: IsoFLOP curves (BPB vs active params) ----

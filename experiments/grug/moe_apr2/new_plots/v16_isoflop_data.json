@@ -105,13 +105,6 @@
     "name": "isoflop-moe-v16-1e+19-d768"
   },
   {
-    "budget": 3e+18,
-    "dim": 1024,
-    "bpb": 1.0135109424591064,
-    "macro_loss": 3.3475966453552246,
-    "name": "isoflop-moe-v16-3e+18-d1024"
-  },
-  {
     "budget": 3e+19,
     "dim": 1024,
     "bpb": 0.9157812595367432,
@@ -120,8 +113,36 @@
   },
   {
     "budget": 3e+18,
+    "dim": 1024,
+    "bpb": 1.0135109424591064,
+    "macro_loss": 3.3475966453552246,
+    "name": "isoflop-moe-v16-3e+18-d1024"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 768,
+    "bpb": 0.9454101324081421,
+    "macro_loss": 3.114365577697754,
+    "name": "isoflop-moe-v16-3e+19-d768"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 2048,
+    "bpb": 0.9298531413078308,
+    "macro_loss": 3.070441722869873,
+    "name": "isoflop-moe-v16-3e+19-d2048"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 1280,
+    "bpb": 0.9118062257766724,
+    "macro_loss": 3.0079565048217773,
+    "name": "isoflop-moe-v16-3e+19-d1280"
+  },
+  {
+    "budget": 3e+18,
     "dim": 1536,
-    "bpb": 1.0562198162078857,
+    "bpb": 1.0562198162078855,
     "macro_loss": 3.509922504425049,
     "name": "isoflop-moe-v16-3e+18-d1536"
   },
@@ -129,7 +150,7 @@
     "budget": 3e+18,
     "dim": 1792,
     "bpb": 1.0867712497711182,
-    "macro_loss": 3.6189963817596436,
+    "macro_loss": 3.618996381759643,
     "name": "isoflop-moe-v16-3e+18-d1792"
   },
   {
@@ -147,11 +168,25 @@
     "name": "isoflop-moe-v16-1e+18-d1792"
   },
   {
+    "budget": 3e+19,
+    "dim": 896,
+    "bpb": 0.9253579378128052,
+    "macro_loss": 3.051757335662842,
+    "name": "isoflop-moe-v16-3e+19-d896"
+  },
+  {
     "budget": 1e+19,
     "dim": 640,
     "bpb": 0.9850262403488159,
     "macro_loss": 3.2483696937561035,
     "name": "isoflop-moe-v16-1e+19-d640"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 896,
+    "bpb": 1.0121777057647705,
+    "macro_loss": 3.3458549976348877,
+    "name": "isoflop-moe-v16-3e+18-d896"
   },
   {
     "budget": 1e+18,
@@ -161,18 +196,18 @@
     "name": "isoflop-moe-v16-1e+18-d896"
   },
   {
-    "budget": 1e+19,
-    "dim": 896,
-    "bpb": 0.9592800140380859,
-    "macro_loss": 3.164015769958496,
-    "name": "isoflop-moe-v16-1e+19-d896"
+    "budget": 3e+19,
+    "dim": 640,
+    "bpb": 0.9616966247558594,
+    "macro_loss": 3.1705727577209473,
+    "name": "isoflop-moe-v16-3e+19-d640"
   },
   {
-    "budget": 3e+18,
+    "budget": 1e+19,
     "dim": 896,
-    "bpb": 1.0121777057647705,
-    "macro_loss": 3.3458549976348877,
-    "name": "isoflop-moe-v16-3e+18-d896"
+    "bpb": 0.959280014038086,
+    "macro_loss": 3.164015769958496,
+    "name": "isoflop-moe-v16-1e+19-d896"
   },
   {
     "budget": 1e+18,
