@@ -470,21 +470,22 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
-        pending_qb_betas: jax.Array | None = None
+        # pending_qb_betas: jax.Array | None = None  # QB disabled for crash test
 
         # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
-                # QB: apply router bias updates from previous step (on host).
-                if pending_qb_betas is not None:
-                    state = dataclasses.replace(
-                        state,
-                        params=_apply_qb_betas(state.params, pending_qb_betas),
-                        ema_params=(
-                            _apply_qb_betas(state.ema_params, pending_qb_betas) if state.ema_params is not None else None
-                        ),
-                    )
-                    pending_qb_betas = None
+                # QB disabled for crash test
+                # if pending_qb_betas is not None:
+                #     state = dataclasses.replace(
+                #         state,
+                #         params=_apply_qb_betas(state.params, pending_qb_betas),
+                #         ema_params=(
+                #             _apply_qb_betas(state.ema_params, pending_qb_betas) if state.ema_params is not None else None
+                #         ),
+                #     )
+                #     pending_qb_betas = None
+                pass
 
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
@@ -498,7 +499,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
-                pending_qb_betas = metrics["qb_beta_per_layer"]
+                # pending_qb_betas = metrics["qb_beta_per_layer"]  # QB disabled for crash test
 
                 if jnp.isnan(metrics["train/loss"]):
                     logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
@@ -528,9 +529,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
-                # if checkpointer is not None:
-                #     checkpointer.on_step(tree=state, step=int(state.step))
-                pass
+                if checkpointer is not None:
+                    checkpointer.on_step(tree=state, step=int(state.step))
+
+                if int(state.step) >= 1005:
+                    raise RuntimeError("Crash test: forced failure after step 1005")
         except BaseException:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"

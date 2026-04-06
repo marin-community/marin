@@ -787,21 +787,51 @@ def create_d640_d896_sweep() -> list[ExecutorStep]:
 d640_d896_steps = create_d640_d896_sweep()
 
 
+def create_minimal_crash_test() -> list[ExecutorStep]:
+    """Single d256 MoE run for checkpoint resume crash reproduction."""
+    hidden_dim = 256
+    batch_size = 16
+    train_steps = 2000
+    tokens = batch_size * SEQ_LEN * train_steps
+
+    model_cfg = HEURISTIC.build_model_config(hidden_dim)
+
+    from levanter.optim.config import AdamConfig
+
+    optimizer = AdamConfig(learning_rate=1e-3, weight_decay=0.1, warmup=0.1)
+
+    run_id = "crash-test-rms-blocks-adamw-d256"
+    config = GrugMoeLaunchConfig(
+        model=versioned(model_cfg),
+        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        output_path=this_output_path(),
+        run_id=run_id,
+        resources=versioned(ResourceConfig.with_tpu("v4-32")),
+        steps=versioned(train_steps),
+        batch_size=versioned(batch_size),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["grug", "moe-core", "crash-test", "d=256"],
+            group="crash-test",
+            name=run_id,
+        ),
+        optimizer=versioned(optimizer),
+        grug_trainer=versioned(
+            GrugTrainerConfig(
+                z_loss_weight=HEURISTIC.z_loss_weight,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=None,
+    )
+    return [ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config)]
+
+
 if __name__ == "__main__":
-    crashed = [
-        s
-        for s in moe_isoflop_steps
-        if s.config.run_id
-        in [
-            "isoflop-moe-v16-3e+19-d1536",
-            "isoflop-moe-v16-3e+19-d1792",
-            "isoflop-moe-v16-1e+20-d896",
-            "isoflop-moe-v16-1e+20-d1280",
-            "isoflop-moe-v16-1e+20-d1792",
-            "isoflop-moe-v16-1e+20-d2048",
-        ]
-    ]
     executor_main(
-        steps=crashed,
-        description="v16: resubmit 6 crashed runs (checkpointing disabled)",
+        steps=create_minimal_crash_test(),
+        description="d256 MoE crash test with checkpointing enabled",
     )

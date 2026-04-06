@@ -401,30 +401,14 @@ class MoEMLP(eqx.Module):
 
 
 class Block(eqx.Module):
-    rms_attn: RMSNorm
-    attn_gated_norm: GatedNorm
-    attn: CausalSelfAttention
     rms_mlp: RMSNorm
-    mlp_gated_norm: GatedNorm
-    mlp: MoEMLP
-    shared: DenseMLP | None
+    cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
-        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
-        shared = None
-        if cfg.shared_expert_intermediate_dim > 0:
-            shared = DenseMLP.init(
-                cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
-            )
         return Block(
-            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
-            attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
-            mlp=MoEMLP.init(cfg, key=mlp_key),
-            shared=shared,
+            cfg=cfg,
         )
 
     @named_call
@@ -433,13 +417,15 @@ class Block(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask)
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
-        if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
-        x = x + mlp_out
+        x = x + self.rms_mlp(x)
+        dummy = jnp.zeros(())
+        router_stats = {
+            "routing_entropy": dummy,
+            "routing_counts": jnp.zeros((self.cfg.num_experts,)),
+            "load_balancing_loss": dummy,
+            "router_z_loss": dummy,
+            "qb_beta": jnp.zeros((self.cfg.num_experts,)),
+        }
         return x, router_stats
 
 
@@ -486,14 +472,9 @@ class Transformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
-        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
-        long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
-
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
-            layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            hidden, router_stats = block(hidden, mask)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
