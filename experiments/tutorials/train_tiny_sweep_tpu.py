@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-This is a tutorial script demonstrating how to perform a hyperparameter sweep
-while training a tiny model on the TinyStories dataset using TPU hardware.
+Minimal repro for lm-eval failure on multi-host TPU (v4-32).
+
+Trains a tiny Llama 30M on SlimPajama 6B for 20 steps with CORE_TASKS
+eval at step 10 and 20.  The v4-32 forces a multi-host TPU slice where
+the eval harness breaks.
 """
 import dataclasses
 
@@ -16,47 +19,30 @@ from experiments.llama import llama_30m
 from experiments.pretraining_datasets.simple import tokenized
 from experiments.simple_train_config import SimpleTrainConfig
 
-RESOURCES = ResourceConfig.with_tpu("v4-8")
-EVALS = CORE_TASKS
+RESOURCES = ResourceConfig.with_tpu("v4-32")
+
+# Point at pre-existing tokenized SlimPajama-6B in us-central2
+slimpajama_tokenized = tokenized["slimpajama_6b"].with_output_path("tokenized/SlimPajama-6B-499d45")
 
 small_train_config = SimpleTrainConfig(
-    # Here we define the hardware resources we need.
     resources=RESOURCES,
     train_batch_size=128,
-    num_train_steps=10000,
-    # set hyperparameters
+    num_train_steps=20,
     learning_rate=6e-4,
     weight_decay=0.1,
+    steps_per_eval=10,
+    steps_per_task_eval=10,
+    steps_per_export=20,
 )
 
-sweep_configs = [
-    dataclasses.replace(
-        small_train_config,
-        learning_rate=lr,
-        weight_decay=wd,
-    )
-    for lr in [3e-4, 6e-4, 1e-3]
-    for wd in [0.0, 0.1, 0.2]
-]
-
-# 4. Define an lr sweep
-runs = []
-
-for config in sweep_configs:
-    # 5. Train the model
-    lr, wd = config.learning_rate, config.weight_decay
-    run = default_train(
-        # Marin will automatically create unique ids for runs b/c the model_config is versioned
-        # however, we can give each run a unique name for easier identification
-        name=f"tutorial-slimpajama_6b-30m-sweep-lr{lr}-wd{wd}",
-        tokenized=tokenized["slimpajama_6b"],
-        model_config=versioned(llama_30m),
-        train_config=config,
-        # wandb tags
-        tags=["llama", "30m", "slimpajama_6b", "tutorial", "sweep", "test20251117"],
-        eval_harness_tasks=CORE_TASKS,
-    )
-    runs.append(run)
+run = default_train(
+    name="repro-lm-eval-multi-host-tpu",
+    tokenized=slimpajama_tokenized,
+    model_config=versioned(llama_30m),
+    train_config=small_train_config,
+    tags=["llama", "30m", "slimpajama_6b", "lm-eval-bug-repro"],
+    eval_harness_tasks=CORE_TASKS,
+)
 
 if __name__ == "__main__":
-    executor_main(steps=runs)
+    executor_main(steps=[run])
