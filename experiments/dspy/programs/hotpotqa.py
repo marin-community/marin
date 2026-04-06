@@ -7,7 +7,7 @@ class HotpotQA(dspy.Module):
         self.search = search
         self.num_docs = num_docs
         self.num_hops = num_hops
-        self.generate_query = [dspy.ChainOfThought("context, question -> search_query") for _ in range(num_hops)]
+        self.generate_query = dspy.ChainOfThought("context, question -> search_query")
         self.generate_answer = dspy.ChainOfThought("context, question -> answer")
 
     def forward(self, question: str) -> dspy.Prediction:
@@ -15,7 +15,7 @@ class HotpotQA(dspy.Module):
         hop_traces = []
 
         for hop_idx in range(self.num_hops):
-            query = self.generate_query[hop_idx](context=context, question=question).search_query
+            query = self.generate_query(context=context, question=question).search_query
             passages = self.search(query, k=self.num_docs)
             context = deduplicate(context + list(passages))
 
