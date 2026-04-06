@@ -34,7 +34,7 @@ class LogPusher:
         server_url: str,
         timeout_ms: int = 10_000,
         batch_size: int = 1000,
-        flush_interval: float = 1.0,
+        flush_interval: float = 5.0,
     ) -> None:
         self._client = LogServiceClientSync(address=server_url, timeout_ms=timeout_ms)
         self._batch_size = batch_size
@@ -60,6 +60,7 @@ class LogPusher:
     def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
         if not entries:
             return
+        to_send: list[logging_pb2.LogEntry] | None = None
         with self._lock:
             buf = self._buffers.get(key)
             if buf is None:
@@ -67,23 +68,22 @@ class LogPusher:
                 self._buffers[key] = buf
             buf.extend(entries)
             if len(buf) >= self._batch_size:
-                self._flush_key_locked(key)
+                to_send = self._buffers.pop(key, None)
+        if to_send:
+            self._send(key, to_send)
 
-    def _flush_key_locked(self, key: str) -> None:
-        """Flush a single key's buffer. Caller must hold self._lock."""
-        entries = self._buffers.pop(key, None)
-        if not entries:
-            return
+    def _flush_all(self) -> None:
+        with self._lock:
+            snapshot = self._buffers
+            self._buffers = {}
+        for key, entries in snapshot.items():
+            self._send(key, entries)
+
+    def _send(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
         try:
             self._client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
         except Exception:
             logger.debug("Failed to push %d log entries for key %s", len(entries), key, exc_info=True)
-
-    def _flush_all(self) -> None:
-        with self._lock:
-            keys = list(self._buffers.keys())
-            for key in keys:
-                self._flush_key_locked(key)
 
     def flush(self) -> None:
         """Force-flush all buffered entries."""

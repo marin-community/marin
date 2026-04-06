@@ -106,7 +106,7 @@ def test_log_pusher_buffers_and_flushes():
     sent: list[tuple[str, int]] = []
 
     class RecordingPusher(LogPusher):
-        """Override _flush_key_locked to record without RPC."""
+        """Override _send to record without RPC."""
 
         def __init__(self):
             # Skip real __init__ to avoid RPC client setup.
@@ -117,10 +117,8 @@ def test_log_pusher_buffers_and_flushes():
             self._closed = False
             self._flush_timer = None
 
-        def _flush_key_locked(self, key: str) -> None:
-            entries = self._buffers.pop(key, None)
-            if entries:
-                sent.append((key, len(entries)))
+        def _send(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
+            sent.append((key, len(entries)))
 
     pusher = RecordingPusher()
 
@@ -150,10 +148,8 @@ def test_log_pusher_flushes_at_batch_size():
             self._closed = False
             self._flush_timer = None
 
-        def _flush_key_locked(self, key: str) -> None:
-            entries = self._buffers.pop(key, None)
-            if entries:
-                sent.append((key, len(entries)))
+        def _send(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
+            sent.append((key, len(entries)))
 
     pusher = RecordingPusher()
     entry = logging_pb2.LogEntry(source="test", data="line")
