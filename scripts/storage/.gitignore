@@ -1,3 +1,5 @@
+*.duckdb.tmp
 *.duckdb
 *.sqlite3
 *.parquet
+*.wal

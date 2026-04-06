@@ -87,9 +87,11 @@ export async function recalculateProtectRules() {
 }
 
 // Unified explorer
-export async function fetchUnifiedExplore(prefix = '') {
+export async function fetchUnifiedExplore(prefix = '', bucket = '', storageClass = '') {
   const params = new URLSearchParams()
   if (prefix) params.set('prefix', prefix)
+  if (bucket) params.set('bucket', bucket)
+  if (storageClass) params.set('storage_class', storageClass)
   return fetchJSON(`/api/explore/unified?${params}`)
 }
 

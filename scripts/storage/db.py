@@ -98,6 +98,11 @@ NON_STANDARD_STORAGE_CLASSES = frozenset({"NEARLINE", "COLDLINE", "ARCHIVE"})
 
 SOFT_DELETE_RETENTION_SECONDS = 3 * 24 * 3600  # 3 days
 
+# dir_summary collapse thresholds: dirs deeper than this with less than
+# DIR_SUMMARY_MIN_BYTES are rolled up into their depth-2 ancestor.
+DIR_SUMMARY_MIN_DEPTH = 2
+DIR_SUMMARY_MIN_BYTES = 1_000_000_000  # 1 GB
+
 GCS_MAX_PAGE_SIZE = 5000
 
 # Partial response fields for list_blobs — only fetch what _blob_to_scanned needs.
@@ -891,6 +896,10 @@ def read_split_cache(cache: dict[str, list[str]], bucket_name: str, prefix: str)
 def materialize_dir_summary(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog = DEFAULT_CATALOG) -> int:
     """Aggregate objects into per-directory rows with per-storage-class columns.
 
+    Directories deeper than DIR_SUMMARY_MIN_DEPTH with fewer than
+    DIR_SUMMARY_MIN_BYTES total bytes are rolled up into their
+    depth-MIN_DEPTH ancestor to keep the row count manageable.
+
     Returns total rows written.
     """
     buf = DirSummaryBuffer(catalog.dir_summary_parquet_dir, conn)
@@ -901,8 +910,10 @@ def materialize_dir_summary(conn: duckdb.DuckDBPyConnection, catalog: StorageCat
 
         print_summary(f"  materializing dir_summary for {bucket_name}...")
 
-        result = conn.execute(
+        # Pass 1: fine-grained per-directory aggregation
+        conn.execute(
             """
+            CREATE OR REPLACE TEMPORARY TABLE _raw_dir_summary AS
             SELECT o.bucket,
                    left(o.name, length(o.name) - position('/' in reverse(o.name)) + 1) as dir_prefix,
                    COUNT(*) FILTER (WHERE sc.name = 'STANDARD') as standard_count,
@@ -921,9 +932,50 @@ def materialize_dir_summary(conn: duckdb.DuckDBPyConnection, catalog: StorageCat
             (bucket_name,),
         )
 
+        # Pass 2: collapse small deep dirs into their depth-N ancestor
+        min_depth = DIR_SUMMARY_MIN_DEPTH
+        min_bytes = DIR_SUMMARY_MIN_BYTES
+        result = conn.execute(
+            f"""
+            WITH annotated AS (
+                SELECT *,
+                    (standard_bytes + nearline_bytes + coldline_bytes + archive_bytes) as total_bytes,
+                    len(string_split(dir_prefix, '/')) - 1 as depth
+                FROM _raw_dir_summary
+            ),
+            kept AS (
+                SELECT bucket, dir_prefix,
+                       standard_count, standard_bytes, nearline_count, nearline_bytes,
+                       coldline_count, coldline_bytes, archive_count, archive_bytes
+                FROM annotated
+                WHERE depth <= {min_depth} OR total_bytes >= {min_bytes}
+            ),
+            collapsed AS (
+                SELECT bucket,
+                       array_to_string(string_split(dir_prefix, '/')[1:{min_depth + 1}], '/') || '/' as dir_prefix,
+                       SUM(standard_count) as standard_count, SUM(standard_bytes) as standard_bytes,
+                       SUM(nearline_count) as nearline_count, SUM(nearline_bytes) as nearline_bytes,
+                       SUM(coldline_count) as coldline_count, SUM(coldline_bytes) as coldline_bytes,
+                       SUM(archive_count) as archive_count, SUM(archive_bytes) as archive_bytes
+                FROM annotated
+                WHERE depth > {min_depth} AND total_bytes < {min_bytes}
+                GROUP BY bucket, dir_prefix
+            )
+            SELECT bucket, dir_prefix,
+                   SUM(standard_count) as standard_count, SUM(standard_bytes) as standard_bytes,
+                   SUM(nearline_count) as nearline_count, SUM(nearline_bytes) as nearline_bytes,
+                   SUM(coldline_count) as coldline_count, SUM(coldline_bytes) as coldline_bytes,
+                   SUM(archive_count) as archive_count, SUM(archive_bytes) as archive_bytes
+            FROM (SELECT * FROM kept UNION ALL SELECT * FROM collapsed)
+            GROUP BY bucket, dir_prefix
+            """
+        )
+
         arrow_table = result.fetch_arrow_table()
         if len(arrow_table) > 0:
             buf.write_arrow_table(arrow_table)
+
+        conn.execute("DROP TABLE IF EXISTS _raw_dir_summary")
 
     total = _fetchone_dict(conn.execute("SELECT COUNT(*) as cnt FROM dir_summary"))
     return int(total["cnt"])

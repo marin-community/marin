@@ -462,6 +462,162 @@ def test_unified_explore_broad_delete_narrow_protect(client):
 
 
 # ---------------------------------------------------------------------------
+# /api/explore/unified — bucket filter
+# ---------------------------------------------------------------------------
+
+
+def test_unified_explore_bucket_filter_limits_to_bucket(client):
+    """Filtering by bucket returns only entries present in that bucket."""
+    resp = client.get("/api/explore/unified?bucket=marin-us-central1")
+    names = {e["name"] for e in resp.json()["entries"]}
+    assert "data/" in names, "data/training/ exists only in us-central1"
+    assert "tmp/" in names, "tmp/scratch/ exists only in us-central1"
+
+    resp2 = client.get("/api/explore/unified?bucket=marin-eu-west4")
+    names2 = {e["name"] for e in resp2.json()["entries"]}
+    assert "data/" not in names2, "data/ should not appear in eu-west4"
+    assert "tmp/" not in names2, "tmp/ should not appear in eu-west4"
+    assert "checkpoints/" in names2
+
+
+def test_unified_explore_bucket_filter_exact_pricing(client):
+    """Bucket-specific queries use exact region pricing, not averaged."""
+    resp_us = client.get("/api/explore/unified?bucket=marin-us-central1")
+    resp_eu = client.get("/api/explore/unified?bucket=marin-eu-west4")
+
+    # checkpoints/exp1/ exists in both buckets — EU pricing is higher per GiB
+    ckpt_us = next(e for e in resp_us.json()["entries"] if e["name"] == "checkpoints/")
+    ckpt_eu = next(e for e in resp_eu.json()["entries"] if e["name"] == "checkpoints/")
+
+    # EU has higher per-GiB prices for all storage classes, but the EU bucket
+    # has fewer bytes. Verify both return valid costs > 0.
+    assert ckpt_us["monthly_cost_usd"] > 0
+    assert ckpt_eu["monthly_cost_usd"] > 0
+
+
+def test_unified_explore_per_bucket_status_no_cross_bucket_mixed(client):
+    """Protect checkpoints only in us-central1 + delete checkpoints everywhere.
+
+    Without bucket filter this shows 'mixed' (protected in one bucket, deleted
+    in another). With bucket filter, each bucket is cleanly keep or delete.
+    """
+    client.post("/api/rules", json={"bucket": "marin-us-central1", "pattern": "checkpoints/%"})
+    client.post("/api/delete-rules", json={"pattern": "checkpoints/%"})
+
+    # Per-bucket: us-central1 is protected → keep
+    resp_us = client.get("/api/explore/unified?bucket=marin-us-central1")
+    ckpt_us = next(e for e in resp_us.json()["entries"] if e["name"] == "checkpoints/")
+    assert ckpt_us["status"] == "keep"
+
+    # Per-bucket: eu-west4 is not protected → delete
+    resp_eu = client.get("/api/explore/unified?bucket=marin-eu-west4")
+    ckpt_eu = next(e for e in resp_eu.json()["entries"] if e["name"] == "checkpoints/")
+    assert ckpt_eu["status"] == "delete"
+
+    # All-buckets: aggregates cross-bucket → mixed
+    resp_all = client.get("/api/explore/unified")
+    ckpt_all = next(e for e in resp_all.json()["entries"] if e["name"] == "checkpoints/")
+    assert ckpt_all["status"] == "mixed"
+
+
+# ---------------------------------------------------------------------------
+# /api/explore/unified — storage class filter
+# ---------------------------------------------------------------------------
+
+
+def test_unified_explore_storage_class_filter_limits_columns(client):
+    """When filtering by storage class, only that class's bytes appear."""
+    resp = client.get("/api/explore/unified?bucket=marin-us-central1&storage_class=STANDARD")
+    entries = resp.json()["entries"]
+    for entry in entries:
+        # by_storage_class should only contain STANDARD
+        classes = {sc["class"] for sc in entry.get("by_storage_class", [])}
+        assert classes <= {"STANDARD"}, f"Expected only STANDARD, got {classes}"
+
+
+def test_unified_explore_storage_class_filter_resolves_mixed(client):
+    """Delete only ARCHIVE. With all classes → mixed. With class=ARCHIVE → delete."""
+    client.post("/api/delete-rules", json={"pattern": "checkpoints/%", "storage_class": "ARCHIVE"})
+
+    # No class filter: checkpoints has STANDARD + ARCHIVE, only ARCHIVE deleted → mixed
+    resp_all = client.get("/api/explore/unified?bucket=marin-us-central1")
+    ckpt = next(e for e in resp_all.json()["entries"] if e["name"] == "checkpoints/")
+    assert ckpt["status"] == "mixed"
+
+    # Class filter = ARCHIVE: all ARCHIVE bytes are deleted → delete
+    resp_ar = client.get("/api/explore/unified?bucket=marin-us-central1&storage_class=ARCHIVE")
+    ckpt_ar = next(e for e in resp_ar.json()["entries"] if e["name"] == "checkpoints/")
+    assert ckpt_ar["status"] == "delete"
+
+    # Class filter = STANDARD: no delete rule targets STANDARD → unmatched
+    resp_std = client.get("/api/explore/unified?bucket=marin-us-central1&storage_class=STANDARD")
+    ckpt_std = next(e for e in resp_std.json()["entries"] if e["name"] == "checkpoints/")
+    assert ckpt_std["status"] == "unmatched"
+
+
+# ---------------------------------------------------------------------------
+# /api/explore/unified — kept_cost and bucketed status collapsing
+# ---------------------------------------------------------------------------
+
+
+def test_unified_explore_children_have_kept_cost(client):
+    """Children (TLD) entries include a kept_cost field."""
+    resp = client.get("/api/explore/unified")
+    data = resp.json()
+    assert data["type"] == "children"
+    for entry in data["entries"]:
+        assert "kept_cost" in entry
+        assert entry["kept_cost"] >= 0
+
+
+def test_unified_explore_kept_cost_reflects_deletions(client):
+    """kept_cost < total cost when part of the data is marked for deletion."""
+    client.post("/api/delete-rules", json={"pattern": "checkpoints/%"})
+
+    resp = client.get("/api/explore/unified")
+    ckpt = next(e for e in resp.json()["entries"] if e["name"] == "checkpoints/")
+    assert ckpt["status"] == "delete"
+    assert ckpt["kept_cost"] == 0.0
+
+
+def test_unified_explore_kept_cost_equals_total_when_all_kept(client):
+    """When nothing is deleted, kept_cost should equal monthly_cost_usd."""
+    client.post("/api/rules", json={"bucket": "*", "pattern": "data/%"})
+
+    resp = client.get("/api/explore/unified")
+    data_entry = next(e for e in resp.json()["entries"] if e["name"] == "data/")
+    assert data_entry["status"] == "keep"
+    assert data_entry["kept_cost"] == data_entry["monthly_cost_usd"]
+
+
+def test_unified_explore_bucketed_only_keep_delete(client):
+    """Bucketed entries should only have 'keep' or 'delete' status, not 'mixed'
+    or 'unmatched'. Mixed/unmatched are collapsed to 'keep'."""
+    client.post("/api/delete-rules", json={"pattern": "tmp/%"})
+
+    resp = client.get("/api/explore/unified?max_children=1")
+    data = resp.json()
+    assert data["type"] == "buckets"
+    for entry in data["entries"]:
+        assert entry["status"] in (
+            "keep",
+            "delete",
+        ), f"Bucketed entry has status '{entry['status']}', expected 'keep' or 'delete'"
+
+
+def test_unified_explore_bucketed_mixed_collapses_to_keep(client):
+    """A storage-class-specific delete (creating 'mixed') should collapse to
+    'keep' in the bucketed view."""
+    client.post("/api/delete-rules", json={"pattern": "%", "storage_class": "ARCHIVE"})
+
+    resp = client.get("/api/explore/unified?max_children=1")
+    data = resp.json()
+    assert data["type"] == "buckets"
+    for entry in data["entries"]:
+        assert entry["status"] in ("keep", "delete")
+
+
+# ---------------------------------------------------------------------------
 # /api/savings
 # ---------------------------------------------------------------------------
 

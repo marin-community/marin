@@ -105,19 +105,20 @@ STATUS_ORDER = {"delete": 0, "mixed": 1, "keep": 2, "unmatched": 3}
 
 
 def _materialize_dir_status(conn: duckdb.DuckDBPyConnection) -> int:
-    """Build a temp table with per-dir_prefix deletion status.
+    """Build a temp table with per-(bucket, dir_prefix) deletion status.
 
     Uses rule-driven joins: iterates the small rules tables and joins into
     dir_summary, rather than running correlated EXISTS for each of the 16M+
     dir_summary rows.
 
     Phase 1: Join protect_rules → dir_summary to find protected (bucket, dir_prefix) pairs.
-    Phase 2: Join delete_rules → dir_summary (excluding protected) to compute deletable bytes.
-    Phase 3: Aggregate cross-bucket into one status per dir_prefix.
+    Phase 2: Join delete_rules → dir_summary (excluding protected) to compute deletable bytes
+             and assign per-(bucket, dir_prefix) status. No cross-bucket aggregation.
+
+    _protected_dirs is kept alive for on-the-fly storage-class-filtered status queries.
     """
     conn.execute("DROP TABLE IF EXISTS _dir_status_mem")
     conn.execute("DROP TABLE IF EXISTS _protected_dirs")
-    conn.execute("DROP TABLE IF EXISTS _per_dir_status")
 
     # Phase 1: protected dir_prefixes (driven by ~461 protect_rules, not 16M rows)
     conn.execute(
@@ -131,11 +132,12 @@ def _materialize_dir_status(conn: duckdb.DuckDBPyConnection) -> int:
         """
     )
 
-    # Phase 2: per-row status with delete bytes, using _protected_dirs as a filter
+    # Phase 2: per-(bucket, dir_prefix) status — no cross-bucket aggregation
     conn.execute(
         """
-        CREATE TEMPORARY TABLE _per_dir_status AS
+        CREATE TEMPORARY TABLE _dir_status_mem AS
         SELECT
+            d.bucket,
             d.dir_prefix,
             d.standard_bytes + d.nearline_bytes
                 + d.coldline_bytes + d.archive_bytes AS total_bytes,
@@ -146,7 +148,16 @@ def _materialize_dir_status(conn: duckdb.DuckDBPyConnection) -> int:
             END AS protect_bytes,
             CASE WHEN pd.dir_prefix IS NOT NULL THEN 0 ELSE
                 COALESCE(del.delete_bytes, 0)
-            END AS delete_bytes
+            END AS delete_bytes,
+            CASE
+                WHEN d.standard_bytes + d.nearline_bytes
+                     + d.coldline_bytes + d.archive_bytes = 0 THEN 'unmatched'
+                WHEN pd.dir_prefix IS NOT NULL THEN 'keep'
+                WHEN COALESCE(del.delete_bytes, 0) >= d.standard_bytes + d.nearline_bytes
+                     + d.coldline_bytes + d.archive_bytes THEN 'delete'
+                WHEN COALESCE(del.delete_bytes, 0) > 0 THEN 'mixed'
+                ELSE 'unmatched'
+            END AS status
         FROM dir_summary d
         LEFT JOIN _protected_dirs pd
             ON pd.bucket = d.bucket AND pd.dir_prefix = d.dir_prefix
@@ -172,30 +183,6 @@ def _materialize_dir_status(conn: duckdb.DuckDBPyConnection) -> int:
         """
     )
 
-    # Phase 3: aggregate cross-bucket → one status per dir_prefix
-    conn.execute(
-        """
-        CREATE TEMPORARY TABLE _dir_status_mem AS
-        SELECT
-            dir_prefix,
-            SUM(total_bytes) AS total_bytes,
-            SUM(protect_bytes) AS protect_bytes,
-            SUM(delete_bytes) AS delete_bytes,
-            CASE
-                WHEN SUM(total_bytes) = 0 THEN 'unmatched'
-                WHEN SUM(delete_bytes) >= SUM(total_bytes) THEN 'delete'
-                WHEN SUM(delete_bytes) > 0 THEN 'mixed'
-                WHEN SUM(protect_bytes) > 0 THEN 'keep'
-                ELSE 'unmatched'
-            END AS status
-        FROM _per_dir_status
-        GROUP BY dir_prefix
-        """
-    )
-
-    conn.execute("DROP TABLE IF EXISTS _per_dir_status")
-    conn.execute("DROP TABLE IF EXISTS _protected_dirs")
-
     row = conn.execute("SELECT COUNT(*) FROM _dir_status_mem").fetchone()
     count = row[0] if row else 0
     log.info("materialized %d dir_status rows", count)
@@ -206,23 +193,21 @@ def _update_dir_status_for_patterns(conn: duckdb.DuckDBPyConnection, patterns: l
     """Incrementally recompute dir_status rows affected by the given LIKE patterns.
 
     Deletes existing status rows matching any pattern, then recomputes just
-    those dir_prefixes. Much faster than full rematerialization for single-rule changes.
+    those (bucket, dir_prefix) pairs. Much faster than full rematerialization.
     """
     if not patterns:
         return
 
-    # Delete affected rows from the materialized table
     where_clauses = " OR ".join("dir_prefix LIKE ?" for _ in patterns)
     conn.execute(f"DELETE FROM _dir_status_mem WHERE {where_clauses}", tuple(patterns))
 
-    # Find affected dir_prefixes and recompute their status
+    # Also refresh _protected_dirs for affected prefixes
+    conn.execute(f"DELETE FROM _protected_dirs WHERE {where_clauses}", tuple(patterns))
     dir_where = " OR ".join("d.dir_prefix LIKE ?" for _ in patterns)
     params = tuple(patterns)
-
-    conn.execute("DROP TABLE IF EXISTS _incr_protected")
     conn.execute(
         f"""
-        CREATE TEMPORARY TABLE _incr_protected AS
+        INSERT INTO _protected_dirs
         SELECT DISTINCT d.bucket, d.dir_prefix
         FROM protect_rules p
         JOIN dir_summary d
@@ -235,64 +220,57 @@ def _update_dir_status_for_patterns(conn: duckdb.DuckDBPyConnection, patterns: l
 
     conn.execute(
         f"""
-        INSERT INTO _dir_status_mem (dir_prefix, total_bytes, protect_bytes, delete_bytes, status)
-        WITH per_dir AS (
-            SELECT
-                d.dir_prefix,
-                d.standard_bytes + d.nearline_bytes
-                    + d.coldline_bytes + d.archive_bytes AS total_bytes,
-                CASE WHEN pd.dir_prefix IS NOT NULL
-                    THEN d.standard_bytes + d.nearline_bytes
-                         + d.coldline_bytes + d.archive_bytes
-                    ELSE 0
-                END AS protect_bytes,
-                CASE WHEN pd.dir_prefix IS NOT NULL THEN 0 ELSE
-                    COALESCE(del.delete_bytes, 0)
-                END AS delete_bytes
-            FROM dir_summary d
-            LEFT JOIN _incr_protected pd
-                ON pd.bucket = d.bucket AND pd.dir_prefix = d.dir_prefix
-            LEFT JOIN (
-                SELECT d2.bucket, d2.dir_prefix,
-                    SUM(
-                        CASE WHEN dr.storage_class IS NULL OR dr.storage_class = 'STANDARD'
-                             THEN d2.standard_bytes ELSE 0 END
-                      + CASE WHEN dr.storage_class IS NULL OR dr.storage_class = 'NEARLINE'
-                             THEN d2.nearline_bytes ELSE 0 END
-                      + CASE WHEN dr.storage_class IS NULL OR dr.storage_class = 'COLDLINE'
-                             THEN d2.coldline_bytes ELSE 0 END
-                      + CASE WHEN dr.storage_class IS NULL OR dr.storage_class = 'ARCHIVE'
-                             THEN d2.archive_bytes ELSE 0 END
-                    ) AS delete_bytes
-                FROM delete_rules dr
-                JOIN dir_summary d2 ON d2.dir_prefix LIKE dr.pattern
-                LEFT JOIN _incr_protected pd2
-                    ON pd2.bucket = d2.bucket AND pd2.dir_prefix = d2.dir_prefix
-                WHERE pd2.dir_prefix IS NULL
-                  AND ({dir_where.replace('d.dir_prefix', 'd2.dir_prefix')})
-                GROUP BY d2.bucket, d2.dir_prefix
-            ) del ON del.bucket = d.bucket AND del.dir_prefix = d.dir_prefix
-            WHERE {dir_where}
-        )
+        INSERT INTO _dir_status_mem (bucket, dir_prefix, total_bytes, protect_bytes, delete_bytes, status)
         SELECT
-            dir_prefix,
-            SUM(total_bytes),
-            SUM(protect_bytes),
-            SUM(delete_bytes),
+            d.bucket,
+            d.dir_prefix,
+            d.standard_bytes + d.nearline_bytes
+                + d.coldline_bytes + d.archive_bytes AS total_bytes,
+            CASE WHEN pd.dir_prefix IS NOT NULL
+                THEN d.standard_bytes + d.nearline_bytes
+                     + d.coldline_bytes + d.archive_bytes
+                ELSE 0
+            END AS protect_bytes,
+            CASE WHEN pd.dir_prefix IS NOT NULL THEN 0 ELSE
+                COALESCE(del.delete_bytes, 0)
+            END AS delete_bytes,
             CASE
-                WHEN SUM(total_bytes) = 0 THEN 'unmatched'
-                WHEN SUM(delete_bytes) >= SUM(total_bytes) THEN 'delete'
-                WHEN SUM(delete_bytes) > 0 THEN 'mixed'
-                WHEN SUM(protect_bytes) > 0 THEN 'keep'
+                WHEN d.standard_bytes + d.nearline_bytes
+                     + d.coldline_bytes + d.archive_bytes = 0 THEN 'unmatched'
+                WHEN pd.dir_prefix IS NOT NULL THEN 'keep'
+                WHEN COALESCE(del.delete_bytes, 0) >= d.standard_bytes + d.nearline_bytes
+                     + d.coldline_bytes + d.archive_bytes THEN 'delete'
+                WHEN COALESCE(del.delete_bytes, 0) > 0 THEN 'mixed'
                 ELSE 'unmatched'
-            END
-        FROM per_dir
-        GROUP BY dir_prefix
+            END AS status
+        FROM dir_summary d
+        LEFT JOIN _protected_dirs pd
+            ON pd.bucket = d.bucket AND pd.dir_prefix = d.dir_prefix
+        LEFT JOIN (
+            SELECT d2.bucket, d2.dir_prefix,
+                SUM(
+                    CASE WHEN dr.storage_class IS NULL OR dr.storage_class = 'STANDARD'
+                         THEN d2.standard_bytes ELSE 0 END
+                  + CASE WHEN dr.storage_class IS NULL OR dr.storage_class = 'NEARLINE'
+                         THEN d2.nearline_bytes ELSE 0 END
+                  + CASE WHEN dr.storage_class IS NULL OR dr.storage_class = 'COLDLINE'
+                         THEN d2.coldline_bytes ELSE 0 END
+                  + CASE WHEN dr.storage_class IS NULL OR dr.storage_class = 'ARCHIVE'
+                         THEN d2.archive_bytes ELSE 0 END
+                ) AS delete_bytes
+            FROM delete_rules dr
+            JOIN dir_summary d2 ON d2.dir_prefix LIKE dr.pattern
+            LEFT JOIN _protected_dirs pd2
+                ON pd2.bucket = d2.bucket AND pd2.dir_prefix = d2.dir_prefix
+            WHERE pd2.dir_prefix IS NULL
+              AND ({dir_where.replace('d.dir_prefix', 'd2.dir_prefix')})
+            GROUP BY d2.bucket, d2.dir_prefix
+        ) del ON del.bucket = d.bucket AND del.dir_prefix = d.dir_prefix
+        WHERE {dir_where}
         """,
         params + params,
     )
 
-    conn.execute("DROP TABLE IF EXISTS _incr_protected")
     log.info("incrementally updated dir_status for %d patterns", len(patterns))
 
 
@@ -347,6 +325,138 @@ async def _periodic_sync(gcs_prefix: str, db_path: Path, db_conn: duckdb.DuckDBP
     while True:
         await asyncio.sleep(SYNC_INTERVAL)
         _run_sync(gcs_prefix, db_path, db_conn)
+
+
+_SC_BYTES_COL = {
+    "STANDARD": "standard_bytes",
+    "NEARLINE": "nearline_bytes",
+    "COLDLINE": "coldline_bytes",
+    "ARCHIVE": "archive_bytes",
+}
+
+
+def _fetch_segment_status(
+    conn: duckdb.DuckDBPyConnection,
+    prefix_len: int,
+    prefix: str,
+    bucket: str | None,
+    storage_class: str | None,
+) -> tuple[dict[str, str], dict[str, float]]:
+    """Return (status_map, kept_fraction_map) for segments under prefix.
+
+    When storage_class is specified (and bucket is set), computes status
+    on the fly per-class using the small rules tables + _protected_dirs.
+    Otherwise reads from the pre-materialized _dir_status_mem table.
+    """
+    if storage_class and bucket:
+        return _fetch_segment_status_by_class(conn, prefix_len, prefix, bucket, storage_class)
+
+    # Use materialized _dir_status_mem, optionally filtered by bucket
+    where = "dir_prefix LIKE ? || '%'"
+    params: list[Any] = [prefix_len, prefix]
+    if bucket:
+        where += " AND bucket = ?"
+        params.append(bucket)
+
+    status_rows = _fetchall(
+        conn,
+        f"""
+        SELECT split_part(substr(dir_prefix, ?), '/', 1) as segment,
+               CASE WHEN MIN(status) = MAX(status) THEN MIN(status)
+                    ELSE 'mixed'
+               END as status
+        FROM _dir_status_mem
+        WHERE {where}
+        GROUP BY segment
+        """,
+        tuple(params),
+    )
+    status_map = {r["segment"]: r["status"] for r in status_rows}
+
+    kept_frac_rows = _fetchall(
+        conn,
+        f"""
+        SELECT split_part(substr(dir_prefix, ?), '/', 1) as segment,
+               SUM(total_bytes) as total_bytes,
+               SUM(total_bytes) - SUM(delete_bytes) as kept_bytes
+        FROM _dir_status_mem
+        WHERE {where}
+        GROUP BY segment
+        """,
+        tuple(params),
+    )
+    kept_fraction_map: dict[str, float] = {}
+    for r in kept_frac_rows:
+        tb = float(r["total_bytes"] or 0)
+        kb = float(r["kept_bytes"] or 0)
+        kept_fraction_map[r["segment"]] = kb / tb if tb > 0 else 1.0
+
+    return status_map, kept_fraction_map
+
+
+def _fetch_segment_status_by_class(
+    conn: duckdb.DuckDBPyConnection,
+    prefix_len: int,
+    prefix: str,
+    bucket: str,
+    storage_class: str,
+) -> tuple[dict[str, str], dict[str, float]]:
+    """Compute per-segment status for a specific (bucket, storage_class).
+
+    Joins against the small protect/delete rules tables scoped to one bucket,
+    so this is lightweight even for large dir_summary tables.
+    """
+    bytes_col = _SC_BYTES_COL[storage_class]
+
+    rows = _fetchall(
+        conn,
+        f"""
+        WITH dir_status_sc AS (
+            SELECT
+                d.dir_prefix,
+                d.{bytes_col} AS class_bytes,
+                CASE
+                    WHEN d.{bytes_col} = 0 THEN 'unmatched'
+                    WHEN pd.dir_prefix IS NOT NULL THEN 'keep'
+                    WHEN del.dir_prefix IS NOT NULL THEN 'delete'
+                    ELSE 'unmatched'
+                END AS status
+            FROM dir_summary d
+            LEFT JOIN _protected_dirs pd
+                ON pd.bucket = d.bucket AND pd.dir_prefix = d.dir_prefix
+            LEFT JOIN (
+                SELECT DISTINCT d2.bucket, d2.dir_prefix
+                FROM delete_rules dr
+                JOIN dir_summary d2 ON d2.dir_prefix LIKE dr.pattern
+                LEFT JOIN _protected_dirs pd2
+                    ON pd2.bucket = d2.bucket AND pd2.dir_prefix = d2.dir_prefix
+                WHERE (dr.storage_class IS NULL OR dr.storage_class = ?)
+                  AND d2.bucket = ?
+                  AND pd2.dir_prefix IS NULL
+            ) del ON del.bucket = d.bucket AND del.dir_prefix = d.dir_prefix
+            WHERE d.bucket = ? AND d.dir_prefix LIKE ? || '%'
+        )
+        SELECT split_part(substr(dir_prefix, ?), '/', 1) as segment,
+               CASE WHEN MIN(status) = MAX(status) THEN MIN(status)
+                    ELSE 'mixed'
+               END as status,
+               SUM(class_bytes) as total_bytes,
+               SUM(CASE WHEN status != 'delete' THEN class_bytes ELSE 0 END) as kept_bytes
+        FROM dir_status_sc
+        GROUP BY segment
+        """,
+        (storage_class, bucket, bucket, prefix, prefix_len),
+    )
+
+    status_map: dict[str, str] = {}
+    kept_fraction_map: dict[str, float] = {}
+    for r in rows:
+        status_map[r["segment"]] = r["status"]
+        tb = float(r["total_bytes"] or 0)
+        kb = float(r["kept_bytes"] or 0)
+        kept_fraction_map[r["segment"]] = kb / tb if tb > 0 else 1.0
+
+    return status_map, kept_fraction_map
 
 
 def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
@@ -1159,90 +1269,89 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
 
     @app.get("/api/explore/unified")
     @serialized
-    def explore_unified(prefix: str = "", max_children: int = EXPLORE_BUCKET_SIZE) -> dict[str, Any]:
-        """Cross-bucket hierarchical explorer with keep/delete/mixed status.
+    def explore_unified(
+        prefix: str = "",
+        bucket: str | None = None,
+        storage_class: str | None = None,
+        max_children: int = EXPLORE_BUCKET_SIZE,
+    ) -> dict[str, Any]:
+        """Hierarchical explorer with keep/delete status.
 
-        Aggregates dir_summary across all buckets and annotates each child
-        with a status derived from the materialized _dir_status_mem table.
-        When there are too many children, groups by status first then
-        buckets lexicographically within each status group.
+        When a bucket is specified, queries are scoped to that bucket with
+        exact region pricing. When storage_class is also specified, status
+        is computed on the fly for that class only (resolving 'mixed' items).
+
+        When no bucket is specified, aggregates cross-bucket at query time
+        with averaged pricing (may produce 'mixed' at the TLD level).
         """
         conn = db()
-
-        # Average prices across US and EU regions for cross-bucket aggregation
-        prices_row = _fetchall(conn, "SELECT name, price_per_gib_month_us, price_per_gib_month_eu FROM storage_classes")
-        avg_prices = {
-            r["name"]: (float(r["price_per_gib_month_us"]) + float(r["price_per_gib_month_eu"])) / 2.0
-            for r in prices_row
-        }
         discount_factor = 1.0 - GCS_DISCOUNT
 
+        # Resolve pricing
+        prices_row = _fetchall(conn, "SELECT name, price_per_gib_month_us, price_per_gib_month_eu FROM storage_classes")
+        if bucket:
+            region = region_from_bucket(bucket)
+            continent = continent_for_region(region)
+            prices = {
+                r["name"]: float(r["price_per_gib_month_us"] if continent == "US" else r["price_per_gib_month_eu"])
+                for r in prices_row
+            }
+        else:
+            prices = {
+                r["name"]: (float(r["price_per_gib_month_us"]) + float(r["price_per_gib_month_eu"])) / 2.0
+                for r in prices_row
+            }
+
+        # Select which storage class columns to aggregate
+        ALL_SC_COLS: list[tuple[str, str, str]] = [
+            ("STANDARD", "standard_count", "standard_bytes"),
+            ("NEARLINE", "nearline_count", "nearline_bytes"),
+            ("COLDLINE", "coldline_count", "coldline_bytes"),
+            ("ARCHIVE", "archive_count", "archive_bytes"),
+        ]
+        sc_cols = [c for c in ALL_SC_COLS if storage_class is None or c[0] == storage_class]
+
         prefix_len = len(prefix) + 1  # +1 for SQL 1-based indexing
+
+        # Build dir_summary query with optional bucket filter
+        sum_exprs = ", ".join(f"SUM({cc}) as {cc}, SUM({bc}) as {bc}" for _, cc, bc in sc_cols)
+        ds_where = "dir_prefix LIKE ? || '%'"
+        ds_params: list[Any] = [prefix_len, prefix]
+        if bucket:
+            ds_where += " AND bucket = ?"
+            ds_params.append(bucket)
+
         rows = _fetchall(
             conn,
-            """
+            f"""
             SELECT split_part(substr(dir_prefix, ?), '/', 1) as segment,
-                   SUM(standard_count) as standard_count, SUM(standard_bytes) as standard_bytes,
-                   SUM(nearline_count) as nearline_count, SUM(nearline_bytes) as nearline_bytes,
-                   SUM(coldline_count) as coldline_count, SUM(coldline_bytes) as coldline_bytes,
-                   SUM(archive_count) as archive_count, SUM(archive_bytes) as archive_bytes
+                   {sum_exprs}
             FROM dir_summary
-            WHERE dir_prefix LIKE ? || '%'
+            WHERE {ds_where}
             GROUP BY segment
             ORDER BY segment
             """,
-            (prefix_len, prefix),
+            tuple(ds_params),
         )
 
-        # Batch-fetch status for all segments from the materialized table
-        status_rows = _fetchall(
+        # Batch-fetch status for all segments
+        status_map, kept_fraction_map = _fetch_segment_status(
             conn,
-            """
-            SELECT split_part(substr(dir_prefix, ?), '/', 1) as segment,
-                   CASE WHEN MIN(status) = MAX(status) THEN MIN(status)
-                        ELSE 'mixed'
-                   END as status
-            FROM _dir_status_mem
-            WHERE dir_prefix LIKE ? || '%'
-            GROUP BY segment
-            """,
-            (prefix_len, prefix),
+            prefix_len,
+            prefix,
+            bucket,
+            storage_class,
         )
-        status_map = {r["segment"]: r["status"] for r in status_rows}
-
-        # Per-segment kept fraction (for TLD kept-cost display)
-        kept_frac_rows = _fetchall(
-            conn,
-            """
-            SELECT split_part(substr(dir_prefix, ?), '/', 1) as segment,
-                   SUM(total_bytes) as total_bytes,
-                   SUM(total_bytes) - SUM(delete_bytes) as kept_bytes
-            FROM _dir_status_mem
-            WHERE dir_prefix LIKE ? || '%'
-            GROUP BY segment
-            """,
-            (prefix_len, prefix),
-        )
-        kept_fraction_map: dict[str, float] = {}
-        for r in kept_frac_rows:
-            tb = float(r["total_bytes"] or 0)
-            kb = float(r["kept_bytes"] or 0)
-            kept_fraction_map[r["segment"]] = kb / tb if tb > 0 else 1.0
 
         def unified_entry_stats(row: dict[str, Any]) -> dict[str, Any]:
             total_objects = 0
             total_bytes = 0
             total_cost = 0.0
             by_class = []
-            for sc_name, count_col, bytes_col in [
-                ("STANDARD", "standard_count", "standard_bytes"),
-                ("NEARLINE", "nearline_count", "nearline_bytes"),
-                ("COLDLINE", "coldline_count", "coldline_bytes"),
-                ("ARCHIVE", "archive_count", "archive_bytes"),
-            ]:
-                cnt = int(row[count_col] or 0)
-                bts = int(row[bytes_col] or 0)
-                cost = bts / (1024.0 * 1024.0 * 1024.0) * avg_prices[sc_name] * discount_factor
+            for sc_name, count_col, bytes_col in sc_cols:
+                cnt = int(row.get(count_col) or 0)
+                bts = int(row.get(bytes_col) or 0)
+                cost = bts / (1024.0 * 1024.0 * 1024.0) * prices[sc_name] * discount_factor
                 total_objects += cnt
                 total_bytes += bts
                 total_cost += cost
@@ -1294,20 +1403,12 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
                 j += 1
             status_run = rows[i:j]
 
+            col_names = [cc for _, cc, _ in sc_cols] + [bc for _, _, bc in sc_cols]
             for k in range(0, len(status_run), max_children):
                 chunk = status_run[k : k + max_children]
                 merged: dict[str, int] = {}
-                for col in [
-                    "standard_count",
-                    "standard_bytes",
-                    "nearline_count",
-                    "nearline_bytes",
-                    "coldline_count",
-                    "coldline_bytes",
-                    "archive_count",
-                    "archive_bytes",
-                ]:
-                    merged[col] = sum(int(r[col] or 0) for r in chunk)
+                for col in col_names:
+                    merged[col] = sum(int(r.get(col) or 0) for r in chunk)
                 stats = unified_entry_stats(merged)
                 first_seg = chunk[0]["segment"]
                 last_seg = chunk[-1]["segment"]

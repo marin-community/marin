@@ -905,6 +905,12 @@ const UnifiedExplorer = {
     const loading = ref(false)
     const sort = ref({ key: 'name', desc: false })
 
+    // Bucket & storage class filters
+    const buckets = ref([])
+    const selectedBucket = ref('')
+    const STORAGE_CLASSES = ['STANDARD', 'NEARLINE', 'COLDLINE', 'ARCHIVE']
+    const selectedStorageClass = ref('')
+
     const breadcrumbs = computed(() => {
       if (!prefix.value) return []
       const parts = prefix.value.replace(/\/$/, '').split('/')
@@ -918,11 +924,13 @@ const UnifiedExplorer = {
       const key = sort.value.key
       const mult = sort.value.desc ? -1 : 1
       return [...entries.value].sort((a, b) => {
-        // Primary: group by status
-        const sa = a.status_order ?? 99
-        const sb = b.status_order ?? 99
-        if (sa !== sb) return sa - sb
-        // Secondary: user-selected column
+        // For bucketed sub-prefixes, group by status first
+        if (responseType.value === 'buckets') {
+          const sa = a.status_order ?? 99
+          const sb = b.status_order ?? 99
+          if (sa !== sb) return sa - sb
+        }
+        // Sort by user-selected column (lex for TLDs, within-status for buckets)
         if (typeof a[key] === 'string') return mult * a[key].localeCompare(b[key])
         return mult * ((a[key] || 0) - (b[key] || 0))
       })
@@ -931,8 +939,9 @@ const UnifiedExplorer = {
     async function load() {
       loading.value = true
       try {
-        const data = await fetchUnifiedExplore(prefix.value)
+        const data = await fetchUnifiedExplore(prefix.value, selectedBucket.value, selectedStorageClass.value)
         entries.value = data.entries || []
+        responseType.value = data.type || 'children'
       } finally {
         loading.value = false
       }
@@ -962,13 +971,46 @@ const UnifiedExplorer = {
       return sort.value.desc ? ' \u2193' : ' \u2191'
     }
 
-    onMounted(load)
+    watch(selectedBucket, () => { prefix.value = ''; load() })
+    watch(selectedStorageClass, load)
 
-    return { prefix, entries, loading, sort, breadcrumbs, sortedEntries, navigate, sortBy, statusClass, sortIndicator, humanBytes, humanCost }
+    onMounted(async () => {
+      try {
+        const overview = await fetchOverview()
+        buckets.value = overview.regions.map(r => ({ bucket: r.bucket, region: r.region }))
+        if (buckets.value.length > 0) {
+          selectedBucket.value = buckets.value[0].bucket
+          return // watcher will trigger load
+        }
+      } catch (_) {}
+      load()
+    })
+
+    return {
+      prefix, entries, responseType, loading, sort, breadcrumbs, sortedEntries,
+      buckets, selectedBucket, STORAGE_CLASSES, selectedStorageClass,
+      navigate, sortBy, statusClass, sortIndicator, humanBytes, humanCost,
+    }
   },
   template: `
     <div>
       <h1 class="text-2xl font-bold text-text tracking-tight mb-6">Storage Explorer</h1>
+
+      <!-- Filters -->
+      <div class="flex items-center gap-4 mb-4">
+        <select v-model="selectedBucket"
+                class="px-3 py-2 text-sm rounded border border-surface-border bg-surface-sunken text-text focus:outline-none focus:border-accent">
+          <option value="">All buckets</option>
+          <option v-for="b in buckets" :key="b.bucket" :value="b.bucket">
+            {{ b.region }} ({{ b.bucket }})
+          </option>
+        </select>
+        <select v-model="selectedStorageClass"
+                class="px-3 py-2 text-sm rounded border border-surface-border bg-surface-sunken text-text focus:outline-none focus:border-accent">
+          <option value="">All classes</option>
+          <option v-for="sc in STORAGE_CLASSES" :key="sc" :value="sc">{{ sc }}</option>
+        </select>
+      </div>
 
       <!-- Breadcrumb -->
       <div class="flex items-center gap-1 mb-4 text-sm">
@@ -1038,7 +1080,10 @@ const UnifiedExplorer = {
               </td>
               <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ (entry.objects || 0).toLocaleString() }}</td>
               <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ humanBytes(entry.bytes || 0) }}</td>
-              <td class="px-3 py-2 text-[13px] text-right font-mono font-semibold text-accent">{{ humanCost(entry.monthly_cost_usd || 0) }}</td>
+              <td class="px-3 py-2 text-[13px] text-right font-mono font-semibold text-accent">
+                <span v-if="entry.kept_cost != null">{{ humanCost(entry.kept_cost) }}</span>
+                <span v-else>{{ humanCost(entry.monthly_cost_usd || 0) }}</span>
+              </td>
             </tr>
             <tr v-if="!sortedEntries.length && !loading">
               <td colspan="5" class="px-3 py-8 text-center text-sm text-text-muted">No entries</td>
