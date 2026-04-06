@@ -61,7 +61,8 @@ def local_gpt2_marin_tokenizer(tmp_path_factory) -> HfMarinTokenizer:
         _chat_template=None,
         _vocab_size=tok.get_vocab_size(),
         _all_special_ids=all_special_ids,
-        _id_to_token={v: k for k, v in tok.get_vocab().items()},
+        _id_to_token={v: k for k, v in vocab.items()},
+        _vocab=vocab,
     )
 
 
