@@ -532,13 +532,14 @@ class DspyEvaluator(Evaluator):
         """
         is_pi = _is_prime_intellect_task(self.task_name)
 
-        # Configure DSPy -- temperature=0 and cache=False for reproducibility
+        # Configure DSPy -- temperature=0, cache=False, num_retries=0 for reproducibility
         lm = dspy.LM(
             model=f"openai/{self.model.name}",
             base_url=self.endpoint,
             api_key=self.api_key or "dspy",
             temperature=0.0,
             cache=False,
+            num_retries=0,
         )
         adapter = ADAPTER_MAP[self.adapter_name]()
         dspy.configure(lm=lm, adapter=adapter)
