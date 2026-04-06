@@ -13,7 +13,7 @@ import tempfile
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlparse
@@ -145,6 +145,7 @@ class VllmServerBackend(ABC):
         port: int | None,
         timeout_seconds: int,
         extra_cli_args: list[str] | None,
+        env_overrides: Mapping[str, str] | None,
     ) -> VllmServerHandle:
         raise NotImplementedError
 
@@ -174,6 +175,7 @@ class DockerVllmServerBackend(VllmServerBackend):
         port: int | None,
         timeout_seconds: int,
         extra_cli_args: list[str] | None,
+        env_overrides: Mapping[str, str] | None,
     ) -> VllmServerHandle:
         return _start_vllm_docker_server(
             model_name_or_path=model_name_or_path,
@@ -181,6 +183,7 @@ class DockerVllmServerBackend(VllmServerBackend):
             port=port,
             timeout_seconds=timeout_seconds,
             extra_cli_args=extra_cli_args,
+            env_overrides=env_overrides,
             docker_image=self._docker_image,
             docker_run_args=self._docker_run_args,
         )
@@ -210,6 +213,7 @@ class NativeVllmServerBackend(VllmServerBackend):
         port: int | None,
         timeout_seconds: int,
         extra_cli_args: list[str] | None,
+        env_overrides: Mapping[str, str] | None,
     ) -> VllmServerHandle:
         return _start_vllm_native_server(
             model_name_or_path=model_name_or_path,
@@ -217,6 +221,7 @@ class NativeVllmServerBackend(VllmServerBackend):
             port=port,
             timeout_seconds=timeout_seconds,
             extra_cli_args=extra_cli_args,
+            env_overrides=env_overrides,
         )
 
     def logs_tail(self, handle: VllmServerHandle, *, max_lines: int = 200) -> str:
@@ -286,6 +291,11 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     gpu_memory_utilization = engine_kwargs.get("gpu_memory_utilization")
     if gpu_memory_utilization is not None:
         args.extend(["--gpu-memory-utilization", str(gpu_memory_utilization)])
+    tensor_parallel_size = engine_kwargs.get("tensor_parallel_size")
+    if tensor_parallel_size is not None:
+        args.extend(["--tensor-parallel-size", str(tensor_parallel_size)])
+    if engine_kwargs.get("enforce_eager"):
+        args.append("--enforce-eager")
     return args
 
 
@@ -357,6 +367,7 @@ class VllmEnvironment:
         docker_image: str | None = None,
         docker_run_args: list[str] | None = None,
         extra_args: list[str] | None = None,
+        env_overrides: Mapping[str, str] | None = None,
     ) -> None:
         self.model_name_or_path, self.model = resolve_model_name_or_path(model)
         self.mode = resolve_vllm_mode(mode)
@@ -365,6 +376,7 @@ class VllmEnvironment:
         self.timeout_seconds = timeout_seconds
         self.docker_image = docker_image
         self.docker_run_args = docker_run_args
+        self.env_overrides = dict(env_overrides or {})
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
         self._backend = _resolve_vllm_backend(
             self.mode,
@@ -395,6 +407,7 @@ class VllmEnvironment:
                     port=self.port,
                     timeout_seconds=self.timeout_seconds,
                     extra_cli_args=self.extra_cli_args,
+                    env_overrides=self.env_overrides,
                 )
                 self.model_id = _get_first_model_id(self.vllm_server.server_url)
                 logger.info(
@@ -649,6 +662,7 @@ def _start_vllm_docker_server(
     timeout_seconds: int = 3600,
     poll_interval_seconds: int = 5,
     extra_cli_args: list[str] | None = None,
+    env_overrides: Mapping[str, str] | None = None,
     docker_image: str | None = None,
     docker_run_args: list[str] | None = None,
     container_name: str | None = None,
@@ -674,6 +688,8 @@ def _start_vllm_docker_server(
         logger.info(f"No docker_image specified; defaulting to {docker_image} for {resource_type}.")
 
     env: dict[str, str] = _build_vllm_env_dict()
+    if env_overrides:
+        env.update(env_overrides)
     explain_cache_misses = os.environ.get("JAX_EXPLAIN_CACHE_MISSES")
     if explain_cache_misses is not None:
         env["JAX_EXPLAIN_CACHE_MISSES"] = explain_cache_misses
@@ -809,7 +825,7 @@ def _build_vllm_env_dict() -> dict[str, str]:
     return env
 
 
-def _vllm_env() -> dict[str, str]:
+def _vllm_env(env_overrides: Mapping[str, str] | None = None) -> dict[str, str]:
     """Build the vLLM environment for the native (subprocess) backend.
 
     Starts from ``os.environ`` and applies the canonical defaults.
@@ -818,6 +834,8 @@ def _vllm_env() -> dict[str, str]:
     canonical = _build_vllm_env_dict()
     for key, value in canonical.items():
         env.setdefault(key, value)
+    if env_overrides:
+        env.update(env_overrides)
     return env
 
 
@@ -828,6 +846,7 @@ def _start_vllm_native_server(
     port: int | None = None,
     timeout_seconds: int = 3600,
     extra_cli_args: list[str] | None = None,
+    env_overrides: Mapping[str, str] | None = None,
 ) -> VllmServerHandle:
     """Start `vllm serve` in-process and wait until `/v1/models` responds."""
 
@@ -851,7 +870,7 @@ def _start_vllm_native_server(
     stderr_path = os.path.join(log_dir, "stderr.log")
     stdout_f = open(stdout_path, "w")
     stderr_f = open(stderr_path, "w")
-    native_env = _vllm_env()
+    native_env = _vllm_env(env_overrides)
     logger.info(
         "Starting vLLM native server with "
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
