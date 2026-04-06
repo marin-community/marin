@@ -19,6 +19,7 @@ too many concurrent uv sync operations.
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from collections.abc import Callable
 from typing import Protocol
 
 from iris.cluster.bundle import BundleStore
@@ -194,11 +195,16 @@ class ContainerHandle(Protocol):
         """
         ...
 
-    def build(self) -> list[LogLine]:
+    def build(self, on_logs: Callable[[list[LogLine]], None] | None = None) -> list[LogLine]:
         """Run setup_commands (uv sync, pip install, etc).
 
         Blocks until setup completes. If there are no setup_commands,
         this is a no-op.
+
+        Args:
+            on_logs: Optional callback invoked with each incremental batch of
+                log lines as they arrive. Enables streaming logs to callers
+                during long builds.
 
         Returns:
             List of log lines captured during the build phase.

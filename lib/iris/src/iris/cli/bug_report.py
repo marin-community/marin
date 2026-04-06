@@ -13,9 +13,10 @@ from dataclasses import dataclass, field
 
 from iris.cluster.log_store import build_log_source
 from iris.cluster.types import JobName
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.logging_connect import LogServiceClientSync
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -105,14 +106,17 @@ def gather_bug_report(
     """Gather all diagnostic data for a job into a BugReport."""
     interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
     client = ControllerServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
+    log_client = LogServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
     try:
-        return _gather(client, job_id, tail=tail)
+        return _gather(client, log_client, job_id, tail=tail)
     finally:
+        log_client.close()
         client.close()
 
 
 def _gather(
     client: ControllerServiceClientSync,
+    log_client: LogServiceClientSync,
     job_id: JobName,
     *,
     tail: int,
@@ -141,8 +145,8 @@ def _gather(
         try:
             # Fetch all attempts for this task, taking only the last `tail` lines.
             source = build_log_source(JobName.from_wire(task.task_id))
-            log_resp = client.fetch_logs(
-                cluster_pb2.FetchLogsRequest(
+            log_resp = log_client.fetch_logs(
+                logging_pb2.FetchLogsRequest(
                     source=source,
                     max_lines=tail,
                     tail=True,

@@ -10,7 +10,7 @@ import json
 import click
 from tabulate import tabulate
 
-from iris.cli.main import _make_authenticated_client, require_controller_url
+from iris.cli.main import require_controller_url, rpc_client
 from iris.rpc import query_pb2
 
 
@@ -68,18 +68,15 @@ def query_cmd(ctx: click.Context, sql: str, fmt: str) -> None:
     """
     controller_url = require_controller_url(ctx)
     token_provider = ctx.obj.get("token_provider") if ctx.obj else None
-    client = _make_authenticated_client(controller_url, token_provider)
 
-    try:
+    with rpc_client(controller_url, token_provider) as client:
         request = query_pb2.RawQueryRequest(sql=sql)
         response = client.execute_raw_query(request)
 
-        columns = list(response.columns)
-        rows = _parse_rows(list(response.rows))
-        formatter = _FORMATTERS[fmt]
-        output = formatter(columns, rows)
+    columns = list(response.columns)
+    rows = _parse_rows(list(response.rows))
+    formatter = _FORMATTERS[fmt]
+    output = formatter(columns, rows)
 
-        if output:
-            click.echo(output)
-    finally:
-        client.close()
+    if output:
+        click.echo(output)

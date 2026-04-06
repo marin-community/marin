@@ -13,6 +13,7 @@ from connectrpc.errors import ConnectError
 
 from iris.cluster.constraints import WellKnownAttribute, device_variant_constraint
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import cluster_pb2
@@ -548,7 +549,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
         state._db,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
-        log_store=state._log_store,
+        log_service=LogServiceImpl(),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -579,7 +580,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
         state._db,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
-        log_store=state._log_store,
+        log_service=LogServiceImpl(),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -988,7 +989,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
         db,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
+        log_service=LogServiceImpl(),
         auth=auth,
     )
 
@@ -1024,7 +1025,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
         db,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
+        log_service=LogServiceImpl(),
         auth=auth,
     )
 

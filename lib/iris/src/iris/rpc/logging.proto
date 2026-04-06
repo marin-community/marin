@@ -70,3 +70,41 @@ message ResourceUsage {
   double cpu_seconds = 2;
   int64 gpu_memory_bytes = 3;
 }
+
+// ============================================================================
+// LOG SERVICE
+// ============================================================================
+
+message PushLogsRequest {
+  string key = 1;                  // Log store key (e.g. "/user/job/0:3", "/system/worker/w-1234", "/system/controller")
+  repeated LogEntry entries = 2;
+}
+
+message PushLogsResponse {}
+
+// Unified log fetching request. All logs are served from the central LogStore.
+// The source key identifies the log stream and supports regex patterns:
+//   /system/controller             - exact: controller process logs
+//   /system/worker/<worker_id>     - exact: worker process logs
+//   /user/job/.*                   - pattern: all task logs under a job
+//   /user/job/0:.*                 - pattern: all attempts of a single task
+//   /user/job/0:3                  - exact: specific task attempt
+message FetchLogsRequest {
+  string source = 1;           // Log source key or regex pattern
+  int64 since_ms = 2;          // Only return entries after this timestamp (exclusive)
+  int64 cursor = 3;            // Autoincrement id cursor (resume after this id)
+  string substring = 4;        // Literal substring match on log data
+  int32 max_lines = 5;         // Max entries to return (0 = default 1000)
+  bool tail = 6;               // Return last N entries instead of first N
+  string min_level = 7;        // Minimum log level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+}
+
+message FetchLogsResponse {
+  repeated LogEntry entries = 1;
+  int64 cursor = 2;            // Max autoincrement id seen (cursor for next poll)
+}
+
+service LogService {
+  rpc PushLogs(PushLogsRequest) returns (PushLogsResponse);
+  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
+}

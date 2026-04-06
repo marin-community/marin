@@ -174,6 +174,7 @@ def _build_controller_deployment(
                             ],
                             "ports": [{"containerPort": port}],
                             "env": s3_env_vars,
+                            "securityContext": {"capabilities": {"add": ["SYS_PTRACE"]}},
                             "resources": controller_resources,
                             "volumeMounts": [
                                 {"name": "config", "mountPath": "/etc/iris", "readOnly": True},

@@ -10,6 +10,7 @@ from connectrpc.errors import ConnectError
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.types import JobName, WorkerId
+from iris.log_server.server import LogServiceImpl
 from iris.rpc import cluster_pb2
 from iris.rpc.auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Timestamp
@@ -40,7 +41,7 @@ def _make_service(state, mock_controller, tmp_path, auth=None):
         state._db,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
+        log_service=LogServiceImpl(),
         auth=auth or ControllerAuth(),
     )
 

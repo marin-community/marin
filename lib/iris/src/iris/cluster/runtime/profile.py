@@ -40,6 +40,7 @@ MEMORY_FORMAT_MAP: dict[int, tuple[str, str]] = {
     cluster_pb2.MemoryProfile.FLAMEGRAPH: ("flamegraph", "html"),
     cluster_pb2.MemoryProfile.TABLE: ("table", "txt"),
     cluster_pb2.MemoryProfile.STATS: ("stats", "json"),
+    cluster_pb2.MemoryProfile.RAW: ("raw", "bin"),
 }
 
 
@@ -60,6 +61,11 @@ class MemoryProfileSpec:
     duration_seconds: int
     pid: str
     leaks: bool
+
+    @property
+    def is_raw(self) -> bool:
+        """Raw mode returns the .bin trace directly, skipping transform."""
+        return self.reporter == "raw"
 
     @property
     def output_is_file(self) -> bool:
@@ -112,7 +118,7 @@ def build_pyspy_cmd(spec: CpuProfileSpec, py_spy_bin: str, output_path: str) -> 
 
 
 def build_memray_attach_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_path: str) -> list[str]:
-    cmd = [memray_bin, "attach", spec.pid, "--duration", str(spec.duration_seconds), "--output", trace_path]
+    cmd = [memray_bin, "attach", "--native", spec.pid, "--duration", str(spec.duration_seconds), "--output", trace_path]
     if spec.leaks:
         cmd.append("--aggregate")
     return cmd
@@ -215,8 +221,12 @@ def _run_memray_profile(pid: str, duration_seconds: int, memory_config: cluster_
         os.unlink(trace_path)
 
         # Track allocations in-process for the requested duration.
-        with memray.Tracker(trace_path, file_format=file_format):
+        with memray.Tracker(trace_path, native_traces=True, file_format=file_format):
             time.sleep(duration_seconds)
+
+        # Raw mode: return the .bin trace directly, no transform needed.
+        if spec.is_raw:
+            return Path(trace_path).read_bytes()
 
         if spec.output_is_file:
             with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:

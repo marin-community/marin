@@ -187,8 +187,11 @@ def call_rpc(
 
     interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
     client = service.client_class(url, interceptors=interceptors)
-    method_fn = getattr(client, method.method_fn_name)
-    return method_fn(request)
+    try:
+        method_fn = getattr(client, method.method_fn_name)
+        return method_fn(request)
+    finally:
+        client.close()
 
 
 def format_response(response: Message) -> str:

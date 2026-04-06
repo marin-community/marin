@@ -30,6 +30,7 @@ import tempfile
 import threading
 import uuid
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -357,6 +358,8 @@ def _memory_profile_stub(memory_format: int) -> bytes:
         )
     elif memory_format == cluster_pb2.MemoryProfile.TABLE:
         return b"memray unavailable in local mode\n"
+    elif memory_format == cluster_pb2.MemoryProfile.RAW:
+        return b""
     else:  # STATS
         return b'{"error": "memray unavailable in local mode"}'
 
@@ -423,7 +426,7 @@ class ProcessContainerHandle:
         """Return the container ID, if any."""
         return self._container_id
 
-    def build(self) -> list[LogLine]:
+    def build(self, on_logs: Callable[[list[LogLine]], None] | None = None) -> list[LogLine]:
         """No-op for local execution - host is already configured.
 
         In local/test mode, the environment is already set up with the
@@ -584,6 +587,9 @@ class ProcessContainerHandle:
             result = subprocess.run(attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10)
             if result.returncode != 0:
                 raise RuntimeError(f"memray attach failed: {result.stderr}")
+
+            if spec.is_raw:
+                return Path(trace_path).read_bytes()
 
             if spec.output_is_file:
                 with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:

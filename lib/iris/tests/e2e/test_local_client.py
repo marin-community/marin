@@ -11,12 +11,12 @@ import pytest
 
 from iris.client.client import IrisClient, Job
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 
 pytestmark = pytest.mark.e2e
 
 
-def extract_log_text(response: cluster_pb2.FetchLogsResponse) -> str:
+def extract_log_text(response: logging_pb2.FetchLogsResponse) -> str:
     """Extract log text from a FetchLogs response."""
     return "\n".join(e.data for e in response.entries)
 

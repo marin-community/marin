@@ -12,7 +12,6 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.chaos import chaos
-from iris.cluster.log_store import LogStore
 from iris.cluster.process_status import get_process_status as _get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.worker.worker_types import TaskInfo
@@ -48,10 +47,8 @@ class WorkerServiceImpl:
     def __init__(
         self,
         provider: TaskProvider,
-        log_store: LogStore | None = None,
     ):
         self._provider = provider
-        self._log_store = log_store
         self._timer = Timer()
 
     def get_task_status(
@@ -93,27 +90,6 @@ class WorkerServiceImpl:
         response.uptime.milliseconds = self._timer.elapsed_ms()
         return response
 
-    def fetch_logs(
-        self,
-        request: cluster_pb2.FetchLogsRequest,
-        _ctx: RequestContext,
-    ) -> cluster_pb2.FetchLogsResponse:
-        """Fetch logs from the worker's LogStore by key with filtering."""
-        if not self._log_store:
-            return cluster_pb2.FetchLogsResponse(entries=[], cursor=0)
-
-        max_lines = request.max_lines if request.max_lines > 0 else 1000
-        result = self._log_store.get_logs(
-            request.source,
-            since_ms=request.since_ms,
-            cursor=request.cursor,
-            substring_filter=request.substring,
-            max_lines=max_lines,
-            tail=request.tail,
-            min_level=request.min_level,
-        )
-        return cluster_pb2.FetchLogsResponse(entries=result.entries, cursor=result.cursor)
-
     def heartbeat(
         self,
         request: cluster_pb2.HeartbeatRequest,
@@ -142,8 +118,8 @@ class WorkerServiceImpl:
         request: cluster_pb2.GetProcessStatusRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.GetProcessStatusResponse:
-        """Return local process info and recent process logs."""
-        return _get_process_status(request, self._log_store, self._timer)
+        """Return local process info (logs are in the central LogService)."""
+        return _get_process_status(request, None, self._timer)
 
     def profile_task(
         self,

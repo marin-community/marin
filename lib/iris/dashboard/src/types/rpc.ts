@@ -255,9 +255,14 @@ export interface SliceInfo {
   idle?: boolean
 }
 
+export interface ScaleGroupConfig {
+  quotaPool?: string
+  allocationTier?: number
+}
+
 export interface ScaleGroupStatus {
   name: string
-  config?: Record<string, unknown>
+  config?: ScaleGroupConfig
   currentDemand?: number
   peakDemand?: number
   backoffUntil?: ProtoTimestamp

@@ -13,8 +13,9 @@ from pathlib import Path
 import uvicorn
 
 from iris.chaos import chaos
-from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
+from iris.cluster.log_store import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
+from iris.log_server.client import LogPusher, RemoteLogHandler
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
 from iris.cluster.types import JobName, TaskAttempt as TaskAttemptId
 from iris.cluster.bundle import BundleStore
@@ -170,13 +171,12 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        self._log_store = LogStore()
-        self._log_store_handler = LogStoreHandler(self._log_store, key=PROCESS_LOG_KEY)
-        self._log_store_handler.setLevel(logging.INFO)
-        self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-        logging.getLogger().addHandler(self._log_store_handler)
+        # LogPusher and RemoteLogHandler are created after registration, once
+        # the worker can resolve /system/log-server via ListEndpoints.
+        self._log_pusher: LogPusher | None = None
+        self._log_handler: RemoteLogHandler | None = None
 
-        self._service = WorkerServiceImpl(self, log_store=self._log_store)
+        self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
             self._service,
             host=config.host,
@@ -290,7 +290,7 @@ class Worker:
             attempt = TaskAttempt.adopt(
                 discovered=container,
                 container_handle=handle,
-                log_store=self._log_store,
+                log_pusher=self._log_pusher,
                 port_allocator=self._port_allocator,
                 poll_interval_seconds=self._config.poll_interval.to_seconds(),
             )
@@ -360,9 +360,9 @@ class Worker:
         self._threads.stop()
         if self._controller_client:
             self._controller_client.close()
-        logging.getLogger().removeHandler(self._log_store_handler)
-        self._log_store_handler.close()
-        self._log_store.close()
+        self._detach_log_handler()
+        if self._log_pusher is not None:
+            self._log_pusher.close()
         self._bundle_store.close()
 
     def _run_lifecycle(self, stop_event: threading.Event) -> None:
@@ -392,6 +392,7 @@ class Worker:
                     # Shutdown requested during registration
                     break
                 self._worker_id = worker_id
+                self._attach_log_handler()
                 self._serve(stop_event)
         except Exception:
             logger.exception("Worker lifecycle crashed")
@@ -437,6 +438,50 @@ class Worker:
             stop_event.wait(5.0)
 
         return None
+
+    def _resolve_log_service(self) -> str | None:
+        """Resolve the LogService address via the /system/log-server endpoint."""
+        if not self._controller_client:
+            return None
+        resp = self._controller_client.list_endpoints(
+            cluster_pb2.Controller.ListEndpointsRequest(
+                prefix="/system/log-server",
+                exact=True,
+            ),
+        )
+        if not resp.endpoints:
+            logger.warning("No /system/log-server endpoint registered on controller")
+            return None
+        addr = resp.endpoints[0].address
+        logger.info("Resolved /system/log-server -> %s", addr)
+        return addr
+
+    def _attach_log_handler(self) -> None:
+        """Create LogPusher and attach RemoteLogHandler after registration."""
+        self._detach_log_handler()
+        if not self._worker_id:
+            return
+        log_addr = self._resolve_log_service()
+        if not log_addr:
+            return
+        self._log_pusher = LogPusher(log_addr)
+        self._log_handler = RemoteLogHandler(
+            self._log_pusher,
+            key=worker_log_key(self._worker_id),
+        )
+        self._log_handler.setLevel(logging.INFO)
+        self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        logging.getLogger().addHandler(self._log_handler)
+
+    def _detach_log_handler(self) -> None:
+        """Remove and close the current RemoteLogHandler and LogPusher if any."""
+        if self._log_handler is not None:
+            logging.getLogger().removeHandler(self._log_handler)
+            self._log_handler.close()
+            self._log_handler = None
+        if self._log_pusher is not None:
+            self._log_pusher.close()
+            self._log_pusher = None
 
     def _resolve_address(self) -> str:
         """Resolve the address to advertise to the controller."""
@@ -587,7 +632,7 @@ class Worker:
             default_task_image=self._config.default_task_image,
             resolve_image=self._config.resolve_image,
             port_allocator=self._port_allocator,
-            log_store=self._log_store,
+            log_pusher=self._log_pusher,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
 
@@ -720,16 +765,12 @@ class Worker:
                             if reported_state == cluster_pb2.TASK_STATE_PENDING:
                                 reported_state = cluster_pb2.TASK_STATE_BUILDING
 
-                            is_terminal = task.status in self._TERMINAL_STATES
-                            log_cap = 50000 if is_terminal else 5000
-                            log_entries = task.drain_heartbeat_logs(max_entries=log_cap, final=is_terminal)
                             entry = cluster_pb2.Controller.WorkerTaskStatus(
                                 task_id=task_id,
                                 attempt_id=task_proto.current_attempt_id,
                                 state=reported_state,
                                 exit_code=task_proto.exit_code,
                                 error=task_proto.error or "",
-                                log_entries=log_entries,
                                 container_id=task_proto.container_id or "",
                             )
                             if task.status in self._TERMINAL_STATES:
