@@ -69,7 +69,7 @@ class TokenizeConfigBase(abc.ABC):
 
     tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
     """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly.
-    TOKIE uses the tokie library (experimental)."""
+    KITOKEN uses the kitoken library."""
 
     num_shards: int | None = None
     """Override the number tokenize shards. When set, files are grouped to produce approximately
@@ -402,7 +402,7 @@ def tokenize(config: TokenizeConfigBase):
         )
 
         # Broadcast tokenizer config to workers. We send name + backend rather than
-        # the tokenizer object because not all backends support pickling (e.g. tokie).
+        # the tokenizer object because not all backends support pickling.
         ctx.put("tokenizer_name", config.tokenizer)
         ctx.put("tokenizer_backend", config.tokenizer_backend)
 

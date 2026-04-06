@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Comprehensive test suite for MarinTokenizer backends (HF, tokie, kitoken).
+"""Comprehensive test suite for MarinTokenizer backends (HF, kitoken).
 
 Tests are parameterized across all available backends. Backends that are not
 installed are skipped gracefully. The test model is meta-llama/Llama-3.1-8B,
@@ -18,13 +18,6 @@ from levanter.tokenizers import (
     _load_tokenizer_config,
     load_tokenizer,
 )
-
-try:
-    import tokie as _tokie  # noqa: F401
-
-    HAS_TOKIE = True
-except ImportError:
-    HAS_TOKIE = False
 
 try:
     import kitoken as _kitoken  # noqa: F401
@@ -67,9 +60,6 @@ if _MODEL_AVAILABLE:
     load_tokenizer.cache_clear()
     _BACKEND_TOKENIZERS["hf"] = load_tokenizer(MODEL_NAME, backend=TokenizerBackend.HF)
     _AVAILABLE_BACKENDS.append("hf")
-    if HAS_TOKIE:
-        _BACKEND_TOKENIZERS["tokie"] = load_tokenizer(MODEL_NAME, backend=TokenizerBackend.TOKIE)
-        _AVAILABLE_BACKENDS.append("tokie")
     if HAS_KITOKEN:
         _BACKEND_TOKENIZERS["kitoken"] = load_tokenizer(MODEL_NAME, backend=TokenizerBackend.KITOKEN)
         _AVAILABLE_BACKENDS.append("kitoken")
@@ -796,10 +786,8 @@ def test_convert_ids_to_tokens_unknown_returns_unk_format(backend_tokenizer):
 def test_token_id_roundtrip(backend_tokenizer):
     """convert_tokens_to_ids(convert_ids_to_tokens(id)) should return original id for valid ids.
 
-    We pick IDs that are in the regular vocab (not byte-fallback tokens), because
-    tokie's get_vocab() excludes byte-fallback tokens and the id_to_token map is
-    built from get_vocab(). IDs 256+ are safe non-byte-fallback token IDs for
-    Llama 3.
+    We pick IDs that are in the regular vocab (not byte-fallback tokens).
+    IDs 256+ are safe non-byte-fallback token IDs for Llama 3.
     """
     for token_id in [256, 500, 1000, 5000]:
         token = backend_tokenizer.convert_ids_to_tokens(token_id)
@@ -810,8 +798,7 @@ def test_token_id_roundtrip(backend_tokenizer):
 
 @requires_model
 def test_vocab_dict_subset_of_vocab_size(backend_tokenizer):
-    """get_vocab() length should be <= vocab_size. Some backends (tokie) have fewer
-    entries in get_vocab() due to byte-fallback token collisions."""
+    """get_vocab() length should be <= vocab_size."""
     vocab = backend_tokenizer.get_vocab()
     assert len(vocab) <= backend_tokenizer.vocab_size
 

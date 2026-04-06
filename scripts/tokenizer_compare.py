@@ -4,8 +4,8 @@
 
 """Compare MarinTokenizer backends against the canonical HF backend.
 
-Reads text from stdin, encodes with all three backends (HF, tokie, kitoken),
-and exits with an error if any backend produces different token IDs than HF.
+Reads text from stdin, encodes with the kitoken backend,
+and exits with an error if it produces different token IDs than HF.
 Deltas are written to logs/tokenizer/{backend}.json.
 
 Usage:
@@ -27,7 +27,6 @@ import time
 from levanter.tokenizers import TokenizerBackend, load_tokenizer
 
 BACKENDS = [
-    ("tokie", TokenizerBackend.TOKIE),
     ("kitoken", TokenizerBackend.KITOKEN),
 ]
 
@@ -672,6 +671,38 @@ def _pick_test_type(rng: random.Random, tests: list[tuple[str, int]]) -> str:
     return tests[-1][0]
 
 
+def _minimize_text(text: str, is_failing) -> str:
+    """Delta-debugging: remove chunks of decreasing size while the failure persists."""
+    current = text
+    chunk_size = max(1, len(current) // 2)
+    while chunk_size >= 1:
+        i = 0
+        while i + chunk_size <= len(current):
+            candidate = current[:i] + current[i + chunk_size :]
+            if candidate and is_failing(candidate):
+                current = candidate
+            else:
+                i += 1
+        chunk_size //= 2
+    return current
+
+
+def _minimize_ids(ids: list[int], is_failing) -> list[int]:
+    """Delta-debugging: remove chunks of decreasing size from a token ID sequence."""
+    current = list(ids)
+    chunk_size = max(1, len(current) // 2)
+    while chunk_size >= 1:
+        i = 0
+        while i + chunk_size <= len(current):
+            candidate = current[:i] + current[i + chunk_size :]
+            if candidate and is_failing(candidate):
+                current = candidate
+            else:
+                i += 1
+        chunk_size //= 2
+    return current
+
+
 def _run_fuzz_iteration(
     rng: random.Random,
     test_type: str,
@@ -679,23 +710,78 @@ def _run_fuzz_iteration(
     hf_tok,
     backends: list[tuple[str, object]],
     tag_prefix: str,
+    *,
+    minimize: bool = True,
 ) -> list[tuple[str, str]]:
     """Run a single fuzz iteration of the given test type. Returns failure list."""
     if test_type == "encode":
         text = generate_fuzz_input(rng)
-        return _compare_one(text, model, hf_tok, backends, tag=tag_prefix)
+        failures = _compare_one(text, model, hf_tok, backends, tag=tag_prefix)
+        if failures and minimize:
+            orig_len = len(text)
+            text = _minimize_text(text, lambda t: any(tok.encode(t) != hf_tok.encode(t) for _, tok in backends))
+            if len(text) < orig_len:
+                print(f"  minimized: {orig_len} -> {len(text)} chars", file=sys.stderr)
+                failures = _compare_one(text, model, hf_tok, backends, tag=tag_prefix)
+        return failures
 
     elif test_type == "encode_special":
         text = generate_fuzz_input(rng)
-        return _compare_encode_special_tokens(text, model, hf_tok, backends, tag=tag_prefix)
+        failures = _compare_encode_special_tokens(text, model, hf_tok, backends, tag=tag_prefix)
+        if failures and minimize:
+            orig_len = len(text)
+            text = _minimize_text(
+                text,
+                lambda t: any(
+                    tok.encode(t, add_special_tokens=True) != hf_tok.encode(t, add_special_tokens=True)
+                    for _, tok in backends
+                ),
+            )
+            if len(text) < orig_len:
+                print(f"  minimized: {orig_len} -> {len(text)} chars", file=sys.stderr)
+                failures = _compare_encode_special_tokens(text, model, hf_tok, backends, tag=tag_prefix)
+        return failures
 
     elif test_type == "decode_roundtrip":
         text = generate_fuzz_input(rng)
-        return _compare_decode_roundtrip(text, model, hf_tok, backends, tag=tag_prefix)
+        failures = _compare_decode_roundtrip(text, model, hf_tok, backends, tag=tag_prefix)
+        if failures and minimize:
+            orig_len = len(text)
+
+            def _roundtrip_fails(t):
+                hf_ids = hf_tok.encode(t)
+                hf_dec = hf_tok.decode(hf_ids)
+                return any(tok.decode(tok.encode(t)) != hf_dec for _, tok in backends)
+
+            text = _minimize_text(text, _roundtrip_fails)
+            if len(text) < orig_len:
+                print(f"  minimized: {orig_len} -> {len(text)} chars", file=sys.stderr)
+                failures = _compare_decode_roundtrip(text, model, hf_tok, backends, tag=tag_prefix)
+        return failures
 
     elif test_type == "decode_skip_special":
         ids = _gen_ids_with_specials(rng, hf_tok, backends)
-        return _compare_decode_skip_special(ids, model, hf_tok, backends, tag=tag_prefix)
+        failures = _compare_decode_skip_special(ids, model, hf_tok, backends, tag=tag_prefix)
+        if failures and minimize:
+            orig_len = len(ids)
+
+            def _skip_special_fails(candidate_ids):
+                hf_dec = hf_tok.decode(candidate_ids, skip_special_tokens=True)
+                for _, tok in backends:
+                    try:
+                        if tok.decode(candidate_ids, skip_special_tokens=True) != hf_dec:
+                            return True
+                    except (KeyboardInterrupt, SystemExit):
+                        raise
+                    except BaseException:
+                        return True
+                return False
+
+            ids = _minimize_ids(ids, _skip_special_fails)
+            if len(ids) < orig_len:
+                print(f"  minimized: {orig_len} -> {len(ids)} token IDs", file=sys.stderr)
+                failures = _compare_decode_skip_special(ids, model, hf_tok, backends, tag=tag_prefix)
+        return failures
 
     elif test_type == "chat_template":
         choice = rng.random()
@@ -728,6 +814,7 @@ def run_fuzz(
     num_iterations: int | None,
     seed: int,
     active_tests: list[tuple[str, int]],
+    minimize: bool = True,
 ):
     rng = random.Random(seed)
     i = 0
@@ -741,7 +828,7 @@ def run_fuzz(
             model_slug = model.replace("/", "_")
             tag = f"fuzz_{model_slug}_{i:06d}"
 
-            failures = _run_fuzz_iteration(rng, test_type, model, hf_tok, backends, tag)
+            failures = _run_fuzz_iteration(rng, test_type, model, hf_tok, backends, tag, minimize=minimize)
 
             if failures:
                 total_failures += 1
@@ -774,7 +861,8 @@ def main():
         "-n", type=int, default=None, help="Number of fuzz iterations (default: run until mismatch or ctrl-c)"
     )
     parser.add_argument("--seed", type=int, default=42, help="RNG seed for fuzz mode")
-    parser.add_argument("--backend", choices=["tokie", "kitoken", "all"], default="all", help="Which backend(s) to test")
+    parser.add_argument("--backend", choices=["kitoken", "all"], default="all", help="Which backend(s) to test")
+    parser.add_argument("--no-minimize", action="store_true", help="Disable input minimization on failure")
     parser.add_argument(
         "--tests",
         default="all",
@@ -809,7 +897,9 @@ def main():
             print(f"  {model}: {', '.join(n for n, _ in backends)}", file=sys.stderr)
         test_names = ", ".join(n for n, _ in active_tests)
         print(f"seed: {args.seed}, iterations: {args.n or '∞'}, tests: {test_names}", file=sys.stderr)
-        failures = run_fuzz(model_set, num_iterations=args.n, seed=args.seed, active_tests=active_tests)
+        failures = run_fuzz(
+            model_set, num_iterations=args.n, seed=args.seed, active_tests=active_tests, minimize=not args.no_minimize
+        )
         sys.exit(1 if failures else 0)
 
     # Stdin mode — requires --model

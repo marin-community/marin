@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Benchmark HF vs tokie vs kitoken tokenizer backends on fineweb-edu 10BT sample.
+"""Benchmark HF vs kitoken tokenizer backends on fineweb-edu 10BT sample.
 
-Runs three tokenization jobs over the same data — one per backend —
-so throughput and memory behavior can be compared. Also runs two validation
-jobs that compare kitoken and tokie against HF and output any documents
+Runs tokenization jobs over the same data — one per backend —
+so throughput and memory behavior can be compared. Also runs a validation
+job that compares kitoken against HF and outputs any documents
 where the tokenization differs.
 
 Usage (local, tiny synthetic dataset for smoke testing):
@@ -168,10 +168,8 @@ def build_steps() -> list[StepSpec]:
     sample_count = 200 if TINY else None
     return [
         # _tokenize_spec("benchmark-hf", train_path, TokenizerBackend.HF, sample_count=sample_count),
-        # _tokenize_spec("benchmark-tokie", train_path, TokenizerBackend.TOKIE, sample_count=sample_count),
         # _tokenize_spec("benchmark-kitoken", train_path, TokenizerBackend.KITOKEN, sample_count=sample_count),
         _compare_spec("compare-kitoken-vs-hf", train_path, TokenizerBackend.KITOKEN, sample_count=sample_count),
-        # _compare_spec("compare-tokie-vs-hf", train_path, TokenizerBackend.TOKIE, sample_count=sample_count),
     ]
 
 

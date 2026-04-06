@@ -1,6 +1,0 @@
-[submodule "vendor/tokie"]
-	path = vendor/tokie
-	url = https://github.com/chonkie-inc/tokie.git
-[submodule "vendor/kitoken"]
-	path = vendor/kitoken
-	url = https://github.com/Systemcluster/kitoken.git

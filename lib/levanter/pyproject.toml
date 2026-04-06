@@ -37,8 +37,7 @@ dependencies = [
     "einops",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
-    "tokie>=0.0.8",
-    "kitoken>=0.10.1",
+    "kitoken>=0.10.2",
     "transformers>=4.57.1,<5.0",
     "optax>=0.1.9",
     "wandb>=0.17.8",
@@ -100,12 +99,8 @@ kernels = [
     "tokamax",
 ]
 
-tokie = [
-    "tokie>=0.0.8",
-]
-
 kitoken = [
-    "kitoken>=0.10.1",
+    "kitoken>=0.10.2",
 ]
 
 gcp = [

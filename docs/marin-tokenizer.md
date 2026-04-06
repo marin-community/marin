@@ -5,15 +5,14 @@
 
 ## Overview
 
-MarinTokenizer provides a unified `Protocol` interface over three tokenizer backends:
+MarinTokenizer provides a unified `Protocol` interface over two tokenizer backends:
 
 | Backend | Library | Language | Source |
 |---------|---------|----------|--------|
 | **HF** (canonical) | `transformers` | Python/Rust | HuggingFace |
-| **tokie** | `tokie` | Rust | `vendor/tokie/` |
-| **kitoken** | `kitoken` | Rust | `vendor/kitoken/` |
+| **kitoken** | `kitoken` | Rust | `github.com/marin-community/kitoken` |
 
-HF is the reference implementation. tokie and kitoken are Rust-native alternatives
+HF is the reference implementation. kitoken is a Rust-native alternative
 targeting lower overhead for batch tokenization in data pipelines.
 
 ## Correctness Validation
@@ -73,17 +72,17 @@ fineweb-edu 10BT (~10.5M documents) via Iris/Zephyr. Output lands at
    `encode(text, True)` so kitoken recognizes `<|end_of_text|>` etc. as single
    tokens, matching HF's default behavior.
 
-2. **Priority specials heuristic** (`vendor/kitoken/src/convert/tokenizers.rs`):
+2. **Priority specials heuristic** (`github.com/marin-community/kitoken/src/convert/tokenizers.rs`):
    Fixed `drop_priority_from_specials` to only drop Priority specials that are
    actual BPE merge products (single-byte chars or tokens in `bpe.merges`).
    Previously it dropped all or none, breaking tokenizers with many added_tokens
    (Gemma, Qwen, DeepSeek, Phi, OLMo).
 
-3. **lstrip/rstrip propagation** (`vendor/kitoken/src/`): Added `lstrip`/`rstrip`
+3. **lstrip/rstrip propagation** (`github.com/marin-community/kitoken/src/`): Added `lstrip`/`rstrip`
    fields to `SpecialToken`, propagated from HF's `AddedToken` config. Fixes
    whitespace handling around special tokens.
 
-4. **GPT-2 byte-level BPE regex** (`vendor/kitoken/src/convert/tokenizers.rs`):
+4. **GPT-2 byte-level BPE regex** (`github.com/marin-community/kitoken/src/convert/tokenizers.rs`):
    Changed `\s?` to ` ?` (ASCII space only) in the ByteLevel pretokenizer regex,
    matching HF's actual behavior. Added missing `|\s+(?!\S)|\s+` alternatives.
 
@@ -94,51 +93,11 @@ HF's ByteLevel pretokenizer applies regex on byte-level character representation
 while kitoken applies regex on the original text then converts to bytes. Fixing
 this requires a fundamental change to kitoken's encoding pipeline.
 
-## tokie Status: Functional, Edge Cases Remain
-
-### Current results
-
-| Test | Result |
-|------|--------|
-| Fuzzer (10k iter, 10 models) | ~329 failures (3.3%) |
-| Dominant failures | falcon-7b (259), DeepSeek (59) |
-
-### Fixes applied
-
-1. **Infinite loop on form feed/vertical tab** (`vendor/tokie/crates/pretokie/`):
-   Whitespace scanning only recognized 4 of 6 ASCII whitespace bytes, missing
-   `\x0b` (vertical tab) and `\x0c` (form feed). This caused an infinite loop
-   when the pretokenizer encountered these bytes followed by newlines. Fixed by
-   using Rust's `u8::is_ascii_whitespace()`.
-
-2. **DeepSeek pretokenizer detection** (`vendor/tokie/crates/tokie/src/hf.rs`):
-   Fixed multi-stage Split pretokenizer detection for DeepSeek's `\p{N}{1,3}`
-   digit chunking.
-
-3. **Continuation normalization** (`vendor/tokie/crates/tokie/src/normalizer.rs`):
-   Added `normalize_continuation` to skip the `▁` prefix after special token
-   boundaries, fixing Mistral failures.
-
-4. **GPT-2 non-ASCII symbol handling** (`vendor/tokie/crates/pretokie/`): Fixed
-   combining marks being incorrectly merged with following letters in GPT-2 mode.
-
-5. **lstrip/rstrip support** (`vendor/tokie/crates/tokie/src/tokenizer.rs`):
-   Added whitespace stripping around special tokens with `rstrip`/`lstrip` flags.
-
-### Remaining work
-
-- Falcon-7b needs a dedicated pretokenizer for its unusual
-  `Punctuation(Contiguous) + ByteLevel + Digits + Split` chain (~2.6% failure rate)
-- DeepSeek has edge cases with spaces before non-standard unicode (~0.6%)
-- Scattered single-digit failures on Phi-4, Mistral, GPT-2, Llama, OLMo
-
 ## File Overview
 
 | Path | Description |
 |------|-------------|
-| `lib/levanter/src/levanter/tokenizers.py` | `MarinTokenizer` Protocol + HF/tokie/kitoken wrappers |
+| `lib/levanter/src/levanter/tokenizers.py` | `MarinTokenizer` Protocol + HF/kitoken wrappers |
 | `lib/levanter/tests/test_tokenizers.py` | 427 unit tests across all backends |
 | `scripts/tokenizer_compare.py` | Multi-model fuzzer and stdin comparison tool |
 | `experiments/tokenize/fineweb_benchmark.py` | Cluster-scale benchmark on fineweb-edu |
-| `vendor/kitoken/` | Kitoken Rust source (submodule) |
-| `vendor/tokie/` | Tokie Rust source (submodule) |
