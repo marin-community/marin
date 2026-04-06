@@ -19,6 +19,7 @@ import logging
 import os
 import pickle
 import re
+import sys
 from datetime import datetime, timezone
 import threading
 import time
@@ -452,6 +453,8 @@ class ZephyrCoordinator:
         last_log_time = 0.0
 
         while not self._shutdown_event.is_set():
+            if sys.is_finalizing():
+                return
             try:
                 self.check_heartbeats()
                 self._check_worker_group()
@@ -461,6 +464,8 @@ class ZephyrCoordinator:
                     self._log_status()
                     last_log_time = now
             except Exception:
+                if sys.is_finalizing():
+                    return
                 logger.exception("Coordinator loop crashed, aborting pipeline")
                 self.abort("Coordinator loop crashed unexpectedly")
                 return
