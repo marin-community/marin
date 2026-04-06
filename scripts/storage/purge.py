@@ -20,32 +20,27 @@ objects) and are never deleted.  The protect-set is always preserved regardless 
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 import logging
 import os
+import queue
 import shlex
-import shutil
-import duckdb
 import subprocess
 import sys
-import queue
 import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from functools import cache
-from pathlib import Path
 from typing import Any
 
 import click
 import google.auth
 import pyarrow as pa
-import pyarrow.parquet as pq
 from google.cloud import storage
 from rich.console import Console, Group
 from rich.live import Live
@@ -54,379 +49,61 @@ from rich.table import Table
 from rich.text import Text
 from tqdm.auto import tqdm
 
-log = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-
-SCRIPT_PATH = Path(__file__).resolve()
-STORAGE_DIR = SCRIPT_PATH.parent
-REPO_ROOT = STORAGE_DIR.parent.parent
-OUTPUT_ROOT = STORAGE_DIR / "purge"
-PROTECT_DIR = OUTPUT_ROOT / "protect"
-LOG_DIR = OUTPUT_ROOT / "logs"
-STORAGE_DB_PATH = OUTPUT_ROOT / "storage.duckdb"
-OBJECTS_PARQUET_DIR = OUTPUT_ROOT / "objects_parquet"
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-MARIN_BUCKETS = [
-    "marin-eu-west4",
-    "marin-us-central1",
-    "marin-us-central2",
-    "marin-us-east1",
-    "marin-us-east5",
-    "marin-us-west4",
-]
-
-BUCKET_LOCATIONS = {
-    "marin-eu-west4": "EUROPE-WEST4",
-    "marin-us-central1": "US-CENTRAL1",
-    "marin-us-central2": "US-CENTRAL2",
-    "marin-us-east1": "US-EAST1",
-    "marin-us-east5": "US-EAST5",
-    "marin-us-west4": "US-WEST4",
-}
-
-NON_STANDARD_STORAGE_CLASSES = frozenset({"NEARLINE", "COLDLINE", "ARCHIVE"})
-
-SOFT_DELETE_RETENTION_SECONDS = 3 * 24 * 3600  # 3 days
-
-GCS_MAX_PAGE_SIZE = 5000
-
-# Partial response fields for list_blobs — only fetch what _blob_to_scanned needs.
-_BLOB_FIELDS = "items(name,size,storageClass,timeCreated,updated),prefixes,nextPageToken"
-ADAPTIVE_SPLIT_THRESHOLD = 10000  # scan flat if <= this many objects; split otherwise
-ADAPTIVE_SCAN_MAX_DEPTH = 2
-
-GCS_DISCOUNT = 0.30
-
-# Deterministic fingerprint for the plan (bucket list).
-PLAN_FINGERPRINT = hashlib.sha256(json.dumps(MARIN_BUCKETS, sort_keys=True).encode()).hexdigest()
-
-OBJECT_FLUSH_THRESHOLD = 10_000_000
-DELETE_BATCH_SIZE = 1000
-
-# ---------------------------------------------------------------------------
-# Step spec
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class StepSpec:
-    action_id: str
-    group_name: str
-    command_name: str
-    description: str
-    help_text: str
-    mutating: bool
-    runner: Callable[[Context, StepSpec], None]
-    predecessors: tuple[str, ...] = ()
-
-    scan_workers: bool = False
-    settle_hours: bool = False
-    optional: bool = False
-
-    def run(self, ctx: Context) -> None:
-        self.runner(ctx, self)
-
-
-@dataclass(frozen=True)
-class ScannedObject:
-    bucket: str
-    name: str
-    size_bytes: int
-    storage_class_id: int
-    created: datetime | None
-    updated: datetime | None
-
-
-# ---------------------------------------------------------------------------
-# Context
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class Context:
-    dry_run: bool
-    force: bool
-    include_optional: bool
-    scan_workers: int
-    settle_hours: int
-    log_path: Path
-    timestamp: str
-    project: str | None
-
-
-# ---------------------------------------------------------------------------
-# Output directories and cache
-# ---------------------------------------------------------------------------
-
-
-def ensure_output_dirs() -> None:
-    for path in [OUTPUT_ROOT, PROTECT_DIR, LOG_DIR]:
-        path.mkdir(parents=True, exist_ok=True)
-    init_db()
-
-
-# ---------------------------------------------------------------------------
-# Module-level DuckDB connection singleton
-# ---------------------------------------------------------------------------
-
-_db: duckdb.DuckDBPyConnection | None = None
-_db_lock = threading.Lock()
-
-
-def get_db() -> duckdb.DuckDBPyConnection:
-    """Return the module-level DuckDB connection. Raises if init_db() has not been called."""
-    if _db is None:
-        raise RuntimeError("DuckDB connection not initialized — call init_db() first")
-    return _db
-
-
-def _fetchone_dict(result: duckdb.DuckDBPyConnection) -> dict[str, Any] | None:
-    row = result.fetchone()
-    if row is None:
-        return None
-    return dict(zip([d[0] for d in result.description], row, strict=False))
-
-
-def _fetchall_dicts(result: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
-    cols = [d[0] for d in result.description]
-    return [dict(zip(cols, row, strict=False)) for row in result.fetchall()]
-
-
-SCHEMA_VERSION = 9
-
-_OBJECTS_ARROW_SCHEMA = pa.schema(
-    [
-        ("bucket", pa.string()),
-        ("name", pa.string()),
-        ("size_bytes", pa.int64()),
-        ("storage_class_id", pa.int32()),
-        ("created", pa.timestamp("us", tz="UTC")),
-        ("updated", pa.timestamp("us", tz="UTC")),
-    ]
+from scripts.storage.storage_db import (
+    ADAPTIVE_SCAN_MAX_DEPTH,
+    ADAPTIVE_SPLIT_THRESHOLD,
+    DELETE_BATCH_SIZE,
+    GCS_DISCOUNT,
+    GCS_MAX_PAGE_SIZE,
+    IS_PROTECTED,
+    LOG_DIR,
+    OBJECTS_PARQUET_DIR,
+    PLAN_FINGERPRINT,
+    PROTECT_DIR,
+    REPO_ROOT,
+    SOFT_DELETE_RETENTION_SECONDS,
+    Context,
+    ObjectBuffer,
+    ScanBuffer,
+    ScannedObject,
+    StepSpec,
+    _BLOB_FIELDS,
+    _fetchall_dicts,
+    _fetchone_dict,
+    buffer_prefix_scanned,
+    buffer_split_cache,
+    continent_for_region,
+    ensure_output_dirs,
+    file_digest,
+    flush_metadata,
+    get_db,
+    glob_to_like,
+    human_bytes,
+    load_split_cache,
+    marker_exists,
+    marker_matches,
+    materialize_rule_costs,
+    normalize_relative_prefix,
+    normalized_prefix_url,
+    now_utc,
+    plan_rows,
+    print_summary,
+    read_csv_rows,
+    read_marker_extra,
+    read_split_cache,
+    storage_class_id_map,
+    timestamp_string,
+    url_object_path,
+    write_marker,
 )
 
-_ARROW_TO_DUCKDB: dict[pa.DataType, str] = {
-    pa.string(): "VARCHAR",
-    pa.int64(): "BIGINT",
-    pa.int32(): "INTEGER",
-    pa.timestamp("us", tz="UTC"): "TIMESTAMPTZ",
-}
+log = logging.getLogger(__name__)
 
-
-class ObjectBuffer:
-    """Buffers scanned objects and flushes them as sorted, ZSTD-compressed parquet segments.
-
-    Owns the parquet segment directory and the DuckDB view that unions all segments.
-    Append via `extend`, call `flush(force=True)` when done scanning.
-    """
-
-    def __init__(self, parquet_dir: Path, conn: duckdb.DuckDBPyConnection) -> None:
-        self._parquet_dir = parquet_dir
-        self._parquet_dir.mkdir(parents=True, exist_ok=True)
-        self._conn = conn
-        self._pending: list[ScannedObject] = []
-
-        existing = sorted(self._parquet_dir.glob("objects_*.parquet"))
-        self._segment_counter = int(existing[-1].stem.split("_")[1]) if existing else 0
-        self._refresh_view()
-
-    def _next_path(self) -> Path:
-        self._segment_counter += 1
-        return self._parquet_dir / f"objects_{self._segment_counter:06d}.parquet"
-
-    def _refresh_view(self) -> None:
-        """Point the ``objects`` view at current parquet segments."""
-        has_segments = any(self._parquet_dir.glob("objects_*.parquet"))
-        if has_segments:
-            glob = str(self._parquet_dir / "objects_*.parquet")
-            self._conn.execute(
-                f"""
-                CREATE OR REPLACE VIEW objects AS
-                SELECT * FROM read_parquet('{glob}', union_by_name=true, hive_partitioning=false)
-            """
-            )
-        else:
-            cols = ", ".join(f"NULL::{_ARROW_TO_DUCKDB[f.type]} AS {f.name}" for f in _OBJECTS_ARROW_SCHEMA)
-            self._conn.execute(f"CREATE OR REPLACE VIEW objects AS SELECT {cols} WHERE false")
-
-    def add(self, objects: list[ScannedObject]) -> None:
-        """Append objects to the buffer, flushing to parquet if the threshold is reached."""
-        self._pending.extend(objects)
-        self.flush()
-
-    def flush(self, *, force: bool = False) -> None:
-        if len(self._pending) < OBJECT_FLUSH_THRESHOLD and not force:
-            return
-        if not self._pending:
-            return
-        self._pending.sort(key=lambda o: (o.bucket, o.name))
-        arrow_table = pa.table(
-            {
-                "bucket": [o.bucket for o in self._pending],
-                "name": [o.name for o in self._pending],
-                "size_bytes": [o.size_bytes for o in self._pending],
-                "storage_class_id": [o.storage_class_id for o in self._pending],
-                "created": [o.created for o in self._pending],
-                "updated": [o.updated for o in self._pending],
-            },
-            schema=_OBJECTS_ARROW_SCHEMA,
-        )
-        pq.write_table(arrow_table, self._next_path(), compression="zstd")
-        self._refresh_view()
-        self._pending.clear()
-
-    def reset(self) -> None:
-        """Remove all parquet segments and reset counter."""
-        shutil.rmtree(self._parquet_dir, ignore_errors=True)
-        self._parquet_dir.mkdir(parents=True, exist_ok=True)
-        self._segment_counter = 0
-        self._pending.clear()
-        self._refresh_view()
-
-
-def init_db() -> None:
-    """Open the module-level DuckDB connection and ensure the schema is current."""
-    global _db
-    if _db is not None:
-        return
-    print_summary(f"opening DuckDB catalog: {STORAGE_DB_PATH}")
-    conn = duckdb.connect(str(STORAGE_DB_PATH))
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS cache_meta (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )
-        """
-    )
-    row = _fetchone_dict(conn.execute("SELECT value FROM cache_meta WHERE key = 'schema_version'"))
-    current_version = int(row["value"]) if row else 0
-    if current_version < SCHEMA_VERSION:
-        print_summary(f"schema upgrade {current_version} → {SCHEMA_VERSION}, rebuilding tables")
-        for tbl in [
-            "listing_cache",
-            "prefix_estimate_cache",
-            "prefix_scan_cache",
-            "storage_classes",
-            "protect_prefixes",
-            "protect_rules",
-            "split_cache",
-            "scanned_prefixes",
-            "step_markers",
-        ]:
-            conn.execute(f"DROP TABLE IF EXISTS {tbl}")
-        conn.execute("DROP VIEW IF EXISTS objects")
-        shutil.rmtree(OBJECTS_PARQUET_DIR, ignore_errors=True)
-        conn.execute(
-            "INSERT OR REPLACE INTO cache_meta (key, value) VALUES ('schema_version', ?)",
-            (str(SCHEMA_VERSION),),
-        )
-
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS storage_classes (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE,
-            price_per_gib_month_us REAL NOT NULL,
-            price_per_gib_month_eu REAL NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS protect_rules (
-            bucket TEXT NOT NULL,
-            pattern TEXT NOT NULL,
-            pattern_type TEXT NOT NULL,
-            owners TEXT,
-            reasons TEXT,
-            sources TEXT,
-            PRIMARY KEY (bucket, pattern)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS scanned_prefixes (
-            bucket TEXT NOT NULL,
-            prefix TEXT NOT NULL,
-            object_count INTEGER NOT NULL,
-            scanned_at TEXT NOT NULL,
-            PRIMARY KEY (bucket, prefix)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS split_cache (
-            cache_key TEXT PRIMARY KEY,
-            entries_json TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS step_markers (
-            action_id TEXT PRIMARY KEY,
-            completed_at TEXT NOT NULL,
-            dry_run BOOLEAN NOT NULL,
-            input_fingerprint TEXT NOT NULL,
-            extra_json TEXT
-        )
-        """
-    )
-    # Create the objects view over any existing parquet segments
-    ObjectBuffer(OBJECTS_PARQUET_DIR, conn)
-
-    # Seed storage classes
-    for sc_id, name, us_price, eu_price in [
-        (1, "STANDARD", 0.020, 0.023),
-        (2, "NEARLINE", 0.010, 0.013),
-        (3, "COLDLINE", 0.004, 0.006),
-        (4, "ARCHIVE", 0.0012, 0.0025),
-    ]:
-        conn.execute(
-            """
-            INSERT INTO storage_classes (id, name, price_per_gib_month_us, price_per_gib_month_eu)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT DO NOTHING
-            """,
-            (sc_id, name, us_price, eu_price),
-        )
-    _db = conn
-
-
-def storage_class_id_map() -> dict[str, int]:
-    """Return a mapping from storage class name to its DB id."""
-    conn = get_db()
-    rows = _fetchall_dicts(conn.execute("SELECT id, name FROM storage_classes"))
-    return {row["name"]: row["id"] for row in rows}
-
+GCS_LIST_TIMEOUT = 120  # per-page timeout in seconds for list_blobs calls
 
 # ---------------------------------------------------------------------------
-# Helpers
+# GCP helpers
 # ---------------------------------------------------------------------------
-
-
-def now_utc() -> datetime:
-    return datetime.now(tz=UTC)
-
-
-def timestamp_string() -> str:
-    return now_utc().strftime("%Y%m%dT%H%M%SZ")
-
-
-def log_line(ctx: Context, message: str) -> None:
-    with ctx.log_path.open("a") as f:
-        f.write(message.rstrip() + "\n")
 
 
 def command_env() -> dict[str, str]:
@@ -467,6 +144,11 @@ def storage_client(ctx: Context) -> storage.Client:
     return storage.Client(project=project, credentials=credentials)
 
 
+def log_line(ctx: Context, message: str) -> None:
+    with ctx.log_path.open("a") as f:
+        f.write(message.rstrip() + "\n")
+
+
 def run_subprocess(
     ctx: Context,
     command: list[str],
@@ -500,157 +182,6 @@ def run_subprocess(
     return completed
 
 
-def print_summary(message: str) -> None:
-    print(message)
-
-
-# ---------------------------------------------------------------------------
-# CSV / JSON
-# ---------------------------------------------------------------------------
-
-
-def read_csv_rows(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="") as f:
-        return list(csv.DictReader(f))
-
-
-def file_digest(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-# ---------------------------------------------------------------------------
-# Markers (resumable step state)
-# ---------------------------------------------------------------------------
-
-
-def marker_matches(action_id: str, input_fingerprint: str) -> bool:
-    row = _fetchone_dict(
-        get_db().execute("SELECT input_fingerprint FROM step_markers WHERE action_id = ?", (action_id,))
-    )
-    return row is not None and row["input_fingerprint"] == input_fingerprint
-
-
-def marker_exists(action_id: str) -> bool:
-    row = _fetchone_dict(get_db().execute("SELECT 1 FROM step_markers WHERE action_id = ?", (action_id,)))
-    return row is not None
-
-
-def read_marker_extra(action_id: str) -> dict[str, Any] | None:
-    """Read the extra_json blob for a step marker. Returns None if no marker exists."""
-    row = _fetchone_dict(get_db().execute("SELECT extra_json FROM step_markers WHERE action_id = ?", (action_id,)))
-    if row is None or row["extra_json"] is None:
-        return None
-    return json.loads(row["extra_json"])
-
-
-def write_marker(
-    action_id: str,
-    input_fingerprint: str,
-    *,
-    dry_run: bool,
-    extra: dict[str, Any] | None = None,
-) -> None:
-    get_db().execute(
-        "INSERT OR REPLACE INTO step_markers (action_id, completed_at, dry_run, input_fingerprint, extra_json) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (action_id, now_utc().isoformat(), dry_run, input_fingerprint, json.dumps(extra) if extra else None),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Region / bucket helpers
-# ---------------------------------------------------------------------------
-
-
-def region_from_bucket(bucket: str) -> str:
-    return bucket.removeprefix("marin-") if bucket.startswith("marin-") else bucket
-
-
-def region_bucket(region: str) -> str:
-    return f"marin-{region}"
-
-
-def all_regions() -> list[str]:
-    return [region_from_bucket(bucket) for bucket in MARIN_BUCKETS]
-
-
-def url_bucket(url: str) -> str:
-    return url.removeprefix("gs://").split("/", 1)[0]
-
-
-def url_object_path(url: str) -> str:
-    parts = url.removeprefix("gs://").split("/", 1)
-    return parts[1] if len(parts) == 2 else ""
-
-
-def plan_rows() -> list[dict[str, str]]:
-    """Return the cleanup plan: one row per bucket with region and location."""
-    return [{"region": region_from_bucket(b), "bucket": b, "location": BUCKET_LOCATIONS[b]} for b in MARIN_BUCKETS]
-
-
-def normalized_prefix_url(url: str) -> str:
-    return url if url.endswith("/") else f"{url}/"
-
-
-def normalize_relative_prefix(prefix: str) -> str:
-    return prefix if prefix.endswith("/") else f"{prefix}/"
-
-
-def relative_prefix(prefix_url: str, bucket: str) -> str:
-    prefix = url_object_path(prefix_url)
-    if prefix.endswith("/"):
-        return prefix
-    return f"{prefix}/" if prefix else ""
-
-
-def human_bytes(num_bytes: int) -> str:
-    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
-    value = float(num_bytes)
-    for unit in units:
-        if value < 1024.0 or unit == units[-1]:
-            return f"{value:.2f} {unit}"
-        value /= 1024.0
-    return f"{num_bytes} B"
-
-
-def continent_for_region(region: str) -> str:
-    return "EUROPE" if region.startswith("eu-") else "US"
-
-
-# ---------------------------------------------------------------------------
-# Prefix utilities
-# ---------------------------------------------------------------------------
-
-
-def glob_to_like(gs_glob: str) -> str:
-    """Convert a GCS glob pattern to a SQL LIKE pattern relative to the bucket.
-
-    Examples:
-        gs://bucket/checkpoints/dclm_1b* → checkpoints/dclm_1b%
-        gs://bucket/tokenized/*_marin_tokenizer* → tokenized/%_marin_tokenizer%
-        gs://bucket/DL3DV/** → DL3DV/%
-    """
-    path = url_object_path(gs_glob)
-    return path.replace("*", "%").replace("?", "_")
-
-
-# SQL fragment for checking if an object is protected by any rule.
-# Use as: NOT EXISTS (SELECT 1 FROM protect_rules r WHERE {IS_PROTECTED})
-# Requires outer query to alias the object table as 'o'.
-IS_PROTECTED = """
-    SELECT 1 FROM protect_rules r
-    WHERE o.bucket = r.bucket
-      AND CASE r.pattern_type
-          WHEN 'prefix' THEN o.name LIKE r.pattern || '%'
-          WHEN 'like' THEN o.name LIKE r.pattern
-      END
-"""
-
-
 def gcloud_bucket_describe(ctx: Context, bucket_url: str) -> dict[str, Any]:
     return run_subprocess(
         ctx,
@@ -665,13 +196,8 @@ def bucket_soft_delete_seconds(metadata: dict[str, Any]) -> int:
     return int(value) if value is not None else 0
 
 
-# ---------------------------------------------------------------------------
-# Prefix resolution
-# ---------------------------------------------------------------------------
-
-
 # ===========================================================================
-# PREP steps
+# PREP: load protect rules
 # ===========================================================================
 
 
@@ -717,6 +243,7 @@ def load_protect_rules(ctx: Context, action: StepSpec) -> None:
 
     # Write to DB
     conn = get_db()
+    conn.execute("DELETE FROM rule_costs")
     conn.execute("DELETE FROM protect_rules")
     if deduped:
         arrow_table = pa.table(
@@ -732,8 +259,13 @@ def load_protect_rules(ctx: Context, action: StepSpec) -> None:
         conn.register("_protect_stage", arrow_table)
         conn.execute(
             """
-            INSERT OR REPLACE INTO protect_rules (bucket, pattern, pattern_type, owners, reasons, sources)
+            INSERT INTO protect_rules (bucket, pattern, pattern_type, owners, reasons, sources)
             SELECT bucket, pattern, pattern_type, owners, reasons, sources FROM _protect_stage
+            ON CONFLICT (bucket, pattern) DO UPDATE SET
+                pattern_type = EXCLUDED.pattern_type,
+                owners = EXCLUDED.owners,
+                reasons = EXCLUDED.reasons,
+                sources = EXCLUDED.sources
             """
         )
         conn.unregister("_protect_stage")
@@ -757,7 +289,8 @@ class ScanEvent:
 
     Kinds:
       progress   — non-terminal status update (object_count is running total)
-      leaf_done  — terminal, prefix fully scanned, objects contains all blobs
+      objects    — non-terminal, one page of scanned objects (streamed incrementally)
+      leaf_done  — terminal, prefix fully scanned (no objects attached)
       split_page — non-terminal, one page of delimiter listing results;
                    objects = root-level blobs, sub_prefixes = discovered children
       split_done — terminal, delimiter listing complete for this prefix
@@ -804,17 +337,22 @@ def _scan_one_prefix(
     _put("progress", object_count=0)
 
     if prefix == "":
-        objects: list[ScannedObject] = []
-        for blob in client.list_blobs(bucket_name, delimiter="/", page_size=GCS_MAX_PAGE_SIZE, fields=_BLOB_FIELDS):
-            objects.append(_blob_to_scanned(blob, bucket_name, sc_id_map))
-        _put("leaf_done", objects=objects, object_count=len(objects))
+        total = 0
+        for page in client.list_blobs(
+            bucket_name, delimiter="/", page_size=GCS_MAX_PAGE_SIZE, fields=_BLOB_FIELDS, timeout=GCS_LIST_TIMEOUT
+        ).pages:
+            page_items = [_blob_to_scanned(blob, bucket_name, sc_id_map) for blob in page]
+            total += len(page_items)
+            if page_items:
+                _put("objects", objects=page_items, object_count=total)
+        _put("leaf_done", object_count=total)
         return
 
     # Optimistic flat scan — read pages up to ADAPTIVE_SPLIT_THRESHOLD.
-    # If the prefix has fewer objects than the threshold, scan it flat
-    # even if it spans multiple pages (avoids needless splitting on
-    # prefixes like SpatialVID/videos/group_0030 with ~5k objects).
-    iterator = client.list_blobs(bucket_name, prefix=prefix, page_size=GCS_MAX_PAGE_SIZE, fields=_BLOB_FIELDS)
+    # The probe is bounded by ADAPTIVE_SPLIT_THRESHOLD so accumulation is safe.
+    iterator = client.list_blobs(
+        bucket_name, prefix=prefix, page_size=GCS_MAX_PAGE_SIZE, fields=_BLOB_FIELDS, timeout=GCS_LIST_TIMEOUT
+    )
     pages_iter = iterator.pages
     probe_objects: list[ScannedObject] = []
     is_small = False
@@ -822,46 +360,59 @@ def _scan_one_prefix(
         page_items = [_blob_to_scanned(blob, bucket_name, sc_id_map) for blob in page]
         probe_objects.extend(page_items)
         if len(page_items) < GCS_MAX_PAGE_SIZE:
-            # Partial page means we've exhausted the prefix.
             is_small = True
             break
         if len(probe_objects) >= ADAPTIVE_SPLIT_THRESHOLD:
             break
 
     if is_small:
-        _put("leaf_done", objects=probe_objects, object_count=len(probe_objects))
+        if probe_objects:
+            _put("objects", objects=probe_objects, object_count=len(probe_objects))
+        _put("leaf_done", object_count=len(probe_objects))
         return
 
     if depth >= ADAPTIVE_SCAN_MAX_DEPTH:
-        # At max depth — continue the flat scan from where the probe left off.
-        all_objects = probe_objects
+        # Flush probe objects immediately, then stream remaining pages.
+        total = len(probe_objects)
+        if probe_objects:
+            _put("objects", objects=probe_objects, object_count=total)
+            del probe_objects
         for page in pages_iter:
-            all_objects.extend(_blob_to_scanned(blob, bucket_name, sc_id_map) for blob in page)
-            _put("progress", object_count=len(all_objects))
-        _put("leaf_done", objects=all_objects, object_count=len(all_objects))
+            page_items = [_blob_to_scanned(blob, bucket_name, sc_id_map) for blob in page]
+            total += len(page_items)
+            if page_items:
+                _put("objects", objects=page_items, object_count=total)
+        _put("leaf_done", object_count=total)
         return
 
-    # Large prefix, can still split. Discard probe_objects and do a
-    # delimiter listing, yielding sub-prefixes page-by-page.
+    # Large prefix, can still split — probe objects are discarded since the
+    # delimiter listing below re-covers the same prefix.
+    del probe_objects
+
     sub_iterator = client.list_blobs(
-        bucket_name, prefix=prefix, delimiter="/", page_size=GCS_MAX_PAGE_SIZE, fields=_BLOB_FIELDS
+        bucket_name,
+        prefix=prefix,
+        delimiter="/",
+        page_size=GCS_MAX_PAGE_SIZE,
+        fields=_BLOB_FIELDS,
+        timeout=GCS_LIST_TIMEOUT,
     )
-    all_root_objects: list[ScannedObject] = []
+    total = 0
     any_sub_prefixes = False
     for page in sub_iterator.pages:
         page_roots = [_blob_to_scanned(blob, bucket_name, sc_id_map) for blob in page]
         page_subs = list(page.prefixes)
-        all_root_objects.extend(page_roots)
+        total += len(page_roots)
         if page_subs:
             any_sub_prefixes = True
-            _put("split_page", objects=page_roots, object_count=len(all_root_objects), sub_prefixes=page_subs)
-        else:
-            _put("progress", object_count=len(all_root_objects))
+            _put("split_page", objects=page_roots, object_count=total, sub_prefixes=page_subs)
+        elif page_roots:
+            _put("objects", objects=page_roots, object_count=total)
 
     if not any_sub_prefixes:
-        _put("leaf_done", objects=all_root_objects, object_count=len(all_root_objects))
+        _put("leaf_done", object_count=total)
     else:
-        _put("split_done", object_count=len(all_root_objects))
+        _put("split_done", object_count=total)
 
 
 def _scan_worker_loop(
@@ -871,10 +422,7 @@ def _scan_worker_loop(
     work_queue: queue.Queue[tuple[str | None, int]],
     event_queue: queue.Queue[ScanEvent],
 ) -> None:
-    """Long-lived worker: pull (prefix, depth) from work_queue, scan, repeat.
-
-    Exits when it receives _SENTINEL.
-    """
+    """Long-lived worker: pull (prefix, depth) from work_queue, scan, repeat."""
     wid = threading.get_ident()
     client = storage_client(ctx)
 
@@ -890,74 +438,6 @@ def _scan_worker_loop(
             event_queue.put(ScanEvent(prefix=prefix, depth=depth, worker_id=wid, kind="error"))
 
 
-METADATA_FLUSH_THRESHOLD = 500
-
-
-@dataclass
-class ScanBuffer:
-    objects: ObjectBuffer
-    prefixes: list[tuple[str, str, int, str]] = field(default_factory=list)
-    split_cache: list[tuple[str, str, str]] = field(default_factory=list)
-
-
-def _buffer_prefix_scanned(buf: ScanBuffer, bucket_name: str, prefix: str, object_count: int) -> None:
-    buf.prefixes.append((bucket_name, prefix, object_count, now_utc().isoformat()))
-
-
-def _buffer_split_cache(
-    buf: ScanBuffer,
-    cache: dict[str, list[str]],
-    bucket_name: str,
-    prefix: str,
-    children: list[str],
-) -> None:
-    key = _split_cache_key(bucket_name, prefix)
-    cache[key] = children
-    buf.split_cache.append((key, json.dumps(children), now_utc().isoformat()))
-
-
-def _flush_metadata(conn: duckdb.DuckDBPyConnection, buf: ScanBuffer, *, force: bool = False) -> None:
-    """Batch-flush buffered prefix and split-cache writes via PyArrow staging."""
-    total = len(buf.prefixes) + len(buf.split_cache)
-    if total < METADATA_FLUSH_THRESHOLD and not force:
-        return
-    if buf.prefixes:
-        arrow_table = pa.table(
-            {
-                "bucket": [r[0] for r in buf.prefixes],
-                "prefix": [r[1] for r in buf.prefixes],
-                "object_count": [r[2] for r in buf.prefixes],
-                "scanned_at": [r[3] for r in buf.prefixes],
-            }
-        )
-        conn.register("_pfx_stage", arrow_table)
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO scanned_prefixes (bucket, prefix, object_count, scanned_at)
-            SELECT bucket, prefix, object_count, scanned_at FROM _pfx_stage
-            """
-        )
-        conn.unregister("_pfx_stage")
-        buf.prefixes.clear()
-    if buf.split_cache:
-        arrow_table = pa.table(
-            {
-                "cache_key": [r[0] for r in buf.split_cache],
-                "entries_json": [r[1] for r in buf.split_cache],
-                "updated_at": [r[2] for r in buf.split_cache],
-            }
-        )
-        conn.register("_sc_stage", arrow_table)
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO split_cache (cache_key, entries_json, updated_at)
-            SELECT cache_key, entries_json, updated_at FROM _sc_stage
-            """
-        )
-        conn.unregister("_sc_stage")
-        buf.split_cache.clear()
-
-
 @dataclass
 class WorkerSlot:
     """State of a single worker thread as seen by the display."""
@@ -966,7 +446,7 @@ class WorkerSlot:
     prefix: str = ""
     start_time: float = 0.0
     object_count: int = 0
-    sub_prefix_count: int = 0  # sub-prefixes found during split phase
+    sub_prefix_count: int = 0
 
 
 @dataclass
@@ -980,7 +460,6 @@ class ScanProgress:
     prefixes_expanded: int = 0
     prefixes_queued: int = 0
     _start_time: float = field(default_factory=time.monotonic)
-    # Maps thread_ident -> stable display slot
     _thread_slots: dict[int, WorkerSlot] = field(default_factory=dict)
     _next_slot: int = 0
     _progress: Progress = field(init=False)
@@ -1024,10 +503,8 @@ class ScanProgress:
 
     def handle_event(self, event: ScanEvent) -> None:
         slot = self._slot(event.worker_id)
-        # Use delta-based counting so total_objects updates incrementally
-        # from every event type, not just terminal ones.
         delta = event.object_count - slot.object_count
-        if event.kind == "progress":
+        if event.kind in ("progress", "objects"):
             self.total_objects += delta
             slot.object_count = event.object_count
         elif event.kind == "split_page":
@@ -1045,7 +522,7 @@ class ScanProgress:
             self._clear_slot(slot)
             self._progress.advance(self._task_id)
         elif event.kind == "error":
-            self.prefixes_completed += 1  # count as done so we don't hang
+            self.prefixes_completed += 1
             self._clear_slot(slot)
             self._progress.advance(self._task_id)
 
@@ -1066,7 +543,6 @@ class ScanProgress:
         self.prefixes_expanded += 1
         self.prefixes_completed += already_done
         self.add_to_total(children_count - 1)
-        # Advance for the parent + already-done children
         self._progress.advance(self._task_id, advance=1 + already_done)
 
     def _refresh(self) -> None:
@@ -1087,7 +563,6 @@ class ScanProgress:
         pending = self.prefixes_queued - done
         elapsed = time.monotonic() - self._start_time
 
-        # ETA based on completion rate
         eta_str = ""
         if done > 0 and pending > 0 and elapsed > 5:
             rate = done / elapsed
@@ -1118,7 +593,6 @@ class ScanProgress:
         table.add_column("elapsed", style="yellow", justify="right", width=8)
 
         now = time.monotonic()
-        # Show all slots sorted by slot_id; active first, then idle
         all_slots = sorted(self._thread_slots.values(), key=lambda s: (not s.prefix, s.slot_id))
         for slot in all_slots[: self.num_workers]:
             slot_label = f"w{slot.slot_id}"
@@ -1136,25 +610,6 @@ class ScanProgress:
         return Group(self._progress, stats, table)
 
 
-def _split_cache_key(bucket_name: str, prefix: str) -> str:
-    return f"scan://{bucket_name}/{prefix}"
-
-
-def _load_split_cache(conn: duckdb.DuckDBPyConnection) -> dict[str, list[str]]:
-    """Load the split_cache table into memory for fast lookups."""
-    rows = conn.execute("SELECT cache_key, entries_json FROM split_cache").fetchall()
-    cache: dict[str, list[str]] = {}
-    for cache_key, entries_json in rows:
-        entries = json.loads(entries_json)
-        if isinstance(entries, list):
-            cache[cache_key] = entries
-    return cache
-
-
-def _read_split_cache(cache: dict[str, list[str]], bucket_name: str, prefix: str) -> list[str] | None:
-    return cache.get(_split_cache_key(bucket_name, prefix))
-
-
 def _run_adaptive_scan(
     ctx: Context,
     bucket_name: str,
@@ -1162,25 +617,16 @@ def _run_adaptive_scan(
     pending: list[tuple[str, int]],
     num_workers: int,
     already_scanned: set[str],
-    db_conn: duckdb.DuckDBPyConnection,
+    db_conn: Any,
     progress: ScanProgress,
     buf: ScanBuffer,
 ) -> None:
-    """Two-queue adaptive scan: workers are self-scheduling.
-
-    work_queue:  (prefix, depth) items — workers pull from this autonomously
-    event_queue: ScanEvent items — workers push status here
-
-    Workers are long-lived loops that pull work, scan, push events, repeat.
-    The main thread drains events, does DB writes, and puts new work
-    (from splits or cache) onto the work queue.  Workers never wait on
-    the main thread for dispatch.
-    """
+    """Two-queue adaptive scan: workers are self-scheduling."""
     work_queue: queue.Queue[tuple[str | None, int]] = queue.Queue()
     event_queue: queue.Queue[ScanEvent] = queue.Queue()
     in_flight = 0
     split_children: dict[str, list[str]] = {}
-    split_cache = _load_split_cache(db_conn)
+    split_cache = load_split_cache(db_conn)
 
     def _enqueue(prefix: str, depth: int) -> None:
         nonlocal in_flight
@@ -1188,13 +634,10 @@ def _run_adaptive_scan(
         work_queue.put((prefix, depth))
 
     def _expand_cached_or_enqueue(prefix: str, depth: int) -> None:
-        """Use cached split children if available, otherwise enqueue for workers."""
-        cached_children = _read_split_cache(split_cache, bucket_name, prefix)
+        cached_children = read_split_cache(split_cache, bucket_name, prefix)
         if cached_children is not None:
             new_children = [sp for sp in cached_children if sp not in already_scanned]
             skipped = len(cached_children) - len(new_children)
-            # Only count un-scanned children in the total.
-            # Already-scanned children count as both queued and completed.
             progress.mark_queued_split(len(cached_children), already_done=skipped)
             for sp in new_children:
                 _expand_cached_or_enqueue(sp, depth + 1)
@@ -1212,6 +655,12 @@ def _run_adaptive_scan(
             progress.handle_event(event)
             return
 
+        if event.kind == "objects":
+            if event.objects:
+                buf.objects.add(event.objects)
+            progress.handle_event(event)
+            return
+
         if event.kind == "split_page":
             if event.objects:
                 buf.objects.add(event.objects)
@@ -1226,17 +675,15 @@ def _run_adaptive_scan(
 
         if event.kind == "split_done":
             all_children = split_children.pop(event.prefix, [])
-            _buffer_split_cache(buf, split_cache, bucket_name, event.prefix, sorted(all_children))
-            _flush_metadata(db_conn, buf)
+            buffer_split_cache(buf, split_cache, bucket_name, event.prefix, sorted(all_children))
+            flush_metadata(db_conn, buf)
             progress.handle_event(event)
             in_flight -= 1
             return
 
         if event.kind == "leaf_done":
-            if event.objects:
-                buf.objects.add(event.objects)
-            _buffer_prefix_scanned(buf, bucket_name, event.prefix, event.object_count)
-            _flush_metadata(db_conn, buf)
+            buffer_prefix_scanned(buf, bucket_name, event.prefix, event.object_count)
+            flush_metadata(db_conn, buf)
             already_scanned.add(event.prefix)
             progress.handle_event(event)
             in_flight -= 1
@@ -1244,8 +691,6 @@ def _run_adaptive_scan(
 
         if event.kind == "error":
             log.warning("scan failed for %s/%s — will retry on next run", bucket_name, event.prefix)
-            # Don't mark as scanned — it'll be retried on resume.
-            # Clean up any partial split state.
             split_children.pop(event.prefix, None)
             progress.handle_event(event)
             in_flight -= 1
@@ -1273,7 +718,6 @@ def _run_adaptive_scan(
                 progress._refresh()
                 continue
 
-            # Drain all available events
             batch = [event]
             while True:
                 try:
@@ -1286,10 +730,8 @@ def _run_adaptive_scan(
 
             progress._refresh()
     finally:
-        # Flush any remaining buffered objects and metadata
         buf.objects.flush(force=True)
-        _flush_metadata(db_conn, buf, force=True)
-        # Shut down workers
+        flush_metadata(db_conn, buf, force=True)
         for _ in worker_threads:
             work_queue.put(_SENTINEL)
         for t in worker_threads:
@@ -1297,14 +739,7 @@ def _run_adaptive_scan(
 
 
 def scan_objects(ctx: Context, action: StepSpec) -> None:
-    """Scan bucket objects into the DuckDB database for subsequent querying.
-
-    Uses adaptive prefix splitting: each prefix is optimistically scanned with
-    a single page. If the page is full (prefix is large), the prefix is split
-    into sub-prefixes via a delimiter listing and those are enqueued for
-    parallel scanning.  This avoids single-thread bottlenecks on giant flat
-    extractions like SpatialVID/.
-    """
+    """Scan bucket objects into the DuckDB database for subsequent querying."""
     fingerprint = PLAN_FINGERPRINT
     if not ctx.force and marker_matches(action.action_id, fingerprint):
         print_summary(f"skip {action.action_id}: marker is current")
@@ -1318,10 +753,11 @@ def scan_objects(ctx: Context, action: StepSpec) -> None:
         region = plan_row["region"]
         bucket_name = plan_row["bucket"]
 
-        # Discover top-level prefixes
         print_summary(f"{action.action_id}: discovering top-level prefixes in {bucket_name}")
         client = storage_client(ctx)
-        iterator = client.list_blobs(bucket_name, delimiter="/", fields="items(name),prefixes,nextPageToken")
+        iterator = client.list_blobs(
+            bucket_name, delimiter="/", fields="items(name),prefixes,nextPageToken", timeout=GCS_LIST_TIMEOUT
+        )
         top_level_prefixes: list[str] = []
         has_root_objects = False
         for page in iterator.pages:
@@ -1335,7 +771,6 @@ def scan_objects(ctx: Context, action: StepSpec) -> None:
         if has_root_objects:
             initial_prefixes = [("", 0), *initial_prefixes]
 
-        # Load already-scanned prefixes for resume support
         already_scanned: set[str] = set()
         if not ctx.force:
             already_scanned = {
@@ -1539,6 +974,24 @@ def estimate_savings(ctx: Context, action: StepSpec) -> None:
 
 
 # ===========================================================================
+# PREP: materialize rule costs
+# ===========================================================================
+
+
+def materialize_rule_costs_step(ctx: Context, action: StepSpec) -> None:
+    """Materialize per-protect-rule storage costs into the rule_costs table."""
+    fingerprint = hashlib.sha256((PLAN_FINGERPRINT + "rule_costs").encode()).hexdigest()
+    if not ctx.force and marker_matches(action.action_id, fingerprint):
+        print_summary(f"skip {action.action_id}: marker is current")
+        return
+
+    conn = get_db()
+    total_inserted = materialize_rule_costs(conn)
+    print_summary(f"{action.action_id}: materialized {total_inserted} rule cost rows")
+    write_marker(action.action_id, fingerprint, dry_run=ctx.dry_run)
+
+
+# ===========================================================================
 # CLEANUP steps
 # ===========================================================================
 
@@ -1592,6 +1045,8 @@ def _delete_prefix_objects(
     prefix: str,
 ) -> tuple[int, int, dict[str, int]]:
     """Delete cold unprotected objects under a single prefix. Returns (count, bytes, by_class)."""
+    from scripts.storage.storage_db import _db_lock
+
     with _db_lock:
         rows = _fetchall_dicts(
             get_db().execute(
@@ -1735,6 +1190,8 @@ def wait_for_soft_delete_window(ctx: Context, action: StepSpec) -> None:
 
     existing_extra = read_marker_extra(action.action_id)
     if existing_extra is not None and not ctx.force:
+        from datetime import datetime
+
         existing_deadline = datetime.fromisoformat(existing_extra["settle_deadline"])
         if now_utc() < existing_deadline:
             remaining = existing_deadline - now_utc()
@@ -1830,6 +1287,19 @@ STEPS: list[StepSpec] = [
         mutating=False,
         runner=estimate_savings,
         predecessors=("prep.scan_objects",),
+    ),
+    StepSpec(
+        action_id="prep.materialize_rule_costs",
+        group_name="prep",
+        command_name="materialize-rule-costs",
+        description="Materialize per-protect-rule storage costs into the rule_costs table.",
+        help_text=(
+            "Compute the storage cost of each protect rule by joining against the scanned object catalog. "
+            "Results are stored in the rule_costs table for the delete-o-tron dashboard."
+        ),
+        mutating=False,
+        runner=materialize_rule_costs_step,
+        predecessors=("prep.estimate_savings",),
     ),
     StepSpec(
         action_id="cleanup.enable_soft_delete",

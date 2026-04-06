@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>delete-o-tron</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', '"SF Mono"', 'Menlo', 'monospace'],
+          },
+          colors: {
+            surface: {
+              DEFAULT: '#1a1b1e',
+              raised: '#25262b',
+              sunken: '#141517',
+              border: '#373a40',
+              'border-subtle': '#2c2e33',
+            },
+            text: {
+              DEFAULT: '#e4e5e7',
+              secondary: '#909296',
+              muted: '#5c5f66',
+            },
+            accent: {
+              DEFAULT: '#4c6ef5',
+              hover: '#3b5bdb',
+              subtle: '#1b2559',
+              border: '#364fc7',
+            },
+            status: {
+              success: '#40c057',
+              'success-bg': '#0b2e13',
+              'success-border': '#2b8a3e',
+              warning: '#fab005',
+              'warning-bg': '#2e2505',
+              'warning-border': '#e67700',
+              danger: '#fa5252',
+              'danger-bg': '#2e0b0b',
+              'danger-border': '#c92a2a',
+            },
+          },
+        },
+      },
+    }
+  </script>
+  <script type="importmap">
+    {
+      "imports": {
+        "vue": "https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js",
+        "vue-router": "https://unpkg.com/vue-router@4/dist/vue-router.esm-browser.js"
+      }
+    }
+  </script>
+</head>
+<body class="bg-surface text-text min-h-screen">
+  <div id="app"></div>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
