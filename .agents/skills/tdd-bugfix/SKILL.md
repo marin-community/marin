@@ -1,6 +1,6 @@
 ---
 name: tdd-bugfix
-description: Fix a bug using test-driven development. Analyze the problem, write a failing test first, fix the code, validate, then commit. Use when asked to fix a bug with TDD or when a regression needs a reproducing test.
+description: Fix a bug using test-driven development. Analyze the problem, write a failing test first, fix the code, validate, then commit. Use for in-branch bug fixes where the issue is already understood. For bugs originating from a GitHub issue, prefer fix-issue instead.
 ---
 
 # Skill: TDD Bug Fix
@@ -53,7 +53,7 @@ Rules:
 Run the test and confirm it **fails** for the expected reason:
 
 ```bash
-uv run pytest <test_file>::<test_name> -xvs
+uv run pytest <test_file>::<test_name> -xvs --timeout=60
 ```
 
 If the test passes, your test does not reproduce the bug — revise it. If it
@@ -80,30 +80,18 @@ Then run the broader test suite for the affected module to check for regressions
 uv run pytest <test_file> -x --timeout=120
 ```
 
-If other tests break, fix them before proceeding.
+If other tests break, fix them before proceeding. PR CI will catch broader
+regressions beyond this file.
 
-## Phase 4: Lint, Commit, Push
+## Phase 4: Commit and Push
 
-```bash
-./infra/pre-commit.py --all-files --fix
-```
+Delegate to @.agents/skills/commit/SKILL.md for lint, staging, and push.
 
-Fix any lint errors that `--fix` cannot resolve automatically.
-
-Stage the test file and the fix separately so the commit history is reviewable,
-or combine into a single commit if the change is small. Use your judgment.
-
-Commit message format:
+Use this commit message format:
 
 ```
 [<scope>] Fix <concise description>
 
 <Root cause in one sentence. Reference the test that now guards against
 regression.>
-```
-
-Push to the current remote branch:
-
-```bash
-git push
 ```
