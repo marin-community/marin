@@ -502,6 +502,30 @@ def _load_hf_base_tokenizer(name_or_path: str) -> HfBaseTokenizer:
     return HfBaseTokenizer.from_pretrained(name_or_path)
 
 
+def _load_chat_template_jinja(name_or_path: str) -> str | None:
+    """Load chat template from a standalone .jinja file.
+
+    HF transformers>=4.43 saves large chat templates to a separate
+    ``chat_template.jinja`` file instead of inlining them in
+    ``tokenizer_config.json``.
+    """
+    local_path = os.path.join(name_or_path, "chat_template.jinja")
+    if os.path.isfile(local_path):
+        with open(local_path) as f:
+            return f.read()
+
+    if os.path.isdir(name_or_path):
+        return None
+
+    try:
+        path = hf_hub_download(name_or_path, "chat_template.jinja")
+    except (EntryNotFoundError, RepositoryNotFoundError):
+        return None
+
+    with open(path) as f:
+        return f.read()
+
+
 def _load_hf_tokenizer(name_or_path: str) -> HfMarinTokenizer:
     tok = _load_hf_base_tokenizer(name_or_path)
     config = _load_tokenizer_config(name_or_path)
@@ -518,6 +542,8 @@ def _load_hf_tokenizer(name_or_path: str) -> HfMarinTokenizer:
     all_special_ids = _collect_special_ids(config, vocab, bos_id, eos_id, pad_id)
     id_to_token = {v: k for k, v in vocab.items()}
 
+    chat_template = config.get("chat_template") or _load_chat_template_jinja(name_or_path)
+
     return HfMarinTokenizer(
         _tokenizer=tok,
         _name_or_path=name_or_path,
@@ -526,7 +552,7 @@ def _load_hf_tokenizer(name_or_path: str) -> HfMarinTokenizer:
         _pad_id=pad_id,
         _bos_token=bos_token,
         _eos_token=eos_token,
-        _chat_template=config.get("chat_template"),
+        _chat_template=chat_template,
         _vocab_size=tok.get_vocab_size(),
         _all_special_ids=all_special_ids,
         _id_to_token=id_to_token,
@@ -662,7 +688,7 @@ def _load_kitoken_tokenizer(name_or_path: str) -> KitokenMarinTokenizer:
         _eos_id=eos_id,
         _pad_id=pad_id,
         _vocab_size=vocab_size,
-        _chat_template=config.get("chat_template"),
+        _chat_template=config.get("chat_template") or _load_chat_template_jinja(name_or_path),
         _all_special_ids=all_special_ids,
         _prepend_bos=prepend_bos,
         _vocab=vocab,

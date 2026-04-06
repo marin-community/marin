@@ -54,6 +54,7 @@ from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
 from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.cloud_utils import temp_dir_before_upload
+from levanter.tokenizers import MarinTokenizer
 from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, use_cpu_device
 from levanter.utils.json_utils import ConfigJSONEncoder
@@ -1095,7 +1096,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             if save_tokenizer:
                 logger.info("Saving tokenizer")
-                self.tokenizer.save_pretrained(local_path)
+                tokenizer = self.tokenizer
+                if isinstance(tokenizer, MarinTokenizer):
+                    # MarinTokenizer doesn't have save_pretrained; load the
+                    # underlying HF tokenizer so we can serialize it.
+                    tokenizer = load_tokenizer(tokenizer.name_or_path)
+                tokenizer.save_pretrained(local_path)
 
             if save_feature_extractor and self.feature_extractor is not None:
                 logger.info("Saving feature extractor")
