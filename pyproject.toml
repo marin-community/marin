@@ -222,8 +222,3 @@ testpaths = ["tests", "experiments"]
 
 # Don't run TPU or slow tests by default
 addopts = "--session-timeout=480 -m 'not tpu_ci and not slow'"
-
-[dependency-groups]
-dev = [
-    "hypothesis",
-]

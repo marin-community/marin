@@ -3362,7 +3362,7 @@ name = "hypothesis"
 version = "6.151.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "sortedcontainers" },
+    { name = "sortedcontainers", marker = "(extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-gpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/00/5b/039c095977004f2316225559d591c5a4c62b2e4d7a429db2dd01d37c3ec2/hypothesis-6.151.6.tar.gz", hash = "sha256:755decfa326c8c97a4c8766fe40509985003396442138554b0ae824f9584318f", size = 475846, upload-time = "2026-02-11T04:42:06.891Z" }
 wheels = [
@@ -5426,11 +5426,6 @@ dependencies = [
     { name = "zephyr" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "hypothesis" },
-]
-
 [package.metadata]
 requires-dist = [
     { name = "dupekit", specifier = ">=0.1.0" },
@@ -5443,9 +5438,6 @@ requires-dist = [
     { name = "watchdog" },
     { name = "zephyr", editable = "lib/zephyr" },
 ]
-
-[package.metadata.requires-dev]
-dev = [{ name = "hypothesis" }]
 
 [[package]]
 name = "markdown"
