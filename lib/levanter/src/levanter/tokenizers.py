@@ -216,6 +216,7 @@ class HfMarinTokenizer:
     _vocab_size: int
     _all_special_ids: list[int]
     _id_to_token: dict[int, str] = dataclasses.field(default_factory=dict, repr=False)
+    _vocab: dict[str, int] = dataclasses.field(default_factory=dict, repr=False)
 
     @property
     def name_or_path(self) -> str:
@@ -266,7 +267,7 @@ class HfMarinTokenizer:
         return [enc.ids for enc in encodings]
 
     def get_vocab(self) -> dict[str, int]:
-        return self._tokenizer.get_vocab()
+        return self._vocab
 
     def convert_ids_to_tokens(self, ids: int | list[int]) -> str | list[str]:
         if isinstance(ids, int):
@@ -274,10 +275,9 @@ class HfMarinTokenizer:
         return [self._id_to_token.get(i, f"<unk:{i}>") for i in ids]
 
     def convert_tokens_to_ids(self, tokens: str | list[str]) -> int | list[int]:
-        vocab = self._tokenizer.get_vocab()
         if isinstance(tokens, str):
-            return vocab.get(tokens, -1)
-        return [vocab.get(t, -1) for t in tokens]
+            return self._vocab.get(tokens, -1)
+        return [self._vocab.get(t, -1) for t in tokens]
 
     @property
     def all_special_ids(self) -> list[int]:
@@ -530,6 +530,7 @@ def _load_hf_tokenizer(name_or_path: str) -> HfMarinTokenizer:
         _vocab_size=tok.get_vocab_size(),
         _all_special_ids=all_special_ids,
         _id_to_token=id_to_token,
+        _vocab=vocab,
     )
 
 

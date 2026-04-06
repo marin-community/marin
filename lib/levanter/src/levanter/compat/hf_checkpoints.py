@@ -16,7 +16,7 @@ import urllib.parse
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING, Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
@@ -66,9 +66,7 @@ from transformers import (  # noqa: E402  # noqa: E402
     AutoModel,
     AutoModelForCausalLM,
     AutoTokenizer,
-    PreTrainedTokenizer,
     PreTrainedTokenizerBase,
-    PreTrainedTokenizerFast,
 )
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers.dynamic_module_utils import get_class_from_dynamic_module  # noqa: E402
@@ -394,8 +392,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
     HfConfigClass: Type
     "The HFConfig class to use. If None is provided, will be inferred from the reference_checkpoint"
 
-    tokenizer: PreTrainedTokenizerFast | PreTrainedTokenizer
-    "The tokenizer to use. If None, will be inferred from the reference_checkpoint"
+    tokenizer: Any
+    "The tokenizer to use. May be an HF tokenizer, a MarinTokenizer, or similar. If None, will be inferred from the reference_checkpoint."
 
     feature_extractor: Optional["FeatureExtractionMixin"] = None
     "The non-text preprocessor to use for multi-modality."
@@ -415,7 +413,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         LevConfigClass: Type[LevConfig],
         reference_checkpoint: Optional[Union[RepoRef, str]] = None,
         HfConfigClass: Optional[Union[str, Type]] = None,
-        tokenizer: Optional[Union[str, PreTrainedTokenizer, PreTrainedTokenizerFast]] = None,
+        tokenizer: Optional[Any] = None,
         feature_extractor: Optional["FeatureExtractionMixin"] = None,
         config_overrides: Optional[dict] = None,
         trust_remote_code: bool = False,
@@ -555,9 +553,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         return clss
 
     @staticmethod
-    def _infer_tokenizer(
-        tokenizer, ref, trust_remote_code: bool = False
-    ) -> Union[PreTrainedTokenizer, PreTrainedTokenizerFast]:
+    def _infer_tokenizer(tokenizer, ref, trust_remote_code: bool = False) -> Any:
         if tokenizer is None:
             if ref is None:
                 raise ValueError("Must provide either tokenizer or reference_checkpoint")
@@ -571,11 +567,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 revision=rev,
                 trust_remote_code=trust_remote_code,
             )
-        else:
-            pass
-
-        assert isinstance(tokenizer, (PreTrainedTokenizer, PreTrainedTokenizerFast))
-
         return tokenizer
 
     @cached_property
