@@ -72,6 +72,7 @@ def tokenize_nemotron(
     *,
     tokenizer: str | None = None,
     max_workers: int = 4096,
+    cache_copy_max_workers: int = 128,
 ) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Nemotron CC dataset splits.
 
@@ -100,6 +101,7 @@ def tokenize_nemotron(
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
                 max_workers=max_workers,
+                cache_copy_max_workers=cache_copy_max_workers,
             ),
         )
 
