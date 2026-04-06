@@ -1,7 +1,12 @@
 import { createApp, ref, computed, watch, onMounted } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import { humanBytes, humanCost, humanCount } from './format.js'
-import { fetchOverview, fetchSavings, fetchRules, fetchSimulate } from './api.js'
+import {
+  fetchOverview, fetchSavings, fetchRules, fetchSimulate, fetchDeleteEstimate, fetchExplore,
+  fetchDeleteRules, createDeleteRule, removeDeleteRule, recalculateDeleteRules,
+  createProtectRule, removeProtectRule, recalculateProtectRules,
+  fetchUnifiedExplore, triggerSync, fetchSyncStatus,
+} from './api.js'
 
 // ---------------------------------------------------------------------------
 // StorageClassBreakdown
@@ -192,7 +197,7 @@ const COLUMNS = [
 
 const RuleCostTable = {
   props: { rules: Array },
-  emits: ['update:excluded'],
+  emits: ['update:excluded', 'remove'],
   setup(props, { emit }) {
     const search = ref('')
     const sortKey = ref('monthly_cost_usd')
@@ -248,6 +253,7 @@ const RuleCostTable = {
       search, sortKey, sortDir, excluded, filteredRules, COLUMNS,
       toggleSort, toggleExcluded, sortIndicator,
       humanBytes, humanCost, humanCount,
+      emit,
     }
   },
   template: `
@@ -271,6 +277,7 @@ const RuleCostTable = {
                   @click="toggleSort(col.key)">
                 {{ col.label }}{{ sortIndicator(col.key) }}
               </th>
+              <th class="px-3 py-2 w-16"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
@@ -289,9 +296,15 @@ const RuleCostTable = {
               <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ humanCount(rule.total_objects) }}</td>
               <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ humanBytes(rule.total_bytes) }}</td>
               <td class="px-3 py-2 text-[13px] text-right font-mono font-semibold text-accent">{{ humanCost(rule.monthly_cost_usd) }}</td>
+              <td class="px-3 py-2 text-right">
+                <button @click="emit('remove', rule.id)"
+                        class="text-xs text-text-muted hover:text-status-danger transition-colors">
+                  Remove
+                </button>
+              </td>
             </tr>
             <tr v-if="filteredRules.length === 0">
-              <td :colspan="COLUMNS.length + 1" class="px-3 py-8 text-center text-sm text-text-muted">
+              <td :colspan="COLUMNS.length + 2" class="px-3 py-8 text-center text-sm text-text-muted">
                 No matching rules
               </td>
             </tr>
@@ -400,6 +413,8 @@ const OverviewDashboard = {
 // SavePatterns
 // ---------------------------------------------------------------------------
 
+const MARIN_BUCKET_OPTIONS = ['*']
+
 const SavePatterns = {
   components: { RuleCostTable, CostCalculator },
   setup() {
@@ -407,11 +422,16 @@ const SavePatterns = {
     const excluded = ref(new Set())
     const loading = ref(true)
     const error = ref(null)
+    const addError = ref(null)
+    const bucketOptions = ref(MARIN_BUCKET_OPTIONS)
+    const newRule = ref({ pattern: '', bucket: '*', owners: '', reasons: '' })
 
     onMounted(async () => {
       try {
-        const resp = await fetchRules()
-        rules.value = resp.rules
+        const [rulesResp, overviewResp] = await Promise.all([fetchRules(), fetchOverview()])
+        rules.value = rulesResp.rules
+        const buckets = overviewResp.regions.map(r => r.bucket)
+        bucketOptions.value = ['*', ...buckets]
       } catch (e) {
         error.value = e.message || String(e)
       } finally {
@@ -423,11 +443,70 @@ const SavePatterns = {
       excluded.value = ids
     }
 
-    return { rules, excluded, loading, error, onExcludedUpdate }
+    async function addRule() {
+      addError.value = null
+      try {
+        await createProtectRule(newRule.value)
+        newRule.value = { pattern: '', bucket: '*', owners: '', reasons: '' }
+        const resp = await fetchRules()
+        rules.value = resp.rules
+      } catch (e) {
+        addError.value = e.message || String(e)
+      }
+    }
+
+    async function removeRule(id) {
+      try {
+        await removeProtectRule(id)
+        const resp = await fetchRules()
+        rules.value = resp.rules
+      } catch (e) {
+        error.value = e.message || String(e)
+      }
+    }
+
+    return { rules, excluded, loading, error, addError, newRule, bucketOptions, onExcludedUpdate, addRule, removeRule }
   },
   template: `
     <div>
-      <h1 class="text-2xl font-bold text-text tracking-tight mb-6">Save Patterns</h1>
+      <h1 class="text-2xl font-bold text-text tracking-tight mb-6">Protect Rules</h1>
+
+      <!-- Add rule form -->
+      <div class="rounded-lg border border-surface-border bg-surface-raised p-4 mb-6">
+        <h2 class="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">Add Protect Rule</h2>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <label class="text-xs text-text-muted block mb-1">Bucket</label>
+            <select v-model="newRule.bucket"
+                    class="w-full px-3 py-2 text-sm rounded border border-surface-border bg-surface-sunken text-text focus:outline-none focus:border-accent">
+              <option v-for="b in bucketOptions" :key="b" :value="b">{{ b }}</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-text-muted block mb-1">Pattern (SQL LIKE)</label>
+            <input v-model="newRule.pattern" placeholder="e.g. checkpoints/best/%"
+                   class="w-full px-3 py-2 text-sm rounded border border-surface-border bg-surface-sunken text-text placeholder-text-muted focus:outline-none focus:border-accent font-mono" />
+          </div>
+          <div>
+            <label class="text-xs text-text-muted block mb-1">Owners</label>
+            <input v-model="newRule.owners" placeholder="e.g. alice,bob"
+                   class="w-full px-3 py-2 text-sm rounded border border-surface-border bg-surface-sunken text-text placeholder-text-muted focus:outline-none focus:border-accent" />
+          </div>
+          <div>
+            <label class="text-xs text-text-muted block mb-1">Reasons</label>
+            <input v-model="newRule.reasons" placeholder="Why keep these?"
+                   class="w-full px-3 py-2 text-sm rounded border border-surface-border bg-surface-sunken text-text placeholder-text-muted focus:outline-none focus:border-accent" />
+          </div>
+        </div>
+        <div class="mt-3 flex items-center gap-3">
+          <button @click="addRule" :disabled="!newRule.pattern"
+                  class="px-4 py-2 text-sm font-medium rounded bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            Add Rule
+          </button>
+          <span v-if="addError" class="text-sm text-status-danger">{{ addError }}</span>
+        </div>
+      </div>
+
       <div v-if="loading" class="flex items-center justify-center py-24 text-text-muted text-sm">
         ${SPINNER_SVG} Loading rules...
       </div>
@@ -437,7 +516,7 @@ const SavePatterns = {
       </div>
       <div v-else class="flex gap-6">
         <div class="flex-1 min-w-0">
-          <RuleCostTable :rules="rules" @update:excluded="onExcludedUpdate" />
+          <RuleCostTable :rules="rules" @update:excluded="onExcludedUpdate" @remove="removeRule" />
         </div>
         <div class="w-80 flex-shrink-0">
           <CostCalculator :excluded="excluded" :rules="rules" />
@@ -448,10 +527,577 @@ const SavePatterns = {
 }
 
 // ---------------------------------------------------------------------------
+// Explorer
+// ---------------------------------------------------------------------------
+
+const Explorer = {
+  setup() {
+    const buckets = ref([])
+    const selectedBucket = ref('')
+    const pathStack = ref([])  // array of prefix strings for breadcrumb nav
+    const loading = ref(false)
+    const error = ref(null)
+    const result = ref(null)
+    const sortKey = ref('monthly_cost_usd')
+    const sortDir = ref('desc')
+
+    const currentPrefix = computed(() => {
+      return pathStack.value.length > 0 ? pathStack.value[pathStack.value.length - 1] : ''
+    })
+
+    const breadcrumbs = computed(() => {
+      const parts = [{ label: '/', prefix: '' }]
+      if (pathStack.value.length === 0) return parts
+      const full = pathStack.value[pathStack.value.length - 1]
+      const segments = full.split('/').filter(Boolean)
+      let acc = ''
+      for (const seg of segments) {
+        acc += seg + '/'
+        parts.push({ label: seg, prefix: acc })
+      }
+      return parts
+    })
+
+    const sortedEntries = computed(() => {
+      if (!result.value) return []
+      return [...result.value.entries].sort((a, b) => {
+        const av = a[sortKey.value]
+        const bv = b[sortKey.value]
+        if (typeof av === 'number' && typeof bv === 'number') {
+          return sortDir.value === 'asc' ? av - bv : bv - av
+        }
+        return sortDir.value === 'asc'
+          ? String(av ?? '').localeCompare(String(bv ?? ''))
+          : String(bv ?? '').localeCompare(String(av ?? ''))
+      })
+    })
+
+    function toggleSort(key) {
+      if (sortKey.value === key) {
+        sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+      } else {
+        sortKey.value = key
+        sortDir.value = key === 'name' ? 'asc' : 'desc'
+      }
+    }
+
+    function sortIndicator(key) {
+      if (sortKey.value !== key) return ''
+      return sortDir.value === 'asc' ? ' \\u2191' : ' \\u2193'
+    }
+
+    async function load() {
+      if (!selectedBucket.value) return
+      loading.value = true
+      error.value = null
+      try {
+        result.value = await fetchExplore(selectedBucket.value, currentPrefix.value)
+      } catch (e) {
+        error.value = e.message || String(e)
+      } finally {
+        loading.value = false
+      }
+    }
+
+    function navigate(prefix) {
+      pathStack.value = [...pathStack.value, prefix]
+      load()
+    }
+
+    function navigateTo(prefix) {
+      // Used by breadcrumbs — truncate stack to this prefix
+      if (prefix === '') {
+        pathStack.value = []
+      } else {
+        const idx = pathStack.value.indexOf(prefix)
+        if (idx >= 0) {
+          pathStack.value = pathStack.value.slice(0, idx + 1)
+        } else {
+          pathStack.value = [prefix]
+        }
+      }
+      load()
+    }
+
+    onMounted(async () => {
+      try {
+        const overview = await fetchOverview()
+        buckets.value = overview.regions.map(r => ({ bucket: r.bucket, region: r.region }))
+        if (buckets.value.length > 0) {
+          selectedBucket.value = buckets.value[0].bucket
+          load()
+        }
+      } catch (e) {
+        error.value = e.message || String(e)
+      }
+    })
+
+    watch(selectedBucket, () => {
+      pathStack.value = []
+      load()
+    })
+
+    return {
+      buckets, selectedBucket, pathStack, loading, error, result,
+      currentPrefix, breadcrumbs, sortedEntries,
+      sortKey, sortDir, toggleSort, sortIndicator,
+      navigate, navigateTo, load,
+      humanBytes, humanCost, humanCount,
+    }
+  },
+  template: `
+    <div>
+      <h1 class="text-2xl font-bold text-text tracking-tight mb-6">Explore</h1>
+
+      <div class="flex items-center gap-4 mb-4">
+        <select v-model="selectedBucket"
+                class="px-3 py-2 text-sm rounded border border-surface-border bg-surface-sunken text-text focus:outline-none focus:border-accent">
+          <option v-for="b in buckets" :key="b.bucket" :value="b.bucket">
+            {{ b.region }} ({{ b.bucket }})
+          </option>
+        </select>
+      </div>
+
+      <div class="flex items-center gap-1 mb-4 text-sm">
+        <template v-for="(crumb, idx) in breadcrumbs" :key="crumb.prefix">
+          <span v-if="idx > 0" class="text-text-muted">/</span>
+          <button @click="navigateTo(crumb.prefix)"
+                  :class="[
+                    'px-1.5 py-0.5 rounded transition-colors',
+                    idx === breadcrumbs.length - 1
+                      ? 'text-text font-semibold'
+                      : 'text-accent hover:text-accent-hover hover:bg-surface-raised'
+                  ]">
+            {{ crumb.label }}
+          </button>
+        </template>
+      </div>
+
+      <div v-if="loading" class="flex items-center gap-2 text-sm text-text-muted py-8">
+        <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        Loading...
+      </div>
+      <div v-else-if="error"
+           class="rounded-lg border border-status-danger-border bg-status-danger-bg p-4 text-sm text-status-danger">
+        {{ error }}
+      </div>
+      <template v-else-if="result">
+        <div v-if="result.type === 'buckets'" class="mb-2 text-xs text-text-muted">
+          Too many children — showing lexicographic ranges
+        </div>
+
+        <div class="overflow-x-auto rounded-lg border border-surface-border">
+          <table class="w-full border-collapse">
+            <thead>
+              <tr class="border-b border-surface-border bg-surface-sunken">
+                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none hover:text-text transition-colors"
+                    :class="sortKey === 'name' ? 'text-accent' : 'text-text-secondary'"
+                    @click="toggleSort('name')">
+                  Name{{ sortIndicator('name') }}
+                </th>
+                <th v-if="result.type === 'buckets'"
+                    class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">
+                  Dirs
+                </th>
+                <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider cursor-pointer select-none hover:text-text transition-colors"
+                    :class="sortKey === 'objects' ? 'text-accent' : 'text-text-secondary'"
+                    @click="toggleSort('objects')">
+                  Objects{{ sortIndicator('objects') }}
+                </th>
+                <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider cursor-pointer select-none hover:text-text transition-colors"
+                    :class="sortKey === 'bytes' ? 'text-accent' : 'text-text-secondary'"
+                    @click="toggleSort('bytes')">
+                  Size{{ sortIndicator('bytes') }}
+                </th>
+                <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider cursor-pointer select-none hover:text-text transition-colors"
+                    :class="sortKey === 'monthly_cost_usd' ? 'text-accent' : 'text-text-secondary'"
+                    @click="toggleSort('monthly_cost_usd')">
+                  Cost/mo{{ sortIndicator('monthly_cost_usd') }}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="entry in sortedEntries" :key="entry.name"
+                  class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors">
+                <td class="px-3 py-2 text-[13px] font-mono text-text max-w-md">
+                  <button v-if="entry.prefix"
+                          @click="navigate(entry.prefix)"
+                          class="text-accent hover:text-accent-hover hover:underline text-left">
+                    {{ entry.name }}
+                  </button>
+                  <span v-else class="text-text-secondary">{{ entry.name }}</span>
+                </td>
+                <td v-if="result.type === 'buckets'" class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">
+                  {{ humanCount(entry.child_count) }}
+                </td>
+                <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ humanCount(entry.objects) }}</td>
+                <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ humanBytes(entry.bytes) }}</td>
+                <td class="px-3 py-2 text-[13px] text-right font-mono font-semibold text-accent">{{ humanCost(entry.monthly_cost_usd) }}</td>
+              </tr>
+              <tr v-if="sortedEntries.length === 0">
+                <td :colspan="result.type === 'buckets' ? 5 : 4" class="px-3 py-8 text-center text-sm text-text-muted">
+                  Empty directory
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </div>
+  `,
+}
+
+// ---------------------------------------------------------------------------
+// DeleteRulesManager
+// ---------------------------------------------------------------------------
+
+const DeleteRulesManager = {
+  setup() {
+    const rules = ref([])
+    const newRule = ref({ pattern: '', storage_class: null, description: '' })
+    const recalculating = ref(false)
+
+    const totalObjects = computed(() => rules.value.reduce((s, r) => s + (r.total_objects || 0), 0))
+    const totalCost = computed(() => rules.value.reduce((s, r) => s + (r.monthly_cost_usd || 0), 0))
+    const totalBytesHuman = computed(() => {
+      const bytes = rules.value.reduce((s, r) => s + (r.total_bytes || 0), 0)
+      return humanBytes(bytes)
+    })
+
+    async function load() {
+      const data = await fetchDeleteRules()
+      rules.value = data.rules || []
+    }
+
+    async function recalculate() {
+      recalculating.value = true
+      try {
+        await recalculateDeleteRules()
+        await load()
+      } finally {
+        recalculating.value = false
+      }
+    }
+
+    async function addRule() {
+      await createDeleteRule(newRule.value)
+      newRule.value = { pattern: '', storage_class: null, description: '' }
+      await recalculate()
+    }
+
+    async function removeRule(id) {
+      await removeDeleteRule(id)
+      await recalculate()
+    }
+
+    onMounted(load)
+
+    return { rules, newRule, recalculating, totalObjects, totalCost, totalBytesHuman, addRule, removeRule, recalculate, humanBytes, humanCost }
+  },
+  template: `
+    <div class="space-y-6">
+      <div class="flex items-center justify-between">
+        <h1 class="text-2xl font-bold text-text tracking-tight">Delete Rules</h1>
+        <div class="flex gap-2">
+          <button @click="recalculate"
+                  class="px-4 py-2 text-sm font-medium rounded border border-surface-border bg-surface-raised text-text-secondary hover:text-text transition-colors disabled:opacity-50"
+                  :disabled="recalculating">
+            {{ recalculating ? 'Recalculating...' : 'Recalculate Costs' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Add rule form -->
+      <div class="rounded-lg border border-surface-border bg-surface-raised p-4">
+        <h2 class="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">Add Delete Rule</h2>
+        <div class="flex gap-3 items-end flex-wrap">
+          <div class="flex-1 min-w-40">
+            <label class="text-xs text-text-muted block mb-1">Pattern (SQL LIKE)</label>
+            <input v-model="newRule.pattern" placeholder="e.g. checkpoints/%"
+                   class="w-full px-3 py-2 text-sm rounded border border-surface-border bg-surface-sunken text-text placeholder-text-muted focus:outline-none focus:border-accent font-mono" />
+          </div>
+          <div>
+            <label class="text-xs text-text-muted block mb-1">Storage Class</label>
+            <select v-model="newRule.storage_class"
+                    class="px-3 py-2 text-sm rounded border border-surface-border bg-surface-sunken text-text focus:outline-none focus:border-accent">
+              <option :value="null">Any</option>
+              <option value="STANDARD">STANDARD</option>
+              <option value="NEARLINE">NEARLINE</option>
+              <option value="COLDLINE">COLDLINE</option>
+              <option value="ARCHIVE">ARCHIVE</option>
+            </select>
+          </div>
+          <div class="flex-1 min-w-40">
+            <label class="text-xs text-text-muted block mb-1">Description</label>
+            <input v-model="newRule.description" placeholder="Reason for deletion"
+                   class="w-full px-3 py-2 text-sm rounded border border-surface-border bg-surface-sunken text-text placeholder-text-muted focus:outline-none focus:border-accent" />
+          </div>
+          <button @click="addRule" :disabled="!newRule.pattern || recalculating"
+                  class="px-4 py-2 text-sm font-medium rounded bg-status-danger text-white hover:opacity-80 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed">
+            {{ recalculating ? 'Calculating...' : 'Add Rule' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Rules table -->
+      <div class="overflow-x-auto rounded-lg border border-surface-border">
+        <table class="w-full border-collapse">
+          <thead>
+            <tr class="border-b border-surface-border bg-surface-sunken">
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Pattern</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Storage Class</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Description</th>
+              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Objects</th>
+              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Size</th>
+              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">$/mo</th>
+              <th class="px-3 py-2 w-16"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="rule in rules" :key="rule.id"
+                class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors">
+              <td class="px-3 py-2 text-[13px] font-mono text-text max-w-xs truncate" :title="rule.pattern">{{ rule.pattern }}</td>
+              <td class="px-3 py-2 text-[13px] text-text-secondary">{{ rule.storage_class || 'Any' }}</td>
+              <td class="px-3 py-2 text-[13px] text-text-secondary">{{ rule.description }}</td>
+              <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ (rule.total_objects || 0).toLocaleString() }}</td>
+              <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ humanBytes(rule.total_bytes || 0) }}</td>
+              <td class="px-3 py-2 text-[13px] text-right font-mono font-semibold text-status-danger">\${{ (rule.monthly_cost_usd || 0).toFixed(2) }}</td>
+              <td class="px-3 py-2 text-right">
+                <button @click="removeRule(rule.id)" :disabled="recalculating"
+                        class="text-xs text-text-muted hover:text-status-danger transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                  Remove
+                </button>
+              </td>
+            </tr>
+            <tr v-if="!rules.length">
+              <td colspan="7" class="px-3 py-8 text-center text-sm text-text-muted">
+                No delete rules configured. Add one above.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Totals -->
+      <div v-if="rules.length"
+           class="rounded-lg border border-status-danger-border bg-status-danger-bg p-4">
+        <div class="text-xs text-text-secondary uppercase tracking-wider mb-1">Total deletion impact</div>
+        <div class="text-lg font-mono font-semibold text-status-danger">
+          {{ totalObjects.toLocaleString() }} objects &middot; {{ totalBytesHuman }} &middot; \${{ totalCost.toFixed(2) }}/mo
+        </div>
+      </div>
+    </div>
+  `,
+}
+
+// ---------------------------------------------------------------------------
+// UnifiedExplorer
+// ---------------------------------------------------------------------------
+
+const UnifiedExplorer = {
+  setup() {
+    const prefix = ref('')
+    const entries = ref([])
+    const responseType = ref('children')
+    const loading = ref(false)
+    const sort = ref({ key: 'name', desc: false })
+
+    const breadcrumbs = computed(() => {
+      if (!prefix.value) return []
+      const parts = prefix.value.replace(/\/$/, '').split('/')
+      return parts.map((p, i) => ({
+        name: p,
+        prefix: parts.slice(0, i + 1).join('/') + '/',
+      }))
+    })
+
+    const sortedEntries = computed(() => {
+      const key = sort.value.key
+      const mult = sort.value.desc ? -1 : 1
+      return [...entries.value].sort((a, b) => {
+        // Primary: group by status
+        const sa = a.status_order ?? 99
+        const sb = b.status_order ?? 99
+        if (sa !== sb) return sa - sb
+        // Secondary: user-selected column
+        if (typeof a[key] === 'string') return mult * a[key].localeCompare(b[key])
+        return mult * ((a[key] || 0) - (b[key] || 0))
+      })
+    })
+
+    async function load() {
+      loading.value = true
+      try {
+        const data = await fetchUnifiedExplore(prefix.value)
+        entries.value = data.entries || []
+      } finally {
+        loading.value = false
+      }
+    }
+
+    function navigate(newPrefix) {
+      prefix.value = newPrefix
+      load()
+    }
+
+    function sortBy(key) {
+      if (sort.value.key === key) sort.value = { key, desc: !sort.value.desc }
+      else sort.value = { key, desc: true }
+    }
+
+    function statusClass(status) {
+      return {
+        keep: 'bg-status-success-bg text-status-success',
+        delete: 'bg-status-danger-bg text-status-danger',
+        mixed: 'bg-status-warning-bg text-status-warning',
+        unmatched: 'bg-surface-sunken text-text-muted',
+      }[status] || 'bg-surface-sunken text-text-muted'
+    }
+
+    function sortIndicator(key) {
+      if (sort.value.key !== key) return ''
+      return sort.value.desc ? ' \u2193' : ' \u2191'
+    }
+
+    onMounted(load)
+
+    return { prefix, entries, loading, sort, breadcrumbs, sortedEntries, navigate, sortBy, statusClass, sortIndicator, humanBytes, humanCost }
+  },
+  template: `
+    <div>
+      <h1 class="text-2xl font-bold text-text tracking-tight mb-6">Storage Explorer</h1>
+
+      <!-- Breadcrumb -->
+      <div class="flex items-center gap-1 mb-4 text-sm">
+        <button @click="navigate('')"
+                class="px-1.5 py-0.5 rounded text-accent hover:text-accent-hover hover:bg-surface-raised transition-colors">
+          /
+        </button>
+        <template v-for="(seg, i) in breadcrumbs" :key="i">
+          <span class="text-text-muted">/</span>
+          <button @click="navigate(seg.prefix)"
+                  :class="[
+                    'px-1.5 py-0.5 rounded transition-colors',
+                    i === breadcrumbs.length - 1
+                      ? 'text-text font-semibold'
+                      : 'text-accent hover:text-accent-hover hover:bg-surface-raised',
+                  ]">
+            {{ seg.name }}
+          </button>
+        </template>
+      </div>
+
+      <div v-if="loading" class="flex items-center gap-2 text-sm text-text-muted py-8">
+        ${SPINNER_SVG} Loading...
+      </div>
+      <div v-else class="overflow-x-auto rounded-lg border border-surface-border">
+        <table class="w-full border-collapse">
+          <thead>
+            <tr class="border-b border-surface-border bg-surface-sunken">
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none hover:text-text transition-colors"
+                  :class="sort.key === 'name' ? 'text-accent' : 'text-text-secondary'"
+                  @click="sortBy('name')">
+                Name{{ sortIndicator('name') }}
+              </th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Status</th>
+              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider cursor-pointer select-none hover:text-text transition-colors"
+                  :class="sort.key === 'objects' ? 'text-accent' : 'text-text-secondary'"
+                  @click="sortBy('objects')">
+                Objects{{ sortIndicator('objects') }}
+              </th>
+              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider cursor-pointer select-none hover:text-text transition-colors"
+                  :class="sort.key === 'bytes' ? 'text-accent' : 'text-text-secondary'"
+                  @click="sortBy('bytes')">
+                Size{{ sortIndicator('bytes') }}
+              </th>
+              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider cursor-pointer select-none hover:text-text transition-colors"
+                  :class="sort.key === 'monthly_cost_usd' ? 'text-accent' : 'text-text-secondary'"
+                  @click="sortBy('monthly_cost_usd')">
+                Cost/mo{{ sortIndicator('monthly_cost_usd') }}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="entry in sortedEntries" :key="entry.name"
+                class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors">
+              <td class="px-3 py-2 text-[13px] font-mono text-text max-w-md">
+                <button v-if="entry.prefix" @click="navigate(entry.prefix)"
+                        class="text-accent hover:text-accent-hover hover:underline text-left">
+                  {{ entry.name }}
+                </button>
+                <span v-else class="text-text-secondary">{{ entry.name }}</span>
+              </td>
+              <td class="px-3 py-2">
+                <span v-if="entry.status"
+                      :class="[statusClass(entry.status), 'text-xs font-medium px-2 py-0.5 rounded']">
+                  {{ entry.status }}
+                </span>
+              </td>
+              <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ (entry.objects || 0).toLocaleString() }}</td>
+              <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ humanBytes(entry.bytes || 0) }}</td>
+              <td class="px-3 py-2 text-[13px] text-right font-mono font-semibold text-accent">{{ humanCost(entry.monthly_cost_usd || 0) }}</td>
+            </tr>
+            <tr v-if="!sortedEntries.length && !loading">
+              <td colspan="5" class="px-3 py-8 text-center text-sm text-text-muted">No entries</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `,
+}
+
+// ---------------------------------------------------------------------------
+// SyncStatus
+// ---------------------------------------------------------------------------
+
+const SyncStatus = {
+  setup() {
+    const status = ref({})
+
+    function formatTime(iso) {
+      if (!iso) return ''
+      return new Date(iso).toLocaleTimeString()
+    }
+
+    async function load() {
+      try { status.value = await fetchSyncStatus() } catch (_) {}
+    }
+
+    async function sync() {
+      await triggerSync()
+      await load()
+    }
+
+    onMounted(() => {
+      load()
+      setInterval(load, 30000)
+    })
+
+    return { status, formatTime, sync }
+  },
+  template: `
+    <div class="flex items-center gap-2 text-xs text-text-muted">
+      <span v-if="status.syncing" class="text-status-warning">Syncing...</span>
+      <span v-else-if="status.last_sync">Last sync: {{ formatTime(status.last_sync) }}</span>
+      <span v-else>No sync</span>
+      <button @click="sync" :disabled="status.syncing"
+              class="text-accent hover:underline disabled:opacity-50">
+        Sync
+      </button>
+    </div>
+  `,
+}
+
+// ---------------------------------------------------------------------------
 // App shell
 // ---------------------------------------------------------------------------
 
 const App = {
+  components: { SyncStatus },
   setup() {
     return {}
   },
@@ -460,7 +1106,7 @@ const App = {
       <header class="border-b border-surface-border bg-surface-sunken">
         <div class="max-w-7xl mx-auto px-6 flex items-center h-14 gap-8">
           <span class="text-lg font-semibold text-text tracking-tight">delete-o-tron</span>
-          <nav class="flex items-center gap-1">
+          <nav class="flex items-center gap-1 flex-1">
             <router-link to="/"
               :class="['px-3 py-1.5 rounded text-sm font-medium transition-colors',
                 $route.path === '/' ? 'bg-surface-raised text-text' : 'text-text-secondary hover:text-text hover:bg-surface-raised']">
@@ -469,9 +1115,20 @@ const App = {
             <router-link to="/rules"
               :class="['px-3 py-1.5 rounded text-sm font-medium transition-colors',
                 $route.path === '/rules' ? 'bg-surface-raised text-text' : 'text-text-secondary hover:text-text hover:bg-surface-raised']">
-              Save Patterns
+              Protect Rules
+            </router-link>
+            <router-link to="/delete-rules"
+              :class="['px-3 py-1.5 rounded text-sm font-medium transition-colors',
+                $route.path === '/delete-rules' ? 'bg-surface-raised text-text' : 'text-text-secondary hover:text-text hover:bg-surface-raised']">
+              Delete Rules
+            </router-link>
+            <router-link to="/explore"
+              :class="['px-3 py-1.5 rounded text-sm font-medium transition-colors',
+                $route.path === '/explore' ? 'bg-surface-raised text-text' : 'text-text-secondary hover:text-text hover:bg-surface-raised']">
+              Explorer
             </router-link>
           </nav>
+          <SyncStatus />
         </div>
       </header>
       <main class="max-w-7xl mx-auto px-6 py-6">
@@ -490,6 +1147,8 @@ const router = createRouter({
   routes: [
     { path: '/', component: OverviewDashboard },
     { path: '/rules', component: SavePatterns },
+    { path: '/delete-rules', component: DeleteRulesManager },
+    { path: '/explore', component: UnifiedExplorer },
   ],
 })
 

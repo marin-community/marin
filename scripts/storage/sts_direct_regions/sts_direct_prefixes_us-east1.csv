@@ -1,9 +1,0 @@
-sts_prefix,bucket,owners,reasons,sources,artifact_kinds,priority_max,normalized_glob
-gs://marin-us-east1/DL3DV/,marin-us-east1,Julian,DL3DV - popular camera-conditioned video dataset,named.csv:18,,0,gs://marin-us-east1/DL3DV/**
-gs://marin-us-east1/analysis/,marin-us-east1,Rohith,Logprobs from SFT experiments,named.csv:1751,,0,gs://marin-us-east1/analysis/**
-gs://marin-us-east1/dmlab/,marin-us-east1,Julian,Small DeepMind Lab video navigation dataset,named.csv:16,,0,gs://marin-us-east1/dmlab/**
-gs://marin-us-east1/documents/math_reasoning_scaling/,marin-us-east1,Rohith,Evals for a bunch of models,named.csv:1750,,0,gs://marin-us-east1/documents/math_reasoning_scaling/**
-gs://marin-us-east1/ego-dex/,marin-us-east1,Julian,EgoDex - widely used egocentric video dataset,named.csv:14,,0,gs://marin-us-east1/ego-dex/**
-gs://marin-us-east1/pinlin_calvin_xu/,marin-us-east1,Calvin,"small artifacts dir (csvs produced by executor steps, etc.) | David Notes: a few kb",named.csv:4,,0,gs://marin-us-east1/pinlin_calvin_xu/**
-gs://marin-us-east1/re10k_clips/,marin-us-east1,Julian,RealEstate10K - popular camera-conditioned video dataset,named.csv:17,,0,gs://marin-us-east1/re10k_clips/**
-gs://marin-us-east1/webdatasets/,marin-us-east1,Julian,Egocentric video datasets converted to webdataset format | David Notes: 1 tb,named.csv:15,,0,gs://marin-us-east1/webdatasets/**

@@ -1,0 +1,1052 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Shared DuckDB storage catalog: schemas, init, queries, and helpers.
+
+Used by both the purge CLI and the delete-o-tron dashboard server.
+"""
+
+from __future__ import annotations
+
+import csv
+import hashlib
+import json
+import logging
+import shutil
+import threading
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from functools import cached_property
+from pathlib import Path
+from typing import Any
+
+import duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+SCRIPT_PATH = Path(__file__).resolve()
+STORAGE_DIR = SCRIPT_PATH.parent
+REPO_ROOT = STORAGE_DIR.parent.parent
+
+
+@dataclass(frozen=True)
+class StorageCatalog:
+    """Owns all workspace paths derived from a single root directory."""
+
+    root: Path
+
+    @cached_property
+    def db_path(self) -> Path:
+        return self.root / "storage.duckdb"
+
+    @cached_property
+    def objects_parquet_dir(self) -> Path:
+        return self.root / "objects_parquet"
+
+    @cached_property
+    def dir_summary_parquet_dir(self) -> Path:
+        return self.root / "dir_summary_parquet"
+
+    @cached_property
+    def protect_dir(self) -> Path:
+        return self.root / "protect"
+
+    @cached_property
+    def log_dir(self) -> Path:
+        return self.root / "logs"
+
+    def open_db(self) -> duckdb.DuckDBPyConnection:
+        return duckdb.connect(str(self.db_path))
+
+    def ensure_dirs(self) -> None:
+        for d in [self.root, self.objects_parquet_dir, self.dir_summary_parquet_dir, self.protect_dir, self.log_dir]:
+            d.mkdir(parents=True, exist_ok=True)
+
+
+DEFAULT_CATALOG = StorageCatalog(STORAGE_DIR / "purge")
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+MARIN_BUCKETS = [
+    "marin-eu-west4",
+    "marin-us-central1",
+    "marin-us-central2",
+    "marin-us-east1",
+    "marin-us-east5",
+    "marin-us-west4",
+]
+
+BUCKET_LOCATIONS = {
+    "marin-eu-west4": "EUROPE-WEST4",
+    "marin-us-central1": "US-CENTRAL1",
+    "marin-us-central2": "US-CENTRAL2",
+    "marin-us-east1": "US-EAST1",
+    "marin-us-east5": "US-EAST5",
+    "marin-us-west4": "US-WEST4",
+}
+
+NON_STANDARD_STORAGE_CLASSES = frozenset({"NEARLINE", "COLDLINE", "ARCHIVE"})
+
+SOFT_DELETE_RETENTION_SECONDS = 3 * 24 * 3600  # 3 days
+
+GCS_MAX_PAGE_SIZE = 5000
+
+# Partial response fields for list_blobs — only fetch what _blob_to_scanned needs.
+_BLOB_FIELDS = "items(name,size,storageClass,timeCreated,updated),prefixes,nextPageToken"
+ADAPTIVE_SPLIT_THRESHOLD = 10000  # scan flat if <= this many objects; split otherwise
+ADAPTIVE_SCAN_MAX_DEPTH = 2
+
+GCS_DISCOUNT = 0.30
+
+# Deterministic fingerprint for the plan (bucket list).
+PLAN_FINGERPRINT = hashlib.sha256(json.dumps(MARIN_BUCKETS, sort_keys=True).encode()).hexdigest()
+
+OBJECT_FLUSH_THRESHOLD = 10_000_000
+DELETE_BATCH_SIZE = 1000
+
+METADATA_FLUSH_THRESHOLD = 500
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StepSpec:
+    action_id: str
+    group_name: str
+    command_name: str
+    description: str
+    help_text: str
+    mutating: bool
+    runner: Callable[[Context, StepSpec], None]
+    predecessors: tuple[str, ...] = ()
+
+    scan_workers: bool = False
+    settle_hours: bool = False
+    optional: bool = False
+
+    def run(self, ctx: Context) -> None:
+        self.runner(ctx, self)
+
+
+@dataclass(frozen=True)
+class ScannedObject:
+    bucket: str
+    name: str
+    size_bytes: int
+    storage_class_id: int
+    created: datetime | None
+    updated: datetime | None
+
+
+@dataclass
+class Context:
+    conn: duckdb.DuckDBPyConnection
+    db_lock: threading.Lock
+    dry_run: bool
+    force: bool
+    include_optional: bool
+    scan_workers: int
+    settle_hours: int
+    log_path: Path
+    timestamp: str
+    project: str | None
+
+
+SCHEMA_VERSION = 14
+
+_ARROW_TO_DUCKDB: dict[pa.DataType, str] = {
+    pa.string(): "VARCHAR",
+    pa.int64(): "BIGINT",
+    pa.int32(): "INTEGER",
+    pa.timestamp("us", tz="UTC"): "TIMESTAMPTZ",
+}
+
+
+def _fetchone_dict(result: duckdb.DuckDBPyConnection) -> dict[str, Any] | None:
+    row = result.fetchone()
+    if row is None:
+        return None
+    return dict(zip([d[0] for d in result.description], row, strict=False))
+
+
+def _fetchall_dicts(result: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
+    cols = [d[0] for d in result.description]
+    return [dict(zip(cols, row, strict=False)) for row in result.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Arrow schemas
+# ---------------------------------------------------------------------------
+
+_OBJECTS_ARROW_SCHEMA = pa.schema(
+    [
+        ("bucket", pa.string()),
+        ("name", pa.string()),
+        ("size_bytes", pa.int64()),
+        ("storage_class_id", pa.int32()),
+        ("created", pa.timestamp("us", tz="UTC")),
+        ("updated", pa.timestamp("us", tz="UTC")),
+    ]
+)
+
+_DIR_SUMMARY_ARROW_SCHEMA = pa.schema(
+    [
+        ("bucket", pa.string()),
+        ("dir_prefix", pa.string()),
+        ("standard_count", pa.int32()),
+        ("standard_bytes", pa.int64()),
+        ("nearline_count", pa.int32()),
+        ("nearline_bytes", pa.int64()),
+        ("coldline_count", pa.int32()),
+        ("coldline_bytes", pa.int64()),
+        ("archive_count", pa.int32()),
+        ("archive_bytes", pa.int64()),
+    ]
+)
+
+_DIR_SUMMARY_ARROW_TO_DUCKDB: dict[pa.DataType, str] = {
+    pa.string(): "VARCHAR",
+    pa.int64(): "BIGINT",
+    pa.int32(): "INTEGER",
+}
+
+
+# ---------------------------------------------------------------------------
+# ObjectBuffer
+# ---------------------------------------------------------------------------
+
+
+class ObjectBuffer:
+    """Buffers scanned objects and flushes them as sorted, ZSTD-compressed parquet segments.
+
+    Owns the parquet segment directory and the DuckDB view that unions all segments.
+    Append via `add`, call `flush(force=True)` when done scanning.
+    """
+
+    def __init__(self, parquet_dir: Path, conn: duckdb.DuckDBPyConnection) -> None:
+        self._parquet_dir = parquet_dir
+        self._parquet_dir.mkdir(parents=True, exist_ok=True)
+        self._conn = conn
+        self._pending: list[ScannedObject] = []
+
+        existing = sorted(self._parquet_dir.glob("objects_*.parquet"))
+        self._segment_counter = int(existing[-1].stem.split("_")[1]) if existing else 0
+        self._refresh_view()
+
+    def _next_path(self) -> Path:
+        self._segment_counter += 1
+        return self._parquet_dir / f"objects_{self._segment_counter:06d}.parquet"
+
+    def _refresh_view(self) -> None:
+        """Point the ``objects`` view at current parquet segments."""
+        has_segments = any(self._parquet_dir.glob("objects_*.parquet"))
+        if has_segments:
+            glob = str(self._parquet_dir / "objects_*.parquet")
+            self._conn.execute(
+                f"""
+                CREATE OR REPLACE VIEW objects AS
+                SELECT * FROM read_parquet('{glob}', union_by_name=true, hive_partitioning=false)
+            """
+            )
+        else:
+            cols = ", ".join(f"NULL::{_ARROW_TO_DUCKDB[f.type]} AS {f.name}" for f in _OBJECTS_ARROW_SCHEMA)
+            self._conn.execute(f"CREATE OR REPLACE VIEW objects AS SELECT {cols} WHERE false")
+
+    def add(self, objects: list[ScannedObject]) -> None:
+        """Append objects to the buffer, flushing to parquet if the threshold is reached."""
+        self._pending.extend(objects)
+        self.flush()
+
+    def flush(self, *, force: bool = False) -> None:
+        if len(self._pending) < OBJECT_FLUSH_THRESHOLD and not force:
+            return
+        if not self._pending:
+            return
+        self._pending.sort(key=lambda o: (o.bucket, o.name))
+        arrow_table = pa.table(
+            {
+                "bucket": [o.bucket for o in self._pending],
+                "name": [o.name for o in self._pending],
+                "size_bytes": [o.size_bytes for o in self._pending],
+                "storage_class_id": [o.storage_class_id for o in self._pending],
+                "created": [o.created for o in self._pending],
+                "updated": [o.updated for o in self._pending],
+            },
+            schema=_OBJECTS_ARROW_SCHEMA,
+        )
+        pq.write_table(arrow_table, self._next_path(), compression="zstd")
+        self._refresh_view()
+        self._pending.clear()
+
+    def reset(self) -> None:
+        """Remove all parquet segments and reset counter."""
+        shutil.rmtree(self._parquet_dir, ignore_errors=True)
+        self._parquet_dir.mkdir(parents=True, exist_ok=True)
+        self._segment_counter = 0
+        self._pending.clear()
+        self._refresh_view()
+
+
+# ---------------------------------------------------------------------------
+# DirSummaryBuffer
+# ---------------------------------------------------------------------------
+
+
+class DirSummaryBuffer:
+    """Manages parquet segments for dir_summary and maintains a DuckDB view over them."""
+
+    def __init__(self, parquet_dir: Path, conn: duckdb.DuckDBPyConnection) -> None:
+        self._parquet_dir = parquet_dir
+        self._parquet_dir.mkdir(parents=True, exist_ok=True)
+        self._conn = conn
+
+        existing = sorted(self._parquet_dir.glob("dir_summary_*.parquet"))
+        self._segment_counter = int(existing[-1].stem.split("_")[2]) if existing else 0
+        self._refresh_view()
+
+    def _next_path(self) -> Path:
+        self._segment_counter += 1
+        return self._parquet_dir / f"dir_summary_{self._segment_counter:06d}.parquet"
+
+    def _refresh_view(self) -> None:
+        """Point the ``dir_summary`` view at current parquet segments."""
+        has_segments = any(self._parquet_dir.glob("dir_summary_*.parquet"))
+        if has_segments:
+            glob = str(self._parquet_dir / "dir_summary_*.parquet")
+            self._conn.execute(
+                f"""
+                CREATE OR REPLACE VIEW dir_summary AS
+                SELECT * FROM read_parquet('{glob}', union_by_name=true, hive_partitioning=false)
+            """
+            )
+        else:
+            cols = ", ".join(
+                f"NULL::{_DIR_SUMMARY_ARROW_TO_DUCKDB[f.type]} AS {f.name}" for f in _DIR_SUMMARY_ARROW_SCHEMA
+            )
+            self._conn.execute(f"CREATE OR REPLACE VIEW dir_summary AS SELECT {cols} WHERE false")
+
+    def write_arrow_table(self, arrow_table: pa.Table) -> None:
+        pq.write_table(arrow_table, self._next_path(), compression="zstd")
+        self._refresh_view()
+
+    def write_from_query(self, conn: duckdb.DuckDBPyConnection, bucket: str) -> None:
+        """Run the dir_summary aggregation query for a single bucket and write results to parquet."""
+        result = conn.execute(
+            """
+            SELECT o.bucket,
+                   left(o.name, length(o.name) - position('/' in reverse(o.name)) + 1) as dir_prefix,
+                   COUNT(*) FILTER (WHERE sc.name = 'STANDARD') as standard_count,
+                   COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'STANDARD'), 0) as standard_bytes,
+                   COUNT(*) FILTER (WHERE sc.name = 'NEARLINE') as nearline_count,
+                   COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'NEARLINE'), 0) as nearline_bytes,
+                   COUNT(*) FILTER (WHERE sc.name = 'COLDLINE') as coldline_count,
+                   COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'COLDLINE'), 0) as coldline_bytes,
+                   COUNT(*) FILTER (WHERE sc.name = 'ARCHIVE') as archive_count,
+                   COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'ARCHIVE'), 0) as archive_bytes
+            FROM objects o
+            JOIN storage_classes sc ON o.storage_class_id = sc.id
+            WHERE o.bucket = ?
+            GROUP BY o.bucket, dir_prefix
+            """,
+            (bucket,),
+        )
+        arrow_table = result.fetch_arrow_table()
+        if len(arrow_table) > 0:
+            self.write_arrow_table(arrow_table)
+
+    def reset(self) -> None:
+        """Remove all parquet segments and reset counter."""
+        shutil.rmtree(self._parquet_dir, ignore_errors=True)
+        self._parquet_dir.mkdir(parents=True, exist_ok=True)
+        self._segment_counter = 0
+        self._refresh_view()
+
+
+# ---------------------------------------------------------------------------
+# Database initialization
+# ---------------------------------------------------------------------------
+
+
+def init_db(catalog: StorageCatalog = DEFAULT_CATALOG) -> duckdb.DuckDBPyConnection:
+    """Open a DuckDB connection and ensure the schema is current."""
+    print_summary(f"opening DuckDB catalog: {catalog.db_path}")
+    conn = catalog.open_db()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cache_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
+    _run_migrations(conn, catalog)
+    return conn
+
+
+# ---------------------------------------------------------------------------
+# Schema migrations
+# ---------------------------------------------------------------------------
+
+# Each migration is an idempotent function that brings the DB from version N-1
+# to version N.  They run in order inside a single transaction per migration.
+
+
+def _migrate_to_11(conn: duckdb.DuckDBPyConnection) -> None:
+    """Add auto-increment sequence to protect_rules.id."""
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS protect_rules_id_seq START 1")
+    try:
+        conn.execute("ALTER TABLE protect_rules ALTER COLUMN id SET DEFAULT nextval('protect_rules_id_seq')")
+        row = _fetchone_dict(conn.execute("SELECT COALESCE(MAX(id), 0) AS max_id FROM protect_rules"))
+        if row and row["max_id"] > 0:
+            # DuckDB has no setval(); advance by calling nextval() until past max_id
+            current = 0
+            while current <= row["max_id"]:
+                current = conn.execute("SELECT nextval('protect_rules_id_seq')").fetchone()[0]
+    except duckdb.CatalogException:
+        pass  # table doesn't exist yet; created by _ensure_current_schema
+
+
+def _migrate_to_12(conn: duckdb.DuckDBPyConnection) -> None:
+    """Recreate rule_costs with a bucket column for wildcard rule expansion."""
+    try:
+        conn.execute("DROP TABLE rule_costs")
+    except duckdb.CatalogException:
+        pass
+
+
+def _migrate_to_13(conn: duckdb.DuckDBPyConnection) -> None:
+    """Add delete_rules and delete_rule_costs tables."""
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS delete_rules_id_seq START 1")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS delete_rules (
+            id INTEGER PRIMARY KEY DEFAULT nextval('delete_rules_id_seq'),
+            pattern TEXT NOT NULL,
+            storage_class TEXT,
+            description TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE (pattern, storage_class)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS delete_rule_costs (
+            rule_id INTEGER NOT NULL,
+            bucket TEXT NOT NULL,
+            storage_class_id INTEGER NOT NULL,
+            object_count INTEGER NOT NULL,
+            total_bytes BIGINT NOT NULL,
+            monthly_cost_usd REAL NOT NULL,
+            PRIMARY KEY (rule_id, storage_class_id, bucket)
+        )
+        """
+    )
+
+
+def _migrate_to_14(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog) -> None:
+    """Move dir_summary from a DuckDB table to a parquet-backed view."""
+    try:
+        row_count = conn.execute("SELECT COUNT(*) FROM dir_summary").fetchone()[0]
+        if row_count > 0:
+            catalog.dir_summary_parquet_dir.mkdir(parents=True, exist_ok=True)
+            segment_path = catalog.dir_summary_parquet_dir / "dir_summary_000001.parquet"
+            conn.execute(f"COPY dir_summary TO '{segment_path}' (FORMAT PARQUET, COMPRESSION ZSTD)")
+            print_summary(f"  migrated {row_count} dir_summary rows to {segment_path}")
+        conn.execute("DROP TABLE dir_summary")
+    except duckdb.CatalogException:
+        pass  # table doesn't exist (fresh DB)
+
+
+# Migrations 11-13 take (conn); migration 14 also needs the catalog.
+_MIGRATIONS_SIMPLE: list[tuple[int, Callable[[duckdb.DuckDBPyConnection], None]]] = [
+    (11, _migrate_to_11),
+    (12, _migrate_to_12),
+    (13, _migrate_to_13),
+]
+
+
+def _run_migrations(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog) -> None:
+    """Run pending migrations, then ensure the current schema exists."""
+    row = _fetchone_dict(conn.execute("SELECT value FROM cache_meta WHERE key = 'schema_version'"))
+    current_version = int(row["value"]) if row else 0
+
+    for target_version, migrate_fn in _MIGRATIONS_SIMPLE:
+        if current_version >= target_version:
+            continue
+        print_summary(f"  migration → v{target_version}: {migrate_fn.__doc__}")
+        conn.execute("BEGIN TRANSACTION")
+        migrate_fn(conn)
+        conn.execute(
+            "INSERT OR REPLACE INTO cache_meta (key, value) VALUES ('schema_version', ?)",
+            (str(target_version),),
+        )
+        conn.execute("COMMIT")
+
+    if current_version < 14:
+        print_summary(f"  migration → v14: {_migrate_to_14.__doc__}")
+        conn.execute("BEGIN TRANSACTION")
+        _migrate_to_14(conn, catalog)
+        conn.execute(
+            "INSERT OR REPLACE INTO cache_meta (key, value) VALUES ('schema_version', '14')",
+        )
+        conn.execute("COMMIT")
+        current_version = target_version
+
+    _ensure_current_schema(conn, catalog)
+    conn.execute("VACUUM")
+
+
+def _ensure_current_schema(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog) -> None:
+    """Idempotent: create all tables/views/sequences for the current schema version."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS storage_classes (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            price_per_gib_month_us REAL NOT NULL,
+            price_per_gib_month_eu REAL NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS protect_rules_id_seq START 1")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS protect_rules (
+            id INTEGER PRIMARY KEY DEFAULT nextval('protect_rules_id_seq'),
+            bucket TEXT NOT NULL,
+            pattern TEXT NOT NULL,
+            pattern_type TEXT NOT NULL,
+            owners TEXT,
+            reasons TEXT,
+            sources TEXT,
+            UNIQUE (bucket, pattern)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rule_costs (
+            rule_id INTEGER NOT NULL REFERENCES protect_rules(id),
+            bucket TEXT NOT NULL,
+            storage_class_id INTEGER NOT NULL REFERENCES storage_classes(id),
+            object_count INTEGER NOT NULL,
+            total_bytes BIGINT NOT NULL,
+            monthly_cost_usd REAL NOT NULL,
+            PRIMARY KEY (rule_id, storage_class_id, bucket)
+        )
+        """
+    )
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS delete_rules_id_seq START 1")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS delete_rules (
+            id INTEGER PRIMARY KEY DEFAULT nextval('delete_rules_id_seq'),
+            pattern TEXT NOT NULL,
+            storage_class TEXT,
+            description TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE (pattern, storage_class)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS delete_rule_costs (
+            rule_id INTEGER NOT NULL REFERENCES delete_rules(id),
+            bucket TEXT NOT NULL,
+            storage_class_id INTEGER NOT NULL REFERENCES storage_classes(id),
+            object_count INTEGER NOT NULL,
+            total_bytes BIGINT NOT NULL,
+            monthly_cost_usd REAL NOT NULL,
+            PRIMARY KEY (rule_id, storage_class_id, bucket)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scanned_prefixes (
+            bucket TEXT NOT NULL,
+            prefix TEXT NOT NULL,
+            object_count INTEGER NOT NULL,
+            scanned_at TEXT NOT NULL,
+            PRIMARY KEY (bucket, prefix)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS split_cache (
+            cache_key TEXT PRIMARY KEY,
+            entries_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS step_markers (
+            action_id TEXT PRIMARY KEY,
+            completed_at TEXT NOT NULL,
+            dry_run BOOLEAN NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            extra_json TEXT
+        )
+        """
+    )
+    ObjectBuffer(catalog.objects_parquet_dir, conn)
+    # Drop leftover dir_summary table from a partially-completed v14 migration
+    try:
+        conn.execute("DROP TABLE dir_summary")
+    except duckdb.CatalogException:
+        pass
+    DirSummaryBuffer(catalog.dir_summary_parquet_dir, conn)
+
+    for sc_id, name, us_price, eu_price in [
+        (1, "STANDARD", 0.020, 0.023),
+        (2, "NEARLINE", 0.010, 0.013),
+        (3, "COLDLINE", 0.004, 0.006),
+        (4, "ARCHIVE", 0.0012, 0.0025),
+    ]:
+        conn.execute(
+            """
+            INSERT INTO storage_classes (id, name, price_per_gib_month_us, price_per_gib_month_eu)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT DO NOTHING
+            """,
+            (sc_id, name, us_price, eu_price),
+        )
+
+
+def storage_class_id_map(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
+    """Return a mapping from storage class name to its DB id."""
+    rows = _fetchall_dicts(conn.execute("SELECT id, name FROM storage_classes"))
+    return {row["name"]: row["id"] for row in rows}
+
+
+# ---------------------------------------------------------------------------
+# SQL fragments
+# ---------------------------------------------------------------------------
+
+# SQL fragment for checking if an object is protected by any rule.
+# Use as: NOT EXISTS (SELECT 1 FROM protect_rules r WHERE {IS_PROTECTED})
+# Requires outer query to alias the object table as 'o'.
+IS_PROTECTED = """
+    SELECT 1 FROM protect_rules r
+    WHERE (o.bucket = r.bucket OR r.bucket = '*')
+      AND o.name LIKE r.pattern
+"""
+
+IS_DELETE_TARGET = """
+    SELECT 1 FROM delete_rules dr
+    WHERE o.name LIKE dr.pattern
+      AND (dr.storage_class IS NULL OR sc.name = dr.storage_class)
+"""
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def now_utc() -> datetime:
+    return datetime.now(tz=UTC)
+
+
+def timestamp_string() -> str:
+    return now_utc().strftime("%Y%m%dT%H%M%SZ")
+
+
+def print_summary(message: str) -> None:
+    print(message)
+
+
+def human_bytes(num_bytes: int) -> str:
+    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+    value = float(num_bytes)
+    for unit in units:
+        if value < 1024.0 or unit == units[-1]:
+            return f"{value:.2f} {unit}"
+        value /= 1024.0
+    return f"{num_bytes} B"
+
+
+def continent_for_region(region: str) -> str:
+    return "EUROPE" if region.startswith("eu-") else "US"
+
+
+def region_from_bucket(bucket: str) -> str:
+    return bucket.removeprefix("marin-") if bucket.startswith("marin-") else bucket
+
+
+def region_bucket(region: str) -> str:
+    return f"marin-{region}"
+
+
+def all_regions() -> list[str]:
+    return [region_from_bucket(bucket) for bucket in MARIN_BUCKETS]
+
+
+def plan_rows() -> list[dict[str, str]]:
+    """Return the cleanup plan: one row per bucket with region and location."""
+    return [{"region": region_from_bucket(b), "bucket": b, "location": BUCKET_LOCATIONS[b]} for b in MARIN_BUCKETS]
+
+
+def glob_to_like(gs_glob: str) -> str:
+    """Convert a GCS glob pattern to a SQL LIKE pattern (e.g. 'foo/bar*' -> 'foo/bar%')."""
+    return gs_glob.replace("*", "%").replace("?", "_")
+
+
+# ---------------------------------------------------------------------------
+# CSV / JSON
+# ---------------------------------------------------------------------------
+
+
+def read_csv_rows(path: Path) -> list[dict[str, str]]:
+    with path.open(newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Markers (resumable step state)
+# ---------------------------------------------------------------------------
+
+
+def marker_matches(conn: duckdb.DuckDBPyConnection, action_id: str, input_fingerprint: str) -> bool:
+    row = _fetchone_dict(conn.execute("SELECT input_fingerprint FROM step_markers WHERE action_id = ?", (action_id,)))
+    return row is not None and row["input_fingerprint"] == input_fingerprint
+
+
+def marker_exists(conn: duckdb.DuckDBPyConnection, action_id: str) -> bool:
+    row = _fetchone_dict(conn.execute("SELECT 1 FROM step_markers WHERE action_id = ?", (action_id,)))
+    return row is not None
+
+
+def read_marker_extra(conn: duckdb.DuckDBPyConnection, action_id: str) -> dict[str, Any] | None:
+    """Read the extra_json blob for a step marker. Returns None if no marker exists."""
+    row = _fetchone_dict(conn.execute("SELECT extra_json FROM step_markers WHERE action_id = ?", (action_id,)))
+    if row is None or row["extra_json"] is None:
+        return None
+    return json.loads(row["extra_json"])
+
+
+def write_marker(
+    conn: duckdb.DuckDBPyConnection,
+    action_id: str,
+    input_fingerprint: str,
+    *,
+    dry_run: bool,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO step_markers (action_id, completed_at, dry_run, input_fingerprint, extra_json) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (action_id, now_utc().isoformat(), dry_run, input_fingerprint, json.dumps(extra) if extra else None),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Prefix utilities
+# ---------------------------------------------------------------------------
+
+
+def url_bucket(url: str) -> str:
+    return url.removeprefix("gs://").split("/", 1)[0]
+
+
+def url_object_path(url: str) -> str:
+    parts = url.removeprefix("gs://").split("/", 1)
+    return parts[1] if len(parts) == 2 else ""
+
+
+def normalized_prefix_url(url: str) -> str:
+    return url if url.endswith("/") else f"{url}/"
+
+
+def normalize_relative_prefix(prefix: str) -> str:
+    return prefix if prefix.endswith("/") else f"{prefix}/"
+
+
+def relative_prefix(prefix_url: str, bucket: str) -> str:
+    prefix = url_object_path(prefix_url)
+    if prefix.endswith("/"):
+        return prefix
+    return f"{prefix}/" if prefix else ""
+
+
+# ---------------------------------------------------------------------------
+# Scan buffer helpers
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ScanBuffer:
+    objects: ObjectBuffer
+    prefixes: list[tuple[str, str, int, str]] = field(default_factory=list)
+    split_cache: list[tuple[str, str, str]] = field(default_factory=list)
+
+
+def buffer_prefix_scanned(buf: ScanBuffer, bucket_name: str, prefix: str, object_count: int) -> None:
+    buf.prefixes.append((bucket_name, prefix, object_count, now_utc().isoformat()))
+
+
+def split_cache_key(bucket_name: str, prefix: str) -> str:
+    return f"scan://{bucket_name}/{prefix}"
+
+
+def buffer_split_cache(
+    buf: ScanBuffer,
+    cache: dict[str, list[str]],
+    bucket_name: str,
+    prefix: str,
+    children: list[str],
+) -> None:
+    key = split_cache_key(bucket_name, prefix)
+    cache[key] = children
+    buf.split_cache.append((key, json.dumps(children), now_utc().isoformat()))
+
+
+def flush_metadata(conn: duckdb.DuckDBPyConnection, buf: ScanBuffer, *, force: bool = False) -> None:
+    """Batch-flush buffered prefix and split-cache writes via PyArrow staging."""
+    total = len(buf.prefixes) + len(buf.split_cache)
+    if total < METADATA_FLUSH_THRESHOLD and not force:
+        return
+    if buf.prefixes:
+        arrow_table = pa.table(
+            {
+                "bucket": [r[0] for r in buf.prefixes],
+                "prefix": [r[1] for r in buf.prefixes],
+                "object_count": [r[2] for r in buf.prefixes],
+                "scanned_at": [r[3] for r in buf.prefixes],
+            }
+        )
+        conn.register("_pfx_stage", arrow_table)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO scanned_prefixes (bucket, prefix, object_count, scanned_at)
+            SELECT bucket, prefix, object_count, scanned_at FROM _pfx_stage
+            """
+        )
+        conn.unregister("_pfx_stage")
+        buf.prefixes.clear()
+    if buf.split_cache:
+        arrow_table = pa.table(
+            {
+                "cache_key": [r[0] for r in buf.split_cache],
+                "entries_json": [r[1] for r in buf.split_cache],
+                "updated_at": [r[2] for r in buf.split_cache],
+            }
+        )
+        conn.register("_sc_stage", arrow_table)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO split_cache (cache_key, entries_json, updated_at)
+            SELECT cache_key, entries_json, updated_at FROM _sc_stage
+            """
+        )
+        conn.unregister("_sc_stage")
+        buf.split_cache.clear()
+
+
+def load_split_cache(conn: duckdb.DuckDBPyConnection) -> dict[str, list[str]]:
+    """Load the split_cache table into memory for fast lookups."""
+    rows = conn.execute("SELECT cache_key, entries_json FROM split_cache").fetchall()
+    cache: dict[str, list[str]] = {}
+    for cache_key, entries_json in rows:
+        entries = json.loads(entries_json)
+        if isinstance(entries, list):
+            cache[cache_key] = entries
+    return cache
+
+
+def read_split_cache(cache: dict[str, list[str]], bucket_name: str, prefix: str) -> list[str] | None:
+    return cache.get(split_cache_key(bucket_name, prefix))
+
+
+# ---------------------------------------------------------------------------
+# Rule cost materialization
+# ---------------------------------------------------------------------------
+
+
+def materialize_dir_summary(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog = DEFAULT_CATALOG) -> int:
+    """Aggregate objects into per-directory rows with per-storage-class columns.
+
+    Returns total rows written.
+    """
+    buf = DirSummaryBuffer(catalog.dir_summary_parquet_dir, conn)
+    buf.reset()
+
+    for plan_row in plan_rows():
+        bucket_name = plan_row["bucket"]
+
+        print_summary(f"  materializing dir_summary for {bucket_name}...")
+
+        result = conn.execute(
+            """
+            SELECT o.bucket,
+                   left(o.name, length(o.name) - position('/' in reverse(o.name)) + 1) as dir_prefix,
+                   COUNT(*) FILTER (WHERE sc.name = 'STANDARD') as standard_count,
+                   COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'STANDARD'), 0) as standard_bytes,
+                   COUNT(*) FILTER (WHERE sc.name = 'NEARLINE') as nearline_count,
+                   COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'NEARLINE'), 0) as nearline_bytes,
+                   COUNT(*) FILTER (WHERE sc.name = 'COLDLINE') as coldline_count,
+                   COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'COLDLINE'), 0) as coldline_bytes,
+                   COUNT(*) FILTER (WHERE sc.name = 'ARCHIVE') as archive_count,
+                   COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'ARCHIVE'), 0) as archive_bytes
+            FROM objects o
+            JOIN storage_classes sc ON o.storage_class_id = sc.id
+            WHERE o.bucket = ?
+            GROUP BY o.bucket, dir_prefix
+            """,
+            (bucket_name,),
+        )
+
+        arrow_table = result.fetch_arrow_table()
+        if len(arrow_table) > 0:
+            buf.write_arrow_table(arrow_table)
+
+    total = _fetchone_dict(conn.execute("SELECT COUNT(*) as cnt FROM dir_summary"))
+    return int(total["cnt"])
+
+
+_STORAGE_CLASS_COLUMNS = {
+    "STANDARD": ("standard_count", "standard_bytes"),
+    "NEARLINE": ("nearline_count", "nearline_bytes"),
+    "COLDLINE": ("coldline_count", "coldline_bytes"),
+    "ARCHIVE": ("archive_count", "archive_bytes"),
+}
+
+
+def materialize_rule_costs(conn: duckdb.DuckDBPyConnection) -> int:
+    """Compute and store per-rule costs in the rule_costs table using dir_summary.
+
+    Inserts one row per (rule, bucket, storage_class) by summing the per-class
+    columns from matching dir_summary rows. Wildcard rules (bucket='*') are
+    expanded: they produce cost rows for every bucket they match.
+    """
+    conn.execute("DELETE FROM rule_costs")
+    conn.execute("PRAGMA enable_progress_bar")
+
+    sc_id_map = {row["name"]: row["id"] for row in _fetchall_dicts(conn.execute("SELECT id, name FROM storage_classes"))}
+
+    for plan_row in plan_rows():
+        bucket_name = plan_row["bucket"]
+        region = plan_row["region"]
+        continent = continent_for_region(region)
+        price_column = "price_per_gib_month_us" if continent == "US" else "price_per_gib_month_eu"
+
+        prices = {
+            row["name"]: float(row[price_column])
+            for row in _fetchall_dicts(conn.execute(f"SELECT name, {price_column} FROM storage_classes"))
+        }
+
+        for sc_name, (count_col, bytes_col) in _STORAGE_CLASS_COLUMNS.items():
+            sc_id = sc_id_map[sc_name]
+            price = prices[sc_name]
+            discount_factor = 1.0 - GCS_DISCOUNT
+
+            conn.execute(
+                f"""
+                INSERT INTO rule_costs (rule_id, bucket, storage_class_id, object_count, total_bytes, monthly_cost_usd)
+                SELECT r.id,
+                       ? as bucket,
+                       ? as storage_class_id,
+                       COALESCE(SUM(d.{count_col}), 0) as object_count,
+                       COALESCE(SUM(d.{bytes_col}), 0) as total_bytes,
+                       COALESCE(SUM(d.{bytes_col}), 0) / (1024.0*1024.0*1024.0)
+                           * ? as monthly_cost_usd
+                FROM protect_rules r
+                JOIN dir_summary d
+                    ON (d.bucket = r.bucket OR (r.bucket = '*' AND d.bucket = ?))
+                    AND d.dir_prefix LIKE r.pattern
+                WHERE r.bucket = ? OR r.bucket = '*'
+                GROUP BY r.id
+                HAVING SUM(d.{count_col}) > 0
+                """,
+                (bucket_name, sc_id, price * discount_factor, bucket_name, bucket_name),
+            )
+
+    total = _fetchone_dict(conn.execute("SELECT COUNT(*) as cnt FROM rule_costs"))
+    return int(total["cnt"])
+
+
+def materialize_delete_rule_costs(conn: duckdb.DuckDBPyConnection) -> int:
+    """Compute and store per-delete-rule costs in delete_rule_costs using dir_summary."""
+    conn.execute("DELETE FROM delete_rule_costs")
+
+    sc_id_map = {row["name"]: row["id"] for row in _fetchall_dicts(conn.execute("SELECT id, name FROM storage_classes"))}
+
+    for plan_row in plan_rows():
+        bucket_name = plan_row["bucket"]
+        region = plan_row["region"]
+        continent = continent_for_region(region)
+        price_column = "price_per_gib_month_us" if continent == "US" else "price_per_gib_month_eu"
+
+        prices = {
+            row["name"]: float(row[price_column])
+            for row in _fetchall_dicts(conn.execute(f"SELECT name, {price_column} FROM storage_classes"))
+        }
+
+        for sc_name, (count_col, bytes_col) in _STORAGE_CLASS_COLUMNS.items():
+            sc_id = sc_id_map[sc_name]
+            price = prices[sc_name]
+            discount_factor = 1.0 - GCS_DISCOUNT
+
+            conn.execute(
+                f"""
+                INSERT INTO delete_rule_costs
+                    (rule_id, bucket, storage_class_id, object_count, total_bytes, monthly_cost_usd)
+                SELECT dr.id,
+                       ? as bucket,
+                       ? as storage_class_id,
+                       COALESCE(SUM(d.{count_col}), 0) as object_count,
+                       COALESCE(SUM(d.{bytes_col}), 0) as total_bytes,
+                       COALESCE(SUM(d.{bytes_col}), 0) / (1024.0*1024.0*1024.0) * ? as monthly_cost_usd
+                FROM delete_rules dr
+                JOIN dir_summary d ON d.dir_prefix LIKE dr.pattern
+                    AND d.bucket = ?
+                WHERE (dr.storage_class IS NULL OR dr.storage_class = ?)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM protect_rules p
+                    WHERE (p.bucket = d.bucket OR p.bucket = '*')
+                      AND d.dir_prefix LIKE p.pattern
+                  )
+                GROUP BY dr.id
+                HAVING SUM(d.{count_col}) > 0
+                """,
+                (bucket_name, sc_id, price * discount_factor, bucket_name, sc_name),
+            )
+
+    total = _fetchone_dict(conn.execute("SELECT COUNT(*) as cnt FROM delete_rule_costs"))
+    return int(total["cnt"])
+
+
+# ---------------------------------------------------------------------------
+# Output directory setup
+# ---------------------------------------------------------------------------
+
+
+def ensure_output_dirs(catalog: StorageCatalog = DEFAULT_CATALOG) -> duckdb.DuckDBPyConnection:
+    """Create workspace directories and return an initialized DB connection."""
+    catalog.ensure_dirs()
+    return init_db(catalog)
