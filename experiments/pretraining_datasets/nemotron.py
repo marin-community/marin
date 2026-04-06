@@ -15,8 +15,8 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 
 # Fray resources for running a single Nemotron tokenize split as a remote job.
-# TODO (rav): debug why this needs 32g - probably levanter store consolidation
-NEMOTRON_SPLIT_TOKENIZE_RESOURCES = ResourceConfig(ram="32g", cpu=2)
+# TODO (rav): debug why this needs 64g - probably levanter store consolidation
+NEMOTRON_SPLIT_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", cpu=2)
 
 
 def nemotron_cc_download() -> ExecutorStep:
