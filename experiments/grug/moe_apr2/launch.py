@@ -187,7 +187,9 @@ def create_moe_isoflop_steps() -> list[ExecutorStep]:
 
             model_cfg = HEURISTIC.build_model_config(hidden_dim)
             fpt = _compute_flops_per_token(model_cfg)
-            tokens, batch_size, train_steps = _compute_tokens_and_batch(budget, fpt, target_steps=target_steps, min_batch_size=min_bs)
+            tokens, batch_size, train_steps = _compute_tokens_and_batch(
+                budget, fpt, target_steps=target_steps, min_batch_size=min_bs
+            )
 
             optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, hidden_dim)
 
@@ -205,8 +207,7 @@ def create_moe_isoflop_steps() -> list[ExecutorStep]:
                 mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
                 tracker=WandbConfig(
                     project="dial_moe",
-                    tags=["grug", "moe-core", "isoflop", "v16", "gqa4",
-                          f"budget={budget:.0e}", f"d={hidden_dim}"],
+                    tags=["grug", "moe-core", "isoflop", "v16", "gqa4", f"budget={budget:.0e}", f"d={hidden_dim}"],
                     group="isoflop-moe-v16",
                     name=run_id,
                 ),
@@ -472,7 +473,9 @@ V12_ALMOST_DONE = [
     (768, 2.0, 0.00622, 64, 1999),
 ]
 
-v12_almost_done_steps = create_v12_rerun_steps.__wrapped__(V12_ALMOST_DONE) if hasattr(create_v12_rerun_steps, '__wrapped__') else []
+v12_almost_done_steps = (
+    create_v12_rerun_steps.__wrapped__(V12_ALMOST_DONE) if hasattr(create_v12_rerun_steps, "__wrapped__") else []
+)
 
 
 def _create_v12_steps_from_list(run_list):
@@ -505,10 +508,17 @@ def _create_v12_steps_from_list(run_list):
             tracker=WandbConfig(
                 project="dial_moe",
                 tags=[
-                    "grug", "moe-core", "isoflop", "v12",
-                    f"d={dim}", f"tok_ratio={tok_ratio}", f"adam_lr={adam_lr}",
-                    f"adamh_lr={adamh_lr}", f"bs={batch_size}",
-                    "decayNone", "warmup=0.1",
+                    "grug",
+                    "moe-core",
+                    "isoflop",
+                    "v12",
+                    f"d={dim}",
+                    f"tok_ratio={tok_ratio}",
+                    f"adam_lr={adam_lr}",
+                    f"adamh_lr={adamh_lr}",
+                    f"bs={batch_size}",
+                    "decayNone",
+                    "warmup=0.1",
                 ],
                 group="isoflop-moe-v12-retry",
                 name=run_id,
@@ -597,10 +607,17 @@ def _create_v13_retry_step(dim, tok_ratio, adam_lr, batch_size, train_steps):
         tracker=WandbConfig(
             project="dial_moe",
             tags=[
-                "grug", "moe-core", "isoflop", "v13",
-                f"d={dim}", f"tok_ratio={tok_ratio}", f"adam_lr={adam_lr}",
-                f"adamh_lr={adamh_lr}", f"bs={batch_size}",
-                "decayNone", "warmup=0.1",
+                "grug",
+                "moe-core",
+                "isoflop",
+                "v13",
+                f"d={dim}",
+                f"tok_ratio={tok_ratio}",
+                f"adam_lr={adam_lr}",
+                f"adamh_lr={adamh_lr}",
+                f"bs={batch_size}",
+                "decayNone",
+                "warmup=0.1",
             ],
             group="isoflop-moe-v13-retry",
             name=run_id,
@@ -665,9 +682,15 @@ def create_gqa_lr_sweep() -> list[ExecutorStep]:
             tracker=WandbConfig(
                 project="dial_moe",
                 tags=[
-                    "grug", "moe-core", "gqa-lr-sweep",
-                    "d=512", "t4.5x", "kv=1", "gqa4to1",
-                    f"adam_lr={adam_lr}", f"adamh_lr={adamh_lr}",
+                    "grug",
+                    "moe-core",
+                    "gqa-lr-sweep",
+                    "d=512",
+                    "t4.5x",
+                    "kv=1",
+                    "gqa4to1",
+                    f"adam_lr={adam_lr}",
+                    f"adamh_lr={adamh_lr}",
                 ],
                 group="gqa-lr-sweep",
                 name=run_id,
@@ -735,8 +758,7 @@ def create_d640_d896_sweep() -> list[ExecutorStep]:
                 mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
                 tracker=WandbConfig(
                     project="dial_moe",
-                    tags=["grug", "moe-core", "isoflop", "v16", "gqa4",
-                          f"budget={budget:.0e}", f"d={hidden_dim}"],
+                    tags=["grug", "moe-core", "isoflop", "v16", "gqa4", f"budget={budget:.0e}", f"d={hidden_dim}"],
                     group="isoflop-moe-v16",
                     name=run_id,
                 ),
@@ -766,7 +788,20 @@ d640_d896_steps = create_d640_d896_sweep()
 
 
 if __name__ == "__main__":
+    crashed = [
+        s
+        for s in moe_isoflop_steps
+        if s.config.run_id
+        in [
+            "isoflop-moe-v16-3e+19-d1536",
+            "isoflop-moe-v16-3e+19-d1792",
+            "isoflop-moe-v16-1e+20-d896",
+            "isoflop-moe-v16-1e+20-d1280",
+            "isoflop-moe-v16-1e+20-d1792",
+            "isoflop-moe-v16-1e+20-d2048",
+        ]
+    ]
     executor_main(
-        steps=d640_d896_steps,
-        description="v16: d640/d896 isoflop sweep (rounded intermediate_dim)",
+        steps=crashed,
+        description="v16: resubmit 6 crashed runs (checkpointing disabled)",
     )

@@ -44,11 +44,16 @@ class CompletedAdamHHeuristic:
     C = 3 * flops_per_token * tokens  (flops_per_token excludes lm_head)
     """
 
-    # --- LR scaling (from empirical fit, 192 runs, R²=0.995) ---
+    # --- LR scaling (from empirical fit) ---
     # adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * bs^0.5
-    lr_coeff: float = 1.48
-    lr_tokens_exp: float = -0.2781
-    lr_dim_exp: float = -0.3633
+    # Updated (192 runs, R²=0.995):
+    # lr_coeff: float = 1.48
+    # lr_tokens_exp: float = -0.2781
+    # lr_dim_exp: float = -0.3633
+    # Original (186 runs, R²=0.995) — used for v16 sweep:
+    lr_coeff: float = 1.63
+    lr_tokens_exp: float = -0.2813
+    lr_dim_exp: float = -0.3678
     adamh_ratio: float = 13 / 3
 
     # --- Base hyperparameters ---
@@ -87,12 +92,7 @@ class CompletedAdamHHeuristic:
 
     def _compute_adam_lr(self, batch_size: int, tokens: float, hidden_dim: int) -> float:
         """adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * bs^0.5"""
-        adam_lr = (
-            self.lr_coeff
-            * (tokens ** self.lr_tokens_exp)
-            * (hidden_dim ** self.lr_dim_exp)
-            * math.sqrt(batch_size)
-        )
+        adam_lr = self.lr_coeff * (tokens**self.lr_tokens_exp) * (hidden_dim**self.lr_dim_exp) * math.sqrt(batch_size)
         return min(self.max_learning_rate, adam_lr)
 
     def _compute_learning_rate(self, batch_size: int, tokens: float, hidden_dim: int) -> float:
