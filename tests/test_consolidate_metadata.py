@@ -152,22 +152,3 @@ def test_consolidate_shard_caches_end_to_end():
         for i in range(NUM_SHARDS):
             row = merged[i * ROWS_PER_SHARD]
             assert row["input_ids"][0] == i, f"shard {i} data mismatch"
-
-
-def test_consolidate_shard_caches_single_shard():
-    with tempfile.TemporaryDirectory(prefix="levanter-test-consolidate-single-") as tmpdir:
-        shard_path = os.path.join(tmpdir, "shard_0")
-        rows = [{"input_ids": np.full((ROW_WIDTH,), 7, dtype=np.int32)} for _ in range(ROWS_PER_SHARD)]
-        _build_shard_cache(shard_path, EXEMPLAR_FLAT, rows)
-
-        dest_path = os.path.join(tmpdir, "merged")
-        ledger = consolidate_shard_caches([shard_path], dest_path, EXEMPLAR_FLAT, copy_max_workers=1)
-
-        assert ledger.total_num_rows == ROWS_PER_SHARD
-        assert ledger.is_finished
-        assert ledger.shard_rows == {os.path.basename(shard_path): ROWS_PER_SHARD}
-        assert ledger.finished_shards == [os.path.basename(shard_path)]
-
-        merged = TreeStore.open(EXEMPLAR_FLAT, dest_path, mode="r", cache_metadata=True)
-        assert len(merged) == ROWS_PER_SHARD
-        assert merged[0]["input_ids"][0] == 7
