@@ -13,7 +13,7 @@ import sys
 import click
 
 from iris.cli.main import require_controller_url, rpc_client
-from iris.rpc import cluster_pb2
+from iris.rpc import controller_pb2
 from iris.rpc.auth import TokenProvider
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ def task_exec(ctx, task_id: str, command: tuple[str, ...], timeout_seconds: int)
     token_provider: TokenProvider | None = ctx.obj.get("token_provider")
 
     with rpc_client(controller_url, token_provider) as client:
-        request = cluster_pb2.Controller.ExecInContainerRequest(
+        request = controller_pb2.Controller.ExecInContainerRequest(
             task_id=task_id,
             command=list(command),
             timeout_seconds=timeout_seconds,

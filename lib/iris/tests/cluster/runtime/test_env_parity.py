@@ -15,7 +15,7 @@ import pytest
 
 from iris.cluster.providers.k8s.tasks import PodConfig, _build_pod_manifest
 from iris.cluster.runtime.env import build_common_iris_env
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 
 def _make_req(
@@ -29,8 +29,8 @@ def _make_req(
     tpu: bool = False,
     gpu_count: int = 0,
     ports: list[str] | None = None,
-) -> cluster_pb2.Worker.RunTaskRequest:
-    req = cluster_pb2.Worker.RunTaskRequest()
+) -> job_pb2.RunTaskRequest:
+    req = job_pb2.RunTaskRequest()
     req.task_id = task_id
     req.attempt_id = attempt_id
     req.num_tasks = num_tasks
@@ -46,15 +46,15 @@ def _make_req(
         for k, v in user_env.items():
             req.environment.env_vars[k] = v
     if tpu:
-        req.resources.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v4", count=4))
+        req.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
     if gpu_count:
-        req.resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="H100", count=gpu_count))
+        req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=gpu_count))
     if ports:
         req.ports.extend(ports)
     return req
 
 
-def _common_env(req: cluster_pb2.Worker.RunTaskRequest, controller_address: str | None = None) -> dict[str, str]:
+def _common_env(req: job_pb2.RunTaskRequest, controller_address: str | None = None) -> dict[str, str]:
     return build_common_iris_env(
         task_id=req.task_id,
         attempt_id=req.attempt_id,
@@ -68,7 +68,7 @@ def _common_env(req: cluster_pb2.Worker.RunTaskRequest, controller_address: str 
     )
 
 
-def _k8s_env(req: cluster_pb2.Worker.RunTaskRequest, controller_address: str | None = None) -> dict[str, str]:
+def _k8s_env(req: job_pb2.RunTaskRequest, controller_address: str | None = None) -> dict[str, str]:
     """Extract static env vars from the k8s pod manifest (excludes downward API entries)."""
     config = PodConfig(namespace="test", default_image="img:latest", controller_address=controller_address)
     manifest = _build_pod_manifest(req, config)
@@ -234,7 +234,7 @@ def test_task_resources_uses_proto_json():
 
     env = _common_env(_make_req())
     raw = env["IRIS_TASK_RESOURCES"]
-    proto = cluster_pb2.ResourceSpecProto()
+    proto = job_pb2.ResourceSpecProto()
     jf.Parse(raw, proto)
     assert proto.cpu_millicores == 1000
     assert proto.memory_bytes == 4 * 1024**3
@@ -244,7 +244,7 @@ def test_task_resources_includes_gpu_device():
     from google.protobuf import json_format as jf
 
     env = _common_env(_make_req(gpu_count=8))
-    proto = cluster_pb2.ResourceSpecProto()
+    proto = job_pb2.ResourceSpecProto()
     jf.Parse(env["IRIS_TASK_RESOURCES"], proto)
     assert proto.device.gpu.count == 8
     assert proto.device.gpu.variant == "H100"
@@ -254,7 +254,7 @@ def test_task_resources_includes_tpu_device():
     from google.protobuf import json_format as jf
 
     env = _common_env(_make_req(tpu=True))
-    proto = cluster_pb2.ResourceSpecProto()
+    proto = job_pb2.ResourceSpecProto()
     jf.Parse(env["IRIS_TASK_RESOURCES"], proto)
     assert proto.device.tpu.count == 4
 

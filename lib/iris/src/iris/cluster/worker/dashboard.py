@@ -11,7 +11,7 @@ from starlette.routing import Mount, Route
 
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.dashboard_common import html_shell, static_files_mount
-from iris.rpc.cluster_connect import WorkerServiceWSGIApplication
+from iris.rpc.worker_connect import WorkerServiceWSGIApplication
 
 
 class WorkerDashboard:

@@ -7,7 +7,7 @@ from typing import Protocol
 
 from iris.cluster.controller.transitions import DispatchBatch, HeartbeatApplyRequest
 from iris.cluster.types import WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 
 class ProviderError(Exception):
@@ -49,8 +49,8 @@ class TaskProvider(Protocol):
         self,
         worker_id: WorkerId,
         address: str | None,
-        request: cluster_pb2.GetProcessStatusRequest,
-    ) -> cluster_pb2.GetProcessStatusResponse:
+        request: job_pb2.GetProcessStatusRequest,
+    ) -> job_pb2.GetProcessStatusResponse:
         """Fetch full process status (pid, memory, CPU) from an execution unit.
 
         Returns GetProcessStatusResponse. Raises ProviderUnsupportedError if not applicable.
@@ -64,9 +64,9 @@ class TaskProvider(Protocol):
     def profile_task(
         self,
         address: str,
-        request: cluster_pb2.ProfileTaskRequest,
+        request: job_pb2.ProfileTaskRequest,
         timeout_ms: int,
-    ) -> cluster_pb2.ProfileTaskResponse:
+    ) -> job_pb2.ProfileTaskResponse:
         """Profile a task via RPC. Raises ProviderUnsupportedError if not applicable."""
         ...
 

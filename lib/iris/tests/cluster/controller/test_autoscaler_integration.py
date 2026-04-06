@@ -209,9 +209,9 @@ class TestAutoscalerWaterfallEndToEnd:
 
         from iris.cluster.constraints import PlacementRequirements
         from iris.cluster.controller.autoscaler import DemandEntry
-        from iris.rpc import cluster_pb2
+        from iris.rpc import job_pb2
 
-        big_resources = cluster_pb2.ResourceSpecProto(cpu_millicores=128000, memory_bytes=128 * 1024**3)
+        big_resources = job_pb2.ResourceSpecProto(cpu_millicores=128000, memory_bytes=128 * 1024**3)
         normalized = PlacementRequirements(
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),

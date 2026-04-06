@@ -14,7 +14,8 @@ from iris.cluster.types import JobName
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
+from iris.rpc import worker_pb2
 from rigging.timing import Duration
 from starlette.testclient import TestClient
 from tests.cluster.worker.conftest import create_run_task_request
@@ -145,7 +146,7 @@ def test_run_task_with_ports(worker):
     # Ports are allocated in the task thread during setup, so wait for the
     # task to move past PENDING before checking.
     task = worker.get_task(task_id)
-    wait_for_condition(lambda: task.status != cluster_pb2.TASK_STATE_PENDING)
+    wait_for_condition(lambda: task.status != job_pb2.TASK_STATE_PENDING)
 
     assert len(task.ports) == 2
     assert "http" in task.ports
@@ -153,7 +154,7 @@ def test_run_task_with_ports(worker):
 
 
 def test_get_task_status_not_found(service, worker, request_context):
-    status_request = cluster_pb2.Worker.GetTaskStatusRequest(
+    status_request = worker_pb2.Worker.GetTaskStatusRequest(
         task_id=JobName.root("test-user", "nonexistent").task(0).to_wire()
     )
 
@@ -173,7 +174,7 @@ def test_get_task_status_completed_task(service, worker, request_context):
     task = worker.get_task(task_id)
     task.thread.join(timeout=5.0)
 
-    status_request = cluster_pb2.Worker.GetTaskStatusRequest(task_id=task_id)
+    status_request = worker_pb2.Worker.GetTaskStatusRequest(task_id=task_id)
     status = service.get_task_status(status_request, request_context)
 
     assert status.task_id == task_id
@@ -181,7 +182,7 @@ def test_get_task_status_completed_task(service, worker, request_context):
         JobName.from_wire(status.task_id).require_task()[0].to_wire()
         == JobName.root("test-user", "job-completed").to_wire()
     )
-    assert status.state == cluster_pb2.TASK_STATE_SUCCEEDED
+    assert status.state == job_pb2.TASK_STATE_SUCCEEDED
     assert status.exit_code == 0
     assert status.started_at.epoch_ms > 0
     assert status.finished_at.epoch_ms > 0

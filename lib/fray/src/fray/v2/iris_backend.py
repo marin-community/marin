@@ -33,7 +33,7 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 from fray.v2.actor import (
     ActorContext,
@@ -78,18 +78,17 @@ def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingCon
     return None
 
 
-def _convert_device(device: DeviceConfig) -> cluster_pb2.DeviceConfig | None:
+def _convert_device(device: DeviceConfig) -> job_pb2.DeviceConfig | None:
     """Convert fray v2 DeviceConfig to Iris protobuf DeviceConfig."""
     from iris.cluster.types import tpu_device
-    from iris.rpc import cluster_pb2
 
     if isinstance(device, CpuConfig):
         return None
     elif isinstance(device, TpuConfig):
         return tpu_device(device.variant)
     elif isinstance(device, GpuConfig):
-        gpu = cluster_pb2.GpuDevice(variant=device.variant, count=device.count)
-        return cluster_pb2.DeviceConfig(gpu=gpu)
+        gpu = job_pb2.GpuDevice(variant=device.variant, count=device.count)
+        return job_pb2.DeviceConfig(gpu=gpu)
     raise ValueError(f"Unknown device config type: {type(device)}")
 
 
@@ -159,16 +158,15 @@ def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | No
 
 def map_iris_job_state(iris_state: int) -> JobStatus:
     """Map Iris protobuf JobState enum to fray v2 JobStatus."""
-    from iris.rpc import cluster_pb2
 
     _STATE_MAP = {
-        cluster_pb2.JOB_STATE_PENDING: JobStatus.PENDING,
-        cluster_pb2.JOB_STATE_RUNNING: JobStatus.RUNNING,
-        cluster_pb2.JOB_STATE_SUCCEEDED: JobStatus.SUCCEEDED,
-        cluster_pb2.JOB_STATE_FAILED: JobStatus.FAILED,
-        cluster_pb2.JOB_STATE_KILLED: JobStatus.STOPPED,
-        cluster_pb2.JOB_STATE_WORKER_FAILED: JobStatus.FAILED,
-        cluster_pb2.JOB_STATE_UNSCHEDULABLE: JobStatus.FAILED,
+        job_pb2.JOB_STATE_PENDING: JobStatus.PENDING,
+        job_pb2.JOB_STATE_RUNNING: JobStatus.RUNNING,
+        job_pb2.JOB_STATE_SUCCEEDED: JobStatus.SUCCEEDED,
+        job_pb2.JOB_STATE_FAILED: JobStatus.FAILED,
+        job_pb2.JOB_STATE_KILLED: JobStatus.STOPPED,
+        job_pb2.JOB_STATE_WORKER_FAILED: JobStatus.FAILED,
+        job_pb2.JOB_STATE_UNSCHEDULABLE: JobStatus.FAILED,
     }
     return _STATE_MAP.get(iris_state, JobStatus.PENDING)
 
@@ -525,7 +523,7 @@ class FrayIrisClient:
         replicas = request.replicas or 1
         coscheduling = resolve_coscheduling(request.resources.device, replicas)
 
-        policy = cluster_pb2.EXISTING_JOB_POLICY_KEEP if adopt_existing else cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED
+        policy = job_pb2.EXISTING_JOB_POLICY_KEEP if adopt_existing else job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED
         try:
             job = self._iris.submit(
                 entrypoint=iris_entrypoint,

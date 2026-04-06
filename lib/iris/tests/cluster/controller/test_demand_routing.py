@@ -24,7 +24,8 @@ from iris.cluster.constraints import (
     PlacementRequirements,
     WellKnownAttribute,
 )
-from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc import config_pb2
+from iris.rpc import job_pb2
 from rigging.timing import Duration, Timestamp
 from tests.cluster.providers.conftest import (
     make_mock_platform,
@@ -1073,7 +1074,7 @@ class TestRoutingBinPacking:
         return ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
 
     def _make_entries(self, count: int, memory_bytes: int = 32 * 1024**3) -> list[DemandEntry]:
-        resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=memory_bytes)
+        resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=memory_bytes)
         normalized = PlacementRequirements(
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
@@ -1157,7 +1158,7 @@ class TestRoutingBinPacking:
         config.slice_template.gcp.zone = "us-central1-a"
         group = ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
 
-        resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
+        resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
         normalized = PlacementRequirements(
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
@@ -1199,7 +1200,7 @@ class TestRoutingBinPacking:
         config.slice_template.gcp.zone = "us-central1-a"
         group = ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
 
-        resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
+        resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
         normalized = PlacementRequirements(
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
@@ -1241,12 +1242,12 @@ class TestRoutingBinPacking:
             (
                 DeviceType.GPU,
                 "h100",
-                lambda: cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="h100", count=1)),
+                lambda: job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="h100", count=1)),
             ),
             (
                 DeviceType.TPU,
                 "v5p-8",
-                lambda: cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
+                lambda: job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant="v5p-8")),
             ),
         ],
         ids=["gpu", "tpu"],
@@ -1255,7 +1256,7 @@ class TestRoutingBinPacking:
         """Accelerator entries (GPU/TPU) must each get their own VM, not share a bin."""
         group = self._make_group(max_slices=2, memory_bytes=128 * 1024**3)
 
-        resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=32 * 1024**3, device=make_device())
+        resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=32 * 1024**3, device=make_device())
         normalized = PlacementRequirements(
             device_type=device_type,
             device_variants=frozenset({device_variant}),

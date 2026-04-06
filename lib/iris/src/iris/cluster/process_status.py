@@ -15,7 +15,8 @@ import threading
 
 from iris.cluster.runtime.process import _read_proc_cpu_percent
 from iris.log_server.server import LogServiceImpl
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
 from rigging.timing import Timer
 
 # Persistent CPU sampling state so delta-based measurement works across requests.
@@ -67,14 +68,14 @@ def _open_fd_count() -> int:
     return 0
 
 
-def collect_process_info(timer: Timer) -> cluster_pb2.ProcessInfo:
+def collect_process_info(timer: Timer) -> job_pb2.ProcessInfo:
     """Collect information about the current process and host."""
     global _prev_cpu_total, _prev_cpu_utime
 
     rss, vms = _memory_bytes()
     cpu_pct, _prev_cpu_total, _prev_cpu_utime = _read_proc_cpu_percent(os.getpid(), _prev_cpu_total, _prev_cpu_utime)
 
-    return cluster_pb2.ProcessInfo(
+    return job_pb2.ProcessInfo(
         hostname=platform.node(),
         pid=os.getpid(),
         python_version=sys.version.split()[0],
@@ -91,11 +92,11 @@ def collect_process_info(timer: Timer) -> cluster_pb2.ProcessInfo:
 
 
 def get_process_status(
-    request: cluster_pb2.GetProcessStatusRequest,
+    request: job_pb2.GetProcessStatusRequest,
     log_service: LogServiceImpl | None,
     timer: Timer,
     log_key: str = "",
-) -> cluster_pb2.GetProcessStatusResponse:
+) -> job_pb2.GetProcessStatusResponse:
     """Build a GetProcessStatusResponse with local process info and recent logs.
 
     This is the shared implementation used by both controller and worker services.
@@ -116,7 +117,7 @@ def get_process_status(
         fetch_resp = log_service.fetch_logs(fetch_req, None)
         log_entries = list(fetch_resp.entries)
 
-    return cluster_pb2.GetProcessStatusResponse(
+    return job_pb2.GetProcessStatusResponse(
         process_info=process_info,
         log_entries=log_entries,
     )

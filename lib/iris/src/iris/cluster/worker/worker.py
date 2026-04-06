@@ -36,9 +36,12 @@ from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from rigging.log_setup import slow_log
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc import config_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+from iris.rpc import worker_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
@@ -129,7 +132,7 @@ class Worker:
         environment_provider: EnvironmentProvider | None = None,
         port_allocator: PortAllocator | None = None,
         threads: ThreadContainer | None = None,
-        worker_metadata: cluster_pb2.WorkerMetadata | None = None,
+        worker_metadata: job_pb2.WorkerMetadata | None = None,
     ):
         self._config = config
 
@@ -420,7 +423,7 @@ class Worker:
                         raise rule.error
 
                 response = self._controller_client.register(
-                    cluster_pb2.Controller.RegisterRequest(
+                    controller_pb2.Controller.RegisterRequest(
                         address=address,
                         metadata=metadata,
                         worker_id=self._worker_id or "",
@@ -444,7 +447,7 @@ class Worker:
         if not self._controller_client:
             return None
         resp = self._controller_client.list_endpoints(
-            cluster_pb2.Controller.ListEndpointsRequest(
+            controller_pb2.Controller.ListEndpointsRequest(
                 prefix="/system/log-server",
                 exact=True,
             ),
@@ -537,10 +540,10 @@ class Worker:
 
     _TERMINAL_STATES = frozenset(
         {
-            cluster_pb2.TASK_STATE_SUCCEEDED,
-            cluster_pb2.TASK_STATE_FAILED,
-            cluster_pb2.TASK_STATE_KILLED,
-            cluster_pb2.TASK_STATE_WORKER_FAILED,
+            job_pb2.TASK_STATE_SUCCEEDED,
+            job_pb2.TASK_STATE_FAILED,
+            job_pb2.TASK_STATE_KILLED,
+            job_pb2.TASK_STATE_WORKER_FAILED,
         }
     )
 
@@ -554,7 +557,7 @@ class Worker:
         matching.sort(key=lambda x: x[0][1], reverse=True)
         return matching[0][1]
 
-    def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str:
+    def submit_task(self, request: job_pb2.RunTaskRequest) -> str:
         """Submit a new task for execution.
 
         If a non-terminal task with the same task_id already exists:
@@ -691,7 +694,7 @@ class Worker:
                 by_task[task_id] = task
         return list(by_task.values())
 
-    def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse:
+    def handle_heartbeat(self, request: job_pb2.HeartbeatRequest) -> job_pb2.HeartbeatResponse:
         """Handle controller-initiated heartbeat with reconciliation.
 
         Processing order (sequential, not concurrent):
@@ -737,7 +740,7 @@ class Worker:
                     except Exception as e:
                         logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
 
-            tasks: list[cluster_pb2.Controller.WorkerTaskStatus] = []
+            tasks: list[job_pb2.WorkerTaskStatus] = []
 
             with slow_log(logger, "heartbeat reconciliation", threshold_ms=200):
                 with self._lock:
@@ -750,10 +753,10 @@ class Worker:
 
                         if task is None:
                             tasks.append(
-                                cluster_pb2.Controller.WorkerTaskStatus(
+                                job_pb2.WorkerTaskStatus(
                                     task_id=task_id,
                                     attempt_id=expected_attempt_id,
-                                    state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                                    state=job_pb2.TASK_STATE_WORKER_FAILED,
                                     exit_code=0,
                                     error="Task not found on worker",
                                     finished_at=timestamp_to_proto(Timestamp.now()),
@@ -762,10 +765,10 @@ class Worker:
                         else:
                             task_proto = task.to_proto()
                             reported_state = task.status
-                            if reported_state == cluster_pb2.TASK_STATE_PENDING:
-                                reported_state = cluster_pb2.TASK_STATE_BUILDING
+                            if reported_state == job_pb2.TASK_STATE_PENDING:
+                                reported_state = job_pb2.TASK_STATE_BUILDING
 
-                            entry = cluster_pb2.Controller.WorkerTaskStatus(
+                            entry = job_pb2.WorkerTaskStatus(
                                 task_id=task_id,
                                 attempt_id=task_proto.current_attempt_id,
                                 state=reported_state,
@@ -804,7 +807,7 @@ class Worker:
                 total_processes = 0
                 with self._lock:
                     for task in self._tasks.values():
-                        if task.status == cluster_pb2.TASK_STATE_RUNNING:
+                        if task.status == job_pb2.TASK_STATE_RUNNING:
                             running_count += 1
                             total_processes += task.process_count
                 resource_snapshot.running_task_count = running_count
@@ -816,7 +819,7 @@ class Worker:
                 if not health.healthy:
                     logger.warning("Worker health check failed: %s", health.error)
 
-            return cluster_pb2.HeartbeatResponse(
+            return job_pb2.HeartbeatResponse(
                 tasks=tasks,
                 resource_snapshot=resource_snapshot,
                 worker_healthy=health.healthy,
@@ -846,9 +849,9 @@ class Worker:
 
         # Check if already in terminal state
         if task.status not in (
-            cluster_pb2.TASK_STATE_RUNNING,
-            cluster_pb2.TASK_STATE_BUILDING,
-            cluster_pb2.TASK_STATE_PENDING,
+            job_pb2.TASK_STATE_RUNNING,
+            job_pb2.TASK_STATE_BUILDING,
+            job_pb2.TASK_STATE_PENDING,
         ):
             return False
 
@@ -878,7 +881,7 @@ class Worker:
         try:
             task.stop(force=False)
 
-            running_states = (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
+            running_states = (job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_BUILDING)
             stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
                 lambda: task.status not in running_states,
                 timeout=Duration.from_ms(term_timeout_ms),
@@ -904,7 +907,7 @@ class Worker:
         self,
         task_id: str,
         duration_seconds: int,
-        profile_type: cluster_pb2.ProfileType,
+        profile_type: job_pb2.ProfileType,
         attempt_id: int | None = None,
     ) -> bytes:
         """Profile a running task by delegating to its container handle.
@@ -924,27 +927,27 @@ class Worker:
             attempt = self._get_current_attempt(task_id)
             if not attempt:
                 raise ValueError(f"Task {task_id} not found")
-        if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
-            raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
+        if attempt.status != job_pb2.TASK_STATE_RUNNING:
+            raise ValueError(f"Task {task_id} is not running (state={job_pb2.TaskState.Name(attempt.status)})")
         return attempt.profile(duration_seconds, profile_type)
 
     def exec_in_container(
         self, task_id: str, command: list[str], timeout_seconds: int = 60
-    ) -> cluster_pb2.Worker.ExecInContainerResponse:
+    ) -> worker_pb2.Worker.ExecInContainerResponse:
         """Execute a command in a running task's container.
 
         Delegates to the container handle's underlying runtime (docker exec, subprocess, kubectl exec).
         """
         attempt = self._get_current_attempt(task_id)
         if not attempt:
-            return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} not found")
-        if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
-            return cluster_pb2.Worker.ExecInContainerResponse(
-                error=f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})"
+            return worker_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} not found")
+        if attempt.status != job_pb2.TASK_STATE_RUNNING:
+            return worker_pb2.Worker.ExecInContainerResponse(
+                error=f"Task {task_id} is not running (state={job_pb2.TaskState.Name(attempt.status)})"
             )
         container_id = attempt.container_id
         if not container_id:
-            return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} has no container")
+            return worker_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} has no container")
         return attempt.exec_in_container(command, timeout_seconds)
 
     @property
