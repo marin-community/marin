@@ -5,6 +5,7 @@ from typing import Optional
 
 import dspy
 import pytest
+from dspy.utils.exceptions import AdapterParseError
 
 from experiments.dspy.adapters.gbnf import GBNFAdapter, build_gbnf_grammar, _type_to_rule_ref
 from experiments.dspy.adapters.xgrammar import XGrammarAdapter, build_json_schema, _annotation_to_json_schema
@@ -90,9 +91,8 @@ class TestGBNFAdapterParse:
         assert result["items"] == ["apple", "banana", "cherry"]
 
     def test_parse_empty(self):
-        result = self.adapter.parse(SimpleSignature, "")
-        assert result["label"] is None
-        assert result["reasoning"] is None
+        with pytest.raises(AdapterParseError):
+            self.adapter.parse(SimpleSignature, "")
 
     def test_parse_optional_enum(self):
         completion = "### Label:\nNOT_SUPPORTED"
@@ -154,13 +154,12 @@ class TestXGrammarAdapterParse:
         assert result["label"] == Label.NOT_SUPPORTED
 
     def test_parse_invalid_json(self):
-        result = self.adapter.parse(SimpleSignature, "not json at all")
-        assert result["label"] is None
-        assert result["reasoning"] is None
+        with pytest.raises(AdapterParseError):
+            self.adapter.parse(SimpleSignature, "not json at all")
 
     def test_parse_empty(self):
-        result = self.adapter.parse(SimpleSignature, "")
-        assert result["label"] is None
+        with pytest.raises(AdapterParseError):
+            self.adapter.parse(SimpleSignature, "")
 
     def test_parse_list_field(self):
         completion = '{"items": ["apple", "banana"]}'

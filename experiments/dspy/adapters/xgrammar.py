@@ -43,6 +43,7 @@ from typing import Any, Union, get_args, get_origin
 
 from dspy import Adapter
 from dspy.signatures.signature import Signature
+from dspy.utils.exceptions import AdapterParseError
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +195,11 @@ class XGrammarAdapter(Adapter):
         result: dict[str, Any] = {name: None for name in signature.output_fields}
 
         if not completion or not completion.strip():
-            return result
+            raise AdapterParseError(
+                adapter_name="XGrammarAdapter",
+                signature=signature,
+                lm_response=completion or "",
+            )
 
         text = completion.strip()
 
@@ -211,10 +216,18 @@ class XGrammarAdapter(Adapter):
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError:
-            return result
+            raise AdapterParseError(
+                adapter_name="XGrammarAdapter",
+                signature=signature,
+                lm_response=completion,
+            )
 
         if not isinstance(parsed, dict):
-            return result
+            raise AdapterParseError(
+                adapter_name="XGrammarAdapter",
+                signature=signature,
+                lm_response=completion,
+            )
 
         for name, field in signature.output_fields.items():
             if name in parsed:

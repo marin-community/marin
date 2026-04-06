@@ -38,6 +38,7 @@ from typing import Any, Union, get_args, get_origin
 
 from dspy import Adapter
 from dspy.signatures.signature import Signature
+from dspy.utils.exceptions import AdapterParseError
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +207,11 @@ class GBNFAdapter(Adapter):
         result: dict[str, Any] = {name: None for name in signature.output_fields}
 
         if not completion or not completion.strip():
-            return result
+            raise AdapterParseError(
+                adapter_name="GBNFAdapter",
+                signature=signature,
+                lm_response=completion or "",
+            )
 
         header_re = re.compile(r"###\s+([^\n:]+)\s*:\s*", re.IGNORECASE)
         parts = header_re.split(completion)
@@ -229,6 +234,14 @@ class GBNFAdapter(Adapter):
                 continue
 
             result[matched] = self._coerce(raw_value, signature.output_fields[matched].annotation)
+
+        if all(v is None for v in result.values()):
+            raise AdapterParseError(
+                adapter_name="GBNFAdapter",
+                signature=signature,
+                lm_response=completion,
+                parsed_result=result,
+            )
 
         return result
 
