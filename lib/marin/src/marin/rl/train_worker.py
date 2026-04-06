@@ -25,7 +25,7 @@ from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SI
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
-from transformers import PreTrainedTokenizer
+from levanter.tokenizers import MarinTokenizer
 
 from marin.rl import weight_transfer
 from fray.v1.job import get_default_job_ctx
@@ -53,7 +53,7 @@ class TrainWorkerConfig:
     weight_transfer: WeightTransferConfig
     curriculum_config: CurriculumConfig
     loss: RLLossModule
-    tokenizer: PreTrainedTokenizer
+    tokenizer: MarinTokenizer
     run_id: str
 
     initial_checkpoint: str | None = None
@@ -61,7 +61,7 @@ class TrainWorkerConfig:
 
     vocab_size: int | None = None
     """Vocab size for model construction. Should match the checkpoint's vocab dimension.
-    If None, falls back to len(tokenizer)."""
+    If None, falls back to tokenizer.vocab_size."""
 
     seed: int = 0
     """Random seed for replay buffer sampling and model construction."""
@@ -164,7 +164,7 @@ class TrainWorker:
     replay_buffer: ReplayBuffer
     replay_loader: ReplayDataLoader
     transfer_server: weight_transfer.WeightTransferServer
-    tokenizer: PreTrainedTokenizer
+    tokenizer: MarinTokenizer
     loss_module: RLLossModule
 
     def __init__(
@@ -227,7 +227,7 @@ class TrainWorker:
         """Build reference and initial policy models."""
         config = self.config
         model_key = jrandom.PRNGKey(config.seed)
-        vocab_size = config.vocab_size if config.vocab_size is not None else len(self.tokenizer)
+        vocab_size = config.vocab_size if config.vocab_size is not None else self.tokenizer.vocab_size
         Vocab = hax.Axis("vocab", vocab_size)
 
         if config.initial_checkpoint is not None:
@@ -366,7 +366,7 @@ class TrainWorker:
         trainer.add_hook(_log_samples_hook, every=1)
 
         # Add MFU (Model FLOPs Utilization) logging
-        vocab_size = self.config.vocab_size if self.config.vocab_size is not None else len(self.tokenizer)
+        vocab_size = self.config.vocab_size if self.config.vocab_size is not None else self.tokenizer.vocab_size
         tokens_per_example = self.config.curriculum_config.max_seq_len
         flops_per_token = self.config.model.flops_per_token(vocab_size, tokens_per_example)
         flops_per_example = 3 * flops_per_token * tokens_per_example if flops_per_token is not None else None

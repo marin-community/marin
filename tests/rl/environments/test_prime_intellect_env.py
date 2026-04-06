@@ -11,7 +11,7 @@ import pytest
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
-from transformers import AutoTokenizer
+from levanter.tokenizers import load_tokenizer
 
 try:
     import verifiers as vf
@@ -47,7 +47,7 @@ def create_mock_chat_completion(response_text: str = "42") -> ChatCompletion:
 @pytest.fixture
 def tokenizer():
     """Create a real tokenizer for testing."""
-    return AutoTokenizer.from_pretrained("gpt2")
+    return load_tokenizer("gpt2")
 
 
 @pytest.fixture

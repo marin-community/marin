@@ -39,7 +39,7 @@ from marin.rl.rollout_worker import create_inference_context
 from marin.rl.types import RolloutGroup
 from marin.training.training import _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
-from transformers import AutoTokenizer
+from levanter.tokenizers import load_tokenizer
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ class EnvironmentEvalConfig:
 
     vocab_size: int | None = None
     """Vocab size for model construction. Should match the checkpoint's vocab dimension.
-    If None, falls back to len(tokenizer)."""
+    If None, falls back to tokenizer.vocab_size."""
 
 
 def _run_evaluation(config: EnvironmentEvalConfig) -> None:
@@ -127,7 +127,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
 
     def _run_inference():
         logger.info("Loading tokenizer for evaluation")
-        tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
+        tokenizer = load_tokenizer(checkpoint_path)
 
         with remove_tpu_lockfile_on_exit():
 
@@ -153,7 +153,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
             logger.info(f"Model config: {model_config}")
 
             key = jrandom.PRNGKey(42)
-            vocab_size = config.vocab_size if config.vocab_size is not None else len(tokenizer)
+            vocab_size = config.vocab_size if config.vocab_size is not None else tokenizer.vocab_size
             Vocab = hax.Axis("vocab", vocab_size)
             logger.info(f"Vocab size: {vocab_size}")
 

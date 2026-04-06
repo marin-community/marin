@@ -16,7 +16,6 @@ import braceexpand
 import datasets
 import fsspec
 import requests
-import transformers
 from rigging.filesystem import url_to_fs
 from huggingface_hub.utils import HfHubHTTPError
 
@@ -219,17 +218,17 @@ def load_dataset_with_backoff(
 def load_tokenizer_with_backoff(
     tokenizer_name: str,
     *,
-    tokenizer_kwargs: dict[str, Any] | None = None,
     context: str | None = None,
     max_attempts: int = 6,
     initial_delay: float = 2.0,
     max_delay: float = 60.0,
     logger: logging.Logger | None = None,
 ):
-    kwargs = tokenizer_kwargs or {}
+    from levanter.tokenizers import load_tokenizer
+
     load_context = context or f"tokenizer={tokenizer_name}"
     return call_with_hf_backoff(
-        lambda: transformers.AutoTokenizer.from_pretrained(tokenizer_name, **kwargs),
+        lambda: load_tokenizer(tokenizer_name),
         context=load_context,
         max_attempts=max_attempts,
         initial_delay=initial_delay,
