@@ -1,45 +1,34 @@
 import dspy
-
-
-class _HotpotQAAnswerSignature(dspy.Signature):
-    """Answer the multi-hop question based on the collected notes."""
-
-    question: str    = dspy.InputField()
-    notes: list[str] = dspy.InputField()
-    answer: str      = dspy.OutputField(desc="A short, direct answer — a few words or a single phrase.")
+from dsp.utils import deduplicate
 
 
 class HotpotQA(dspy.Module):
     def __init__(self, search, num_docs=3, num_hops=2):
         self.search = search
-        self.num_docs, self.num_hops = num_docs, num_hops
-        self.generate_query  = dspy.ChainOfThought("question, notes -> search_query")
-        self.append_notes    = dspy.ChainOfThought("question, notes, context -> new_notes: list[str]")
-        self.generate_answer = dspy.ChainOfThought(_HotpotQAAnswerSignature)
+        self.num_docs = num_docs
+        self.num_hops = num_hops
+        self.generate_query = [dspy.ChainOfThought("context, question -> search_query") for _ in range(num_hops)]
+        self.generate_answer = dspy.ChainOfThought("context, question -> answer")
 
     def forward(self, question: str) -> dspy.Prediction:
-        notes      = []
+        context = []
         hop_traces = []
 
         for hop_idx in range(self.num_hops):
-            query             = self.generate_query(question=question, notes=notes).search_query
-            context           = self.search(query, k=self.num_docs)
-            passages_this_hop = [{"text": t, "score": s} for t, s in context.items()]
-            prediction        = self.append_notes(question=question, notes=notes, context=context)
-            new_notes         = prediction.new_notes
-            notes.extend(new_notes)
+            query = self.generate_query[hop_idx](context=context, question=question).search_query
+            passages = self.search(query, k=self.num_docs)
+            context = deduplicate(context + list(passages))
 
             hop_traces.append({
-                "hop":          hop_idx + 1,
+                "hop": hop_idx + 1,
                 "search_query": query,
-                "context":      passages_this_hop,
-                "new_notes":    new_notes,
+                "context": context,
             })
 
-        pred = self.generate_answer(question=question, notes=notes)
+        pred = self.generate_answer(context=context, question=question)
 
         return dspy.Prediction(
-            notes      = notes,
-            hop_traces = hop_traces,
-            answer     = pred.answer,
+            context=context,
+            hop_traces=hop_traces,
+            answer=pred.answer,
         )
