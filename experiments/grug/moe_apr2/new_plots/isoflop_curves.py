@@ -47,9 +47,9 @@ def fetch_v16_data():
 def compute_active_params(dim):
     """Active parameters (lm_head, no embed) for a given hidden_dim."""
     # From heuristic
-    hidden_head_ratio = 128
+    # hidden_head_ratio = 128
     vocab_size = 128256
-    num_heads = max(1, dim // hidden_head_ratio)
+    # num_heads = max(1, dim // hidden_head_ratio)
 
     # num_layers from heuristic formula
     hs_pow = math.log2(dim)
@@ -260,7 +260,7 @@ def main():
             ax1b.plot(10**opt_log, opt_bpb, "*", color=color, markersize=15)
 
         # Label dims
-        for t, b, d in zip(tokens_sorted, bpbs_sorted, dims_sorted):
+        for t, b, d in zip(tokens_sorted, bpbs_sorted, dims_sorted, strict=True):
             ax1b.annotate(f"d{d}", (t, b), textcoords="offset points", xytext=(4, 4), fontsize=7, alpha=0.7)
 
     ax1b.set_xscale("log")
@@ -307,7 +307,7 @@ def main():
             opt_loss = np.polyval(coeffs, opt_log)
             ax1c.plot(10**opt_log, opt_loss, "*", color=color, markersize=15)
 
-        for t, l, d in zip(tokens_sorted, losses_sorted, dims_sorted):
+        for t, l, d in zip(tokens_sorted, losses_sorted, dims_sorted, strict=True):
             ax1c.annotate(f"d{d}", (t, l), textcoords="offset points", xytext=(4, 4), fontsize=7, alpha=0.7)
 
     ax1c.set_xscale("log")
