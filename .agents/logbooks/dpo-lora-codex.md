@@ -2287,3 +2287,698 @@ uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-spece
 uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr1e5-seed0-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr1e5_seed0_b64.py
 uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr1e5-seed2-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr1e5_seed2_b64.py
 ```
+
+## 2026-04-02 Local W&B Export For Canonical Tune-LoRA Runs
+
+### Scope
+
+- Created a local export root at:
+  - [`scratch/wandb_dpo_data/tune_lora/`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/tune_lora)
+- Exported the **canonical 18** tune-LoRA runs only:
+  - the `1700`-step variants
+  - not the older superseded `850`-step duplicates
+
+### What Was Saved
+
+- Wrote a top-level manifest:
+  - [`scratch/wandb_dpo_data/tune_lora/canonical_18_runs_manifest.json`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/tune_lora/canonical_18_runs_manifest.json)
+- For each run, saved:
+  - `run_metadata.json`
+  - `config.json`
+  - `summary.json`
+  - `files_manifest.json`
+  - `logged_artifacts.json`
+  - `history.jsonl.gz`
+  - `system_history_sampled.csv`
+  - `downloaded_files.json`
+  - `files/` mirror of the run-attached W&B files
+- This export is W&B-local metadata/history/files only.
+- I did **not** download large checkpoint artifacts from W&B artifact references.
+
+### Verification
+
+- Manifest count:
+  - `18` runs
+- All exported runs are marked:
+  - `state = finished`
+- Export summary from the manifest:
+  - `history_rows = 2000` for each run
+  - `num_file_errors = 0` for every run
+- Total local size after export:
+  - about `305M`
+
+### Notes
+
+- The run-attached file count varies across runs (`16` to `40` files), but all attached files that W&B exposed for these runs downloaded successfully.
+- The canonical run list used for this export is the same `18`-run `9 x 2` matrix described above under the updated sweep plan.
+
+## 2026-04-02 Iris Availability Check And v5p-8 Full-DPO Batch-64 Napkin Math
+
+### Command
+
+```bash
+uv run iris --config=lib/iris/examples/marin.yaml cluster status
+```
+
+### Current TPU Snapshot
+
+At the time of this check, Iris reported:
+
+- `tpu_v5p_8-us-central1-a`: `Ready 21`
+- `tpu_v5p_8-us-east5-a`: `Ready 21`
+- `tpu_v5p_32-us-central1-a`: `Ready 2`
+- `tpu_v5p_32-us-east5-a`: `Ready 0`
+
+So the answer is: it is **not** only `v5p-8`. There is currently live `v5p-32` capacity in `us-central1-a`, although the pool is much smaller than `v5p-8`.
+
+### Why Full DPO Is Heavier Than The LoRA Sweep
+
+The current code paths are meaningfully different:
+
+- Full DPO in [`experiments/sweep_dpo/`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/sweep_dpo) uses a true separate reference model via `SeparateReferenceConfig`.
+- In [`train_dpo.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/main/train_dpo.py), that path constructs `DpoModel(policy, reference)` and loads the reference weights separately.
+- The tune-LoRA sweep in [`experiments/tune_lora/common.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/tune_lora/common.py) uses `AdapterBaseReferenceConfig`, so the reference path is taken as the base-model view of the policy instead of loading a second full model.
+
+Important nuance: both paths still compute policy chosen/rejected and reference chosen/rejected log-probs during **training**. So the batch/sequence-driven activation and temporary-allocation pressure should be directionally similar. The main extra burden in full DPO is resident frozen-reference model memory, not a totally different loss shape.
+
+### Napkin Math
+
+Known hard evidence from the LoRA `v5p-8` failure:
+
+- observed usage at first-step compile: `111.15G`
+- `v5p-8` HBM capacity seen by XLA: `95.74G`
+- over by: `15.41G`
+
+If we make the intentionally crude assumption that the dominant training-step memory is roughly linear in batch size, then:
+
+- batch `128`: `111.15G`
+- batch `64`: about `55.58G`
+- implied headroom at batch `64`: about `40.16G`
+
+That is a **large** enough gap that simply halving batch looks plausibly sufficient from the activation/temp-allocation side.
+
+The catch is full DPO:
+
+- LoRA at `reference=adapter_base` avoided storing a second separately loaded reference model.
+- Full DPO at `reference=separate` must keep extra frozen reference parameters resident.
+- Therefore full DPO batch `64` on `v5p-8` is not guaranteed by the LoRA math.
+
+My best napkin read is:
+
+- full DPO on `v5p-8` at batch `64` looks **plausible enough to try once**
+- but it is still materially riskier than the LoRA `b64` sweep because the extra reference-model residency eats into that `~40G` crude headroom
+- if it fails, `train_batch_size: 32` is the obvious next rung
+
+### Recommendation
+
+- If the goal is the lowest-risk path to reproduce the February full-DPO runs with more evals, prefer `v5p-32`.
+- If the goal is to test whether we can get away with cheaper hardware, a single `v5p-8`, batch-`64` full-DPO trial is justified by the current napkin math.
+- I would treat that `v5p-8` batch-`64` run as a fit/probe, not as guaranteed-capacity ground truth.
+
+## 2026-04-03 Planned Single v5p-16 Full-DPO Probe (`dummy`)
+
+User requested a single launch on `v5p-16` named `dummy`.
+
+I am using a one-off wrapper at:
+
+- [`experiments/sweep_dpo/dummy.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/sweep_dpo/dummy.py)
+
+Config choice for this probe:
+
+- full DPO, not LoRA
+- Bloom SpecEval v2 tokenized train/val
+- `beta=0.1`
+- seed `0`
+- `v5p-16`
+- `train_batch_size=64`
+- `num_train_steps=10`
+- `steps_per_eval=5`
+
+Reason for the short run:
+
+- this is a hardware-fit / launch probe, not a canonical long baseline
+- the main uncertainty is whether full DPO with a separate reference model fits and starts cleanly on `v5p-16`
+
+Planned launch command:
+
+```bash
+uv run iris --config=lib/iris/examples/marin.yaml job run --job-name dummy --tpu v5p-16 --region us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" --no-wait -- uv run python experiments/sweep_dpo/dummy.py
+```
+
+### Submission Result
+
+- submitted successfully via Iris
+- job id: `/ahmed/dummy`
+- immediate scheduler state from `iris job list`: `pending`
+- scheduler note: `Coscheduling: need 2 workers in 'tpu-name' group ...`
+
+Interpretation:
+
+- this is expected for a multinode `v5p-16` request
+- the job is queued cleanly; it has not failed at submit time
+
+### Running Update
+
+Subsequent monitoring showed:
+
+- child training job: `/ahmed/dummy/train_dpo`
+- child scheduler state: `running`
+- W&B run from process 0:
+  - `https://wandb.ai/marin-community/dpo/runs/dummy-3ca308`
+
+Signals seen before first-step compile:
+
+- both TPU tasks started and joined JAX distributed cleanly
+- W&B initialized successfully on process 0
+- the training cache and validation cache started loading
+- no `RESOURCE_EXHAUSTED`, HBM, OOM, or `FAILED_PRECONDITION` signal observed yet
+
+This means the probe has cleared scheduler placement and entered the actual train-DPO runtime path on `v5p-16`.
+
+### Deeper Runtime Update
+
+Continued babysitting showed that `dummy` advanced beyond simple process startup:
+
+- it finished one full pass reading the `marin-community/marin-8b-instruct` safetensor shard set
+- it then began a second HF load pass, consistent with full DPO loading the separate reference model
+- the job remained in scheduler state `running` throughout this phase
+
+Important negative signal:
+
+- still no `RESOURCE_EXHAUSTED`, TPU HBM, `FAILED_PRECONDITION`, traceback, or process-death signal during this model-loading phase
+
+This is not yet proof that first-step compile will fit, but it is stronger evidence than mere scheduler placement: the full-DPO `v5p-16` probe is making real progress through the heavyweight model-load path without early failure.
+
+## 2026-04-03 Planned Full-DPO Compare-To-LoRA Sweep (`beta=0.1`, `b64`, `1 epoch`, `v5p-16`)
+
+Once the `dummy` probe reached the real `train_dpo` child runtime on `v5p-16`, the next step was to launch a comparable full-DPO sweep against the LoRA `b64`, `1 epoch` runs.
+
+New wrappers:
+
+- [`experiments/sweep_dpo/compare_lora_beta0p1_b64_v5p16_common.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/sweep_dpo/compare_lora_beta0p1_b64_v5p16_common.py)
+- [`experiments/sweep_dpo/compare_lora_beta0p1_b64_v5p16_seed0.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/sweep_dpo/compare_lora_beta0p1_b64_v5p16_seed0.py)
+- [`experiments/sweep_dpo/compare_lora_beta0p1_b64_v5p16_seed1.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/sweep_dpo/compare_lora_beta0p1_b64_v5p16_seed1.py)
+- [`experiments/sweep_dpo/compare_lora_beta0p1_b64_v5p16_seed2.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/sweep_dpo/compare_lora_beta0p1_b64_v5p16_seed2.py)
+
+Sweep shape:
+
+- full DPO, not LoRA
+- `beta=0.1`
+- seeds `0`, `1`, `2`
+- `train_batch_size=64`
+- `num_epochs=1.0`
+- `v5p-16`
+- same Bloom SpecEval v2 train/val preference data
+- same base LR as the original full-DPO baseline: `5e-7`
+- auto-scheduled 5-point validation because `steps_per_eval` is intentionally left unset
+
+Planned launch commands:
+
+```bash
+uv run iris --config=lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-full-dpo-compare-lora-beta0p1-seed0-b64-v5p16 --tpu v5p-16 --region us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" --no-wait -- uv run python experiments/sweep_dpo/compare_lora_beta0p1_b64_v5p16_seed0.py
+uv run iris --config=lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-full-dpo-compare-lora-beta0p1-seed1-b64-v5p16 --tpu v5p-16 --region us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" --no-wait -- uv run python experiments/sweep_dpo/compare_lora_beta0p1_b64_v5p16_seed1.py
+uv run iris --config=lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-full-dpo-compare-lora-beta0p1-seed2-b64-v5p16 --tpu v5p-16 --region us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" --no-wait -- uv run python experiments/sweep_dpo/compare_lora_beta0p1_b64_v5p16_seed2.py
+```
+
+### Submission Result
+
+- seed `0` job id:
+  - `/ahmed/bloom-speceval-v2-full-dpo-compare-lora-beta0p1-seed0-b64-v5p16`
+- seed `1` job id:
+  - `/ahmed/bloom-speceval-v2-full-dpo-compare-lora-beta0p1-seed1-b64-v5p16`
+- seed `2` job id:
+  - `/ahmed/bloom-speceval-v2-full-dpo-compare-lora-beta0p1-seed2-b64-v5p16`
+
+Immediate scheduler states after submit:
+
+- seed `0`: `running`
+- seed `1`: `pending`
+- seed `2`: `pending`
+
+Pending reason for seeds `1` and `2`:
+
+- `Coscheduling: need 2 workers in 'tpu-name' group ...`
+
+Interpretation:
+
+- the cluster had enough free `v5p-16` capacity to start one sweep job immediately while `dummy` was still occupying another slice
+- the remaining two sweep jobs are queued cleanly behind the same multinode placement constraint
+
+## 2026-04-03 Local W&B Archive For New Full-DPO Runs
+
+Created a new local read-only W&B export root for the newly finished full-DPO runs:
+
+- [`scratch/wandb_dpo_data/new_dpo`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/new_dpo)
+
+Top-level manifest:
+
+- [`finished_new_dpo_runs_manifest.json`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/new_dpo/finished_new_dpo_runs_manifest.json)
+
+Archived runs:
+
+- `dummy-3ca308`
+- `bloom_speceval_v2_beta0.1_seed0_b64_v5p16-68f963`
+- `bloom_speceval_v2_beta0.1_seed1_b64_v5p16-c50842`
+- `bloom_speceval_v2_beta0.1_seed2_b64_v5p16-2272c8`
+
+Saved per-run files:
+
+- `run_metadata.json`
+- `config.json`
+- `summary.json`
+- `files_manifest.json`
+- `downloaded_files.json`
+- `logged_artifacts.json`
+- `history.jsonl.gz`
+- `system_history_sampled.csv`
+- `files/` with downloaded W&B run files
+
+Verification summary:
+
+- manifest length: `4`
+- all run states: `finished`
+- compare runs exported `1700` history rows each
+- `dummy` exported `10` history rows
+- file download errors: `0` for all four runs
+- archive size on disk: about `33M`
+
+Implementation note:
+
+- the first export attempt hit a benign W&B API attribute mismatch on `run.updated_at`; rerunning with `getattr(..., None)` completed the archive without modifying any runs
+
+## 2026-04-03 OG Full-DPO Vs New Full-DPO Visualization
+
+Built a new local comparison report for the OG February full-DPO baseline versus the new April full-DPO rerun:
+
+- [`scripts/dpo/plot_beta0p1_og_dpo_vs_new_dpo.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scripts/dpo/plot_beta0p1_og_dpo_vs_new_dpo.py)
+- [`beta0p1_og_dpo_vs_new_dpo.html`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/plots/beta0p1_og_dpo_vs_new_dpo.html)
+- [`beta0p1_og_dpo_vs_new_dpo_selection.json`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/plots/beta0p1_og_dpo_vs_new_dpo_selection.json)
+
+Selection rule:
+
+- OG side: `beta=0.1` February full-DPO baseline runs from `scratch/wandb_dpo_data/og_no_lora`, averaged across seeds `0/1/2`
+- new side: `beta=0.1` April full-DPO reruns from `scratch/wandb_dpo_data/new_dpo`, averaged across seeds `0/1/2`
+- excluded: the `10`-step `dummy-3ca308` probe
+
+Plotting choices:
+
+- same four Bloom SpecEval v2 DPO metrics as the earlier LoRA comparison
+- x-axis is normalized to percent of the run so OG `850`-step `b128` and new `1700`-step `b64` runs line up as one-epoch curves
+- both loss panels use log-scale y-axes
+- train loss is lightly smoothed; eval metrics remain checkpoint markers
+
+## 2026-04-03 One-Off Regression Wrapper For Deduped-Val Full DPO
+
+Added a one-off executor wrapper for the cleanest current-head comparison against the old `new_dpo_v2` run family:
+
+- [`experiments/sweep_dpo/regression_test_dpo.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/sweep_dpo/regression_test_dpo.py)
+
+Intent:
+
+- keep the linked `new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_-7_seed2-947c5d` training shape
+- run on `v5p-32`
+- keep `train_batch_size=128`
+- keep `num_train_steps=850`
+- keep `learning_rate=7.5e-7`
+- keep `steps_per_eval=200`
+- keep the same seed semantics as the old executor path (`data_seed=2`, trainer seed remains defaulted)
+- but swap the primary DPO validation set to the current deduped val path
+- and let current `default_dpo(...)` add the modern validation stack (LM eval suites plus reference-eval cache)
+
+This is intentionally a one-off debugging/repro script, not a new canonical experiment entry point.
+
+### Launch Record
+
+Submitted the one-off regression run on Iris in `us-central1-a`.
+
+Launch command:
+
+```bash
+uv run iris --config=lib/iris/examples/marin.yaml job run --job-name regression-test-dpo-beta0p1-lr7p5e-7-seed2-deduped-val --tpu v5p-32 --zone us-central1-a -e WANDB_API_KEY "$WANDB_API_KEY" --no-wait -- uv run python experiments/sweep_dpo/regression_test_dpo.py
+```
+
+Identifiers:
+
+- Iris job: `/ahmed/regression-test-dpo-beta0p1-lr7p5e-7-seed2-deduped-val`
+- submit time: `2026-04-03 12:29:52 PDT`
+
+Initial scheduler state:
+
+- `pending`
+- reason: `Scheduler: Coscheduling: need 4 workers in 'tpu-name' group ...`
+
+### Iris State Transition
+
+By `2026-04-03 13:08 PDT`, the child TPU training job had moved past the original coscheduling wait:
+
+- parent executor job `/ahmed/regression-test-dpo-beta0p1-lr7p5e-7-seed2-deduped-val`: `running`
+- child training job `/ahmed/regression-test-dpo-beta0p1-lr7p5e-7-seed2-deduped-val/train_dpo`: `running`
+- child task counts at that moment: `building=4`
+
+Interpretation:
+
+- the outer executor wrapper is alive and orchestrating steps
+- the inner `train_dpo` child has now received the `v5p-32` worker gang
+- startup is still in the worker-build / container-init phase, so this is not yet proof that the model has begun compiling or training
+
+Next monitoring gate:
+
+- keep short startup checks until child logs show actual training initialization or an early failure
+
+### Startup Clear
+
+By `2026-04-03 13:09 PDT`, the child job had cleared the build phase and was fully running on all four TPU tasks:
+
+- child training job `/ahmed/regression-test-dpo-beta0p1-lr7p5e-7-seed2-deduped-val/train_dpo`: `running`
+- child task counts: `running=4`
+
+Earliest substantive startup signal observed:
+
+- Levanter began loading the deduped validation cache ledger from `gs://marin-us-central1/tokenized/bloom_speceval_v2_val_deduped_prefs_marin_tokenizer-589b86/validation/shard_ledger.json`
+
+No early `RESOURCE_EXHAUSTED`, HBM OOM, `FAILED_PRECONDITION`, or node-death signal had appeared by that point.
+
+### Terminal Status
+
+Checked again at `2026-04-03 12:42 PDT` and the one-off regression run had completed successfully:
+
+- parent executor job `/ahmed/regression-test-dpo-beta0p1-lr7p5e-7-seed2-deduped-val`: `succeeded`
+- child training job `/ahmed/regression-test-dpo-beta0p1-lr7p5e-7-seed2-deduped-val/train_dpo`: `succeeded`
+- child task counts: `succeeded=4`
+- failure count: `0`
+- preemption count: `0`
+
+Runtime from Iris child timestamps:
+
+- child start: `2026-04-03 12:01:13 PDT`
+- child finish: `2026-04-03 17:15:42 PDT`
+- child wall time: `5h 14m 28s`
+
+Parent executor wall time:
+
+- parent start: `2026-04-03 12:00:16 PDT`
+- parent finish: `2026-04-03 17:15:52 PDT`
+- parent wall time: `5h 15m 36s`
+
+### W&B Pull And Local Archive
+
+Pulled the finished regression run from W&B and archived it into the existing `new_dpo` scratch bundle.
+
+Canonical W&B run:
+
+- display name: `regression_test_dpo_bloom_lr7.5e-7_seed2_deduped_val-1e4e93`
+- URL: `https://wandb.ai/marin-community/dpo/runs/regression_test_dpo_bloom_lr7.5e-7_seed2_deduped_val-1e4e93`
+
+Local archive path:
+
+- [`scratch/wandb_dpo_data/new_dpo/regression_test_dpo_bloom_lr7.5e-7_seed2_deduped_val-1e4e93`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/new_dpo/regression_test_dpo_bloom_lr7.5e-7_seed2_deduped_val-1e4e93)
+
+Archived contents:
+
+- `run_metadata.json`
+- `config.json`
+- `summary.json`
+- `history.jsonl.gz`
+- `system_history_sampled.csv`
+- `files_manifest.json`
+- `downloaded_files.json`
+- `logged_artifacts.json`
+- downloaded run files under `files/`
+
+Verification:
+
+- manifest [`finished_new_dpo_runs_manifest.json`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/new_dpo/finished_new_dpo_runs_manifest.json) now has `5` finished runs
+- regression run export has `history_rows = 850`
+- `system_history_rows = 500`
+- `num_files = 11`
+- `num_file_errors = 0`
+
+### Reference Baseline Pull
+
+Pulled the older full-val reference run into a separate scratch archive so it would not contaminate the seed-averaged `new_dpo` directory.
+
+Canonical W&B run:
+
+- display name: `new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_-7_seed2-947c5d`
+- URL: `https://wandb.ai/marin-community/dpo/runs/new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_-7_seed2-947c5d`
+
+Local archive path:
+
+- [`scratch/wandb_dpo_data/reference_dpo/new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_-7_seed2-947c5d`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/reference_dpo/new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_-7_seed2-947c5d)
+
+Verification:
+
+- manifest [`finished_reference_dpo_runs_manifest.json`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/reference_dpo/finished_reference_dpo_runs_manifest.json) has `1` finished run
+- reference export has `history_rows = 1000`
+- `system_history_rows = 500`
+- `num_files = 13`
+- `num_file_errors = 0`
+
+### Dedicated 947c5d vs Regression Plot
+
+Built a dedicated exact-step comparison plot for the two single runs:
+
+- baseline full-val run `947c5d`
+- deduped-val regression run `1e4e93`
+
+Artifacts:
+
+- plot script: [`scripts/dpo/plot_regression_test_vs_new_dpo_v2.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scripts/dpo/plot_regression_test_vs_new_dpo_v2.py)
+- HTML: [`scratch/wandb_dpo_data/plots/regression_test_vs_new_dpo_v2_seed2.html`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/plots/regression_test_vs_new_dpo_v2_seed2.html)
+- selection summary: [`scratch/wandb_dpo_data/plots/regression_test_vs_new_dpo_v2_seed2_selection.json`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/plots/regression_test_vs_new_dpo_v2_seed2_selection.json)
+
+Key readout from the archived W&B summaries:
+
+- train loss is identical at step `849`: `0.003482460742816329` in both runs
+- eval loss diverges: `0.005509627517312765` in `947c5d` vs `0.10757964104413986` in `1e4e93`
+- eval accuracy diverges: `99.5669%` in `947c5d` vs `84.8307%` in `1e4e93`
+
+Interpretation:
+
+- the exact same training shape reproduced cleanly
+- the validation-side numbers changed sharply once the run used the deduped validation set plus current validation callbacks
+- this supports the hypothesis that the training path is not what changed in the regression test
+
+### Post-Plot Conclusion
+
+After reviewing the exact-step overlay in `regression_test_vs_new_dpo_v2_seed2.html`, confidence increased further:
+
+- the train-loss curve is not just close at the endpoint; it visually overlays almost exactly across the full run
+- the final train metrics also match exactly at step `849`
+
+Current working conclusion:
+
+- the regression run `1e4e93` is a moral reproduction of the old `947c5d` training run
+- current-head DPO training appears sound for this configuration
+- the large metric gap is on the validation side, not in the optimization path
+
+Practical implication for future comparisons:
+
+- treat `1e4e93` as the bridge run that establishes continuity between old full-val reporting and the new deduped-val reporting
+- compare future runs primarily against the deduped-val metric family rather than against the historical full-val numbers
+- if needed, use `947c5d` only as the archival reference showing that training itself reproduced
+
+## 2026-04-03 Batch-64 Full DPO vs Tune-LoRA Comparison
+
+Built a dedicated local-archive comparison between the batch-64 full-DPO reruns and two selected LoRA groups.
+
+Artifacts:
+
+- plot script: [`scripts/dpo/plot_full_dpo_b64_vs_tune_lora.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scripts/dpo/plot_full_dpo_b64_vs_tune_lora.py)
+- HTML: [`scratch/wandb_dpo_data/plots/beta0p1_full_dpo_b64_vs_tune_lora.html`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/plots/beta0p1_full_dpo_b64_vs_tune_lora.html)
+- selection summary: [`scratch/wandb_dpo_data/plots/beta0p1_full_dpo_b64_vs_tune_lora_selection.json`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/plots/beta0p1_full_dpo_b64_vs_tune_lora_selection.json)
+
+Selection:
+
+- `Full DPO`: batch `64`, beta `0.1`, lr `5e-7`, steps `1700`, seeds `0/1/2`
+- `LoRA 10x LR`: batch `64`, beta `0.1`, lr `5e-6`, steps `1700`, archived seeds `0/2`
+- `LoRA Best Eval`: batch `64`, beta `0.1`, lr `1e-5`, steps `1700`, archived seeds `0/2`
+
+Important caveat:
+
+- the archived LoRA sweep contains only seeds `0` and `2` for each learning rate
+- so the full-DPO group is a true `3`-seed average, while both LoRA groups are true `2`-seed averages
+
+Best-Eval selection rule:
+
+- highest mean final eval accuracy
+- tie-break lowest mean final eval loss
+
+Resulting LoRA LR ranking head:
+
+- `1e-5`: mean final eval accuracy `0.992759108543396`, mean final eval loss `0.006394619820639491`
+- `8.75e-6`: mean final eval accuracy `0.9925685524940491`, mean final eval loss `0.006546571617946029`
+- `5e-6` (10x LR): mean final eval accuracy `0.9919969439506532`, mean final eval loss `0.007281250087544322`
+
+Final mean metrics from the selected groups:
+
+- `Full DPO`: eval loss `0.023859122768044472`, eval accuracy `0.9692460497220358`, eval policy margin `-40.860984802246094`
+- `LoRA 10x LR`: eval loss `0.007281250087544322`, eval accuracy `0.9919969439506532`, eval policy margin `14.115777015686035`
+- `LoRA Best Eval`: eval loss `0.006394619820639491`, eval accuracy `0.992759108543396`, eval policy margin `67.51775360107422`
+
+Interpretation:
+
+- on the current deduped-val metric family, the selected LoRA runs clearly outperform the batch-64 full-DPO reruns
+- the strongest LoRA setting in the archived sweep is `lr=1e-5`
+- the `10x` heuristic choice at `5e-6` is close, but still weaker than the `1e-5` group by the chosen eval ranking
+
+### Expanded Metric Coverage
+
+Updated [`beta0p1_full_dpo_b64_vs_tune_lora.html`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/plots/beta0p1_full_dpo_b64_vs_tune_lora.html) to include the full shared metric set from the archived histories, not just the DPO subset.
+
+The current shared set across all three selected groups is `17` metrics:
+
+- training: `train/loss`, `train/dpo_loss`, `train/dpo_accuracy`, `train/dpo_chosen_reward`, `train/dpo_rejected_reward`, `train/dpo_margin_policy`, `train/dpo_margin_ref`
+- evaluation: `eval/bloom_speceval_v2_val/loss`, `eval/bloom_speceval_v2_val/dpo_loss`, `eval/bloom_speceval_v2_val/dpo_accuracy`, `eval/bloom_speceval_v2_val/dpo_chosen_reward`, `eval/bloom_speceval_v2_val/dpo_rejected_reward`, `eval/bloom_speceval_v2_val/dpo_margin_policy`, `eval/bloom_speceval_v2_val/dpo_margin_ref`
+- eval timing/default bookkeeping: `eval/bloom_speceval_v2_val/timing/load_time`, `eval/bloom_speceval_v2_val/timing/loss_time`, `eval/bloom_speceval_v2_val/timing/num_batches`
+
+Note:
+
+- the earlier statement that there were no extra LM-suite keys in this comparison was wrong
+- the shared archive actually includes a large `lm_eval/...` block on all three groups
+
+### LM Eval Correction
+
+Patched [`scripts/dpo/plot_full_dpo_b64_vs_tune_lora.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scripts/dpo/plot_full_dpo_b64_vs_tune_lora.py) so the comparison now includes shared `lm_eval/...` metrics in addition to `train/...` and `eval/...`.
+
+Verification from the rebuilt selection summary:
+
+- [`beta0p1_full_dpo_b64_vs_tune_lora_selection.json`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/plots/beta0p1_full_dpo_b64_vs_tune_lora_selection.json)
+- `common_metric_count = 77`
+- `contains_lm_eval = true`
+
+Examples of the newly included shared LM-eval metrics:
+
+- aggregate: `lm_eval/loss`, `lm_eval/bpb`, `lm_eval/macro_loss`, `lm_eval/macro_bpb`, `lm_eval/loading_time`, `lm_eval/total_time`
+- Paloma slices: `lm_eval/paloma/...`
+- Uncheatable eval slices: `lm_eval/uncheatable_eval/...`
+
+Net:
+
+- the HTML now includes the shared train metrics, shared DPO validation metrics, and the shared LM-eval suite metrics for the selected full-DPO and LoRA groups
+
+### Tabbed HTML
+
+The all-in-one `77`-metric page was too cluttered, so [`beta0p1_full_dpo_b64_vs_tune_lora.html`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/plots/beta0p1_full_dpo_b64_vs_tune_lora.html) is now rendered as a tabbed HTML instead of a single giant Plotly grid.
+
+Current panes:
+
+- `Core DPO`
+- `LM Summary`
+- `Paloma Summary`
+- `Paloma BPB`
+- `Paloma Loss`
+- `Uncheatable Summary`
+- `Uncheatable BPB`
+- `Uncheatable Loss`
+
+Implementation detail:
+
+- the script now writes multiple Plotly figures into a single custom HTML shell with clickable tabs
+- tab metadata is recorded in [`beta0p1_full_dpo_b64_vs_tune_lora_selection.json`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/plots/beta0p1_full_dpo_b64_vs_tune_lora_selection.json)
+
+### Bloom Scratch Archive
+
+Copied the Bloom spec-adherence judging data needed for the `Std/Opp/Natural/Adversarial` figure into [`scratch/bloom_data`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/bloom_data).
+
+Archive contents:
+
+- selected judging subtree: [`scratch/bloom_data/judging`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/bloom_data/judging)
+- selection manifest: [`scratch/bloom_data/selected_runs_manifest.json`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/bloom_data/selected_runs_manifest.json)
+- copied plotting script from Bloom: [`scratch/bloom_data/adherence.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/bloom_data/adherence.py)
+- copied plot outputs: [`scratch/bloom_data/plot_output`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/bloom_data/plot_output)
+
+Selection details:
+
+- `13` unique judging runs copied
+- only plotting-relevant artifacts copied per run: `summary.json`, `run_metadata.json`, and `per_statement/*.json`
+- total local archive size after copy: about `854M`
+
+Plot provenance:
+
+- source script is Bloom's [`plot/adherence.py`](/Users/ahmed/code/bloom/plot/adherence.py)
+- source figure copied locally as [`scratch/bloom_data/plot_output/overall_adherence.png`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/bloom_data/plot_output/overall_adherence.png)
+
+Local rerender note:
+
+- attempted to rerun the plot against the copied scratch judging root
+- this environment stalled during `matplotlib` startup/import before the plotting logic ran
+- as a practical fallback, copied the exact Bloom-generated plot outputs into the scratch bundle next to the selected data and plotting script
+
+### Opposite-Mode Proxy Check
+
+Looked across the full February no-LoRA family (`12` runs: `2` betas x `2` learning rates x `3` seeds) to see whether any old W&B eval metric already preferred the same family as the Bloom opposite-mode adherence plot.
+
+Scope:
+
+- source runs: the full CS229 cache under [`data/wandb_logs`](/Users/ahmed/code/cs229/CS229_-Project-Final-Spec-Alignment/data/wandb_logs)
+- available old eval metrics are only the `7` DPO-validation metrics:
+  - `eval/bloom_speceval_v2_val/dpo_accuracy`
+  - `eval/bloom_speceval_v2_val/dpo_chosen_reward`
+  - `eval/bloom_speceval_v2_val/dpo_loss`
+  - `eval/bloom_speceval_v2_val/dpo_margin_policy`
+  - `eval/bloom_speceval_v2_val/dpo_margin_ref`
+  - `eval/bloom_speceval_v2_val/dpo_rejected_reward`
+  - `eval/bloom_speceval_v2_val/loss`
+
+Main result:
+
+- the cleanest old proxy for the Bloom opposite-mode preference toward the `beta=0.1` family is [`eval/bloom_speceval_v2_val/dpo_accuracy`](/Users/ahmed/code/cs229/CS229_-Project-Final-Spec-Alignment/data/wandb_logs/bloom_speceval_v2_marin_instruct_beta0.1_seed0-4f9703_meta.json)
+
+Family means:
+
+- `beta=0.1, lr=5e-7`: `0.995811`
+- `beta=0.1, lr=7.5e-7`: `0.995754`
+- `beta=0.01, lr=5e-7`: `0.994650`
+- `beta=0.01, lr=7.5e-7`: `0.994141`
+
+Interpretation:
+
+- this metric puts both `beta=0.1` configs above both `beta=0.01` configs
+- it also slightly prefers `beta=0.1, lr=5e-7` over `beta=0.1, lr=7.5e-7`, matching the opposite-mode read that `beta=0.1, lr=5e-7` is the healthiest controllability point
+- seed variance is negligible, so this is not a noise artifact
+
+Supporting proxy:
+
+- [`eval/bloom_speceval_v2_val/dpo_chosen_reward`](/Users/ahmed/code/cs229/CS229_-Project-Final-Spec-Alignment/data/wandb_logs/bloom_speceval_v2_marin_instruct_beta0.1_seed0-4f9703_meta.json) also strongly separates the families:
+  - `beta=0.1` family is positive (`2.86`, `2.57`)
+  - `beta=0.01` family is negative (`-0.95`, `-2.32`)
+
+Misleading old proxy:
+
+- [`eval/bloom_speceval_v2_val/dpo_margin_policy`](/Users/ahmed/code/cs229/CS229_-Project-Final-Spec-Alignment/data/wandb_logs/bloom_speceval_v2_marin_instruct_beta0.01_seed0-e2b733_meta.json) points in the wrong direction for controllability:
+  - `beta=0.01` family has huge positive policy margins (`430`, `1644`)
+  - `beta=0.1` family is much smaller / negative (`-79`, `-46`)
+- this now looks like a likely over-optimization signal rather than a health signal, since the same family is the one that fails to flip under opposite-mode system prompts
+
+### LoRA Ranking by Eval DPO Accuracy
+
+Ranked the canonical `18` tune-LoRA sweep runs in [`scratch/wandb_dpo_data/tune_lora`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/tune_lora) by [`eval/bloom_speceval_v2_val/dpo_accuracy`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/tune_lora/bloom_speceval_v2_marin_lr1e5_seed0_b64_v5p8-41586d/summary.json).
+
+Top individual runs:
+
+- `lr=1e-5`
+  - [`bloom_speceval_v2_marin_lr1e5_seed0_b64_v5p8-41586d`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/tune_lora/bloom_speceval_v2_marin_lr1e5_seed0_b64_v5p8-41586d): `dpo_accuracy=0.992759`, `dpo_loss=0.006383`
+  - [`bloom_speceval_v2_marin_lr1e5_seed2_b64_v5p8-a73d6f`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/tune_lora/bloom_speceval_v2_marin_lr1e5_seed2_b64_v5p8-a73d6f): `dpo_accuracy=0.992759`, `dpo_loss=0.006406`
+- `lr=8.75e-6`
+  - [`bloom_speceval_v2_marin_lr8p75e6_seed2_b64_v5p8-f0636c`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/tune_lora/bloom_speceval_v2_marin_lr8p75e6_seed2_b64_v5p8-f0636c): `dpo_accuracy=0.992759`, `dpo_loss=0.006553`
+  - [`bloom_speceval_v2_marin_lr8p75e6_seed0_b64_v5p8-ee2e69`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/scratch/wandb_dpo_data/tune_lora/bloom_speceval_v2_marin_lr8p75e6_seed0_b64_v5p8-ee2e69): `dpo_accuracy=0.992378`, `dpo_loss=0.006541`
+
+Per-LR means ranked by mean eval `dpo_accuracy`:
+
+- `lr=1e-5`: mean `dpo_accuracy=0.992759`, mean `dpo_loss=0.006395`
+- `lr=8.75e-6`: mean `dpo_accuracy=0.992569`, mean `dpo_loss=0.006547`
+- `lr=2.5e-6`: mean `dpo_accuracy=0.992378`, mean `dpo_loss=0.009144`
+- `lr=7.5e-6`: mean `dpo_accuracy=0.992187`, mean `dpo_loss=0.006739`
+- `lr=6.25e-6`: mean `dpo_accuracy=0.991997`, mean `dpo_loss=0.006965`
+- `lr=5e-6`: mean `dpo_accuracy=0.991997`, mean `dpo_loss=0.007281`
+- `lr=4.5e-6`: mean `dpo_accuracy=0.991997`, mean `dpo_loss=0.007452`
+- `lr=3.75e-6`: mean `dpo_accuracy=0.991997`, mean `dpo_loss=0.007804`
+- `lr=1e-6`: mean `dpo_accuracy=0.991806`, mean `dpo_loss=0.052525`
+
+Interpretation:
+
+- if we treat eval `dpo_accuracy` as the primary selector, the best LoRA family is clearly `lr=1e-5`
+- the next best family is `lr=8.75e-6`
+- the previously-highlighted `10x` family (`lr=5e-6`) is not best on this metric; it sits in the middle pack and mainly won before on the "tinker recommended" heuristic rather than pure eval-accuracy ranking
+- caveat: the archived LoRA sweep only has seeds `0` and `2`, so these family means are 2-seed means rather than 3-seed means

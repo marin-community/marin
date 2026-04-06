@@ -15,6 +15,8 @@ from experiments.simple_dpo_config import DPO_EVAL_PARALLELISM, SimpleDPOConfig
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 
+LORA_RUN_PREFIX = "lora_"
+
 
 @dataclass(frozen=True)
 class LoraTuneSpec:
@@ -83,7 +85,7 @@ def bloom_speceval_v2_lora_step(spec: LoraTuneSpec):
     ]
 
     return default_dpo(
-        name=f"dpo/tune_lora/{spec.slug}",
+        name=f"dpo/tune_lora/{LORA_RUN_PREFIX}{spec.slug}",
         tokenized=tokenized_preferences,
         model_config=llama_8b,
         dpo_config=bloom_speceval_v2_lora_config(spec),

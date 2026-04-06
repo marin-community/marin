@@ -2406,3 +2406,793 @@ The original goal "keep `TrainerState.model` policy-only for both regular DPO an
 - Teaching `SimpleDPOConfig` / `default_dpo` about LoRA for sweep parity
 - Full LR sweep analysis (waiting for runs to complete)
 - Batch size ablation (only if needed after LR sweep)
+
+## 2026-04-01 Expanded LoRA DPO Sweep Launch
+
+### Context
+
+Previous sweep only covered LRs 5e-6 to 1e-5 with 3 runs. Codex expanded the
+sweep to 9 LRs × 2 seeds = 18 jobs, added auto-epoch computation (num_epochs=1.0
+→ 1700 steps at batch=64), deduped val set (23K→2.6K pairs), and wired in
+Paloma + Uncheatable Eval as LM eval callbacks.
+
+### Cross-region error fix
+
+Codex's launch plan used `--region us-central1 --region us-east5` but the
+executor rejected it because the raw preference data lives in `us-central1`
+only (`gs://marin-us-central1/preference/...`). When Iris places the job in
+`us-east5`, the tokenization step has cross-region GCS deps (raw data in
+central1, cache in east5). Fix: launch with `--region us-central1` only.
+
+### Launch — 2026-04-01T01:54Z
+
+All 18 jobs submitted to Iris with `--region us-central1` only.
+
+| LR | Seed 0 Job ID | Seed 2 Job ID |
+|---|---|---|
+| 1e-6 | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr1e6-seed0-b64` | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr1e6-seed2-b64` |
+| 2.5e-6 | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr2p5e6-seed0-b64` | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr2p5e6-seed2-b64` |
+| 3.75e-6 | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr3p75e6-seed0-b64` | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr3p75e6-seed2-b64` |
+| 4.5e-6 | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr4p5e6-seed0-b64` | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr4p5e6-seed2-b64` |
+| 5e-6 | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr5e6-seed0-b64` | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr5e6-seed2-b64` |
+| 6.25e-6 | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr6p25e6-seed0-b64` | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr6p25e6-seed2-b64` |
+| 7.5e-6 | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr7p5e6-seed0-b64` | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr7p5e6-seed2-b64` |
+| 8.75e-6 | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr8p75e6-seed0-b64` | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr8p75e6-seed2-b64` |
+| 1e-5 | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr1e5-seed0-b64` | `/ahmed/bloom-speceval-v2-lora-beta0p1-lr1e5-seed2-b64` |
+
+Each job: 1700 steps (1 epoch, batch=64), 5 DPO evals (deduped 2.6K val),
+5 LM evals (Paloma + Uncheatable under `lm_eval/...`).
+
+### Data Copy to us-east5
+
+Started `gcloud storage cp -r` of raw preference data from `us-central1` to
+`us-east5` at 2026-04-01T01:57Z so we can relaunch pending jobs there if
+`us-central1` TPU quota remains exhausted.
+
+### Babysit Check Log (Expanded Sweep)
+
+#### Check 0 — 2026-04-01T01:57Z
+- **1 RUNNING**: `lr1e6-seed0` (first submitted, got the only available slot)
+- **17 PENDING**: All others — "Insufficient TPUs (need 4, available 0) - 10 workers"
+- `us-central1` v5p-8 quota fully consumed. Only 1 job got through.
+- Action: Started copying raw preference data to `us-east5`.
+  Will wait until ~06:00Z (4h mark). If most jobs still PENDING, kill and relaunch in `us-east5`.
+- Data copy to `us-east5` completed and fixed (22 train shards + 1 val_deduped shard in correct structure).
+
+#### Check 1 — 2026-04-01T02:17Z
+- **10 parent executors RUNNING**: lr1e6 through lr5e6 (both seeds) — all got v5p-8 slots
+  - 6 `train_dpo` child jobs RUNNING: lr1e6, lr2p5e6, lr3p75e6 (both seeds)
+  - 4 `train_dpo` child jobs PENDING: lr4p5e6, lr5e6 (both seeds) — "Insufficient memory (need 400GB)"
+- **8 parent executors PENDING**: lr6p25e6, lr7p5e6, lr8p75e6, lr1e5 (both seeds) — "Insufficient TPUs (need 4, available 0) - 25 workers"
+- **0 FAILED, 0 SUCCEEDED**
+- Cluster scaled from 10 to 25 workers. 6 jobs actively training, 4 more queued for TPU memory.
+- `us-east5` raw preference data ready (train + val_deduped in correct paths).
+- Action: No intervention needed yet. Good progress — will check again in 20 min.
+
+#### Check 2 — 2026-04-01T02:37Z
+- **18/18 parent executors RUNNING** — all got v5p-8 slots
+- **18/18 `train_dpo` child jobs RUNNING** — all actively training
+- **0 PENDING, 0 FAILED, 0 SUCCEEDED**
+- Cluster fully scaled up. All jobs training concurrently in `us-central1`.
+- No intervention needed. `us-east5` migration unnecessary.
+
+#### Check 3 — 2026-04-01T02:57Z
+- **18/18 RUNNING** (all parent executors + all `train_dpo` children). 0 pending/failed/succeeded.
+- Steady state. ~1h into training for the earliest jobs (lr1e6).
+
+#### Check 4 — 2026-04-01T03:17Z
+- **18/18 RUNNING**. 0 pending/failed/succeeded. ~1.5h into training for earliest jobs.
+
+#### Check 5 — 2026-04-01T03:37Z
+- **18/18 RUNNING**. 0 pending/failed/succeeded. ~2h into training for earliest jobs.
+
+#### Check 6 — 2026-04-01T03:57Z
+- **18/18 RUNNING**. 0 pending/failed/succeeded. ~2.5h in.
+
+#### Check 7 — 2026-04-01T04:17Z
+- **18/18 RUNNING**. 0 pending/failed/succeeded. ~3h in.
+
+#### Check 8 — 2026-04-01T04:37Z
+- **18/18 RUNNING**. ~3.5h in. Expect earliest jobs to finish within ~1-2h.
+
+#### Check 9 — 2026-04-01T04:57Z
+- **18/18 RUNNING**. ~4h in. No failures or preemptions.
+
+#### Check 10 — 2026-04-01T05:17Z
+- **18/18 RUNNING** (all parents + all train_dpo children). ~4.5h in. No completions yet.
+
+#### Check 11 — 2026-04-01T05:37Z
+- **18/18 RUNNING**. ~5h in. No failures/preemptions. Jobs should start completing soon
+  (1700 steps at ~12s/step ≈ 5.7h training + eval overhead).
+
+#### Check 12 — 2026-04-01T05:57Z
+- **18/18 RUNNING**. ~5.5h in. Completions imminent.
+
+#### Check 13 — 2026-04-01T06:17Z
+- **18/18 RUNNING**. ~6h in. No completions yet — full epoch (1700 steps) + 5 eval rounds
+  + LM eval adds significant overhead vs the old 850-step runs. Expected ~7-8h total.
+
+#### Check 14 — 2026-04-01T06:37Z
+- **18/18 RUNNING**. ~6.5h in. Still no completions. Steady state, no failures.
+
+#### Check 15 — 2026-04-01T06:57Z
+- **18/18 RUNNING**. ~7h in. All train_dpo children active. No failures/preemptions.
+
+#### Check 16 — 2026-04-01T07:17Z
+- **18/18 RUNNING**. ~7.5h in. No completions yet — runs taking longer than
+  estimated, likely due to LM eval overhead (Paloma + Uncheatable on every eval round).
+  No failures.
+
+#### Check 17 — 2026-04-01T07:37Z
+- **18/18 RUNNING**. ~8h in. No failures. Still waiting for first completions.
+
+#### Check 18 — 2026-04-01T07:57Z
+- **18/18 RUNNING**. ~8.5h in. No failures. Revised ETA: total runtime likely
+  ~9-10h given 1700 training steps + 5× (DPO eval on 2.6K pairs + LM eval on
+  23 Paloma/Uncheatable datasets) + model loading + compilation overhead.
+
+#### Check 19 — 2026-04-01T08:17Z
+- **18/18 RUNNING**. ~9h in. No failures. Earliest jobs (lr1e6) should complete soon.
+
+#### Check 20 — 2026-04-01T08:37Z
+- **18/18 RUNNING**. ~9.5h in. All 36 jobs (18 parents + 18 train_dpo) still active.
+  Zero failures across the entire sweep. Completions any time now.
+
+#### Check 21 — 2026-04-01T08:57Z
+- **18/18 RUNNING**. ~10h in. No failures. The new full-epoch + LM eval runs
+  are taking roughly 2x the old 850-step config (~14h vs ~7h estimated).
+  All jobs healthy — just slow due to doubled training steps + eval overhead.
+
+#### Check 22 — 2026-04-01T09:17Z
+- **18/18 RUNNING**. ~10.5h in. No failures.
+
+#### Check 23 — 2026-04-01T09:57Z
+- **18/18 RUNNING**. ~11h in. No failures. All healthy.
+
+#### Check 24 — 2026-04-01T10:17Z
+- **18/18 RUNNING**. ~11.5h in. No failures.
+
+#### Check 25 — 2026-04-01T10:37Z
+- **18/18 RUNNING**. ~12h in. No failures. All train_dpo children confirmed active.
+
+#### Check 26 — 2026-04-01T11:20Z
+- **14 train_dpo RUNNING, 4 train_dpo PENDING** (preempted at ~17:20Z):
+  - `lr5e6-seed0`, `lr6p25e6-seed0`, `lr7p5e6-seed2`, `lr1e5-seed2`
+  - Reason: "Insufficient memory (need 400GB, available 1.8GB)" — TPU workers reclaimed
+- All 18 parent executors still RUNNING. 0 FAILED, 0 SUCCEEDED.
+- ~12.5h in. The 14 active train_dpo jobs continue training.
+  The 4 preempted ones should auto-resume when workers become available
+  (they have checkpoints to resume from).
+
+#### Check 27 — 2026-04-01T11:42Z
+- **17 train_dpo RUNNING, 1 FAILED**:
+  - `lr6p25e6-seed0`: SIGSEGV (preemption). Was at step 514/1700, checkpoint at step 498.
+    Parent executor also failed (no auto-retry).
+  - Relaunched as `/ahmed/bloom-speceval-v2-lora-beta0p1-lr6p25e6-seed0-b64-r2`.
+    Will resume from step-498 checkpoint.
+- The other 3 preempted jobs (lr5e6-seed0, lr7p5e6-seed2, lr1e5-seed2) recovered and are running.
+- 0 SUCCEEDED yet. ~13h in.
+
+#### Check 28 — 2026-04-01T12:02Z
+- **18 train_dpo RUNNING** (17 originals + lr6p25e6-seed0-r2 relaunch). 0 new failures.
+- The `-r2` relaunch is active and should be resuming from step-498 checkpoint.
+- ~13.5h in. Still no completions — these full-epoch runs are long.
+
+#### Check 29 — 2026-04-01T12:22Z
+- **18 train_dpo RUNNING**. No new failures. ~14h in.
+
+#### Check 30 — 2026-04-01T13:02Z
+- **18 train_dpo RUNNING**. No new failures. ~15h in.
+
+#### Check 31 — 2026-04-01T13:42Z
+- **18 train_dpo RUNNING**. ~16h in. W&B shows most jobs at step ~1200-1240/1700
+  (~70%). ETA ~1-2h for most, ~3h for slowest (lr1e5-seed2 at step 1015).
+
+#### Check 32 — 2026-04-01T14:02Z
+- **18 train_dpo RUNNING**. ~16.5h in. No new failures. First completions expected soon.
+
+#### Check 33 — 2026-04-01T14:42Z
+- **14 train_dpo RUNNING, 1 PENDING, 3 KILLED** (preemptions), **1 FAILED** (old lr6p25e6-seed0)
+- New preemptions:
+  - `lr6p25e6-seed0-r2`: killed ("Parent task preempted") — relaunched as `-r3`
+  - `lr6p25e6-seed2`: killed — parent still running, should auto-retry
+  - `lr4p5e6-seed2`: killed — parent still running, should auto-retry
+  - `lr7p5e6-seed2`: pending — waiting for TPU memory, should auto-recover
+- ~17h in. The cluster is experiencing preemption pressure.
+  14 jobs still actively training toward completion.
+
+#### Check 34 — 2026-04-01T15:02Z
+- Major preemption wave. Current state:
+  - **8 train_dpo RUNNING**: lr1e6 ×2, lr2p5e6-seed0, lr5e6-seed2, lr6p25e6-seed0-r2,
+    lr7p5e6-seed0, lr8p75e6-seed2, lr1e5-seed0
+  - **4 train_dpo PENDING**: lr2p5e6-seed2, lr3p75e6 ×2, lr4p5e6-seed0 (auto-recovering)
+  - **6 train_dpo KILLED**: lr1e5-seed2, lr4p5e6-seed2, lr5e6-seed0, lr6p25e6-seed2,
+    lr7p5e6-seed2, lr8p75e6-seed0 (parents running, will re-spawn)
+  - **1 FAILED** (old lr6p25e6-seed0), **r3 pending** (waiting for TPUs)
+- Cluster at 40 workers but 0 available TPUs — heavy contention.
+- All parents still running → children will auto-recover when capacity frees up.
+  All jobs have checkpoints, so no training progress lost.
+
+#### Check 35 — 2026-04-01T15:22Z
+- Recovering from preemption wave: **16 train_dpo RUNNING**, **2 PENDING**
+  (lr8p75e6-seed0, lr4p5e6-seed0 — waiting for memory), **1 FAILED** (old).
+- Up from 8 running last check. Cluster freeing up capacity.
+
+#### Check 36 — 2026-04-01T15:42Z
+- **15 RUNNING, 1 PENDING** (lr4p5e6-seed0), **2 KILLED** (lr8p75e6-seed0, lr5e6-seed0
+  — parents running, will re-spawn). Ongoing preemption churn but most jobs progressing.
+
+#### Check 37 — 2026-04-01T16:02Z
+- **18 train_dpo RUNNING**. Fully recovered from preemption wave. ~18.5h in.
+
+#### Check 38 — 2026-04-01T16:22Z
+- **18 train_dpo RUNNING**. Stable. ~19h in.
+
+#### Check 39 — 2026-04-01T16:42Z
+- **18 train_dpo RUNNING**. Stable. ~19.5h in.
+
+#### Check 40 — 2026-04-01T17:02Z
+- **15 RUNNING, 3 PENDING** (lr8p75e6 ×2, lr3p75e6-seed2 — preempted, auto-recovering).
+  ~20h in. Preemption churn continues but parents alive.
+
+#### Check 41 — 2026-04-01T17:22Z
+- **18 train_dpo RUNNING**. Recovered again. ~20.5h in.
+
+#### Check 42 — 2026-04-01T17:42Z
+- **17 RUNNING, 1 KILLED** (lr3p75e6-seed2 — parent alive, will re-spawn). ~21h in.
+
+#### Check 43 — 2026-04-01T18:02Z
+- **17 RUNNING, 1 KILLED** (lr3p75e6-seed2 still recovering — killed at 22:58Z,
+  parent running). ~21.5h in. Same job as last check, still in re-spawn gap.
+
+#### Check 44 — 2026-04-01T18:22Z
+- **15 RUNNING, 1 PENDING** (lr6p25e6-seed0-r3), **2 KILLED** (lr3p75e6-seed2,
+  lr7p5e6-seed2 — parents alive). ~22h in. Ongoing preemption pressure.
+
+#### Check 45 — 2026-04-01T18:42Z — FIRST COMPLETIONS
+- **2 SUCCEEDED**: `lr3p75e6-seed0`, `lr1e5-seed0`
+- **12 RUNNING**, **4 PENDING** (lr2p5e6-seed2, lr1e6-seed0, lr1e5-seed2, lr4p5e6-seed2)
+- **1 KILLED** (lr6p25e6-seed0-r2 — stale), **1 FAILED** (old)
+- ~22.5h in. First two jobs completed successfully. More should follow as the
+  preempted jobs recover and finish their remaining steps.
+
+#### Check 46 — 2026-04-01T19:02Z
+- **5 SUCCEEDED**: lr3p75e6-seed0, lr1e6-seed2, lr1e5-seed0, lr7p5e6-seed0, lr5e6-seed2
+- **8 RUNNING, 5 PENDING** (recovering from preemption)
+- ~23h in. Completions accelerating — 5/18 done.
+
+#### Check 47 — 2026-04-01T19:22Z
+- **6 SUCCEEDED** (+lr2p5e6-seed0), **8 RUNNING, 4 PENDING**. 6/18 done. ~23.5h in.
+
+#### Check 48 — 2026-04-01T19:42Z
+- **8 SUCCEEDED** (+lr6p25e6-seed0-r3, lr6p25e6-seed2), **10 RUNNING**. 8/18 done.
+  ~24h in. The troubled lr6p25e6-seed0 finally completed on r3. No more pending.
+
+#### Check 49 — 2026-04-01T20:02Z
+- **11 SUCCEEDED, 7 RUNNING**. 11/18 done! ~24.5h in.
+- Remaining 7: lr1e5-seed2, lr3p75e6-seed2, lr4p5e6 ×2, lr7p5e6-seed2,
+  lr8p75e6 ×2. These were the most preempted — still catching up.
+
+#### Check 50 — 2026-04-01T20:22Z
+- **13 SUCCEEDED, 4 RUNNING** (lr1e5-seed2, lr3p75e6-seed2, lr4p5e6 ×2),
+  **1 KILLED** (lr8p75e6-seed2 — preempted again, parent alive). 13/18 done. ~25h in.
+
+#### Check 51 — 2026-04-01T20:42Z
+- **14 SUCCEEDED** (+lr4p5e6-seed2), **4 RUNNING** (lr8p75e6-seed2 recovered,
+  lr1e5-seed2, lr3p75e6-seed2, lr4p5e6-seed0). 14/18 done. ~25.5h in.
+
+---
+
+# CODEX SECTIONS (imported 2026-04-03)
+
+The following sections are imported from `dpo-lora-codex.md`. They contain
+detailed design plans, profiling analysis, and implementation records that
+were only summarized in earlier parts of this logbook.
+
+## 2026-03-29 Codex Standalone Eval Profiling Thread
+
+### Goal
+
+- Get `experiments/eval_dpo.py` into a runnable state so DPO eval can be profiled directly without burning 400+ training steps just to trigger an eval hook.
+
+### Initial Findings
+
+- The checked-in `experiments/eval_dpo.py` did not match current Levanter APIs.
+- It had broken model-init calls, broken cache loading, and an incomplete profiler / tracker lifecycle.
+- It also diverged from the standard standalone eval pattern enough that even a superficially fixed script would not necessarily profile the real Levanter eval path.
+
+### Fixes Applied
+
+- Updated `experiments/eval_dpo.py` to use current model-init helpers:
+  - `prepare_model_init_context(...)`
+  - `load_model_from_source(...)`
+- Switched validation-cache loading to the current `TreeCache.load(... exemplar=..., options=...)` pattern.
+- Reused existing Bloom SpecEval v2 experiment config, tokenizer, and model definitions instead of keeping parallel hardcoded copies.
+- Switched profiling lifecycle to `profile_ctx(...)`.
+- Explicitly finish the tracker on exit for remote worker safety.
+
+### Remote Failure Investigation
+
+Observed remote failure during warmup:
+
+- fused next-token loss crashed with
+  - `Axis embed present in both specs with different sizes`
+  - local shard looked like `embed(256)` while the model contract axis was `embed(4096)`
+
+### Root Cause
+
+- This was not a dataset-shape bug and not an HF-config mismatch.
+- The standalone script had left `parameter_axis_mapping` active across the eval path.
+- In this mesh config, `parameter_axis_mapping` includes `embed -> data`.
+- That is correct for parameter layout, but wrong for executing the eval kernel.
+- The fused CE path uses the current thread-local mapping when it enters `shard_map(...)`, so eval wound up executing under parameter sharding instead of compute sharding.
+
+### Sharding Fix Applied
+
+- Removed the outer `hax.axis_mapping(parameter_axis_mapping)` context from `experiments/eval_dpo.py`.
+- Changed the eval kernel from plain `eqx.filter_jit` to:
+  - `@hax.named_jit(axis_resources=compute_axis_mapping)`
+- Kept model loading under `parameter_axis_mapping`.
+
+### Current Technical View
+
+What looks high-confidence:
+
+- Caching frozen-reference log-probs is the cleanest eval optimization.
+- It removes 2 of the 4 forward passes in DPO eval without requiring sharding redesign.
+
+What looks plausible but not yet proven:
+
+- An eval-specific replicated/data-parallel model layout may reduce communication overhead.
+- That is not a simple `axis_mapping` flip. It would require a second eval layout for the model itself, not just a different thread-local mapping.
+- The right order is still:
+  1. cache reference log-probs
+  2. re-profile
+  3. only then decide whether an eval-specific layout is worth building
+
+## 2026-03-29 Codex Reference Logprob Cache Plan
+
+### Goal
+
+- Remove the two frozen-reference forward passes from every DPO eval by precomputing:
+  - `logp_ref_chosen`
+  - `logp_ref_rejected`
+- Keep the cache reusable across runs.
+- Avoid introducing meaningful runtime I/O overhead during eval.
+
+### Core Design
+
+- Persist the cache to GCS once.
+- Load the full cache into host RAM at job startup.
+- Join cached values to eval examples by dataset index.
+
+For the Bloom SpecEval v2 validation set:
+
+- the cache only needs two scalar floats per example
+- DPO already reduces over position via `_logp_sum(...)`
+- `PreferenceChatLmDatasetFormat` defaults to `pack=False`, so the validation set is naturally aligned 1:1 with cache rows
+
+That means the runtime working set is on the order of a few hundred KB, not GB.
+
+### Cache Payload
+
+Per validation example, store:
+
+```python
+{
+    "logp_ref_chosen": np.float32(...),
+    "logp_ref_rejected": np.float32(...),
+}
+```
+
+### Storage Format
+
+Use a small sidecar `TreeCache`, not an ad hoc JSON/NPY blob.
+
+Reasons:
+
+- it reuses the repo's existing cache machinery
+- it naturally lives on GCS
+- it gives us a ledger and metadata validation
+- it is easy to load back as an `AsyncDataset`
+
+### Cache Key / Metadata
+
+Cache key must include:
+
+- validation cache path
+- reference model path / HF ref
+- immutable reference revision if available
+- tokenizer id
+- sequence length
+- preference-format fields that affect tokenization/loss semantics:
+  - `chosen_field`
+  - `rejected_field`
+  - `mask_user_turns`
+  - `slice_strategy`
+
+### Cache Location
+
+Use a sibling GCS path near the existing validation token cache:
+
+```text
+<validation-cache-root>/reference_logprobs/<stable-cache-key>/
+```
+
+### Runtime Integration
+
+Do not read the sidecar cache remotely batch-by-batch during eval.
+
+Instead:
+
+1. load the sidecar cache once at startup
+2. materialize the two float arrays in CPU memory
+3. map validation examples to include cached reference values by index
+4. during eval, compute only:
+   - `logp_pi_chosen`
+   - `logp_pi_rejected`
+5. combine with cached reference scalars to produce the normal DPO metrics
+
+### Expected Outcome
+
+- DPO eval should drop from 4 forward passes per example to 2.
+- The cache should be reusable across runs and cheap to load.
+
+## 2026-03-29/30 Transfer Note: Claude Work Summary And Revised Eval-Sharding Plan
+
+### TL;DR
+
+- Claude finished the reference log-prob caching path for standalone DPO eval and validated it on real full-validation runs.
+- The cached path appears correct and gives a reproducible ~2x eval speedup by removing the two frozen-reference forward passes.
+- Claude's follow-up idea of replicated non-FSDP eval sharding is plausible, but the proposed implementation seam was too optimistic.
+- The better next experiment is: keep model loading unchanged, run cached eval only, explicitly reshard the loaded policy model once into an eval-only replicated layout, then measure steady-state batches and communication.
+
+### What Claude Actually Completed
+
+Implemented in `experiments/eval_dpo.py`:
+
+- three eval modes:
+  - `--mode uncached`
+  - `--mode build`
+  - `--mode cached`
+- a deterministic reference-logprob sidecar cache path
+- cache build logic for `logp_ref_chosen` and `logp_ref_rejected`
+- a cached eval path that avoids loading or running the reference model in cached mode
+- a cached-example wrapper compatible with Levanter/JAX pytree expectations
+
+### Claude's Validation Results
+
+#### 1-batch validation
+
+- Cached loss compute dropped from `26.9s` to `13.4s`.
+
+#### 20-batch apples-to-apples validation
+
+- Uncached total eval: `552.1s`
+- Cached total eval: `279.1s`
+- Measured speedup: `1.98x`
+
+#### Full validation correctness test on a trained checkpoint
+
+Policy: trained step-849 checkpoint from the new DPO pipeline
+Reference: `marin-community/marin-8b-instruct`
+Validation set: full `bloom_speceval_v2_val`, `23,552` examples, `46` batches at eval parallelism `32`
+
+Reported metric agreement:
+
+- `loss`: exact match
+- `dpo_accuracy`: exact match
+- `dpo_chosen_reward`: exact match
+- `dpo_rejected_reward`: exact match
+- `dpo_margin_policy`: exact match
+- `dpo_margin_ref`: exact match
+
+Reported performance at full scale:
+
+- uncached total eval: about `20.7 min`
+- cached total eval: about `10.4 min`
+- measured speedup: `1.98x`
+
+### Claude's Important Debugging Fixes
+
+These are worth preserving because they explain the multihost failure modes we already hit:
+
+- use `process_allgather(..., tiled=True)` before converting sharded outputs to numpy
+- only one host should write the sidecar cache
+- gate cache writes with `jax.process_index() == 0`
+- synchronize after cache writes so non-writers do not race ahead
+- use an `eqx.Module` for cached examples instead of a plain dataclass so DataLoader/JIT can batch them
+- treat `TreeCache.get_batch_sync(...)` as returning a list of dicts, not a dict
+- remove trailing `(1,)` dimensions from cached scalar values before wrapping them with `hax.named(...)`
+- run eval/loss under `compute_axis_mapping`, not under `parameter_axis_mapping`
+- avoid losing results behind multihost barrier/profiler cleanup ordering
+
+### Assessment Of Claude's Non-FSDP Eval-Sharding Idea
+
+The high-level idea is plausible, but the logged implementation proposal was too optimistic in three ways.
+
+#### 1. It changed the wrong seam
+
+Claude proposed making the experiment by changing `load_model_from_source(..., parameter_axis_mapping=parameter_axis_mapping)` to `load_model_from_source(..., parameter_axis_mapping=compute_axis_mapping)`. This is not just an eval-layout change — it changes the HF/GCS deserialization path too.
+
+#### 2. The load-cost reasoning was not accurate
+
+The current HF/GCS path builds a full state dict on each host before sharding it into the model. Both FSDP and replicated cases already involve heavy per-host state-dict loading before device placement.
+
+#### 3. The speedup estimate outran the evidence
+
+We had collective op counts but not per-op durations. The collectives might be overlapped with compute.
+
+### Revised Better Plan For Eval Sharding
+
+Keep model loading unchanged. Explicitly reshard once after load:
+
+```python
+policy_model = hax.shard_with_axis_mapping(policy_model, compute_axis_mapping)
+```
+
+Measure:
+1. policy model load time
+2. one-time reshard time
+3. warmup / first-compile time
+4. steady-state loss time over 20 batches, then full 46-batch validation
+5. total eval wall time
+6. peak HBM / OOM behavior
+
+## 2026-03-30 Design Plan: Durable Reference Eval Log-Prob Cache
+
+### Problem
+
+- DPO eval during training still does four forward passes because `loss_function` in `train_dpo.py` computes both policy and reference log-probs inline.
+- The eval hook goes through the generic `Trainer.add_eval_hook(...)` path, so eval currently reuses the uncached training loss.
+- `experiments/eval_dpo.py` proved caching gives ~2x speedup, but that file is a standalone profiling script.
+- Pre-emption is routine, so an in-memory-only cache is not acceptable. The cache must survive restarts.
+
+### Goals
+
+- Add an opt-in DPO config flag that builds or loads a reference-eval cache before training starts.
+- Persist the cache to GCS, then load it into host RAM for repeated eval use within the run.
+- Keep the cache scoped to validation/eval only.
+- Reuse Levanter's existing finished-ledger cache semantics.
+- Keep the generic `Trainer` API unchanged.
+- Support both DPO reference modes: `separate` and `adapter_base`.
+
+### Proposed Code Organization
+
+- Add a new library module: `lib/levanter/src/levanter/dpo.py`
+- Keep `train_dpo.py` as the orchestration layer
+- Leave `experiments/eval_dpo.py` as disposable profiling code
+
+### Proposed API Shape
+
+```python
+@dataclass(frozen=True)
+class ReferenceEvalCacheConfig:
+    mode: Literal["disabled", "build_or_load"] = "disabled"
+    cache_dir: str | None = None
+
+@dataclass(frozen=True)
+class ValidationDatasetSpec:
+    name: str
+    dataset: AsyncDataset[DpoExample]
+    source_cache_path: str
+    source_split: str
+    slice_start: int | None = None
+    slice_end: int | None = None
+```
+
+### Core Design Choices
+
+1. **Durable sidecar cache, then RAM** — source of truth on GCS, fast serving from host RAM. ~188 KB for 23K examples.
+2. **Keep eval caching out of the generic trainer** — DPO loss accepts either `DpoExample` or `CachedDpoExample`.
+3. **Custom dataset wrapper** — `MappedAsyncDataset` doesn't pass example index into callback; need index for cache lookup.
+4. **Strict cache identity** — key includes validation cache identity, slice, reference identity, seq length, schema version.
+5. **Finished-or-rebuild semantics** — missing → build, unfinished → build, metadata mismatch → rebuild.
+
+### Implementation Outline
+
+1. Add config surface to `TrainDpoConfig`, `SimpleDPOConfig`, `experiments/defaults.py`
+2. Refactor validation-set construction with `ValidationDatasetSpec` for provenance
+3. Add `levanter/dpo.py` with reusable helpers
+4. Wire the cache into `train_dpo.py`
+5. Add tests for cache-path identity, metadata mismatch, cached-vs-uncached parity
+6. Update docs
+
+## 2026-03-30 Implementation: Durable Reference Eval Log-Prob Cache
+
+### Outcome
+
+- Implemented the pre-emption-safe cached reference-eval path in the real DPO runtime.
+- New module: `lib/levanter/src/levanter/dpo.py`
+- Owns: `DpoModel`, shared DPO loss helpers, `ReferenceEvalCacheConfig`, `CachedDpoExample`, `CachedReferenceDataset`, `ValidationDatasetSpec`, cache metadata/path helpers, build/load helpers
+- Feature is opt-in, scoped to validation/eval only. Training unchanged.
+
+### Important implementation details
+
+- `TrainDpoConfig` now has `reference_eval_cache`, threaded through `lora_dpo.py`, `simple_dpo_config.py`, `experiments/defaults.py`
+- Validation datasets preserve provenance for deterministic cache paths
+- Cache loading is strict: missing → build, unfinished → build, metadata mismatch → rebuild
+- Eval loss path accepts either `DpoExample` or `CachedDpoExample`
+
+### Verification
+
+- Committed as `35d9c444b` (`[dpo] Cache reference eval logprobs`)
+- `34 passed, 1 skipped`
+
+## 2026-03-30 Handoff: LoRA Resume Babysitting On central1
+
+### Goal
+
+- Keep babysitting the resumed LoRA DPO run for W&B run `endlboq3` until completion or failure.
+- Validating that the LoRA resume path is correct after the adapter-checkpoint fix.
+
+### Final corrected relaunch
+
+Several earlier central1 relaunches were wrong:
+- one used unsupported deep `draccus` CLI overrides for dataset cache dirs
+- one used `initialize_from_checkpoint_path` against a LoRA trainer checkpoint and failed with missing base arrays
+- one used `trainer.initialize_from` together with `initialize_from_hf` and hit config validation error
+
+The clean relaunch path is:
+- keep `initialize_from_hf` in the config
+- do **not** use `trainer.initialize_from`
+- do **not** use `initialize_from_checkpoint_path`
+- instead pass `--trainer.load_checkpoint_path <east5 trainer checkpoint>`
+
+Correct running job:
+- Iris job: `/ahmed/lora-bsv2-mi-b0p1-s2-lr7p5e6-b64-v5p8-central1-resume-20260330-2236`
+- W&B: `https://wandb.ai/marin-community/dpo/runs/endlboq3`
+- Checkpoint source: `gs://marin-us-east5/checkpoints/dpo/lora_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_b64/endlboq3/step-835`
+
+### What the successful relaunch proved
+
+- W&B reused `endlboq3`
+- Process loaded east5 trainer checkpoint via `--trainer.load_checkpoint_path`
+- Fixed LoRA resume path ran:
+  - `Resuming from step 836, using checkpoint policy weights.`
+  - `Adapter checkpoints only store trainable weights. Reconstructing the base policy model from the configured source before overlaying resumed adapter parameters.`
+- Training completed successfully
+- Final central1 checkpoint: `gs://marin-us-central1/checkpoints/dpo/lora_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v5p8_b64/endlboq3/step-849`
+
+### Important context
+
+- This run did NOT use the new reference-eval cache feature (no `reference_eval_cache` block in YAML)
+- Final eval is on the old uncached path — 4 forward passes — hence slow eval time
+- Occasional `Failed to compress input file` log lines did not correlate with failure
+
+## 2026-03-31 DPO Schedule Follow-up
+
+### Scope
+
+- User wanted `SimpleDPOConfig` to support "one pass over the train set" mode instead of hard-coded step budgets.
+- Default validation cadence: once before training, three evenly spaced interior, once at end.
+
+### Config / runtime changes
+
+- `SimpleDPOConfig`: `num_train_steps: int | None = None`, `num_epochs: float = 1.0`, `steps_per_eval: int | None = None`
+- `defaults.py`: `default_dpo(...)` now enables runtime auto-resolution via `TrainDpoOnPodConfig(auto_num_epochs=..., auto_validation_runs=5)`
+- `lib/marin/src/marin/training/training.py`: reads tokenizer stats, uses `total_elements` as train-set size, converts `num_epochs` to steps
+
+### Shared stats helper
+
+- Added `lib/marin/src/marin/processing/tokenize/cache_stats.py` with `TokenizedCacheStats`, `read_tokenized_cache_stats()`
+
+### DPO eval scheduling changes
+
+- `train_dpo.py`: added `scheduled_eval_steps`, `run_initial_eval`
+- Explicit initial validation before training, exact interior eval steps, final via trainer's end-of-training hook
+- Removed the old extra DPO-side `trainer.run_hooks(last_info, force=True)` (trainer already does this)
+
+### Expected resolved budgets
+
+- LoRA sweep (batch 64, num_epochs=1.0): resolves to 1700 train steps, 5 validations
+- Main Bloom SpecEval v2 (batch 128, num_epochs=1.0): resolves to 850 train steps, 5 validations
+
+### Verification
+
+- `tests/test_training.py`: 8 passed
+- Levanter DPO tests: 35 passed, 1 skipped
+
+## 2026-04-01 DPO LM Eval Integration
+
+### What changed
+
+- `default_dpo(...)` now always builds `lm_validation_data` from `default_validation_sets(tokenizer=...)` (Paloma + Uncheatable Eval)
+- `train_dpo.py`: added `lm_validation_data: LmDataConfig | None` and `lm_validation_prefix: str = "lm_eval"`
+- LM evals run through `levanter.eval.cb_tagged_lm_evaluate(...)` on the same cadence as DPO preference eval
+
+### Logging behavior
+
+- Preference validation: `eval/...` (DPO loss metrics)
+- LM eval: `lm_eval/paloma/...` and `lm_eval/uncheatable_eval/...` (next-token loss / bpb)
+
+### Verification
+
+- `tests/test_training.py`: 9 passed
+- Levanter DPO tests: 37 passed, 1 skipped
+- Committed as `1e0e5fe9f` (`[dpo] Add LM eval suites to DPO runs`)
+
+## Updated Sweep Plan
+
+### Objective
+
+- Expand LoRA DPO LR sweep to 9 LRs × 2 seeds = 18 jobs
+- Keep: `beta=0.1`, batch 64, rank 64, `alpha=64`, `reference.type=adapter_base`, `reference_eval_cache.mode=build_or_load`, v5p-8
+
+### Recommended LR grid
+
+Existing: `5e-6`, `6.25e-6`, `7.5e-6`, `8.75e-6`, `1e-5`
+New lower-LR points: `1e-6`, `2.5e-6`, `3.75e-6`, `4.5e-6`
+
+Seeds: `0` and `2` for every LR.
+
+### Each run behavior
+
+- 1700 train steps (num_epochs=1.0)
+- DPO preference eval at: initial, steps 425, 850, 1275, final
+- Paloma + Uncheatable LM evals on same schedule under `lm_eval/...`
+
+### Iris Multi-Region Launch Plan
+
+Use `--region us-central1 --region us-east5` with `v5p-8`.
+
+Cache status (2026-04-01): train preference cache, deduped val cache, and `default_validation_sets()` all present in both regions.
+
+### 18 launch commands
+
+```bash
+uv run iris --config lib/iris/examples/marin.yaml job run --job-name bloom-speceval-v2-lora-beta0p1-lr{LR}-seed{SEED}-b64 --tpu v5p-8 --region us-central1 --region us-east5 --no-wait -- uv run python experiments/tune_lora/beta0p1_lr{LR}_seed{SEED}_b64.py
+```
+
+(for each of the 9 LRs × 2 seeds)
+
+## 2026-04-02 Local W&B Export For Canonical Tune-LoRA Runs
+
+- Exported the canonical 18 tune-LoRA runs (1700-step variants) to `scratch/wandb_dpo_data/tune_lora/`
+- Manifest: `canonical_18_runs_manifest.json`
+- Per-run: `run_metadata.json`, `config.json`, `summary.json`, `history.jsonl.gz`, `system_history_sampled.csv`, `files/` mirror
+- All 18 runs `state = finished`, 2000 history rows each, 0 file errors
+- Total local size: ~305M
+
+## 2026-04-02 Iris Availability Check And v5p-8 Full-DPO Batch-64 Napkin Math
+
+### Current TPU Snapshot
+
+- `tpu_v5p_8-us-central1-a`: Ready 21
+- `tpu_v5p_8-us-east5-a`: Ready 21
+- `tpu_v5p_32-us-central1-a`: Ready 2
+- `tpu_v5p_32-us-east5-a`: Ready 0
+
+### Why Full DPO Is Heavier Than LoRA Sweep
+
+- Full DPO uses `SeparateReferenceConfig` → `DpoModel(policy, reference)` with separately loaded reference weights
+- LoRA uses `AdapterBaseReferenceConfig` → reference is base-model view of policy, no second model loaded
+- Both still compute 4 forward passes during training. Main extra burden is resident frozen-reference memory.
+
+### Napkin Math
+
+From LoRA v5p-8 failure: 111.15G used at batch 128, v5p-8 HBM = 95.74G.
+- batch 64: ~55.58G → ~40G headroom
+- Full DPO adds frozen reference params → headroom eaten into
+- Plausible but riskier than LoRA b64
+
+### Recommendation
+
+- Lowest-risk full-DPO path: v5p-32
+- If testing cheaper hardware: single v5p-8 batch-64 probe is justified but treat it as a fit test
+
+## 2026-04-03 Planned Single v5p-16 Full-DPO Probe (`dummy`)
+
+User requested a single launch on `v5p-16` named `dummy`.
+
+Config:
+- full DPO, Bloom SpecEval v2, beta=0.1, seed 0, v5p-16
+- `train_batch_size=64`, `num_train_steps=10`, `steps_per_eval=5`
+- Purpose: hardware-fit / launch probe, not canonical baseline
+
+Launch:
+```bash
+uv run iris --config=lib/iris/examples/marin.yaml job run --job-name dummy --tpu v5p-16 --region us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" --no-wait -- uv run python experiments/sweep_dpo/dummy.py
+```
+
+Submission: job `/ahmed/dummy`, pending (coscheduling 2 workers for multinode v5p-16).
