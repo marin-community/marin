@@ -261,15 +261,7 @@ def create_1e22_run() -> list[ExecutorStep]:
                 log_every=1,
             )
         ),
-        eval=versioned(
-            GrugEvalConfig(
-                eval_batch_size=512,
-                steps_per_eval=1000,
-                max_eval_batches=8,
-                eval_current=True,
-                eval_ema=False,
-            )
-        ),
+        eval=versioned(None),  # Eval disabled to avoid OOM/multi-controller crash on checkpoint resume
     )
 
     return [
