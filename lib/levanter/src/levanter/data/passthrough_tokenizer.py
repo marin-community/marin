@@ -95,3 +95,6 @@ class PassthroughTokenizer:
         **kwargs,
     ) -> dict[str, list[list[int]]]:
         raise ValueError("PassthroughTokenizer does not support chat templates")
+
+    def as_hf_tokenizer(self):
+        raise ValueError("PassthroughTokenizer cannot be converted to an HF tokenizer")
