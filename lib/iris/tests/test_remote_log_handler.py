@@ -114,6 +114,7 @@ def test_log_pusher_buffers_and_flushes():
             self._flush_interval = 999.0
             self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
             self._lock = threading.Lock()
+            self._send_lock = threading.Lock()
             self._closed = False
             self._flush_timer = None
 
@@ -145,6 +146,7 @@ def test_log_pusher_flushes_at_batch_size():
             self._flush_interval = 999.0
             self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
             self._lock = threading.Lock()
+            self._send_lock = threading.Lock()
             self._closed = False
             self._flush_timer = None
 
@@ -160,3 +162,72 @@ def test_log_pusher_flushes_at_batch_size():
     pusher.push("k", [entry])  # Hits batch_size=2
     assert len(sent) == 1
     assert sent[0] == ("k", 2)
+
+
+def test_close_waits_for_inflight_send():
+    """close() must not destroy the client while _send() is in flight.
+
+    Simulates a slow RPC by blocking inside _send. close() must wait for it
+    to finish before closing the client. Without the _send_lock this would
+    close the client while the send is still running.
+    """
+    send_entered = threading.Event()
+    send_may_proceed = threading.Event()
+    client_closed_during_send = False
+
+    class SlowPusher(LogPusher):
+        def __init__(self):
+            self._batch_size = 1000
+            self._flush_interval = 0.01  # fast timer to trigger the race
+            self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
+            self._lock = threading.Lock()
+            self._send_lock = threading.Lock()
+            self._closed = False
+            self._flush_timer = None
+            self._client_alive = True
+            self._schedule_flush()
+
+        def _send(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
+            nonlocal client_closed_during_send
+            with self._send_lock:
+                if self._closed:
+                    return
+                send_entered.set()
+                send_may_proceed.wait(timeout=5.0)
+                if not self._client_alive:
+                    client_closed_during_send = True
+
+        def close(self) -> None:
+            if self._flush_timer is not None:
+                self._flush_timer.cancel()
+            self.flush()
+            with self._send_lock:
+                self._closed = True
+            self._client_alive = False
+
+    pusher = SlowPusher()
+    entry = logging_pb2.LogEntry(source="test", data="line")
+    pusher.push("k", [entry])
+
+    # Wait for the periodic flush timer to trigger _send
+    assert send_entered.wait(timeout=5.0), "timer-triggered _send never started"
+
+    # Now call close() from another thread — it should block on _send_lock
+    close_done = threading.Event()
+
+    def do_close():
+        pusher.close()
+        close_done.set()
+
+    t = threading.Thread(target=do_close)
+    t.start()
+
+    # Give close() a moment to potentially race ahead (it shouldn't)
+    assert not close_done.wait(timeout=0.1), "close() returned before send finished"
+
+    # Let the send complete
+    send_may_proceed.set()
+
+    assert close_done.wait(timeout=5.0), "close() never completed"
+    t.join(timeout=1.0)
+    assert not client_closed_during_send, "client was destroyed while _send was in flight"

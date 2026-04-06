@@ -41,6 +41,8 @@ class LogPusher:
         self._flush_interval = flush_interval
         self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
         self._lock = threading.Lock()
+        # Serializes RPC sends so close() can wait for in-flight flushes.
+        self._send_lock = threading.Lock()
         self._closed = False
 
         self._flush_timer: threading.Timer | None = None
@@ -80,20 +82,24 @@ class LogPusher:
             self._send(key, entries)
 
     def _send(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-        try:
-            self._client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
-        except Exception:
-            logger.debug("Failed to push %d log entries for key %s", len(entries), key, exc_info=True)
+        with self._send_lock:
+            if self._closed:
+                return
+            try:
+                self._client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
+            except Exception:
+                logger.debug("Failed to push %d log entries for key %s", len(entries), key, exc_info=True)
 
     def flush(self) -> None:
         """Force-flush all buffered entries."""
         self._flush_all()
 
     def close(self) -> None:
-        self._closed = True
         if self._flush_timer is not None:
             self._flush_timer.cancel()
         self.flush()
+        with self._send_lock:
+            self._closed = True
         self._client.close()
 
 
