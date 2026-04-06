@@ -8,6 +8,7 @@ import gc
 import logging as pylogging
 import operator
 import os
+import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -429,13 +430,19 @@ def consolidate_shard_caches(
 
     logger.info(f"Consolidating {len(shard_cache_paths)} shard caches into {output_path}")
 
+    shard_ledgers = [CacheLedger.load(p, metadata) for p in shard_cache_paths]
+
+    if len(shard_cache_paths) == 1:
+        shard_path = shard_cache_paths[0]
+        logger.info(f"Single shard cache detected; copying {shard_path} into {output_path} without reopening it.")
+        _copy_tree_contents(shard_path, output_path)
+        return _merge_ledgers(output_path, shard_cache_paths, shard_ledgers, metadata)
+
     first_cache = TreeStore.open(exemplar, shard_cache_paths[0], mode="r", cache_metadata=True)
     data_offset_tree = jax.tree.map(lambda x: 0, first_cache.tree)
 
     shard_info: list[dict] = []
     total_rows = 0
-
-    shard_ledgers = [CacheLedger.load(p, metadata) for p in shard_cache_paths]
 
     # Parallel: open each TreeStore to read data_size (dominates wall time on remote storage)
     def _get_data_sizes(shard_path):
@@ -486,6 +493,30 @@ def consolidate_shard_caches(
     # as a final step, set the total num rows in the final cache
     _expose_cache_rows(output_path, exemplar, final_ledger.total_num_rows)
     return final_ledger
+
+
+def _copy_tree_contents(source_path: str, dest_path: str) -> None:
+    src_fs, src_root = url_to_fs(source_path)
+    dest_fs, dest_root = url_to_fs(dest_path)
+
+    dest_fs.makedirs(dest_root, exist_ok=True)
+    entries = src_fs.find(src_root, withdirs=True, detail=True)
+
+    for src_file, info in entries.items():
+        if info.get("type") == "directory":
+            continue
+
+        rel_path = os.path.relpath(src_file, src_root)
+        dest_file = os.path.join(dest_root, rel_path)
+        dest_parent = os.path.dirname(dest_file)
+        if dest_parent:
+            dest_fs.makedirs(dest_parent, exist_ok=True)
+
+        if type(src_fs) is type(dest_fs):
+            src_fs.copy(src_file, dest_file)
+        else:
+            with src_fs.open(src_file, "rb") as src_f, dest_fs.open(dest_file, "wb") as dest_f:
+                shutil.copyfileobj(src_f, dest_f)
 
 
 def _merge_ledgers(
