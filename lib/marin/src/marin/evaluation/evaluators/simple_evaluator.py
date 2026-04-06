@@ -130,6 +130,7 @@ class SimpleEvaluator(Evaluator):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        eval_datasets_cache_path: str | None = None,
     ) -> None:
         try:
             from vllm import LLM, SamplingParams
@@ -180,6 +181,7 @@ class SimpleEvaluator(Evaluator):
         resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        eval_datasets_cache_path: str | None = None,
     ) -> None:
         """Launch the evaluation run with Fray."""
 
@@ -194,6 +196,7 @@ class SimpleEvaluator(Evaluator):
             resource_config=resource_config,
             max_eval_instances=max_eval_instances,
             wandb_tags=wandb_tags,
+            eval_datasets_cache_path=eval_datasets_cache_path,
             extras=("eval", "tpu"),
             pip_packages=pip_packages,
         )

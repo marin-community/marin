@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
+from marin.execution.executor import InputName
 
 # Wandb project name for evaluations. Controlled via WANDB_PROJECT env var.
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
@@ -102,3 +103,16 @@ class EvaluationConfig:
     base_eval_run_name: str | None = None
     """Custom base name for wandb runs. If set, wandb runs will be named
     evalchemy-{base_eval_run_name}[-step{N}]-{task}-seed{S}."""
+
+    eval_datasets_cache_path: str | None = None
+    """
+    Optional GCS path to pre-cached evaluation datasets for Levanter lm-eval.
+    """
+
+    eval_datasets_cache_dependency: InputName | str | None = None
+    """
+    Optional executor-only dependency marker for the eval dataset cache step.
+
+    This field is not read at runtime. It exists so Executor can see an
+    `InputName` and block the evaluation step on a cache-population step.
+    """

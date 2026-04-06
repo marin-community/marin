@@ -52,6 +52,8 @@ def evaluate_lm_evaluation_harness(
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
+    eval_datasets_cache_path: str | None = None,
+    eval_datasets_cache_dependency: InputName | str | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
@@ -77,6 +79,8 @@ def evaluate_lm_evaluation_harness(
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
             wandb_tags=wandb_tags,
+            eval_datasets_cache_path=eval_datasets_cache_path,
+            eval_datasets_cache_dependency=eval_datasets_cache_dependency,
         ),
     )
 
@@ -132,6 +136,8 @@ def evaluate_levanter_lm_evaluation_harness(
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
+    eval_datasets_cache_path: str | None = None,
+    eval_datasets_cache_dependency: InputName | str | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
@@ -139,17 +145,24 @@ def evaluate_levanter_lm_evaluation_harness(
     logger.info(f"Running evals on the following tasks: {evals}")
     return ExecutorStep(
         name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
-        fn=evaluate,
+        fn=remote(
+            evaluate,
+            resources=resource_config,
+            pip_dependency_groups=["eval", "tpu"],
+        ),
         config=EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",
             model_name=None,  # imputed automatically
             model_path=model_path,  # type: ignore
             evaluation_path=this_output_path(),
             evals=versioned(evals),
+            launch_with_ray=False,
             discover_latest_checkpoint=discover_latest_checkpoint,
             max_eval_instances=versioned(max_eval_instances),
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
+            eval_datasets_cache_path=versioned(eval_datasets_cache_path),
+            eval_datasets_cache_dependency=eval_datasets_cache_dependency,
         ),
     )
 

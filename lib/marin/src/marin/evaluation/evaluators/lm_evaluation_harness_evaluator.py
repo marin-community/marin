@@ -83,6 +83,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
         resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        eval_datasets_cache_path: str | None = None,
     ) -> None:
         """Launch the evaluation run with Fray."""
 
@@ -97,6 +98,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
             resource_config=resource_config,
             max_eval_instances=max_eval_instances,
             wandb_tags=wandb_tags,
+            eval_datasets_cache_path=eval_datasets_cache_path,
             extras=("eval", "tpu"),
             pip_packages=pip_packages,
             env_vars={"HF_ALLOW_CODE_EVAL": "1"},
@@ -109,6 +111,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        eval_datasets_cache_path: str | None = None,
     ) -> None:
         """
         Runs EleutherAI's lm-eval harness on the specified model and set of  tasks.

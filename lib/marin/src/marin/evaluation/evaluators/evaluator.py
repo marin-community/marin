@@ -72,6 +72,7 @@ class Evaluator(ABC):
         resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        eval_datasets_cache_path: str | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
@@ -94,6 +95,7 @@ class Evaluator(ABC):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        eval_datasets_cache_path: str | None = None,
     ) -> None:
         """What to run to evaluate."""
         pass
@@ -109,6 +111,7 @@ def launch_evaluate_with_ray(
     resource_config: ResourceConfig,
     max_eval_instances: int | None = None,
     wandb_tags: list[str] | None = None,
+    eval_datasets_cache_path: str | None = None,
     extras: Sequence[str] = (),
     pip_packages: Sequence[str] = (),
     env_vars: dict[str, str] | None = None,
@@ -124,16 +127,31 @@ def launch_evaluate_with_ray(
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        eval_datasets_cache_path: str | None = None,
     ) -> None:
         if configure_logging:
             import logging
 
             _init_logging(level=logging.INFO)
-        evaluator.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
+        evaluator.evaluate(
+            model,
+            evals,
+            output_path,
+            max_eval_instances,
+            wandb_tags,
+            eval_datasets_cache_path=eval_datasets_cache_path,
+        )
 
     def _run() -> None:
         with remove_tpu_lockfile_on_exit():
-            launch(model, evals, output_path, max_eval_instances, wandb_tags)
+            launch(
+                model,
+                evals,
+                output_path,
+                max_eval_instances,
+                wandb_tags,
+                eval_datasets_cache_path=eval_datasets_cache_path,
+            )
 
     if resource_config is None:
         resource_config = ResourceConfig()

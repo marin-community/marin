@@ -27,6 +27,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        eval_datasets_cache_path: str | None = None,
     ) -> None:
         """
         Launches the evaluation run with Fray.
@@ -40,6 +41,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
             resource_config=resource_config,
             max_eval_instances=max_eval_instances,
             wandb_tags=wandb_tags,
+            eval_datasets_cache_path=eval_datasets_cache_path,
             extras=("eval", "tpu"),
             configure_logging=False,
         )

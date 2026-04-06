@@ -98,9 +98,17 @@ from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import
     QSPLIT240_300M_EVAL_TASKS,
     build_run_specs as build_qsplit240_300m_run_specs,
     create_experiment as create_qsplit240_300m_experiment,
+    select_run_specs_for_shard,
+    shard_execution_name_prefix,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_mmlu_sl_verb_rerun import (
     build_run_specs as build_qsplit240_mmlu_sl_verb_rerun_specs,
+)
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_qsplit240_olmo_base_easy_overlap_rerun as qsplit240_olmo_base_easy_overlap_rerun,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_olmo_base_easy_overlap_rerun import (
+    build_run_specs as build_qsplit240_olmo_base_easy_overlap_rerun_specs,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3_mmlu_sl_verb_rerun import (
     build_run_specs as build_qsplit240_seedpanel_mmlu_sl_verb_rerun_specs,
@@ -552,6 +560,27 @@ def test_qsplit240_300m_6b_experiment_uses_expected_model_resources_and_tasks():
     )
 
 
+def test_qsplit240_300m_6b_sharding_uses_contiguous_prefixes_and_keeps_training_prefix_stable():
+    run_specs = build_qsplit240_300m_run_specs()
+
+    shard0 = select_run_specs_for_shard(run_specs, shard_index=0, shard_count=8)
+    shard1 = select_run_specs_for_shard(run_specs, shard_index=1, shard_count=8)
+    shard7 = select_run_specs_for_shard(run_specs, shard_index=7, shard_count=8)
+
+    assert len(shard0) == 30
+    assert len(shard1) == 30
+    assert len(shard7) == 30
+    assert [spec.run_id for spec in shard0] == list(range(30))
+    assert [spec.run_id for spec in shard1] == list(range(30, 60))
+    assert [spec.run_id for spec in shard7] == list(range(210, 240))
+    assert shard_execution_name_prefix(name_prefix=qsplit240_300m.NAME, shard_index=2, shard_count=8) == (
+        f"{qsplit240_300m.NAME}/shard_03of08"
+    )
+    assert shard_execution_name_prefix(name_prefix=qsplit240_300m.NAME, shard_index=0, shard_count=1) == (
+        qsplit240_300m.NAME
+    )
+
+
 def test_qsplit240_300m_6b_training_step_blocks_on_eval_dataset_cache():
     experiment = create_qsplit240_300m_experiment(name=qsplit240_300m.NAME, tpu_type="v5p-8")
     run_spec = build_qsplit240_300m_run_specs()[0]
@@ -590,6 +619,23 @@ def test_qsplit240_mmlu_sl_verb_rerun_builds_expected_manifest():
     assert len(run_specs) == 240
     assert [spec.run_id for spec in run_specs] == list(range(240))
     assert {spec.cohort for spec in run_specs} == {"original_swarm_mmlu_sl_verb_rerun"}
+    assert run_specs[0].run_name == "baseline_proportional"
+    assert run_specs[1].run_name == "baseline_unimax"
+    assert run_specs[2].run_name == "run_00002"
+    assert run_specs[-1].run_name == "run_00239"
+    assert run_specs[0].source_experiment != ORIGINAL_QSPLIT240_SOURCE_EXPERIMENT
+    assert {spec.source_experiment for spec in run_specs[2:]} == {ORIGINAL_QSPLIT240_SOURCE_EXPERIMENT}
+    assert all(spec.checkpoint_root is None for spec in run_specs)
+    assert all(abs(sum(spec.phase_weights["phase_0"].values()) - 1.0) < 1e-12 for spec in run_specs)
+    assert all(abs(sum(spec.phase_weights["phase_1"].values()) - 1.0) < 1e-12 for spec in run_specs)
+
+
+def test_qsplit240_olmo_base_easy_overlap_rerun_builds_expected_manifest():
+    run_specs = build_qsplit240_olmo_base_easy_overlap_rerun_specs()
+
+    assert len(run_specs) == 240
+    assert [spec.run_id for spec in run_specs] == list(range(240))
+    assert {spec.cohort for spec in run_specs} == {"original_swarm_olmo_base_easy_overlap_rerun"}
     assert run_specs[0].run_name == "baseline_proportional"
     assert run_specs[1].run_name == "baseline_unimax"
     assert run_specs[2].run_name == "run_00002"
@@ -1313,6 +1359,65 @@ def test_qsplit240_seedpanel_mmlu_sl_verb_rerun_main_wires_max_concurrent(monkey
     assert len(captured["steps"]) == 8
     assert "fixed-subset seedpanel" in captured["description"]
     assert qsplit240_seedpanel_slverb_rerun.DEFAULT_MAX_CONCURRENT == 24
+
+
+def test_qsplit240_olmo_base_easy_overlap_rerun_main_wires_cache_and_max_concurrent(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(
+        qsplit240_olmo_base_easy_overlap_rerun,
+        "resolve_checkpoint_roots",
+        lambda run_specs: [
+            replace(spec, checkpoint_root=f"gs://unit-test/checkpoints/{spec.run_name}") for spec in run_specs
+        ],
+    )
+    monkeypatch.setattr(
+        qsplit240_olmo_base_easy_overlap_rerun,
+        "evaluate_levanter_lm_evaluation_harness",
+        lambda **kwargs: SimpleNamespace(name=kwargs["model_name"]),
+    )
+    monkeypatch.setattr(
+        qsplit240_olmo_base_easy_overlap_rerun,
+        "output_path_of",
+        lambda step, filename=None: (
+            f"gs://unit-test/{step.name}" if filename is None else f"gs://unit-test/{step.name}/{filename}"
+        ),
+    )
+    monkeypatch.setattr(
+        qsplit240_olmo_base_easy_overlap_rerun,
+        "create_run_manifest_step",
+        lambda **_: SimpleNamespace(name="run_manifest"),
+    )
+    monkeypatch.setattr(
+        qsplit240_olmo_base_easy_overlap_rerun,
+        "create_cache_eval_datasets_step",
+        lambda **_: SimpleNamespace(name="cache_eval_datasets"),
+    )
+
+    def fake_executor_main(config=None, *, steps, description):
+        captured["config"] = config
+        captured["steps"] = steps
+        captured["description"] = description
+
+    monkeypatch.setattr(qsplit240_olmo_base_easy_overlap_rerun, "executor_main", fake_executor_main)
+    monkeypatch.setattr(
+        qsplit240_olmo_base_easy_overlap_rerun,
+        "build_run_specs",
+        lambda: build_qsplit240_olmo_base_easy_overlap_rerun_specs()[:6],
+    )
+    monkeypatch.setattr(
+        qsplit240_olmo_base_easy_overlap_rerun.sys,
+        "argv",
+        ["launcher", "--max-concurrent", "11"],
+    )
+
+    qsplit240_olmo_base_easy_overlap_rerun.main()
+
+    assert captured["config"].max_concurrent == 11
+    assert len(captured["steps"]) == 9
+    assert "OLMoBaseEval-overlap rerun" in captured["description"]
+    assert qsplit240_olmo_base_easy_overlap_rerun.DEFAULT_MAX_CONCURRENT == 12
 
 
 def test_genericfamily_subset_optimum_run_name_formats_subset_size():

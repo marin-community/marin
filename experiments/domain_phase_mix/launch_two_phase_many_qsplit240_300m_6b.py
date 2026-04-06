@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import sys
 from dataclasses import asdict, dataclass, replace
@@ -138,6 +139,33 @@ def build_run_specs() -> list[Qsplit240ModelSizeRunSpec]:
     ]
 
 
+def shard_label(*, shard_index: int, shard_count: int) -> str:
+    """Return a stable user-facing shard label."""
+    return f"shard_{shard_index + 1:02d}of{shard_count:02d}"
+
+
+def select_run_specs_for_shard(
+    run_specs: list[Qsplit240ModelSizeRunSpec], *, shard_index: int, shard_count: int
+) -> list[Qsplit240ModelSizeRunSpec]:
+    """Select one contiguous shard from the full qsplit240 replay manifest."""
+    if shard_count < 1:
+        raise ValueError(f"shard_count must be >= 1, got {shard_count}")
+    if not 0 <= shard_index < shard_count:
+        raise ValueError(f"shard_index must be in [0, {shard_count}), got {shard_index}")
+
+    shard_size = math.ceil(len(run_specs) / shard_count)
+    start = shard_index * shard_size
+    end = min(start + shard_size, len(run_specs))
+    return run_specs[start:end]
+
+
+def shard_execution_name_prefix(*, name_prefix: str, shard_index: int, shard_count: int) -> str:
+    """Return the executor-side name prefix for shard-local bookkeeping steps."""
+    if shard_count == 1:
+        return name_prefix
+    return f"{name_prefix}/{shard_label(shard_index=shard_index, shard_count=shard_count)}"
+
+
 def save_run_manifest(config: SaveRunManifestConfig) -> None:
     """Persist the replay manifest for downstream collection and fitting."""
     run_specs = json.loads(config.run_specs_json)
@@ -156,15 +184,20 @@ def save_run_manifest(config: SaveRunManifestConfig) -> None:
         json.dump(payload, f, indent=2, sort_keys=True)
 
 
-def create_run_manifest_step(*, name_prefix: str, run_specs: list[Qsplit240ModelSizeRunSpec]) -> ExecutorStep:
+def create_run_manifest_step(
+    *,
+    step_name_prefix: str,
+    experiment_name: str,
+    run_specs: list[Qsplit240ModelSizeRunSpec],
+) -> ExecutorStep:
     """Create the manifest writer step for the replayed 300M swarm."""
     return ExecutorStep(
-        name=f"{name_prefix}/run_manifest",
+        name=f"{step_name_prefix}/run_manifest",
         description=f"Save qsplit240 300M / 6B swarm manifest ({len(run_specs)} runs)",
         fn=save_run_manifest,
         config=SaveRunManifestConfig(
             output_path=this_output_path(),
-            experiment_name=name_prefix,
+            experiment_name=experiment_name,
             run_specs_json=json.dumps([asdict(spec) for spec in run_specs], sort_keys=True),
         ),
     )
@@ -221,6 +254,8 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--name-prefix", default=NAME)
     parser.add_argument("--tpu-type", default="v5p-8")
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
+    parser.add_argument("--shard-count", type=int, default=1)
+    parser.add_argument("--shard-index", type=int, default=0)
     return parser.parse_known_args()
 
 
@@ -238,12 +273,25 @@ def main() -> None:
         tpu_type=args.tpu_type,
         eval_datasets_cache_path=eval_datasets_cache_path,
     )
-    run_specs = build_run_specs()
-    run_manifest_step = create_run_manifest_step(name_prefix=args.name_prefix, run_specs=run_specs)
+    run_specs = select_run_specs_for_shard(
+        build_run_specs(),
+        shard_index=args.shard_index,
+        shard_count=args.shard_count,
+    )
+    execution_name_prefix = shard_execution_name_prefix(
+        name_prefix=args.name_prefix,
+        shard_index=args.shard_index,
+        shard_count=args.shard_count,
+    )
+    run_manifest_step = create_run_manifest_step(
+        step_name_prefix=execution_name_prefix,
+        experiment_name=args.name_prefix,
+        run_specs=run_specs,
+    )
     cache_eval_datasets_step = create_cache_eval_datasets_step(
         eval_tasks=QSPLIT240_300M_EVAL_TASKS,
         gcs_path=eval_datasets_cache_path,
-        name_prefix=args.name_prefix,
+        name_prefix=execution_name_prefix,
     )
 
     training_steps: list[ExecutorStep] = []
@@ -257,23 +305,28 @@ def main() -> None:
         training_steps.append(add_eval_cache_dependency_to_training_step(training_step, cache_eval_datasets_step))
 
     results_step = create_manifest_results_step(
-        name_prefix=args.name_prefix,
+        name_prefix=execution_name_prefix,
         run_manifest_step=run_manifest_step,
         wandb_entity=WANDB_ENTITY,
         wandb_project=WANDB_PROJECT,
         depends_on=training_steps,
     )
     fit_dataset_step = create_fit_dataset_export_step(
-        name_prefix=args.name_prefix,
+        name_prefix=execution_name_prefix,
         run_manifest_step=run_manifest_step,
         analysis_step=results_step,
     )
 
     logger.info(
-        "Launching %d qsplit240 300M / 6B runs on %s with max_concurrent=%d. Outputs will include %s, %s, and %s.",
+        "Launching shard %d/%d with %d qsplit240 300M / 6B runs on %s with max_concurrent=%d. "
+        "Training outputs stay under %s; shard bookkeeping outputs go under %s. Outputs will include %s, %s, and %s.",
+        args.shard_index + 1,
+        args.shard_count,
         len(run_specs),
         args.tpu_type,
         args.max_concurrent,
+        args.name_prefix,
+        execution_name_prefix,
         RESULTS_CSV,
         FIT_DATASET_CSV,
         FIT_DATASET_SUMMARY_JSON,
@@ -281,7 +334,7 @@ def main() -> None:
     executor_main(
         ExecutorMainConfig(max_concurrent=args.max_concurrent),
         steps=[run_manifest_step, cache_eval_datasets_step, *training_steps, results_step, fit_dataset_step],
-        description=f"{args.name_prefix}: original qsplit240 swarm replay at 300M / 6B",
+        description=f"{execution_name_prefix}: original qsplit240 swarm replay at 300M / 6B",
     )
 
 

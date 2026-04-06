@@ -187,6 +187,7 @@ class HarborEvaluator(Evaluator):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        eval_datasets_cache_path: str | None = None,
     ) -> None:
         """
         Run Harbor evaluation on any dataset.
@@ -269,6 +270,7 @@ class HarborEvaluator(Evaluator):
         resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        eval_datasets_cache_path: str | None = None,
     ) -> None:
         """Launch Harbor evaluation with Fray.
 
@@ -283,6 +285,7 @@ class HarborEvaluator(Evaluator):
                 output_path=output_path,
                 max_eval_instances=max_eval_instances,
                 wandb_tags=wandb_tags,
+                eval_datasets_cache_path=eval_datasets_cache_path,
             )
             return
 
@@ -321,6 +324,7 @@ class HarborEvaluator(Evaluator):
             resource_config=resource_config,
             max_eval_instances=max_eval_instances,
             wandb_tags=wandb_tags,
+            eval_datasets_cache_path=eval_datasets_cache_path,
             extras=("harbor", "tpu", "vllm"),
             pip_packages=pip_packages,
             env_vars=env_vars,

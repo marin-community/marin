@@ -811,6 +811,7 @@ _patch_autoconfig_for_gcs()
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        eval_datasets_cache_path: str | None = None,
     ) -> None:
         """
         Run Evalchemy evaluations on the specified model and tasks.
@@ -1043,6 +1044,7 @@ _patch_autoconfig_for_gcs()
         resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        eval_datasets_cache_path: str | None = None,
     ) -> None:
         """Launch evaluation on Ray cluster with TPU resources."""
         env_vars = {"HF_ALLOW_CODE_EVAL": "1"}
@@ -1062,6 +1064,7 @@ _patch_autoconfig_for_gcs()
             resource_config=resource_config,
             max_eval_instances=max_eval_instances,
             wandb_tags=wandb_tags,
+            eval_datasets_cache_path=eval_datasets_cache_path,
             extras=("evalchemy", "tpu", "vllm"),
             env_vars=env_vars,
         )
