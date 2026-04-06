@@ -528,8 +528,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
-                if checkpointer is not None:
-                    checkpointer.on_step(tree=state, step=int(state.step))
+                # if checkpointer is not None:
+                #     checkpointer.on_step(tree=state, step=int(state.step))
+                pass
         except BaseException:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
