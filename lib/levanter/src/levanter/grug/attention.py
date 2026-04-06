@@ -9,7 +9,7 @@ import equinox as eqx
 import jax
 from jax import numpy as jnp
 from jax import shard_map
-from jax.sharding import NamedSharding, get_abstract_mesh
+from jax.sharding import NamedSharding
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.jax_utils import named_call

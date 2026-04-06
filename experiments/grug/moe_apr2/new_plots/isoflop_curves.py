@@ -1,9 +1,13 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Generate isoflop curves from v16 sweep data.
 
 For each compute budget, plots BPB vs total (active) parameters across model sizes,
 fits a log-space parabola to find the optimal model size, and fits an asymptotic
 scaling law: loss*(C) = L_inf + A * C^{-alpha}.
 """
+
 import json
 import math
 
@@ -16,6 +20,7 @@ PLOT_DIR = "experiments/grug/moe_apr2/new_plots"
 # ============================================================
 # 1) Load data from wandb
 # ============================================================
+
 
 def fetch_v16_data():
     """Fetch finished v16 isoflop runs from wandb."""
@@ -87,6 +92,7 @@ def compute_fpt(dim):
 # 2) Fit parabolas per budget and find optima
 # ============================================================
 
+
 def fit_isoflop_parabola(dims, bpbs):
     """Fit bpb = a*log10(params)^2 + b*log10(params) + c. Return optimal params and bpb."""
     params = np.array([compute_active_params(d) for d in dims])
@@ -141,6 +147,7 @@ def fit_asymptotic_powerlaw(C, loss, n_grid=400):
 # ============================================================
 # 3) Generate plots
 # ============================================================
+
 
 def main():
     # Load data
@@ -200,12 +207,14 @@ def main():
             ax.plot(opt_params, opt_bpb, "*", color=color, markersize=15)
 
         # Compute FLOPs for the optimal
-        optima.append({
-            "budget": budget,
-            "opt_params": opt_params,
-            "opt_bpb": opt_bpb,
-            "opt_tokens": budget / (3 * compute_fpt(dims_sorted[np.argmin(bpbs_sorted)])),
-        })
+        optima.append(
+            {
+                "budget": budget,
+                "opt_params": opt_params,
+                "opt_bpb": opt_bpb,
+                "opt_tokens": budget / (3 * compute_fpt(dims_sorted[np.argmin(bpbs_sorted)])),
+            }
+        )
 
     ax.set_xscale("log")
     ax.set_xlabel("Active Parameters (no embed)")
@@ -326,14 +335,21 @@ def main():
         if fit:
             C_grid = np.logspace(np.log10(C_arr.min()) - 0.3, np.log10(C_arr.max()) + 0.5, 200)
             yhat = fit["L_inf"] + fit["A"] * C_grid ** (-fit["alpha"])
-            ax2.plot(C_grid, yhat, "--", color="C0", alpha=0.5,
-                     label=f"L∞={fit['L_inf']:.3f} + {fit['A']:.2f}·C^(-{fit['alpha']:.3f})")
+            ax2.plot(
+                C_grid,
+                yhat,
+                "--",
+                color="C0",
+                alpha=0.5,
+                label=f"L∞={fit['L_inf']:.3f} + {fit['A']:.2f}·C^(-{fit['alpha']:.3f})",
+            )
             ax2.legend()
             print(f"Scaling law: L_inf={fit['L_inf']:.4f}, A={fit['A']:.3f}, alpha={fit['alpha']:.4f}")
 
         for o in optima:
-            ax2.annotate(f"{o['budget']:.0e}", (o["budget"], o["opt_bpb"]),
-                         textcoords="offset points", xytext=(5, 5), fontsize=8)
+            ax2.annotate(
+                f"{o['budget']:.0e}", (o["budget"], o["opt_bpb"]), textcoords="offset points", xytext=(5, 5), fontsize=8
+            )
 
         ax2.set_xscale("log")
         ax2.set_xlabel("Compute (FLOPs, excl lm_head)")
