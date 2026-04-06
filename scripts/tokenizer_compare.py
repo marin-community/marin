@@ -175,9 +175,7 @@ def _compare_decode_skip_special(
     for name, tok in backends:
         try:
             decoded = tok.decode(ids_with_specials, skip_special_tokens=True)
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except BaseException as e:
+        except Exception as e:
             path = _write_error(
                 name,
                 model,
@@ -771,9 +769,7 @@ def _run_fuzz_iteration(
                     try:
                         if tok.decode(candidate_ids, skip_special_tokens=True) != hf_dec:
                             return True
-                    except (KeyboardInterrupt, SystemExit):
-                        raise
-                    except BaseException:
+                    except Exception:
                         return True
                 return False
 

@@ -396,7 +396,7 @@ class KitokenMarinTokenizer:
     def encode_batch(self, texts: list[str], *, add_special_tokens: bool = False) -> list[list[int]]:
         texts = ["".join(s) for s in texts]
         results = self._tokenizer.encode_all(texts, True)
-        if add_special_tokens and self._bos_id is not None:
+        if add_special_tokens and self._prepend_bos and self._bos_id is not None:
             return [[self._bos_id] + ids for ids in results]
         return results
 

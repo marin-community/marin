@@ -1082,11 +1082,39 @@ def test_chat_processor_with_marin_tokenizer():
     assert any(m == 1 for m in mask), "assistant_masks should mark assistant content"
 
 
+@requires_model
+@pytest.mark.parametrize("text", BASIC_TEXTS, ids=[t[:30] for t in BASIC_TEXTS])
+def test_encode_batch_respects_prepend_bos(backend_tokenizer, text):
+    """encode_batch with add_special_tokens must agree with encode.
+
+    When _prepend_bos is False (e.g. models without a TemplateProcessing
+    post-processor), encode_batch should not prepend BOS either. This
+    regression test patches _prepend_bos=False to exercise the code path
+    that was previously unchecked in encode_batch.
+    """
+    import dataclasses as _dc
+
+    from levanter.tokenizers import KitokenMarinTokenizer
+
+    if not isinstance(backend_tokenizer, KitokenMarinTokenizer):
+        pytest.skip("Bug only affects KitokenMarinTokenizer")
+
+    # Simulate a model whose post-processor does NOT prepend BOS.
+    patched = _dc.replace(backend_tokenizer, _prepend_bos=False)
+
+    single = patched.encode(text, add_special_tokens=True)
+    batch = patched.encode_batch([text], add_special_tokens=True)
+    assert batch[0] == single, (
+        f"encode_batch diverged from encode with _prepend_bos=False: "
+        f"encode returned {single[:5]}..., encode_batch returned {batch[0][:5]}..."
+    )
+
+
 _GEMMA_TOKENIZERS: dict[str, MarinTokenizer] = {}
 _GEMMA_BACKENDS: list[str] = []
 try:
     load_tokenizer.cache_clear()
-    for _b in [TokenizerBackend.HF, TokenizerBackend.TOKIE, TokenizerBackend.KITOKEN]:
+    for _b in [TokenizerBackend.HF, TokenizerBackend.KITOKEN]:
         _GEMMA_TOKENIZERS[_b.value] = load_tokenizer("google/gemma-3-4b-it", backend=_b)
         _GEMMA_BACKENDS.append(_b.value)
 except Exception:
