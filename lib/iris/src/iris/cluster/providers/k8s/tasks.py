@@ -711,7 +711,7 @@ class LogCollector:
                 self._log_pusher.push(key, entries)
             pod.last_timestamp = result.last_timestamp
         except Exception as e:
-            logger.debug("LogCollector: failed for pod %s: %s", pod.pod_name, e)
+            logger.warning("LogCollector: fetch failed for pod %s: %s", pod.pod_name, e)
 
     def close(self) -> None:
         self._stop.set()
@@ -816,7 +816,7 @@ class K8sTaskProvider:
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
     log_pusher: LogPusherProtocol | None = None
-    poll_concurrency: int = 8
+    poll_concurrency: int = 32
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _log_collector: LogCollector | None = field(default=None, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
