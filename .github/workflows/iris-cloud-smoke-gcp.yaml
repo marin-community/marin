@@ -189,14 +189,14 @@ jobs:
           # Fetch recent controller and worker logs via RPC
           uv run --group dev python3 -c "
           import json, sys
-          from iris.cluster.controller import connect as cluster_connect
-          from iris.rpc import cluster_pb2
+          from iris.rpc import controller_connect
+          from iris.rpc import controller_pb2, job_pb2
 
           url = '$IRIS_CONTROLLER_URL'
-          client = cluster_connect.ControllerServiceClientSync(url)
+          client = controller_connect.ControllerServiceClientSync(url)
 
           # Controller process status with recent logs
-          proc = client.get_process_status(cluster_pb2.GetProcessStatusRequest())
+          proc = client.get_process_status(job_pb2.GetProcessStatusRequest())
           with open('$LOG_DIR/controller-process.json', 'w') as f:
               json.dump({
                   'git_hash': proc.process_info.git_hash,
@@ -206,12 +206,12 @@ jobs:
               }, f, indent=2)
 
           # List workers and fetch status for each
-          workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
+          workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
           for w in workers:
               wid = w.worker_id
               try:
                   status = client.get_worker_status(
-                      cluster_pb2.Controller.GetWorkerStatusRequest(worker_id=wid)
+                      controller_pb2.Controller.GetWorkerStatusRequest(worker_id=wid)
                   )
                   with open(f'$LOG_DIR/worker-{wid}.json', 'w') as f:
                       json.dump({
