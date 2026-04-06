@@ -7,8 +7,9 @@ import pytest
 from datasets import load_dataset
 
 from levanter.data.sharded_datasource import AudioTextUrlDataSource
+from levanter.tokenizers import load_tokenizer
 from test_utils import skip_if_hf_model_not_accessible, skip_if_no_soundlibs
-from transformers import AutoProcessor, AutoTokenizer
+from transformers import AutoProcessor
 
 from levanter.data.audio import AudioDatasetSourceConfig, AudioIODatasetConfig, BatchAudioProcessor
 from levanter.store.cache import SerialCacheWriter
@@ -19,7 +20,7 @@ from levanter.store.cache import SerialCacheWriter
 def test_whisper_batch_processor():
     try:
         processor = AutoProcessor.from_pretrained("openai/whisper-tiny")
-        tokenizer = AutoTokenizer.from_pretrained("openai/whisper-tiny")
+        tokenizer = load_tokenizer("openai/whisper-tiny")
         ds = load_dataset("WillHeld/test_librispeech_parquet", split="validation").select_columns(["audio", "text"])
         batch_processor = BatchAudioProcessor(processor, tokenizer)
         inputs = [
@@ -76,7 +77,7 @@ def test_hf_audio_serial_cache():
     ac = AudioIODatasetConfig(id="WillHeld/test_librispeech_parquet", text_key="text")
 
     processor = AutoProcessor.from_pretrained("openai/whisper-tiny")
-    tokenizer = AutoTokenizer.from_pretrained("openai/whisper-tiny")
+    tokenizer = load_tokenizer("openai/whisper-tiny")
     batch_processor = BatchAudioProcessor(processor, tokenizer, max_length=1024)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -98,7 +99,7 @@ def test_hf_audio_serial_cache():
 @skip_if_hf_model_not_accessible("openai/whisper-tiny")
 def test_metadata_works():
     processor = AutoProcessor.from_pretrained("openai/whisper-tiny")
-    tokenizer = AutoTokenizer.from_pretrained("openai/whisper-tiny")
+    tokenizer = load_tokenizer("openai/whisper-tiny")
     batch_processor = BatchAudioProcessor(processor, tokenizer)
     # test this doesn't throw
     assert len(batch_processor.metadata)
