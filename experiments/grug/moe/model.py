@@ -28,11 +28,18 @@ except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
-from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
+from levanter.grug.activation_logging import LayerLogging, block_activation_logging, flatten_layer_logging
+from levanter.grug.attention import (
+    AttentionMask,
+    RotaryConfig,
+    apply_rotary_embedding,
+    attention,
+    max_abs_attention_logit,
+)
 from levanter.grug.grug_moe import MoeActivation, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
@@ -134,7 +141,11 @@ class CausalSelfAttention(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+    ) -> tuple[Float[Array, "B S D"], jax.Array]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -146,6 +157,7 @@ class CausalSelfAttention(eqx.Module):
         k = rms_norm(k)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
+        max_logit = max_abs_attention_logit(q, k)
         attn_out = attention(q, k, v, mask)
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
@@ -156,7 +168,8 @@ class CausalSelfAttention(eqx.Module):
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        output = jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        return output, max_logit
 
 
 class RMSNorm(eqx.Module):
@@ -264,14 +277,14 @@ def _routing_stats(
     }
 
 
-def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | Histogram]:
+def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
     routing_entropy = router_metrics["routing_entropy_per_layer"]
     routing_counts = router_metrics["routing_counts_per_layer"]
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
     num_layers = int(routing_entropy.shape[0])
 
-    out: dict[str, jax.Array | Histogram] = {
+    out: dict[str, jax.Array | SummaryStats] = {
         "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
         "train/router/load_balancing_loss": jnp.mean(load_balancing_loss),
         "train/router/router_z_loss": jnp.mean(router_z_loss),
@@ -286,7 +299,7 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     return out
 
 
-def _histogram_from_expert_counts(expert_counts: jax.Array) -> Histogram:
+def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
     counts = jnp.asarray(expert_counts, dtype=jnp.float32)
     num_experts = counts.shape[0]
     expert_ids = jnp.arange(num_experts, dtype=jnp.float32)
@@ -299,14 +312,17 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> Histogram:
     min_value = jnp.where(num > 0, min_value, 0.0)
     max_value = jnp.where(num > 0, max_value, 0.0)
     bucket_limits = jnp.arange(num_experts + 1, dtype=jnp.float32)
-    return Histogram(
+    return SummaryStats(
         min=min_value,
         max=max_value,
         num=num,
+        nonzero_count=num - counts[0],
         sum=sum_values,
         sum_squares=sum_squares,
-        bucket_limits=bucket_limits,
-        bucket_counts=counts,
+        histogram=Histogram(
+            bucket_limits=bucket_limits,
+            bucket_counts=counts,
+        ),
     )
 
 
@@ -351,8 +367,7 @@ class MoEMLP(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
-        # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None)))
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
@@ -448,9 +463,10 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], LayerLogging]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask)
+        attn_out, max_abs_logit = self.attn(attn_in, mask)
+        x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         if self.dense_mlp is not None:
             mlp_out = self.dense_mlp(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -461,7 +477,18 @@ class Block(eqx.Module):
             if self.shared is not None:
                 mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
-        return x, router_stats
+        return (
+            x,
+            router_stats,
+            block_activation_logging(
+                attn_in=attn_in,
+                attn_out=attn_out,
+                mlp_in=mlp_in,
+                mlp_out=mlp_out,
+                block_out=x,
+                max_abs_attn_logit=max_abs_logit,
+            ),
+        )
 
 
 class Transformer(eqx.Module):
@@ -500,7 +527,12 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        *,
+        return_activation_metrics: bool = False,
+    ) -> (
+        tuple[Float[Array, "B S D"], dict[str, jax.Array]]
+        | tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array | SummaryStats]]
+    ):
         if mask is None:
             mask = AttentionMask.causal()
 
@@ -514,9 +546,11 @@ class Transformer(eqx.Module):
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
 
         moe_router_stats: list[dict[str, jax.Array]] = []
+        layer_logging: list[LayerLogging] = []
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            hidden, router_stats, block_logging = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            layer_logging.append(block_logging)
             if router_stats:
                 moe_router_stats.append(router_stats)
 
@@ -528,6 +562,8 @@ class Transformer(eqx.Module):
             "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))
+        if return_activation_metrics:
+            return hidden, router_metrics, flatten_layer_logging(layer_logging)
         return hidden, router_metrics
 
     @named_call
@@ -550,8 +586,13 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
-    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | Histogram]]:
-        hidden, router_metrics = self(token_ids, mask=mask)
+        return_activation_metrics: bool = False,
+    ) -> (
+        jax.Array
+        | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]
+        | tuple[jax.Array, tuple[dict[str, jax.Array | SummaryStats], dict[str, jax.Array | SummaryStats]]]
+    ):
+        hidden, router_metrics, activation_metrics = self(token_ids, mask=mask, return_activation_metrics=True)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
@@ -569,11 +610,19 @@ class Transformer(eqx.Module):
         rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
         aux_loss = self.config.router_z_loss_coef * rzl
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
+        summarized_metrics = None
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
+        if return_router_metrics and return_activation_metrics:
+            return loss, (summarized_metrics, activation_metrics)
+        if return_router_metrics:
+            if summarized_metrics is None:
+                raise AssertionError("summarized_metrics should be populated when return_router_metrics=True")
             return loss, summarized_metrics
+        if return_activation_metrics:
+            return loss, activation_metrics
         return loss
 
 

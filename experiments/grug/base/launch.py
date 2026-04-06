@@ -14,13 +14,11 @@ from datetime import timedelta
 
 import jmp
 from fray.cluster import ResourceConfig
-from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LmDataConfig
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
@@ -57,10 +55,10 @@ GRUG_130M_MODEL = GrugModelConfig(
     hidden_dim=512,
     intermediate_dim=1792,
     num_layers=6,
-    num_heads=8,
-    num_kv_heads=8,
+    num_heads=4,
+    num_kv_heads=4,
     max_seq_len=4096,
-    head_dim=None,
+    head_dim=128,
 )
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -86,12 +84,12 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
 
 def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
     # Map template launch knobs onto full Levanter TrainerConfig.
-    trainer = TrainerConfig(
+    trainer = dataclasses.replace(
+        config.grug_trainer.trainer,
         id=config.run_id,
         seed=config.seed,
         train_batch_size=config.batch_size,
         num_train_steps=config.steps,
-        profiler=ProfilerConfig(enabled=False, start_step=5, num_steps=100, perfetto_link=False),
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,

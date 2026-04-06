@@ -274,7 +274,24 @@ def _make_train_step(
                 logsumexp_weight=z_loss,
             )
 
-        loss, grads = jax.value_and_grad(loss_fn)(state.params)
+        def loss_with_activation_metrics_fn(params):
+            compute_params = mp.cast_to_compute(params)
+            return compute_params.next_token_loss(
+                batch.tokens,
+                batch.loss_weight,
+                mask=batch.attn_mask,
+                reduction="mean",
+                logsumexp_weight=z_loss,
+                return_activation_metrics=True,
+            )
+
+        if compute_watch:
+            (loss, activation_metrics), grads = jax.value_and_grad(loss_with_activation_metrics_fn, has_aux=True)(
+                state.params
+            )
+        else:
+            loss, grads = jax.value_and_grad(loss_fn)(state.params)
+            activation_metrics = None
         updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
         params = optax.apply_updates(state.params, updates)
 
@@ -303,6 +320,9 @@ def _make_train_step(
                 opt_state=state.opt_state,
                 model_tree_type=type(state.params),
             )
+            if activation_metrics is None:
+                raise AssertionError("activation_metrics should be populated when compute_watch=True")
+            watch_stats.update(activation_metrics)
 
         next_state = dataclasses.replace(
             state,

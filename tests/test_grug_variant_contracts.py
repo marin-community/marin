@@ -28,6 +28,7 @@ from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
 
 from levanter.checkpoint import CheckpointerConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
@@ -145,6 +146,74 @@ def test_grug_variant_one_step_contract_lowers_with_default_ctor(variant: str):
     assert "train/loss" in out_metrics_shape
     assert out_metrics_shape["train/loss"].shape == ()
     assert out_watch_shape is None
+
+
+@pytest.mark.parametrize(
+    "variant",
+    _discover_grug_variants_with_model_and_train(),
+)
+def test_grug_variant_activation_watch_contract_lowers(variant: str):
+    train_module = importlib.import_module(_variant_module_name(variant, "train"))
+    model_module = importlib.import_module(_variant_module_name(variant, "model"))
+    model_config_cls = model_module.GrugModelConfig
+    make_train_step = train_module._make_train_step
+    initial_state = train_module.initial_state
+    mesh_fn = getattr(model_module, "debug_mesh_and_token_pspec", None)
+    if mesh_fn is None:
+        raise AssertionError(f"{_variant_module_name(variant, 'model')} must define debug_mesh_and_token_pspec")
+
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+    watch_config = WatchConfig(
+        watch_targets=["grads"],
+        include_norms=True,
+        include_per_parameter_norms=False,
+        include_histograms=False,
+        interval=1,
+    )
+    train_step = make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None, watch_config=watch_config)
+    mesh, token_pspec = mesh_fn(num_devices=4)
+    batch = GrugLmExample(
+        tokens=jnp.zeros((8, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((8, 4), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    def one_step():
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        cfg = _small_model_config(model_config_cls, vocab_size=1024, seq_len=batch.tokens.shape[1])
+        if variant == "moe":
+            cfg = dataclasses.replace(cfg, num_layers=4)
+        state = initial_state(
+            cfg,
+            optimizer=optimizer,
+            mp=mp,
+            key=jax.random.PRNGKey(0),
+            ema_beta=None,
+        )
+        return train_step(state, sharded_batch, compute_watch=True)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        _, _, out_watch_shape = eqx.filter_eval_shape(one_step)
+
+    if out_watch_shape is None:
+        raise AssertionError("expected heavy-watch activation metrics")
+
+    required_keys = [
+        "train/activations/layer_0/attn_in",
+        "train/activations/layer_0/attn_out",
+        "train/activations/layer_0/mlp_out",
+        "train/activations/layer_0/block_out",
+        "train/activations/layer_0/attn_out_cosine_with_in",
+        "train/activations/layer_0/mlp_out_cosine_with_in",
+        "train/activations/layer_0/max_abs_attn_logit",
+    ]
+    for key in required_keys:
+        assert key in out_watch_shape
 
 
 @pytest.mark.parametrize(
