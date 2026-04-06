@@ -150,6 +150,9 @@ dev = [
 
 
 [tool.uv]
+find-links = [
+  "https://github.com/marin-community/kitoken/releases/expanded_assets/kitoken-0.10.2-a3012f4",
+]
 conflicts = [
   [
     { extra = "gpu" },

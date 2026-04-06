@@ -89,6 +89,14 @@ class MarinTokenizer(Protocol):
         **kwargs,
     ) -> dict[str, list[list[int]]]: ...
 
+    def as_hf_tokenizer(self) -> Any:
+        """Return a HuggingFace PreTrainedTokenizerFast for this tokenizer.
+
+        Useful for operations that require the HF API (save_pretrained,
+        add_tokens, generation config, etc.).
+        """
+        ...
+
 
 # Sentinel used to mark generation (assistant) boundaries in rendered templates.
 _GENERATION_SENTINEL_START = "__MARIN_GEN_START_7f3a9c__"
@@ -315,6 +323,11 @@ class HfMarinTokenizer:
     ) -> dict[str, list[list[int]]]:
         return _apply_chat_template_with_masks(self, conversations, chat_template=chat_template, **kwargs)
 
+    def as_hf_tokenizer(self) -> Any:
+        from transformers import AutoTokenizer
+
+        return AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+
 
 @dataclasses.dataclass(frozen=True)
 class KitokenMarinTokenizer:
@@ -448,6 +461,11 @@ class KitokenMarinTokenizer:
         **kwargs,
     ) -> dict[str, list[list[int]]]:
         return _apply_chat_template_with_masks(self, conversations, chat_template=chat_template, **kwargs)
+
+    def as_hf_tokenizer(self) -> Any:
+        from transformers import AutoTokenizer
+
+        return AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
 
 
 class TokenizerBackend(StrEnum):
