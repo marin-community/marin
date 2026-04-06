@@ -261,7 +261,16 @@ def create_1e22_run() -> list[ExecutorStep]:
                 log_every=1,
             )
         ),
-        eval=versioned(None),  # Eval disabled to avoid OOM/multi-controller crash on checkpoint resume
+        eval=versioned(
+            GrugEvalConfig(
+                eval_batch_size=512,
+                steps_per_eval=None,  # Eval disabled to avoid OOM/multi-controller crash on resume
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+        load_checkpoint_path="gs://marin-us-central2/grug/moe-v7-1e22-d3200-5a4518/checkpoints",
     )
 
     return [
