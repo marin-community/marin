@@ -101,7 +101,7 @@ SOFT_DELETE_RETENTION_SECONDS = 3 * 24 * 3600  # 3 days
 # dir_summary collapse thresholds: dirs deeper than this with less than
 # DIR_SUMMARY_MIN_BYTES are rolled up into their depth-2 ancestor.
 DIR_SUMMARY_MIN_DEPTH = 2
-DIR_SUMMARY_MIN_BYTES = 1_000_000_000  # 1 GB
+DIR_SUMMARY_MIN_BYTES = 10_000_000_000  # 10 GB
 
 GCS_MAX_PAGE_SIZE = 5000
 
@@ -441,8 +441,7 @@ def _migrate_to_13(conn: duckdb.DuckDBPyConnection) -> None:
             pattern TEXT NOT NULL,
             storage_class TEXT,
             description TEXT,
-            created_at TEXT NOT NULL,
-            UNIQUE (pattern, storage_class)
+            created_at TEXT NOT NULL
         )
         """
     )
@@ -562,8 +561,7 @@ def _ensure_current_schema(conn: duckdb.DuckDBPyConnection, catalog: StorageCata
             pattern TEXT NOT NULL,
             storage_class TEXT,
             description TEXT,
-            created_at TEXT NOT NULL,
-            UNIQUE (pattern, storage_class)
+            created_at TEXT NOT NULL
         )
         """
     )
@@ -905,77 +903,57 @@ def materialize_dir_summary(conn: duckdb.DuckDBPyConnection, catalog: StorageCat
     buf = DirSummaryBuffer(catalog.dir_summary_parquet_dir, conn)
     buf.reset()
 
+    min_depth = DIR_SUMMARY_MIN_DEPTH
+    min_bytes = DIR_SUMMARY_MIN_BYTES
+
     for plan_row in plan_rows():
         bucket_name = plan_row["bucket"]
 
         print_summary(f"  materializing dir_summary for {bucket_name}...")
 
-        # Pass 1: fine-grained per-directory aggregation
-        conn.execute(
-            """
-            CREATE OR REPLACE TEMPORARY TABLE _raw_dir_summary AS
-            SELECT o.bucket,
-                   left(o.name, length(o.name) - position('/' in reverse(o.name)) + 1) as dir_prefix,
-                   COUNT(*) FILTER (WHERE sc.name = 'STANDARD') as standard_count,
-                   COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'STANDARD'), 0) as standard_bytes,
-                   COUNT(*) FILTER (WHERE sc.name = 'NEARLINE') as nearline_count,
-                   COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'NEARLINE'), 0) as nearline_bytes,
-                   COUNT(*) FILTER (WHERE sc.name = 'COLDLINE') as coldline_count,
-                   COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'COLDLINE'), 0) as coldline_bytes,
-                   COUNT(*) FILTER (WHERE sc.name = 'ARCHIVE') as archive_count,
-                   COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'ARCHIVE'), 0) as archive_bytes
-            FROM objects o
-            JOIN storage_classes sc ON o.storage_class_id = sc.id
-            WHERE o.bucket = ?
-            GROUP BY o.bucket, dir_prefix
-            """,
-            (bucket_name,),
-        )
-
-        # Pass 2: collapse small deep dirs into their depth-N ancestor
-        min_depth = DIR_SUMMARY_MIN_DEPTH
-        min_bytes = DIR_SUMMARY_MIN_BYTES
+        # Aggregate per-directory, then collapse small deep dirs into their
+        # depth-{min_depth} ancestor in a single query.
         result = conn.execute(
             f"""
-            WITH annotated AS (
+            WITH raw AS (
+                SELECT o.bucket,
+                       left(o.name, length(o.name) - position('/' in reverse(o.name)) + 1) as dir_prefix,
+                       COUNT(*) FILTER (WHERE sc.name = 'STANDARD') as standard_count,
+                       COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'STANDARD'), 0) as standard_bytes,
+                       COUNT(*) FILTER (WHERE sc.name = 'NEARLINE') as nearline_count,
+                       COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'NEARLINE'), 0) as nearline_bytes,
+                       COUNT(*) FILTER (WHERE sc.name = 'COLDLINE') as coldline_count,
+                       COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'COLDLINE'), 0) as coldline_bytes,
+                       COUNT(*) FILTER (WHERE sc.name = 'ARCHIVE') as archive_count,
+                       COALESCE(SUM(o.size_bytes) FILTER (WHERE sc.name = 'ARCHIVE'), 0) as archive_bytes
+                FROM objects o
+                JOIN storage_classes sc ON o.storage_class_id = sc.id
+                WHERE o.bucket = ?
+                GROUP BY o.bucket, dir_prefix
+            ),
+            tagged AS (
                 SELECT *,
-                    (standard_bytes + nearline_bytes + coldline_bytes + archive_bytes) as total_bytes,
-                    len(string_split(dir_prefix, '/')) - 1 as depth
-                FROM _raw_dir_summary
-            ),
-            kept AS (
-                SELECT bucket, dir_prefix,
-                       standard_count, standard_bytes, nearline_count, nearline_bytes,
-                       coldline_count, coldline_bytes, archive_count, archive_bytes
-                FROM annotated
-                WHERE depth <= {min_depth} OR total_bytes >= {min_bytes}
-            ),
-            collapsed AS (
-                SELECT bucket,
-                       array_to_string(string_split(dir_prefix, '/')[1:{min_depth + 1}], '/') || '/' as dir_prefix,
-                       SUM(standard_count) as standard_count, SUM(standard_bytes) as standard_bytes,
-                       SUM(nearline_count) as nearline_count, SUM(nearline_bytes) as nearline_bytes,
-                       SUM(coldline_count) as coldline_count, SUM(coldline_bytes) as coldline_bytes,
-                       SUM(archive_count) as archive_count, SUM(archive_bytes) as archive_bytes
-                FROM annotated
-                WHERE depth > {min_depth} AND total_bytes < {min_bytes}
-                GROUP BY bucket, dir_prefix
+                    CASE WHEN len(string_split(dir_prefix, '/')) - 1 > {min_depth}
+                              AND (standard_bytes + nearline_bytes + coldline_bytes + archive_bytes) < {min_bytes}
+                         THEN array_to_string(string_split(dir_prefix, '/')[1:{min_depth + 1}], '/') || '/'
+                         ELSE dir_prefix
+                    END AS effective_prefix
+                FROM raw
             )
-            SELECT bucket, dir_prefix,
+            SELECT bucket, effective_prefix AS dir_prefix,
                    SUM(standard_count) as standard_count, SUM(standard_bytes) as standard_bytes,
                    SUM(nearline_count) as nearline_count, SUM(nearline_bytes) as nearline_bytes,
                    SUM(coldline_count) as coldline_count, SUM(coldline_bytes) as coldline_bytes,
                    SUM(archive_count) as archive_count, SUM(archive_bytes) as archive_bytes
-            FROM (SELECT * FROM kept UNION ALL SELECT * FROM collapsed)
-            GROUP BY bucket, dir_prefix
-            """
+            FROM tagged
+            GROUP BY bucket, effective_prefix
+            """,
+            (bucket_name,),
         )
 
         arrow_table = result.fetch_arrow_table()
         if len(arrow_table) > 0:
             buf.write_arrow_table(arrow_table)
-
-        conn.execute("DROP TABLE IF EXISTS _raw_dir_summary")
 
     total = _fetchone_dict(conn.execute("SELECT COUNT(*) as cnt FROM dir_summary"))
     return int(total["cnt"])

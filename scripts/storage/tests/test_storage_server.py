@@ -78,8 +78,7 @@ def _make_test_db(db_path: Path) -> None:
             pattern TEXT NOT NULL,
             storage_class TEXT,
             description TEXT,
-            created_at TEXT NOT NULL,
-            UNIQUE (pattern, storage_class)
+            created_at TEXT NOT NULL
         )
         """
     )
@@ -362,14 +361,14 @@ def test_unified_explore_entries_have_status(client):
     resp = client.get("/api/explore/unified")
     for entry in resp.json()["entries"]:
         assert "status" in entry
-        assert entry["status"] in ("keep", "delete", "unmatched", "mixed")
+        assert entry["status"] in ("keep", "delete", "mixed")
 
 
-def test_unified_explore_unmatched_when_no_rules(client):
+def test_unified_explore_keep_when_no_rules(client):
+    """With no rules, all entries are implicitly keep (not unmatched)."""
     resp = client.get("/api/explore/unified")
     statuses = {e["status"] for e in resp.json()["entries"]}
-    # With no protect or delete rules, every entry should be unmatched.
-    assert statuses == {"unmatched"}
+    assert statuses == {"keep"}
 
 
 def test_unified_explore_delete_rule_marks_entry(client):
@@ -404,17 +403,19 @@ def test_unified_explore_protect_wins_over_delete(client):
     assert data_entry["status"] == "keep"
 
 
-def test_unified_explore_storage_class_delete_produces_mixed(client):
-    """A delete rule targeting only ARCHIVE should produce 'mixed' for dirs
-    that also have STANDARD bytes."""
+def test_unified_explore_class_specific_delete_is_keep_without_filter(client):
+    """A delete rule targeting only ARCHIVE is invisible without a class filter.
+
+    Class-specific rules only affect status when filtering by that class.
+    Without a filter, only rules with storage_class=NULL (delete all) count.
+    """
     client.post("/api/delete-rules", json={"pattern": "%", "storage_class": "ARCHIVE"})
 
     resp = client.get("/api/explore/unified")
     entries = resp.json()["entries"]
-    # checkpoints/exp1/ has both standard and archive bytes in seed data
     ckpt = next((e for e in entries if e["name"].startswith("checkpoints")), None)
     assert ckpt is not None, "expected a 'checkpoints/' entry in seed data"
-    assert ckpt["status"] == "mixed"
+    assert ckpt["status"] == "keep"
 
 
 def test_unified_explore_all_entries_have_status_order(client):
@@ -431,7 +432,7 @@ def test_unified_explore_bucketed_entries_have_status(client):
     assert data["type"] == "buckets"
     for entry in data["entries"]:
         assert "status" in entry
-        assert entry["status"] in ("keep", "delete", "unmatched", "mixed")
+        assert entry["status"] in ("keep", "delete")
         assert "status_order" in entry
 
 
@@ -444,9 +445,9 @@ def test_unified_explore_bucketed_status_grouped(client):
     data = resp.json()
     assert data["type"] == "buckets"
     entries = data["entries"]
-    # Each bucketed range should have a single homogeneous status
+    # Bucketed entries should only be keep or delete (mixed collapsed to keep)
     for entry in entries:
-        assert entry["status"] in ("keep", "delete", "unmatched", "mixed")
+        assert entry["status"] in ("keep", "delete")
 
 
 def test_unified_explore_broad_delete_narrow_protect(client):
@@ -535,24 +536,25 @@ def test_unified_explore_storage_class_filter_limits_columns(client):
         assert classes <= {"STANDARD"}, f"Expected only STANDARD, got {classes}"
 
 
-def test_unified_explore_storage_class_filter_resolves_mixed(client):
-    """Delete only ARCHIVE. With all classes → mixed. With class=ARCHIVE → delete."""
+def test_unified_explore_storage_class_filter_resolves_status(client):
+    """Delete only ARCHIVE. Without class filter → keep (class-specific rules
+    are invisible). With class=ARCHIVE → delete. With class=STANDARD → keep."""
     client.post("/api/delete-rules", json={"pattern": "checkpoints/%", "storage_class": "ARCHIVE"})
 
-    # No class filter: checkpoints has STANDARD + ARCHIVE, only ARCHIVE deleted → mixed
+    # No class filter: class-specific delete rules don't count → keep
     resp_all = client.get("/api/explore/unified?bucket=marin-us-central1")
     ckpt = next(e for e in resp_all.json()["entries"] if e["name"] == "checkpoints/")
-    assert ckpt["status"] == "mixed"
+    assert ckpt["status"] == "keep"
 
     # Class filter = ARCHIVE: all ARCHIVE bytes are deleted → delete
     resp_ar = client.get("/api/explore/unified?bucket=marin-us-central1&storage_class=ARCHIVE")
     ckpt_ar = next(e for e in resp_ar.json()["entries"] if e["name"] == "checkpoints/")
     assert ckpt_ar["status"] == "delete"
 
-    # Class filter = STANDARD: no delete rule targets STANDARD → unmatched
+    # Class filter = STANDARD: no delete rule targets STANDARD → keep
     resp_std = client.get("/api/explore/unified?bucket=marin-us-central1&storage_class=STANDARD")
     ckpt_std = next(e for e in resp_std.json()["entries"] if e["name"] == "checkpoints/")
-    assert ckpt_std["status"] == "unmatched"
+    assert ckpt_std["status"] == "keep"
 
 
 # ---------------------------------------------------------------------------
@@ -605,9 +607,9 @@ def test_unified_explore_bucketed_only_keep_delete(client):
         ), f"Bucketed entry has status '{entry['status']}', expected 'keep' or 'delete'"
 
 
-def test_unified_explore_bucketed_mixed_collapses_to_keep(client):
-    """A storage-class-specific delete (creating 'mixed') should collapse to
-    'keep' in the bucketed view."""
+def test_unified_explore_bucketed_class_specific_delete_stays_keep(client):
+    """A class-specific delete rule is invisible without a class filter,
+    so all bucketed entries remain 'keep'."""
     client.post("/api/delete-rules", json={"pattern": "%", "storage_class": "ARCHIVE"})
 
     resp = client.get("/api/explore/unified?max_children=1")

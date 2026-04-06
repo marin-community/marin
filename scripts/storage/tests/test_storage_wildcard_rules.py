@@ -85,8 +85,7 @@ def _make_test_db() -> duckdb.DuckDBPyConnection:
             pattern TEXT NOT NULL,
             storage_class TEXT,
             description TEXT,
-            created_at TEXT NOT NULL,
-            UNIQUE (pattern, storage_class)
+            created_at TEXT NOT NULL
         )
         """
     )
