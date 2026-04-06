@@ -9,7 +9,9 @@ import dspy
 import requests
 from dspy.utils.exceptions import AdapterParseError
 from experiments.dspy.adapters.baml import BAMLAdapter
+from experiments.dspy.adapters.gbnf import GBNFAdapter
 from experiments.dspy.adapters.toon import ToonAdapter
+from experiments.dspy.adapters.xgrammar import XGrammarAdapter
 from experiments.dspy.programs.hover import HoVer
 from experiments.dspy.programs.hotpotqa import HotpotQA
 from experiments.dspy.programs.prime_intellect import PrimeIntellectSolver
@@ -36,7 +38,9 @@ class _EnumSafeEncoder(json.JSONEncoder):
 ADAPTER_MAP: dict[str, type[dspy.Adapter]] = {
     "baml": BAMLAdapter,
     "chat": dspy.ChatAdapter,
+    "gbnf": GBNFAdapter,
     "toon": ToonAdapter,
+    "xgrammar": XGrammarAdapter,
 }
 
 
@@ -528,13 +532,14 @@ class DspyEvaluator(Evaluator):
         """
         is_pi = _is_prime_intellect_task(self.task_name)
 
-        # Configure DSPy -- temperature=0 and cache=False for reproducibility
+        # Configure DSPy -- temperature=0, cache=False, num_retries=0 for reproducibility
         lm = dspy.LM(
             model=f"openai/{self.model.name}",
             base_url=self.endpoint,
             api_key=self.api_key or "dspy",
             temperature=0.0,
             cache=False,
+            num_retries=0,
         )
         adapter = ADAPTER_MAP[self.adapter_name]()
         dspy.configure(lm=lm, adapter=adapter)

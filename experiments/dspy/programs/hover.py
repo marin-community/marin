@@ -14,6 +14,7 @@ class _HoverAnswerSignature(dspy.Signature):
     claim: str = dspy.InputField()
     notes: list[str] = dspy.InputField()
     label: HoverLabel = dspy.OutputField(desc='Respond with exactly "SUPPORTED" or "NOT_SUPPORTED".')
+    supporting_doc_ids: list[str] = dspy.OutputField(desc="List of Wikipedia document titles that support the claim.")
 
 
 class HoVer(dspy.Module):
@@ -50,4 +51,5 @@ class HoVer(dspy.Module):
             hop_traces=hop_traces,
             label=pred.label,
             label_int=int(pred.label == HoverLabel.SUPPORTED),
+            supporting_doc_ids=pred.supporting_doc_ids,
         )
