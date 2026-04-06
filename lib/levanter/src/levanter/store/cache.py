@@ -471,7 +471,7 @@ def consolidate_shard_caches(
         )
 
     ctx = ZephyrContext(
-        resources=ResourceConfig(ram="32g", disk="16g"),
+        resources=ResourceConfig(ram="10g", disk="16g"),
         max_workers=min(copy_max_workers, len(shard_info)),
         name="levanter-cache-copy",
     )
