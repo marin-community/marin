@@ -424,7 +424,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         ],
         name="nvidia/Nemotron-Terminal-Corpus/dataset_adapters",
         subsets=["dataset_adapters"],
-        max_parallelism=32,
+        max_parallelism=4,  # Reduced from 32: large nested parquet files OOM at higher parallelism
     ),
     "nvidia/Nemotron-Terminal-Corpus/skill_based_easy": InstructionDatasetConfig(
         hf_dataset_id="nvidia/Nemotron-Terminal-Corpus",
