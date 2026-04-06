@@ -1,10 +1,24 @@
+// Capture token from URL and persist to localStorage
+;(function() {
+  const params = new URLSearchParams(window.location.search)
+  const token = params.get('token')
+  if (token) {
+    localStorage.setItem('storage_token', token)
+    // Strip token from URL to keep it clean
+    params.delete('token')
+    const clean = params.toString()
+    const url = window.location.pathname + (clean ? '?' + clean : '')
+    window.history.replaceState({}, '', url)
+  }
+})()
+
 import { createApp, ref, computed, watch, onMounted } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import { humanBytes, humanCost, humanCount } from './format.js'
 import {
   fetchOverview, fetchSavings, fetchRules, fetchSimulate, fetchDeleteEstimate, fetchExplore,
-  fetchDeleteRules, createDeleteRule, removeDeleteRule, recalculateDeleteRules,
-  createProtectRule, removeProtectRule, recalculateProtectRules,
+  fetchDeleteRules, createDeleteRule, removeDeleteRule,
+  createProtectRule, removeProtectRule,
   fetchUnifiedExplore, triggerSync, fetchSyncStatus,
 } from './api.js'
 
@@ -758,7 +772,7 @@ const DeleteRulesManager = {
   setup() {
     const rules = ref([])
     const newRule = ref({ pattern: '', storage_class: null, description: '' })
-    const recalculating = ref(false)
+    const loading = ref(false)
 
     const totalObjects = computed(() => rules.value.reduce((s, r) => s + (r.total_objects || 0), 0))
     const totalCost = computed(() => rules.value.reduce((s, r) => s + (r.monthly_cost_usd || 0), 0))
@@ -768,46 +782,34 @@ const DeleteRulesManager = {
     })
 
     async function load() {
-      const data = await fetchDeleteRules()
-      rules.value = data.rules || []
-    }
-
-    async function recalculate() {
-      recalculating.value = true
+      loading.value = true
       try {
-        await recalculateDeleteRules()
-        await load()
+        const data = await fetchDeleteRules()
+        rules.value = data.rules || []
       } finally {
-        recalculating.value = false
+        loading.value = false
       }
     }
 
     async function addRule() {
       await createDeleteRule(newRule.value)
       newRule.value = { pattern: '', storage_class: null, description: '' }
-      await recalculate()
+      await load()
     }
 
     async function removeRule(id) {
       await removeDeleteRule(id)
-      await recalculate()
+      await load()
     }
 
     onMounted(load)
 
-    return { rules, newRule, recalculating, totalObjects, totalCost, totalBytesHuman, addRule, removeRule, recalculate, humanBytes, humanCost }
+    return { rules, newRule, loading, totalObjects, totalCost, totalBytesHuman, addRule, removeRule, humanBytes, humanCost }
   },
   template: `
     <div class="space-y-6">
       <div class="flex items-center justify-between">
         <h1 class="text-2xl font-bold text-text tracking-tight">Delete Rules</h1>
-        <div class="flex gap-2">
-          <button @click="recalculate"
-                  class="px-4 py-2 text-sm font-medium rounded border border-surface-border bg-surface-raised text-text-secondary hover:text-text transition-colors disabled:opacity-50"
-                  :disabled="recalculating">
-            {{ recalculating ? 'Recalculating...' : 'Recalculate Costs' }}
-          </button>
-        </div>
       </div>
 
       <!-- Add rule form -->
@@ -835,9 +837,9 @@ const DeleteRulesManager = {
             <input v-model="newRule.description" placeholder="Reason for deletion"
                    class="w-full px-3 py-2 text-sm rounded border border-surface-border bg-surface-sunken text-text placeholder-text-muted focus:outline-none focus:border-accent" />
           </div>
-          <button @click="addRule" :disabled="!newRule.pattern || recalculating"
+          <button @click="addRule" :disabled="!newRule.pattern || loading"
                   class="px-4 py-2 text-sm font-medium rounded bg-status-danger text-white hover:opacity-80 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed">
-            {{ recalculating ? 'Calculating...' : 'Add Rule' }}
+            {{ loading ? 'Loading...' : 'Add Rule' }}
           </button>
         </div>
       </div>
@@ -866,7 +868,7 @@ const DeleteRulesManager = {
               <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ humanBytes(rule.total_bytes || 0) }}</td>
               <td class="px-3 py-2 text-[13px] text-right font-mono font-semibold text-status-danger">\${{ (rule.monthly_cost_usd || 0).toFixed(2) }}</td>
               <td class="px-3 py-2 text-right">
-                <button @click="removeRule(rule.id)" :disabled="recalculating"
+                <button @click="removeRule(rule.id)" :disabled="loading"
                         class="text-xs text-text-muted hover:text-status-danger transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                   Remove
                 </button>

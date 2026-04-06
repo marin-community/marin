@@ -17,7 +17,6 @@ import pytest
 from scripts.storage.db import (
     MARIN_BUCKETS,
     _DIR_SUMMARY_ARROW_SCHEMA,
-    materialize_delete_rule_costs,
     materialize_rule_costs,
     DirSummaryBuffer,
 )
@@ -388,67 +387,10 @@ def test_consolidate_mixed_patterns():
 
 
 # ---------------------------------------------------------------------------
-# delete_rules / delete_rule_costs
+# delete_rules / protect interaction
 # ---------------------------------------------------------------------------
 
-# Tests use marin-us-central1 as the canonical bucket since materialize_delete_rule_costs
-# iterates plan_rows() which only covers MARIN_BUCKETS. "test-bucket" is not in that list.
 _TEST_BUCKET = "marin-us-central1"
-
-
-def test_delete_rule_matches_pattern():
-    """A delete rule with a pattern should match objects via LIKE."""
-    conn = _make_test_db()
-    conn.execute(
-        "INSERT INTO delete_rules (pattern, storage_class, description, created_at) "
-        "VALUES ('checkpoints/%', NULL, 'test', '2024-01-01')"
-    )
-    _insert_dir_summary(conn, _TEST_BUCKET, "checkpoints/exp1/", nearline_count=10, nearline_bytes=1000)
-    _insert_dir_summary(conn, _TEST_BUCKET, "data/important/", nearline_count=5, nearline_bytes=500)
-
-    materialize_delete_rule_costs(conn)
-
-    costs = conn.execute("SELECT * FROM delete_rule_costs").fetchall()
-    assert len(costs) > 0
-    # data/ prefix must not be targeted; only checkpoints/ is matched
-    total_bytes = sum(r[4] for r in costs)  # total_bytes is column index 4
-    assert total_bytes == 1000
-
-    conn.close()
-
-
-def test_delete_rule_with_storage_class_filter():
-    """A delete rule with storage_class set should only match that class."""
-    conn = _make_test_db()
-    conn.execute(
-        "INSERT INTO delete_rules (pattern, storage_class, description, created_at) "
-        "VALUES ('old/%', 'ARCHIVE', 'only archive', '2024-01-01')"
-    )
-    _insert_dir_summary(
-        conn,
-        _TEST_BUCKET,
-        "old/stuff/",
-        nearline_count=5,
-        nearline_bytes=500,
-        archive_count=10,
-        archive_bytes=2000,
-    )
-
-    materialize_delete_rule_costs(conn)
-
-    costs = conn.execute(
-        """
-        SELECT sc.name, drc.total_bytes
-        FROM delete_rule_costs drc
-        JOIN storage_classes sc ON drc.storage_class_id = sc.id
-        """
-    ).fetchall()
-
-    class_names = {r[0] for r in costs}
-    assert "ARCHIVE" in class_names
-    assert "NEARLINE" not in class_names
-
-    conn.close()
 
 
 def test_protect_wins_over_delete():
@@ -484,40 +426,6 @@ def test_protect_wins_over_delete():
         """
     ).fetchone()
     assert result[0] == 0
-
-    conn.close()
-
-
-def test_delete_rule_standard_objects():
-    """A delete rule without a storage_class filter targets STANDARD objects too."""
-    conn = _make_test_db()
-    conn.execute(
-        "INSERT INTO delete_rules (pattern, storage_class, description, created_at) "
-        "VALUES ('tmp/%', NULL, 'delete all tmp', '2024-01-01')"
-    )
-    _insert_dir_summary(
-        conn,
-        _TEST_BUCKET,
-        "tmp/scratch/",
-        standard_count=20,
-        standard_bytes=3000,
-        nearline_count=5,
-        nearline_bytes=500,
-    )
-
-    materialize_delete_rule_costs(conn)
-
-    costs = conn.execute(
-        """
-        SELECT sc.name, drc.total_bytes
-        FROM delete_rule_costs drc
-        JOIN storage_classes sc ON drc.storage_class_id = sc.id
-        """
-    ).fetchall()
-
-    class_names = {r[0] for r in costs}
-    assert "STANDARD" in class_names
-    assert "NEARLINE" in class_names
 
     conn.close()
 

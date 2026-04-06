@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 PURGE_DIR = REPO_ROOT / "scripts" / "storage" / "purge"
 DEFAULT_ZONE = "us-central2-b"
-DEFAULT_MACHINE_TYPE = "e2-standard-4"
+DEFAULT_MACHINE_TYPE = "e2-highmem-4"
 VM_NAME = "delete-o-tron"
 IMAGE_NAME = "delete-o-tron"
 
@@ -130,7 +130,7 @@ def deploy(zone: str, machine_type: str, skip_build: bool, skip_data: bool):
                 f"--container-env=GCS_DATA_PREFIX={gcs_prefix}",
                 "--scopes=storage-full,compute-ro",
                 "--tags=http-server",
-                "--boot-disk-size=50GB",
+                "--boot-disk-size=100GB",
             ]
         )
         # Create firewall rule; ignore failure if it already exists.
@@ -185,9 +185,10 @@ def _sync_data(gcs_prefix: str):
         local = PURGE_DIR / name
         if local.is_dir():
             _run(["gsutil", "-m", "rsync", "-r", str(local) + "/", f"{gcs_prefix}/{name}/"])
-    db_path = PURGE_DIR / "storage.duckdb"
-    if db_path.exists():
-        _run(["gsutil", "cp", str(db_path), f"{gcs_prefix}/storage.duckdb"])
+    for rule_file in ["protect_rules.json", "delete_rules.json"]:
+        rule_path = PURGE_DIR / rule_file
+        if rule_path.exists():
+            _run(["gsutil", "cp", str(rule_path), f"{gcs_prefix}/{rule_file}"])
 
 
 if __name__ == "__main__":

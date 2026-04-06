@@ -55,6 +55,14 @@ class StorageCatalog:
         return self.root / "dir_summary_parquet"
 
     @cached_property
+    def protect_rules_json(self) -> Path:
+        return self.root / "protect_rules.json"
+
+    @cached_property
+    def delete_rules_json(self) -> Path:
+        return self.root / "delete_rules.json"
+
+    @cached_property
     def protect_dir(self) -> Path:
         return self.root / "protect"
 
@@ -169,7 +177,7 @@ class Context:
     project: str | None
 
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 16
 
 _ARROW_TO_DUCKDB: dict[pa.DataType, str] = {
     pa.string(): "VARCHAR",
@@ -397,6 +405,7 @@ def init_db(catalog: StorageCatalog = DEFAULT_CATALOG) -> duckdb.DuckDBPyConnect
         """
     )
     _run_migrations(conn, catalog)
+    load_rules_from_json(conn, catalog)
     return conn
 
 
@@ -475,10 +484,20 @@ def _migrate_to_14(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog) -> 
 
 
 # Migrations 11-13 take (conn); migration 14 also needs the catalog.
+def _migrate_to_16(conn: duckdb.DuckDBPyConnection) -> None:
+    """Clear rules tables; data reloaded from JSON on startup."""
+    for table in ("delete_rule_costs", "rule_costs", "delete_rules", "protect_rules"):
+        try:
+            conn.execute(f"DELETE FROM {table}")
+        except duckdb.CatalogException:
+            pass
+
+
 _MIGRATIONS_SIMPLE: list[tuple[int, Callable[[duckdb.DuckDBPyConnection], None]]] = [
     (11, _migrate_to_11),
     (12, _migrate_to_12),
     (13, _migrate_to_13),
+    (16, _migrate_to_16),
 ]
 
 
@@ -1069,6 +1088,59 @@ def materialize_delete_rule_costs(conn: duckdb.DuckDBPyConnection) -> int:
 
     total = _fetchone_dict(conn.execute("SELECT COUNT(*) as cnt FROM delete_rule_costs"))
     return int(total["cnt"])
+
+
+# ---------------------------------------------------------------------------
+# JSON-backed rules persistence
+# ---------------------------------------------------------------------------
+
+
+def load_rules_from_json(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog) -> None:
+    """Reload protect_rules and delete_rules from JSON files into DuckDB tables.
+
+    Called on every startup so the JSON files are the source of truth.
+    """
+    conn.execute("DELETE FROM rule_costs")
+    conn.execute("DELETE FROM delete_rule_costs")
+    conn.execute("DELETE FROM protect_rules")
+    conn.execute("DELETE FROM delete_rules")
+
+    if catalog.protect_rules_json.exists():
+        rules = json.loads(catalog.protect_rules_json.read_text())
+        for r in rules:
+            conn.execute(
+                "INSERT INTO protect_rules (bucket, pattern, pattern_type, owners, reasons, sources) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (r["bucket"], r["pattern"], r["pattern_type"], r.get("owners"), r.get("reasons"), r.get("sources")),
+            )
+        print_summary(f"  loaded {len(rules)} protect rules from JSON")
+
+    if catalog.delete_rules_json.exists():
+        rules = json.loads(catalog.delete_rules_json.read_text())
+        for r in rules:
+            conn.execute(
+                "INSERT INTO delete_rules (pattern, storage_class, description, created_at) " "VALUES (?, ?, ?, ?)",
+                (r["pattern"], r.get("storage_class"), r.get("description"), r["created_at"]),
+            )
+        print_summary(f"  loaded {len(rules)} delete rules from JSON")
+
+
+def flush_protect_rules(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog) -> None:
+    """Write the current protect_rules table back to JSON."""
+    rows = _fetchall_dicts(
+        conn.execute(
+            "SELECT bucket, pattern, pattern_type, owners, reasons, sources FROM protect_rules ORDER BY bucket, pattern"
+        )
+    )
+    catalog.protect_rules_json.write_text(json.dumps(rows, indent=2) + "\n")
+
+
+def flush_delete_rules(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog) -> None:
+    """Write the current delete_rules table back to JSON."""
+    rows = _fetchall_dicts(
+        conn.execute("SELECT pattern, storage_class, description, created_at FROM delete_rules ORDER BY id")
+    )
+    catalog.delete_rules_json.write_text(json.dumps(rows, indent=2) + "\n")
 
 
 # ---------------------------------------------------------------------------

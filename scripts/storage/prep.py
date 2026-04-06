@@ -2,7 +2,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Storage prep workflow: scan objects, compute summaries, load rules.
+"""Storage prep workflow: scan objects and compute summaries.
 
 Usage:
     uv run scripts/storage/prep.py run [--from X] [--to Y] [--force] [--scan-workers N]
@@ -18,7 +18,6 @@ from typing import Any
 
 import click
 
-from scripts.storage.rules import load_protect_rules
 from scripts.storage.scan import scan_objects
 from scripts.storage.db import (
     DEFAULT_CATALOG,
@@ -39,10 +38,6 @@ from scripts.storage.db import (
 # ===========================================================================
 # Step runners
 # ===========================================================================
-
-
-def _load_protect_rules_step(ctx: Context, action: StepSpec) -> None:
-    load_protect_rules(ctx, action)
 
 
 def _scan_objects_step(ctx: Context, action: StepSpec) -> None:
@@ -75,19 +70,6 @@ def _materialize_rule_costs_step(ctx: Context, action: StepSpec) -> None:
 
 STEPS: list[StepSpec] = [
     StepSpec(
-        action_id="prep.load_protect_rules",
-        group_name="prep",
-        command_name="load-protect-rules",
-        description="Load protect globs and direct prefixes into the protect_rules DB table.",
-        help_text=(
-            "Reads protect_prefixes_classified.csv and protect_prefixes_direct.csv, converts wildcard "
-            "globs to SQL LIKE patterns, and inserts all rules into the protect_rules table. "
-            "No GCS listing calls needed — protection is resolved against scanned objects via SQL."
-        ),
-        mutating=False,
-        runner=_load_protect_rules_step,
-    ),
-    StepSpec(
         action_id="prep.scan_objects",
         group_name="prep",
         command_name="scan-objects",
@@ -99,7 +81,6 @@ STEPS: list[StepSpec] = [
         ),
         mutating=False,
         runner=_scan_objects_step,
-        predecessors=("prep.load_protect_rules",),
         scan_workers=True,
     ),
     StepSpec(
@@ -214,7 +195,7 @@ def runtime_options(
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
     help=(
-        "Storage prep workflow: load protect rules, scan bucket objects, and materialize "
+        "Storage prep workflow: scan bucket objects and materialize "
         "summaries for downstream cost analysis. Run `plan` to see step status, or use the "
         "prep subcommands to execute individual steps."
     ),
@@ -269,7 +250,7 @@ def run_cli(
     print_summary("completed selected steps")
 
 
-@cli.group(help="Preparation commands: load protect rules, scan objects, materialize summaries.")
+@cli.group(help="Preparation commands: scan objects, materialize summaries.")
 def prep() -> None:
     pass
 

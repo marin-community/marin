@@ -17,7 +17,6 @@ import asyncio
 import functools
 import logging
 import os
-import shutil
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -38,6 +37,8 @@ from scripts.storage.db import (
     GCS_DISCOUNT,
     StorageCatalog,
     continent_for_region,
+    flush_delete_rules,
+    flush_protect_rules,
     human_bytes,
     materialize_delete_rule_costs,
     materialize_rule_costs,
@@ -104,22 +105,20 @@ def _fetchone(conn: duckdb.DuckDBPyConnection, sql: str, params: tuple[Any, ...]
 STATUS_ORDER = {"delete": 0, "mixed": 1, "keep": 2}
 
 
-def _run_sync(gcs_prefix: str, db_path: Path, db_conn: duckdb.DuckDBPyConnection) -> None:
-    """Execute one sync cycle: checkpoint DB, upload to GCS, optionally archive."""
+def _run_sync(gcs_prefix: str, catalog: StorageCatalog) -> None:
+    """Upload rules JSON files to GCS, optionally archiving hourly."""
     global _sync_state
     try:
         _sync_state.syncing = True
         _sync_state.error = None
-        with _db_lock:
-            db_conn.execute("CHECKPOINT")
-        tmp = db_path.with_suffix(".sync.duckdb")
-        shutil.copy2(db_path, tmp)
-        subprocess.run(
-            ["gsutil", "cp", str(tmp), f"{gcs_prefix}/storage.duckdb"],
-            check=True,
-            capture_output=True,
-        )
-        tmp.unlink(missing_ok=True)
+        for name in ("protect_rules.json", "delete_rules.json"):
+            local = catalog.root / name
+            if local.exists():
+                subprocess.run(
+                    ["gsutil", "cp", str(local), f"{gcs_prefix}/{name}"],
+                    check=True,
+                    capture_output=True,
+                )
         now = datetime.now(UTC).isoformat()
         _sync_state.last_sync = now
 
@@ -132,16 +131,17 @@ def _run_sync(gcs_prefix: str, db_path: Path, db_conn: duckdb.DuckDBPyConnection
         )
         if should_archive:
             ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-            subprocess.run(
-                [
-                    "gsutil",
-                    "cp",
-                    f"{gcs_prefix}/storage.duckdb",
-                    f"{gcs_prefix}/archive/storage_{ts}.duckdb",
-                ],
-                check=True,
-                capture_output=True,
-            )
+            for name in ("protect_rules.json", "delete_rules.json"):
+                subprocess.run(
+                    [
+                        "gsutil",
+                        "cp",
+                        f"{gcs_prefix}/{name}",
+                        f"{gcs_prefix}/archive/{name.replace('.json', '')}_{ts}.json",
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
             _sync_state.last_archive = now
     except Exception as e:
         log.exception("sync failed")
@@ -150,11 +150,11 @@ def _run_sync(gcs_prefix: str, db_path: Path, db_conn: duckdb.DuckDBPyConnection
         _sync_state.syncing = False
 
 
-async def _periodic_sync(gcs_prefix: str, db_path: Path, db_conn: duckdb.DuckDBPyConnection) -> None:
-    """Background task: sync DuckDB to GCS every 10 minutes, archive hourly."""
+async def _periodic_sync(gcs_prefix: str, catalog: StorageCatalog) -> None:
+    """Background task: sync rules JSON to GCS every 10 minutes, archive hourly."""
     while True:
         await asyncio.sleep(SYNC_INTERVAL)
-        _run_sync(gcs_prefix, db_path, db_conn)
+        _run_sync(gcs_prefix, catalog)
 
 
 ALL_SC_COLS: list[tuple[str, str, str]] = [
@@ -287,13 +287,18 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
         gcs_prefix = os.environ.get("GCS_DATA_PREFIX")
         if not gcs_prefix:
             return
-        if not catalog.db_path.exists():
-            log.info("downloading DB from %s", gcs_prefix)
-            subprocess.run(
-                ["gsutil", "cp", f"{gcs_prefix}/storage.duckdb", str(catalog.db_path)],
-                check=True,
-                capture_output=True,
-            )
+        for name in ("protect_rules.json", "delete_rules.json"):
+            local = catalog.root / name
+            if not local.exists():
+                log.info("downloading %s from %s", name, gcs_prefix)
+                try:
+                    subprocess.run(
+                        ["gsutil", "cp", f"{gcs_prefix}/{name}", str(local)],
+                        check=True,
+                        capture_output=True,
+                    )
+                except subprocess.CalledProcessError:
+                    log.warning("could not download %s — starting with empty rules", name)
         for name, local_dir in [
             ("objects_parquet", catalog.objects_parquet_dir),
             ("dir_summary_parquet", catalog.dir_summary_parquet_dir),
@@ -349,7 +354,7 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
         gcs_prefix = os.environ.get("GCS_DATA_PREFIX")
         if gcs_prefix:
             assert _db is not None
-            task = asyncio.create_task(_periodic_sync(gcs_prefix, catalog.db_path, _db))
+            task = asyncio.create_task(_periodic_sync(gcs_prefix, catalog))
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)
 
@@ -633,6 +638,7 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
             """,
             (req.bucket, req.pattern, req.owners, req.reasons),
         )
+        flush_protect_rules(conn, catalog)
         return row or {}
 
     @app.delete("/api/rules/{rule_id}")
@@ -641,6 +647,7 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
         conn = db()
         conn.execute("DELETE FROM rule_costs WHERE rule_id = ?", (rule_id,))
         conn.execute("DELETE FROM protect_rules WHERE id = ?", (rule_id,))
+        flush_protect_rules(conn, catalog)
         return {"deleted": rule_id}
 
     @app.post("/api/rules/recalculate")
@@ -820,6 +827,7 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
             """,
             (req.pattern, req.storage_class, req.description, now),
         )
+        flush_delete_rules(conn, catalog)
         return row or {}
 
     @app.delete("/api/delete-rules/{rule_id}")
@@ -828,6 +836,7 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
         conn = db()
         conn.execute("DELETE FROM delete_rule_costs WHERE rule_id = ?", (rule_id,))
         conn.execute("DELETE FROM delete_rules WHERE id = ?", (rule_id,))
+        flush_delete_rules(conn, catalog)
         return {"deleted": rule_id}
 
     @app.post("/api/delete-rules/recalculate")
@@ -1182,7 +1191,7 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
             return {"status": "no_gcs_prefix", "state": _sync_state.__dict__}
         if _sync_state.syncing:
             return {"status": "already_syncing", "state": _sync_state.__dict__}
-        _run_sync(gcs_prefix, catalog.db_path, _db)
+        _run_sync(gcs_prefix, catalog)
         return {"status": "ok", "state": _sync_state.__dict__}
 
     @app.get("/api/sync/status")

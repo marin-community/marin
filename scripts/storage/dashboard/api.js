@@ -1,5 +1,13 @@
+function authHeaders() {
+  const token = localStorage.getItem('storage_token')
+  const headers = {}
+  if (token) headers['Authorization'] = 'Bearer ' + token
+  return headers
+}
+
 async function fetchJSON(url) {
-  const resp = await fetch(url)
+  const resp = await fetch(url, { headers: authHeaders() })
+  if (resp.status === 401) { location.href = '/'; return }
   if (!resp.ok) throw new Error(`${url}: ${resp.status} ${resp.statusText}`)
   return resp.json()
 }
@@ -29,9 +37,10 @@ export function fetchExplore(bucket, prefix = '') {
 export async function fetchDeleteEstimate(patterns) {
   const resp = await fetch('/api/delete-patterns/estimate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ patterns }),
   })
+  if (resp.status === 401) { location.href = '/'; return }
   if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
   return resp.json()
 }
@@ -44,47 +53,41 @@ export async function fetchDeleteRules() {
 export async function createDeleteRule(rule) {
   const resp = await fetch('/api/delete-rules', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(rule),
   })
+  if (resp.status === 401) { location.href = '/'; return }
   if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
   return resp.json()
 }
 
 export async function removeDeleteRule(id) {
-  const resp = await fetch(`/api/delete-rules/${id}`, { method: 'DELETE' })
+  const resp = await fetch(`/api/delete-rules/${id}`, { method: 'DELETE', headers: authHeaders() })
+  if (resp.status === 401) { location.href = '/'; return }
   if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
   return resp.json()
 }
 
-export async function recalculateDeleteRules() {
-  const resp = await fetch('/api/delete-rules/recalculate', { method: 'POST' })
-  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
-  return resp.json()
-}
 
 // Protect rule mutations
 export async function createProtectRule(rule) {
   const resp = await fetch('/api/rules', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(rule),
   })
+  if (resp.status === 401) { location.href = '/'; return }
   if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
   return resp.json()
 }
 
 export async function removeProtectRule(id) {
-  const resp = await fetch(`/api/rules/${id}`, { method: 'DELETE' })
+  const resp = await fetch(`/api/rules/${id}`, { method: 'DELETE', headers: authHeaders() })
+  if (resp.status === 401) { location.href = '/'; return }
   if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
   return resp.json()
 }
 
-export async function recalculateProtectRules() {
-  const resp = await fetch('/api/rules/recalculate', { method: 'POST' })
-  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
-  return resp.json()
-}
 
 // Unified explorer
 export async function fetchUnifiedExplore(prefix = '', bucket = '', storageClass = '') {
@@ -97,7 +100,8 @@ export async function fetchUnifiedExplore(prefix = '', bucket = '', storageClass
 
 // Sync
 export async function triggerSync() {
-  const resp = await fetch('/api/sync', { method: 'POST' })
+  const resp = await fetch('/api/sync', { method: 'POST', headers: authHeaders() })
+  if (resp.status === 401) { location.href = '/'; return }
   if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
   return resp.json()
 }
