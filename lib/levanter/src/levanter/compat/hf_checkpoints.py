@@ -515,14 +515,15 @@ class HFCheckpointConverter(Generic[LevConfig]):
             f"(adding {num_to_add} dummy tokens) to match model vocab size."
         )
 
-        # Add dummy tokens to the tokenizer
+        # Add dummy tokens to the tokenizer. MarinTokenizer is read-only,
+        # so we convert to an HF tokenizer which supports add_tokens.
         dummy_tokens = [f"<|padding_{i}|>" for i in range(num_to_add)]
-        self.tokenizer.add_tokens(dummy_tokens)
+        tokenizer = self.tokenizer
+        if isinstance(tokenizer, MarinTokenizer):
+            tokenizer = tokenizer.as_hf_tokenizer()
+        tokenizer.add_tokens(dummy_tokens)
 
-        # Return a new converter with the modified tokenizer
-        # Note: We modify self.tokenizer in place, but since the Vocab property is cached,
-        # we need to return a new converter to get a fresh Vocab
-        return dataclasses.replace(self, tokenizer=self.tokenizer)  # type: ignore
+        return dataclasses.replace(self, tokenizer=tokenizer)  # type: ignore
 
     def with_config_overrides(self, config_overrides: dict, merge: bool = True) -> "HFCheckpointConverter":
         if self.config_overrides is not None and merge:
@@ -1098,9 +1099,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 logger.info("Saving tokenizer")
                 tokenizer = self.tokenizer
                 if isinstance(tokenizer, MarinTokenizer):
-                    # MarinTokenizer doesn't have save_pretrained; load the
-                    # underlying HF tokenizer so we can serialize it.
-                    tokenizer = load_tokenizer(tokenizer.name_or_path)
+                    tokenizer = tokenizer.as_hf_tokenizer()
                 tokenizer.save_pretrained(local_path)
 
             if save_feature_extractor and self.feature_extractor is not None:
