@@ -33,7 +33,8 @@ Usage
 
 import enum
 import re
-from typing import Any, get_args, get_origin
+from types import UnionType
+from typing import Any, Union, get_args, get_origin
 
 from dspy import Adapter
 from dspy.signatures.signature import Signature
@@ -67,6 +68,13 @@ def _type_to_rule_ref(annotation: Any, rules: dict[str, str]) -> str:
 
     Side-effects: may add new rules to *rules*.
     """
+    # Unwrap Optional / Union — use the first non-None type
+    origin = get_origin(annotation)
+    if origin in (Union, UnionType):
+        non_none = [a for a in get_args(annotation) if a is not type(None)]
+        if non_none:
+            return _type_to_rule_ref(non_none[0], rules)
+
     if annotation is None or annotation is str:
         rules.setdefault("string", r'string ::= [^\n]+')
         return "string"
@@ -89,7 +97,7 @@ def _type_to_rule_ref(annotation: Any, rules: dict[str, str]) -> str:
         return rule_name
 
     origin = get_origin(annotation)
-    if origin is list or annotation is list:
+    if origin is list or isinstance(annotation, type) and issubclass(annotation, list):
         args = get_args(annotation)
         inner = _type_to_rule_ref(args[0], rules) if args else "string"
         rule_name = f"list-of-{inner}"
