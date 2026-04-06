@@ -738,7 +738,7 @@ class TestScalingGroupAvailability:
         assert state.status == GroupAvailability.AVAILABLE
 
     def test_at_max_slices_when_at_max_slices(self):
-        """Group is AT_MAX_SLICES when at max_slices."""
+        """Group is AT_MAX_SLICES when at max_slices with all slices READY."""
         from iris.cluster.controller.scaling_group import GroupAvailability
 
         config = _with_resources(
@@ -748,10 +748,13 @@ class TestScalingGroupAvailability:
                 max_slices=2,
             ),
         )
-        discovered = [make_fake_slice_handle(f"slice-{i}") for i in range(2)]
+        discovered = [make_fake_slice_handle(f"slice-{i}", all_ready=True) for i in range(2)]
         platform = make_mock_platform(slices_to_discover=discovered)
         group = ScalingGroup(config, platform)
         group.reconcile()
+        for h in discovered:
+            worker_ids = [w.worker_id for w in h.describe().workers]
+            group.mark_slice_ready(h.slice_id, worker_ids)
 
         state = group.availability()
         assert state.status == GroupAvailability.AT_MAX_SLICES
@@ -785,10 +788,13 @@ class TestScalingGroupAvailability:
                 max_slices=1,
             ),
         )
-        discovered = [make_fake_slice_handle("slice-0")]
+        discovered = [make_fake_slice_handle("slice-0", all_ready=True)]
         platform = make_mock_platform(slices_to_discover=discovered)
         group = ScalingGroup(config, platform)
         group.reconcile()
+        for h in discovered:
+            worker_ids = [w.worker_id for w in h.describe().workers]
+            group.mark_slice_ready(h.slice_id, worker_ids)
 
         assert group.can_accept_demand() is False
 
@@ -917,7 +923,8 @@ class TestScalingGroupAvailability:
         assert group.can_accept_demand(Timestamp.from_ms(1_003_000)) is True
 
     def test_at_max_slices_takes_precedence_over_cooldown(self):
-        """When both at max_slices and in cooldown, AT_MAX_SLICES takes precedence."""
+        """When both at max_slices and in cooldown, AT_MAX_SLICES takes precedence
+        (once all slices are READY)."""
         from iris.cluster.controller.scaling_group import GroupAvailability
 
         config = _with_resources(
@@ -936,7 +943,13 @@ class TestScalingGroupAvailability:
         handle = group.scale_up(timestamp=ts)
         group.complete_scale_up(handle, ts)
 
-        # At max_slices (1) AND in cooldown — AT_MAX_SLICES should win
+        # While slice is BOOTING, group accepts demand (in-flight capacity)
+        state = group.availability(Timestamp.from_ms(1_003_000))
+        assert state.status == GroupAvailability.COOLDOWN
+
+        # Once the slice is READY, AT_MAX_SLICES takes precedence over cooldown
+        worker_ids = [w.worker_id for w in handle.describe().workers]
+        group.mark_slice_ready(handle.slice_id, worker_ids)
         state = group.availability(Timestamp.from_ms(1_003_000))
         assert state.status == GroupAvailability.AT_MAX_SLICES
 

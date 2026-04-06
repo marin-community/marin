@@ -11,6 +11,8 @@ from iris.cluster.controller.transitions import ClusterCapacity, RunningTaskEntr
 import time
 
 from iris.cluster.log_store._types import TaskAttempt, task_log_key
+from iris.log_server.server import LogServiceImpl
+from iris.rpc import logging_pb2
 from iris.cluster.providers.k8s.tasks import (
     K8sTaskProvider,
     _LABEL_JOB_ID,
@@ -29,6 +31,12 @@ from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
 
 from .conftest import make_batch, make_run_req, populate_node, populate_pod, populate_running_pod_resource
+
+
+def _fetch_logs(log_service: LogServiceImpl, key: str, max_lines: int = 100) -> list[logging_pb2.LogEntry]:
+    resp = log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=key, max_lines=max_lines), ctx=None)
+    return list(resp.entries)
+
 
 # ---------------------------------------------------------------------------
 # sync(): tasks_to_run
@@ -206,7 +214,7 @@ def test_pod_not_found_grace_resets_when_pod_reappears(provider, k8s):
     assert result.updates[0].new_state == cluster_pb2.TASK_STATE_FAILED
 
 
-def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_store):
+def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceImpl):
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
@@ -219,10 +227,10 @@ def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_store):
     result = provider.sync(batch)
 
     assert result.updates[0].new_state == cluster_pb2.TASK_STATE_SUCCEEDED
-    # Logs go to LogStore via LogCollector (untrack does a synchronous final fetch).
+    # Logs are pushed through the LogService via LogCollector (untrack does a synchronous final fetch).
     key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
-    logs = log_store.get_logs(key, cursor=0, max_lines=100)
-    assert any(e.data == "task complete" for e in logs.entries)
+    logs = _fetch_logs(log_service, key)
+    assert any(e.data == "task complete" for e in logs)
 
 
 def test_sync_empty_batch(provider):
@@ -232,56 +240,11 @@ def test_sync_empty_batch(provider):
 
 
 # ---------------------------------------------------------------------------
-# fetch_live_logs
-# ---------------------------------------------------------------------------
-
-
-def test_fetch_live_logs_returns_entries_with_cursor(provider, k8s):
-    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
-    k8s.set_logs(pod_name, "line 1\nline 2\n")
-
-    entries, next_cursor = provider.fetch_live_logs("/job/0", 0, cursor=0, max_lines=10)
-
-    assert len(entries) == 2
-    assert entries[0].data == "line 1"
-    assert next_cursor > 0
-
-
-def test_fetch_live_logs_respects_max_lines(provider, k8s):
-    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
-    k8s.set_logs(pod_name, "\n".join(f"line {i}" for i in range(10)) + "\n")
-
-    entries, _ = provider.fetch_live_logs("/job/0", 0, cursor=0, max_lines=3)
-    assert len(entries) == 3
-
-
-def test_fetch_live_logs_falls_back_to_previous_when_empty(provider, k8s):
-    """When stream_logs returns nothing, fall back to kubectl.logs(previous=True)."""
-    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
-    k8s.set_logs(pod_name, "line a\nline b\nline c\n")
-
-    entries, _next_cursor = provider.fetch_live_logs("/job/0", 0, cursor=0, max_lines=10)
-    assert len(entries) >= 1
-    assert any(e.data == "line a" for e in entries)
-
-
-def test_fetch_live_logs_fallback_replays_all_with_nonzero_cursor(provider, k8s):
-    """When stream_logs returns nothing (all consumed), fall back to logs(previous=True)."""
-    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
-    k8s.set_logs(pod_name, "line a\nline b\nline c\n")
-
-    # First call consumes all content; second triggers fallback
-    _, cursor = provider.fetch_live_logs("/job/0", 0, cursor=0, max_lines=100)
-    entries, _ = provider.fetch_live_logs("/job/0", 0, cursor=cursor, max_lines=100)
-    assert [e.data for e in entries] == ["line a", "line b", "line c"]
-
-
-# ---------------------------------------------------------------------------
 # Incremental log polling
 # ---------------------------------------------------------------------------
 
 
-def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_store):
+def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_service: LogServiceImpl):
     """Running pods get incremental logs via the background LogCollector."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -300,12 +263,12 @@ def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_store
     # Give it time to run one cycle.
     time.sleep(3)
     key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
-    logs = log_store.get_logs(key, cursor=0, max_lines=100)
-    assert len(logs.entries) >= 1
-    assert logs.entries[0].data == "hello from running pod"
+    logs = _fetch_logs(log_service, key)
+    assert len(logs) >= 1
+    assert logs[0].data == "hello from running pod"
 
 
-def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_store):
+def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogServiceImpl):
     """LogCollector advances byte offsets: repeated fetches don't duplicate."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -319,20 +282,20 @@ def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_store):
     provider.sync(make_batch(running_tasks=[entry]))
     time.sleep(3)
     key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
-    logs = log_store.get_logs(key, cursor=0, max_lines=100)
-    assert len(logs.entries) == 1
-    assert logs.entries[0].data == "line 1"
+    logs = _fetch_logs(log_service, key)
+    assert len(logs) == 1
+    assert logs[0].data == "line 1"
 
     # Append new content and let collector run again.
     k8s.set_logs(pod_name, "line 1\nline 2\n")
     provider.sync(make_batch(running_tasks=[entry]))
     time.sleep(3)
-    logs = log_store.get_logs(key, cursor=0, max_lines=100)
-    assert len(logs.entries) == 2
-    assert logs.entries[1].data == "line 2"
+    logs = _fetch_logs(log_service, key)
+    assert len(logs) == 2
+    assert logs[1].data == "line 2"
 
 
-def test_final_log_fetch_on_pod_completion(provider, k8s, log_store):
+def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServiceImpl):
     """Completed pods get a final full-log fetch via LogCollector.untrack()."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -345,11 +308,11 @@ def test_final_log_fetch_on_pod_completion(provider, k8s, log_store):
     result = provider.sync(make_batch(running_tasks=[entry]))
 
     assert result.updates[0].new_state == cluster_pb2.TASK_STATE_SUCCEEDED
-    # untrack() does a synchronous final fetch — logs should be in store.
+    # untrack() does a synchronous final fetch — logs should be in the service.
     key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
-    logs = log_store.get_logs(key, cursor=0, max_lines=100)
-    assert len(logs.entries) == 3
-    assert logs.entries[0].data == "line 1"
+    logs = _fetch_logs(log_service, key)
+    assert len(logs) == 3
+    assert logs[0].data == "line 1"
 
 
 # ---------------------------------------------------------------------------
@@ -802,3 +765,48 @@ def test_configmap_cleaned_up_on_delete(provider, k8s):
 
     assert k8s.get_json("pod", "iris-pod-1") is None
     assert k8s.get_json("configmap", "iris-pod-1-wf") is None
+
+
+# ---------------------------------------------------------------------------
+# PodDisruptionBudget for coordinator tasks
+# ---------------------------------------------------------------------------
+
+
+def test_sync_creates_pdb_for_coordinator_task(provider, k8s):
+    """Coordinator tasks (single-task, no accelerator) get a PDB."""
+    req = make_run_req("/coord-job/0")
+    req.num_tasks = 1
+    batch = make_batch(tasks_to_run=[req])
+
+    provider.sync(batch)
+
+    pdbs = k8s.list_json("poddisruptionbudget")
+    assert len(pdbs) == 1
+    pdb = pdbs[0]
+    assert pdb["spec"]["minAvailable"] == 1
+    assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == _task_hash("/coord-job/0")
+
+
+def test_bulk_delete_cleans_up_pdbs(provider, k8s):
+    """_bulk_delete_task_pods also deletes associated PDBs."""
+    task_id = "/coord-job/0"
+    task_hash = _task_hash(task_id)
+    labels = {
+        _LABEL_MANAGED: "true",
+        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+        _LABEL_TASK_HASH: task_hash,
+    }
+
+    populate_pod(k8s, "iris-coord-pod", "Running", labels={_LABEL_TASK_HASH: task_hash})
+    pdb = {
+        "kind": "PodDisruptionBudget",
+        "metadata": {"name": "iris-coord-pod-pdb", "labels": labels},
+        "spec": {"minAvailable": 1},
+    }
+    k8s.seed_resource("poddisruptionbudget", "iris-coord-pod-pdb", pdb)
+
+    cached_pods = k8s.list_json("pods", labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
+    provider._bulk_delete_task_pods([task_id], cached_pods)
+
+    assert k8s.get_json("pod", "iris-coord-pod") is None
+    assert k8s.get_json("poddisruptionbudget", "iris-coord-pod-pdb") is None

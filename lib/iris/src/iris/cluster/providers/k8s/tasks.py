@@ -19,12 +19,12 @@ import threading
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
 from iris.cluster.controller.transitions import DirectProviderBatch, RunningTaskEntry, TaskUpdate
-from iris.cluster.log_store._types import LogStoreProtocol, TaskAttempt, task_log_key
+from iris.cluster.log_store._types import LogPusherProtocol, TaskAttempt, task_log_key
 from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import KubectlError, KubectlLogLine, parse_k8s_quantity
@@ -305,6 +305,56 @@ def _build_init_container_spec(
     ]
 
     return init_containers, extra_volumes, configmap_name
+
+
+def _is_coordinator_task(run_req: cluster_pb2.Worker.RunTaskRequest) -> bool:
+    """Heuristic: single-task job with no accelerators is a coordinator/orchestrator.
+
+    Coordinator pods (e.g. zephyr *-coord jobs) are single-replica, CPU-only
+    processes whose loss kills the entire pipeline. Returns True so the caller
+    can create a PodDisruptionBudget to prevent voluntary eviction.
+    """
+    if run_req.num_tasks > 1:
+        return False
+    if run_req.HasField("resources") and run_req.resources.HasField("device"):
+        device = run_req.resources.device
+        if device.HasField("gpu") or device.HasField("tpu"):
+            return False
+    return True
+
+
+def _pdb_name(pod_name: str) -> str:
+    """Derive a PDB name from a pod name."""
+    return f"{pod_name}-pdb"
+
+
+def _build_pdb_manifest(
+    pod_name: str,
+    namespace: str,
+    task_hash: str,
+    managed_label: str = "",
+) -> dict:
+    """Build a PodDisruptionBudget manifest for a coordinator task pod."""
+    labels = {
+        _LABEL_MANAGED: "true",
+        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+        _LABEL_TASK_HASH: task_hash,
+    }
+    if managed_label:
+        labels[managed_label] = "true"
+    return {
+        "apiVersion": "policy/v1",
+        "kind": "PodDisruptionBudget",
+        "metadata": {
+            "name": _pdb_name(pod_name),
+            "namespace": namespace,
+            "labels": labels,
+        },
+        "spec": {
+            "minAvailable": 1,
+            "selector": {"matchLabels": {_LABEL_TASK_HASH: task_hash}},
+        },
+    }
 
 
 def _build_pod_manifest(
@@ -595,17 +645,17 @@ class _LogPod:
 
 
 class LogCollector:
-    """Background log fetcher that writes directly to a LogStore.
+    """Background log fetcher that pushes entries to the LogService.
 
     Runs on its own daemon thread with a bounded ThreadPoolExecutor.
     The sync loop calls track()/untrack() to manage the set of pods;
-    the collector independently fetches logs and writes them to the
-    log store without blocking the scheduling path.
+    the collector independently fetches logs and pushes them via the
+    LogPusher without blocking the scheduling path.
     """
 
-    def __init__(self, kubectl: K8sService, log_store: LogStoreProtocol, concurrency: int = 8):
+    def __init__(self, kubectl: K8sService, log_pusher: LogPusherProtocol, concurrency: int = 8):
         self._kubectl = kubectl
-        self._log_store = log_store
+        self._log_pusher = log_pusher
         self._pods: dict[str, _LogPod] = {}
         self._lock = threading.Lock()
         self._pod_locks: dict[str, threading.Lock] = {}
@@ -658,7 +708,7 @@ class LogCollector:
             if result.lines:
                 entries = [_kubectl_log_line_to_log_entry(kll, pod.attempt_id) for kll in result.lines]
                 key = task_log_key(TaskAttempt(task_id=pod.task_id, attempt_id=pod.attempt_id))
-                self._log_store.append_batch([(key, entries)])
+                self._log_pusher.push(key, entries)
             pod.last_timestamp = result.last_timestamp
         except Exception as e:
             logger.debug("LogCollector: failed for pod %s: %s", pod.pod_name, e)
@@ -765,7 +815,7 @@ class K8sTaskProvider:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
-    log_store: LogStoreProtocol | None = None
+    log_pusher: LogPusherProtocol | None = None
     poll_concurrency: int = 8
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _log_collector: LogCollector | None = field(default=None, init=False, repr=False)
@@ -777,8 +827,8 @@ class K8sTaskProvider:
         return self._resource_collector
 
     def _ensure_log_collector(self) -> LogCollector | None:
-        if self._log_collector is None and self.log_store is not None:
-            self._log_collector = LogCollector(self.kubectl, self.log_store, concurrency=self.poll_concurrency)
+        if self._log_collector is None and self.log_pusher is not None:
+            self._log_collector = LogCollector(self.kubectl, self.log_pusher, concurrency=self.poll_concurrency)
         return self._log_collector
 
     def _track_pod(self, pod_name: str, task_id: JobName, attempt_id: int, phase: str) -> None:
@@ -825,43 +875,6 @@ class K8sTaskProvider:
         capacity = self._query_capacity(managed_pods)
         scheduling_events = self._fetch_scheduling_events(managed_pods)
         return DirectProviderSyncResult(updates=updates, scheduling_events=scheduling_events, capacity=capacity)
-
-    def fetch_live_logs(
-        self,
-        task_id: str,
-        attempt_id: int,
-        cursor: int,
-        max_lines: int,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        """Fetch live logs from a task pod.
-
-        Cursor semantics: cursor is epoch-microseconds encoding the last seen
-        timestamp. 0 means "from the beginning".
-        """
-        since_time = datetime.fromtimestamp(cursor / 1_000_000, tz=UTC) if cursor > 0 else None
-        pod_name = _pod_name(JobName.from_wire(task_id), attempt_id)
-        result = self.kubectl.stream_logs(pod_name, container="task", since_time=since_time)
-        entries = [_kubectl_log_line_to_log_entry(kll, attempt_id) for kll in result.lines]
-
-        if not entries:
-            # Pod may have terminated; try fetching the complete logs.
-            raw = self.kubectl.logs(pod_name, container="task", previous=True, tail=-1)
-            if raw:
-                lines = raw.splitlines()
-                sliced = lines[:max_lines] if max_lines > 0 else lines
-                now_ts = Timestamp.now()
-                fallback_entries: list[logging_pb2.LogEntry] = []
-                for line in sliced:
-                    entry = logging_pb2.LogEntry(source="stdout", data=line, attempt_id=attempt_id)
-                    entry.timestamp.CopyFrom(timestamp_to_proto(now_ts))
-                    fallback_entries.append(entry)
-                return fallback_entries, now_ts.epoch_ms() * 1_000
-
-        if max_lines > 0:
-            entries = entries[:max_lines]
-
-        next_cursor = int(result.last_timestamp.timestamp() * 1_000_000) if result.last_timestamp else cursor
-        return entries, next_cursor
 
     def profile_task(
         self,
@@ -1180,8 +1193,18 @@ class K8sTaskProvider:
             run_req.attempt_id,
         )
 
+        if _is_coordinator_task(run_req):
+            pdb = _build_pdb_manifest(
+                pod_name,
+                self.namespace,
+                _task_hash(run_req.task_id),
+                managed_label=self.managed_label,
+            )
+            self.kubectl.apply_json(pdb)
+            logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
+
     def _bulk_delete_task_pods(self, task_ids: list[str], cached_pods: list[dict]) -> None:
-        """Delete pods and configmaps for multiple tasks in one kubectl call per resource type."""
+        """Delete pods, configmaps, and PDBs for multiple tasks in one kubectl call per resource type."""
         if not task_ids:
             return
         task_hashes = {_task_hash(tid) for tid in task_ids}
@@ -1192,38 +1215,47 @@ class K8sTaskProvider:
             if p.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH) in task_hashes
         ]
 
-        all_cms = self.kubectl.list_json(
-            "configmaps",
-            labels={
-                _LABEL_MANAGED: "true",
-                _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
-            },
-        )
+        managed_labels = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE}
+
+        all_cms = self.kubectl.list_json("configmaps", labels=managed_labels)
         cm_names = [
             c["metadata"]["name"]
             for c in all_cms
             if c.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH) in task_hashes
         ]
 
+        all_pdbs = self.kubectl.list_json("poddisruptionbudgets", labels=managed_labels)
+        pdb_names = [
+            p["metadata"]["name"]
+            for p in all_pdbs
+            if p.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH) in task_hashes
+        ]
+
         if pod_names:
             self.kubectl.delete_many("pods", pod_names, wait=False)
         if cm_names:
             self.kubectl.delete_many("configmaps", cm_names, wait=False)
+        if pdb_names:
+            self.kubectl.delete_many("poddisruptionbudgets", pdb_names, wait=False)
 
-        logger.info("Deleted %d pods, %d configmaps for %d tasks", len(pod_names), len(cm_names), len(task_ids))
+        logger.info(
+            "Deleted %d pods, %d configmaps, %d PDBs for %d tasks",
+            len(pod_names),
+            len(cm_names),
+            len(pdb_names),
+            len(task_ids),
+        )
 
     def _delete_pods_by_task_id(self, task_id: str) -> None:
-        """Delete all pods for a given task_id (any attempt).
+        """Delete all pods, configmaps, and PDBs for a given task_id (any attempt).
 
         Uses the SHA-256 task hash label for collision-resistant pod lookup,
         avoiding false matches that _sanitize_label_value's lossy truncation
         could cause when distinct task IDs share the same sanitized prefix.
         """
         task_hash = _task_hash(task_id)
-        pods = self.kubectl.list_json(
-            "pods",
-            labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: task_hash},
-        )
+        managed_labels = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: task_hash}
+        pods = self.kubectl.list_json("pods", labels=managed_labels)
         for pod in pods:
             pod_name = pod.get("metadata", {}).get("name", "")
             if pod_name:
@@ -1231,15 +1263,20 @@ class K8sTaskProvider:
                 logger.info("Deleted pod %s for task %s", pod_name, task_id)
 
         # Clean up associated ConfigMaps (workdir files).
-        configmaps = self.kubectl.list_json(
-            "configmaps",
-            labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: task_hash},
-        )
+        configmaps = self.kubectl.list_json("configmaps", labels=managed_labels)
         for cm in configmaps:
             cm_name = cm.get("metadata", {}).get("name", "")
             if cm_name:
                 self.kubectl.delete("configmap", cm_name)
                 logger.info("Deleted configmap %s for task %s", cm_name, task_id)
+
+        # Clean up associated PDBs (coordinator tasks).
+        pdbs = self.kubectl.list_json("poddisruptionbudgets", labels=managed_labels)
+        for pdb in pdbs:
+            pdb_name = pdb.get("metadata", {}).get("name", "")
+            if pdb_name:
+                self.kubectl.delete("pdb", pdb_name)
+                logger.info("Deleted PDB %s for task %s", pdb_name, task_id)
 
     def _poll_pods(self, running: list[RunningTaskEntry], cached_pods: list[dict]) -> list[TaskUpdate]:
         """Poll pod phases for all running tasks.

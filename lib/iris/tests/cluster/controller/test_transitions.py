@@ -40,7 +40,6 @@ from iris.cluster.controller.transitions import (
     PruneResult,
     TaskUpdate,
 )
-from iris.cluster.log_store import LogStore
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from rigging.timing import Duration, Timestamp
@@ -1357,9 +1356,12 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
 # =============================================================================
 
 
-def test_log_entries_accumulated_in_log_store(state):
-    """Log entries from heartbeat are stored in the controller's log store."""
+def test_log_service_direct_push(state, log_service):
+    """Log entries pushed via LogService are queryable."""
     from iris.rpc import logging_pb2
+
+    from iris.cluster.log_store import task_log_key
+    from iris.cluster.types import TaskAttempt
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -1367,38 +1369,26 @@ def test_log_entries_accumulated_in_log_store(state):
     task = tasks[0]
     dispatch_task(state, task, worker_id)
 
-    snapshot = state.begin_heartbeat(worker_id)
-    assert snapshot is not None
+    attempt_id = _query_task(state, task.task_id).current_attempt_id
+    log_key = task_log_key(TaskAttempt(task_id=task.task_id, attempt_id=attempt_id))
 
+    # Simulate push-based log delivery (worker pushes via LogService)
     log_entry = logging_pb2.LogEntry(source="stdout", data="hello world")
     log_entry.timestamp.epoch_ms = 1000
+    push_req = logging_pb2.PushLogsRequest(key=log_key, entries=[log_entry])
+    log_service.push_logs(push_req, None)
 
-    response = cluster_pb2.HeartbeatResponse(
-        worker_healthy=True,
-        tasks=[
-            cluster_pb2.Controller.WorkerTaskStatus(
-                task_id=task.task_id.to_wire(),
-                attempt_id=_query_task(state, task.task_id).current_attempt_id,
-                state=cluster_pb2.TASK_STATE_RUNNING,
-                log_entries=[log_entry],
-            )
-        ],
-    )
-    state.complete_heartbeat(snapshot, response)
+    fetch_resp = log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=log_key), None)
+    assert len(fetch_resp.entries) == 1
+    assert fetch_resp.entries[0].data == "hello world"
+
+
+def test_log_service_accumulates_pushes(state, log_service):
+    """Multiple pushes accumulate logs in the service."""
+    from iris.rpc import logging_pb2
 
     from iris.cluster.log_store import task_log_key
     from iris.cluster.types import TaskAttempt
-
-    log_result = state._log_store.get_logs(
-        task_log_key(TaskAttempt(task_id=task.task_id, attempt_id=_query_task(state, task.task_id).current_attempt_id))
-    )
-    assert len(log_result.entries) == 1
-    assert log_result.entries[0].data == "hello world"
-
-
-def test_log_entries_accumulated_across_heartbeats(state):
-    """Multiple heartbeats accumulate logs in the store."""
-    from iris.rpc import logging_pb2
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -1406,32 +1396,17 @@ def test_log_entries_accumulated_across_heartbeats(state):
     task = tasks[0]
     dispatch_task(state, task, worker_id)
 
+    attempt_id = _query_task(state, task.task_id).current_attempt_id
+    log_key = task_log_key(TaskAttempt(task_id=task.task_id, attempt_id=attempt_id))
+
     for i in range(3):
-        snapshot = state.begin_heartbeat(worker_id)
-        assert snapshot is not None
         entry = logging_pb2.LogEntry(source="stdout", data=f"line {i}")
         entry.timestamp.epoch_ms = 1000 + i
-        response = cluster_pb2.HeartbeatResponse(
-            worker_healthy=True,
-            tasks=[
-                cluster_pb2.Controller.WorkerTaskStatus(
-                    task_id=task.task_id.to_wire(),
-                    attempt_id=_query_task(state, task.task_id).current_attempt_id,
-                    state=cluster_pb2.TASK_STATE_RUNNING,
-                    log_entries=[entry],
-                )
-            ],
-        )
-        state.complete_heartbeat(snapshot, response)
+        log_service.push_logs(logging_pb2.PushLogsRequest(key=log_key, entries=[entry]), None)
 
-    from iris.cluster.log_store import task_log_key
-    from iris.cluster.types import TaskAttempt
-
-    log_result = state._log_store.get_logs(
-        task_log_key(TaskAttempt(task_id=task.task_id, attempt_id=_query_task(state, task.task_id).current_attempt_id))
-    )
-    assert len(log_result.entries) == 3
-    assert [e.data for e in log_result.entries] == ["line 0", "line 1", "line 2"]
+    fetch_resp = log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=log_key), None)
+    assert len(fetch_resp.entries) == 3
+    assert [e.data for e in fetch_resp.entries] == ["line 0", "line 1", "line 2"]
 
 
 # =============================================================================
@@ -2850,8 +2825,7 @@ def test_snapshot_round_trip_preserves_reservation_holder(state):
         checkpoint_path = Path(tmpdir) / "controller.sqlite3"
         state._db.backup_to(checkpoint_path)
         restored_db = ControllerDB(db_dir=Path(tmpdir))
-        restored_log_store = LogStore(log_dir=Path(tmpdir) / "logs")
-        restored_state = ControllerTransitions(db=restored_db, log_store=restored_log_store)
+        restored_state = ControllerTransitions(db=restored_db)
 
         restored_holder = _query_job(restored_state, holder_job_id)
         assert restored_holder is not None

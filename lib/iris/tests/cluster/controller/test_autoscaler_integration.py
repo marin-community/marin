@@ -124,12 +124,12 @@ class TestAutoscalerWaterfallEndToEnd:
         autoscaler.shutdown()
 
     def test_full_group_cascades_to_fallback(self):
-        """When primary group hits max_slices, demand cascades to fallback."""
+        """When primary group hits max_slices with all slices READY, demand cascades to fallback."""
 
         config_primary = make_scale_group_config(name="primary", max_slices=1, priority=10, zones=["us-central1-a"])
         config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20, zones=["us-central1-a"])
 
-        platform_primary, _ = make_gcp_provider(config_primary)
+        platform_primary, service_primary = make_gcp_provider(config_primary)
         platform_fallback, _ = make_gcp_provider(config_fallback)
 
         group_primary = ScalingGroup(config_primary, platform_primary, scale_up_cooldown=Duration.from_ms(0))
@@ -146,6 +146,10 @@ class TestAutoscalerWaterfallEndToEnd:
         autoscaler.run_once(demand, {})
         autoscaler._wait_for_inflight()
         assert group_primary.slice_count() == 1
+
+        # Mark the primary slice as READY so it enters AT_MAX_SLICES (rejecting)
+        advance_all_tpus(service_primary, "READY")
+        _mark_all_slices_ready(group_primary)
 
         demand = make_demand_entries(2, device_type=DeviceType.CPU, device_variant=None)
         autoscaler.run_once(demand, {})

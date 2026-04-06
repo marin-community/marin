@@ -285,7 +285,7 @@ const poolSections = computed<PoolSection[]>(() => {
   }
 
   if (unpooled.length > 0) {
-    sections.push({ pool: '', groups: unpooled, blockedAtTier: null })
+    sections.push({ pool: '__unpooled', groups: unpooled, blockedAtTier: null })
   }
 
   return sections
@@ -548,14 +548,14 @@ function idleThresholdMs(groupName: string): number {
           <tbody>
             <template v-for="section in poolSections" :key="section.pool || '__unpooled'">
               <!-- Pool header row -->
-              <tr v-if="section.pool" class="bg-surface border-b border-surface-border cursor-pointer hover:bg-surface-raised" @click="togglePool(section.pool)">
+              <tr class="bg-surface border-b border-surface-border cursor-pointer hover:bg-surface-raised" @click="togglePool(section.pool)">
                 <td colspan="8" class="px-3 py-1.5">
                   <div class="flex items-center gap-2">
                     <span class="text-[10px] text-text-muted">
                       {{ collapsedPools.has(section.pool) ? '▶' : '▼' }}
                     </span>
                     <span class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
-                      Pool: {{ section.pool }}
+                      {{ section.pool === '__unpooled' ? 'Unpooled' : `Pool: ${section.pool}` }}
                     </span>
                     <span
                       v-if="section.blockedAtTier"
@@ -564,8 +564,8 @@ function idleThresholdMs(groupName: string): number {
                     >
                       blocked at tier {{ section.blockedAtTier }}+
                     </span>
-                    <!-- Tier chain visualization -->
-                    <span class="flex items-center gap-0.5 text-xs text-text-muted ml-2">
+                    <!-- Tier chain visualization (not shown for unpooled groups) -->
+                    <span v-if="section.pool !== '__unpooled'" class="flex items-center gap-0.5 text-xs text-text-muted ml-2">
                       <template v-for="(gs, idx) in section.groups" :key="gs.group">
                         <span v-if="idx > 0" class="text-text-muted mx-0.5">&rarr;</span>
                         <span
@@ -591,7 +591,7 @@ function idleThresholdMs(groupName: string): number {
             <template v-for="gs in section.groups" :key="gs.group">
               <!-- Main row -->
               <tr
-                v-if="!section.pool || !collapsedPools.has(section.pool)"
+                v-if="!collapsedPools.has(section.pool)"
                 :class="[
                   'border-b border-surface-border-subtle hover:bg-surface-raised transition-colors',
                   isInactiveRow(gs) ? 'opacity-50' : '',
@@ -703,7 +703,7 @@ function idleThresholdMs(groupName: string): number {
               </tr>
 
               <!-- Slice detail (expanded) -->
-              <tr v-if="expandedSlices.has(gs.group) && groupHasSlices(gs.group) && (!section.pool || !collapsedPools.has(section.pool))" class="bg-surface-sunken">
+              <tr v-if="expandedSlices.has(gs.group) && groupHasSlices(gs.group) && (!collapsedPools.has(section.pool))" class="bg-surface-sunken">
                 <td colspan="8" class="px-6 py-3">
                   <div class="space-y-1.5">
                     <div
@@ -742,7 +742,7 @@ function idleThresholdMs(groupName: string): number {
               </tr>
 
               <!-- Demand detail (expanded) -->
-              <tr v-if="expandedDemand.has(gs.group) && groupDemand(gs.group) > 0 && (!section.pool || !collapsedPools.has(section.pool))" class="bg-surface-sunken">
+              <tr v-if="expandedDemand.has(gs.group) && groupDemand(gs.group) > 0 && (!collapsedPools.has(section.pool))" class="bg-surface-sunken">
                 <td colspan="8" class="px-6 py-3">
                   <div class="space-y-1">
                     <div

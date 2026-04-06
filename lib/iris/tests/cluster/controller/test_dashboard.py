@@ -15,6 +15,7 @@ from starlette.testclient import TestClient
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.db import (
     healthy_active_workers_with_attributes,
 )
@@ -153,18 +154,19 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 @pytest.fixture
 def service(state, scheduler, tmp_path):
     controller_mock = _make_controller_mock(state, scheduler)
+    log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
         state._db,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
+        log_service=log_service,
     )
 
 
 @pytest.fixture
 def client(service):
-    dashboard = ControllerDashboard(service)
+    dashboard = ControllerDashboard(service, log_service=service._log_service)
     return TestClient(dashboard.app)
 
 
@@ -172,12 +174,13 @@ def client(service):
 def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
     """Service with autoscaler enabled for tests."""
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
+    log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
         state._db,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
+        log_service=log_service,
     )
 
 
@@ -548,7 +551,7 @@ def mock_autoscaler():
 @pytest.fixture
 def client_with_autoscaler(service_with_autoscaler):
     """Dashboard test client with autoscaler enabled."""
-    dashboard = ControllerDashboard(service_with_autoscaler)
+    dashboard = ControllerDashboard(service_with_autoscaler, log_service=service_with_autoscaler._log_service)
     return TestClient(dashboard.app)
 
 
@@ -794,7 +797,20 @@ def test_health_endpoint_returns_ok(client):
 
 
 def test_fetch_logs_for_missing_task_returns_empty_entries(client):
-    """FetchLogs returns empty entries for a nonexistent task."""
+    """FetchLogs on LogService returns empty entries for a nonexistent task."""
+    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
+    resp = client.post(
+        "/iris.logging.LogService/FetchLogs",
+        json={"source": re.escape(task_id) + ":.*"},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("entries", []) == []
+
+
+def test_fetch_logs_backward_compat_proxy(client):
+    """The old ControllerService/FetchLogs path proxies to LogService."""
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
         "/iris.cluster.ControllerService/FetchLogs",
@@ -804,6 +820,23 @@ def test_fetch_logs_for_missing_task_returns_empty_entries(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data.get("entries", []) == []
+
+
+def test_fetch_logs_backward_compat_proxy_proto_binary(client):
+    """Old clients using default Connect proto encoding hit the compat endpoint."""
+    from iris.rpc import logging_pb2
+
+    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
+    req = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+    resp = client.post(
+        "/iris.cluster.ControllerService/FetchLogs",
+        content=req.SerializeToString(),
+        headers={"Content-Type": "application/proto"},
+    )
+    assert resp.status_code == 200
+    parsed = logging_pb2.FetchLogsResponse()
+    parsed.ParseFromString(resp.content)
+    assert list(parsed.entries) == []
 
 
 # =============================================================================
@@ -948,7 +981,9 @@ def test_auth_config_returns_enabled_when_verifier_set(service):
     from iris.rpc.auth import StaticTokenVerifier
 
     verifier = StaticTokenVerifier({"test-token": "test-user"})
-    dashboard = ControllerDashboard(service, auth_verifier=verifier, auth_provider="gcp")
+    dashboard = ControllerDashboard(
+        service, log_service=service._log_service, auth_verifier=verifier, auth_provider="gcp"
+    )
     authed_client = TestClient(dashboard.app)
 
     resp = authed_client.get("/auth/config")
@@ -970,14 +1005,15 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
     """auth/config returns provider_kind=kubernetes when controller has direct provider."""
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.has_direct_provider = True
+    log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
         state,
         state._db,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
+        log_service=log_service,
     )
-    dashboard = ControllerDashboard(svc)
+    dashboard = ControllerDashboard(svc, log_service=svc._log_service)
     k8s_client = TestClient(dashboard.app)
 
     resp = k8s_client.get("/auth/config")

@@ -26,8 +26,6 @@ from typing import Any
 import cloudpickle
 import fsspec
 import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.dataset as pad
 import pyarrow.parquet as pq
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import open_url, url_to_fs
@@ -137,8 +135,9 @@ def _get_scatter_read_fs(num_files: int, sample_path: str, memory_fraction: floa
 class ScatterParquetIterator:
     """Reference to sorted chunks for one target shard in one Parquet file.
 
-    Creates a ``pyarrow.dataset`` once (caching file metadata) and yields
-    lazy per-chunk iterators via Scanner with predicate pushdown.
+    Opens the file via ``pq.ParquetFile`` and uses Parquet row-group
+    statistics on ``(shard_idx, chunk_idx)`` for predicate pushdown,
+    avoiding the ``pyarrow.dataset`` memory leak (apache/arrow#39808).
     """
 
     path: str
@@ -154,28 +153,33 @@ class ScatterParquetIterator:
     def get_chunk_iterators(self, batch_size: int = 1024) -> Iterator[Iterator]:
         """Yield one lazy iterator per sorted chunk.
 
-        Opens the file once via ``pyarrow.dataset`` and creates a Scanner
-        per chunk with predicate pushdown on ``(shard_idx, chunk_idx)``.
+        Opens the file once via ``pq.ParquetFile`` and uses row-group
+        statistics to skip non-matching row groups (equivalent to dataset
+        Scanner predicate pushdown for the scatter envelope columns).
         """
+
         _, fs_path = url_to_fs(self.path)
-        dataset: pad.FileSystemDataset = pad.dataset(fs_path, format="parquet", filesystem=self.filesystem)
+        pf = pq.ParquetFile(self.filesystem.open_input_file(fs_path))
         col = _ZEPHYR_SHUFFLE_PICKLED_COL if self.is_pickled else _ZEPHYR_SHUFFLE_ITEM_COL
 
         for chunk_idx in range(self.chunk_count):
-            scanner = dataset.scanner(
-                columns=[col],
-                filter=(
-                    (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == self.shard_idx)
-                    & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == chunk_idx)
-                ),
-                batch_size=batch_size,
-                use_threads=False,
-            )
-            yield self._iter_scanner(scanner, col)
+            yield self._iter_chunk(pf, col, chunk_idx)
 
-    def _iter_scanner(self, scanner: pad.Scanner, col: str) -> Iterator:
-        for batch in scanner.to_batches():
-            items = batch.column(col).to_pylist()
+    def _iter_chunk(self, pf: pq.ParquetFile, col: str, chunk_idx: int) -> Iterator:
+        from zephyr.readers import iter_parquet_row_groups
+
+        # The scatter writer writes one (shard_idx, chunk_idx) per row group,
+        # so equality_predicates on min/max statistics skip non-matching row
+        # groups without reading data — equivalent to dataset predicate pushdown.
+        for table in iter_parquet_row_groups(
+            pf,
+            columns=[col],
+            equality_predicates={
+                _ZEPHYR_SHUFFLE_SHARD_IDX_COL: self.shard_idx,
+                _ZEPHYR_SHUFFLE_CHUNK_IDX_COL: chunk_idx,
+            },
+        ):
+            items = table.column(col).to_pylist()
             if self.is_pickled:
                 yield from (pickle.loads(b) for b in items)
             else:

@@ -29,7 +29,7 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.log_store import LogStore
+from iris.log_server.server import LogServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.types import JobName, WorkerId
@@ -395,8 +395,7 @@ class ServiceTestHarness:
 
 def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "k8s_db")
-    log_store = LogStore(log_dir=tmp_path / "k8s_logs")
-    state = ControllerTransitions(db=db, log_store=log_store)
+    state = ControllerTransitions(db=db)
 
     k8s = InMemoryK8sService()
     k8s.add_node_pool(
@@ -421,7 +420,7 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
         db,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "k8s_bundles")),
-        log_store=log_store,
+        log_service=LogServiceImpl(),
     )
 
     return ServiceTestHarness(
@@ -436,8 +435,7 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
 
 def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "gcp_db")
-    log_store = LogStore(log_dir=tmp_path / "gcp_logs")
-    state = ControllerTransitions(db=db, log_store=log_store)
+    state = ControllerTransitions(db=db)
 
     ctrl = _HarnessController()
     ctrl.has_direct_provider = False
@@ -447,7 +445,7 @@ def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
         db,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "gcp_bundles")),
-        log_store=log_store,
+        log_service=LogServiceImpl(),
     )
 
     return ServiceTestHarness(

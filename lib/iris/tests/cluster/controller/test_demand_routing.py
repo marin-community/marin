@@ -291,6 +291,7 @@ class TestWaterfallRouting:
         discovered = [make_mock_slice_handle(f"slice-{i}", all_ready=True) for i in range(2)]
         group_high = ScalingGroup(config_high, make_mock_platform(slices_to_discover=discovered))
         group_high.reconcile()
+        _mark_discovered_ready(group_high, discovered)
 
         group_low = ScalingGroup(config_low, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
 
@@ -476,6 +477,7 @@ class TestWaterfallRouting:
         discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
         group_a = ScalingGroup(config_a, make_mock_platform(slices_to_discover=discovered))
         group_a.reconcile()
+        _mark_discovered_ready(group_a, discovered)
         assert group_a.availability().status == GroupAvailability.AT_MAX_SLICES
 
         group_b = ScalingGroup(
@@ -489,6 +491,63 @@ class TestWaterfallRouting:
 
         # 2 tiny CPU entries pack into 1 slice
         assert len(result.routed_entries.get("group-b", [])) == 2
+
+    def test_booting_slice_at_max_does_not_cascade_across_zones(self):
+        """A single pending task must not waterfall across zones when the first zone
+        has a booting (in-flight) slice at max_slices.
+
+        Regression test: with max_slices=1 per zone and N zones, a single CPU task
+        caused all N zones to scale up because once a slice moved from REQUESTING to
+        BOOTING, the group returned AT_MAX_SLICES (rejecting), and demand waterfalled
+        to the next zone on every autoscaler cycle.
+        """
+
+        # Simulate 3 zones, each with max_slices=1 (mirrors production CPU VM config)
+        configs = [
+            make_scale_group_config(
+                name=f"cpu-zone-{i}",
+                max_slices=1,
+                priority=1000,
+                accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+                accelerator_variant="",
+            )
+            for i in range(3)
+        ]
+
+        ts = Timestamp.from_ms(1_000_000)
+
+        # Zone 0: has 1 booting slice (scale-up happened, slice created but not ready)
+        handle_0 = make_mock_slice_handle("slice-zone-0", all_ready=False)
+        group_0 = ScalingGroup(configs[0], make_mock_platform(), scale_up_cooldown=Duration.from_ms(60_000))
+        group_0.begin_scale_up(timestamp=ts)
+        group_0.complete_scale_up(handle_0, timestamp=ts)
+        # Slice is BOOTING, not READY. Group is at max_slices.
+        assert group_0.slice_count() == 1
+
+        # Zone 1 and 2: empty, ready to accept
+        group_1 = ScalingGroup(configs[1], make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group_2 = ScalingGroup(configs[2], make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+
+        groups = [group_0, group_1, group_2]
+        demand = make_demand_entries(1, device_type=DeviceType.CPU, device_variant=None)
+
+        eval_ts = Timestamp.from_ms(1_030_000)
+        result = route_demand(groups, demand, eval_ts)
+
+        # The task should route to zone 0 (which already has a booting slice)
+        # and NOT cascade to zone 1 or zone 2.
+        routed_groups = [name for name, entries in result.routed_entries.items() if entries]
+        assert len(routed_groups) == 1, (
+            f"Expected demand routed to exactly 1 group, but routed to {routed_groups}. "
+            f"launch={result.group_to_launch}"
+        )
+        assert routed_groups[0] == "cpu-zone-0", (
+            f"Expected demand routed to cpu-zone-0 (has booting slice), " f"but routed to {routed_groups[0]}"
+        )
+        # No new slices should be launched — zone 0 already has capacity incoming
+        assert result.group_to_launch.get("cpu-zone-0", 0) == 0
+        assert result.group_to_launch.get("cpu-zone-1", 0) == 0
+        assert result.group_to_launch.get("cpu-zone-2", 0) == 0
 
 
 # ---------------------------------------------------------------------------
