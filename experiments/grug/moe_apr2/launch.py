@@ -967,8 +967,8 @@ def create_d1024_resume() -> list[ExecutorStep]:
     return [ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config)]
 
 
-def create_v2_resume(budget, hidden_dim, gcs_hash, latest_step) -> list[ExecutorStep]:
-    """Resume a single run from checkpoint, writing to v2 output and wandb."""
+def create_v2_resume(budget, hidden_dim, gcs_hash, latest_step, suffix="-v2", tpu_type="v4-32") -> list[ExecutorStep]:
+    """Resume a single run from checkpoint, writing to new output and wandb."""
     step_mult, min_bs = BUDGET_CONFIG.get(budget, (1, MIN_BATCH_SIZE))
     target_steps = 2**14 * step_mult
 
@@ -980,7 +980,7 @@ def create_v2_resume(budget, hidden_dim, gcs_hash, latest_step) -> list[Executor
     optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, hidden_dim)
 
     orig_run_id = f"isoflop-moe-v16-{budget:.0e}-d{hidden_dim}"
-    run_id = f"{orig_run_id}-v2"
+    run_id = f"{orig_run_id}{suffix}"
     checkpoint_path = (
         f"gs://marin-us-central2/grug/{orig_run_id}-{gcs_hash}/checkpoints/step-{latest_step}"
     )
@@ -990,7 +990,7 @@ def create_v2_resume(budget, hidden_dim, gcs_hash, latest_step) -> list[Executor
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
         output_path=this_output_path(),
         run_id=run_id,
-        resources=versioned(ResourceConfig.with_tpu("v4-32")),
+        resources=versioned(ResourceConfig.with_tpu(tpu_type)),
         steps=versioned(train_steps),
         batch_size=versioned(batch_size),
         seed=versioned(0),
@@ -1075,6 +1075,6 @@ def create_d1024_v2_bs128() -> list[ExecutorStep]:
 
 if __name__ == "__main__":
     executor_main(
-        steps=create_d1024_v2_bs128(),
-        description="v16: resume 1e20-d1024-v2 bs=128 from step-139000",
+        steps=create_v2_resume(1e20, 2048, "v2-a71c6a", 36000, suffix="-v3", tpu_type="v4-128"),
+        description="v16: resume 1e20-d2048-v3 from v2 step-36000 on v4-128",
     )
