@@ -15,6 +15,7 @@ from iris.log_server.server import LogServiceImpl
 from iris.rpc import logging_pb2
 from iris.cluster.providers.k8s.tasks import (
     K8sTaskProvider,
+    _GC_MAX_AGE_SECONDS,
     _LABEL_JOB_ID,
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
@@ -902,3 +903,94 @@ def test_bulk_delete_cleans_up_pdbs(provider, k8s):
 
     assert k8s.get_json("pod", "iris-coord-pod") is None
     assert k8s.get_json("poddisruptionbudget", "iris-coord-pod-pdb") is None
+
+
+# ---------------------------------------------------------------------------
+# GC: terminal pod and resource cleanup
+# ---------------------------------------------------------------------------
+
+
+def _seed_terminal_pod(k8s, name: str, phase: str, task_hash: str, created: str) -> None:
+    """Insert a terminal pod with a creationTimestamp into the fake k8s store."""
+    pod = {
+        "kind": "Pod",
+        "metadata": {
+            "name": name,
+            "creationTimestamp": created,
+            "labels": {
+                _LABEL_MANAGED: "true",
+                _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+                _LABEL_TASK_HASH: task_hash,
+            },
+        },
+        "status": {"phase": phase},
+    }
+    k8s.seed_resource("pod", name, pod)
+
+
+def _seed_configmap(k8s, name: str, task_hash: str, created: str) -> None:
+    cm = {
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": name,
+            "creationTimestamp": created,
+            "labels": {
+                _LABEL_MANAGED: "true",
+                _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+                _LABEL_TASK_HASH: task_hash,
+            },
+        },
+    }
+    k8s.seed_resource("configmap", name, cm)
+
+
+def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    recent_ts = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    hash_old = "aabbccdd11223344"
+    hash_recent = "eeff001122334455"
+
+    # Old succeeded pod + its configmap — should be GC'd.
+    _seed_terminal_pod(k8s, "old-succeeded-pod", "Succeeded", hash_old, old_ts)
+    _seed_configmap(k8s, "old-succeeded-pod-wf", hash_old, old_ts)
+
+    # Recent succeeded pod + its configmap — should survive.
+    _seed_terminal_pod(k8s, "recent-succeeded-pod", "Succeeded", hash_recent, recent_ts)
+    _seed_configmap(k8s, "recent-succeeded-pod-wf", hash_recent, recent_ts)
+
+    # Old failed pod — should be GC'd.
+    _seed_terminal_pod(k8s, "old-failed-pod", "Failed", "ffaa112233445566", old_ts)
+
+    provider._gc_terminal_resources()
+
+    # Old resources deleted.
+    assert k8s.get_json("pod", "old-succeeded-pod") is None
+    assert k8s.get_json("configmap", "old-succeeded-pod-wf") is None
+    assert k8s.get_json("pod", "old-failed-pod") is None
+
+    # Recent resources preserved.
+    assert k8s.get_json("pod", "recent-succeeded-pod") is not None
+    assert k8s.get_json("configmap", "recent-succeeded-pod-wf") is not None
+
+
+def test_gc_respects_interval(provider, k8s):
+    """_maybe_gc_terminal_resources should only run every _GC_INTERVAL_SECONDS."""
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    _seed_terminal_pod(k8s, "gc-pod-1", "Succeeded", "aaaa111122223333", old_ts)
+
+    # First call should trigger GC (last_gc_time == 0).
+    provider._maybe_gc_terminal_resources()
+    assert k8s.get_json("pod", "gc-pod-1") is None
+
+    # Seed another old pod. A second immediate call should NOT trigger GC.
+    _seed_terminal_pod(k8s, "gc-pod-2", "Succeeded", "bbbb444455556666", old_ts)
+    provider._maybe_gc_terminal_resources()
+    assert k8s.get_json("pod", "gc-pod-2") is not None  # Still exists

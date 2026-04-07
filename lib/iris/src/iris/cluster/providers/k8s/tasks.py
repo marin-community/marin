@@ -16,10 +16,11 @@ import logging
 import re
 import shlex
 import threading
+import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from iris.cluster.controller.transitions import ClusterCapacity, DirectProviderSyncResult, SchedulingEvent
@@ -636,6 +637,12 @@ _ACTIVE_PODS_FIELD_SELECTOR = "status.phase!=Succeeded,status.phase!=Failed"
 # Standard label filter for iris-managed pods.
 _MANAGED_POD_LABELS = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE}
 
+# Garbage collection: how often to run the terminal-pod cleanup pass (seconds).
+_GC_INTERVAL_SECONDS = 300  # 5 minutes
+
+# Garbage collection: delete terminal pods and orphaned configmaps/PDBs older than this (seconds).
+_GC_MAX_AGE_SECONDS = 3600  # 1 hour
+
 
 def _build_pod_statuses(pods: list[dict]) -> list[controller_pb2.Controller.KubernetesPodStatus]:
     """Build pod status protos from raw kubectl pod objects."""
@@ -1032,6 +1039,7 @@ class K8sTaskProvider:
     _log_collector: LogCollector | None = field(default=None, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
+    _last_gc_time: float = field(default=0.0, init=False, repr=False)
 
     def _ensure_resource_collector(self) -> ResourceCollector:
         if self._resource_collector is None:
@@ -1095,6 +1103,8 @@ class K8sTaskProvider:
         node_pools = _fetch_node_pools(self.kubectl, self.managed_label)
         self._cluster_state.update(managed_pods, nodes, node_pools)
         capacity = self._cluster_state.capacity()
+
+        self._maybe_gc_terminal_resources()
 
         return DirectProviderSyncResult(updates=updates, scheduling_events=scheduling_events, capacity=capacity)
 
@@ -1341,6 +1351,91 @@ class K8sTaskProvider:
             len(pdb_names),
             len(task_ids),
         )
+
+    def _maybe_gc_terminal_resources(self) -> None:
+        """Periodically delete terminal (Succeeded/Failed) pods and their associated
+        configmaps/PDBs that are older than _GC_MAX_AGE_SECONDS.
+
+        Without this, completed pods and their configmaps accumulate in etcd indefinitely
+        since the sync loop's field selector excludes terminal pods from its queries.
+        """
+        now = time.monotonic()
+        if now - self._last_gc_time < _GC_INTERVAL_SECONDS:
+            return
+        self._last_gc_time = now
+
+        try:
+            self._gc_terminal_resources()
+        except Exception:
+            logger.exception("GC pass failed; will retry next interval")
+
+    def _gc_terminal_resources(self) -> None:
+        cutoff = datetime.now(timezone.utc).timestamp() - _GC_MAX_AGE_SECONDS
+
+        # Collect terminal pods older than the cutoff.
+        old_pod_names: list[str] = []
+        old_task_hashes: set[str] = set()
+        for phase in ("Succeeded", "Failed"):
+            pods = self.kubectl.list_json(
+                "pods",
+                labels=_MANAGED_POD_LABELS,
+                field_selector=f"status.phase={phase}",
+            )
+            for pod in pods:
+                meta = pod.get("metadata", {})
+                created = meta.get("creationTimestamp", "")
+                if not created:
+                    continue
+                ts = datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+                if ts < cutoff:
+                    old_pod_names.append(meta["name"])
+                    task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
+                    if task_hash:
+                        old_task_hashes.add(task_hash)
+
+        # Collect configmaps whose task_hash belongs to a terminal pod, or that are old
+        # and have no corresponding active pod.
+        all_cms = self.kubectl.list_json("configmaps", labels=_MANAGED_POD_LABELS)
+        old_cm_names: list[str] = []
+        for cm in all_cms:
+            meta = cm.get("metadata", {})
+            task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
+            created = meta.get("creationTimestamp", "")
+            if not created:
+                continue
+            ts = datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+            if ts < cutoff and task_hash in old_task_hashes:
+                old_cm_names.append(meta["name"])
+
+        # Collect PDBs the same way.
+        all_pdbs = self.kubectl.list_json("poddisruptionbudgets", labels=_MANAGED_POD_LABELS)
+        old_pdb_names: list[str] = []
+        for pdb in all_pdbs:
+            meta = pdb.get("metadata", {})
+            task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
+            created = meta.get("creationTimestamp", "")
+            if not created:
+                continue
+            ts = datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+            if ts < cutoff and task_hash in old_task_hashes:
+                old_pdb_names.append(meta["name"])
+
+        if old_pod_names:
+            self.kubectl.delete_many("pods", old_pod_names, wait=False)
+        if old_cm_names:
+            self.kubectl.delete_many("configmaps", old_cm_names, wait=False)
+        if old_pdb_names:
+            self.kubectl.delete_many("poddisruptionbudgets", old_pdb_names, wait=False)
+
+        total = len(old_pod_names) + len(old_cm_names) + len(old_pdb_names)
+        if total > 0:
+            logger.info(
+                "GC: deleted %d terminal pods, %d configmaps, %d PDBs (age > %ds)",
+                len(old_pod_names),
+                len(old_cm_names),
+                len(old_pdb_names),
+                _GC_MAX_AGE_SECONDS,
+            )
 
     def _delete_pods_by_task_id(self, task_id: str) -> None:
         """Delete all pods, configmaps, and PDBs for a given task_id (any attempt).
