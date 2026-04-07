@@ -36,6 +36,13 @@ from marin.utils import remove_tpu_lockfile_on_exit
 logger = logging.getLogger(__name__)
 
 
+# Default CPU resources for checkpoint export. Levanter's `_restore_old_ts` deserializes with
+# `concurrent_gb=300`, and the HF conversion must hold the full unsharded model in host RAM,
+# so small defaults (`ResourceConfig.with_cpu()` is 128m RAM / 1g disk) OOM on 50B+ models.
+def _default_export_resources() -> ResourceConfig:
+    return ResourceConfig.with_cpu(cpu=8, ram="400g", disk="400g")
+
+
 @dataclass(frozen=True)
 class ConvertCheckpointStepConfig:
     """
@@ -45,7 +52,7 @@ class ConvertCheckpointStepConfig:
     checkpoint_path: str | InputName | VersionedValue[str]
     trainer: TrainerConfig
     model: LmConfig
-    resources: ResourceConfig = dataclasses.field(default_factory=ResourceConfig.with_cpu)
+    resources: ResourceConfig = dataclasses.field(default_factory=_default_export_resources)
     output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore[arg-type]
     upload_to_hf: bool | str | RepoRef = False
     tokenizer: str | None = None
@@ -138,7 +145,9 @@ def convert_checkpoint_to_hf_step(
             ``train_step.cd("checkpoints/ckpt-210388")``.
         trainer: TrainerConfig that matches the topology the checkpoint was saved with.
         model: Model configuration that produced the checkpoint.
-        resources: Hardware resources to use when running the conversion. Defaults to CPU-only execution.
+        resources: Hardware resources to use when running the conversion. Defaults to CPU-only
+            execution sized for large models (8 CPU, 400g RAM, 400g disk); override for smaller
+            models or when using an accelerator.
         upload_to_hf: Optional HuggingFace repo reference (bool, repo-id string, or RepoRef).
         tokenizer: Optional tokenizer override. Defaults to the tokenizer specified by ``model``.
         override_vocab_size: If provided, resizes the vocabulary before exporting.
@@ -160,7 +169,7 @@ def convert_checkpoint_to_hf_step(
         checkpoint_path=checkpoint_value,
         trainer=trainer,
         model=model,
-        resources=resources or ResourceConfig.with_cpu(),
+        resources=resources or _default_export_resources(),
         upload_to_hf=upload_to_hf,
         tokenizer=tokenizer,
         override_vocab_size=override_vocab_size,
