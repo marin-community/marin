@@ -316,17 +316,19 @@ def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServic
 
 
 # ---------------------------------------------------------------------------
-# _query_capacity
+# ClusterState.capacity (via sync)
 # ---------------------------------------------------------------------------
 
 
-def test_query_capacity_returns_cluster_capacity(provider, k8s):
+def test_capacity_returns_cluster_capacity(provider, k8s):
     """Capacity reports total and available resources as ClusterCapacity."""
     populate_node(k8s, "node-1", cpu="4", memory="8Gi")
     populate_node(k8s, "node-2", cpu="4", memory="8Gi")
     populate_running_pod_resource(k8s, "running-pod-1", cpu_limits="1000m", memory_limits=str(2 * 1024**3))
 
-    cap = provider._query_capacity(k8s.list_json("pods", labels=_MANAGED_POD_LABELS))
+    provider.sync(make_batch())
+    cap = provider._cluster_state.capacity()
+
     assert cap is not None
     assert isinstance(cap, ClusterCapacity)
     assert cap.schedulable_nodes == 2
@@ -336,7 +338,7 @@ def test_query_capacity_returns_cluster_capacity(provider, k8s):
     assert cap.available_memory_bytes == (2 * 8 - 2) * 1024**3
 
 
-def test_query_capacity_skips_tainted_nodes(provider, k8s):
+def test_capacity_skips_tainted_nodes(provider, k8s):
     populate_node(
         k8s,
         "tainted-node",
@@ -346,16 +348,20 @@ def test_query_capacity_skips_tainted_nodes(provider, k8s):
     )
     populate_node(k8s, "clean-node", cpu="4", memory="8Gi")
 
-    cap = provider._query_capacity(k8s.list_json("pods", labels=_MANAGED_POD_LABELS))
+    provider.sync(make_batch())
+    cap = provider._cluster_state.capacity()
+
     assert cap is not None
     assert cap.schedulable_nodes == 1
     assert cap.total_memory_bytes == 8 * 1024**3
 
 
-def test_query_capacity_returns_none_when_all_tainted(provider, k8s):
+def test_capacity_returns_none_when_all_tainted(provider, k8s):
     populate_node(k8s, "tainted-only", cpu="4", memory="8Gi", taints=[{"effect": "NoSchedule"}])
 
-    cap = provider._query_capacity(k8s.list_json("pods", labels=_MANAGED_POD_LABELS))
+    provider.sync(make_batch())
+    cap = provider._cluster_state.capacity()
+
     assert cap is None
 
 
@@ -425,7 +431,7 @@ def test_fetch_scheduling_events_returns_empty_on_failure(provider, k8s):
 
 
 def test_get_cluster_status_basic(k8s):
-    """get_cluster_status returns namespace, node counts, and pod statuses."""
+    """get_cluster_status returns namespace, node counts, and pod statuses after sync."""
     populate_node(k8s, "node-1", cpu="4", memory="8Gi")
     node_tainted = {
         "kind": "Node",
@@ -447,30 +453,116 @@ def test_get_cluster_status_basic(k8s):
     pod = k8s.get_json("pod", "iris-task-0")
     pod["status"]["conditions"] = []
 
-    provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
-    resp = provider.get_cluster_status()
+    p = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
+    try:
+        p.sync(make_batch())
+        resp = p.get_cluster_status()
 
-    assert resp.namespace == "iris"
-    assert resp.total_nodes == 2
-    assert resp.schedulable_nodes == 1
-    assert "cores" in resp.allocatable_cpu
-    assert "GiB" in resp.allocatable_memory
-    assert len(resp.pod_statuses) == 1
-    assert resp.pod_statuses[0].pod_name == "iris-task-0"
-    assert resp.pod_statuses[0].phase == "Running"
+        assert resp.namespace == "iris"
+        assert resp.total_nodes == 2
+        assert resp.schedulable_nodes == 1
+        assert "cores" in resp.allocatable_cpu
+        assert "GiB" in resp.allocatable_memory
+        assert len(resp.pod_statuses) == 1
+        assert resp.pod_statuses[0].pod_name == "iris-task-0"
+        assert resp.pod_statuses[0].phase == "Running"
+    finally:
+        p.close()
 
 
 def test_get_cluster_status_node_failure(k8s):
-    """get_cluster_status handles node query failure gracefully."""
-    k8s.inject_failure("list_json", RuntimeError("kubectl error"))
+    """Node list failure during sync is handled gracefully; status reports 0 nodes."""
+    k8s.inject_failure("list_json:node", RuntimeError("kubectl error"))
     p = K8sTaskProvider(kubectl=k8s, namespace="test-ns", default_image="img:latest")
     try:
+        p.sync(make_batch())
         resp = p.get_cluster_status()
         assert resp.namespace == "test-ns"
         assert resp.total_nodes == 0
         assert resp.schedulable_nodes == 0
     finally:
         p.close()
+
+
+def test_get_cluster_status_excludes_terminal_pods(k8s):
+    """After sync, only active pods appear; Succeeded/Failed are excluded by the field selector."""
+    populate_node(k8s, "node-1", cpu="4", memory="8Gi")
+    populate_pod(k8s, "iris-running", "Running")
+    populate_pod(k8s, "iris-succeeded", "Succeeded")
+    populate_pod(k8s, "iris-failed", "Failed")
+
+    p = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
+    try:
+        p.sync(make_batch())
+        resp = p.get_cluster_status()
+
+        phases = {ps.pod_name: ps.phase for ps in resp.pod_statuses}
+        assert "iris-running" in phases
+        assert "iris-succeeded" not in phases
+        assert "iris-failed" not in phases
+    finally:
+        p.close()
+
+
+def test_get_cluster_status_uses_sync_cache(provider, k8s):
+    """After sync(), pod data is served from cache even if the pod is deleted from k8s."""
+    populate_pod(k8s, "iris-task-0", "Running")
+
+    provider.sync(make_batch())
+
+    # Delete the pod from the fake k8s store. A fresh kubectl call would return 0 pods.
+    k8s.delete("pod", "iris-task-0")
+
+    resp = provider.get_cluster_status()
+
+    # Pod statuses reflect the sync() cache (pod still visible), not a fresh kubectl call.
+    assert len(resp.pod_statuses) == 1
+    assert resp.pod_statuses[0].pod_name == "iris-task-0"
+
+
+def test_sync_cache_excludes_terminal_pods(provider, k8s):
+    """sync() caches only active pods; get_cluster_status reflects the field-selector filter."""
+    # sync() uses _ACTIVE_PODS_FIELD_SELECTOR which excludes Succeeded/Failed.
+    populate_pod(k8s, "iris-running", "Running")
+    populate_pod(k8s, "iris-succeeded", "Succeeded")
+
+    batch = make_batch()
+    provider.sync(batch)
+
+    resp = provider.get_cluster_status()
+    phases = {ps.pod_name: ps.phase for ps in resp.pod_statuses}
+    assert "iris-running" in phases
+    assert "iris-succeeded" not in phases
+
+
+def test_get_cluster_status_includes_node_pools(provider, k8s):
+    """Node pools fetched during sync() are included in get_cluster_status() response."""
+    k8s.seed_resource(
+        "nodepool",
+        "gpu-pool",
+        {
+            "kind": "NodePool",
+            "metadata": {"name": "gpu-pool", "labels": {}},
+            "spec": {"instanceType": "H100", "targetNodes": 4},
+            "status": {"currentNodes": 3},
+        },
+    )
+    provider.sync(make_batch())
+    resp = provider.get_cluster_status()
+    assert any(np.name == "gpu-pool" for np in resp.node_pools)
+
+
+def test_sync_node_failure_yields_no_capacity(provider, k8s):
+    """When node list fails during sync, capacity is None but sync still returns."""
+    populate_pod(k8s, "iris-running", "Running")
+    k8s.inject_failure("list_json:node", RuntimeError("nodes unavailable"))
+
+    result = provider.sync(make_batch())
+
+    assert result.capacity is None
+    # Pod statuses are still populated from the successful pod list.
+    resp = provider.get_cluster_status()
+    assert any(ps.pod_name == "iris-running" for ps in resp.pod_statuses)
 
 
 # ---------------------------------------------------------------------------
