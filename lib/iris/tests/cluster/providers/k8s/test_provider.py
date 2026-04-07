@@ -15,6 +15,8 @@ from iris.log_server.server import LogServiceImpl
 from iris.rpc import logging_pb2
 from iris.cluster.providers.k8s.tasks import (
     K8sTaskProvider,
+    _COLLECTOR_MAX_CONSECUTIVE_FAILURES,
+    _GC_MAX_AGE_SECONDS,
     _LABEL_JOB_ID,
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
@@ -879,8 +881,8 @@ def test_sync_creates_pdb_for_coordinator_task(provider, k8s):
     assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == _task_hash("/coord-job/0")
 
 
-def test_bulk_delete_cleans_up_pdbs(provider, k8s):
-    """_bulk_delete_task_pods also deletes associated PDBs."""
+def test_bulk_delete_defers_pdb_cleanup_to_gc(provider, k8s):
+    """_bulk_delete_task_pods deletes pods immediately but defers PDB/CM cleanup to GC."""
     task_id = "/coord-job/0"
     task_hash = _task_hash(task_id)
     labels = {
@@ -900,5 +902,270 @@ def test_bulk_delete_cleans_up_pdbs(provider, k8s):
     cached_pods = k8s.list_json("pods", labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
     provider._bulk_delete_task_pods([task_id], cached_pods)
 
+    # Pod deleted immediately.
     assert k8s.get_json("pod", "iris-coord-pod") is None
+    # PDB still exists — deferred to GC.
+    assert k8s.get_json("poddisruptionbudget", "iris-coord-pod-pdb") is not None
+
+    # GC pass cleans up the deferred PDB.
+    provider._gc_terminal_resources(active_pods=[])
     assert k8s.get_json("poddisruptionbudget", "iris-coord-pod-pdb") is None
+
+
+# ---------------------------------------------------------------------------
+# GC: terminal pod and resource cleanup
+# ---------------------------------------------------------------------------
+
+
+def _seed_terminal_pod(k8s, name: str, phase: str, task_hash: str, created: str) -> None:
+    """Insert a terminal pod with a creationTimestamp into the fake k8s store."""
+    pod = {
+        "kind": "Pod",
+        "metadata": {
+            "name": name,
+            "creationTimestamp": created,
+            "labels": {
+                _LABEL_MANAGED: "true",
+                _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+                _LABEL_TASK_HASH: task_hash,
+            },
+        },
+        "status": {"phase": phase},
+    }
+    k8s.seed_resource("pod", name, pod)
+
+
+def _seed_configmap(k8s, name: str, task_hash: str, created: str) -> None:
+    cm = {
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": name,
+            "creationTimestamp": created,
+            "labels": {
+                _LABEL_MANAGED: "true",
+                _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+                _LABEL_TASK_HASH: task_hash,
+            },
+        },
+    }
+    k8s.seed_resource("configmap", name, cm)
+
+
+def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    recent_ts = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    hash_old = "aabbccdd11223344"
+    hash_recent = "eeff001122334455"
+
+    # Old succeeded pod + its configmap — should be GC'd.
+    _seed_terminal_pod(k8s, "old-succeeded-pod", "Succeeded", hash_old, old_ts)
+    _seed_configmap(k8s, "old-succeeded-pod-wf", hash_old, old_ts)
+
+    # Recent succeeded pod + its configmap — should survive.
+    _seed_terminal_pod(k8s, "recent-succeeded-pod", "Succeeded", hash_recent, recent_ts)
+    _seed_configmap(k8s, "recent-succeeded-pod-wf", hash_recent, recent_ts)
+
+    # Old failed pod — should be GC'd.
+    _seed_terminal_pod(k8s, "old-failed-pod", "Failed", "ffaa112233445566", old_ts)
+
+    provider._gc_terminal_resources(active_pods=[])
+
+    # Old resources deleted.
+    assert k8s.get_json("pod", "old-succeeded-pod") is None
+    assert k8s.get_json("configmap", "old-succeeded-pod-wf") is None
+    assert k8s.get_json("pod", "old-failed-pod") is None
+
+    # Recent resources preserved.
+    assert k8s.get_json("pod", "recent-succeeded-pod") is not None
+    assert k8s.get_json("configmap", "recent-succeeded-pod-wf") is not None
+
+
+def test_gc_respects_interval(provider, k8s):
+    """_maybe_gc_terminal_resources should only run every _GC_INTERVAL_SECONDS."""
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Trigger GC once to set _last_gc_time to now.
+    provider._maybe_gc_terminal_resources(active_pods=[])
+
+    # Seed an old pod. An immediate second call should NOT trigger GC (interval not elapsed).
+    _seed_terminal_pod(k8s, "gc-pod-1", "Succeeded", "aaaa111122223333", old_ts)
+    provider._maybe_gc_terminal_resources(active_pods=[])
+    assert k8s.get_json("pod", "gc-pod-1") is not None  # Still exists — interval gate held
+
+
+def test_gc_cleans_up_deferred_configmaps(provider, k8s):
+    """GC deletes configmaps for task hashes enqueued by _bulk_delete_task_pods."""
+    task_id = "/deferred-job/0"
+    task_hash = _task_hash(task_id)
+    labels = {
+        _LABEL_MANAGED: "true",
+        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+        _LABEL_TASK_HASH: task_hash,
+    }
+
+    # Seed a configmap (no pod needed — the hash is what matters).
+    cm = {
+        "kind": "ConfigMap",
+        "metadata": {"name": "deferred-cm", "labels": labels},
+    }
+    k8s.seed_resource("configmap", "deferred-cm", cm)
+
+    # Simulate _bulk_delete_task_pods enqueuing the hash.
+    provider._pending_gc_hashes.add(task_hash)
+
+    # GC picks it up and deletes the configmap.
+    provider._gc_terminal_resources(active_pods=[])
+    assert k8s.get_json("configmap", "deferred-cm") is None
+
+
+def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
+    """Deferred hashes must not be dropped when the killed pod is still in the
+    pre-delete managed_pods snapshot (the common tasks_to_kill path).
+
+    Reproduces: sync fetches managed_pods, _bulk_delete_task_pods deletes the pod
+    and enqueues hash, then _maybe_gc sees the hash as "active" from the stale
+    snapshot. The hash must be retained for the next GC cycle.
+    """
+    task_id = "/kill-me/0"
+    task_hash = _task_hash(task_id)
+    labels = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: task_hash}
+
+    # Seed the pod and its configmap.
+    populate_pod(k8s, "iris-kill-me-0-0", "Running", labels={_LABEL_TASK_HASH: task_hash})
+    cm = {"kind": "ConfigMap", "metadata": {"name": "iris-kill-me-0-0-wf", "labels": labels}}
+    k8s.seed_resource("configmap", "iris-kill-me-0-0-wf", cm)
+
+    # Snapshot managed pods BEFORE delete (as sync() does).
+    pre_delete_pods = k8s.list_json("pods", labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
+
+    # Kill the pod — hash goes into _pending_gc_hashes.
+    provider._bulk_delete_task_pods([task_id], pre_delete_pods)
+    assert k8s.get_json("pod", "iris-kill-me-0-0") is None
+    assert task_hash in provider._pending_gc_hashes
+
+    # GC with the stale snapshot — hash should be skipped but NOT discarded.
+    provider._gc_terminal_resources(active_pods=pre_delete_pods)
+    assert k8s.get_json("configmap", "iris-kill-me-0-0-wf") is not None  # Not yet cleaned
+    assert task_hash in provider._pending_gc_hashes  # Retained for next cycle
+
+    # Next GC cycle with empty active pods — now the CM is cleaned up.
+    provider._gc_terminal_resources(active_pods=[])
+    assert k8s.get_json("configmap", "iris-kill-me-0-0-wf") is None
+    assert task_hash not in provider._pending_gc_hashes
+
+
+def test_gc_skips_hashes_with_active_pods(provider, k8s):
+    """GC must not delete configmaps/PDBs for task hashes that have active retry pods.
+
+    task_hash is shared across all attempts of the same task_id. If attempt 0 is
+    terminal (old) and attempt 1 is still Running, deleting by task_hash would
+    remove the active attempt's configmap and PDB protection.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    shared_hash = "shared_hash_12345"
+
+    # Old terminal pod for attempt 0.
+    _seed_terminal_pod(k8s, "old-attempt-0", "Succeeded", shared_hash, old_ts)
+
+    # Configmap and PDB for the active retry (attempt 1).
+    active_labels = {
+        _LABEL_MANAGED: "true",
+        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+        _LABEL_TASK_HASH: shared_hash,
+    }
+    cm = {"kind": "ConfigMap", "metadata": {"name": "active-retry-cm", "labels": active_labels}}
+    k8s.seed_resource("configmap", "active-retry-cm", cm)
+    pdb = {
+        "kind": "PodDisruptionBudget",
+        "metadata": {"name": "active-retry-pdb", "labels": active_labels},
+        "spec": {"minAvailable": 1},
+    }
+    k8s.seed_resource("poddisruptionbudget", "active-retry-pdb", pdb)
+
+    # Simulate the active pod (from the sync loop's managed_pods list).
+    active_pod = {
+        "metadata": {"name": "active-attempt-1", "labels": {_LABEL_TASK_HASH: shared_hash}},
+        "status": {"phase": "Running"},
+    }
+
+    provider._gc_terminal_resources(active_pods=[active_pod])
+
+    # Terminal pod is deleted (by name, not by hash).
+    assert k8s.get_json("pod", "old-attempt-0") is None
+    # But configmap and PDB are preserved because the hash is still active.
+    assert k8s.get_json("configmap", "active-retry-cm") is not None
+    assert k8s.get_json("poddisruptionbudget", "active-retry-pdb") is not None
+
+
+# ---------------------------------------------------------------------------
+# Collector auto-untrack on consecutive failures
+# ---------------------------------------------------------------------------
+
+
+def test_log_collector_auto_untracks_after_consecutive_failures(k8s, log_pusher):
+    """LogCollector stops polling a pod after it fails stream_logs enough times.
+
+    The fake K8sService raises KubectlError for stream_logs on nonexistent pods,
+    matching real kubectl behavior.
+    """
+    from iris.cluster.providers.k8s.tasks import LogCollector
+    from iris.cluster.types import JobName
+
+    collector = LogCollector(k8s, log_pusher, concurrency=1)
+    task_id = JobName.from_wire("/fail-job/0")
+
+    # Track a pod that doesn't exist — stream_logs will raise on each fetch.
+    collector.track("nonexistent-pod", task_id, 0)
+    key = f"{task_id.to_wire()}:0"
+
+    for _ in range(_COLLECTOR_MAX_CONSECUTIVE_FAILURES):
+        with collector._lock:
+            pod = collector._pods.get(key)
+        if pod is None:
+            break
+        pod_lock = collector._pod_locks.get(key)
+        if pod_lock is None:
+            break
+        collector._guarded_fetch(pod, pod_lock)
+
+    with collector._lock:
+        assert key not in collector._pods
+    collector.close()
+
+
+def test_resource_collector_auto_untracks_after_consecutive_failures(k8s):
+    """ResourceCollector stops polling a pod that consistently returns no metrics.
+
+    The fake K8sService returns None from top_pod for nonexistent pods,
+    matching real kubectl behavior (metrics-server has no data).
+    """
+    from iris.cluster.providers.k8s.tasks import ResourceCollector
+    from iris.cluster.types import JobName
+
+    collector = ResourceCollector(k8s, concurrency=1)
+    task_id = JobName.from_wire("/fail-job/0")
+
+    # Track a pod that doesn't exist — top_pod will return None on each fetch.
+    collector.track("nonexistent-pod", task_id, 0)
+    key = f"{task_id.to_wire()}:0"
+
+    for _ in range(_COLLECTOR_MAX_CONSECUTIVE_FAILURES):
+        with collector._lock:
+            if key not in collector._pods:
+                break
+        collector._fetch_one(key, "nonexistent-pod")
+
+    with collector._lock:
+        assert key not in collector._pods
+    collector.close()
