@@ -1351,7 +1351,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
         coordinator.set_worker_group.remote(worker_group).result()
 
     try:
-        results = coordinator.run_pipeline.remote(config.plan, config.execution_id).result()
+        results = coordinator.run_pipeline.submit(config.plan, config.execution_id).result()
 
         ensure_parent_dir(result_path)
         with open_url(result_path, "wb") as f:
