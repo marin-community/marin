@@ -1,0 +1,240 @@
+[
+  {
+    "budget": 1e+18,
+    "dim": 1536,
+    "bpb": 1.1782900094985962,
+    "macro_loss": 3.939781665802002,
+    "name": "isoflop-moe-v16-1e+18-d1536"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 768,
+    "bpb": 1.0122312307357788,
+    "macro_loss": 3.3397984504699707,
+    "name": "isoflop-moe-v16-3e+18-d768"
+  },
+  {
+    "budget": 1e+18,
+    "dim": 1280,
+    "bpb": 1.1254481077194214,
+    "macro_loss": 3.748671770095825,
+    "name": "isoflop-moe-v16-1e+18-d1280"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 512,
+    "bpb": 1.0374560356140137,
+    "macro_loss": 3.414754629135132,
+    "name": "isoflop-moe-v16-3e+18-d512"
+  },
+  {
+    "budget": 1e+18,
+    "dim": 512,
+    "bpb": 1.074018120765686,
+    "macro_loss": 3.5396740436553955,
+    "name": "isoflop-moe-v16-1e+18-d512"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 2048,
+    "bpb": 1.1229931116104126,
+    "macro_loss": 3.737143039703369,
+    "name": "isoflop-moe-v16-3e+18-d2048"
+  },
+  {
+    "budget": 1e+18,
+    "dim": 768,
+    "bpb": 1.065784215927124,
+    "macro_loss": 3.5272915363311768,
+    "name": "isoflop-moe-v16-1e+18-d768"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 512,
+    "bpb": 1.0129190683364868,
+    "macro_loss": 3.332810401916504,
+    "name": "isoflop-moe-v16-1e+19-d512"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 2048,
+    "bpb": 1.0034514665603638,
+    "macro_loss": 3.329171657562256,
+    "name": "isoflop-moe-v16-1e+19-d2048"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 1280,
+    "bpb": 0.9579063057899476,
+    "macro_loss": 3.162015199661255,
+    "name": "isoflop-moe-v16-1e+19-d1280"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 1536,
+    "bpb": 0.9686749577522278,
+    "macro_loss": 3.201606035232544,
+    "name": "isoflop-moe-v16-1e+19-d1536"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 1792,
+    "bpb": 0.9853507280349731,
+    "macro_loss": 3.2618567943573,
+    "name": "isoflop-moe-v16-1e+19-d1792"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 1024,
+    "bpb": 0.9541351795196532,
+    "macro_loss": 3.149415969848633,
+    "name": "isoflop-moe-v16-1e+19-d1024"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 768,
+    "bpb": 0.97293883562088,
+    "macro_loss": 3.209399700164795,
+    "name": "isoflop-moe-v16-1e+19-d768"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 1024,
+    "bpb": 1.0135109424591064,
+    "macro_loss": 3.3475966453552246,
+    "name": "isoflop-moe-v16-3e+18-d1024"
+  },
+  {
+    "budget": 1e+18,
+    "dim": 1024,
+    "bpb": 1.0905778408050537,
+    "macro_loss": 3.623152256011963,
+    "name": "isoflop-moe-v16-1e+18-d1024"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 1024,
+    "bpb": 0.9157812595367432,
+    "macro_loss": 3.015672206878662,
+    "name": "isoflop-moe-v16-3e+19-d1024"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 1536,
+    "bpb": 1.0562198162078855,
+    "macro_loss": 3.509922504425049,
+    "name": "isoflop-moe-v16-3e+18-d1536"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 1792,
+    "bpb": 1.0867712497711182,
+    "macro_loss": 3.618996381759643,
+    "name": "isoflop-moe-v16-3e+18-d1792"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 1280,
+    "bpb": 0.9118062257766724,
+    "macro_loss": 3.0079565048217773,
+    "name": "isoflop-moe-v16-3e+19-d1280"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 2048,
+    "bpb": 0.9298531413078308,
+    "macro_loss": 3.070441722869873,
+    "name": "isoflop-moe-v16-3e+19-d2048"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 768,
+    "bpb": 0.945410132408142,
+    "macro_loss": 3.114365577697754,
+    "name": "isoflop-moe-v16-3e+19-d768"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 1280,
+    "bpb": 1.0274500846862793,
+    "macro_loss": 3.405738353729248,
+    "name": "isoflop-moe-v16-3e+18-d1280"
+  },
+  {
+    "budget": 1e+18,
+    "dim": 1792,
+    "bpb": 1.2321083545684814,
+    "macro_loss": 4.121220588684082,
+    "name": "isoflop-moe-v16-1e+18-d1792"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 640,
+    "bpb": 0.985026240348816,
+    "macro_loss": 3.2483696937561035,
+    "name": "isoflop-moe-v16-1e+19-d640"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 896,
+    "bpb": 0.9253579378128052,
+    "macro_loss": 3.051757335662842,
+    "name": "isoflop-moe-v16-3e+19-d896"
+  },
+  {
+    "budget": 1e+18,
+    "dim": 896,
+    "bpb": 1.080352783203125,
+    "macro_loss": 3.5876283645629883,
+    "name": "isoflop-moe-v16-1e+18-d896"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 896,
+    "bpb": 0.959280014038086,
+    "macro_loss": 3.164015769958496,
+    "name": "isoflop-moe-v16-1e+19-d896"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 896,
+    "bpb": 1.0121777057647705,
+    "macro_loss": 3.3458549976348877,
+    "name": "isoflop-moe-v16-3e+18-d896"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 640,
+    "bpb": 0.9616966247558594,
+    "macro_loss": 3.1705727577209473,
+    "name": "isoflop-moe-v16-3e+19-d640"
+  },
+  {
+    "budget": 1e+18,
+    "dim": 640,
+    "bpb": 1.0667572021484375,
+    "macro_loss": 3.5221519470214844,
+    "name": "isoflop-moe-v16-1e+18-d640"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 640,
+    "bpb": 1.0202412605285645,
+    "macro_loss": 3.367424249649048,
+    "name": "isoflop-moe-v16-3e+18-d640"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 1536,
+    "bpb": 0.9123398661613464,
+    "macro_loss": 3.0066311359405518,
+    "name": "isoflop-moe-v16-3e+19-d1536-v2"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 1792,
+    "bpb": 0.9208377599716187,
+    "macro_loss": 3.037367582321167,
+    "name": "isoflop-moe-v16-3e+19-d1792-v2"
+  }
+]

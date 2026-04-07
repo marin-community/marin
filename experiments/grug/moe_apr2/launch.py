@@ -843,8 +843,238 @@ def create_v2_resume_3e19_d1536() -> list[ExecutorStep]:
     return [ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config)]
 
 
+CRASHED_RUNS = [
+    # (budget, hidden_dim, gcs_hash, latest_step)
+    (3e19, 1792, "4013e1", 31173),
+    (1e20, 768, "a3be13", 97000),
+    (1e20, 896, "d15ca9", 28000),
+    (1e20, 1024, "e7e0e8", 109686),
+    (1e20, 1280, "5e3d43", 26656),
+    (1e20, 1536, "4b02e2", 77191),
+    (1e20, 1792, "727363", 21319),
+    (1e20, 2048, "431fdb", 21415),
+]
+
+
+def create_crashed_resume_steps() -> list[ExecutorStep]:
+    """Resume all crashed runs from their latest checkpoints."""
+    steps = []
+    for budget, hidden_dim, gcs_hash, latest_step in CRASHED_RUNS:
+        step_mult, min_bs = BUDGET_CONFIG.get(budget, (1, MIN_BATCH_SIZE))
+        target_steps = 2**14 * step_mult
+
+        model_cfg = HEURISTIC.build_model_config(hidden_dim)
+        fpt = _compute_flops_per_token(model_cfg)
+        tokens, batch_size, train_steps = _compute_tokens_and_batch(
+            budget, fpt, target_steps=target_steps, min_batch_size=min_bs
+        )
+        optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, hidden_dim)
+
+        run_id = f"isoflop-moe-v16-{budget:.0e}-d{hidden_dim}"
+        checkpoint_path = (
+            f"gs://marin-us-central2/grug/{run_id}-{gcs_hash}/checkpoints/step-{latest_step}"
+        )
+
+        config = GrugMoeLaunchConfig(
+            model=versioned(model_cfg),
+            data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+            output_path=this_output_path(),
+            run_id=run_id,
+            resources=versioned(ResourceConfig.with_tpu("v4-32")),
+            steps=versioned(train_steps),
+            batch_size=versioned(batch_size),
+            seed=versioned(0),
+            mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+            tracker=WandbConfig(
+                project="dial_moe",
+                tags=["grug", "moe-core", "isoflop", "v16", "gqa4", f"budget={budget:.0e}", f"d={hidden_dim}", "resume"],
+                group="isoflop-moe-v16",
+                name=run_id,
+            ),
+            optimizer=versioned(optimizer),
+            grug_trainer=versioned(
+                GrugTrainerConfig(
+                    z_loss_weight=HEURISTIC.z_loss_weight,
+                    ema_beta=None,
+                    log_every=1,
+                )
+            ),
+            eval=versioned(
+                GrugEvalConfig(
+                    eval_batch_size=64 if hidden_dim >= 2048 else 512,
+                    steps_per_eval=1000,
+                    max_eval_batches=64 if hidden_dim >= 2048 else 8,
+                    eval_current=True,
+                    eval_ema=False,
+                )
+            ),
+            load_checkpoint_path=checkpoint_path,
+        )
+        steps.append(ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config))
+    return steps
+
+
+def create_d1024_resume() -> list[ExecutorStep]:
+    """Resume 1e20-d1024 from step-111000 with bs=128."""
+    budget = 1e20
+    hidden_dim = 1024
+    batch_size = 128
+    step_mult, min_bs = BUDGET_CONFIG[budget]
+    target_steps = 2**14 * step_mult
+
+    model_cfg = HEURISTIC.build_model_config(hidden_dim)
+    fpt = _compute_flops_per_token(model_cfg)
+    tokens = budget / (3 * fpt)
+    train_steps = max(1, round(tokens / (batch_size * SEQ_LEN)))
+    optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, hidden_dim)
+
+    run_id = "isoflop-moe-v16-1e+20-d1024"
+    config = GrugMoeLaunchConfig(
+        model=versioned(model_cfg),
+        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        output_path=this_output_path(),
+        run_id=run_id,
+        resources=versioned(ResourceConfig.with_tpu("v4-32")),
+        steps=versioned(train_steps),
+        batch_size=versioned(batch_size),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["grug", "moe-core", "isoflop", "v16", "gqa4", "budget=1e+20", "d=1024", "resume"],
+            group="isoflop-moe-v16",
+            name=run_id,
+        ),
+        optimizer=versioned(optimizer),
+        grug_trainer=versioned(
+            GrugTrainerConfig(
+                z_loss_weight=HEURISTIC.z_loss_weight,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            GrugEvalConfig(
+                eval_batch_size=512,
+                steps_per_eval=1000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+        load_checkpoint_path="gs://marin-us-central2/grug/isoflop-moe-v16-1e+20-d1024-e7e0e8/checkpoints/step-111000",
+    )
+    return [ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config)]
+
+
+def create_v2_resume(budget, hidden_dim, gcs_hash, latest_step) -> list[ExecutorStep]:
+    """Resume a single run from checkpoint, writing to v2 output and wandb."""
+    step_mult, min_bs = BUDGET_CONFIG.get(budget, (1, MIN_BATCH_SIZE))
+    target_steps = 2**14 * step_mult
+
+    model_cfg = HEURISTIC.build_model_config(hidden_dim)
+    fpt = _compute_flops_per_token(model_cfg)
+    tokens, batch_size, train_steps = _compute_tokens_and_batch(
+        budget, fpt, target_steps=target_steps, min_batch_size=min_bs
+    )
+    optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, hidden_dim)
+
+    orig_run_id = f"isoflop-moe-v16-{budget:.0e}-d{hidden_dim}"
+    run_id = f"{orig_run_id}-v2"
+    checkpoint_path = (
+        f"gs://marin-us-central2/grug/{orig_run_id}-{gcs_hash}/checkpoints/step-{latest_step}"
+    )
+
+    config = GrugMoeLaunchConfig(
+        model=versioned(model_cfg),
+        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        output_path=this_output_path(),
+        run_id=run_id,
+        resources=versioned(ResourceConfig.with_tpu("v4-32")),
+        steps=versioned(train_steps),
+        batch_size=versioned(batch_size),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["grug", "moe-core", "isoflop", "v16", "gqa4", f"budget={budget:.0e}", f"d={hidden_dim}", "qb-jit-fix"],
+            group="isoflop-moe-v16",
+            name=run_id,
+        ),
+        optimizer=versioned(optimizer),
+        grug_trainer=versioned(
+            GrugTrainerConfig(
+                z_loss_weight=HEURISTIC.z_loss_weight,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            GrugEvalConfig(
+                eval_batch_size=64 if hidden_dim >= 2048 else 512,
+                steps_per_eval=1000,
+                max_eval_batches=64 if hidden_dim >= 2048 else 8,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+        load_checkpoint_path=checkpoint_path,
+    )
+    return [ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config)]
+
+
+def create_d1024_v2_bs128() -> list[ExecutorStep]:
+    """Resume 1e20-d1024 with bs=128 to match original run."""
+    budget = 1e20
+    hidden_dim = 1024
+    batch_size = 128
+    model_cfg = HEURISTIC.build_model_config(hidden_dim)
+    fpt = _compute_flops_per_token(model_cfg)
+    tokens = budget / (3 * fpt)
+    train_steps = max(1, round(tokens / (batch_size * SEQ_LEN)))
+    optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, hidden_dim)
+
+    run_id = "isoflop-moe-v16-1e+20-d1024-v2"
+    config = GrugMoeLaunchConfig(
+        model=versioned(model_cfg),
+        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        output_path=this_output_path(),
+        run_id=run_id,
+        resources=versioned(ResourceConfig.with_tpu("v4-32")),
+        steps=versioned(train_steps),
+        batch_size=versioned(batch_size),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["grug", "moe-core", "isoflop", "v16", "gqa4", "budget=1e+20", "d=1024", "qb-jit-fix"],
+            group="isoflop-moe-v16",
+            name=run_id,
+        ),
+        optimizer=versioned(optimizer),
+        grug_trainer=versioned(
+            GrugTrainerConfig(
+                z_loss_weight=HEURISTIC.z_loss_weight,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            GrugEvalConfig(
+                eval_batch_size=512,
+                steps_per_eval=1000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+        load_checkpoint_path="gs://marin-us-central2/grug/isoflop-moe-v16-1e+20-d1024-e7e0e8/checkpoints/step-139000",
+    )
+    return [ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config)]
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=create_v2_resume_3e19_d1536(),
-        description="v16: resume 3e19-d1536 from step-49000 with QB-in-JIT fix",
+        steps=create_d1024_v2_bs128(),
+        description="v16: resume 1e20-d1024-v2 bs=128 from step-139000",
     )
