@@ -47,6 +47,7 @@ WORKER_PROJECT_ROLES = (
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",
     "roles/storage.objectAdmin",
+    "roles/storage.bucketViewer",
     "roles/tpu.viewer",
 )
 IMPERSONATION_ROLES = (
@@ -263,6 +264,37 @@ def _gcloud_probe(cmd: list[str]) -> tuple[bool, str]:
     return False, result.stderr.strip()
 
 
+def _normalize_gcs_probe_path(path: str) -> str:
+    path = path.strip()
+    if not path:
+        raise ValueError("GCS probe path cannot be empty")
+    if not path.startswith("gs://"):
+        path = f"gs://{path.lstrip('/')}"
+    return path.rstrip("/")
+
+
+def _gcs_bucket_from_path(path: str) -> str:
+    path = _normalize_gcs_probe_path(path)
+    bucket = path.removeprefix("gs://").split("/", 1)[0]
+    if not bucket:
+        raise ValueError(f"Invalid GCS probe path: {path}")
+    return bucket
+
+
+def _gcloud_storage_bucket_probe(bucket: str, service_account: str) -> tuple[bool, str]:
+    return _gcloud_probe(
+        [
+            "gcloud",
+            "storage",
+            "buckets",
+            "describe",
+            f"gs://{bucket}",
+            "--format=value(location)",
+            f"--impersonate-service-account={service_account}",
+        ]
+    )
+
+
 @click.group(help=__doc__)
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
 @click.pass_context
@@ -441,14 +473,24 @@ def _check_result(
 @click.option("--project", required=True, help="GCP project id")
 @click.option("--controller-sa-id", default=DEFAULT_CONTROLLER_SA_ID, show_default=True)
 @click.option("--worker-sa-id", default=DEFAULT_WORKER_SA_ID, show_default=True)
+@click.option(
+    "--probe-gcs-path",
+    multiple=True,
+    help=(
+        "Optional gs:// bucket or path used to verify bucket metadata access "
+        "with the worker SA, e.g. gs://marin-us-east5 or "
+        "gs://marin-tmp-us-east5/ttl=1d"
+    ),
+)
 @click.argument("email")
-def check(project: str, controller_sa_id: str, worker_sa_id: str, email: str) -> None:
+def check(project: str, controller_sa_id: str, worker_sa_id: str, probe_gcs_path: tuple[str, ...], email: str) -> None:
     """Check whether a user has the IAM bindings and live credentials to use Iris.
 
     Checks IAM policy bindings, then performs live gcloud probes for each
     capability the Iris CLI needs: SA impersonation, OS Login SSH key
     registration, compute instance listing, OS Login profile resolution,
-    and metadata-style SSH key setup.
+    metadata-style SSH key setup, and optional worker-SA GCS bucket
+    metadata probes.
 
     \b
     Example:
@@ -465,6 +507,8 @@ def check(project: str, controller_sa_id: str, worker_sa_id: str, email: str) ->
     click.echo(f"Project:               {project}")
     click.echo(f"Controller SA:         {controller_sa}")
     click.echo(f"Worker SA:             {worker_sa}")
+    if probe_gcs_path:
+        click.echo(f"Probe GCS paths:       {', '.join(_normalize_gcs_probe_path(path) for path in probe_gcs_path)}")
     click.echo()
 
     ok = True
@@ -607,6 +651,27 @@ def check(project: str, controller_sa_id: str, worker_sa_id: str, email: str) ->
         ]
     )
     ok &= _check_result("read project metadata", passed, detail, results=results)
+
+    # -- 9. Live: storage bucket metadata (worker SA) --------------------------
+    click.echo()
+    click.echo("9. Live: GCS bucket metadata probes (worker SA)")
+    normalized_probe_paths = [_normalize_gcs_probe_path(path) for path in probe_gcs_path]
+    if not normalized_probe_paths:
+        click.echo("  Skipping bucket probes: no --probe-gcs-path provided.")
+    else:
+        seen_buckets: set[str] = set()
+        for path in normalized_probe_paths:
+            bucket = _gcs_bucket_from_path(path)
+            if bucket in seen_buckets:
+                continue
+            passed, detail = _gcloud_storage_bucket_probe(bucket, worker_sa)
+            ok &= _check_result(
+                f"read bucket metadata for gs://{bucket}",
+                passed,
+                detail,
+                results=results,
+            )
+            seen_buckets.add(bucket)
 
     # -- Summary table ---------------------------------------------------------
     _print_results_table(results)
