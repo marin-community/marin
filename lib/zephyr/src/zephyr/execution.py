@@ -394,6 +394,8 @@ class ZephyrCoordinator:
         self._pipeline_id: int = 0
         self._attempt_id: int = 0
         self._worker_batch_counter: int = 0
+        """Counts the number of batches spawned so far, used for unique worker
+        group naming when spawning on-demand batches."""
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
