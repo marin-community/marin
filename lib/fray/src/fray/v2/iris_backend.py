@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, cast
 
@@ -328,14 +329,40 @@ class OperationFuture:
             time.sleep(self._poll_interval)
 
 
+class _ThreadFuture:
+    """Future backed by a daemon thread running a direct Call RPC.
+
+    Unlike OperationFuture, this holds a single HTTP connection for the
+    call duration and does not poll. Suitable for short RPCs where the
+    overhead of StartOperation + GetOperation polling is unnecessary.
+    """
+
+    def __init__(self, fn: Any, args: tuple, kwargs: dict):
+        self._future: Future[Any] = Future()
+
+        def run() -> None:
+            try:
+                self._future.set_result(fn(*args, **kwargs))
+            except Exception as e:
+                self._future.set_exception(e)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def result(self, timeout: float | None = None) -> Any:
+        return self._future.result(timeout=timeout)
+
+
 class _IrisActorMethod:
     """Wraps a method on an Iris actor.
 
-    ``remote()`` uses long-running operations: a fast ``StartOperation`` RPC
-    returns an operation ID, and ``OperationFuture.result()`` polls via
-    ``GetOperation``. No client-side thread pool is needed.
+    ``remote()`` spawns a thread running a direct ``Call`` RPC — fast
+    (single RPC) and suitable for short-lived methods.
 
-    ``__call__()`` uses the existing blocking ``Call`` RPC for simplicity.
+    ``submit()`` uses long-running operations: a fast ``StartOperation``
+    RPC returns an operation ID, and ``OperationFuture.result()`` polls
+    via ``GetOperation``. Use for methods that run for minutes/hours.
+
+    ``__call__()`` uses the blocking ``Call`` RPC synchronously.
     """
 
     def __init__(self, handle: IrisActorHandle, method_name: str):
@@ -343,6 +370,11 @@ class _IrisActorMethod:
         self._method = method_name
 
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
+        client = self._handle._resolve()
+        method = getattr(client, self._method)
+        return _ThreadFuture(method, args, kwargs)
+
+    def submit(self, *args: Any, **kwargs: Any) -> ActorFuture:
         client = self._handle._resolve()
         op_id = client.start_operation(self._method, *args, **kwargs)
         return OperationFuture(client, op_id)
