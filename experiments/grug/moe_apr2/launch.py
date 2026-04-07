@@ -839,8 +839,66 @@ def create_cbs_sweep() -> list[ExecutorStep]:
 cbs_sweep_steps = create_cbs_sweep()
 
 
+CBS_D512_LARGE_BS = [256 + 128 * n for n in range(1, 6)]  # 384, 512, 640, 768, 896
+
+
+def create_cbs_d512_large_bs() -> list[ExecutorStep]:
+    """d512 CBS sweep at larger batch sizes."""
+    steps = []
+    dim, budget = 512, 4.9e17
+    model_cfg = HEURISTIC.build_model_config(dim)
+    fpt = _compute_flops_per_token(model_cfg)
+    tokens = budget / (3 * fpt)
+
+    for bs in CBS_D512_LARGE_BS:
+        train_steps = max(1, round(tokens / (bs * SEQ_LEN)))
+        optimizer = HEURISTIC.build_optimizer_config(bs, tokens, dim)
+
+        run_id = f"cbs-d{dim}-{budget:.0e}-bs{bs}"
+        config = GrugMoeLaunchConfig(
+            model=versioned(model_cfg),
+            data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+            output_path=this_output_path(),
+            run_id=run_id,
+            resources=versioned(ResourceConfig.with_tpu("v4-128")),
+            steps=versioned(train_steps),
+            batch_size=versioned(bs),
+            seed=versioned(0),
+            mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+            tracker=WandbConfig(
+                project="dial_moe",
+                tags=[
+                    "grug", "moe-core", "cbs-sweep",
+                    f"d={dim}", f"budget={budget:.0e}", f"bs={bs}",
+                ],
+                group="cbs-sweep",
+                name=run_id,
+            ),
+            optimizer=versioned(optimizer),
+            grug_trainer=versioned(
+                GrugTrainerConfig(
+                    z_loss_weight=HEURISTIC.z_loss_weight,
+                    ema_beta=None,
+                    log_every=1,
+                )
+            ),
+            eval=versioned(
+                GrugEvalConfig(
+                    eval_batch_size=min(bs, 512),
+                    steps_per_eval=1000,
+                    max_eval_batches=8,
+                    eval_current=True,
+                    eval_ema=False,
+                )
+            ),
+        )
+        steps.append(ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config))
+
+    return steps
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=cbs_sweep_steps,
-        description="Critical batch size sweep: d512/d768/d1024 × 8 batch sizes",
+        steps=create_cbs_d512_large_bs(),
+        description="CBS d512 large batch size sweep: 384-896 on v4-128",
     )
