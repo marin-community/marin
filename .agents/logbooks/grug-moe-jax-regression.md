@@ -55,10 +55,10 @@
 - Escalate if the comparison is blocked by environment-resolution issues or obvious TPU contention.
 
 ## Final Classification
-- Classification: No Grug MoE training regression on the fixed `jax==0.9.2` stack; the stronger `v5p-8` benchmark replicated 3x per stack shows a small throughput improvement and no observed short-run quality regression.
-- Outcome: After fixing the Grug `shard_map` boundary assumptions and repairing the benchmark harness, both JAX stacks train successfully. On matched one-step quality checks on `v5p-8`, loss/router drift is negligible and total parameter norm matches exactly. On matched `v5p-8`, `steps=7`, `warmup=2`, `batch_size=32` comparisons with 3 runs per stack, `jax==0.9.2` is `4.36%` faster than `jax==0.8.0` in `throughput/tokens_per_second` and `mfu`, with `duration` `4.18%` lower.
-- Confidence: High that the fixed `jax==0.9.2` path is no longer a training blocker and shows no obvious short-run numerical regression; moderate-to-high that the `v5p-8` steady-state result is the right throughput readout for this thread because the per-stack variance is low.
-- Main caveat: The earlier short `v4-8` benchmark pointed the other way (`-3.83%` on `steps=2`, `warmup=1`), but the longer `v5p-8` run shows a clear two-step warmup cliff before steady state. I do not consider the earlier `v4-8` micro-benchmark the best final perf claim.
+- Classification: No Grug MoE training regression on the fixed `jax==0.9.2` stack; replicated steady-state benchmarks on both `v5p-8` and `v4-8` show a small throughput improvement and no observed short-run quality regression.
+- Outcome: After fixing the Grug `shard_map` boundary assumptions and repairing the benchmark harness, both JAX stacks train successfully. On matched one-step quality checks on `v4-8` and `v5p-8`, loss/router drift is negligible and total parameter norm matches exactly. On matched `steps=7`, `warmup=2`, `batch_size=32` comparisons with 3 runs per stack, `jax==0.9.2` is `4.36%` faster than `jax==0.8.0` on `v5p-8` and `3.18%` faster on `v4-8` in `throughput/tokens_per_second` and `mfu`, with `duration` lower on both TPU types.
+- Confidence: High that the fixed `jax==0.9.2` path is no longer a training blocker, shows no obvious short-run numerical regression, and does not regress steady-state throughput on the two TPU types exercised here because both replicated comparisons have low variance and the same direction.
+- Main caveat: The earlier short `v4-8` micro-benchmark (`steps=2`, `warmup=1`) pointed the other way because it only measured one post-warmup step. The longer `steps=7`, `warmup=2` readout on both TPU types is the right final throughput claim for this thread.
 
 ## Experiment Log
 ### 2026-04-06 22:03 UTC - Kickoff
@@ -373,3 +373,57 @@
   - The stronger replicated steady-state result continues to say that `jax==0.9.2` is not a Grug MoE training throughput regression on this path.
 - Next action:
   - Update the experiment issue summary with the 3x-per-stack aggregate.
+
+### 2026-04-07 16:21 UTC - Replicated the same 3x steady-state benchmark on `v4-8`
+- Hypothesis:
+  - The earlier `v4-8` `steps=2`, `warmup=1` result was too shallow to classify throughput direction reliably. Re-running the same `steps=7`, `warmup=2` shape used on `v5p-8` should tell us whether the new stack also stays ahead on `v4-8`.
+- Commands:
+  - Allocated/synced dev TPU session `codex-tpu-dep-hell-grug-jax-v4-rerun` on `v4-8` in `us-central2-b`.
+  - New-stack runs:
+    - `gcloud compute tpus tpu-vm ssh marin-tpu-v4-8-us-central2-b-20260406-1735-2769d299 --zone=us-central2-b --project=hai-gcp-models --worker=0 --quiet --command="bash -lc 'rm -rf /tmp/grug-moe-jax-bench /tmp/grug-moe-jax-bench-logs /tmp/grug-jax-092-v4-7step-a.out && mkdir -p /tmp/grug-moe-jax-bench /tmp/grug-moe-jax-bench-logs && cd ~/marin && /home/ubuntu/marin/.venv/bin/python scripts/grug_moe_jax_bench.py --run-id grug-jax-092-v4-7step-a --steps 7 --warmup-steps 2 --batch-size 32 --tpu-type v4-8 --tokenizer /home/ubuntu/.cache/huggingface/hub/models--meta-llama--Meta-Llama-3.1-8B/snapshots/d04e592bb4f6aa9cfee91e2e20afa771667e1d4b > /tmp/grug-jax-092-v4-7step-a.out 2>&1'"`
+    - `gcloud compute tpus tpu-vm ssh marin-tpu-v4-8-us-central2-b-20260406-1735-2769d299 --zone=us-central2-b --project=hai-gcp-models --worker=0 --quiet --command="bash -lc 'rm -rf /tmp/grug-moe-jax-bench /tmp/grug-moe-jax-bench-logs /tmp/grug-jax-092-v4-7step-b.out && mkdir -p /tmp/grug-moe-jax-bench /tmp/grug-moe-jax-bench-logs && cd ~/marin && /home/ubuntu/marin/.venv/bin/python scripts/grug_moe_jax_bench.py --run-id grug-jax-092-v4-7step-b --steps 7 --warmup-steps 2 --batch-size 32 --tpu-type v4-8 --tokenizer /home/ubuntu/.cache/huggingface/hub/models--meta-llama--Meta-Llama-3.1-8B/snapshots/d04e592bb4f6aa9cfee91e2e20afa771667e1d4b > /tmp/grug-jax-092-v4-7step-b.out 2>&1'"`
+    - `gcloud compute tpus tpu-vm ssh marin-tpu-v4-8-us-central2-b-20260406-1735-2769d299 --zone=us-central2-b --project=hai-gcp-models --worker=0 --quiet --command="bash -lc 'rm -rf /tmp/grug-moe-jax-bench /tmp/grug-moe-jax-bench-logs /tmp/grug-jax-092-v4-7step-c.out && mkdir -p /tmp/grug-moe-jax-bench /tmp/grug-moe-jax-bench-logs && cd ~/marin && /home/ubuntu/marin/.venv/bin/python scripts/grug_moe_jax_bench.py --run-id grug-jax-092-v4-7step-c --steps 7 --warmup-steps 2 --batch-size 32 --tpu-type v4-8 --tokenizer /home/ubuntu/.cache/huggingface/hub/models--meta-llama--Meta-Llama-3.1-8B/snapshots/d04e592bb4f6aa9cfee91e2e20afa771667e1d4b > /tmp/grug-jax-092-v4-7step-c.out 2>&1'"`
+  - Old-stack runs:
+    - `gcloud compute tpus tpu-vm ssh marin-tpu-v4-8-us-central2-b-20260406-1735-2769d299 --zone=us-central2-b --project=hai-gcp-models --worker=0 --quiet --command='cd ~/marin && /home/ubuntu/marin/.venv/bin/pip install -U jax==0.8.0 jaxlib==0.8.0 libtpu==0.0.24'`
+    - `gcloud compute tpus tpu-vm ssh marin-tpu-v4-8-us-central2-b-20260406-1735-2769d299 --zone=us-central2-b --project=hai-gcp-models --worker=0 --quiet --command="bash -lc 'rm -rf /tmp/grug-moe-jax-bench /tmp/grug-moe-jax-bench-logs /tmp/grug-jax-080-v4-7step-a.out && mkdir -p /tmp/grug-moe-jax-bench /tmp/grug-moe-jax-bench-logs && cd ~/marin && /home/ubuntu/marin/.venv/bin/python scripts/grug_moe_jax_bench.py --run-id grug-jax-080-v4-7step-a --steps 7 --warmup-steps 2 --batch-size 32 --tpu-type v4-8 --tokenizer /home/ubuntu/.cache/huggingface/hub/models--meta-llama--Meta-Llama-3.1-8B/snapshots/d04e592bb4f6aa9cfee91e2e20afa771667e1d4b > /tmp/grug-jax-080-v4-7step-a.out 2>&1'"`
+    - `gcloud compute tpus tpu-vm ssh marin-tpu-v4-8-us-central2-b-20260406-1735-2769d299 --zone=us-central2-b --project=hai-gcp-models --worker=0 --quiet --command="bash -lc 'rm -rf /tmp/grug-moe-jax-bench /tmp/grug-moe-jax-bench-logs /tmp/grug-jax-080-v4-7step-b.out && mkdir -p /tmp/grug-moe-jax-bench /tmp/grug-moe-jax-bench-logs && cd ~/marin && /home/ubuntu/marin/.venv/bin/python scripts/grug_moe_jax_bench.py --run-id grug-jax-080-v4-7step-b --steps 7 --warmup-steps 2 --batch-size 32 --tpu-type v4-8 --tokenizer /home/ubuntu/.cache/huggingface/hub/models--meta-llama--Meta-Llama-3.1-8B/snapshots/d04e592bb4f6aa9cfee91e2e20afa771667e1d4b > /tmp/grug-jax-080-v4-7step-b.out 2>&1'"`
+    - `gcloud compute tpus tpu-vm ssh marin-tpu-v4-8-us-central2-b-20260406-1735-2769d299 --zone=us-central2-b --project=hai-gcp-models --worker=0 --quiet --command="bash -lc 'rm -rf /tmp/grug-moe-jax-bench /tmp/grug-moe-jax-bench-logs /tmp/grug-jax-080-v4-7step-c.out && mkdir -p /tmp/grug-moe-jax-bench /tmp/grug-moe-jax-bench-logs && cd ~/marin && /home/ubuntu/marin/.venv/bin/python scripts/grug_moe_jax_bench.py --run-id grug-jax-080-v4-7step-c --steps 7 --warmup-steps 2 --batch-size 32 --tpu-type v4-8 --tokenizer /home/ubuntu/.cache/huggingface/hub/models--meta-llama--Meta-Llama-3.1-8B/snapshots/d04e592bb4f6aa9cfee91e2e20afa771667e1d4b > /tmp/grug-jax-080-v4-7step-c.out 2>&1'"`
+  - Restore new stack:
+    - `gcloud compute tpus tpu-vm ssh marin-tpu-v4-8-us-central2-b-20260406-1735-2769d299 --zone=us-central2-b --project=hai-gcp-models --worker=0 --quiet --command='cd ~/marin && /home/ubuntu/marin/.venv/bin/pip install -U jax==0.9.2 jaxlib==0.9.2 libtpu==0.0.38'`
+- Config:
+  - TPU: `v4-8` dev TPU in `us-central2-b`
+  - Harness shape: `steps=7`, `warmup=2`, `batch_size=32`
+  - Measured window: steps `2..6`
+  - Comparison set:
+    - old stack runs: `grug-jax-080-v4-7step-a`, `grug-jax-080-v4-7step-b`, `grug-jax-080-v4-7step-c`
+    - new stack runs: `grug-jax-092-v4-7step-a`, `grug-jax-092-v4-7step-b`, `grug-jax-092-v4-7step-c`
+- Result:
+  - Run table:
+
+    | Stack | Run ID | Mean tok/s | Mean duration (s) | Mean MFU | Final loss |
+    | --- | --- | ---: | ---: | ---: | ---: |
+    | `0.8.0` | `grug-jax-080-v4-7step-a` | `108191.89` | `1.211477` | `22.11935` | `10.8817949295` |
+    | `0.8.0` | `grug-jax-080-v4-7step-b` | `108064.10` | `1.212912` | `22.09322` | `10.8817949295` |
+    | `0.8.0` | `grug-jax-080-v4-7step-c` | `108180.87` | `1.211601` | `22.11709` | `10.8817949295` |
+    | `0.9.2` | `grug-jax-092-v4-7step-a` | `111628.96` | `1.174176` | `22.82204` | `10.8817195892` |
+    | `0.9.2` | `grug-jax-092-v4-7step-b` | `111599.80` | `1.174482` | `22.81608` | `10.8817195892` |
+    | `0.9.2` | `grug-jax-092-v4-7step-c` | `111512.22` | `1.175405` | `22.79817` | `10.8817195892` |
+
+  - Aggregate table:
+
+    | Stack | Runs | Tok/s mean | Tok/s stdev | Duration mean (s) | Duration stdev | MFU mean | MFU stdev |
+    | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+    | `0.8.0` | `3` | `108145.62` | `70.81` | `1.211997` | `0.000795` | `22.10989` | `0.01448` |
+    | `0.9.2` | `3` | `111580.33` | `60.76` | `1.174688` | `0.000640` | `22.81210` | `0.01242` |
+
+  - Aggregate delta (`0.9.2` relative to `0.8.0`):
+    - `throughput/tokens_per_second`: `+3.18%`
+    - `throughput/duration`: `-3.08%`
+    - `throughput/mfu`: `+3.18%`
+    - final loss mean delta: `-0.000692%`
+- Interpretation:
+  - The longer `v4-8` steady-state benchmark lands in the same direction as `v5p-8`: `jax==0.9.2` is modestly faster than `jax==0.8.0`.
+  - The earlier `v4-8` `steps=2`, `warmup=1` result was not a good final readout because it only sampled one post-warmup step.
+  - Run-to-run variance is low on both stacks, and the new stack is slightly more stable here as well.
+- Next action:
+  - Update the experiment issue summary and umbrella issue comment to include separate `v5p-8` and `v4-8` tables.
