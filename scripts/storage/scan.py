@@ -38,13 +38,11 @@ from scripts.storage.db import (
     ADAPTIVE_SPLIT_THRESHOLD,
     DEFAULT_CATALOG,
     GCS_MAX_PAGE_SIZE,
-    PLAN_FINGERPRINT,
     REPO_ROOT,
     Context,
     ObjectBuffer,
     ScanBuffer,
     ScannedObject,
-    StepSpec,
     _BLOB_FIELDS,
     _fetchall_dicts,
     _fetchone_dict,
@@ -52,12 +50,10 @@ from scripts.storage.db import (
     buffer_split_cache,
     flush_metadata,
     load_split_cache,
-    marker_matches,
     plan_rows,
     print_summary,
     read_split_cache,
     storage_class_id_map,
-    write_marker,
 )
 
 log = logging.getLogger(__name__)
@@ -619,12 +615,8 @@ def _run_adaptive_scan(
             t.join(timeout=5)
 
 
-def scan_objects(ctx: Context, action: StepSpec) -> None:
+def scan_objects(ctx: Context) -> None:
     """Scan bucket objects into the DuckDB database for subsequent querying."""
-    fingerprint = PLAN_FINGERPRINT
-    if not ctx.force and marker_matches(ctx.conn, action.action_id, fingerprint):
-        print_summary(f"skip {action.action_id}: marker is current")
-        return
 
     sc_id_map = storage_class_id_map(ctx.conn)
     remote_summary: dict[str, Any] = {"project": resolved_project(ctx), "regions": {}}
@@ -634,7 +626,7 @@ def scan_objects(ctx: Context, action: StepSpec) -> None:
         region = plan_row["region"]
         bucket_name = plan_row["bucket"]
 
-        print_summary(f"{action.action_id}: discovering top-level prefixes in {bucket_name}")
+        print_summary(f"scan: discovering top-level prefixes in {bucket_name}")
         client = storage_client(ctx)
         iterator = client.list_blobs(
             bucket_name, delimiter="/", fields="items(name),prefixes,nextPageToken", timeout=GCS_LIST_TIMEOUT
@@ -664,7 +656,7 @@ def scan_objects(ctx: Context, action: StepSpec) -> None:
         pending: list[tuple[str, int]] = [(p, d) for p, d in initial_prefixes if p not in already_scanned]
         if len(pending) < len(initial_prefixes):
             skipped = len(initial_prefixes) - len(pending)
-            print_summary(f"{action.action_id}: {bucket_name}: {skipped} prefixes already scanned, skipping")
+            print_summary(f"scan: {bucket_name}: {skipped} prefixes already scanned, skipping")
 
         if not pending:
             total_row = _fetchone_dict(
@@ -683,7 +675,7 @@ def scan_objects(ctx: Context, action: StepSpec) -> None:
             continue
 
         print_summary(
-            f"{action.action_id}: scanning {bucket_name}: {len(pending)} initial prefixes "
+            f"scan: scanning {bucket_name}: {len(pending)} initial prefixes "
             f"with {ctx.scan_workers} workers (adaptive splitting, max depth {ADAPTIVE_SCAN_MAX_DEPTH})"
         )
 
@@ -700,7 +692,7 @@ def scan_objects(ctx: Context, action: StepSpec) -> None:
 
         if progress.prefixes_expanded:
             n = progress.prefixes_expanded
-            print_summary(f"{action.action_id}: {bucket_name}: {n} prefixes expanded via adaptive splitting")
+            print_summary(f"scan: {bucket_name}: {n} prefixes expanded via adaptive splitting")
 
         total_row = _fetchone_dict(
             db_conn.execute(
@@ -726,5 +718,3 @@ def scan_objects(ctx: Context, action: StepSpec) -> None:
             f"{region}: scanned {progress.total_objects} new objects, {grand_total} total "
             f"across {int(prefix_count['cnt'])} prefixes"
         )
-
-    write_marker(ctx.conn, action.action_id, fingerprint, dry_run=ctx.dry_run, extra={"remote_summary": remote_summary})

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 
-from scripts.storage.compute import (
+from scripts.storage.cleanup import (
     DirEntry,
     _collapse_deletions,
     _most_common_rule,

@@ -13,14 +13,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
+ENV PYTHONPATH=/app
 
-# Copy project files for dependency resolution
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
-
-# Copy application code
+# pyproject.toml is copied from scripts/storage/pyproject.toml by the build step
+COPY pyproject.toml /app/pyproject.toml
 COPY scripts/storage/ /app/scripts/storage/
+RUN uv pip install --system -e /app
 
 EXPOSE 8000
 
-CMD ["uv", "run", "scripts/storage/server.py", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "scripts/storage/server.py", "--host", "0.0.0.0", "--port", "8000"]

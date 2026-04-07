@@ -1,26 +1,5 @@
 [
   {
-    "id": 2,
-    "pattern": "%",
-    "storage_class": "ARCHIVE",
-    "description": "old stuff",
-    "created_at": "2026-04-06T21:39:43.463836+00:00"
-  },
-  {
-    "id": 3,
-    "pattern": "%",
-    "storage_class": "COLDLINE",
-    "description": null,
-    "created_at": "2026-04-06T21:43:34.769561+00:00"
-  },
-  {
-    "id": 4,
-    "pattern": "%",
-    "storage_class": "NEARLINE",
-    "description": "",
-    "created_at": "2026-04-06T21:43:42.955530+00:00"
-  },
-  {
     "id": 8,
     "pattern": "checkpoints/code-resili-%",
     "storage_class": null,

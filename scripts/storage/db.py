@@ -124,9 +124,6 @@ ADAPTIVE_SCAN_MAX_DEPTH = 2
 
 GCS_DISCOUNT = 0.30
 
-# Deterministic fingerprint for the plan (bucket list).
-PLAN_FINGERPRINT = hashlib.sha256(json.dumps(MARIN_BUCKETS, sort_keys=True).encode()).hexdigest()
-
 OBJECT_FLUSH_THRESHOLD = 10_000_000
 DELETE_BATCH_SIZE = 1000
 
@@ -136,25 +133,6 @@ METADATA_FLUSH_THRESHOLD = 500
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class StepSpec:
-    action_id: str
-    group_name: str
-    command_name: str
-    description: str
-    help_text: str
-    mutating: bool
-    runner: Callable[[Context, StepSpec], None]
-    predecessors: tuple[str, ...] = ()
-
-    scan_workers: bool = False
-    settle_hours: bool = False
-    optional: bool = False
-
-    def run(self, ctx: Context) -> None:
-        self.runner(ctx, self)
 
 
 @dataclass(frozen=True)
@@ -575,17 +553,6 @@ def _ensure_current_schema(conn: duckdb.DuckDBPyConnection, catalog: StorageCata
         )
         """
     )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS step_markers (
-            action_id TEXT PRIMARY KEY,
-            completed_at TEXT NOT NULL,
-            dry_run BOOLEAN NOT NULL,
-            input_fingerprint TEXT NOT NULL,
-            extra_json TEXT
-        )
-        """
-    )
     ObjectBuffer(catalog.objects_parquet_dir, conn)
     # Drop leftover dir_summary table from a partially-completed v14 migration
     try:
@@ -705,44 +672,6 @@ def file_digest(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-# ---------------------------------------------------------------------------
-# Markers (resumable step state)
-# ---------------------------------------------------------------------------
-
-
-def marker_matches(conn: duckdb.DuckDBPyConnection, action_id: str, input_fingerprint: str) -> bool:
-    row = _fetchone_dict(conn.execute("SELECT input_fingerprint FROM step_markers WHERE action_id = ?", (action_id,)))
-    return row is not None and row["input_fingerprint"] == input_fingerprint
-
-
-def marker_exists(conn: duckdb.DuckDBPyConnection, action_id: str) -> bool:
-    row = _fetchone_dict(conn.execute("SELECT 1 FROM step_markers WHERE action_id = ?", (action_id,)))
-    return row is not None
-
-
-def read_marker_extra(conn: duckdb.DuckDBPyConnection, action_id: str) -> dict[str, Any] | None:
-    """Read the extra_json blob for a step marker. Returns None if no marker exists."""
-    row = _fetchone_dict(conn.execute("SELECT extra_json FROM step_markers WHERE action_id = ?", (action_id,)))
-    if row is None or row["extra_json"] is None:
-        return None
-    return json.loads(row["extra_json"])
-
-
-def write_marker(
-    conn: duckdb.DuckDBPyConnection,
-    action_id: str,
-    input_fingerprint: str,
-    *,
-    dry_run: bool,
-    extra: dict[str, Any] | None = None,
-) -> None:
-    conn.execute(
-        "INSERT OR REPLACE INTO step_markers (action_id, completed_at, dry_run, input_fingerprint, extra_json) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (action_id, now_utc().isoformat(), dry_run, input_fingerprint, json.dumps(extra) if extra else None),
-    )
 
 
 # ---------------------------------------------------------------------------

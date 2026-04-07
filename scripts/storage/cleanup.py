@@ -2,26 +2,37 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Storage cleanup workflow: delete objects from a pre-computed deletion manifest with soft-delete safety net.
+"""Consolidated storage purge workflow: scan, summarize, compute, and delete.
 
-The deletion manifest is produced by compute.py and lists directory prefixes to
-delete. This workflow enables soft-delete, deletes all objects under those
-prefixes, then optionally disables soft-delete after a safety window.
+Six steps run in order:
+  1. scan         — List bucket objects into parquet segments
+  2. summarize    — Materialize per-directory summaries from objects
+  3. compute      — Evaluate delete/protect rules, collapse, write CSV manifest
+  4. soft-enable  — Enable 3-day soft-delete on all buckets
+  5. delete       — Delete objects listed in the manifest
+  6. soft-disable — Disable soft-delete (optional, permanent)
 
 Usage:
-    uv run scripts/storage/cleanup.py run [--from X] [--to Y] [--force] [--dry-run]
     uv run scripts/storage/cleanup.py plan
+    uv run scripts/storage/cleanup.py run [--from STEP] [--to STEP] [--dry-run] [--workers N]
+    uv run scripts/storage/cleanup.py scan [--force] [--workers N]
+    uv run scripts/storage/cleanup.py summarize [--force]
+    uv run scripts/storage/cleanup.py compute [--force]
+    uv run scripts/storage/cleanup.py soft-enable [--dry-run]
+    uv run scripts/storage/cleanup.py delete [--dry-run] [--workers N]
+    uv run scripts/storage/cleanup.py soft-disable [--dry-run]
 """
 
 from __future__ import annotations
 
 import csv
 import logging
+import queue
+import shutil
 import threading
 from collections import defaultdict
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from dataclasses import dataclass
 from typing import Any
 
 import click
@@ -30,56 +41,449 @@ from tqdm.auto import tqdm
 
 from scripts.storage.db import (
     DEFAULT_CATALOG,
-    DELETE_BATCH_SIZE,
-    PLAN_FINGERPRINT,
+    GCS_DISCOUNT,
     REPO_ROOT,
     SOFT_DELETE_RETENTION_SECONDS,
     Context,
-    StepSpec,
+    StorageCatalog,
     _fetchall_dicts,
+    continent_for_region,
     ensure_output_dirs,
     file_digest,
     human_bytes,
-    marker_exists,
-    marker_matches,
-    now_utc,
+    materialize_dir_summary,
     plan_rows,
     print_summary,
-    read_marker_extra,
     timestamp_string,
-    write_marker,
 )
 from scripts.storage.scan import (
     bucket_soft_delete_seconds,
     gcloud_bucket_describe,
     run_subprocess,
+    scan_objects,
     storage_client,
 )
 
 log = logging.getLogger(__name__)
 
+# ===========================================================================
+# Step dataclass
+# ===========================================================================
+
+
+@dataclass(frozen=True)
+class Step:
+    name: str
+    description: str
+    runner: Callable[[Context], None]
+    done: Callable[[StorageCatalog], bool]
+    mutating: bool = False
+    optional: bool = False
+
 
 # ===========================================================================
-# CLEANUP steps
+# Done checks (file-based)
 # ===========================================================================
 
 
-def enable_soft_delete(ctx: Context, action: StepSpec) -> None:
-    fingerprint = PLAN_FINGERPRINT
-    remote_summary: dict[str, Any] = {"regions": {}}
+def scan_done(catalog: StorageCatalog) -> bool:
+    return any(catalog.objects_parquet_dir.glob("objects_*.parquet"))
+
+
+def summarize_done(catalog: StorageCatalog) -> bool:
+    return any(catalog.dir_summary_parquet_dir.glob("dir_summary_*.parquet"))
+
+
+def compute_done(catalog: StorageCatalog) -> bool:
+    return catalog.deletion_manifest_csv.exists()
+
+
+def soft_enable_done(catalog: StorageCatalog) -> bool:
+    ctx = _lightweight_context()
     for row in plan_rows():
-        region = row["region"]
+        bucket_url = f"gs://{row['bucket']}"
+        metadata = gcloud_bucket_describe(ctx, bucket_url)
+        current = bucket_soft_delete_seconds(metadata)
+        if current < SOFT_DELETE_RETENTION_SECONDS:
+            return False
+    return True
+
+
+def soft_disable_done(catalog: StorageCatalog) -> bool:
+    ctx = _lightweight_context()
+    for row in plan_rows():
+        bucket_url = f"gs://{row['bucket']}"
+        metadata = gcloud_bucket_describe(ctx, bucket_url)
+        current = bucket_soft_delete_seconds(metadata)
+        if current != 0:
+            return False
+    return True
+
+
+def _lightweight_context() -> Context:
+    """Minimal context for read-only gcloud queries in done checks."""
+    catalog = DEFAULT_CATALOG
+    conn = ensure_output_dirs(catalog)
+    return Context(
+        conn=conn,
+        db_lock=threading.Lock(),
+        dry_run=True,
+        force=False,
+        include_optional=False,
+        scan_workers=1,
+        settle_hours=0,
+        log_path=catalog.log_dir / "done_check.log",
+        timestamp=timestamp_string(),
+        project=None,
+    )
+
+
+# ===========================================================================
+# Collapsing algorithm (from compute.py)
+# ===========================================================================
+
+
+@dataclass
+class DirEntry:
+    bucket: str
+    prefix: str
+    status: str  # "delete" or "keep"
+    matched_rule: str
+    standard_count: int
+    standard_bytes: int
+    nearline_count: int
+    nearline_bytes: int
+    coldline_count: int
+    coldline_bytes: int
+    archive_count: int
+    archive_bytes: int
+
+    @property
+    def object_count(self) -> int:
+        return self.standard_count + self.nearline_count + self.coldline_count + self.archive_count
+
+    @property
+    def total_bytes(self) -> int:
+        return self.standard_bytes + self.nearline_bytes + self.coldline_bytes + self.archive_bytes
+
+    @property
+    def storage_class_breakdown(self) -> str:
+        parts = []
+        for name, count in [
+            ("STANDARD", self.standard_count),
+            ("NEARLINE", self.nearline_count),
+            ("COLDLINE", self.coldline_count),
+            ("ARCHIVE", self.archive_count),
+        ]:
+            if count > 0:
+                parts.append(f"{name}:{count}")
+        return ";".join(parts)
+
+    @property
+    def depth(self) -> int:
+        return self.prefix.rstrip("/").count("/") + 1
+
+
+def _parent_prefix(prefix: str) -> str | None:
+    """Return the parent directory prefix, or None if already at root."""
+    stripped = prefix.rstrip("/")
+    idx = stripped.rfind("/")
+    if idx < 0:
+        return None
+    return stripped[: idx + 1]
+
+
+def _collapse_deletions(entries: list[DirEntry]) -> list[DirEntry]:
+    """Collapse delete-marked directories bottom-up.
+
+    If all children of a parent (within the same bucket) are "delete", replace
+    them with a single entry for the parent with summed stats. Repeat until stable.
+    """
+    by_bucket: dict[str, list[DirEntry]] = defaultdict(list)
+    for e in entries:
+        by_bucket[e.bucket].append(e)
+
+    result: list[DirEntry] = []
+    for bucket, bucket_entries in sorted(by_bucket.items()):
+        result.extend(_collapse_bucket(bucket, bucket_entries))
+    return result
+
+
+def _collapse_bucket(bucket: str, entries: list[DirEntry]) -> list[DirEntry]:
+    """Collapse within a single bucket."""
+    by_prefix: dict[str, DirEntry] = {e.prefix: e for e in entries}
+
+    changed = True
+    while changed:
+        changed = False
+
+        children_of: dict[str, list[str]] = defaultdict(list)
+        for prefix in by_prefix:
+            parent = _parent_prefix(prefix)
+            if parent is not None:
+                children_of[parent].append(prefix)
+
+        for parent, child_prefixes in children_of.items():
+            if len(child_prefixes) < 2:
+                continue
+
+            children = [by_prefix[cp] for cp in child_prefixes if cp in by_prefix]
+            if len(children) != len(child_prefixes):
+                continue
+            if not all(c.status == "delete" for c in children):
+                continue
+
+            if parent in by_prefix and by_prefix[parent].status == "keep":
+                continue
+
+            merged = DirEntry(
+                bucket=bucket,
+                prefix=parent,
+                status="delete",
+                matched_rule=_most_common_rule(children),
+                standard_count=sum(c.standard_count for c in children),
+                standard_bytes=sum(c.standard_bytes for c in children),
+                nearline_count=sum(c.nearline_count for c in children),
+                nearline_bytes=sum(c.nearline_bytes for c in children),
+                coldline_count=sum(c.coldline_count for c in children),
+                coldline_bytes=sum(c.coldline_bytes for c in children),
+                archive_count=sum(c.archive_count for c in children),
+                archive_bytes=sum(c.archive_bytes for c in children),
+            )
+
+            if parent in by_prefix and by_prefix[parent].status == "delete":
+                existing = by_prefix[parent]
+                merged.standard_count += existing.standard_count
+                merged.standard_bytes += existing.standard_bytes
+                merged.nearline_count += existing.nearline_count
+                merged.nearline_bytes += existing.nearline_bytes
+                merged.coldline_count += existing.coldline_count
+                merged.coldline_bytes += existing.coldline_bytes
+                merged.archive_count += existing.archive_count
+                merged.archive_bytes += existing.archive_bytes
+
+            for cp in child_prefixes:
+                del by_prefix[cp]
+            by_prefix[parent] = merged
+            changed = True
+
+    return sorted(by_prefix.values(), key=lambda e: e.prefix)
+
+
+def _most_common_rule(entries: list[DirEntry]) -> str:
+    counts: dict[str, int] = defaultdict(int)
+    for e in entries:
+        counts[e.matched_rule] += 1
+    return max(counts, key=counts.get)  # type: ignore[arg-type]
+
+
+# ===========================================================================
+# Query + manifest
+# ===========================================================================
+
+_STATUS_QUERY = """
+    SELECT d.bucket, d.dir_prefix,
+           d.standard_count, d.standard_bytes,
+           d.nearline_count, d.nearline_bytes,
+           d.coldline_count, d.coldline_bytes,
+           d.archive_count, d.archive_bytes,
+           CASE WHEN p.dir_prefix IS NOT NULL THEN 'keep'
+                WHEN del.dir_prefix IS NOT NULL THEN 'delete'
+                ELSE 'keep'
+           END AS status,
+           COALESCE(del.matched_rule, '') AS matched_rule
+    FROM dir_summary d
+    LEFT JOIN (
+        SELECT DISTINCT d2.bucket, d2.dir_prefix
+        FROM protect_rules p
+        JOIN dir_summary d2
+            ON d2.dir_prefix LIKE p.pattern
+            AND (d2.bucket = p.bucket OR p.bucket = '*')
+        WHERE d2.bucket = ?
+    ) p USING (bucket, dir_prefix)
+    LEFT JOIN (
+        SELECT DISTINCT ON (d3.bucket, d3.dir_prefix)
+               d3.bucket, d3.dir_prefix, dr.pattern AS matched_rule
+        FROM delete_rules dr
+        JOIN dir_summary d3 ON d3.dir_prefix LIKE dr.pattern
+        WHERE d3.bucket = ?
+          AND dr.storage_class IS NULL
+    ) del USING (bucket, dir_prefix)
+    WHERE d.bucket = ?
+    ORDER BY d.dir_prefix
+"""
+
+
+def _compute_deletion_entries(conn: Any, bucket: str) -> list[DirEntry]:
+    """Query dir_summary with delete/keep status and return delete-marked entries."""
+    rows = _fetchall_dicts(conn.execute(_STATUS_QUERY, (bucket, bucket, bucket)))
+
+    all_entries = [
+        DirEntry(
+            bucket=r["bucket"],
+            prefix=r["dir_prefix"],
+            status=r["status"],
+            matched_rule=r["matched_rule"],
+            standard_count=int(r["standard_count"] or 0),
+            standard_bytes=int(r["standard_bytes"] or 0),
+            nearline_count=int(r["nearline_count"] or 0),
+            nearline_bytes=int(r["nearline_bytes"] or 0),
+            coldline_count=int(r["coldline_count"] or 0),
+            coldline_bytes=int(r["coldline_bytes"] or 0),
+            archive_count=int(r["archive_count"] or 0),
+            archive_bytes=int(r["archive_bytes"] or 0),
+        )
+        for r in rows
+    ]
+
+    collapsed = _collapse_deletions(all_entries)
+    return [e for e in collapsed if e.status == "delete"]
+
+
+CSV_COLUMNS = [
+    "bucket",
+    "prefix",
+    "object_count",
+    "total_bytes",
+    "bytes_human",
+    "storage_class_breakdown",
+    "matched_rule",
+]
+
+
+def _write_manifest(entries: list[DirEntry], path: Any) -> None:
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+        writer.writeheader()
+        for e in entries:
+            writer.writerow(
+                {
+                    "bucket": e.bucket,
+                    "prefix": e.prefix,
+                    "object_count": e.object_count,
+                    "total_bytes": e.total_bytes,
+                    "bytes_human": human_bytes(e.total_bytes),
+                    "storage_class_breakdown": e.storage_class_breakdown,
+                    "matched_rule": e.matched_rule,
+                }
+            )
+
+
+def _print_deletion_summary(entries: list[DirEntry]) -> None:
+    """Print a human-readable summary of the deletion manifest."""
+    if not entries:
+        print_summary("  no directories marked for deletion")
+        return
+
+    by_region: dict[str, list[DirEntry]] = defaultdict(list)
+    for e in entries:
+        region = e.bucket.removeprefix("marin-")
+        by_region[region].append(e)
+
+    prices_us = {"STANDARD": 0.020, "NEARLINE": 0.010, "COLDLINE": 0.004, "ARCHIVE": 0.0012}
+    prices_eu = {"STANDARD": 0.023, "NEARLINE": 0.013, "COLDLINE": 0.006, "ARCHIVE": 0.0025}
+    discount = 1.0 - GCS_DISCOUNT
+
+    grand_prefixes = 0
+    grand_objects = 0
+    grand_bytes = 0
+    grand_cost = 0.0
+
+    for region in sorted(by_region):
+        region_entries = by_region[region]
+        continent = continent_for_region(region)
+        prices = prices_us if continent == "US" else prices_eu
+
+        region_objects = sum(e.object_count for e in region_entries)
+        region_bytes = sum(e.total_bytes for e in region_entries)
+        region_cost = 0.0
+        for e in region_entries:
+            for sc, byte_val in [
+                ("STANDARD", e.standard_bytes),
+                ("NEARLINE", e.nearline_bytes),
+                ("COLDLINE", e.coldline_bytes),
+                ("ARCHIVE", e.archive_bytes),
+            ]:
+                region_cost += byte_val / (1024**3) * prices[sc] * discount
+
+        print_summary(
+            f"  {region}: {len(region_entries)} prefixes, "
+            f"{region_objects:,} objects, {human_bytes(region_bytes)}, "
+            f"~${region_cost:,.2f}/mo"
+        )
+        grand_prefixes += len(region_entries)
+        grand_objects += region_objects
+        grand_bytes += region_bytes
+        grand_cost += region_cost
+
+    print_summary(
+        f"  total: {grand_prefixes} prefixes, "
+        f"{grand_objects:,} objects, {human_bytes(grand_bytes)}, "
+        f"~${grand_cost:,.2f}/mo"
+    )
+
+    top = sorted(entries, key=lambda e: e.total_bytes, reverse=True)[:10]
+    print_summary("  top 10 by size:")
+    for e in top:
+        print_summary(f"    {e.bucket}/{e.prefix}  {human_bytes(e.total_bytes)}  ({e.object_count:,} objects)")
+
+
+# ===========================================================================
+# Step runners
+# ===========================================================================
+
+
+def run_scan(ctx: Context) -> None:
+    if ctx.force:
+        # Wipe objects_parquet dir to re-scan from scratch
+        parquet_dir = DEFAULT_CATALOG.objects_parquet_dir
+        if parquet_dir.exists():
+            shutil.rmtree(parquet_dir)
+            parquet_dir.mkdir(parents=True, exist_ok=True)
+    scan_objects(ctx)
+
+
+def run_summarize(ctx: Context) -> None:
+    if ctx.force:
+        parquet_dir = DEFAULT_CATALOG.dir_summary_parquet_dir
+        if parquet_dir.exists():
+            shutil.rmtree(parquet_dir)
+            parquet_dir.mkdir(parents=True, exist_ok=True)
+    total_dirs = materialize_dir_summary(ctx.conn)
+    print_summary(f"  materialized {total_dirs} directory summary rows")
+
+
+def run_compute(ctx: Context) -> None:
+    catalog = DEFAULT_CATALOG
+
+    all_entries: list[DirEntry] = []
+    for plan_row in plan_rows():
+        bucket = plan_row["bucket"]
+        print_summary(f"  computing deletion set for {bucket}...")
+        entries = _compute_deletion_entries(ctx.conn, bucket)
+        all_entries.extend(entries)
+
+    manifest_path = catalog.deletion_manifest_csv
+    _write_manifest(all_entries, manifest_path)
+    print_summary(f"  wrote {len(all_entries)} prefixes to {manifest_path.relative_to(REPO_ROOT)}")
+
+    # Write SHA-256 sidecar for fingerprint validation during delete
+    sha_path = manifest_path.parent / (manifest_path.name + ".sha256")
+    sha_path.write_text(file_digest(manifest_path))
+
+    _print_deletion_summary(all_entries)
+
+
+def run_soft_enable(ctx: Context) -> None:
+    for row in plan_rows():
         bucket_url = f"gs://{row['bucket']}"
         metadata = gcloud_bucket_describe(ctx, bucket_url)
         current_seconds = bucket_soft_delete_seconds(metadata)
         if current_seconds >= SOFT_DELETE_RETENTION_SECONDS and not ctx.force:
-            print_summary(
-                f"{action.action_id}: {bucket_url} already has soft-delete >= {SOFT_DELETE_RETENTION_SECONDS}s"
-            )
-            remote_summary["regions"][region] = {"soft_delete_seconds": current_seconds, "action": "already_enabled"}
+            print_summary(f"  {bucket_url} already has soft-delete >= {SOFT_DELETE_RETENTION_SECONDS}s")
             continue
         print_summary(
-            f"{action.action_id}: {'would enable' if ctx.dry_run else 'enabling'} "
+            f"  {'would enable' if ctx.dry_run else 'enabling'} "
             f"soft-delete ({SOFT_DELETE_RETENTION_SECONDS}s) on {bucket_url}"
         )
         if not ctx.dry_run:
@@ -100,37 +504,28 @@ def enable_soft_delete(ctx: Context, action: StepSpec) -> None:
                 raise RuntimeError(
                     f"Soft-delete on {bucket_url} is {after_seconds}s, expected >= {SOFT_DELETE_RETENTION_SECONDS}s"
                 )
-            remote_summary["regions"][region] = {"soft_delete_seconds": after_seconds, "action": "enabled"}
-        else:
-            remote_summary["regions"][region] = {"action": "dry_run"}
-    if not ctx.dry_run:
-        write_marker(
-            ctx.conn, action.action_id, fingerprint, dry_run=ctx.dry_run, extra={"remote_summary": remote_summary}
-        )
 
 
 def _load_manifest(ctx: Context) -> dict[str, list[str]]:
     """Load the deletion manifest CSV and return prefixes grouped by bucket.
 
-    Also validates the CSV fingerprint against the compute step's stored fingerprint.
+    Validates the CSV fingerprint against the .sha256 sidecar if it exists.
     """
     catalog = DEFAULT_CATALOG
     manifest_path = catalog.deletion_manifest_csv
     if not manifest_path.exists():
         raise RuntimeError(
-            f"Deletion manifest not found at {manifest_path.relative_to(REPO_ROOT)}. "
-            "Run `uv run scripts/storage/compute.py run` first."
+            f"Deletion manifest not found at {manifest_path.relative_to(REPO_ROOT)}. " "Run the compute step first."
         )
 
-    # Validate fingerprint
-    compute_extra = read_marker_extra(ctx.conn, "compute.materialize_deletion_set")
-    if compute_extra is not None:
-        expected_fingerprint = compute_extra.get("csv_fingerprint")
-        actual_fingerprint = file_digest(manifest_path)
-        if expected_fingerprint and actual_fingerprint != expected_fingerprint:
+    sha_path = manifest_path.parent / (manifest_path.name + ".sha256")
+    if sha_path.exists():
+        expected = sha_path.read_text().strip()
+        actual = file_digest(manifest_path)
+        if expected != actual:
             raise RuntimeError(
                 "Deletion manifest has been modified since the compute step ran. "
-                "Re-run `uv run scripts/storage/compute.py run --force` to regenerate."
+                "Re-run the compute step with --force to regenerate."
             )
 
     by_bucket: dict[str, list[str]] = defaultdict(list)
@@ -195,15 +590,9 @@ def _delete_manifest_prefix(
     return deleted_count, deleted_bytes, dict(deleted_by_class)
 
 
-def delete_from_manifest(ctx: Context, action: StepSpec) -> None:
+def run_delete(ctx: Context) -> None:
     """Delete objects listed in the pre-computed deletion manifest."""
-    fingerprint = PLAN_FINGERPRINT
-    if not ctx.force and marker_matches(ctx.conn, action.action_id, fingerprint):
-        print_summary(f"skip {action.action_id}: already completed")
-        return
-
     manifest = _load_manifest(ctx)
-    remote_summary: dict[str, Any] = {"regions": {}}
 
     for row in plan_rows():
         region = row["region"]
@@ -211,18 +600,15 @@ def delete_from_manifest(ctx: Context, action: StepSpec) -> None:
         prefixes = manifest.get(bucket_name, [])
 
         if not prefixes:
-            print_summary(f"{action.action_id}: {bucket_name}: no prefixes in manifest, skipping")
-            remote_summary["regions"][region] = {"deleted_count": 0, "deleted_bytes": 0}
+            print_summary(f"  {bucket_name}: no prefixes in manifest, skipping")
             continue
 
         print_summary(
-            f"{action.action_id}: deleting objects from {bucket_name} "
-            f"({len(prefixes)} manifest prefixes, {ctx.scan_workers} workers)"
+            f"  deleting objects from {bucket_name} " f"({len(prefixes)} manifest prefixes, {ctx.scan_workers} workers)"
         )
 
         total_deleted_count = 0
         total_deleted_bytes = 0
-        total_deleted_by_class: dict[str, int] = defaultdict(int)
 
         progress = tqdm(total=len(prefixes), desc=f"delete {bucket_name}", unit="prefix", leave=True)
         workers = max(1, min(ctx.scan_workers, len(prefixes) or 1))
@@ -230,196 +616,69 @@ def delete_from_manifest(ctx: Context, action: StepSpec) -> None:
             future_to_prefix = {executor.submit(_delete_manifest_prefix, ctx, bucket_name, p): p for p in prefixes}
             for future in as_completed(future_to_prefix):
                 p = future_to_prefix[future]
-                count, nbytes, by_class = future.result()
+                count, nbytes, _by_class = future.result()
                 total_deleted_count += count
                 total_deleted_bytes += nbytes
-                for sc, c in by_class.items():
-                    total_deleted_by_class[sc] += c
-                progress.set_postfix_str(f"{p[:50]} ({count} del)")
+                verb = "would del" if ctx.dry_run else "del"
+                progress.set_postfix_str(f"{p[:50]} ({count} {verb})")
                 progress.update(1)
         progress.close()
 
-        remote_summary["regions"][region] = {
-            "deleted_count": total_deleted_count,
-            "deleted_bytes": total_deleted_bytes,
-        }
         verb = "would delete" if ctx.dry_run else "deleted"
-        print_summary(f"{region}: {verb} {total_deleted_count} objects ({human_bytes(total_deleted_bytes)})")
-    if not ctx.dry_run:
-        write_marker(
-            ctx.conn, action.action_id, fingerprint, dry_run=ctx.dry_run, extra={"remote_summary": remote_summary}
-        )
+        print_summary(f"  {region}: {verb} {total_deleted_count} objects ({human_bytes(total_deleted_bytes)})")
 
 
-def wait_for_soft_delete_window(ctx: Context, action: StepSpec) -> None:
-    if not marker_exists(ctx.conn, "cleanup.delete_cold_objects"):
-        raise RuntimeError("cleanup.wait_for_safety_window requires cleanup.delete_cold_objects to be complete first")
-    fingerprint = PLAN_FINGERPRINT
-    settle_deadline = now_utc() + timedelta(hours=ctx.settle_hours)
-
-    existing_extra = read_marker_extra(ctx.conn, action.action_id)
-    if existing_extra is not None and not ctx.force:
-        existing_deadline = datetime.fromisoformat(existing_extra["settle_deadline"])
-        if now_utc() < existing_deadline:
-            remaining = existing_deadline - now_utc()
-            raise RuntimeError(
-                f"Soft-delete safety window still open until {existing_deadline.isoformat()} "
-                f"({remaining} remaining). Rerun after the deadline or use --force to override."
-            )
-        print_summary(f"{action.action_id}: soft-delete safety window already elapsed")
-        return
-
-    print_summary(
-        f"{action.action_id}: recording safety window for {ctx.settle_hours} hours "
-        f"(until {settle_deadline.isoformat()})"
-    )
-    write_marker(
-        ctx.conn,
-        action.action_id,
-        fingerprint,
-        dry_run=ctx.dry_run,
-        extra={"settle_deadline": settle_deadline.isoformat()},
-    )
-
-
-def disable_soft_delete(ctx: Context, action: StepSpec) -> None:
-    fingerprint = PLAN_FINGERPRINT
-    remote_summary: dict[str, Any] = {"regions": {}}
+def run_soft_disable(ctx: Context) -> None:
     for row in plan_rows():
-        region = row["region"]
         bucket_url = f"gs://{row['bucket']}"
         metadata = gcloud_bucket_describe(ctx, bucket_url)
         current_seconds = bucket_soft_delete_seconds(metadata)
         if current_seconds == 0 and not ctx.force:
-            print_summary(f"{action.action_id}: {bucket_url} already has soft-delete disabled")
-            remote_summary["regions"][region] = {"soft_delete_seconds": 0, "action": "already_disabled"}
+            print_summary(f"  {bucket_url} already has soft-delete disabled")
             continue
-        print_summary(
-            f"{action.action_id}: {'would disable' if ctx.dry_run else 'disabling'} soft-delete on {bucket_url}"
-        )
+        print_summary(f"  {'would disable' if ctx.dry_run else 'disabling'} soft-delete on {bucket_url}")
         if not ctx.dry_run:
             run_subprocess(ctx, ["gcloud", "storage", "buckets", "update", bucket_url, "--clear-soft-delete"])
             after = gcloud_bucket_describe(ctx, bucket_url)
             after_seconds = bucket_soft_delete_seconds(after)
             if after_seconds != 0:
                 raise RuntimeError(f"Soft-delete on {bucket_url} is still {after_seconds}s after clear")
-            remote_summary["regions"][region] = {"soft_delete_seconds": 0, "action": "disabled"}
-        else:
-            remote_summary["regions"][region] = {"action": "dry_run"}
-    if not ctx.dry_run:
-        write_marker(
-            ctx.conn, action.action_id, fingerprint, dry_run=ctx.dry_run, extra={"remote_summary": remote_summary}
-        )
 
 
 # ===========================================================================
 # Step registry
 # ===========================================================================
 
-STEPS: list[StepSpec] = [
-    StepSpec(
-        action_id="cleanup.enable_soft_delete",
-        group_name="cleanup",
-        command_name="enable-soft-delete",
-        description="Enable 3-day soft-delete retention on source buckets.",
-        help_text=(
-            "Enable soft-delete on each source bucket with a 3-day retention window. "
-            "This ensures deleted objects can be recovered if something goes wrong. "
-            "Safe to re-run; skips buckets that already have the required retention."
-        ),
+STEPS: list[Step] = [
+    Step("scan", "Scan objects into parquet", run_scan, scan_done),
+    Step("summarize", "Materialize dir_summary from objects", run_summarize, summarize_done),
+    Step("compute", "Compute deletion manifest CSV", run_compute, compute_done),
+    Step("soft-enable", "Enable 3-day soft-delete on buckets", run_soft_enable, soft_enable_done, mutating=True),
+    Step("delete", "Delete objects from manifest", run_delete, lambda _: False, mutating=True),
+    Step(
+        "soft-disable",
+        "Disable soft-delete (permanent)",
+        run_soft_disable,
+        soft_disable_done,
         mutating=True,
-        runner=enable_soft_delete,
-    ),
-    StepSpec(
-        action_id="cleanup.delete_cold_objects",
-        group_name="cleanup",
-        command_name="delete-cold-objects",
-        description="Delete objects listed in the pre-computed deletion manifest.",
-        help_text=(
-            "Read the deletion manifest produced by compute.py and delete all objects "
-            "under the listed prefixes. Validates the manifest fingerprint before proceeding. "
-            "Fans out over manifest prefixes with --scan-workers concurrent threads."
-        ),
-        mutating=True,
-        runner=delete_from_manifest,
-        predecessors=("cleanup.enable_soft_delete", "compute.materialize_deletion_set"),
-        scan_workers=True,
-    ),
-    StepSpec(
-        action_id="cleanup.wait_for_safety_window",
-        group_name="cleanup",
-        command_name="wait-for-safety-window",
-        description="Record and honor the soft-delete safety window.",
-        help_text=(
-            "Record the soft-delete safety window and refuse to disable soft-delete until that window "
-            "has elapsed. This is a checkpoint, not a sleep. Use `--settle-hours` to adjust the window."
-        ),
-        mutating=False,
-        runner=wait_for_soft_delete_window,
-        predecessors=("cleanup.delete_cold_objects",),
-        settle_hours=True,
-    ),
-    StepSpec(
-        action_id="cleanup.disable_soft_delete",
-        group_name="cleanup",
-        command_name="disable-soft-delete",
-        description="Disable soft-delete after the safety window has elapsed.",
-        help_text=(
-            "Disable soft-delete on each source bucket, permanently removing the soft-deleted objects. "
-            "Only run this after the safety window has elapsed and you have confirmed no important "
-            "data was accidentally deleted."
-        ),
-        mutating=True,
-        runner=disable_soft_delete,
-        predecessors=("cleanup.wait_for_safety_window",),
         optional=True,
     ),
 ]
 
-STEP_INDEX = {step.action_id: step for step in STEPS}
+STEP_INDEX: dict[str, Step] = {s.name: s for s in STEPS}
+STEP_NAMES: list[str] = [s.name for s in STEPS]
+
 
 # ===========================================================================
-# CLI
+# Context builder
 # ===========================================================================
-
-
-def selected_steps(
-    *,
-    from_action: str | None,
-    to_action: str | None,
-    only_action: str | None,
-    include_optional: bool,
-) -> list[StepSpec]:
-    if only_action is not None:
-        return [STEP_INDEX[only_action]]
-    start_index = 0 if from_action is None else next(i for i, s in enumerate(STEPS) if s.action_id == from_action)
-    end_index = len(STEPS) - 1 if to_action is None else next(i for i, s in enumerate(STEPS) if s.action_id == to_action)
-    steps = STEPS[start_index : end_index + 1]
-    if include_optional:
-        return steps
-    if to_action is not None and STEP_INDEX[to_action].optional:
-        return steps
-    return [s for s in steps if not s.optional]
-
-
-def assert_step_predecessors(ctx: Context, step: StepSpec) -> None:
-    if ctx.force:
-        return
-    missing = [p for p in step.predecessors if not marker_exists(ctx.conn, p)]
-    if missing:
-        raise RuntimeError(
-            f"{step.action_id} requires these predecessor steps to be complete first: {', '.join(missing)}"
-        )
 
 
 def build_context(
     *,
     dry_run: bool,
     force: bool,
-    include_optional: bool,
     scan_workers: int,
-    settle_hours: int,
-    log_prefix: str,
     project: str | None,
 ) -> Context:
     catalog = DEFAULT_CATALOG
@@ -429,153 +688,172 @@ def build_context(
         db_lock=threading.Lock(),
         dry_run=dry_run,
         force=force,
-        include_optional=include_optional,
+        include_optional=False,
         scan_workers=scan_workers,
-        settle_hours=settle_hours,
-        log_path=catalog.log_dir / f"{log_prefix}_{timestamp_string()}.log",
+        settle_hours=0,
+        log_path=catalog.log_dir / f"cleanup_{timestamp_string()}.log",
         timestamp=timestamp_string(),
         project=project,
     )
 
 
-def runtime_options(
-    *,
-    scan_workers: bool = False,
-    settle_hours: bool = False,
-    include_optional: bool = False,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        options: list[Callable[[Callable[..., Any]], Callable[..., Any]]] = [
-            click.option("--force", is_flag=True, help="Ignore cached markers and recompute."),
-            click.option("--dry-run", is_flag=True, help="Read-only mode: inspect but never mutate remote state."),
-            click.option("--project", help="Override the GCP project for Cloud Storage API calls."),
-        ]
-        if include_optional:
-            options.append(click.option("--include-optional", is_flag=True, help="Include optional cleanup steps."))
-        if scan_workers:
-            options.append(
-                click.option(
-                    "--scan-workers", default=64, show_default=True, type=int, help="Concurrent scan/delete workers."
-                )
-            )
-        if settle_hours:
-            options.append(
-                click.option(
-                    "--settle-hours", default=72, show_default=True, type=int, help="Soft-delete safety window (hours)."
-                )
-            )
-        for option in reversed(options):
-            func = option(func)
-        return func
+# ===========================================================================
+# CLI helpers
+# ===========================================================================
 
-    return decorator
+
+def _selected_steps(
+    *,
+    from_step: str | None,
+    to_step: str | None,
+) -> list[Step]:
+    start = 0 if from_step is None else STEP_NAMES.index(from_step)
+    end = len(STEPS) - 1 if to_step is None else STEP_NAMES.index(to_step)
+    return STEPS[start : end + 1]
+
+
+def _run_steps(ctx: Context, steps: list[Step]) -> None:
+    for step in steps:
+        tags = []
+        if step.mutating:
+            tags.append("mutating")
+        if step.optional:
+            tags.append("optional")
+        tag_str = f" [{', '.join(tags)}]" if tags else ""
+        print_summary(f"==> {step.name}: {step.description}{tag_str}")
+
+        step.runner(ctx)
+
+    print_summary("completed selected steps")
+
+
+# ===========================================================================
+# CLI
+# ===========================================================================
 
 
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
     help=(
-        "Storage cleanup workflow: delete objects matching delete rules from Marin buckets "
-        "with a soft-delete safety net. Run `plan` to see step status, or use the "
-        "cleanup subcommands to execute individual steps."
+        "Storage purge workflow: scan, summarize, compute deletion manifest, "
+        "and delete objects with a soft-delete safety net."
     ),
 )
 def cli() -> None:
     pass
 
 
-@cli.command("plan", help="Show ordered step list and completion status.")
+@cli.command("plan", help="Show each step's status.")
 def plan_cli() -> None:
-    conn = ensure_output_dirs()
-    print("Ordered cleanup steps:")
+    catalog = DEFAULT_CATALOG
+    # Ensure dirs exist so we can check parquet files, but don't need gcloud for plan
+    catalog.ensure_dirs()
+    print("Storage purge steps:")
     for step in STEPS:
-        suffix = " [optional]" if step.optional else ""
-        status = "done" if marker_exists(conn, step.action_id) else "pending"
-        print(f"  {status:7}  {step.action_id}{suffix}")
+        tags = []
+        if step.mutating:
+            tags.append("mutating")
+        if step.optional:
+            tags.append("optional")
+        tag_str = f"  [{', '.join(tags)}]" if tags else ""
+
+        # For steps that need gcloud (soft-enable/disable), show "unknown" instead of calling gcloud
+        if step.name in ("soft-enable", "soft-disable"):
+            status = "pending"
+        else:
+            try:
+                status = "done" if step.done(catalog) else "pending"
+            except Exception:
+                status = "error"
+
+        print(f"  {status:7}  {step.name:14} {step.description}{tag_str}")
 
 
-@cli.command(
-    "run",
-    help="Execute a contiguous slice of the ordered workflow.",
-)
-@runtime_options(scan_workers=True, settle_hours=True, include_optional=True)
-@click.option("--from", "from_action", type=click.Choice(sorted(STEP_INDEX)), help="Start from this step.")
-@click.option("--to", "to_action", type=click.Choice(sorted(STEP_INDEX)), help="Stop after this step.")
-@click.option("--only", "only_action", type=click.Choice(sorted(STEP_INDEX)), help="Run exactly one step.")
+@cli.command("run", help="Execute a contiguous slice of the ordered workflow.")
+@click.option("--from", "from_step", type=click.Choice(STEP_NAMES), help="Start from this step.")
+@click.option("--to", "to_step", type=click.Choice(STEP_NAMES), help="Stop after this step.")
+@click.option("--dry-run", is_flag=True, help="Read-only mode: inspect but never mutate remote state.")
+@click.option("--force", is_flag=True, help="Re-run steps even if already done.")
+@click.option("--workers", "scan_workers", default=64, show_default=True, type=int, help="Concurrent workers.")
+@click.option("--project", help="Override GCP project.")
 def run_cli(
+    from_step: str | None,
+    to_step: str | None,
     dry_run: bool,
     force: bool,
-    include_optional: bool,
     scan_workers: int,
-    settle_hours: int,
     project: str | None,
-    from_action: str | None,
-    to_action: str | None,
-    only_action: str | None,
 ) -> None:
-    ctx = build_context(
-        dry_run=dry_run,
-        force=force,
-        include_optional=include_optional,
-        scan_workers=scan_workers,
-        settle_hours=settle_hours,
-        log_prefix="run",
-        project=project,
-    )
-    steps = selected_steps(
-        from_action=from_action,
-        to_action=to_action,
-        only_action=only_action,
-        include_optional=include_optional,
-    )
+    ctx = build_context(dry_run=dry_run, force=force, scan_workers=scan_workers, project=project)
+    steps = _selected_steps(from_step=from_step, to_step=to_step)
     print_summary(f"running {len(steps)} steps; log: {ctx.log_path.relative_to(REPO_ROOT)}")
-    for step in steps:
-        print_summary(f"==> {step.action_id}: {step.description}")
-        assert_step_predecessors(ctx, step)
-        step.run(ctx)
-    print_summary("completed selected steps")
+    _run_steps(ctx, steps)
 
 
-@cli.group(help="Cleanup commands: enable soft-delete, delete objects matching rules, finalize.")
-def cleanup() -> None:
-    pass
+# Individual step commands
 
 
-GROUPS: dict[str, click.Group] = {"cleanup": cleanup}
+@cli.command("scan", help="Scan bucket objects into parquet segments.")
+@click.option("--force", is_flag=True, help="Wipe existing parquet and re-scan.")
+@click.option("--workers", "scan_workers", default=64, show_default=True, type=int, help="Concurrent scan workers.")
+@click.option("--project", help="Override GCP project.")
+def scan_cli(force: bool, scan_workers: int, project: str | None) -> None:
+    ctx = build_context(dry_run=False, force=force, scan_workers=scan_workers, project=project)
+    print_summary(f"==> scan: {STEP_INDEX['scan'].description}")
+    run_scan(ctx)
+    print_summary("completed")
 
 
-def register_step_command(group: click.Group, step: StepSpec) -> None:
-    @runtime_options(
-        scan_workers=step.scan_workers,
-        settle_hours=step.settle_hours,
-    )
-    def command(
-        dry_run: bool,
-        force: bool,
-        project: str | None,
-        scan_workers: int = 64,
-        settle_hours: int = 72,
-    ) -> None:
-        ctx = build_context(
-            dry_run=dry_run,
-            force=force,
-            include_optional=False,
-            scan_workers=scan_workers,
-            settle_hours=settle_hours,
-            log_prefix=step.action_id.replace(".", "__"),
-            project=project,
-        )
-        print_summary(f"running 1 step; log: {ctx.log_path.relative_to(REPO_ROOT)}")
-        print_summary(f"==> {step.action_id}: {step.description}")
-        assert_step_predecessors(ctx, step)
-        step.run(ctx)
-        print_summary("completed selected steps")
-
-    command.__name__ = step.action_id.replace(".", "_").replace("-", "_")
-    group.command(name=step.command_name, help=step.help_text)(command)
+@cli.command("summarize", help="Materialize dir_summary from objects.")
+@click.option("--force", is_flag=True, help="Wipe existing dir_summary and re-run.")
+@click.option("--project", help="Override GCP project.")
+def summarize_cli(force: bool, project: str | None) -> None:
+    ctx = build_context(dry_run=False, force=force, scan_workers=1, project=project)
+    print_summary(f"==> summarize: {STEP_INDEX['summarize'].description}")
+    run_summarize(ctx)
+    print_summary("completed")
 
 
-for _step in STEPS:
-    register_step_command(GROUPS[_step.group_name], _step)
+@cli.command("compute", help="Compute deletion manifest CSV from rules.")
+@click.option("--project", help="Override GCP project.")
+def compute_cli(project: str | None) -> None:
+    ctx = build_context(dry_run=False, force=False, scan_workers=1, project=project)
+    print_summary(f"==> compute: {STEP_INDEX['compute'].description}")
+    run_compute(ctx)
+    print_summary("completed")
+
+
+@cli.command("soft-enable", help="Enable 3-day soft-delete on all buckets.")
+@click.option("--dry-run", is_flag=True, help="Show what would happen.")
+@click.option("--force", is_flag=True, help="Re-enable even if already set.")
+@click.option("--project", help="Override GCP project.")
+def soft_enable_cli(dry_run: bool, force: bool, project: str | None) -> None:
+    ctx = build_context(dry_run=dry_run, force=force, scan_workers=1, project=project)
+    print_summary(f"==> soft-enable: {STEP_INDEX['soft-enable'].description}")
+    run_soft_enable(ctx)
+    print_summary("completed")
+
+
+@cli.command("delete", help="Delete objects listed in the manifest.")
+@click.option("--dry-run", is_flag=True, help="Show what would be deleted.")
+@click.option("--workers", "scan_workers", default=64, show_default=True, type=int, help="Concurrent delete workers.")
+@click.option("--project", help="Override GCP project.")
+def delete_cli(dry_run: bool, scan_workers: int, project: str | None) -> None:
+    ctx = build_context(dry_run=dry_run, force=False, scan_workers=scan_workers, project=project)
+    print_summary(f"==> delete: {STEP_INDEX['delete'].description}")
+    run_delete(ctx)
+    print_summary("completed")
+
+
+@cli.command("soft-disable", help="Disable soft-delete (permanent).")
+@click.option("--dry-run", is_flag=True, help="Show what would happen.")
+@click.option("--force", is_flag=True, help="Re-disable even if already off.")
+@click.option("--project", help="Override GCP project.")
+def soft_disable_cli(dry_run: bool, force: bool, project: str | None) -> None:
+    ctx = build_context(dry_run=dry_run, force=force, scan_workers=1, project=project)
+    print_summary(f"==> soft-disable: {STEP_INDEX['soft-disable'].description}")
+    run_soft_disable(ctx)
+    print_summary("completed")
 
 
 if __name__ == "__main__":

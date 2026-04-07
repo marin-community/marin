@@ -12,6 +12,7 @@ Usage:
 import logging
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import click
@@ -21,7 +22,7 @@ log = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 PURGE_DIR = REPO_ROOT / "scripts" / "storage" / "purge"
 DEFAULT_ZONE = "us-central2-b"
-DEFAULT_MACHINE_TYPE = "e2-highmem-4"
+DEFAULT_MACHINE_TYPE = "n2-highmem-4"
 VM_NAME = "delete-o-tron"
 IMAGE_NAME = "delete-o-tron"
 
@@ -57,41 +58,25 @@ def cli():
 @cli.command()
 @click.option("--zone", default=DEFAULT_ZONE, show_default=True, help="GCP zone for the VM.")
 @click.option("--machine-type", default=DEFAULT_MACHINE_TYPE, show_default=True)
-@click.option("--skip-build", is_flag=True, help="Skip Docker build+push, just update the VM.")
+@click.option("--skip-build", is_flag=True, help="Skip Docker build and restart; only sync data.")
 @click.option("--skip-data", is_flag=True, help="Skip syncing data to GCS.")
 def deploy(zone: str, machine_type: str, skip_build: bool, skip_data: bool):
-    """Build, push, and deploy the dashboard to a GCP VM."""
+    """Build and deploy the dashboard to a GCP VM.
+
+    Syncs source to the VM, builds the Docker image there, and restarts the container.
+    Creates the VM first if it does not exist.
+    """
     project = _get_project()
     region = zone.rsplit("-", 1)[0]
     temp_bucket = f"marin-tmp-{region}"
     gcs_prefix = f"gs://{temp_bucket}/ttl=30d/delete-o-tron"
-    registry = f"gcr.io/{project}"
-    image_tag = f"{registry}/{IMAGE_NAME}:latest"
-
-    # Build and push
-    if not skip_build:
-        click.echo("\n==> Building Docker image...")
-        _run(
-            [
-                "docker",
-                "build",
-                "-t",
-                f"{IMAGE_NAME}:latest",
-                "-f",
-                str(REPO_ROOT / "scripts" / "storage" / "Dockerfile"),
-                str(REPO_ROOT),
-            ]
-        )
-        _run(["docker", "tag", f"{IMAGE_NAME}:latest", image_tag])
-        click.echo(f"\n==> Pushing to {image_tag}...")
-        _run(["docker", "push", image_tag])
 
     # Sync data
     if not skip_data:
         _sync_data(gcs_prefix)
 
-    # Create or update VM
-    click.echo(f"\n==> Deploying VM {VM_NAME} in {zone}...")
+    # Create VM if it doesn't exist
+    click.echo(f"\n==> Checking VM {VM_NAME} in {zone}...")
     exists = (
         subprocess.run(
             ["gcloud", "compute", "instances", "describe", VM_NAME, f"--zone={zone}", f"--project={project}"],
@@ -101,33 +86,20 @@ def deploy(zone: str, machine_type: str, skip_build: bool, skip_data: bool):
         == 0
     )
 
-    if exists:
+    if not exists:
+        click.echo(f"\n==> Creating VM {VM_NAME}...")
         _run(
             [
                 "gcloud",
                 "compute",
                 "instances",
-                "update-container",
-                VM_NAME,
-                f"--zone={zone}",
-                f"--project={project}",
-                f"--container-image={image_tag}",
-                f"--container-env=GCS_DATA_PREFIX={gcs_prefix}",
-            ]
-        )
-    else:
-        _run(
-            [
-                "gcloud",
-                "compute",
-                "instances",
-                "create-with-container",
+                "create",
                 VM_NAME,
                 f"--zone={zone}",
                 f"--project={project}",
                 f"--machine-type={machine_type}",
-                f"--container-image={image_tag}",
-                f"--container-env=GCS_DATA_PREFIX={gcs_prefix}",
+                "--image-family=cos-stable",
+                "--image-project=cos-cloud",
                 "--scopes=storage-full,compute-ro",
                 "--tags=http-server",
                 "--boot-disk-size=100GB",
@@ -149,6 +121,9 @@ def deploy(zone: str, machine_type: str, skip_build: bool, skip_data: bool):
             check=False,
             capture_output=True,
         )
+
+    if not skip_build:
+        _build_on_vm(zone, project, gcs_prefix)
 
     result = subprocess.run(
         [
@@ -178,17 +153,79 @@ def sync_data_cmd(region: str):
     _sync_data(gcs_prefix)
 
 
+def _build_on_vm(zone: str, project: str, gcs_prefix: str):
+    """Rsync source to the VM, rebuild the image there, and restart the container."""
+    remote_dir = "/tmp/delete-o-tron-build"
+    ssh_base = ["gcloud", "compute", "ssh", VM_NAME, f"--zone={zone}", f"--project={project}"]
+
+    click.echo("\n==> Waiting for SSH...")
+    for attempt in range(20):
+        result = subprocess.run([*ssh_base, "--command", "true"], capture_output=True)
+        if result.returncode == 0:
+            break
+        click.echo(f"    SSH not ready, retrying in 10s (attempt {attempt + 1}/20)...")
+        time.sleep(10)
+    else:
+        raise click.ClickException("SSH did not become available after 200s")
+
+    click.echo("\n==> Syncing source to VM...")
+    # Pipe a tar archive over SSH — avoids needing rsync or scp with excludes.
+    tar = subprocess.Popen(
+        [
+            "tar",
+            "-czf",
+            "-",
+            "--no-xattrs",
+            "--exclude=scripts/storage/purge/objects_parquet",
+            "--exclude=scripts/storage/purge/dir_summary_parquet",
+            "--exclude=scripts/storage/__pycache__",
+            "--exclude=scripts/storage/*/__pycache__",
+            "scripts/storage",
+        ],
+        stdout=subprocess.PIPE,
+        cwd=str(REPO_ROOT),
+    )
+    # Extract and promote the standalone pyproject.toml to the build root.
+    remote_setup = (
+        f"rm -rf {remote_dir} && mkdir -p {remote_dir} && tar -xzf - -C {remote_dir} && "
+        f"cp {remote_dir}/scripts/storage/pyproject.toml {remote_dir}/pyproject.toml"
+    )
+    extract = subprocess.Popen(
+        [*ssh_base, "--", remote_setup],
+        stdin=tar.stdout,
+    )
+    tar.stdout.close()
+    extract.wait()
+    tar.wait()
+    if tar.returncode != 0 or extract.returncode != 0:
+        raise click.ClickException("Failed to sync source to VM")
+
+    click.echo("\n==> Building image and restarting container on VM...")
+    build_and_restart = " && ".join(
+        [
+            f"cd {remote_dir}",
+            f"docker build -t {IMAGE_NAME}:latest -f scripts/storage/Dockerfile .",
+            f"docker rm -f {VM_NAME} 2>/dev/null || true",
+            f"docker run -d --name {VM_NAME} -p 8000:8000"
+            f" -e GCS_DATA_PREFIX={gcs_prefix}"
+            f" -v /mnt/stateful_partition/delete-o-tron-data:/app/scripts/storage/purge"
+            f" {IMAGE_NAME}:latest",
+        ]
+    )
+    _run([*ssh_base, "--command", build_and_restart])
+
+
 def _sync_data(gcs_prefix: str):
     """Sync parquet dirs and DB to GCS."""
     click.echo("\n==> Syncing data to GCS...")
     for name in ["objects_parquet", "dir_summary_parquet"]:
         local = PURGE_DIR / name
         if local.is_dir():
-            _run(["gsutil", "-m", "rsync", "-r", str(local) + "/", f"{gcs_prefix}/{name}/"])
+            _run(["gcloud", "storage", "rsync", "--recursive", str(local) + "/", f"{gcs_prefix}/{name}/"])
     for rule_file in ["protect_rules.json", "delete_rules.json"]:
         rule_path = PURGE_DIR / rule_file
         if rule_path.exists():
-            _run(["gsutil", "cp", str(rule_path), f"{gcs_prefix}/{rule_file}"])
+            _run(["gcloud", "storage", "cp", str(rule_path), f"{gcs_prefix}/{rule_file}"])
 
 
 if __name__ == "__main__":
