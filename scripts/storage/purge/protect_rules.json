@@ -1,5 +1,6 @@
 [
   {
+    "id": 7443,
     "bucket": "*",
     "pattern": "DL3DV/%",
     "pattern_type": "like",
@@ -8,6 +9,7 @@
     "sources": "named.csv:18"
   },
   {
+    "id": 7444,
     "bucket": "*",
     "pattern": "analysis/%",
     "pattern_type": "like",
@@ -16,534 +18,7 @@
     "sources": "named.csv:1751"
   },
   {
-    "bucket": "*",
-    "pattern": "checkpoints/dclm_1b_1x_how_to%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:37"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/dclm_1b_1x_replication_eval_check%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:38"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/dclm_7b_1x_how_to%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:39"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/dclm_baseline_1b_1x_replication_nov12%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:40"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/dolma-1.4b%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:41"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/dpo/ultrafeedback_llama3_8b%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_dpo output",
-    "sources": "high-value.csv:42"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/exp2262%",
-    "pattern_type": "like",
-    "owners": "Moo Jin",
-    "reasons": "Checkpoints for synthetic data teacher selection experiments",
-    "sources": "named.csv:1748"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/exp3956%",
-    "pattern_type": "like",
-    "owners": "Moo Jin",
-    "reasons": "Checkpoints for synthetic data teacher selection experiments",
-    "sources": "named.csv:1749"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/ferry_muonh_qwen3_8b_feistel-515e16%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:43"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/ferry_qwen3_1_7b_pt_to_cooldown-027563%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:44"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/ferry_qwen3_8b_pt_to_cooldown-1fc2cb%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:45"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/llama-150m-fineweb-edu-gpu%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:46"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/llama-32b-tootsie-2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:13"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/llama-8b-tootsie-0.001%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:47"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/llama-8b-tootsie-adept-phoenix%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:48"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/llama-8b-tootsie-cooldown-take-2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:49"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/llama-8b-tootsie-dessert%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:50"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/llama-8b-tootsie-dessert-v3%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:51"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/llama-8b-tootsie-phase2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:52"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/llama-8b-tootsie-phase3%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:53"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/llama-bs1536-70b-tootsie%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:54"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/llama3.1_mixture_total-redux%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_sft output",
-    "sources": "high-value.csv:55"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/marin-32b-muon-4%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:2"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/marin-32b-nadamw-4%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:3"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/marin-32b-necro-2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:4"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/marin-32b-qwen%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:5"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/marin-32b-v5p-qwen-2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:6"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/marin-nano-tinystories%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:56"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/marin-tinystories-30m%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:57"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/marin_8b_sft_smoltalk2_nemotron_v2_big%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_sft output",
-    "sources": "high-value.csv:7"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/marinochat-pre-mid%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:58"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/marinochat-sft%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:59"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/multilingual-cpt-8b-fineweb2-hq%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:60"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/olmoish-1b%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:61"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/plantcad-train-r1%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:62"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/sft/mixture_sft_deeper_starling%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:63"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/sft/tulu3_sft_spoonbill_945_lr_%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:64"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/sft/tulu3_tootsie_deeper_spoonbill%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_sft output",
-    "sources": "high-value.csv:65"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/sft/tulu3_tootsie_sft_deeper_spoonbill_zloss%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:66"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/sft/tulu3_tootsie_sft_spoonbill_zloss%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:67"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-32b-cooldown-bison-adamc%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:8"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-32b-cooldown-bison-adamc-flat%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:9"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-32b-cooldown-bison-adamc/checkpoints/step-190000%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".cd(...) path",
-    "sources": "high-value.csv:10"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-32b-cooldown-mantis-adamc-v2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:11"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-32b-mantis-sft-exp1994%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_sft output",
-    "sources": "high-value.csv:12"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-deeper-spoonbill-2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:68"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-deeper-starling%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:69"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-focused-spoonbill-fp32%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:70"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-focused-spoonbill-zloss%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:71"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-giraffe-32k%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:72"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-giraffe-32k-293fef%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:73"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-giraffe-32k-293fef/hf/step-%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".cd(...) path",
-    "sources": "high-value.csv:74"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-giraffe-4k-v4%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:75"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-giraffe-4k-v4/hf/step-%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".cd(...) path",
-    "sources": "high-value.csv:76"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-giraffe-phase3-64k%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:77"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-giraffe-phase3-64k/hf/step-%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".cd(...) path",
-    "sources": "high-value.csv:78"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-hypnotic-spoonbill%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:79"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-hypnotic-spoonbill-norms-2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:80"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-sensible-starling%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:81"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-sensible-starling/checkpoints/step-1399923%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".cd(...) path",
-    "sources": "high-value.csv:82"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-soft-raccoon-3%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:83"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-softer-raccoon%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:84"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-softer-raccoon-no-decay%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:85"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tootsie-8b-softer-raccoon-reset-adamw-2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:86"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tutorial-dclm-30m-sweep-lr%-wd%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:87"
-  },
-  {
-    "bucket": "*",
-    "pattern": "checkpoints/tutorial-slimpajama_6b-30m-sweep-lr%-wd%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_train output",
-    "sources": "high-value.csv:88"
-  },
-  {
+    "id": 7445,
     "bucket": "*",
     "pattern": "dmlab/%",
     "pattern_type": "like",
@@ -552,14 +27,7 @@
     "sources": "named.csv:16"
   },
   {
-    "bucket": "*",
-    "pattern": "documents/stack_edu/%",
-    "pattern_type": "like",
-    "owners": "Calvin",
-    "reasons": "Hydrated Stack-Edu text shards derived from Software Heritage blob fetches; required to retokenize or reuse Stack-Edu for Dolma 3 Pool.",
-    "sources": "named.csv:6"
-  },
-  {
+    "id": 7446,
     "bucket": "*",
     "pattern": "ego-dex/%",
     "pattern_type": "like",
@@ -568,6 +36,7 @@
     "sources": "named.csv:14"
   },
   {
+    "id": 7447,
     "bucket": "*",
     "pattern": "pinlin_calvin_xu/%",
     "pattern_type": "like",
@@ -576,806 +45,7 @@
     "sources": "named.csv:4"
   },
   {
-    "bucket": "*",
-    "pattern": "raw/EleutherAI/lambada_openaihf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:90"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/Idavidrein/gpqa%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:91"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/Rowan/hellaswaghf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_download output",
-    "sources": "high-value.csv:92"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/SaylorTwift/bbhhf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:93"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/SlimPajama-627B-262830%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:94"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/SlimPajama-627B-262830/2d0accd/huggingface.co/datasets/cerebras/SlimPajama-627B/resolve/2d0accd%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".cd(...) path",
-    "sources": "high-value.csv:95"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/SlimPajama-6B-be35b7%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:96"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/SlimPajama-6B-be35b7/data%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".cd(...) path",
-    "sources": "high-value.csv:97"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/TIGER-Lab/MMLU-Prohf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_download output",
-    "sources": "high-value.csv:98"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/WillHeld/MuSRDecontamhf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:99"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/allenai/ai2_archf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_download output",
-    "sources": "high-value.csv:100"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/allenai/openbookqahf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_download output",
-    "sources": "high-value.csv:101"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/allenai/winograndehf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_download output",
-    "sources": "high-value.csv:102"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/ambean/lingOly%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:103"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/baber/piqahf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:104"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/cais/mmlu_raw%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:105"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/cais/mmluhf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:106"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/arxiv_abstracts_filtered-f1d7a9a%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:107"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/arxiv_papers_filtered-033cf7f%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:108"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/biodiversity_heritage_library_filtered-0486ed6%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:109"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/caselaw_access_project_filtered-50e1961%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:110"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/cccc_filtered-03a3de5%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:111"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/data_provenance_initiative_filtered-8f5afcf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:112"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/doab_filtered-defb24c%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:113"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/foodista_filtered-bf2c7aa%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:114"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/github_archive_filtered-52282fe%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:115"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/library_of_congress_filtered-56725c7%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:116"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/libretexts_filtered-70388bc%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:117"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/news_filtered-59aaa8f%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:118"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/oercommons_filtered-506b615%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:119"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/peS2o_filtered-2977475%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:120"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/pre_1929_books_filtered-23f9d96%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:121"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/pressbooks_filtered-1a1d3b5%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:122"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/project_gutenberg_filtered-3cdf687%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:123"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/public_domain_review_filtered-efc7f21%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:124"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/pubmed_filtered-c156f05%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:125"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/python_enhancement_proposals_filtered-5821709%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:126"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/regulations_filtered-3327364%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:127"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/stackexchange_filtered-c0ac737%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:128"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/stackv2-d0e3266%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:129"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/stackv2_edu_filtered-c354dbe%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:130"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/stackv2_html_filtered-92c9fa8%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:131"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/ubuntu_irc_filtered-84f88c9%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:132"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/uk_hansard_filtered-c88adc4%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:133"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/usgpo_filtered-b150cc2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:134"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/uspto_filtered-13894c5%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:135"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/wikimedia_filtered-0641bb8%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:136"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/wikiteam_filtered-f4ed055%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:137"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/common_pile/youtube_filtered-dff8c8a%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:138"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/commoncrawl/rephraser_sweep_batch0-231d96/%",
-    "pattern_type": "like",
-    "owners": "Michael",
-    "reasons": "Raw HTML extracted from 150 CommonCrawl WARC files (slow to re-download)",
-    "sources": "named.csv:50"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/dclm/a3b142c%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".cd(...) path",
-    "sources": "high-value.csv:139"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/dolma%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:140"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/dolma/v1.7%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "InputName.hardcoded",
-    "sources": "high-value.csv:89"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/dolma3_mix-150B-1025-15d04ee%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:141"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/dolmino-mix-1124-157960%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:142"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/eval-datasets/code-tasks%",
-    "pattern_type": "like",
-    "owners": "Calvin",
-    "reasons": "Pre-cached code eval datasets used by two-phase and three-phase StarCoder domain-phase-mix runs.",
-    "sources": "named.csv:9"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/eval-datasets/core-tasks%",
-    "pattern_type": "like",
-    "owners": "Calvin",
-    "reasons": "Pre-cached core eval datasets used by single-phase common-crawl domain-phase-mix runs.",
-    "sources": "named.csv:10"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/finemath%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:143"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/fineweb%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:144"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/fineweb-edu-%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:145"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/fineweb2-hq%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:146"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/fineweb2_hq%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:147"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/google-research-datasets/mbpphf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:148"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/google-research-datasets/mbpphf/4bb6404/full%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".cd(...) path",
-    "sources": "high-value.csv:149"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/google/boolqhf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_download output",
-    "sources": "high-value.csv:150"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/gsm8k/mainhf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:151"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/hendrycks/mathhf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:152"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/institutional-books-d2f504a%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_download output",
-    "sources": "high-value.csv:153"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/latxa_corpus%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:154"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/lavita_medical_qa%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_download output",
-    "sources": "high-value.csv:155"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/llm360/megamath%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_download output",
-    "sources": "high-value.csv:156"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/marcov/winograd_wsc_wsc273_promptsourcehf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:157"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/nemotro-cc%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:158"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/nemotron-cc%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:14"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/nemotron_cc_code_v1%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:15"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/nemotron_cc_math_v1%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:16"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/nemotron_cc_v2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:17"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/nemotron_cc_v2_1%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:18"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/nemotron_pretraining_code_v1%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:19"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/nemotron_pretraining_code_v2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:20"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/nemotron_pretraining_sft_v1%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:21"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/nemotron_pretraining_specialized_v1%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:22"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/openai/openai_humanevalhf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_download output",
-    "sources": "high-value.csv:282"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/paloma-fc6827%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:159"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/pile_pubmed_abstracts%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_download output",
-    "sources": "high-value.csv:160"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/pile_pubmed_central%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_download output",
-    "sources": "high-value.csv:161"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/proof-pile-2-f1b1d8%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:162"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/proof-pile-2-f1b1d8/901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".cd(...) path",
-    "sources": "high-value.csv:163"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/stack_edu-ad3cf0%",
-    "pattern_type": "like",
-    "owners": "Calvin",
-    "reasons": "Raw Stack-Edu export used to hydrate and tokenize the Dolma 3 Pool stack_edu partitions for the two-phase Dolma3+Dolmino swarm.",
-    "sources": "named.csv:5"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/starcoderdata-720c8c%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:164"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/tau/commonsense_qahf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:165"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/the-stack-dedup-4ba450%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:166"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/the-stack-dedup-4ba450/17cad72%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".cd(...) path",
-    "sources": "high-value.csv:167"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/the_pile_openwebtext2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:168"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/the_pile_openwebtext2/1de27c6/huggingface.co/datasets/vietgpt/the_pile_openwebtext2/resolve/1de27c6%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".cd(...) path",
-    "sources": "high-value.csv:169"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/tokenizers/marin-community--marin-tokenizer%",
-    "pattern_type": "like",
-    "owners": "Calvin",
-    "reasons": "Tokenizer cache used by Marin-tokenizer domain-phase-mix runs such as single_phase_cc and Dolma3/Dolmino tokenization prep.",
-    "sources": "named.csv:12"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/tokenizers/meta-llama--Meta-Llama-3.1-8B%",
-    "pattern_type": "like",
-    "owners": "Calvin",
-    "reasons": "Tokenizer cache used by StarCoder domain-phase-mix experiments and candidate validation to avoid repeated Hugging Face fetches.",
-    "sources": "named.csv:11"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/truthful_qa/multiple_choicehf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:170"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/wis-k/instruction-following-evalhf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:171"
-  },
-  {
-    "bucket": "*",
-    "pattern": "raw/ybisk/piqahf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_download output",
-    "sources": "high-value.csv:172"
-  },
-  {
+    "id": 7448,
     "bucket": "*",
     "pattern": "re10k_clips/%",
     "pattern_type": "like",
@@ -1384,1030 +54,7 @@
     "sources": "named.csv:17"
   },
   {
-    "bucket": "*",
-    "pattern": "tokenized/%_marin_tokenizer%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:173"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/angiosperm_16_genomes%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:174"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/arxiv-no-problem-a3e054%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:175"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/arxiv_abstracts%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:176"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/arxiv_papers%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:177"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/biodiversity_heritage_library%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:178"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/caselaw_access_project%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:179"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/cccc%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:180"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/data_provenance_initiative%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:181"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/doab%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:182"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/foodista%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:183"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/github_archive%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:184"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/library_of_congress%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:185"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/libretexts%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:186"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/news%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:187"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/oercommons%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:188"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/peS2o%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:189"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/pre_1929_books%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:190"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/pressbooks%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:191"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/project_gutenberg%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:192"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/public_domain_review%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:193"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/pubmed%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:194"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/python_enhancement_proposals%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:195"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/regulations%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:196"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/stackexchange%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:197"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/stackv2_edu%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:198"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/stackv2_html%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:199"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/ubuntu_irc%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:200"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/uk_hansard%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:201"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/usgpo%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:202"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/uspto%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:203"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/wikimedia%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:204"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/wikiteam%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:205"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile/youtube%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:206"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/common_pile_stackv2_edu_filtered_python%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:207"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dclm_baseline-0206f1/%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:208"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dclm_baseline_100m_llama3-f42a23/%",
-    "pattern_type": "like",
-    "owners": "Michael",
-    "reasons": "Tokenized DCLM web text used as baseline training data",
-    "sources": "named.csv:49"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dlwh/wikitext_2_detokenized%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:209"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/algebraic-stack-cc00cf%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:210"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/arxiv-07a51f%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:211"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/c4-e0e5ec%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:212"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/cc-74b017%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:213"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/cc-news-625d3e%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:214"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/falcon-da8fd0%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:215"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/flan-a99cb2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:216"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/gutenberg-f9eb99%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:217"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/megawika-34abf2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:218"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/open-web-math-79823d%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:219"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/pes2o-538363%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:220"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/reddit-62a64a%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:221"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/stackexchange-adfc49%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:222"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/starcoder-8b6089%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:223"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma/wiki-212315%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:224"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma3_dolmino_pool/%",
-    "pattern_type": "like",
-    "owners": "Calvin",
-    "reasons": null,
-    "sources": "named.csv:8"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma3_mix-150B-1025-15d04ee/%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:225"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolma3_pool/%",
-    "pattern_type": "like",
-    "owners": "Calvin",
-    "reasons": "tbh I'll be doing this on east5a, so maybe fine to remove from central1, 2, europe",
-    "sources": "named.csv:7"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolmino/all_math-9d507c%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:226"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolmino/dclm-6c18eb%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:227"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolmino/flan-d71ec1%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:228"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolmino/math/codesearchnet-owmfilter-fd2640%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:229"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolmino/math/dolmino_math_synth-11f876%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:230"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolmino/math/gsm8k-902e8b%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:231"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolmino/math/mathcoder2-synthmath-bc8dd2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:232"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolmino/math/metamath-owmfilter-fafa84%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:233"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolmino/math/tinyGSM-MIND-6c3016%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:234"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolmino/math/tulu_math-414a4d%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:235"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolmino/pes2o-d22243%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:236"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolmino/stackexchange-271a84%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:237"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/dolmino/wiki-c31b74%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:238"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/finemath_3_plus-a26b0f/%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:239"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/finepdfs_edu_eng_Latn_llama3%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:240"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/finepdfs_eng_Latn_val%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:241"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/fineweb-edu%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:242"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/latxa_corpus%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:243"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/longmino_%_llama3%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:244"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/medu-mmlu-science-qa-c64fda%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:245"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cc/hq_actual%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:23"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cc/hq_actual-5af4cc%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:24"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cc/hq_synth%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:25"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cc/hq_synth-3525e2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:26"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cc/low_actual%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:27"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cc/low_actual-cb3f2c%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:28"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cc/low_synth%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:29"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cc/low_synth-3c57b3%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:30"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cc/medium%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:31"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cc/medium-d86506%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:32"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cc/medium_high%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:33"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cc/medium_high-d21701%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:34"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cc/medium_low%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "ExecutorStep output",
-    "sources": "high-value.csv:35"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cc/medium_low-0fdb07%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:36"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/nemotron_cooldown_1e20-666089/%",
-    "pattern_type": "like",
-    "owners": "Michael",
-    "reasons": "Tokenized Nemotron data used as training data for cooldown runs",
-    "sources": "named.csv:48"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/4chan%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:246"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/c4_100_domains%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:247"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/c4_en%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:248"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/dolma-v1_5%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:249"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/dolma_100_programing_languages%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:250"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/dolma_100_subreddits%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:251"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/falcon-refinedweb%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:252"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/gab%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:253"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/m2d2_s2orc_unsplit%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:254"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/m2d2_wikipedia_unsplit%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:255"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/manosphere_meta_sep%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:256"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/mc4%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:257"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/ptb%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:258"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/redpajama%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:259"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/twitterAAE_HELM_fixed%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:260"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/paloma/wikitext_103%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:261"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/pile_pubmed_abstracts%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:262"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/pile_pubmed_central%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:263"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/proofpile_2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:264"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/rephraser_spec_d7d976d3_cooldown-02c17e/%",
-    "pattern_type": "like",
-    "owners": "Michael",
-    "reasons": "Tokenized rephraser-extracted text used as training data for cooldown runs",
-    "sources": "named.csv:47"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/roneneldan/TinyStories%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:265"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/slimpajama-6b-cw%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:266"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/smoltalk_marin%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:267"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/stackexchange-621b94%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:268"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/starcoderdata%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:269"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/tokenized/lavita_allprocessed%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:270"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/tokenized/lavita_medmcqa%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:271"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/tokenized/lavita_medmcqa_validation%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:272"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/tokenized/lavita_pubmedqa%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:273"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/tokenized/lavita_pubmedqa_validation%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:274"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/tulu_sft-1bb7d4%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:275"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/tulu_sft-349fb7/%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:276"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/tulu_sft_v3_llama3_instruct_tokenizer%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:277"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/ultrafeedback_binarized_test_prefs_marin_tokenizer%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:278"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/ultrafeedback_binarized_train_prefs_marin_tokenizer%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:279"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/uncheatable_eval/%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": "default_tokenize output",
-    "sources": "high-value.csv:280"
-  },
-  {
-    "bucket": "*",
-    "pattern": "tokenized/wikipedia-6980f2%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": ".with_output_path(...) path",
-    "sources": "high-value.csv:281"
-  },
-  {
+    "id": 7449,
     "bucket": "*",
     "pattern": "webdatasets/%",
     "pattern_type": "like",
@@ -2416,734 +63,7 @@
     "sources": "named.csv:15"
   },
   {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adam-lr1.25e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adam-lr1.77e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adam-lr2.50e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adam-lr3.54e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adam-lr5.00e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adam-lr7.07e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-bs128-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:12 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:64 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr1.00e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:9 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr1.25e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:11 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr1.41e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr1.77e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:2 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr2.00e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:5 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr2.50e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:14 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr2.83e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:2 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr3.13e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr3.54e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr4.00e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:2 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr5.00e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:13 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr6.25e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:5 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr7.07e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/baseline-muonh-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:49 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/baseline-muonhc-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:8 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/baseline-muonht-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:2 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/bsabl-magma_muonh-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:8 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/bsabl-muonh-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:8 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden1024-mup-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:16 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden1024-nl4-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:29 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-mup-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:16 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl1024-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:5 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl128-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:21 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl16-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:29 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl256-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:10 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl32-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:29 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl4-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:124 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl512-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:10 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl64-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:22 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl8-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:29 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden2048-nl4-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:22 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden256-mup-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:5 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden256-nl4-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:29 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden512-mup-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:5 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden512-nl4-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:29 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_1b_feistel_lr0.003_bs1024/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_1b_feistel_lr0.006_bs1024/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_1b_feistel_lr0.006_bs512/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_1b_feistel_lr0.009_bs1024/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_1b_feistel_lr0.012_bs1024/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_3b_feistel-515e16/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_feistel-515e16/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_feistel_100B-515e16/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.003-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.006-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.009-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.012-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3__feistel_lr0.006_bs1024_layer300/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3__feistel_lr0.009_bs1024_layer12/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3__feistel_lr0.009_bs1024_layer128/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3__feistel_lr0.009_bs1024_layer16/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3__feistel_lr0.009_bs1024_layer256/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3__feistel_lr0.009_bs1024_layer32/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3__feistel_lr0.009_bs1024_layer64/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_feistel_lr0.006_bs1024_wide_arch/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/hidden128-nl16-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:7 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/hidden128-nl32-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:7 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/hidden128-nl4-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:9 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/hidden128-nl8-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:7 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muon-lr1.25e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muon-lr1.77e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muon-lr2.50e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muon-lr3.54e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muon-lr5.00e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muon-lr7.07e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr1.00e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:77 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr1.25e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:12 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr1.41e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:45 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr1.77e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:12 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr2.00e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:30 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr2.50e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:14 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr2.83e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:24 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr3.54e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:58 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr4.00e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:2 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr5.00e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:75 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr5.66e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:2 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr7.07e-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:78 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-power0.2-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:480 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/rerun_baseline-muonh-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:24 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/test-weight-/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Hyperball experiments",
-    "sources": "consolidated:4 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "scratch/kaiyue/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Small artifacts",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-eu-west4",
-    "pattern": "speedrun/%",
-    "pattern_type": "like",
-    "owners": "Kaiyue",
-    "reasons": "Speedrun checkpoints",
-    "sources": "consolidated:1 rules"
-  },
-  {
-    "bucket": "marin-us-central1",
-    "pattern": "align/%",
-    "pattern_type": "like",
-    "owners": null,
-    "reasons": null,
-    "sources": "named.csv:1757"
-  },
-  {
+    "id": 7450,
     "bucket": "marin-us-central1",
     "pattern": "cdx/%",
     "pattern_type": "like",
@@ -3152,14 +72,7 @@
     "sources": "named.csv:51"
   },
   {
-    "bucket": "marin-us-central1",
-    "pattern": "checkpoints/dq-%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "checkpoints from pretraining data quality experiments",
-    "sources": "named.csv:1756"
-  },
-  {
+    "id": 7451,
     "bucket": "marin-us-central1",
     "pattern": "checkpoints/isoflop/%",
     "pattern_type": "like",
@@ -3168,14 +81,7 @@
     "sources": "named.csv:3"
   },
   {
-    "bucket": "marin-us-central1",
-    "pattern": "checkpoints/math_sft_sweep%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "Model checkpoints",
-    "sources": "named.csv:1753"
-  },
-  {
+    "id": 7452,
     "bucket": "marin-us-central1",
     "pattern": "checkpoints/qwen3-0.6b-rephraser-mid-sft-v1-d39527/hf/step-9398/%",
     "pattern_type": "like",
@@ -3184,6 +90,7 @@
     "sources": "named.csv:42"
   },
   {
+    "id": 7453,
     "bucket": "marin-us-central1",
     "pattern": "checkpoints/qwen3-0.6b-rephraser-sft-v6-5a8b19/hf/step-1318/%",
     "pattern_type": "like",
@@ -3192,6 +99,7 @@
     "sources": "named.csv:39"
   },
   {
+    "id": 7454,
     "bucket": "marin-us-central1",
     "pattern": "checkpoints/qwen3-1.7b-rephraser-mid-sft-v1-bab2de/hf/step-9398/%",
     "pattern_type": "like",
@@ -3200,6 +108,7 @@
     "sources": "named.csv:41"
   },
   {
+    "id": 7455,
     "bucket": "marin-us-central1",
     "pattern": "checkpoints/qwen3-1.7b-rephraser-sft-v4-4c525e/hf/step-1318/%",
     "pattern_type": "like",
@@ -3208,6 +117,7 @@
     "sources": "named.csv:38"
   },
   {
+    "id": 7456,
     "bucket": "marin-us-central1",
     "pattern": "checkpoints/qwen3-4b-thinking-rephraser-sft-32k-v5-e17272/hf/step-750/%",
     "pattern_type": "like",
@@ -3216,6 +126,7 @@
     "sources": "named.csv:37"
   },
   {
+    "id": 7457,
     "bucket": "marin-us-central1",
     "pattern": "checkpoints/qwen3-8b-rephraser-mid-sft-v1-5a71ec/hf/step-1250/%",
     "pattern_type": "like",
@@ -3224,6 +135,7 @@
     "sources": "named.csv:40"
   },
   {
+    "id": 7458,
     "bucket": "marin-us-central1",
     "pattern": "checkpoints/qwen3-8b-rephraser-sft-v4-193d7b/hf/step-1318/%",
     "pattern_type": "like",
@@ -3232,6 +144,7 @@
     "sources": "named.csv:36"
   },
   {
+    "id": 7459,
     "bucket": "marin-us-central1",
     "pattern": "cooldown-dclm-100m-v2-32bcbc/%",
     "pattern_type": "like",
@@ -3240,6 +153,7 @@
     "sources": "named.csv:46"
   },
   {
+    "id": 7460,
     "bucket": "marin-us-central1",
     "pattern": "cooldown-dclm-filtered-v1-54cdb7/%",
     "pattern_type": "like",
@@ -3248,6 +162,7 @@
     "sources": "named.csv:45"
   },
   {
+    "id": 7461,
     "bucket": "marin-us-central1",
     "pattern": "cooldown-rephraser-d7d976d3-150warc-v2-f8aa0b/%",
     "pattern_type": "like",
@@ -3256,14 +171,7 @@
     "sources": "named.csv:44"
   },
   {
-    "bucket": "marin-us-central1",
-    "pattern": "documents/math500%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "Rollouts from evals/SFT",
-    "sources": "named.csv:1752"
-  },
-  {
+    "id": 7462,
     "bucket": "marin-us-central1",
     "pattern": "documents/math_reasoning_scaling/%",
     "pattern_type": "like",
@@ -3272,22 +180,43 @@
     "sources": "named.csv:1750"
   },
   {
-    "bucket": "marin-us-central1",
-    "pattern": "documents/math_test%",
+    "id": 7463,
+    "bucket": "marin-us-central2",
+    "pattern": "documents/math_reasoning_scaling/%",
     "pattern_type": "like",
     "owners": "Rohith",
-    "reasons": "more rollouts/etc",
-    "sources": "named.csv:1755"
+    "reasons": "Evals for a bunch of models",
+    "sources": "named.csv:1750"
   },
   {
-    "bucket": "marin-us-central1",
-    "pattern": "documents/math_train%",
+    "id": 7464,
+    "bucket": "marin-us-east1",
+    "pattern": "documents/math_reasoning_scaling/%",
     "pattern_type": "like",
     "owners": "Rohith",
-    "reasons": "more rollouts/etc",
-    "sources": "named.csv:1754"
+    "reasons": "Evals for a bunch of models",
+    "sources": "named.csv:1750"
   },
   {
+    "id": 7465,
+    "bucket": "marin-us-east5",
+    "pattern": "documents/math_reasoning_scaling/%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "Evals for a bunch of models",
+    "sources": "named.csv:1750"
+  },
+  {
+    "id": 7466,
+    "bucket": "marin-us-west4",
+    "pattern": "documents/math_reasoning_scaling/%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "Evals for a bunch of models",
+    "sources": "named.csv:1750"
+  },
+  {
+    "id": 7467,
     "bucket": "marin-us-central1",
     "pattern": "downloaded/%",
     "pattern_type": "like",
@@ -3296,6 +225,7 @@
     "sources": "named.csv:52"
   },
   {
+    "id": 7468,
     "bucket": "marin-us-central1",
     "pattern": "evaluation/%",
     "pattern_type": "like",
@@ -3304,6 +234,7 @@
     "sources": "named.csv:13"
   },
   {
+    "id": 7469,
     "bucket": "marin-us-central1",
     "pattern": "exp2166-scaling-ladder-nemotron-validation-optimal-1e+20-9563f0/%",
     "pattern_type": "like",
@@ -3312,6 +243,7 @@
     "sources": "named.csv:43"
   },
   {
+    "id": 7470,
     "bucket": "marin-us-central1",
     "pattern": "mathhelpforum/cc_download-5b0941/%",
     "pattern_type": "like",
@@ -3320,38 +252,43 @@
     "sources": "named.csv:53"
   },
   {
-    "bucket": "marin-us-central2",
-    "pattern": "adamh-scaling-ladder-nemotron-optimal%",
+    "id": 7471,
+    "bucket": "*",
+    "pattern": "raw/commoncrawl/rephraser_sweep_batch0-231d96/%",
     "pattern_type": "like",
-    "owners": "Will",
-    "reasons": "Delphi",
-    "sources": "named.csv:2"
+    "owners": "Michael",
+    "reasons": "Raw HTML extracted from 150 CommonCrawl WARC files (slow to re-download)",
+    "sources": "named.csv:50"
   },
   {
-    "bucket": "marin-us-central2",
-    "pattern": "align/%",
+    "id": 7472,
+    "bucket": "*",
+    "pattern": "tokenized/dclm_baseline_100m_llama3-f42a23/%",
     "pattern_type": "like",
-    "owners": null,
-    "reasons": null,
-    "sources": "named.csv:1757"
+    "owners": "Michael",
+    "reasons": "Tokenized DCLM web text used as baseline training data",
+    "sources": "named.csv:49"
   },
   {
-    "bucket": "marin-us-central2",
-    "pattern": "checkpoints/dq-%",
+    "id": 7473,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cooldown_1e20-666089/%",
     "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "checkpoints from pretraining data quality experiments",
-    "sources": "named.csv:1756"
+    "owners": "Michael",
+    "reasons": "Tokenized Nemotron data used as training data for cooldown runs",
+    "sources": "named.csv:48"
   },
   {
-    "bucket": "marin-us-central2",
-    "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill%",
+    "id": 7474,
+    "bucket": "*",
+    "pattern": "tokenized/rephraser_spec_d7d976d3_cooldown-02c17e/%",
     "pattern_type": "like",
-    "owners": "Tony",
-    "reasons": "Checkpoints for post-training algorithm paper",
-    "sources": "named.csv:20"
+    "owners": "Michael",
+    "reasons": "Tokenized rephraser-extracted text used as training data for cooldown runs",
+    "sources": "named.csv:47"
   },
   {
+    "id": 7475,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot3_math53k_n1_vr1_round1-16b3cd/%",
     "pattern_type": "like",
@@ -3360,6 +297,7 @@
     "sources": "named.csv:21"
   },
   {
+    "id": 7476,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot3_math53k_n1_vr3_round1-c33b92/%",
     "pattern_type": "like",
@@ -3368,6 +306,7 @@
     "sources": "named.csv:22"
   },
   {
+    "id": 7477,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot3_math53k_n4_vr1_round1-b2bf48/%",
     "pattern_type": "like",
@@ -3376,6 +315,7 @@
     "sources": "named.csv:23"
   },
   {
+    "id": 7478,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot3_math53k_n4_vr3_round1-c608fa/%",
     "pattern_type": "like",
@@ -3384,6 +324,7 @@
     "sources": "named.csv:24"
   },
   {
+    "id": 7479,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot3_math53k_n8_vr1_round1-913d32/%",
     "pattern_type": "like",
@@ -3392,6 +333,7 @@
     "sources": "named.csv:25"
   },
   {
+    "id": 7480,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot3_math53k_n8_vr3_round1-e7db3b/%",
     "pattern_type": "like",
@@ -3400,6 +342,7 @@
     "sources": "named.csv:26"
   },
   {
+    "id": 7481,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_code9k_n1_vr1_round1-ddab85/%",
     "pattern_type": "like",
@@ -3408,6 +351,7 @@
     "sources": "named.csv:31"
   },
   {
+    "id": 7482,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_code9k_n4_vr3_round1-c4bb99/%",
     "pattern_type": "like",
@@ -3416,6 +360,7 @@
     "sources": "named.csv:32"
   },
   {
+    "id": 7483,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_code9k_n8_vr3_round1-e67d23/%",
     "pattern_type": "like",
@@ -3424,6 +369,7 @@
     "sources": "named.csv:33"
   },
   {
+    "id": 7484,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_code9k_n8_vr5_round1-2e374d/%",
     "pattern_type": "like",
@@ -3432,6 +378,7 @@
     "sources": "named.csv:34"
   },
   {
+    "id": 7485,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_math30k_n4_vr3_round1-0e7dc3/%",
     "pattern_type": "like",
@@ -3440,6 +387,7 @@
     "sources": "named.csv:27"
   },
   {
+    "id": 7486,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_science26k_n1_vr1_round1-f757ed/%",
     "pattern_type": "like",
@@ -3448,6 +396,7 @@
     "sources": "named.csv:28"
   },
   {
+    "id": 7487,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_science26k_n4_vr3_round1-82c9f4/%",
     "pattern_type": "like",
@@ -3456,6 +405,7 @@
     "sources": "named.csv:29"
   },
   {
+    "id": 7488,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_science26k_n8_vr3_round1-5c8b4c/%",
     "pattern_type": "like",
@@ -3464,6 +414,7 @@
     "sources": "named.csv:30"
   },
   {
+    "id": 7489,
     "bucket": "marin-us-central2",
     "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill_ot4_science26k_n8_vr5_round1-e46bc8/%",
     "pattern_type": "like",
@@ -3472,46 +423,7 @@
     "sources": "named.csv:35"
   },
   {
-    "bucket": "marin-us-central2",
-    "pattern": "checkpoints/math_sft_sweep%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "Model checkpoints",
-    "sources": "named.csv:1753"
-  },
-  {
-    "bucket": "marin-us-central2",
-    "pattern": "documents/math500%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "Rollouts from evals/SFT",
-    "sources": "named.csv:1752"
-  },
-  {
-    "bucket": "marin-us-central2",
-    "pattern": "documents/math_reasoning_scaling/%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "Evals for a bunch of models",
-    "sources": "named.csv:1750"
-  },
-  {
-    "bucket": "marin-us-central2",
-    "pattern": "documents/math_test%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "more rollouts/etc",
-    "sources": "named.csv:1755"
-  },
-  {
-    "bucket": "marin-us-central2",
-    "pattern": "documents/math_train%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "more rollouts/etc",
-    "sources": "named.csv:1754"
-  },
-  {
+    "id": 7490,
     "bucket": "marin-us-central2",
     "pattern": "evaluation/evalchemy/%",
     "pattern_type": "like",
@@ -3520,6 +432,3445 @@
     "sources": "named.csv:19"
   },
   {
+    "id": 7491,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adam-lr1.25e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7492,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adam-lr1.77e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7493,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adam-lr2.50e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7494,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adam-lr3.54e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7495,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adam-lr5.00e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7496,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adam-lr7.07e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7497,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-bs128-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:12 rules"
+  },
+  {
+    "id": 7498,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-lr-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:64 rules"
+  },
+  {
+    "id": 7499,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-lr1.00e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:9 rules"
+  },
+  {
+    "id": 7500,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-lr1.25e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:11 rules"
+  },
+  {
+    "id": 7501,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-lr1.41e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7502,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-lr1.77e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:2 rules"
+  },
+  {
+    "id": 7503,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-lr2.00e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:5 rules"
+  },
+  {
+    "id": 7504,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-lr2.50e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:14 rules"
+  },
+  {
+    "id": 7505,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-lr2.83e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:2 rules"
+  },
+  {
+    "id": 7506,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-lr3.13e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7507,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-lr3.54e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7508,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-lr4.00e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:2 rules"
+  },
+  {
+    "id": 7509,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-lr5.00e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:13 rules"
+  },
+  {
+    "id": 7510,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-lr6.25e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:5 rules"
+  },
+  {
+    "id": 7511,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/adamh-lr7.07e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7512,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/baseline-muonh-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:49 rules"
+  },
+  {
+    "id": 7513,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/baseline-muonhc-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:8 rules"
+  },
+  {
+    "id": 7514,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/baseline-muonht-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:2 rules"
+  },
+  {
+    "id": 7515,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/bsabl-magma_muonh-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:8 rules"
+  },
+  {
+    "id": 7516,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/bsabl-muonh-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:8 rules"
+  },
+  {
+    "id": 7517,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden1024-mup-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:16 rules"
+  },
+  {
+    "id": 7518,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden1024-nl4-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:29 rules"
+  },
+  {
+    "id": 7519,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden128-mup-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:16 rules"
+  },
+  {
+    "id": 7520,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden128-nl1024-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:5 rules"
+  },
+  {
+    "id": 7521,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden128-nl128-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:21 rules"
+  },
+  {
+    "id": 7522,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden128-nl16-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:29 rules"
+  },
+  {
+    "id": 7523,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden128-nl256-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:10 rules"
+  },
+  {
+    "id": 7524,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden128-nl32-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:29 rules"
+  },
+  {
+    "id": 7525,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden128-nl4-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:124 rules"
+  },
+  {
+    "id": 7526,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden128-nl512-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:10 rules"
+  },
+  {
+    "id": 7527,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden128-nl64-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:22 rules"
+  },
+  {
+    "id": 7528,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden128-nl8-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:29 rules"
+  },
+  {
+    "id": 7529,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden2048-nl4-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:22 rules"
+  },
+  {
+    "id": 7530,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden256-mup-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:5 rules"
+  },
+  {
+    "id": 7531,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden256-nl4-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:29 rules"
+  },
+  {
+    "id": 7532,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden512-mup-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:5 rules"
+  },
+  {
+    "id": 7533,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/exp1570_hidden512-nl4-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:29 rules"
+  },
+  {
+    "id": 7534,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_1b_feistel_lr0.003_bs1024/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7535,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_1b_feistel_lr0.006_bs1024/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7536,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_1b_feistel_lr0.006_bs512/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7537,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_1b_feistel_lr0.009_bs1024/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7538,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_1b_feistel_lr0.012_bs1024/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7539,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_3b_feistel-515e16/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7540,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_feistel-515e16/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7541,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_feistel_100B-515e16/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7542,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.003-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7543,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.006-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7544,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.009-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7545,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.012-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7546,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3__feistel_lr0.006_bs1024_layer300/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7547,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3__feistel_lr0.009_bs1024_layer12/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7548,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3__feistel_lr0.009_bs1024_layer128/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7549,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3__feistel_lr0.009_bs1024_layer16/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7550,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3__feistel_lr0.009_bs1024_layer256/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7551,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3__feistel_lr0.009_bs1024_layer32/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7552,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3__feistel_lr0.009_bs1024_layer64/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7553,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/ferry_muonh_qwen3_feistel_lr0.006_bs1024_wide_arch/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7554,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/hidden128-nl16-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:7 rules"
+  },
+  {
+    "id": 7555,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/hidden128-nl32-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:7 rules"
+  },
+  {
+    "id": 7556,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/hidden128-nl4-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:9 rules"
+  },
+  {
+    "id": 7557,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/hidden128-nl8-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:7 rules"
+  },
+  {
+    "id": 7558,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muon-lr1.25e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7559,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muon-lr1.77e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7560,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muon-lr2.50e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7561,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muon-lr3.54e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7562,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muon-lr5.00e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7563,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muon-lr7.07e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7564,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muonh-lr1.00e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:77 rules"
+  },
+  {
+    "id": 7565,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muonh-lr1.25e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:12 rules"
+  },
+  {
+    "id": 7566,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muonh-lr1.41e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:45 rules"
+  },
+  {
+    "id": 7567,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muonh-lr1.77e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:12 rules"
+  },
+  {
+    "id": 7568,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muonh-lr2.00e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:30 rules"
+  },
+  {
+    "id": 7569,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muonh-lr2.50e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:14 rules"
+  },
+  {
+    "id": 7570,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muonh-lr2.83e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:24 rules"
+  },
+  {
+    "id": 7571,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muonh-lr3.54e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:58 rules"
+  },
+  {
+    "id": 7572,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muonh-lr4.00e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:2 rules"
+  },
+  {
+    "id": 7573,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muonh-lr5.00e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:75 rules"
+  },
+  {
+    "id": 7574,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muonh-lr5.66e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:2 rules"
+  },
+  {
+    "id": 7575,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muonh-lr7.07e-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:78 rules"
+  },
+  {
+    "id": 7576,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/muonh-power0.2-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:480 rules"
+  },
+  {
+    "id": 7577,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/rerun_baseline-muonh-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:24 rules"
+  },
+  {
+    "id": 7578,
+    "bucket": "marin-eu-west4",
+    "pattern": "checkpoints/test-weight-/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Hyperball experiments",
+    "sources": "consolidated:4 rules"
+  },
+  {
+    "id": 7579,
+    "bucket": "marin-eu-west4",
+    "pattern": "scratch/kaiyue/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Small artifacts",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7580,
+    "bucket": "marin-eu-west4",
+    "pattern": "speedrun/%",
+    "pattern_type": "like",
+    "owners": "Kaiyue",
+    "reasons": "Speedrun checkpoints",
+    "sources": "consolidated:1 rules"
+  },
+  {
+    "id": 7581,
+    "bucket": "*",
+    "pattern": "checkpoints/dclm_1b_1x_how_to%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:37"
+  },
+  {
+    "id": 7582,
+    "bucket": "*",
+    "pattern": "checkpoints/dclm_1b_1x_replication_eval_check%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:38"
+  },
+  {
+    "id": 7583,
+    "bucket": "*",
+    "pattern": "checkpoints/dclm_7b_1x_how_to%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:39"
+  },
+  {
+    "id": 7584,
+    "bucket": "*",
+    "pattern": "checkpoints/dclm_baseline_1b_1x_replication_nov12%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:40"
+  },
+  {
+    "id": 7585,
+    "bucket": "*",
+    "pattern": "checkpoints/dolma-1.4b%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:41"
+  },
+  {
+    "id": 7586,
+    "bucket": "*",
+    "pattern": "checkpoints/dpo/ultrafeedback_llama3_8b%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_dpo output",
+    "sources": "high-value.csv:42"
+  },
+  {
+    "id": 7587,
+    "bucket": "*",
+    "pattern": "checkpoints/exp2262%",
+    "pattern_type": "like",
+    "owners": "Moo Jin",
+    "reasons": "Checkpoints for synthetic data teacher selection experiments",
+    "sources": "named.csv:1748"
+  },
+  {
+    "id": 7588,
+    "bucket": "*",
+    "pattern": "checkpoints/exp3956%",
+    "pattern_type": "like",
+    "owners": "Moo Jin",
+    "reasons": "Checkpoints for synthetic data teacher selection experiments",
+    "sources": "named.csv:1749"
+  },
+  {
+    "id": 7589,
+    "bucket": "*",
+    "pattern": "checkpoints/ferry_muonh_qwen3_8b_feistel-515e16%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:43"
+  },
+  {
+    "id": 7590,
+    "bucket": "*",
+    "pattern": "checkpoints/ferry_qwen3_1_7b_pt_to_cooldown-027563%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:44"
+  },
+  {
+    "id": 7591,
+    "bucket": "*",
+    "pattern": "checkpoints/ferry_qwen3_8b_pt_to_cooldown-1fc2cb%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:45"
+  },
+  {
+    "id": 7592,
+    "bucket": "*",
+    "pattern": "checkpoints/llama-150m-fineweb-edu-gpu%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:46"
+  },
+  {
+    "id": 7593,
+    "bucket": "*",
+    "pattern": "checkpoints/llama-32b-tootsie-2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:13"
+  },
+  {
+    "id": 7594,
+    "bucket": "*",
+    "pattern": "checkpoints/llama-8b-tootsie-0.001%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:47"
+  },
+  {
+    "id": 7595,
+    "bucket": "*",
+    "pattern": "checkpoints/llama-8b-tootsie-adept-phoenix%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:48"
+  },
+  {
+    "id": 7596,
+    "bucket": "*",
+    "pattern": "checkpoints/llama-8b-tootsie-cooldown-take-2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:49"
+  },
+  {
+    "id": 7597,
+    "bucket": "*",
+    "pattern": "checkpoints/llama-8b-tootsie-dessert%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:50"
+  },
+  {
+    "id": 7598,
+    "bucket": "*",
+    "pattern": "checkpoints/llama-8b-tootsie-dessert-v3%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:51"
+  },
+  {
+    "id": 7599,
+    "bucket": "*",
+    "pattern": "checkpoints/llama-8b-tootsie-phase2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:52"
+  },
+  {
+    "id": 7600,
+    "bucket": "*",
+    "pattern": "checkpoints/llama-8b-tootsie-phase3%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:53"
+  },
+  {
+    "id": 7601,
+    "bucket": "*",
+    "pattern": "checkpoints/llama-bs1536-70b-tootsie%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:54"
+  },
+  {
+    "id": 7602,
+    "bucket": "*",
+    "pattern": "checkpoints/llama3.1_mixture_total-redux%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_sft output",
+    "sources": "high-value.csv:55"
+  },
+  {
+    "id": 7603,
+    "bucket": "*",
+    "pattern": "checkpoints/marin-32b-muon-4%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:2"
+  },
+  {
+    "id": 7604,
+    "bucket": "*",
+    "pattern": "checkpoints/marin-32b-nadamw-4%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:3"
+  },
+  {
+    "id": 7605,
+    "bucket": "*",
+    "pattern": "checkpoints/marin-32b-necro-2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:4"
+  },
+  {
+    "id": 7606,
+    "bucket": "*",
+    "pattern": "checkpoints/marin-32b-qwen%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:5"
+  },
+  {
+    "id": 7607,
+    "bucket": "*",
+    "pattern": "checkpoints/marin-32b-v5p-qwen-2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:6"
+  },
+  {
+    "id": 7608,
+    "bucket": "*",
+    "pattern": "checkpoints/marin-nano-tinystories%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:56"
+  },
+  {
+    "id": 7609,
+    "bucket": "*",
+    "pattern": "checkpoints/marin-tinystories-30m%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:57"
+  },
+  {
+    "id": 7610,
+    "bucket": "*",
+    "pattern": "checkpoints/marin_8b_sft_smoltalk2_nemotron_v2_big%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_sft output",
+    "sources": "high-value.csv:7"
+  },
+  {
+    "id": 7611,
+    "bucket": "*",
+    "pattern": "checkpoints/marinochat-pre-mid%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:58"
+  },
+  {
+    "id": 7612,
+    "bucket": "*",
+    "pattern": "checkpoints/marinochat-sft%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:59"
+  },
+  {
+    "id": 7613,
+    "bucket": "*",
+    "pattern": "checkpoints/multilingual-cpt-8b-fineweb2-hq%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:60"
+  },
+  {
+    "id": 7614,
+    "bucket": "*",
+    "pattern": "checkpoints/olmoish-1b%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:61"
+  },
+  {
+    "id": 7615,
+    "bucket": "*",
+    "pattern": "checkpoints/plantcad-train-r1%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:62"
+  },
+  {
+    "id": 7616,
+    "bucket": "*",
+    "pattern": "checkpoints/sft/mixture_sft_deeper_starling%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:63"
+  },
+  {
+    "id": 7617,
+    "bucket": "*",
+    "pattern": "checkpoints/sft/tulu3_sft_spoonbill_945_lr_%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:64"
+  },
+  {
+    "id": 7618,
+    "bucket": "*",
+    "pattern": "checkpoints/sft/tulu3_tootsie_deeper_spoonbill%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_sft output",
+    "sources": "high-value.csv:65"
+  },
+  {
+    "id": 7619,
+    "bucket": "*",
+    "pattern": "checkpoints/sft/tulu3_tootsie_sft_deeper_spoonbill_zloss%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:66"
+  },
+  {
+    "id": 7620,
+    "bucket": "*",
+    "pattern": "checkpoints/sft/tulu3_tootsie_sft_spoonbill_zloss%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:67"
+  },
+  {
+    "id": 7621,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-32b-cooldown-bison-adamc%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:8"
+  },
+  {
+    "id": 7622,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-32b-cooldown-bison-adamc-flat%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:9"
+  },
+  {
+    "id": 7623,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-32b-cooldown-bison-adamc/checkpoints/step-190000%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".cd(...) path",
+    "sources": "high-value.csv:10"
+  },
+  {
+    "id": 7624,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-32b-cooldown-mantis-adamc-v2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:11"
+  },
+  {
+    "id": 7625,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-32b-mantis-sft-exp1994%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_sft output",
+    "sources": "high-value.csv:12"
+  },
+  {
+    "id": 7626,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-deeper-spoonbill-2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:68"
+  },
+  {
+    "id": 7627,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-deeper-starling%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:69"
+  },
+  {
+    "id": 7628,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-focused-spoonbill-fp32%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:70"
+  },
+  {
+    "id": 7629,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-focused-spoonbill-zloss%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:71"
+  },
+  {
+    "id": 7630,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-giraffe-32k%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:72"
+  },
+  {
+    "id": 7631,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-giraffe-32k-293fef%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:73"
+  },
+  {
+    "id": 7632,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-giraffe-32k-293fef/hf/step-%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".cd(...) path",
+    "sources": "high-value.csv:74"
+  },
+  {
+    "id": 7633,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-giraffe-4k-v4%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:75"
+  },
+  {
+    "id": 7634,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-giraffe-4k-v4/hf/step-%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".cd(...) path",
+    "sources": "high-value.csv:76"
+  },
+  {
+    "id": 7635,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-giraffe-phase3-64k%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:77"
+  },
+  {
+    "id": 7636,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-giraffe-phase3-64k/hf/step-%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".cd(...) path",
+    "sources": "high-value.csv:78"
+  },
+  {
+    "id": 7637,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-hypnotic-spoonbill%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:79"
+  },
+  {
+    "id": 7638,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-hypnotic-spoonbill-norms-2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:80"
+  },
+  {
+    "id": 7639,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-sensible-starling%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:81"
+  },
+  {
+    "id": 7640,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-sensible-starling/checkpoints/step-1399923%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".cd(...) path",
+    "sources": "high-value.csv:82"
+  },
+  {
+    "id": 7641,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-soft-raccoon-3%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:83"
+  },
+  {
+    "id": 7642,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-softer-raccoon%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:84"
+  },
+  {
+    "id": 7643,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-softer-raccoon-no-decay%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:85"
+  },
+  {
+    "id": 7644,
+    "bucket": "*",
+    "pattern": "checkpoints/tootsie-8b-softer-raccoon-reset-adamw-2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:86"
+  },
+  {
+    "id": 7645,
+    "bucket": "*",
+    "pattern": "checkpoints/tutorial-dclm-30m-sweep-lr%-wd%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:87"
+  },
+  {
+    "id": 7646,
+    "bucket": "*",
+    "pattern": "checkpoints/tutorial-slimpajama_6b-30m-sweep-lr%-wd%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_train output",
+    "sources": "high-value.csv:88"
+  },
+  {
+    "id": 7647,
+    "bucket": "*",
+    "pattern": "documents/stack_edu/%",
+    "pattern_type": "like",
+    "owners": "Calvin",
+    "reasons": "Hydrated Stack-Edu text shards derived from Software Heritage blob fetches; required to retokenize or reuse Stack-Edu for Dolma 3 Pool.",
+    "sources": "named.csv:6"
+  },
+  {
+    "id": 7648,
+    "bucket": "*",
+    "pattern": "raw/EleutherAI/lambada_openaihf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:90"
+  },
+  {
+    "id": 7649,
+    "bucket": "*",
+    "pattern": "raw/Idavidrein/gpqa%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:91"
+  },
+  {
+    "id": 7650,
+    "bucket": "*",
+    "pattern": "raw/Rowan/hellaswaghf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_download output",
+    "sources": "high-value.csv:92"
+  },
+  {
+    "id": 7651,
+    "bucket": "*",
+    "pattern": "raw/SaylorTwift/bbhhf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:93"
+  },
+  {
+    "id": 7652,
+    "bucket": "*",
+    "pattern": "raw/SlimPajama-627B-262830%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:94"
+  },
+  {
+    "id": 7653,
+    "bucket": "*",
+    "pattern": "raw/SlimPajama-627B-262830/2d0accd/huggingface.co/datasets/cerebras/SlimPajama-627B/resolve/2d0accd%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".cd(...) path",
+    "sources": "high-value.csv:95"
+  },
+  {
+    "id": 7654,
+    "bucket": "*",
+    "pattern": "raw/SlimPajama-6B-be35b7%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:96"
+  },
+  {
+    "id": 7655,
+    "bucket": "*",
+    "pattern": "raw/SlimPajama-6B-be35b7/data%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".cd(...) path",
+    "sources": "high-value.csv:97"
+  },
+  {
+    "id": 7656,
+    "bucket": "*",
+    "pattern": "raw/TIGER-Lab/MMLU-Prohf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_download output",
+    "sources": "high-value.csv:98"
+  },
+  {
+    "id": 7657,
+    "bucket": "*",
+    "pattern": "raw/WillHeld/MuSRDecontamhf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:99"
+  },
+  {
+    "id": 7658,
+    "bucket": "*",
+    "pattern": "raw/allenai/ai2_archf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_download output",
+    "sources": "high-value.csv:100"
+  },
+  {
+    "id": 7659,
+    "bucket": "*",
+    "pattern": "raw/allenai/openbookqahf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_download output",
+    "sources": "high-value.csv:101"
+  },
+  {
+    "id": 7660,
+    "bucket": "*",
+    "pattern": "raw/allenai/winograndehf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_download output",
+    "sources": "high-value.csv:102"
+  },
+  {
+    "id": 7661,
+    "bucket": "*",
+    "pattern": "raw/ambean/lingOly%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:103"
+  },
+  {
+    "id": 7662,
+    "bucket": "*",
+    "pattern": "raw/baber/piqahf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:104"
+  },
+  {
+    "id": 7663,
+    "bucket": "*",
+    "pattern": "raw/cais/mmlu_raw%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:105"
+  },
+  {
+    "id": 7664,
+    "bucket": "*",
+    "pattern": "raw/cais/mmluhf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:106"
+  },
+  {
+    "id": 7665,
+    "bucket": "*",
+    "pattern": "raw/common_pile/arxiv_abstracts_filtered-f1d7a9a%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:107"
+  },
+  {
+    "id": 7666,
+    "bucket": "*",
+    "pattern": "raw/common_pile/arxiv_papers_filtered-033cf7f%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:108"
+  },
+  {
+    "id": 7667,
+    "bucket": "*",
+    "pattern": "raw/common_pile/biodiversity_heritage_library_filtered-0486ed6%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:109"
+  },
+  {
+    "id": 7668,
+    "bucket": "*",
+    "pattern": "raw/common_pile/caselaw_access_project_filtered-50e1961%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:110"
+  },
+  {
+    "id": 7669,
+    "bucket": "*",
+    "pattern": "raw/common_pile/cccc_filtered-03a3de5%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:111"
+  },
+  {
+    "id": 7670,
+    "bucket": "*",
+    "pattern": "raw/common_pile/data_provenance_initiative_filtered-8f5afcf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:112"
+  },
+  {
+    "id": 7671,
+    "bucket": "*",
+    "pattern": "raw/common_pile/doab_filtered-defb24c%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:113"
+  },
+  {
+    "id": 7672,
+    "bucket": "*",
+    "pattern": "raw/common_pile/foodista_filtered-bf2c7aa%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:114"
+  },
+  {
+    "id": 7673,
+    "bucket": "*",
+    "pattern": "raw/common_pile/github_archive_filtered-52282fe%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:115"
+  },
+  {
+    "id": 7674,
+    "bucket": "*",
+    "pattern": "raw/common_pile/library_of_congress_filtered-56725c7%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:116"
+  },
+  {
+    "id": 7675,
+    "bucket": "*",
+    "pattern": "raw/common_pile/libretexts_filtered-70388bc%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:117"
+  },
+  {
+    "id": 7676,
+    "bucket": "*",
+    "pattern": "raw/common_pile/news_filtered-59aaa8f%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:118"
+  },
+  {
+    "id": 7677,
+    "bucket": "*",
+    "pattern": "raw/common_pile/oercommons_filtered-506b615%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:119"
+  },
+  {
+    "id": 7678,
+    "bucket": "*",
+    "pattern": "raw/common_pile/peS2o_filtered-2977475%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:120"
+  },
+  {
+    "id": 7679,
+    "bucket": "*",
+    "pattern": "raw/common_pile/pre_1929_books_filtered-23f9d96%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:121"
+  },
+  {
+    "id": 7680,
+    "bucket": "*",
+    "pattern": "raw/common_pile/pressbooks_filtered-1a1d3b5%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:122"
+  },
+  {
+    "id": 7681,
+    "bucket": "*",
+    "pattern": "raw/common_pile/project_gutenberg_filtered-3cdf687%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:123"
+  },
+  {
+    "id": 7682,
+    "bucket": "*",
+    "pattern": "raw/common_pile/public_domain_review_filtered-efc7f21%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:124"
+  },
+  {
+    "id": 7683,
+    "bucket": "*",
+    "pattern": "raw/common_pile/pubmed_filtered-c156f05%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:125"
+  },
+  {
+    "id": 7684,
+    "bucket": "*",
+    "pattern": "raw/common_pile/python_enhancement_proposals_filtered-5821709%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:126"
+  },
+  {
+    "id": 7685,
+    "bucket": "*",
+    "pattern": "raw/common_pile/regulations_filtered-3327364%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:127"
+  },
+  {
+    "id": 7686,
+    "bucket": "*",
+    "pattern": "raw/common_pile/stackexchange_filtered-c0ac737%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:128"
+  },
+  {
+    "id": 7687,
+    "bucket": "*",
+    "pattern": "raw/common_pile/stackv2-d0e3266%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:129"
+  },
+  {
+    "id": 7688,
+    "bucket": "*",
+    "pattern": "raw/common_pile/stackv2_edu_filtered-c354dbe%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:130"
+  },
+  {
+    "id": 7689,
+    "bucket": "*",
+    "pattern": "raw/common_pile/stackv2_html_filtered-92c9fa8%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:131"
+  },
+  {
+    "id": 7690,
+    "bucket": "*",
+    "pattern": "raw/common_pile/ubuntu_irc_filtered-84f88c9%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:132"
+  },
+  {
+    "id": 7691,
+    "bucket": "*",
+    "pattern": "raw/common_pile/uk_hansard_filtered-c88adc4%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:133"
+  },
+  {
+    "id": 7692,
+    "bucket": "*",
+    "pattern": "raw/common_pile/usgpo_filtered-b150cc2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:134"
+  },
+  {
+    "id": 7693,
+    "bucket": "*",
+    "pattern": "raw/common_pile/uspto_filtered-13894c5%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:135"
+  },
+  {
+    "id": 7694,
+    "bucket": "*",
+    "pattern": "raw/common_pile/wikimedia_filtered-0641bb8%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:136"
+  },
+  {
+    "id": 7695,
+    "bucket": "*",
+    "pattern": "raw/common_pile/wikiteam_filtered-f4ed055%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:137"
+  },
+  {
+    "id": 7696,
+    "bucket": "*",
+    "pattern": "raw/common_pile/youtube_filtered-dff8c8a%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:138"
+  },
+  {
+    "id": 7697,
+    "bucket": "*",
+    "pattern": "raw/dclm/a3b142c%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".cd(...) path",
+    "sources": "high-value.csv:139"
+  },
+  {
+    "id": 7698,
+    "bucket": "*",
+    "pattern": "raw/dolma%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:140"
+  },
+  {
+    "id": 7699,
+    "bucket": "*",
+    "pattern": "raw/dolma/v1.7%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "InputName.hardcoded",
+    "sources": "high-value.csv:89"
+  },
+  {
+    "id": 7700,
+    "bucket": "*",
+    "pattern": "raw/dolma3_mix-150B-1025-15d04ee%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:141"
+  },
+  {
+    "id": 7701,
+    "bucket": "*",
+    "pattern": "raw/dolmino-mix-1124-157960%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:142"
+  },
+  {
+    "id": 7702,
+    "bucket": "*",
+    "pattern": "raw/eval-datasets/code-tasks%",
+    "pattern_type": "like",
+    "owners": "Calvin",
+    "reasons": "Pre-cached code eval datasets used by two-phase and three-phase StarCoder domain-phase-mix runs.",
+    "sources": "named.csv:9"
+  },
+  {
+    "id": 7703,
+    "bucket": "*",
+    "pattern": "raw/eval-datasets/core-tasks%",
+    "pattern_type": "like",
+    "owners": "Calvin",
+    "reasons": "Pre-cached core eval datasets used by single-phase common-crawl domain-phase-mix runs.",
+    "sources": "named.csv:10"
+  },
+  {
+    "id": 7704,
+    "bucket": "*",
+    "pattern": "raw/finemath%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:143"
+  },
+  {
+    "id": 7705,
+    "bucket": "*",
+    "pattern": "raw/fineweb%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:144"
+  },
+  {
+    "id": 7706,
+    "bucket": "*",
+    "pattern": "raw/fineweb-edu-%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:145"
+  },
+  {
+    "id": 7707,
+    "bucket": "*",
+    "pattern": "raw/fineweb2-hq%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:146"
+  },
+  {
+    "id": 7708,
+    "bucket": "*",
+    "pattern": "raw/fineweb2_hq%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:147"
+  },
+  {
+    "id": 7709,
+    "bucket": "*",
+    "pattern": "raw/google-research-datasets/mbpphf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:148"
+  },
+  {
+    "id": 7710,
+    "bucket": "*",
+    "pattern": "raw/google-research-datasets/mbpphf/4bb6404/full%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".cd(...) path",
+    "sources": "high-value.csv:149"
+  },
+  {
+    "id": 7711,
+    "bucket": "*",
+    "pattern": "raw/google/boolqhf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_download output",
+    "sources": "high-value.csv:150"
+  },
+  {
+    "id": 7712,
+    "bucket": "*",
+    "pattern": "raw/gsm8k/mainhf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:151"
+  },
+  {
+    "id": 7713,
+    "bucket": "*",
+    "pattern": "raw/hendrycks/mathhf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:152"
+  },
+  {
+    "id": 7714,
+    "bucket": "*",
+    "pattern": "raw/institutional-books-d2f504a%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_download output",
+    "sources": "high-value.csv:153"
+  },
+  {
+    "id": 7715,
+    "bucket": "*",
+    "pattern": "raw/latxa_corpus%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:154"
+  },
+  {
+    "id": 7716,
+    "bucket": "*",
+    "pattern": "raw/lavita_medical_qa%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_download output",
+    "sources": "high-value.csv:155"
+  },
+  {
+    "id": 7717,
+    "bucket": "*",
+    "pattern": "raw/llm360/megamath%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_download output",
+    "sources": "high-value.csv:156"
+  },
+  {
+    "id": 7718,
+    "bucket": "*",
+    "pattern": "raw/marcov/winograd_wsc_wsc273_promptsourcehf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:157"
+  },
+  {
+    "id": 7719,
+    "bucket": "*",
+    "pattern": "raw/nemotro-cc%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:158"
+  },
+  {
+    "id": 7720,
+    "bucket": "*",
+    "pattern": "raw/nemotron-cc%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:14"
+  },
+  {
+    "id": 7721,
+    "bucket": "*",
+    "pattern": "raw/nemotron_cc_code_v1%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:15"
+  },
+  {
+    "id": 7722,
+    "bucket": "*",
+    "pattern": "raw/nemotron_cc_math_v1%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:16"
+  },
+  {
+    "id": 7723,
+    "bucket": "*",
+    "pattern": "raw/nemotron_cc_v2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:17"
+  },
+  {
+    "id": 7724,
+    "bucket": "*",
+    "pattern": "raw/nemotron_cc_v2_1%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:18"
+  },
+  {
+    "id": 7725,
+    "bucket": "*",
+    "pattern": "raw/nemotron_pretraining_code_v1%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:19"
+  },
+  {
+    "id": 7726,
+    "bucket": "*",
+    "pattern": "raw/nemotron_pretraining_code_v2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:20"
+  },
+  {
+    "id": 7727,
+    "bucket": "*",
+    "pattern": "raw/nemotron_pretraining_sft_v1%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:21"
+  },
+  {
+    "id": 7728,
+    "bucket": "*",
+    "pattern": "raw/nemotron_pretraining_specialized_v1%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:22"
+  },
+  {
+    "id": 7729,
+    "bucket": "*",
+    "pattern": "raw/paloma-fc6827%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:159"
+  },
+  {
+    "id": 7730,
+    "bucket": "*",
+    "pattern": "raw/pile_pubmed_abstracts%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_download output",
+    "sources": "high-value.csv:160"
+  },
+  {
+    "id": 7731,
+    "bucket": "*",
+    "pattern": "raw/pile_pubmed_central%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_download output",
+    "sources": "high-value.csv:161"
+  },
+  {
+    "id": 7732,
+    "bucket": "*",
+    "pattern": "raw/proof-pile-2-f1b1d8%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:162"
+  },
+  {
+    "id": 7733,
+    "bucket": "*",
+    "pattern": "raw/proof-pile-2-f1b1d8/901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".cd(...) path",
+    "sources": "high-value.csv:163"
+  },
+  {
+    "id": 7734,
+    "bucket": "*",
+    "pattern": "raw/stack_edu-ad3cf0%",
+    "pattern_type": "like",
+    "owners": "Calvin",
+    "reasons": "Raw Stack-Edu export used to hydrate and tokenize the Dolma 3 Pool stack_edu partitions for the two-phase Dolma3+Dolmino swarm.",
+    "sources": "named.csv:5"
+  },
+  {
+    "id": 7735,
+    "bucket": "*",
+    "pattern": "raw/starcoderdata-720c8c%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:164"
+  },
+  {
+    "id": 7736,
+    "bucket": "*",
+    "pattern": "raw/tau/commonsense_qahf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:165"
+  },
+  {
+    "id": 7737,
+    "bucket": "*",
+    "pattern": "raw/the-stack-dedup-4ba450%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:166"
+  },
+  {
+    "id": 7738,
+    "bucket": "*",
+    "pattern": "raw/the-stack-dedup-4ba450/17cad72%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".cd(...) path",
+    "sources": "high-value.csv:167"
+  },
+  {
+    "id": 7739,
+    "bucket": "*",
+    "pattern": "raw/the_pile_openwebtext2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:168"
+  },
+  {
+    "id": 7740,
+    "bucket": "*",
+    "pattern": "raw/the_pile_openwebtext2/1de27c6/huggingface.co/datasets/vietgpt/the_pile_openwebtext2/resolve/1de27c6%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".cd(...) path",
+    "sources": "high-value.csv:169"
+  },
+  {
+    "id": 7741,
+    "bucket": "*",
+    "pattern": "raw/tokenizers/marin-community--marin-tokenizer%",
+    "pattern_type": "like",
+    "owners": "Calvin",
+    "reasons": "Tokenizer cache used by Marin-tokenizer domain-phase-mix runs such as single_phase_cc and Dolma3/Dolmino tokenization prep.",
+    "sources": "named.csv:12"
+  },
+  {
+    "id": 7742,
+    "bucket": "*",
+    "pattern": "raw/tokenizers/meta-llama--Meta-Llama-3.1-8B%",
+    "pattern_type": "like",
+    "owners": "Calvin",
+    "reasons": "Tokenizer cache used by StarCoder domain-phase-mix experiments and candidate validation to avoid repeated Hugging Face fetches.",
+    "sources": "named.csv:11"
+  },
+  {
+    "id": 7743,
+    "bucket": "*",
+    "pattern": "raw/truthful_qa/multiple_choicehf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:170"
+  },
+  {
+    "id": 7744,
+    "bucket": "*",
+    "pattern": "raw/wis-k/instruction-following-evalhf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:171"
+  },
+  {
+    "id": 7745,
+    "bucket": "*",
+    "pattern": "raw/ybisk/piqahf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_download output",
+    "sources": "high-value.csv:172"
+  },
+  {
+    "id": 7746,
+    "bucket": "*",
+    "pattern": "tokenized/%_marin_tokenizer%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:173"
+  },
+  {
+    "id": 7747,
+    "bucket": "*",
+    "pattern": "tokenized/angiosperm_16_genomes%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:174"
+  },
+  {
+    "id": 7748,
+    "bucket": "*",
+    "pattern": "tokenized/arxiv-no-problem-a3e054%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:175"
+  },
+  {
+    "id": 7749,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/arxiv_abstracts%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:176"
+  },
+  {
+    "id": 7750,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/arxiv_papers%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:177"
+  },
+  {
+    "id": 7751,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/biodiversity_heritage_library%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:178"
+  },
+  {
+    "id": 7752,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/caselaw_access_project%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:179"
+  },
+  {
+    "id": 7753,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/cccc%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:180"
+  },
+  {
+    "id": 7754,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/data_provenance_initiative%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:181"
+  },
+  {
+    "id": 7755,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/doab%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:182"
+  },
+  {
+    "id": 7756,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/foodista%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:183"
+  },
+  {
+    "id": 7757,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/github_archive%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:184"
+  },
+  {
+    "id": 7758,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/library_of_congress%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:185"
+  },
+  {
+    "id": 7759,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/libretexts%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:186"
+  },
+  {
+    "id": 7760,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/news%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:187"
+  },
+  {
+    "id": 7761,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/oercommons%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:188"
+  },
+  {
+    "id": 7762,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/peS2o%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:189"
+  },
+  {
+    "id": 7763,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/pre_1929_books%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:190"
+  },
+  {
+    "id": 7764,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/pressbooks%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:191"
+  },
+  {
+    "id": 7765,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/project_gutenberg%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:192"
+  },
+  {
+    "id": 7766,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/public_domain_review%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:193"
+  },
+  {
+    "id": 7767,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/pubmed%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:194"
+  },
+  {
+    "id": 7768,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/python_enhancement_proposals%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:195"
+  },
+  {
+    "id": 7769,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/regulations%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:196"
+  },
+  {
+    "id": 7770,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/stackexchange%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:197"
+  },
+  {
+    "id": 7771,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/stackv2_edu%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:198"
+  },
+  {
+    "id": 7772,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/stackv2_html%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:199"
+  },
+  {
+    "id": 7773,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/ubuntu_irc%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:200"
+  },
+  {
+    "id": 7774,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/uk_hansard%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:201"
+  },
+  {
+    "id": 7775,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/usgpo%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:202"
+  },
+  {
+    "id": 7776,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/uspto%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:203"
+  },
+  {
+    "id": 7777,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/wikimedia%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:204"
+  },
+  {
+    "id": 7778,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/wikiteam%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:205"
+  },
+  {
+    "id": 7779,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile/youtube%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:206"
+  },
+  {
+    "id": 7780,
+    "bucket": "*",
+    "pattern": "tokenized/common_pile_stackv2_edu_filtered_python%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:207"
+  },
+  {
+    "id": 7781,
+    "bucket": "*",
+    "pattern": "tokenized/dclm_baseline-0206f1/%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:208"
+  },
+  {
+    "id": 7782,
+    "bucket": "*",
+    "pattern": "tokenized/dlwh/wikitext_2_detokenized%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:209"
+  },
+  {
+    "id": 7783,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/algebraic-stack-cc00cf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:210"
+  },
+  {
+    "id": 7784,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/arxiv-07a51f%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:211"
+  },
+  {
+    "id": 7785,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/c4-e0e5ec%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:212"
+  },
+  {
+    "id": 7786,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/cc-74b017%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:213"
+  },
+  {
+    "id": 7787,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/cc-news-625d3e%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:214"
+  },
+  {
+    "id": 7788,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/falcon-da8fd0%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:215"
+  },
+  {
+    "id": 7789,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/flan-a99cb2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:216"
+  },
+  {
+    "id": 7790,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/gutenberg-f9eb99%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:217"
+  },
+  {
+    "id": 7791,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/megawika-34abf2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:218"
+  },
+  {
+    "id": 7792,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/open-web-math-79823d%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:219"
+  },
+  {
+    "id": 7793,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/pes2o-538363%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:220"
+  },
+  {
+    "id": 7794,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/reddit-62a64a%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:221"
+  },
+  {
+    "id": 7795,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/stackexchange-adfc49%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:222"
+  },
+  {
+    "id": 7796,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/starcoder-8b6089%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:223"
+  },
+  {
+    "id": 7797,
+    "bucket": "*",
+    "pattern": "tokenized/dolma/wiki-212315%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:224"
+  },
+  {
+    "id": 7798,
+    "bucket": "*",
+    "pattern": "tokenized/dolma3_dolmino_pool/%",
+    "pattern_type": "like",
+    "owners": "Calvin",
+    "reasons": null,
+    "sources": "named.csv:8"
+  },
+  {
+    "id": 7799,
+    "bucket": "*",
+    "pattern": "tokenized/dolma3_mix-150B-1025-15d04ee/%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:225"
+  },
+  {
+    "id": 7800,
+    "bucket": "*",
+    "pattern": "tokenized/dolma3_pool/%",
+    "pattern_type": "like",
+    "owners": "Calvin",
+    "reasons": "tbh I'll be doing this on east5a, so maybe fine to remove from central1, 2, europe",
+    "sources": "named.csv:7"
+  },
+  {
+    "id": 7801,
+    "bucket": "*",
+    "pattern": "tokenized/dolmino/all_math-9d507c%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:226"
+  },
+  {
+    "id": 7802,
+    "bucket": "*",
+    "pattern": "tokenized/dolmino/dclm-6c18eb%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:227"
+  },
+  {
+    "id": 7803,
+    "bucket": "*",
+    "pattern": "tokenized/dolmino/flan-d71ec1%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:228"
+  },
+  {
+    "id": 7804,
+    "bucket": "*",
+    "pattern": "tokenized/dolmino/math/codesearchnet-owmfilter-fd2640%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:229"
+  },
+  {
+    "id": 7805,
+    "bucket": "*",
+    "pattern": "tokenized/dolmino/math/dolmino_math_synth-11f876%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:230"
+  },
+  {
+    "id": 7806,
+    "bucket": "*",
+    "pattern": "tokenized/dolmino/math/gsm8k-902e8b%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:231"
+  },
+  {
+    "id": 7807,
+    "bucket": "*",
+    "pattern": "tokenized/dolmino/math/mathcoder2-synthmath-bc8dd2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:232"
+  },
+  {
+    "id": 7808,
+    "bucket": "*",
+    "pattern": "tokenized/dolmino/math/metamath-owmfilter-fafa84%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:233"
+  },
+  {
+    "id": 7809,
+    "bucket": "*",
+    "pattern": "tokenized/dolmino/math/tinyGSM-MIND-6c3016%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:234"
+  },
+  {
+    "id": 7810,
+    "bucket": "*",
+    "pattern": "tokenized/dolmino/math/tulu_math-414a4d%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:235"
+  },
+  {
+    "id": 7811,
+    "bucket": "*",
+    "pattern": "tokenized/dolmino/pes2o-d22243%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:236"
+  },
+  {
+    "id": 7812,
+    "bucket": "*",
+    "pattern": "tokenized/dolmino/stackexchange-271a84%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:237"
+  },
+  {
+    "id": 7813,
+    "bucket": "*",
+    "pattern": "tokenized/dolmino/wiki-c31b74%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:238"
+  },
+  {
+    "id": 7814,
+    "bucket": "*",
+    "pattern": "tokenized/finemath_3_plus-a26b0f/%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:239"
+  },
+  {
+    "id": 7815,
+    "bucket": "*",
+    "pattern": "tokenized/finepdfs_edu_eng_Latn_llama3%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:240"
+  },
+  {
+    "id": 7816,
+    "bucket": "*",
+    "pattern": "tokenized/finepdfs_eng_Latn_val%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:241"
+  },
+  {
+    "id": 7817,
+    "bucket": "*",
+    "pattern": "tokenized/fineweb-edu%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:242"
+  },
+  {
+    "id": 7818,
+    "bucket": "*",
+    "pattern": "tokenized/latxa_corpus%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:243"
+  },
+  {
+    "id": 7819,
+    "bucket": "*",
+    "pattern": "tokenized/longmino_%_llama3%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:244"
+  },
+  {
+    "id": 7820,
+    "bucket": "*",
+    "pattern": "tokenized/medu-mmlu-science-qa-c64fda%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:245"
+  },
+  {
+    "id": 7821,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cc/hq_actual%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:23"
+  },
+  {
+    "id": 7822,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cc/hq_actual-5af4cc%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:24"
+  },
+  {
+    "id": 7823,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cc/hq_synth%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:25"
+  },
+  {
+    "id": 7824,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cc/hq_synth-3525e2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:26"
+  },
+  {
+    "id": 7825,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cc/low_actual%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:27"
+  },
+  {
+    "id": 7826,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cc/low_actual-cb3f2c%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:28"
+  },
+  {
+    "id": 7827,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cc/low_synth%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:29"
+  },
+  {
+    "id": 7828,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cc/low_synth-3c57b3%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:30"
+  },
+  {
+    "id": 7829,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cc/medium%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:31"
+  },
+  {
+    "id": 7830,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cc/medium-d86506%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:32"
+  },
+  {
+    "id": 7831,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cc/medium_high%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:33"
+  },
+  {
+    "id": 7832,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cc/medium_high-d21701%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:34"
+  },
+  {
+    "id": 7833,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cc/medium_low%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "ExecutorStep output",
+    "sources": "high-value.csv:35"
+  },
+  {
+    "id": 7834,
+    "bucket": "*",
+    "pattern": "tokenized/nemotron_cc/medium_low-0fdb07%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:36"
+  },
+  {
+    "id": 7835,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/4chan%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:246"
+  },
+  {
+    "id": 7836,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/c4_100_domains%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:247"
+  },
+  {
+    "id": 7837,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/c4_en%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:248"
+  },
+  {
+    "id": 7838,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/dolma-v1_5%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:249"
+  },
+  {
+    "id": 7839,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/dolma_100_programing_languages%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:250"
+  },
+  {
+    "id": 7840,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/dolma_100_subreddits%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:251"
+  },
+  {
+    "id": 7841,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/falcon-refinedweb%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:252"
+  },
+  {
+    "id": 7842,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/gab%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:253"
+  },
+  {
+    "id": 7843,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/m2d2_s2orc_unsplit%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:254"
+  },
+  {
+    "id": 7844,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/m2d2_wikipedia_unsplit%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:255"
+  },
+  {
+    "id": 7845,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/manosphere_meta_sep%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:256"
+  },
+  {
+    "id": 7846,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/mc4%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:257"
+  },
+  {
+    "id": 7847,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/ptb%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:258"
+  },
+  {
+    "id": 7848,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/redpajama%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:259"
+  },
+  {
+    "id": 7849,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/twitterAAE_HELM_fixed%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:260"
+  },
+  {
+    "id": 7850,
+    "bucket": "*",
+    "pattern": "tokenized/paloma/wikitext_103%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:261"
+  },
+  {
+    "id": 7851,
+    "bucket": "*",
+    "pattern": "tokenized/pile_pubmed_abstracts%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:262"
+  },
+  {
+    "id": 7852,
+    "bucket": "*",
+    "pattern": "tokenized/pile_pubmed_central%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:263"
+  },
+  {
+    "id": 7853,
+    "bucket": "*",
+    "pattern": "tokenized/proofpile_2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:264"
+  },
+  {
+    "id": 7854,
+    "bucket": "*",
+    "pattern": "tokenized/roneneldan/TinyStories%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:265"
+  },
+  {
+    "id": 7855,
+    "bucket": "*",
+    "pattern": "tokenized/slimpajama-6b-cw%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:266"
+  },
+  {
+    "id": 7856,
+    "bucket": "*",
+    "pattern": "tokenized/smoltalk_marin%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:267"
+  },
+  {
+    "id": 7857,
+    "bucket": "*",
+    "pattern": "tokenized/stackexchange-621b94%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:268"
+  },
+  {
+    "id": 7858,
+    "bucket": "*",
+    "pattern": "tokenized/starcoderdata%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:269"
+  },
+  {
+    "id": 7859,
+    "bucket": "*",
+    "pattern": "tokenized/tokenized/lavita_allprocessed%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:270"
+  },
+  {
+    "id": 7860,
+    "bucket": "*",
+    "pattern": "tokenized/tokenized/lavita_medmcqa%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:271"
+  },
+  {
+    "id": 7861,
+    "bucket": "*",
+    "pattern": "tokenized/tokenized/lavita_medmcqa_validation%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:272"
+  },
+  {
+    "id": 7862,
+    "bucket": "*",
+    "pattern": "tokenized/tokenized/lavita_pubmedqa%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:273"
+  },
+  {
+    "id": 7863,
+    "bucket": "*",
+    "pattern": "tokenized/tokenized/lavita_pubmedqa_validation%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:274"
+  },
+  {
+    "id": 7864,
+    "bucket": "*",
+    "pattern": "tokenized/tulu_sft-1bb7d4%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:275"
+  },
+  {
+    "id": 7865,
+    "bucket": "*",
+    "pattern": "tokenized/tulu_sft-349fb7/%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:276"
+  },
+  {
+    "id": 7866,
+    "bucket": "*",
+    "pattern": "tokenized/tulu_sft_v3_llama3_instruct_tokenizer%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:277"
+  },
+  {
+    "id": 7867,
+    "bucket": "*",
+    "pattern": "tokenized/ultrafeedback_binarized_test_prefs_marin_tokenizer%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:278"
+  },
+  {
+    "id": 7868,
+    "bucket": "*",
+    "pattern": "tokenized/ultrafeedback_binarized_train_prefs_marin_tokenizer%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:279"
+  },
+  {
+    "id": 7869,
+    "bucket": "*",
+    "pattern": "tokenized/uncheatable_eval/%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_tokenize output",
+    "sources": "high-value.csv:280"
+  },
+  {
+    "id": 7870,
+    "bucket": "*",
+    "pattern": "tokenized/wikipedia-6980f2%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": ".with_output_path(...) path",
+    "sources": "high-value.csv:281"
+  },
+  {
+    "id": 7871,
+    "bucket": "marin-us-central1",
+    "pattern": "align/%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": null,
+    "sources": "named.csv:1757"
+  },
+  {
+    "id": 7872,
+    "bucket": "marin-us-central2",
+    "pattern": "align/%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": null,
+    "sources": "named.csv:1757"
+  },
+  {
+    "id": 7873,
     "bucket": "marin-us-east1",
     "pattern": "align/%",
     "pattern_type": "like",
@@ -3528,54 +3879,7 @@
     "sources": "named.csv:1757"
   },
   {
-    "bucket": "marin-us-east1",
-    "pattern": "checkpoints/dq-%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "checkpoints from pretraining data quality experiments",
-    "sources": "named.csv:1756"
-  },
-  {
-    "bucket": "marin-us-east1",
-    "pattern": "checkpoints/math_sft_sweep%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "Model checkpoints",
-    "sources": "named.csv:1753"
-  },
-  {
-    "bucket": "marin-us-east1",
-    "pattern": "documents/math500%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "Rollouts from evals/SFT",
-    "sources": "named.csv:1752"
-  },
-  {
-    "bucket": "marin-us-east1",
-    "pattern": "documents/math_reasoning_scaling/%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "Evals for a bunch of models",
-    "sources": "named.csv:1750"
-  },
-  {
-    "bucket": "marin-us-east1",
-    "pattern": "documents/math_test%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "more rollouts/etc",
-    "sources": "named.csv:1755"
-  },
-  {
-    "bucket": "marin-us-east1",
-    "pattern": "documents/math_train%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "more rollouts/etc",
-    "sources": "named.csv:1754"
-  },
-  {
+    "id": 7874,
     "bucket": "marin-us-east5",
     "pattern": "align/%",
     "pattern_type": "like",
@@ -3584,54 +3888,7 @@
     "sources": "named.csv:1757"
   },
   {
-    "bucket": "marin-us-east5",
-    "pattern": "checkpoints/dq-%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "checkpoints from pretraining data quality experiments",
-    "sources": "named.csv:1756"
-  },
-  {
-    "bucket": "marin-us-east5",
-    "pattern": "checkpoints/math_sft_sweep%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "Model checkpoints",
-    "sources": "named.csv:1753"
-  },
-  {
-    "bucket": "marin-us-east5",
-    "pattern": "documents/math500%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "Rollouts from evals/SFT",
-    "sources": "named.csv:1752"
-  },
-  {
-    "bucket": "marin-us-east5",
-    "pattern": "documents/math_reasoning_scaling/%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "Evals for a bunch of models",
-    "sources": "named.csv:1750"
-  },
-  {
-    "bucket": "marin-us-east5",
-    "pattern": "documents/math_test%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "more rollouts/etc",
-    "sources": "named.csv:1755"
-  },
-  {
-    "bucket": "marin-us-east5",
-    "pattern": "documents/math_train%",
-    "pattern_type": "like",
-    "owners": "Rohith",
-    "reasons": "more rollouts/etc",
-    "sources": "named.csv:1754"
-  },
-  {
+    "id": 7875,
     "bucket": "marin-us-west4",
     "pattern": "align/%",
     "pattern_type": "like",
@@ -3640,6 +3897,43 @@
     "sources": "named.csv:1757"
   },
   {
+    "id": 7876,
+    "bucket": "marin-us-central1",
+    "pattern": "checkpoints/dq-%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "checkpoints from pretraining data quality experiments",
+    "sources": "named.csv:1756"
+  },
+  {
+    "id": 7877,
+    "bucket": "marin-us-central2",
+    "pattern": "checkpoints/dq-%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "checkpoints from pretraining data quality experiments",
+    "sources": "named.csv:1756"
+  },
+  {
+    "id": 7878,
+    "bucket": "marin-us-east1",
+    "pattern": "checkpoints/dq-%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "checkpoints from pretraining data quality experiments",
+    "sources": "named.csv:1756"
+  },
+  {
+    "id": 7879,
+    "bucket": "marin-us-east5",
+    "pattern": "checkpoints/dq-%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "checkpoints from pretraining data quality experiments",
+    "sources": "named.csv:1756"
+  },
+  {
+    "id": 7880,
     "bucket": "marin-us-west4",
     "pattern": "checkpoints/dq-%",
     "pattern_type": "like",
@@ -3648,6 +3942,43 @@
     "sources": "named.csv:1756"
   },
   {
+    "id": 7881,
+    "bucket": "marin-us-central1",
+    "pattern": "checkpoints/math_sft_sweep%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "Model checkpoints",
+    "sources": "named.csv:1753"
+  },
+  {
+    "id": 7882,
+    "bucket": "marin-us-central2",
+    "pattern": "checkpoints/math_sft_sweep%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "Model checkpoints",
+    "sources": "named.csv:1753"
+  },
+  {
+    "id": 7883,
+    "bucket": "marin-us-east1",
+    "pattern": "checkpoints/math_sft_sweep%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "Model checkpoints",
+    "sources": "named.csv:1753"
+  },
+  {
+    "id": 7884,
+    "bucket": "marin-us-east5",
+    "pattern": "checkpoints/math_sft_sweep%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "Model checkpoints",
+    "sources": "named.csv:1753"
+  },
+  {
+    "id": 7885,
     "bucket": "marin-us-west4",
     "pattern": "checkpoints/math_sft_sweep%",
     "pattern_type": "like",
@@ -3656,6 +3987,43 @@
     "sources": "named.csv:1753"
   },
   {
+    "id": 7886,
+    "bucket": "marin-us-central1",
+    "pattern": "documents/math500%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "Rollouts from evals/SFT",
+    "sources": "named.csv:1752"
+  },
+  {
+    "id": 7887,
+    "bucket": "marin-us-central2",
+    "pattern": "documents/math500%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "Rollouts from evals/SFT",
+    "sources": "named.csv:1752"
+  },
+  {
+    "id": 7888,
+    "bucket": "marin-us-east1",
+    "pattern": "documents/math500%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "Rollouts from evals/SFT",
+    "sources": "named.csv:1752"
+  },
+  {
+    "id": 7889,
+    "bucket": "marin-us-east5",
+    "pattern": "documents/math500%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "Rollouts from evals/SFT",
+    "sources": "named.csv:1752"
+  },
+  {
+    "id": 7890,
     "bucket": "marin-us-west4",
     "pattern": "documents/math500%",
     "pattern_type": "like",
@@ -3664,14 +4032,43 @@
     "sources": "named.csv:1752"
   },
   {
-    "bucket": "marin-us-west4",
-    "pattern": "documents/math_reasoning_scaling/%",
+    "id": 7891,
+    "bucket": "marin-us-central1",
+    "pattern": "documents/math_test%",
     "pattern_type": "like",
     "owners": "Rohith",
-    "reasons": "Evals for a bunch of models",
-    "sources": "named.csv:1750"
+    "reasons": "more rollouts/etc",
+    "sources": "named.csv:1755"
   },
   {
+    "id": 7892,
+    "bucket": "marin-us-central2",
+    "pattern": "documents/math_test%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "more rollouts/etc",
+    "sources": "named.csv:1755"
+  },
+  {
+    "id": 7893,
+    "bucket": "marin-us-east1",
+    "pattern": "documents/math_test%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "more rollouts/etc",
+    "sources": "named.csv:1755"
+  },
+  {
+    "id": 7894,
+    "bucket": "marin-us-east5",
+    "pattern": "documents/math_test%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "more rollouts/etc",
+    "sources": "named.csv:1755"
+  },
+  {
+    "id": 7895,
     "bucket": "marin-us-west4",
     "pattern": "documents/math_test%",
     "pattern_type": "like",
@@ -3680,11 +4077,75 @@
     "sources": "named.csv:1755"
   },
   {
+    "id": 7896,
+    "bucket": "marin-us-central1",
+    "pattern": "documents/math_train%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "more rollouts/etc",
+    "sources": "named.csv:1754"
+  },
+  {
+    "id": 7897,
+    "bucket": "marin-us-central2",
+    "pattern": "documents/math_train%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "more rollouts/etc",
+    "sources": "named.csv:1754"
+  },
+  {
+    "id": 7898,
+    "bucket": "marin-us-east1",
+    "pattern": "documents/math_train%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "more rollouts/etc",
+    "sources": "named.csv:1754"
+  },
+  {
+    "id": 7899,
+    "bucket": "marin-us-east5",
+    "pattern": "documents/math_train%",
+    "pattern_type": "like",
+    "owners": "Rohith",
+    "reasons": "more rollouts/etc",
+    "sources": "named.csv:1754"
+  },
+  {
+    "id": 7900,
     "bucket": "marin-us-west4",
     "pattern": "documents/math_train%",
     "pattern_type": "like",
     "owners": "Rohith",
     "reasons": "more rollouts/etc",
     "sources": "named.csv:1754"
+  },
+  {
+    "id": 7901,
+    "bucket": "marin-us-central2",
+    "pattern": "adamh-scaling-ladder-nemotron-optimal%",
+    "pattern_type": "like",
+    "owners": "Will",
+    "reasons": "Delphi",
+    "sources": "named.csv:2"
+  },
+  {
+    "id": 7902,
+    "bucket": "marin-us-central2",
+    "pattern": "checkpoints/exp_sft_qwen3_4b_selfinstill%",
+    "pattern_type": "like",
+    "owners": "Tony",
+    "reasons": "Checkpoints for post-training algorithm paper",
+    "sources": "named.csv:20"
+  },
+  {
+    "id": 7903,
+    "bucket": "*",
+    "pattern": "raw/openai/openai_humanevalhf%",
+    "pattern_type": "like",
+    "owners": null,
+    "reasons": "default_download output",
+    "sources": "high-value.csv:282"
   }
 ]

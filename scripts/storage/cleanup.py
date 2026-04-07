@@ -2,7 +2,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Storage cleanup workflow: delete objects matching delete rules with soft-delete safety net.
+"""Storage cleanup workflow: delete objects from a pre-computed deletion manifest with soft-delete safety net.
+
+The deletion manifest is produced by compute.py and lists directory prefixes to
+delete. This workflow enables soft-delete, deletes all objects under those
+prefixes, then optionally disables soft-delete after a safety window.
 
 Usage:
     uv run scripts/storage/cleanup.py run [--from X] [--to Y] [--force] [--dry-run]
@@ -11,6 +15,7 @@ Usage:
 
 from __future__ import annotations
 
+import csv
 import logging
 import threading
 from collections import defaultdict
@@ -26,15 +31,14 @@ from tqdm.auto import tqdm
 from scripts.storage.db import (
     DEFAULT_CATALOG,
     DELETE_BATCH_SIZE,
-    IS_PROTECTED,
     PLAN_FINGERPRINT,
     REPO_ROOT,
     SOFT_DELETE_RETENTION_SECONDS,
     Context,
     StepSpec,
     _fetchall_dicts,
-    _fetchone_dict,
     ensure_output_dirs,
+    file_digest,
     human_bytes,
     marker_exists,
     marker_matches,
@@ -105,32 +109,55 @@ def enable_soft_delete(ctx: Context, action: StepSpec) -> None:
         )
 
 
-def _delete_prefix_objects(
+def _load_manifest(ctx: Context) -> dict[str, list[str]]:
+    """Load the deletion manifest CSV and return prefixes grouped by bucket.
+
+    Also validates the CSV fingerprint against the compute step's stored fingerprint.
+    """
+    catalog = DEFAULT_CATALOG
+    manifest_path = catalog.deletion_manifest_csv
+    if not manifest_path.exists():
+        raise RuntimeError(
+            f"Deletion manifest not found at {manifest_path.relative_to(REPO_ROOT)}. "
+            "Run `uv run scripts/storage/compute.py run` first."
+        )
+
+    # Validate fingerprint
+    compute_extra = read_marker_extra(ctx.conn, "compute.materialize_deletion_set")
+    if compute_extra is not None:
+        expected_fingerprint = compute_extra.get("csv_fingerprint")
+        actual_fingerprint = file_digest(manifest_path)
+        if expected_fingerprint and actual_fingerprint != expected_fingerprint:
+            raise RuntimeError(
+                "Deletion manifest has been modified since the compute step ran. "
+                "Re-run `uv run scripts/storage/compute.py run --force` to regenerate."
+            )
+
+    by_bucket: dict[str, list[str]] = defaultdict(list)
+    with manifest_path.open(newline="") as f:
+        for row in csv.DictReader(f):
+            by_bucket[row["bucket"]].append(row["prefix"])
+    return dict(by_bucket)
+
+
+def _delete_manifest_prefix(
     ctx: Context,
     bucket_name: str,
     prefix: str,
 ) -> tuple[int, int, dict[str, int]]:
-    """Delete objects matching a delete rule (and not protected) under a single prefix.
+    """Delete all objects under a manifest prefix from GCS.
 
-    Returns (count, bytes, by_class). Unlike the purge workflow, this only deletes objects
-    that match an explicit delete_rule, preventing accidental deletion of objects not covered
-    by any rule.
+    Returns (count, bytes, by_class).
     """
     with ctx.db_lock:
         rows = _fetchall_dicts(
             ctx.conn.execute(
-                f"""
+                """
             SELECT o.name, o.size_bytes, sc.name as storage_class
             FROM objects o
             JOIN storage_classes sc ON o.storage_class_id = sc.id
             WHERE o.bucket = ?
               AND o.name LIKE ? || '%'
-              AND EXISTS (
-                  SELECT 1 FROM delete_rules dr
-                  WHERE o.name LIKE dr.pattern
-                    AND (dr.storage_class IS NULL OR sc.name = dr.storage_class)
-              )
-              AND NOT EXISTS ({IS_PROTECTED})
             ORDER BY o.name
             """,
                 (bucket_name, prefix),
@@ -168,54 +195,39 @@ def _delete_prefix_objects(
     return deleted_count, deleted_bytes, dict(deleted_by_class)
 
 
-def delete_cold_unprotected(ctx: Context, action: StepSpec) -> None:
-    """Delete objects matching delete rules (excluding protected objects), driven by the objects DB."""
+def delete_from_manifest(ctx: Context, action: StepSpec) -> None:
+    """Delete objects listed in the pre-computed deletion manifest."""
     fingerprint = PLAN_FINGERPRINT
     if not ctx.force and marker_matches(ctx.conn, action.action_id, fingerprint):
         print_summary(f"skip {action.action_id}: already completed")
         return
 
+    manifest = _load_manifest(ctx)
     remote_summary: dict[str, Any] = {"regions": {}}
-    conn = ctx.conn
 
     for row in plan_rows():
         region = row["region"]
         bucket_name = row["bucket"]
+        prefixes = manifest.get(bucket_name, [])
 
-        prefix_rows = _fetchall_dicts(
-            conn.execute(
-                "SELECT prefix FROM scanned_prefixes WHERE bucket = ? ORDER BY prefix",
-                (bucket_name,),
-            )
-        )
-        prefixes = [r["prefix"] for r in prefix_rows]
+        if not prefixes:
+            print_summary(f"{action.action_id}: {bucket_name}: no prefixes in manifest, skipping")
+            remote_summary["regions"][region] = {"deleted_count": 0, "deleted_bytes": 0}
+            continue
 
         print_summary(
-            f"{action.action_id}: deleting cold unprotected objects from {bucket_name} "
-            f"({len(prefixes)} prefixes, {ctx.scan_workers} workers)"
+            f"{action.action_id}: deleting objects from {bucket_name} "
+            f"({len(prefixes)} manifest prefixes, {ctx.scan_workers} workers)"
         )
 
         total_deleted_count = 0
         total_deleted_bytes = 0
         total_deleted_by_class: dict[str, int] = defaultdict(int)
 
-        protected_row = _fetchone_dict(
-            conn.execute(
-                f"""
-            SELECT COUNT(*) as cnt FROM objects o
-            JOIN storage_classes sc ON o.storage_class_id = sc.id
-            WHERE o.bucket = ?
-              AND EXISTS ({IS_PROTECTED})
-            """,
-                (bucket_name,),
-            )
-        )
-        total_skipped_protected = int(protected_row["cnt"])
-
         progress = tqdm(total=len(prefixes), desc=f"delete {bucket_name}", unit="prefix", leave=True)
         workers = max(1, min(ctx.scan_workers, len(prefixes) or 1))
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_prefix = {executor.submit(_delete_prefix_objects, ctx, bucket_name, p): p for p in prefixes}
+            future_to_prefix = {executor.submit(_delete_manifest_prefix, ctx, bucket_name, p): p for p in prefixes}
             for future in as_completed(future_to_prefix):
                 p = future_to_prefix[future]
                 count, nbytes, by_class = future.result()
@@ -230,13 +242,9 @@ def delete_cold_unprotected(ctx: Context, action: StepSpec) -> None:
         remote_summary["regions"][region] = {
             "deleted_count": total_deleted_count,
             "deleted_bytes": total_deleted_bytes,
-            "skipped_protected": total_skipped_protected,
         }
         verb = "would delete" if ctx.dry_run else "deleted"
-        print_summary(
-            f"{region}: {verb} {total_deleted_count} objects ({human_bytes(total_deleted_bytes)}), "
-            f"skipped {total_skipped_protected} protected"
-        )
+        print_summary(f"{region}: {verb} {total_deleted_count} objects ({human_bytes(total_deleted_bytes)})")
     if not ctx.dry_run:
         write_marker(
             ctx.conn, action.action_id, fingerprint, dry_run=ctx.dry_run, extra={"remote_summary": remote_summary}
@@ -326,15 +334,15 @@ STEPS: list[StepSpec] = [
         action_id="cleanup.delete_cold_objects",
         group_name="cleanup",
         command_name="delete-cold-objects",
-        description="Delete objects matching delete rules (excluding protected objects).",
+        description="Delete objects listed in the pre-computed deletion manifest.",
         help_text=(
-            "Delete objects that match a delete_rule AND are not in the protect set. "
-            "Fans out over scanned prefixes with --scan-workers concurrent threads. "
-            "Only objects explicitly covered by a delete rule are removed."
+            "Read the deletion manifest produced by compute.py and delete all objects "
+            "under the listed prefixes. Validates the manifest fingerprint before proceeding. "
+            "Fans out over manifest prefixes with --scan-workers concurrent threads."
         ),
         mutating=True,
-        runner=delete_cold_unprotected,
-        predecessors=("cleanup.enable_soft_delete",),
+        runner=delete_from_manifest,
+        predecessors=("cleanup.enable_soft_delete", "compute.materialize_deletion_set"),
         scan_workers=True,
     ),
     StepSpec(

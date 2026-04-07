@@ -29,7 +29,6 @@ from scripts.storage.db import (
     marker_exists,
     marker_matches,
     materialize_dir_summary,
-    materialize_rule_costs,
     print_summary,
     timestamp_string,
     write_marker,
@@ -51,16 +50,6 @@ def _materialize_dir_summary_step(ctx: Context, action: StepSpec) -> None:
         return
     total_dirs = materialize_dir_summary(ctx.conn)
     print_summary(f"{action.action_id}: materialized {total_dirs} directory summary rows")
-    write_marker(ctx.conn, action.action_id, fingerprint, dry_run=ctx.dry_run)
-
-
-def _materialize_rule_costs_step(ctx: Context, action: StepSpec) -> None:
-    fingerprint = hashlib.sha256((PLAN_FINGERPRINT + "rule_costs").encode()).hexdigest()
-    if not ctx.force and marker_matches(ctx.conn, action.action_id, fingerprint):
-        print_summary(f"skip {action.action_id}: marker is current")
-        return
-    total_inserted = materialize_rule_costs(ctx.conn)
-    print_summary(f"{action.action_id}: materialized {total_inserted} rule cost rows")
     write_marker(ctx.conn, action.action_id, fingerprint, dry_run=ctx.dry_run)
 
 
@@ -95,19 +84,6 @@ STEPS: list[StepSpec] = [
         mutating=False,
         runner=_materialize_dir_summary_step,
         predecessors=("prep.scan_objects",),
-    ),
-    StepSpec(
-        action_id="prep.materialize_rule_costs",
-        group_name="prep",
-        command_name="materialize-rule-costs",
-        description="Materialize per-protect-rule storage costs.",
-        help_text=(
-            "Compute the storage cost of each protect rule by joining against the dir_summary table. "
-            "Results are stored in the rule_costs table for the delete-o-tron dashboard."
-        ),
-        mutating=False,
-        runner=_materialize_rule_costs_step,
-        predecessors=("prep.materialize_dir_summary",),
     ),
 ]
 

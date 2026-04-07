@@ -63,6 +63,10 @@ class StorageCatalog:
         return self.root / "delete_rules.json"
 
     @cached_property
+    def deletion_manifest_csv(self) -> Path:
+        return self.root / "deletion_manifest.csv"
+
+    @cached_property
     def protect_dir(self) -> Path:
         return self.root / "protect"
 
@@ -177,7 +181,7 @@ class Context:
     project: str | None
 
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 _ARROW_TO_DUCKDB: dict[pa.DataType, str] = {
     pa.string(): "VARCHAR",
@@ -405,7 +409,6 @@ def init_db(catalog: StorageCatalog = DEFAULT_CATALOG) -> duckdb.DuckDBPyConnect
         """
     )
     _run_migrations(conn, catalog)
-    load_rules_from_json(conn, catalog)
     return conn
 
 
@@ -485,12 +488,17 @@ def _migrate_to_14(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog) -> 
 
 # Migrations 11-13 take (conn); migration 14 also needs the catalog.
 def _migrate_to_16(conn: duckdb.DuckDBPyConnection) -> None:
-    """Clear rules tables; data reloaded from JSON on startup."""
+    """Drop rules tables; replaced by views over JSON files."""
     for table in ("delete_rule_costs", "rule_costs", "delete_rules", "protect_rules"):
-        try:
-            conn.execute(f"DELETE FROM {table}")
-        except duckdb.CatalogException:
-            pass
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
+    for seq in ("protect_rules_id_seq", "delete_rules_id_seq"):
+        conn.execute(f"DROP SEQUENCE IF EXISTS {seq}")
+
+
+def _migrate_to_17(conn: duckdb.DuckDBPyConnection) -> None:
+    """Drop materialized cost tables; costs are now computed on the fly."""
+    for table in ("rule_costs", "delete_rule_costs"):
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
 
 
 _MIGRATIONS_SIMPLE: list[tuple[int, Callable[[duckdb.DuckDBPyConnection], None]]] = [
@@ -498,6 +506,7 @@ _MIGRATIONS_SIMPLE: list[tuple[int, Callable[[duckdb.DuckDBPyConnection], None]]
     (12, _migrate_to_12),
     (13, _migrate_to_13),
     (16, _migrate_to_16),
+    (17, _migrate_to_17),
 ]
 
 
@@ -544,59 +553,8 @@ def _ensure_current_schema(conn: duckdb.DuckDBPyConnection, catalog: StorageCata
         )
         """
     )
-    conn.execute("CREATE SEQUENCE IF NOT EXISTS protect_rules_id_seq START 1")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS protect_rules (
-            id INTEGER PRIMARY KEY DEFAULT nextval('protect_rules_id_seq'),
-            bucket TEXT NOT NULL,
-            pattern TEXT NOT NULL,
-            pattern_type TEXT NOT NULL,
-            owners TEXT,
-            reasons TEXT,
-            sources TEXT,
-            UNIQUE (bucket, pattern)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS rule_costs (
-            rule_id INTEGER NOT NULL REFERENCES protect_rules(id),
-            bucket TEXT NOT NULL,
-            storage_class_id INTEGER NOT NULL REFERENCES storage_classes(id),
-            object_count INTEGER NOT NULL,
-            total_bytes BIGINT NOT NULL,
-            monthly_cost_usd REAL NOT NULL,
-            PRIMARY KEY (rule_id, storage_class_id, bucket)
-        )
-        """
-    )
-    conn.execute("CREATE SEQUENCE IF NOT EXISTS delete_rules_id_seq START 1")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS delete_rules (
-            id INTEGER PRIMARY KEY DEFAULT nextval('delete_rules_id_seq'),
-            pattern TEXT NOT NULL,
-            storage_class TEXT,
-            description TEXT,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS delete_rule_costs (
-            rule_id INTEGER NOT NULL REFERENCES delete_rules(id),
-            bucket TEXT NOT NULL,
-            storage_class_id INTEGER NOT NULL REFERENCES storage_classes(id),
-            object_count INTEGER NOT NULL,
-            total_bytes BIGINT NOT NULL,
-            monthly_cost_usd REAL NOT NULL,
-            PRIMARY KEY (rule_id, storage_class_id, bucket)
-        )
-        """
-    )
+    # Rules are views over JSON files — the JSON is the source of truth.
+    _create_rules_views(conn, catalog)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS scanned_prefixes (
@@ -978,169 +936,69 @@ def materialize_dir_summary(conn: duckdb.DuckDBPyConnection, catalog: StorageCat
     return int(total["cnt"])
 
 
-_STORAGE_CLASS_COLUMNS = {
-    "STANDARD": ("standard_count", "standard_bytes"),
-    "NEARLINE": ("nearline_count", "nearline_bytes"),
-    "COLDLINE": ("coldline_count", "coldline_bytes"),
-    "ARCHIVE": ("archive_count", "archive_bytes"),
-}
-
-
-def materialize_rule_costs(conn: duckdb.DuckDBPyConnection) -> int:
-    """Compute and store per-rule costs in the rule_costs table using dir_summary.
-
-    Inserts one row per (rule, bucket, storage_class) by summing the per-class
-    columns from matching dir_summary rows. Wildcard rules (bucket='*') are
-    expanded: they produce cost rows for every bucket they match.
-    """
-    conn.execute("DELETE FROM rule_costs")
-    conn.execute("PRAGMA enable_progress_bar")
-
-    sc_id_map = {row["name"]: row["id"] for row in _fetchall_dicts(conn.execute("SELECT id, name FROM storage_classes"))}
-
-    for plan_row in plan_rows():
-        bucket_name = plan_row["bucket"]
-        region = plan_row["region"]
-        continent = continent_for_region(region)
-        price_column = "price_per_gib_month_us" if continent == "US" else "price_per_gib_month_eu"
-
-        prices = {
-            row["name"]: float(row[price_column])
-            for row in _fetchall_dicts(conn.execute(f"SELECT name, {price_column} FROM storage_classes"))
-        }
-
-        for sc_name, (count_col, bytes_col) in _STORAGE_CLASS_COLUMNS.items():
-            sc_id = sc_id_map[sc_name]
-            price = prices[sc_name]
-            discount_factor = 1.0 - GCS_DISCOUNT
-
-            conn.execute(
-                f"""
-                INSERT INTO rule_costs (rule_id, bucket, storage_class_id, object_count, total_bytes, monthly_cost_usd)
-                SELECT r.id,
-                       ? as bucket,
-                       ? as storage_class_id,
-                       COALESCE(SUM(d.{count_col}), 0) as object_count,
-                       COALESCE(SUM(d.{bytes_col}), 0) as total_bytes,
-                       COALESCE(SUM(d.{bytes_col}), 0) / (1024.0*1024.0*1024.0)
-                           * ? as monthly_cost_usd
-                FROM protect_rules r
-                JOIN dir_summary d
-                    ON (d.bucket = r.bucket OR (r.bucket = '*' AND d.bucket = ?))
-                    AND d.dir_prefix LIKE r.pattern
-                WHERE r.bucket = ? OR r.bucket = '*'
-                GROUP BY r.id
-                HAVING SUM(d.{count_col}) > 0
-                """,
-                (bucket_name, sc_id, price * discount_factor, bucket_name, bucket_name),
-            )
-
-    total = _fetchone_dict(conn.execute("SELECT COUNT(*) as cnt FROM rule_costs"))
-    return int(total["cnt"])
-
-
-def materialize_delete_rule_costs(conn: duckdb.DuckDBPyConnection) -> int:
-    """Compute and store per-delete-rule costs in delete_rule_costs using dir_summary."""
-    conn.execute("DELETE FROM delete_rule_costs")
-
-    sc_id_map = {row["name"]: row["id"] for row in _fetchall_dicts(conn.execute("SELECT id, name FROM storage_classes"))}
-
-    for plan_row in plan_rows():
-        bucket_name = plan_row["bucket"]
-        region = plan_row["region"]
-        continent = continent_for_region(region)
-        price_column = "price_per_gib_month_us" if continent == "US" else "price_per_gib_month_eu"
-
-        prices = {
-            row["name"]: float(row[price_column])
-            for row in _fetchall_dicts(conn.execute(f"SELECT name, {price_column} FROM storage_classes"))
-        }
-
-        for sc_name, (count_col, bytes_col) in _STORAGE_CLASS_COLUMNS.items():
-            sc_id = sc_id_map[sc_name]
-            price = prices[sc_name]
-            discount_factor = 1.0 - GCS_DISCOUNT
-
-            conn.execute(
-                f"""
-                INSERT INTO delete_rule_costs
-                    (rule_id, bucket, storage_class_id, object_count, total_bytes, monthly_cost_usd)
-                SELECT dr.id,
-                       ? as bucket,
-                       ? as storage_class_id,
-                       COALESCE(SUM(d.{count_col}), 0) as object_count,
-                       COALESCE(SUM(d.{bytes_col}), 0) as total_bytes,
-                       COALESCE(SUM(d.{bytes_col}), 0) / (1024.0*1024.0*1024.0) * ? as monthly_cost_usd
-                FROM delete_rules dr
-                JOIN dir_summary d ON d.dir_prefix LIKE dr.pattern
-                    AND d.bucket = ?
-                WHERE (dr.storage_class IS NULL OR dr.storage_class = ?)
-                  AND NOT EXISTS (
-                    SELECT 1 FROM protect_rules p
-                    WHERE (p.bucket = d.bucket OR p.bucket = '*')
-                      AND d.dir_prefix LIKE p.pattern
-                  )
-                GROUP BY dr.id
-                HAVING SUM(d.{count_col}) > 0
-                """,
-                (bucket_name, sc_id, price * discount_factor, bucket_name, sc_name),
-            )
-
-    total = _fetchone_dict(conn.execute("SELECT COUNT(*) as cnt FROM delete_rule_costs"))
-    return int(total["cnt"])
-
-
 # ---------------------------------------------------------------------------
 # JSON-backed rules persistence
 # ---------------------------------------------------------------------------
 
 
-def load_rules_from_json(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog) -> None:
-    """Reload protect_rules and delete_rules from JSON files into DuckDB tables.
+_EMPTY_PROTECT_RULES_VIEW = (
+    "CREATE OR REPLACE VIEW protect_rules AS "
+    "SELECT NULL::BIGINT as id, NULL::VARCHAR as bucket, NULL::VARCHAR as pattern, "
+    "NULL::VARCHAR as pattern_type, NULL::VARCHAR as owners, "
+    "NULL::VARCHAR as reasons, NULL::VARCHAR as sources WHERE false"
+)
 
-    Called on every startup so the JSON files are the source of truth.
+_EMPTY_DELETE_RULES_VIEW = (
+    "CREATE OR REPLACE VIEW delete_rules AS "
+    "SELECT NULL::BIGINT as id, NULL::VARCHAR as pattern, NULL::VARCHAR as storage_class, "
+    "NULL::VARCHAR as description, NULL::VARCHAR as created_at WHERE false"
+)
+
+
+def _json_file_has_rows(path: Path) -> bool:
+    """Return True if path exists and contains a non-empty JSON array."""
+    if not path.exists():
+        return False
+    text = path.read_text().strip()
+    return text not in ("", "[]")
+
+
+def _create_rules_views(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog) -> None:
+    """Create (or replace) views over the JSON rule files.
+
+    If a JSON file doesn't exist or is empty, creates an empty view with the
+    right column schema.  DuckDB's read_json_auto cannot infer columns from an
+    empty array, so we must handle that case explicitly.
     """
-    conn.execute("DELETE FROM rule_costs")
-    conn.execute("DELETE FROM delete_rule_costs")
-    conn.execute("DELETE FROM protect_rules")
-    conn.execute("DELETE FROM delete_rules")
+    if _json_file_has_rows(catalog.protect_rules_json):
+        conn.execute(
+            f"CREATE OR REPLACE VIEW protect_rules AS " f"SELECT * FROM read_json_auto('{catalog.protect_rules_json}')"
+        )
+    else:
+        conn.execute(_EMPTY_PROTECT_RULES_VIEW)
 
-    if catalog.protect_rules_json.exists():
-        rules = json.loads(catalog.protect_rules_json.read_text())
-        for r in rules:
-            conn.execute(
-                "INSERT INTO protect_rules (bucket, pattern, pattern_type, owners, reasons, sources) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (r["bucket"], r["pattern"], r["pattern_type"], r.get("owners"), r.get("reasons"), r.get("sources")),
-            )
-        print_summary(f"  loaded {len(rules)} protect rules from JSON")
+    if _json_file_has_rows(catalog.delete_rules_json):
+        conn.execute(
+            f"CREATE OR REPLACE VIEW delete_rules AS " f"SELECT * FROM read_json_auto('{catalog.delete_rules_json}')"
+        )
+    else:
+        conn.execute(_EMPTY_DELETE_RULES_VIEW)
 
-    if catalog.delete_rules_json.exists():
-        rules = json.loads(catalog.delete_rules_json.read_text())
-        for r in rules:
-            conn.execute(
-                "INSERT INTO delete_rules (pattern, storage_class, description, created_at) " "VALUES (?, ?, ?, ?)",
-                (r["pattern"], r.get("storage_class"), r.get("description"), r["created_at"]),
-            )
-        print_summary(f"  loaded {len(rules)} delete rules from JSON")
+
+def _next_rule_id(conn: duckdb.DuckDBPyConnection, table: str) -> int:
+    """Return the next available id for a rules JSON file."""
+    row = conn.execute(f"SELECT COALESCE(MAX(id), 0) + 1 FROM {table}").fetchone()
+    return int(row[0])
 
 
 def flush_protect_rules(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog) -> None:
-    """Write the current protect_rules table back to JSON."""
-    rows = _fetchall_dicts(
-        conn.execute(
-            "SELECT bucket, pattern, pattern_type, owners, reasons, sources FROM protect_rules ORDER BY bucket, pattern"
-        )
-    )
-    catalog.protect_rules_json.write_text(json.dumps(rows, indent=2) + "\n")
+    """Refresh the protect_rules view after the JSON file has been updated."""
+    _create_rules_views(conn, catalog)
 
 
 def flush_delete_rules(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog) -> None:
-    """Write the current delete_rules table back to JSON."""
-    rows = _fetchall_dicts(
-        conn.execute("SELECT pattern, storage_class, description, created_at FROM delete_rules ORDER BY id")
-    )
-    catalog.delete_rules_json.write_text(json.dumps(rows, indent=2) + "\n")
+    """Refresh the delete_rules view after the JSON file has been updated."""
+    _create_rules_views(conn, catalog)
 
 
 # ---------------------------------------------------------------------------

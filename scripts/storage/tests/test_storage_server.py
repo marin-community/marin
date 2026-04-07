@@ -12,109 +12,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
 
-from scripts.storage.db import StorageCatalog
-
-
-def _make_test_db(db_path: Path) -> None:
-    """Initialise a test DuckDB at db_path with the full schema and seed rows.
-
-    We create dir_summary as a plain table rather than a parquet-backed view
-    because the server queries it via SQL and DuckDB doesn't care which it is.
-    """
-    conn = duckdb.connect(str(db_path))
-
-    conn.execute("CREATE TABLE cache_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-    conn.execute("INSERT INTO cache_meta VALUES ('schema_version', '14')")
-
-    conn.execute("CREATE SEQUENCE protect_rules_id_seq START 1")
-    conn.execute(
-        """
-        CREATE TABLE storage_classes (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE,
-            price_per_gib_month_us REAL NOT NULL,
-            price_per_gib_month_eu REAL NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE protect_rules (
-            id INTEGER PRIMARY KEY DEFAULT nextval('protect_rules_id_seq'),
-            bucket TEXT NOT NULL,
-            pattern TEXT NOT NULL,
-            pattern_type TEXT NOT NULL,
-            owners TEXT,
-            reasons TEXT,
-            sources TEXT,
-            UNIQUE (bucket, pattern)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE rule_costs (
-            rule_id INTEGER NOT NULL REFERENCES protect_rules(id),
-            bucket TEXT NOT NULL,
-            storage_class_id INTEGER NOT NULL REFERENCES storage_classes(id),
-            object_count INTEGER NOT NULL,
-            total_bytes BIGINT NOT NULL,
-            monthly_cost_usd REAL NOT NULL,
-            PRIMARY KEY (rule_id, storage_class_id, bucket)
-        )
-        """
-    )
-    conn.execute("CREATE SEQUENCE delete_rules_id_seq START 1")
-    conn.execute(
-        """
-        CREATE TABLE delete_rules (
-            id INTEGER PRIMARY KEY DEFAULT nextval('delete_rules_id_seq'),
-            pattern TEXT NOT NULL,
-            storage_class TEXT,
-            description TEXT,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE delete_rule_costs (
-            rule_id INTEGER NOT NULL REFERENCES delete_rules(id),
-            bucket TEXT NOT NULL,
-            storage_class_id INTEGER NOT NULL REFERENCES storage_classes(id),
-            object_count INTEGER NOT NULL,
-            total_bytes BIGINT NOT NULL,
-            monthly_cost_usd REAL NOT NULL,
-            PRIMARY KEY (rule_id, storage_class_id, bucket)
-        )
-        """
-    )
-
-    for sc_id, name, us, eu in [
-        (1, "STANDARD", 0.020, 0.023),
-        (2, "NEARLINE", 0.010, 0.013),
-        (3, "COLDLINE", 0.004, 0.006),
-        (4, "ARCHIVE", 0.0012, 0.0025),
-    ]:
-        conn.execute("INSERT INTO storage_classes VALUES (?,?,?,?)", (sc_id, name, us, eu))
-
-    # Empty objects view — needed by materialize_*_costs helpers if called.
-    conn.execute(
-        """
-        CREATE VIEW objects AS
-        SELECT NULL::VARCHAR as bucket, NULL::VARCHAR as name,
-               NULL::BIGINT as size_bytes, NULL::INTEGER as storage_class_id,
-               NULL::TIMESTAMPTZ as created, NULL::TIMESTAMPTZ as updated
-        WHERE false
-        """
-    )
-    conn.close()
+from scripts.storage.db import StorageCatalog, init_db
 
 
 def _write_seed_parquet(parquet_dir: Path) -> None:
@@ -141,7 +44,9 @@ def _write_seed_parquet(parquet_dir: Path) -> None:
 def catalog(tmp_path: Path) -> StorageCatalog:
     cat = StorageCatalog(tmp_path)
     cat.ensure_dirs()
-    _make_test_db(cat.db_path)
+    # init_db creates all tables, views, and seeds storage_classes.
+    conn = init_db(cat)
+    conn.close()
     _write_seed_parquet(cat.dir_summary_parquet_dir)
     return cat
 
@@ -176,6 +81,13 @@ def test_overview_totals_reflect_seed_data(client):
     assert totals["total_objects"] > 0
     assert totals["total_bytes"] > 0
     assert totals["total_monthly_cost_usd"] > 0
+    # With no protect rules, nothing is protected and everything is deletable
+    assert totals["protected_objects"] == 0
+    assert totals["protected_bytes"] == 0
+    assert totals["protected_monthly_cost_usd"] == 0
+    assert totals["deletable_objects"] == totals["total_objects"]
+    assert totals["deletable_bytes"] == totals["total_bytes"]
+    assert totals["deletable_monthly_cost_usd"] == totals["total_monthly_cost_usd"]
 
 
 def test_overview_region_entry_shape(client):
@@ -187,6 +99,31 @@ def test_overview_region_entry_shape(client):
         assert "bucket" in entry
         assert "total_objects" in entry
         assert "by_storage_class" in entry
+        assert "protected_objects" in entry
+        assert "protected_bytes" in entry
+        assert "protected_bytes_human" in entry
+        assert "protected_monthly_cost_usd" in entry
+        assert "deletable_objects" in entry
+        assert "deletable_bytes" in entry
+        assert "deletable_bytes_human" in entry
+        assert "deletable_monthly_cost_usd" in entry
+
+
+def test_overview_protected_reflects_protect_rules(client):
+    """Adding a protect rule shifts matching bytes from deletable to protected."""
+    totals_before = client.get("/api/overview").json()["totals"]
+    assert totals_before["protected_objects"] == 0
+
+    client.post("/api/rules", json={"bucket": "*", "pattern": "data/training/%"})
+
+    data = client.get("/api/overview").json()
+    totals = data["totals"]
+    assert totals["protected_objects"] > 0
+    assert totals["protected_bytes"] > 0
+    assert totals["protected_monthly_cost_usd"] > 0
+    # Totals are conserved: protected + deletable == total
+    assert totals["protected_objects"] + totals["deletable_objects"] == totals["total_objects"]
+    assert totals["protected_bytes"] + totals["deletable_bytes"] == totals["total_bytes"]
 
 
 # ---------------------------------------------------------------------------
@@ -295,21 +232,18 @@ def test_delete_delete_rule_removes_it(client):
     assert not any(r["id"] == rule_id for r in rules)
 
 
-def test_delete_rule_recalculate_excludes_protected_dirs(client):
+def test_delete_rule_costs_exclude_protected_dirs(client):
     """Delete rule costs should not count directories covered by a protect rule."""
     # Delete everything matching tmp/
     client.post("/api/delete-rules", json={"pattern": "tmp/%"})
 
-    # Recalculate without protection — tmp/scratch/ should be counted
-    resp = client.post("/api/delete-rules/recalculate")
-    assert resp.status_code == 200
+    # Without protection, tmp/scratch/ should be counted
     rules_before = client.get("/api/delete-rules").json()["rules"]
     rule = next(r for r in rules_before if r["pattern"] == "tmp/%")
     assert rule["total_objects"] > 0
 
-    # Now protect tmp/ and recalculate — should drop to zero
+    # Now protect tmp/ — costs should drop to zero on next read
     client.post("/api/rules", json={"bucket": "*", "pattern": "tmp/%"})
-    client.post("/api/delete-rules/recalculate")
     rules_after = client.get("/api/delete-rules").json()["rules"]
     rule = next(r for r in rules_after if r["pattern"] == "tmp/%")
     assert rule["total_objects"] == 0

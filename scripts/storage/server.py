@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+from collections import defaultdict
 import os
 import subprocess
 import threading
@@ -32,16 +33,16 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.responses import FileResponse
 
+
 from scripts.storage.db import (
     DEFAULT_CATALOG,
     GCS_DISCOUNT,
     StorageCatalog,
+    _next_rule_id,
     continent_for_region,
     flush_delete_rules,
     flush_protect_rules,
     human_bytes,
-    materialize_delete_rule_costs,
-    materialize_rule_costs,
     plan_rows,
     region_from_bucket,
 )
@@ -365,6 +366,9 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
         grand_total_objects = 0
         grand_total_bytes = 0
         grand_total_cost = 0.0
+        grand_protected_objects = 0
+        grand_protected_bytes = 0
+        grand_protected_cost = 0.0
 
         # Fetch prices once
         prices_us = {
@@ -398,16 +402,33 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
             if not totals or totals["standard_count"] is None:
                 continue
 
+            protected_row = _fetchone(
+                db(),
+                """
+                SELECT COALESCE(SUM(d.standard_count), 0) as p_standard_count,
+                       COALESCE(SUM(d.standard_bytes), 0) as p_standard_bytes,
+                       COALESCE(SUM(d.nearline_count), 0) as p_nearline_count,
+                       COALESCE(SUM(d.nearline_bytes), 0) as p_nearline_bytes,
+                       COALESCE(SUM(d.coldline_count), 0) as p_coldline_count,
+                       COALESCE(SUM(d.coldline_bytes), 0) as p_coldline_bytes,
+                       COALESCE(SUM(d.archive_count), 0) as p_archive_count,
+                       COALESCE(SUM(d.archive_bytes), 0) as p_archive_bytes
+                FROM protect_rules r
+                JOIN dir_summary d ON d.dir_prefix LIKE r.pattern
+                    AND (d.bucket = r.bucket OR r.bucket = '*')
+                WHERE d.bucket = ?
+                """,
+                (bucket_name,),
+            )
+
             by_class = []
             total_objects = 0
             total_bytes = 0
             total_cost = 0.0
-            for sc_name, count_col, bytes_col in [
-                ("STANDARD", "standard_count", "standard_bytes"),
-                ("NEARLINE", "nearline_count", "nearline_bytes"),
-                ("COLDLINE", "coldline_count", "coldline_bytes"),
-                ("ARCHIVE", "archive_count", "archive_bytes"),
-            ]:
+            protected_objects = 0
+            protected_bytes = 0
+            protected_cost = 0.0
+            for sc_name, count_col, bytes_col in ALL_SC_COLS:
                 cnt = int(totals[count_col] or 0)
                 bts = int(totals[bytes_col] or 0)
                 cost = bts / (1024.0 * 1024.0 * 1024.0) * prices[sc_name] * discount_factor
@@ -425,6 +446,16 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
                 total_bytes += bts
                 total_cost += cost
 
+                p_cnt = int(protected_row[f"p_{count_col}"] or 0) if protected_row else 0
+                p_bts = int(protected_row[f"p_{bytes_col}"] or 0) if protected_row else 0
+                protected_objects += p_cnt
+                protected_bytes += p_bts
+                protected_cost += p_bts / (1024.0 * 1024.0 * 1024.0) * prices[sc_name] * discount_factor
+
+            deletable_objects = total_objects - protected_objects
+            deletable_bytes = total_bytes - protected_bytes
+            deletable_cost = total_cost - protected_cost
+
             regions.append(
                 {
                     "region": region,
@@ -434,6 +465,14 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
                     "total_bytes": total_bytes,
                     "total_bytes_human": human_bytes(total_bytes),
                     "total_monthly_cost_usd": round(total_cost, 2),
+                    "protected_objects": protected_objects,
+                    "protected_bytes": protected_bytes,
+                    "protected_bytes_human": human_bytes(protected_bytes),
+                    "protected_monthly_cost_usd": round(protected_cost, 2),
+                    "deletable_objects": deletable_objects,
+                    "deletable_bytes": deletable_bytes,
+                    "deletable_bytes_human": human_bytes(deletable_bytes),
+                    "deletable_monthly_cost_usd": round(deletable_cost, 2),
                     "by_storage_class": by_class,
                 }
             )
@@ -441,6 +480,13 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
             grand_total_objects += total_objects
             grand_total_bytes += total_bytes
             grand_total_cost += total_cost
+            grand_protected_objects += protected_objects
+            grand_protected_bytes += protected_bytes
+            grand_protected_cost += protected_cost
+
+        grand_deletable_objects = grand_total_objects - grand_protected_objects
+        grand_deletable_bytes = grand_total_bytes - grand_protected_bytes
+        grand_deletable_cost = grand_total_cost - grand_protected_cost
 
         return {
             "regions": regions,
@@ -449,6 +495,14 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
                 "total_bytes": grand_total_bytes,
                 "total_bytes_human": human_bytes(grand_total_bytes),
                 "total_monthly_cost_usd": round(grand_total_cost, 2),
+                "protected_objects": grand_protected_objects,
+                "protected_bytes": grand_protected_bytes,
+                "protected_bytes_human": human_bytes(grand_protected_bytes),
+                "protected_monthly_cost_usd": round(grand_protected_cost, 2),
+                "deletable_objects": grand_deletable_objects,
+                "deletable_bytes": grand_deletable_bytes,
+                "deletable_bytes_human": human_bytes(grand_deletable_bytes),
+                "deletable_monthly_cost_usd": round(grand_deletable_cost, 2),
             },
             "discount": GCS_DISCOUNT,
         }
@@ -456,7 +510,7 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     @app.get("/api/savings")
     @serialized
     def savings() -> dict[str, Any]:
-        """Derive deletable = total - protected from dir_summary and rule_costs."""
+        """Derive deletable = total - protected from dir_summary and protect_rules."""
         regions = []
         grand_deletable_objects = 0
         grand_deletable_bytes = 0
@@ -490,20 +544,24 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
                 (bucket_name,),
             )
 
-            protected = _fetchall(
+            protected_row = _fetchone(
                 db(),
                 """
-                SELECT sc.name as class,
-                       COALESCE(SUM(rc.object_count), 0) as objects,
-                       COALESCE(SUM(rc.total_bytes), 0) as bytes
-                FROM rule_costs rc
-                JOIN storage_classes sc ON rc.storage_class_id = sc.id
-                WHERE rc.bucket = ?
-                GROUP BY sc.name
+                SELECT COALESCE(SUM(d.standard_count), 0) as p_standard_count,
+                       COALESCE(SUM(d.standard_bytes), 0) as p_standard_bytes,
+                       COALESCE(SUM(d.nearline_count), 0) as p_nearline_count,
+                       COALESCE(SUM(d.nearline_bytes), 0) as p_nearline_bytes,
+                       COALESCE(SUM(d.coldline_count), 0) as p_coldline_count,
+                       COALESCE(SUM(d.coldline_bytes), 0) as p_coldline_bytes,
+                       COALESCE(SUM(d.archive_count), 0) as p_archive_count,
+                       COALESCE(SUM(d.archive_bytes), 0) as p_archive_bytes
+                FROM protect_rules r
+                JOIN dir_summary d ON d.dir_prefix LIKE r.pattern
+                    AND (d.bucket = r.bucket OR r.bucket = '*')
+                WHERE d.bucket = ?
                 """,
                 (bucket_name,),
             )
-            protected_by_class = {r["class"]: r for r in protected}
 
             if not totals:
                 continue
@@ -520,9 +578,8 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
             ]:
                 total_cnt = int(totals[count_col] or 0)
                 total_bts = int(totals[bytes_col] or 0)
-                p = protected_by_class.get(sc_name)
-                p_cnt = int(p["objects"]) if p else 0
-                p_bts = int(p["bytes"]) if p else 0
+                p_cnt = int(protected_row[f"p_{count_col}"] or 0) if protected_row else 0
+                p_bts = int(protected_row[f"p_{bytes_col}"] or 0) if protected_row else 0
                 d_cnt = total_cnt - p_cnt
                 d_bts = total_bts - p_bts
                 if d_cnt <= 0:
@@ -568,94 +625,122 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     @app.get("/api/rules")
     @serialized
     def list_protect_rules() -> dict[str, Any]:
-        raw_rules = _fetchall(
-            db(),
+        conn = db()
+        prices_us = {
+            r["name"]: float(r["price"])
+            for r in _fetchall(conn, "SELECT name, price_per_gib_month_us as price FROM storage_classes")
+        }
+        prices_eu = {
+            r["name"]: float(r["price"])
+            for r in _fetchall(conn, "SELECT name, price_per_gib_month_eu as price FROM storage_classes")
+        }
+        discount_factor = 1.0 - GCS_DISCOUNT
+
+        raw = _fetchall(
+            conn,
             """
             SELECT r.id, r.bucket, r.pattern, r.pattern_type, r.owners, r.reasons,
-                   COALESCE(SUM(rc.object_count), 0) as total_objects,
-                   COALESCE(SUM(rc.total_bytes), 0) as total_bytes,
-                   COALESCE(SUM(rc.monthly_cost_usd), 0) as monthly_cost_usd
+                   d.bucket as data_bucket,
+                   SUM(d.standard_count) as standard_count, SUM(d.standard_bytes) as standard_bytes,
+                   SUM(d.nearline_count) as nearline_count, SUM(d.nearline_bytes) as nearline_bytes,
+                   SUM(d.coldline_count) as coldline_count, SUM(d.coldline_bytes) as coldline_bytes,
+                   SUM(d.archive_count) as archive_count, SUM(d.archive_bytes) as archive_bytes
             FROM protect_rules r
-            LEFT JOIN rule_costs rc ON rc.rule_id = r.id
-            GROUP BY r.id, r.bucket, r.pattern, r.pattern_type, r.owners, r.reasons
-            ORDER BY monthly_cost_usd DESC
-            """,
+            LEFT JOIN dir_summary d ON d.dir_prefix LIKE r.pattern
+                AND (d.bucket = r.bucket OR r.bucket = '*')
+            GROUP BY r.id, r.bucket, r.pattern, r.pattern_type, r.owners, r.reasons, d.bucket
+        """,
         )
 
-        result_rules = []
-        for r in raw_rules:
-            by_class = _fetchall(
-                db(),
-                """
-                SELECT sc.name as class,
-                       rc.object_count as objects,
-                       rc.total_bytes as bytes,
-                       rc.monthly_cost_usd
-                FROM rule_costs rc
-                JOIN storage_classes sc ON rc.storage_class_id = sc.id
-                WHERE rc.rule_id = ?
-                ORDER BY sc.id
-                """,
-                (r["id"],),
-            )
-            result_rules.append(
-                {
-                    "id": r["id"],
-                    "bucket": r["bucket"],
-                    "region": region_from_bucket(r["bucket"]),
-                    "pattern": r["pattern"],
-                    "pattern_type": r["pattern_type"],
-                    "owners": r["owners"] or "",
-                    "reasons": r["reasons"] or "",
-                    "total_objects": int(r["total_objects"]),
-                    "total_bytes": int(r["total_bytes"]),
-                    "total_bytes_human": human_bytes(int(r["total_bytes"])),
-                    "monthly_cost_usd": round(float(r["monthly_cost_usd"]), 4),
-                    "by_storage_class": [
-                        {
-                            "class": c["class"],
-                            "objects": int(c["objects"]),
-                            "bytes": int(c["bytes"]),
-                            "monthly_cost_usd": round(float(c["monthly_cost_usd"]), 4),
-                        }
-                        for c in by_class
-                    ],
-                }
-            )
+        rules_agg: dict[int, dict[str, Any]] = {}
+        rules_by_class: dict[int, dict[str, dict[str, int | float]]] = defaultdict(dict)
 
+        for row in raw:
+            rid = row["id"]
+            if rid not in rules_agg:
+                rules_agg[rid] = {
+                    "id": rid,
+                    "bucket": row["bucket"],
+                    "region": region_from_bucket(row["bucket"]),
+                    "pattern": row["pattern"],
+                    "pattern_type": row["pattern_type"],
+                    "owners": row["owners"] or "",
+                    "reasons": row["reasons"] or "",
+                    "total_objects": 0,
+                    "total_bytes": 0,
+                    "monthly_cost_usd": 0.0,
+                }
+
+            data_bucket = row["data_bucket"]
+            if data_bucket is None:
+                continue
+            continent = continent_for_region(region_from_bucket(data_bucket))
+            prices = prices_us if continent == "US" else prices_eu
+
+            for sc_name, count_col, bytes_col in ALL_SC_COLS:
+                cnt = int(row[count_col] or 0)
+                bts = int(row[bytes_col] or 0)
+                if cnt == 0:
+                    continue
+                cost = bts / (1024.0 * 1024.0 * 1024.0) * prices[sc_name] * discount_factor
+                rules_agg[rid]["total_objects"] += cnt
+                rules_agg[rid]["total_bytes"] += bts
+                rules_agg[rid]["monthly_cost_usd"] += cost
+
+                key = sc_name
+                if key not in rules_by_class[rid]:
+                    rules_by_class[rid][key] = {"class": sc_name, "objects": 0, "bytes": 0, "monthly_cost_usd": 0.0}
+                rules_by_class[rid][key]["objects"] += cnt
+                rules_by_class[rid][key]["bytes"] += bts
+                rules_by_class[rid][key]["monthly_cost_usd"] += cost
+
+        result_rules = []
+        for rid, info in rules_agg.items():
+            info["total_bytes_human"] = human_bytes(info["total_bytes"])
+            info["monthly_cost_usd"] = round(info["monthly_cost_usd"], 4)
+            info["by_storage_class"] = [
+                {**v, "monthly_cost_usd": round(v["monthly_cost_usd"], 4)} for v in rules_by_class.get(rid, {}).values()
+            ]
+            result_rules.append(info)
+
+        result_rules.sort(key=lambda r: r["monthly_cost_usd"], reverse=True)
         return {"rules": result_rules}
 
     @app.post("/api/rules")
     @serialized
     def create_protect_rule(req: ProtectRuleCreate) -> dict[str, Any]:
         conn = db()
-        row = _fetchone(
-            conn,
-            """
-            INSERT INTO protect_rules (bucket, pattern, pattern_type, owners, reasons)
-            VALUES (?, ?, 'like', ?, ?)
-            RETURNING id, bucket, pattern, pattern_type, owners, reasons
-            """,
-            (req.bucket, req.pattern, req.owners, req.reasons),
-        )
+        new_id = _next_rule_id(conn, "protect_rules")
+        import json as _json
+
+        path = catalog.protect_rules_json
+        rules = _json.loads(path.read_text()) if path.exists() else []
+        new_rule = {
+            "id": new_id,
+            "bucket": req.bucket,
+            "pattern": req.pattern,
+            "pattern_type": "like",
+            "owners": req.owners,
+            "reasons": req.reasons,
+            "sources": None,
+        }
+        rules.append(new_rule)
+        path.write_text(_json.dumps(rules, indent=2) + "\n")
         flush_protect_rules(conn, catalog)
-        return row or {}
+        return new_rule
 
     @app.delete("/api/rules/{rule_id}")
     @serialized
     def remove_protect_rule(rule_id: int) -> dict[str, Any]:
+        import json as _json
+
         conn = db()
-        conn.execute("DELETE FROM rule_costs WHERE rule_id = ?", (rule_id,))
-        conn.execute("DELETE FROM protect_rules WHERE id = ?", (rule_id,))
+        path = catalog.protect_rules_json
+        rules = _json.loads(path.read_text()) if path.exists() else []
+        rules = [r for r in rules if r["id"] != rule_id]
+        path.write_text(_json.dumps(rules, indent=2) + "\n")
         flush_protect_rules(conn, catalog)
         return {"deleted": rule_id}
-
-    @app.post("/api/rules/recalculate")
-    @serialized
-    def recalculate_protect_rules() -> dict[str, Any]:
-        conn = db()
-        count = materialize_rule_costs(conn)
-        return {"rows": count}
 
     @app.get("/api/rules/simulate")
     @serialized
@@ -672,28 +757,52 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
         baseline = savings()
         placeholders = ", ".join("?" * len(exclude))
 
-        # Sum costs of excluded rules per bucket+class.
-        # rule_costs.bucket holds the actual bucket even for wildcard rules.
+        prices_us = {
+            r["name"]: float(r["price"])
+            for r in _fetchall(db(), "SELECT name, price_per_gib_month_us as price FROM storage_classes")
+        }
+        prices_eu = {
+            r["name"]: float(r["price"])
+            for r in _fetchall(db(), "SELECT name, price_per_gib_month_eu as price FROM storage_classes")
+        }
+        discount_factor = 1.0 - GCS_DISCOUNT
+
         excluded_costs = _fetchall(
             db(),
             f"""
-            SELECT rc.bucket,
-                   sc.name as class,
-                   COALESCE(SUM(rc.object_count), 0) as objects,
-                   COALESCE(SUM(rc.total_bytes), 0) as bytes,
-                   COALESCE(SUM(rc.monthly_cost_usd), 0) as monthly_cost_usd
-            FROM rule_costs rc
-            JOIN storage_classes sc ON rc.storage_class_id = sc.id
-            WHERE rc.rule_id IN ({placeholders})
-            GROUP BY rc.bucket, sc.name
+            SELECT r.bucket as rule_bucket, d.bucket,
+                   SUM(d.standard_count) as standard_count, SUM(d.standard_bytes) as standard_bytes,
+                   SUM(d.nearline_count) as nearline_count, SUM(d.nearline_bytes) as nearline_bytes,
+                   SUM(d.coldline_count) as coldline_count, SUM(d.coldline_bytes) as coldline_bytes,
+                   SUM(d.archive_count) as archive_count, SUM(d.archive_bytes) as archive_bytes
+            FROM protect_rules r
+            JOIN dir_summary d ON d.dir_prefix LIKE r.pattern
+                AND (d.bucket = r.bucket OR r.bucket = '*')
+            WHERE r.id IN ({placeholders})
+            GROUP BY r.bucket, d.bucket
             """,
             tuple(exclude),
         )
 
-        # Index excluded costs by bucket
         extra_by_bucket: dict[str, list[dict[str, Any]]] = {}
         for row in excluded_costs:
-            extra_by_bucket.setdefault(row["bucket"], []).append(row)
+            bucket = row["bucket"]
+            continent = continent_for_region(region_from_bucket(bucket))
+            prices = prices_us if continent == "US" else prices_eu
+            for sc_name, count_col, bytes_col in ALL_SC_COLS:
+                cnt = int(row[count_col] or 0)
+                bts = int(row[bytes_col] or 0)
+                if cnt == 0:
+                    continue
+                cost = bts / (1024.0 * 1024.0 * 1024.0) * prices[sc_name] * discount_factor
+                extra_by_bucket.setdefault(bucket, []).append(
+                    {
+                        "class": sc_name,
+                        "objects": cnt,
+                        "bytes": bts,
+                        "monthly_cost_usd": round(cost, 4),
+                    }
+                )
 
         # Add excluded rule costs to baseline savings
         regions = []
@@ -758,93 +867,141 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     @app.get("/api/delete-rules")
     @serialized
     def list_delete_rules() -> dict[str, Any]:
-        raw_rules = _fetchall(
-            db(),
+        conn = db()
+        prices_us = {
+            r["name"]: float(r["price"])
+            for r in _fetchall(conn, "SELECT name, price_per_gib_month_us as price FROM storage_classes")
+        }
+        prices_eu = {
+            r["name"]: float(r["price"])
+            for r in _fetchall(conn, "SELECT name, price_per_gib_month_eu as price FROM storage_classes")
+        }
+        discount_factor = 1.0 - GCS_DISCOUNT
+
+        raw = _fetchall(
+            conn,
             """
             SELECT dr.id, dr.pattern, dr.storage_class, dr.description, dr.created_at,
-                   COALESCE(SUM(drc.object_count), 0) as total_objects,
-                   COALESCE(SUM(drc.total_bytes), 0) as total_bytes,
-                   COALESCE(SUM(drc.monthly_cost_usd), 0) as monthly_cost_usd
+                   d.bucket as data_bucket,
+                   SUM(d.standard_count) as standard_count, SUM(d.standard_bytes) as standard_bytes,
+                   SUM(d.nearline_count) as nearline_count, SUM(d.nearline_bytes) as nearline_bytes,
+                   SUM(d.coldline_count) as coldline_count, SUM(d.coldline_bytes) as coldline_bytes,
+                   SUM(d.archive_count) as archive_count, SUM(d.archive_bytes) as archive_bytes
             FROM delete_rules dr
-            LEFT JOIN delete_rule_costs drc ON drc.rule_id = dr.id
-            GROUP BY dr.id, dr.pattern, dr.storage_class, dr.description, dr.created_at
-            ORDER BY monthly_cost_usd DESC
-            """,
+            LEFT JOIN dir_summary d ON d.dir_prefix LIKE dr.pattern
+            LEFT JOIN protect_rules p ON d.dir_prefix LIKE p.pattern
+                AND (d.bucket = p.bucket OR p.bucket = '*')
+            WHERE p.id IS NULL
+            GROUP BY dr.id, dr.pattern, dr.storage_class, dr.description, dr.created_at, d.bucket
+        """,
         )
 
-        result_rules = []
-        for r in raw_rules:
-            by_class = _fetchall(
-                db(),
-                """
-                SELECT sc.name as class,
-                       drc.object_count as objects,
-                       drc.total_bytes as bytes,
-                       drc.monthly_cost_usd
-                FROM delete_rule_costs drc
-                JOIN storage_classes sc ON drc.storage_class_id = sc.id
-                WHERE drc.rule_id = ?
-                ORDER BY sc.id
-                """,
-                (r["id"],),
-            )
-            result_rules.append(
-                {
+        rules_agg: dict[int, dict[str, Any]] = {}
+        rules_by_class: dict[int, dict[str, dict[str, int | float]]] = defaultdict(dict)
+
+        for row in raw:
+            rid = row["id"]
+            if rid not in rules_agg:
+                rules_agg[rid] = {
+                    "id": rid,
+                    "pattern": row["pattern"],
+                    "storage_class": row["storage_class"] or "",
+                    "description": row["description"] or "",
+                    "created_at": row["created_at"],
+                    "total_objects": 0,
+                    "total_bytes": 0,
+                    "monthly_cost_usd": 0.0,
+                }
+
+            data_bucket = row["data_bucket"]
+            if data_bucket is None:
+                continue
+
+            rule_sc = row["storage_class"]
+            continent = continent_for_region(region_from_bucket(data_bucket))
+            prices = prices_us if continent == "US" else prices_eu
+
+            for sc_name, count_col, bytes_col in ALL_SC_COLS:
+                if rule_sc and rule_sc != sc_name:
+                    continue
+                cnt = int(row[count_col] or 0)
+                bts = int(row[bytes_col] or 0)
+                if cnt == 0:
+                    continue
+                cost = bts / (1024.0 * 1024.0 * 1024.0) * prices[sc_name] * discount_factor
+                rules_agg[rid]["total_objects"] += cnt
+                rules_agg[rid]["total_bytes"] += bts
+                rules_agg[rid]["monthly_cost_usd"] += cost
+
+                if sc_name not in rules_by_class[rid]:
+                    rules_by_class[rid][sc_name] = {"class": sc_name, "objects": 0, "bytes": 0, "monthly_cost_usd": 0.0}
+                rules_by_class[rid][sc_name]["objects"] += cnt
+                rules_by_class[rid][sc_name]["bytes"] += bts
+                rules_by_class[rid][sc_name]["monthly_cost_usd"] += cost
+
+        # Ensure rules with no matching data still appear
+        all_rules = _fetchall(
+            conn, "SELECT id, pattern, storage_class, description, created_at FROM delete_rules ORDER BY id"
+        )
+        for r in all_rules:
+            if r["id"] not in rules_agg:
+                rules_agg[r["id"]] = {
                     "id": r["id"],
                     "pattern": r["pattern"],
                     "storage_class": r["storage_class"] or "",
                     "description": r["description"] or "",
                     "created_at": r["created_at"],
-                    "total_objects": int(r["total_objects"]),
-                    "total_bytes": int(r["total_bytes"]),
-                    "total_bytes_human": human_bytes(int(r["total_bytes"])),
-                    "monthly_cost_usd": round(float(r["monthly_cost_usd"]), 4),
-                    "by_storage_class": [
-                        {
-                            "class": c["class"],
-                            "objects": int(c["objects"]),
-                            "bytes": int(c["bytes"]),
-                            "monthly_cost_usd": round(float(c["monthly_cost_usd"]), 4),
-                        }
-                        for c in by_class
-                    ],
+                    "total_objects": 0,
+                    "total_bytes": 0,
+                    "monthly_cost_usd": 0.0,
                 }
-            )
 
+        result_rules = []
+        for rid, info in rules_agg.items():
+            info["total_bytes_human"] = human_bytes(info["total_bytes"])
+            info["monthly_cost_usd"] = round(info["monthly_cost_usd"], 4)
+            info["by_storage_class"] = [
+                {**v, "monthly_cost_usd": round(v["monthly_cost_usd"], 4)} for v in rules_by_class.get(rid, {}).values()
+            ]
+            result_rules.append(info)
+
+        result_rules.sort(key=lambda r: r["monthly_cost_usd"], reverse=True)
         return {"rules": result_rules}
 
     @app.post("/api/delete-rules")
     @serialized
     def create_delete_rule(req: DeleteRuleCreate) -> dict[str, Any]:
+        import json as _json
+
         conn = db()
+        new_id = _next_rule_id(conn, "delete_rules")
         now = datetime.now(UTC).isoformat()
-        row = _fetchone(
-            conn,
-            """
-            INSERT INTO delete_rules (pattern, storage_class, description, created_at)
-            VALUES (?, ?, ?, ?)
-            RETURNING id, pattern, storage_class, description, created_at
-            """,
-            (req.pattern, req.storage_class, req.description, now),
-        )
+        path = catalog.delete_rules_json
+        rules = _json.loads(path.read_text()) if path.exists() else []
+        new_rule = {
+            "id": new_id,
+            "pattern": req.pattern,
+            "storage_class": req.storage_class,
+            "description": req.description,
+            "created_at": now,
+        }
+        rules.append(new_rule)
+        path.write_text(_json.dumps(rules, indent=2) + "\n")
         flush_delete_rules(conn, catalog)
-        return row or {}
+        return new_rule
 
     @app.delete("/api/delete-rules/{rule_id}")
     @serialized
     def remove_delete_rule(rule_id: int) -> dict[str, Any]:
+        import json as _json
+
         conn = db()
-        conn.execute("DELETE FROM delete_rule_costs WHERE rule_id = ?", (rule_id,))
-        conn.execute("DELETE FROM delete_rules WHERE id = ?", (rule_id,))
+        path = catalog.delete_rules_json
+        rules = _json.loads(path.read_text()) if path.exists() else []
+        rules = [r for r in rules if r["id"] != rule_id]
+        path.write_text(_json.dumps(rules, indent=2) + "\n")
         flush_delete_rules(conn, catalog)
         return {"deleted": rule_id}
-
-    @app.post("/api/delete-rules/recalculate")
-    @serialized
-    def recalculate_delete_rules() -> dict[str, Any]:
-        conn = db()
-        count = materialize_delete_rule_costs(conn)
-        return {"rows": count}
 
     @app.post("/api/delete-patterns/estimate")
     @serialized

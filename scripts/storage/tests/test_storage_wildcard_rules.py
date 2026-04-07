@@ -17,7 +17,6 @@ import pytest
 from scripts.storage.db import (
     MARIN_BUCKETS,
     _DIR_SUMMARY_ARROW_SCHEMA,
-    materialize_rule_costs,
     DirSummaryBuffer,
 )
 from scripts.storage.db import IS_PROTECTED
@@ -63,19 +62,6 @@ def _make_test_db() -> duckdb.DuckDBPyConnection:
         )
         """
     )
-    db.execute(
-        """
-        CREATE TABLE rule_costs (
-            rule_id INTEGER NOT NULL REFERENCES protect_rules(id),
-            bucket TEXT NOT NULL,
-            storage_class_id INTEGER NOT NULL REFERENCES storage_classes(id),
-            object_count INTEGER NOT NULL,
-            total_bytes BIGINT NOT NULL,
-            monthly_cost_usd REAL NOT NULL,
-            PRIMARY KEY (rule_id, storage_class_id, bucket)
-        )
-        """
-    )
     db.execute("CREATE SEQUENCE delete_rules_id_seq START 1")
     db.execute(
         """
@@ -85,19 +71,6 @@ def _make_test_db() -> duckdb.DuckDBPyConnection:
             storage_class TEXT,
             description TEXT,
             created_at TEXT NOT NULL
-        )
-        """
-    )
-    db.execute(
-        """
-        CREATE TABLE delete_rule_costs (
-            rule_id INTEGER NOT NULL REFERENCES delete_rules(id),
-            bucket TEXT NOT NULL,
-            storage_class_id INTEGER NOT NULL REFERENCES storage_classes(id),
-            object_count INTEGER NOT NULL,
-            total_bytes BIGINT NOT NULL,
-            monthly_cost_usd REAL NOT NULL,
-            PRIMARY KEY (rule_id, storage_class_id, bucket)
         )
         """
     )
@@ -245,66 +218,6 @@ def test_is_protected_wildcard_does_not_match_wrong_pattern(conn):
         """
     ).fetchone()[0]
     assert result is False
-
-
-# ---------------------------------------------------------------------------
-# materialize_rule_costs
-# ---------------------------------------------------------------------------
-
-
-def test_materialize_rule_costs_bucket_specific(conn):
-    """A bucket-specific rule only produces costs for its own bucket."""
-    rule_id = _insert_rule(conn, "marin-us-central1", "data/%")
-    _insert_dir_summary(conn, "marin-us-central1", "data/train/", nearline_count=100, nearline_bytes=1024 * 1024)
-    _insert_dir_summary(conn, "marin-eu-west4", "data/train/", nearline_count=50, nearline_bytes=512 * 1024)
-
-    total = materialize_rule_costs(conn)
-    assert total > 0
-
-    rows = conn.execute("SELECT bucket, object_count FROM rule_costs WHERE rule_id = ?", (rule_id,)).fetchall()
-    buckets = {r[0] for r in rows}
-    assert "marin-us-central1" in buckets
-    assert "marin-eu-west4" not in buckets
-
-
-def test_materialize_rule_costs_wildcard_expands_to_all_matching_buckets(conn):
-    """A wildcard rule produces cost rows for every bucket that has matching data."""
-    rule_id = _insert_rule(conn, "*", "raw/%")
-
-    # Add data in two buckets
-    _insert_dir_summary(conn, "marin-us-central1", "raw/train/", nearline_count=100, nearline_bytes=1024)
-    _insert_dir_summary(conn, "marin-eu-west4", "raw/eval/", nearline_count=50, nearline_bytes=512)
-
-    total = materialize_rule_costs(conn)
-    assert total > 0
-
-    rows = conn.execute(
-        "SELECT bucket, object_count, total_bytes FROM rule_costs WHERE rule_id = ?", (rule_id,)
-    ).fetchall()
-    cost_by_bucket = {r[0]: (r[1], r[2]) for r in rows}
-
-    assert "marin-us-central1" in cost_by_bucket
-    assert "marin-eu-west4" in cost_by_bucket
-    assert cost_by_bucket["marin-us-central1"][0] == 100
-    assert cost_by_bucket["marin-eu-west4"][0] == 50
-
-
-def test_materialize_rule_costs_wildcard_and_specific_coexist(conn):
-    """Both a wildcard and bucket-specific rule can match the same data."""
-    wildcard_id = _insert_rule(conn, "*", "raw/%")
-    specific_id = _insert_rule(conn, "marin-us-central1", "raw/special/%")
-
-    _insert_dir_summary(conn, "marin-us-central1", "raw/special/train/", nearline_count=10, nearline_bytes=100)
-
-    materialize_rule_costs(conn)
-
-    wildcard_rows = conn.execute("SELECT bucket FROM rule_costs WHERE rule_id = ?", (wildcard_id,)).fetchall()
-    specific_rows = conn.execute("SELECT bucket FROM rule_costs WHERE rule_id = ?", (specific_id,)).fetchall()
-
-    # Wildcard matches marin-us-central1 (where the data is)
-    assert any(r[0] == "marin-us-central1" for r in wildcard_rows)
-    # Specific rule also matches
-    assert any(r[0] == "marin-us-central1" for r in specific_rows)
 
 
 # ---------------------------------------------------------------------------
