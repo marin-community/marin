@@ -908,7 +908,7 @@ def test_bulk_delete_defers_pdb_cleanup_to_gc(provider, k8s):
     assert k8s.get_json("poddisruptionbudget", "iris-coord-pod-pdb") is not None
 
     # GC pass cleans up the deferred PDB.
-    provider._gc_terminal_resources()
+    provider._gc_terminal_resources(active_pods=[])
     assert k8s.get_json("poddisruptionbudget", "iris-coord-pod-pdb") is None
 
 
@@ -972,7 +972,7 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
     # Old failed pod — should be GC'd.
     _seed_terminal_pod(k8s, "old-failed-pod", "Failed", "ffaa112233445566", old_ts)
 
-    provider._gc_terminal_resources()
+    provider._gc_terminal_resources(active_pods=[])
 
     # Old resources deleted.
     assert k8s.get_json("pod", "old-succeeded-pod") is None
@@ -994,12 +994,12 @@ def test_gc_respects_interval(provider, k8s):
     _seed_terminal_pod(k8s, "gc-pod-1", "Succeeded", "aaaa111122223333", old_ts)
 
     # First call should trigger GC (last_gc_time == 0).
-    provider._maybe_gc_terminal_resources()
+    provider._maybe_gc_terminal_resources(active_pods=[])
     assert k8s.get_json("pod", "gc-pod-1") is None
 
     # Seed another old pod. A second immediate call should NOT trigger GC.
     _seed_terminal_pod(k8s, "gc-pod-2", "Succeeded", "bbbb444455556666", old_ts)
-    provider._maybe_gc_terminal_resources()
+    provider._maybe_gc_terminal_resources(active_pods=[])
     assert k8s.get_json("pod", "gc-pod-2") is not None  # Still exists
 
 
@@ -1024,8 +1024,55 @@ def test_gc_cleans_up_deferred_configmaps(provider, k8s):
     provider._pending_gc_hashes.add(task_hash)
 
     # GC picks it up and deletes the configmap.
-    provider._gc_terminal_resources()
+    provider._gc_terminal_resources(active_pods=[])
     assert k8s.get_json("configmap", "deferred-cm") is None
+
+
+def test_gc_skips_hashes_with_active_pods(provider, k8s):
+    """GC must not delete configmaps/PDBs for task hashes that have active retry pods.
+
+    task_hash is shared across all attempts of the same task_id. If attempt 0 is
+    terminal (old) and attempt 1 is still Running, deleting by task_hash would
+    remove the active attempt's configmap and PDB protection.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    shared_hash = "shared_hash_12345"
+
+    # Old terminal pod for attempt 0.
+    _seed_terminal_pod(k8s, "old-attempt-0", "Succeeded", shared_hash, old_ts)
+
+    # Configmap and PDB for the active retry (attempt 1).
+    active_labels = {
+        _LABEL_MANAGED: "true",
+        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+        _LABEL_TASK_HASH: shared_hash,
+    }
+    cm = {"kind": "ConfigMap", "metadata": {"name": "active-retry-cm", "labels": active_labels}}
+    k8s.seed_resource("configmap", "active-retry-cm", cm)
+    pdb = {
+        "kind": "PodDisruptionBudget",
+        "metadata": {"name": "active-retry-pdb", "labels": active_labels},
+        "spec": {"minAvailable": 1},
+    }
+    k8s.seed_resource("poddisruptionbudget", "active-retry-pdb", pdb)
+
+    # Simulate the active pod (from the sync loop's managed_pods list).
+    active_pod = {
+        "metadata": {"name": "active-attempt-1", "labels": {_LABEL_TASK_HASH: shared_hash}},
+        "status": {"phase": "Running"},
+    }
+
+    provider._gc_terminal_resources(active_pods=[active_pod])
+
+    # Terminal pod is deleted (by name, not by hash).
+    assert k8s.get_json("pod", "old-attempt-0") is None
+    # But configmap and PDB are preserved because the hash is still active.
+    assert k8s.get_json("configmap", "active-retry-cm") is not None
+    assert k8s.get_json("poddisruptionbudget", "active-retry-pdb") is not None
 
 
 # ---------------------------------------------------------------------------

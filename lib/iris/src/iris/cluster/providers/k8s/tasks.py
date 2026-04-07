@@ -1156,7 +1156,7 @@ class K8sTaskProvider:
         self._cluster_state.update(managed_pods, nodes, node_pools)
         capacity = self._cluster_state.capacity()
 
-        self._maybe_gc_terminal_resources()
+        self._maybe_gc_terminal_resources(managed_pods)
 
         return DirectProviderSyncResult(updates=updates, scheduling_events=scheduling_events, capacity=capacity)
 
@@ -1384,12 +1384,15 @@ class K8sTaskProvider:
 
         logger.info("Deleted %d pods for %d tasks (CM/PDB cleanup deferred to GC)", len(pod_names), len(task_ids))
 
-    def _maybe_gc_terminal_resources(self) -> None:
+    def _maybe_gc_terminal_resources(self, active_pods: list[dict]) -> None:
         """Periodically delete terminal (Succeeded/Failed) pods and their associated
         configmaps/PDBs that are older than _GC_MAX_AGE_SECONDS.
 
         Without this, completed pods and their configmaps accumulate in etcd indefinitely
         since the sync loop's field selector excludes terminal pods from its queries.
+
+        active_pods is the list of Pending/Running pods from the current sync cycle,
+        used to protect configmaps/PDBs for tasks that have active retry attempts.
         """
         now = time.monotonic()
         if now - self._last_gc_time < _GC_INTERVAL_SECONDS:
@@ -1397,27 +1400,38 @@ class K8sTaskProvider:
         self._last_gc_time = now
 
         try:
-            self._gc_terminal_resources()
+            self._gc_terminal_resources(active_pods)
         except Exception:
             logger.exception("GC pass failed; will retry next interval")
 
-    def _gc_terminal_resources(self) -> None:
+    def _gc_terminal_resources(self, active_pods: list[dict]) -> None:
         cutoff = datetime.now(timezone.utc).timestamp() - _GC_MAX_AGE_SECONDS
+
+        # Collect task hashes that still have active (Pending/Running) pods.
+        # These must NOT have their configmaps/PDBs deleted, even if an older
+        # attempt of the same task is terminal — task_hash is shared across attempts.
+        active_hashes: set[str] = set()
+        for pod in active_pods:
+            h = pod.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH)
+            if h:
+                active_hashes.add(h)
 
         # 1. Targeted cleanup: delete configmaps/PDBs for tasks that were killed
         #    since last GC. Uses label-selector deletes (one kubectl call per hash)
         #    instead of listing all resources and filtering client-side.
         pending = self._pending_gc_hashes.copy()
         self._pending_gc_hashes.clear()
-        for task_hash in pending:
+        safe_pending = pending - active_hashes
+        for task_hash in safe_pending:
             labels = {**_MANAGED_POD_LABELS, _LABEL_TASK_HASH: task_hash}
             self.kubectl.delete_by_labels("configmaps", labels, wait=False)
             self.kubectl.delete_by_labels("poddisruptionbudgets", labels, wait=False)
-        if pending:
-            logger.info("GC: cleaned up CMs/PDBs for %d killed task hashes", len(pending))
+        if safe_pending:
+            logger.info("GC: cleaned up CMs/PDBs for %d killed task hashes", len(safe_pending))
 
         # 2. Age-based sweep: delete terminal pods older than the cutoff, and
         #    their associated configmaps/PDBs (by task_hash label-selector delete).
+        #    Skip hashes that still have active pods to avoid deleting live resources.
         old_pod_names: list[str] = []
         old_task_hashes: set[str] = set()
         for phase in ("Succeeded", "Failed"):
@@ -1440,17 +1454,19 @@ class K8sTaskProvider:
 
         if old_pod_names:
             self.kubectl.delete_many("pods", old_pod_names, wait=False)
-        for task_hash in old_task_hashes:
+        safe_hashes = old_task_hashes - active_hashes
+        for task_hash in safe_hashes:
             labels = {**_MANAGED_POD_LABELS, _LABEL_TASK_HASH: task_hash}
             self.kubectl.delete_by_labels("configmaps", labels, wait=False)
             self.kubectl.delete_by_labels("poddisruptionbudgets", labels, wait=False)
 
         if old_pod_names:
             logger.info(
-                "GC: deleted %d terminal pods + CMs/PDBs for %d task hashes (age > %ds)",
+                "GC: deleted %d terminal pods + CMs/PDBs for %d task hashes (age > %ds, %d skipped with active pods)",
                 len(old_pod_names),
-                len(old_task_hashes),
+                len(safe_hashes),
                 _GC_MAX_AGE_SECONDS,
+                len(old_task_hashes - safe_hashes),
             )
 
     def _delete_pods_by_task_id(self, task_id: str) -> None:
