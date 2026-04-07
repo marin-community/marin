@@ -1022,3 +1022,115 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
     assert resp.status_code == 200
     data = resp.json()
     assert data["provider_kind"] == "kubernetes"
+
+
+# =============================================================================
+# Kubernetes Cluster Status RPC
+# =============================================================================
+
+
+def _make_k8s_dashboard_client(state, scheduler, tmp_path):
+    """Build a TestClient wired to a real K8sTaskProvider backed by InMemoryK8sService."""
+    from iris.cluster.providers.k8s.fake import InMemoryK8sService
+    from iris.cluster.providers.k8s.tasks import K8sTaskProvider
+
+    k8s = InMemoryK8sService(namespace="iris")
+    provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
+    controller_mock = _make_controller_mock(state, scheduler)
+    controller_mock.has_direct_provider = True
+    controller_mock.provider = provider
+    log_service = LogServiceImpl()
+    svc = ControllerServiceImpl(
+        state,
+        state._db,
+        controller=controller_mock,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_service=log_service,
+    )
+    dashboard = ControllerDashboard(svc, log_service=svc._log_service)
+    return TestClient(dashboard.app), k8s, provider
+
+
+def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
+    """GetKubernetesClusterStatus returns node capacity and pod statuses after sync."""
+    from iris.cluster.controller.transitions import DirectProviderBatch
+    from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
+
+    client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path)
+
+    # Seed nodes and a pod.
+    k8s.seed_resource(
+        "node",
+        "node-1",
+        {
+            "kind": "Node",
+            "metadata": {"name": "node-1"},
+            "spec": {"taints": []},
+            "status": {"allocatable": {"cpu": "8", "memory": "16Gi"}},
+        },
+    )
+    k8s.seed_resource(
+        "pod",
+        "iris-task-0",
+        {
+            "kind": "Pod",
+            "metadata": {
+                "name": "iris-task-0",
+                "labels": {
+                    _LABEL_MANAGED: "true",
+                    _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+                    "iris.task_id": "job.0",
+                },
+            },
+            "status": {"phase": "Running"},
+        },
+    )
+
+    # Sync to populate ClusterState.
+    provider.sync(DirectProviderBatch(tasks_to_run=[], running_tasks=[], tasks_to_kill=[]))
+
+    resp = client.post(
+        "/iris.cluster.ControllerService/GetKubernetesClusterStatus",
+        json={},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["namespace"] == "iris"
+    assert data["totalNodes"] == 1
+    assert data["schedulableNodes"] == 1
+    assert "cores" in data["allocatableCpu"]
+    assert len(data["podStatuses"]) == 1
+    assert data["podStatuses"][0]["podName"] == "iris-task-0"
+    assert data["podStatuses"][0]["phase"] == "Running"
+
+    provider.close()
+
+
+def test_k8s_cluster_status_empty_before_sync(state, scheduler, tmp_path):
+    """GetKubernetesClusterStatus returns empty data when no sync has run yet."""
+    client, _k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path)
+
+    resp = client.post(
+        "/iris.cluster.ControllerService/GetKubernetesClusterStatus",
+        json={},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("totalNodes", 0) == 0
+    assert data.get("podStatuses", []) == []
+
+    provider.close()
+
+
+def test_k8s_cluster_status_without_direct_provider(client):
+    """GetKubernetesClusterStatus returns empty response when no K8s provider is configured."""
+    resp = client.post(
+        "/iris.cluster.ControllerService/GetKubernetesClusterStatus",
+        json={},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("totalNodes", 0) == 0
