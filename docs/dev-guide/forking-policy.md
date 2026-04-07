@@ -12,15 +12,26 @@ maintaining such forks.
    standalone repository under the organization (e.g.
    `marin-community/harbor`, `marin-community/vllm-tpu`).
 
-2. **Set up CI to autobuild wheels on push to main.**
-   Every push to the fork's `main` branch must produce a versioned wheel via
-   GitHub Actions (or equivalent CI). There should be no manual "run this
-   script to get new wheels" step.
+2. **Set up CI to autobuild wheels on push to the canonical Marin branch.**
+   Every push to the branch Marin actually builds from must produce a
+   versioned wheel via GitHub Actions (or equivalent CI). There should be no
+   manual "run this script to get new wheels" step.
+
+   Use one of these branch layouts:
+
+   - **Simple layout**: use `main` as the canonical Marin branch. Build wheels
+     from `main`.
+   - **Split layout**: keep `main` as the upstream-tracking branch and use a
+     dedicated integration branch such as `marin-main` for Marin-only changes.
+     Build wheels from `marin-main`.
+
+   If you use the split layout, make the branch roles explicit in the repo's
+   README, release workflow, and any Marin dependency pins.
 
 3. **Pin by version hash in Marin's `pyproject.toml`.**
    Marin should depend on the fork via a wheel URL or a git dependency with a
-   pinned revision, so that `uv sync` runs quickly and results are cacheable.
-   Example from `pyproject.toml`:
+   pinned revision from the canonical Marin branch, so that `uv sync` runs
+   quickly and results are cacheable. Example from `pyproject.toml`:
 
    ```toml
    harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d..." }
@@ -46,7 +57,12 @@ overhead — even with agents helping, keeping it in sync takes effort.
 
 ## Maintaining a Fork
 
-- Keep the fork's `main` branch rebased or merged regularly against upstream.
+- Keep the upstream-tracking branch rebased or merged regularly against
+  upstream.
+- If `main` is the canonical Marin branch, that means keeping `main` close to
+  upstream.
+- If you use a split layout (`main` + `marin-main`), keep `main` close to
+  upstream and regularly rebase or merge `main` into `marin-main`.
 - Tag releases that correspond to the pinned revisions in Marin so the
   provenance is clear.
 - When bumping the pinned revision in Marin, update the rev in

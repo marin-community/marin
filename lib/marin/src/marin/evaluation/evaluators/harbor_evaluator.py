@@ -30,7 +30,7 @@ from rigging.filesystem import open_url
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
 from marin.evaluation.utils import download_from_gcs, is_remote_path, upload_to_gcs
-from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
+from marin.inference.vllm_server import VllmEnvironment, resolve_vllm_mode
 from marin.utils import fsspec_exists, fsspec_glob
 
 logger = logging.getLogger(__name__)
@@ -287,7 +287,7 @@ class HarborEvaluator(Evaluator):
             return
 
         mode_str = resolve_vllm_mode(None)
-        pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
+        extras = ("harbor", "tpu", "vllm") if mode_str == "native" else ("harbor", "tpu")
 
         env_vars = _env_vars_from_keys(
             [
@@ -321,8 +321,7 @@ class HarborEvaluator(Evaluator):
             resource_config=resource_config,
             max_eval_instances=max_eval_instances,
             wandb_tags=wandb_tags,
-            extras=("harbor", "tpu", "vllm"),
-            pip_packages=pip_packages,
+            extras=extras,
             env_vars=env_vars,
             max_retries_failure=0,
             max_retries_preemption=10,

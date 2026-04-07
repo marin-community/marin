@@ -10,7 +10,7 @@ from fray.v1.cluster import ResourceConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
-from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, resolve_model_name_or_path, resolve_vllm_mode
+from marin.inference.vllm_server import resolve_model_name_or_path, resolve_vllm_mode
 
 
 @dataclass(frozen=True)
@@ -184,7 +184,7 @@ class SimpleEvaluator(Evaluator):
         """Launch the evaluation run with Fray."""
 
         mode_str = resolve_vllm_mode(None)
-        pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
+        extras = ("eval", "tpu", "vllm") if mode_str == "native" else ("eval", "tpu")
         launch_evaluate_with_ray(
             evaluator=self,
             job_name="simple-eval",
@@ -194,6 +194,5 @@ class SimpleEvaluator(Evaluator):
             resource_config=resource_config,
             max_eval_instances=max_eval_instances,
             wandb_tags=wandb_tags,
-            extras=("eval", "tpu"),
-            pip_packages=pip_packages,
+            extras=extras,
         )
