@@ -2552,8 +2552,8 @@ class ControllerTransitions:
         while not _stopped():
             with self._db.transaction() as cur:
                 c = cur.execute(
-                    "DELETE FROM task_profiles WHERE rowid IN "
-                    "(SELECT rowid FROM task_profiles WHERE captured_at_ms < ? LIMIT 1000)",
+                    "DELETE FROM profiles.task_profiles WHERE rowid IN "
+                    "(SELECT rowid FROM profiles.task_profiles WHERE captured_at_ms < ? LIMIT 1000)",
                     (profile_cutoff_ms,),
                 )
                 batch = c.rowcount
@@ -2565,8 +2565,8 @@ class ControllerTransitions:
         while not _stopped():
             with self._db.transaction() as cur:
                 c = cur.execute(
-                    "DELETE FROM task_profiles WHERE rowid IN "
-                    "(SELECT p.rowid FROM task_profiles p"
+                    "DELETE FROM profiles.task_profiles WHERE rowid IN "
+                    "(SELECT p.rowid FROM profiles.task_profiles p"
                     " LEFT JOIN tasks t ON p.task_id = t.task_id"
                     " WHERE t.task_id IS NULL LIMIT 1000)",
                 )

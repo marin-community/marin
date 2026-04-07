@@ -1357,8 +1357,6 @@ class Controller:
             batch = self._transitions.drain_for_direct_provider(
                 max_promotions=max_promotions,
             )
-            if not batch.tasks_to_run and not batch.running_tasks and not batch.tasks_to_kill:
-                return
             if batch.tasks_to_run:
                 self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
             result = provider.sync(batch)
