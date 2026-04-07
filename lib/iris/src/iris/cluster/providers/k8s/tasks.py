@@ -1419,9 +1419,10 @@ class K8sTaskProvider:
         # 1. Targeted cleanup: delete configmaps/PDBs for tasks that were killed
         #    since last GC. Uses label-selector deletes (one kubectl call per hash)
         #    instead of listing all resources and filtering client-side.
-        pending = self._pending_gc_hashes.copy()
-        self._pending_gc_hashes.clear()
-        safe_pending = pending - active_hashes
+        #    Only remove hashes we actually clean up; skipped hashes (still active)
+        #    stay in the set for the next GC cycle.
+        safe_pending = self._pending_gc_hashes - active_hashes
+        self._pending_gc_hashes -= safe_pending
         for task_hash in safe_pending:
             labels = {**_MANAGED_POD_LABELS, _LABEL_TASK_HASH: task_hash}
             self.kubectl.delete_by_labels("configmaps", labels, wait=False)

@@ -1028,6 +1028,42 @@ def test_gc_cleans_up_deferred_configmaps(provider, k8s):
     assert k8s.get_json("configmap", "deferred-cm") is None
 
 
+def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
+    """Deferred hashes must not be dropped when the killed pod is still in the
+    pre-delete managed_pods snapshot (the common tasks_to_kill path).
+
+    Reproduces: sync fetches managed_pods, _bulk_delete_task_pods deletes the pod
+    and enqueues hash, then _maybe_gc sees the hash as "active" from the stale
+    snapshot. The hash must be retained for the next GC cycle.
+    """
+    task_id = "/kill-me/0"
+    task_hash = _task_hash(task_id)
+    labels = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: task_hash}
+
+    # Seed the pod and its configmap.
+    populate_pod(k8s, "iris-kill-me-0-0", "Running", labels={_LABEL_TASK_HASH: task_hash})
+    cm = {"kind": "ConfigMap", "metadata": {"name": "iris-kill-me-0-0-wf", "labels": labels}}
+    k8s.seed_resource("configmap", "iris-kill-me-0-0-wf", cm)
+
+    # Snapshot managed pods BEFORE delete (as sync() does).
+    pre_delete_pods = k8s.list_json("pods", labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
+
+    # Kill the pod — hash goes into _pending_gc_hashes.
+    provider._bulk_delete_task_pods([task_id], pre_delete_pods)
+    assert k8s.get_json("pod", "iris-kill-me-0-0") is None
+    assert task_hash in provider._pending_gc_hashes
+
+    # GC with the stale snapshot — hash should be skipped but NOT discarded.
+    provider._gc_terminal_resources(active_pods=pre_delete_pods)
+    assert k8s.get_json("configmap", "iris-kill-me-0-0-wf") is not None  # Not yet cleaned
+    assert task_hash in provider._pending_gc_hashes  # Retained for next cycle
+
+    # Next GC cycle with empty active pods — now the CM is cleaned up.
+    provider._gc_terminal_resources(active_pods=[])
+    assert k8s.get_json("configmap", "iris-kill-me-0-0-wf") is None
+    assert task_hash not in provider._pending_gc_hashes
+
+
 def test_gc_skips_hashes_with_active_pods(provider, k8s):
     """GC must not delete configmaps/PDBs for task hashes that have active retry pods.
 
