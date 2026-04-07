@@ -1163,9 +1163,9 @@ LOGS = Table(
     indexes=("CREATE INDEX IF NOT EXISTS idx_logs_key ON logs(key, id)",),
 )
 
-# Migration 0005 + 0014
+# Migration 0005 + 0014 + 0023 (moved to profiles DB)
 TASK_PROFILES = Table(
-    "task_profiles",
+    "profiles.task_profiles",
     "tp",
     columns=(
         Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
@@ -1183,13 +1183,13 @@ TASK_PROFILES = Table(
         Column("profile_kind", "TEXT", "NOT NULL DEFAULT 'cpu'", python_type=str, decoder=str, default="cpu"),
     ),
     indexes=(
-        # Migration 0014 replaced idx_task_profiles_task with this
-        "CREATE INDEX IF NOT EXISTS idx_task_profiles_task_kind"
+        "CREATE INDEX IF NOT EXISTS profiles.idx_task_profiles_task_kind"
         " ON task_profiles(task_id, profile_kind, id DESC)",
     ),
     triggers=(
-        # Migration 0014 replaced the original trigger
-        """CREATE TRIGGER IF NOT EXISTS trg_task_profiles_cap
+        # Trigger lives in the profiles schema; SQLite prohibits qualified table
+        # names inside trigger bodies, so we use unqualified references.
+        """CREATE TRIGGER IF NOT EXISTS profiles.trg_task_profiles_cap
 AFTER INSERT ON task_profiles
 BEGIN
   DELETE FROM task_profiles
@@ -1319,7 +1319,6 @@ MAIN_TABLES: tuple[Table, ...] = (
     SLICES,
     RESERVATION_CLAIMS,
     LOGS,
-    TASK_PROFILES,
     USER_BUDGETS,
 )
 
@@ -1327,6 +1326,8 @@ AUTH_TABLES: tuple[Table, ...] = (
     AUTH_API_KEYS,
     AUTH_CONTROLLER_SECRETS,
 )
+
+PROFILES_TABLES: tuple[Table, ...] = (TASK_PROFILES,)
 
 # ---------------------------------------------------------------------------
 # Hand-written row dataclasses

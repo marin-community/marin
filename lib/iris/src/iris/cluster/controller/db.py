@@ -384,6 +384,7 @@ class ControllerDB:
     _READ_POOL_SIZE = 8
     DB_FILENAME = "controller.sqlite3"
     AUTH_DB_FILENAME = "auth.sqlite3"
+    PROFILES_DB_FILENAME = "profiles.sqlite3"
 
     def __init__(self, db_dir: Path):
         import time
@@ -392,6 +393,7 @@ class ControllerDB:
         self._db_dir.mkdir(parents=True, exist_ok=True)
         self._db_path = self._db_dir / self.DB_FILENAME
         self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
+        self._profiles_db_path = self._db_dir / self.PROFILES_DB_FILENAME
         self._lock = RLock()
 
         t0 = time.monotonic()
@@ -399,6 +401,7 @@ class ControllerDB:
         self._conn.row_factory = sqlite3.Row
         self._configure(self._conn)
         self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
+        self._conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
         logger.info("DB opened in %.2fs (path=%s)", time.monotonic() - t0, self._db_path)
 
         t0 = time.monotonic()
@@ -469,6 +472,7 @@ class ControllerDB:
             conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             conn.row_factory = sqlite3.Row
             self._configure(conn)
+            conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
             conn.execute("PRAGMA query_only = ON")
             self._read_pool.put(conn)
 
@@ -483,6 +487,10 @@ class ControllerDB:
     @property
     def auth_db_path(self) -> Path:
         return self._auth_db_path
+
+    @property
+    def profiles_db_path(self) -> Path:
+        return self._profiles_db_path
 
     @staticmethod
     def _configure(conn: sqlite3.Connection) -> None:
@@ -636,6 +644,10 @@ class ControllerDB:
     def secrets_table(self) -> str:
         return "auth.controller_secrets"
 
+    @property
+    def task_profiles_table(self) -> str:
+        return "profiles.task_profiles"
+
     def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:
         """Create user if not exists. Does not update role for existing users."""
         self.execute(
@@ -734,10 +746,20 @@ class ControllerDB:
                     dst.write(src.read())
                 auth_tmp.rename(self._auth_db_path)
 
+            # Download profiles DB if present in source
+            profiles_source = f"{source_dir_str}/{self.PROFILES_DB_FILENAME}"
+            fs2, fs_path2 = fsspec.core.url_to_fs(profiles_source)
+            if fs2.exists(fs_path2):
+                profiles_tmp = self._profiles_db_path.with_suffix(".tmp")
+                with fsspec.core.open(profiles_source, "rb") as src, open(profiles_tmp, "wb") as dst:
+                    dst.write(src.read())
+                profiles_tmp.rename(self._profiles_db_path)
+
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)
             self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
+            self._conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
             self._init_read_pool()
         self.apply_migrations()
 
@@ -956,7 +978,7 @@ def insert_task_profile(
     The DB trigger caps profiles at 10 per (task_id, profile_kind), evicting the oldest automatically.
     """
     db.execute(
-        "INSERT INTO task_profiles (task_id, profile_data, captured_at_ms, profile_kind) VALUES (?, ?, ?, ?)",
+        "INSERT INTO profiles.task_profiles (task_id, profile_data, captured_at_ms, profile_kind) VALUES (?, ?, ?, ?)",
         (task_id, profile_data, captured_at.epoch_ms(), profile_kind),
     )
 
@@ -973,13 +995,14 @@ def get_task_profiles(
     """
     if profile_kind is not None:
         query = (
-            "SELECT profile_data, captured_at_ms, profile_kind FROM task_profiles"
+            "SELECT profile_data, captured_at_ms, profile_kind FROM profiles.task_profiles"
             " WHERE task_id = ? AND profile_kind = ? ORDER BY id DESC"
         )
         params: tuple[str, ...] = (task_id, profile_kind)
     else:
         query = (
-            "SELECT profile_data, captured_at_ms, profile_kind FROM task_profiles" " WHERE task_id = ? ORDER BY id DESC"
+            "SELECT profile_data, captured_at_ms, profile_kind FROM profiles.task_profiles"
+            " WHERE task_id = ? ORDER BY id DESC"
         )
         params = (task_id,)
     with db.read_snapshot() as q:

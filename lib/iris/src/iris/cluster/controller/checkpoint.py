@@ -9,6 +9,7 @@ to remote storage and restoring the DB file from a remote checkpoint.
 Checkpoint layout (remote):
     {remote_state_dir}/controller-state/{epoch_ms}/controller.sqlite3.zst
     {remote_state_dir}/controller-state/{epoch_ms}/auth.sqlite3.zst
+    {remote_state_dir}/controller-state/{epoch_ms}/profiles.sqlite3.zst
 
 Files are compressed with zstandard (level 3) before upload.  On download,
 compressed (.zst) files are preferred; uncompressed files are accepted as
@@ -112,6 +113,7 @@ class DatabaseBackup:
 
     main_path: Path
     auth_path: Path | None
+    profiles_path: Path | None
     created_at: Timestamp
 
     def cleanup(self) -> None:
@@ -119,6 +121,8 @@ class DatabaseBackup:
         self.main_path.unlink(missing_ok=True)
         if self.auth_path is not None:
             self.auth_path.unlink(missing_ok=True)
+        if self.profiles_path is not None:
+            self.profiles_path.unlink(missing_ok=True)
 
 
 def backup_databases(db: ControllerDB) -> DatabaseBackup:
@@ -144,13 +148,21 @@ def backup_databases(db: ControllerDB) -> DatabaseBackup:
         os.close(fd2)
         auth_tmp = Path(tmp_name2)
 
-    # Construct the backup object up front so cleanup is always available.
-    backup = DatabaseBackup(main_path=main_tmp, auth_path=auth_tmp, created_at=created_at)
+    profiles_tmp: Path | None = None
+    profiles_path = db.profiles_db_path
+    if profiles_path.exists():
+        fd3, tmp_name3 = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
+        os.close(fd3)
+        profiles_tmp = Path(tmp_name3)
+
+    backup = DatabaseBackup(main_path=main_tmp, auth_path=auth_tmp, profiles_path=profiles_tmp, created_at=created_at)
     ok = False
     try:
         db.backup_to(main_tmp)
         if auth_tmp is not None:
             _backup_sqlite_file(auth_path, auth_tmp)
+        if profiles_tmp is not None:
+            _backup_sqlite_file(profiles_path, profiles_tmp)
         ok = True
     finally:
         if not ok:
@@ -183,7 +195,7 @@ def upload_checkpoint(
     finally:
         tmp_zst.unlink(missing_ok=True)
 
-    # Compress and upload auth DB
+    # Compress and upload auth DB.
     if backup.auth_path is not None:
         auth_remote = f"{checkpoint_dir}/{ControllerDB.AUTH_DB_FILENAME}.zst"
         tmp_zst2 = backup.auth_path.with_suffix(".sqlite3.zst")
@@ -193,6 +205,17 @@ def upload_checkpoint(
             logger.info("checkpoint auth DB uploaded to %s", auth_remote)
         finally:
             tmp_zst2.unlink(missing_ok=True)
+
+    # Compress and upload profiles DB.
+    if backup.profiles_path is not None:
+        profiles_remote = f"{checkpoint_dir}/{ControllerDB.PROFILES_DB_FILENAME}.zst"
+        tmp_zst3 = backup.profiles_path.with_suffix(".sqlite3.zst")
+        try:
+            _compress_zstd(backup.profiles_path, tmp_zst3)
+            _fsspec_copy(str(tmp_zst3), profiles_remote)
+            logger.info("checkpoint profiles DB uploaded to %s", profiles_remote)
+        finally:
+            tmp_zst3.unlink(missing_ok=True)
 
     # Row counts are read from the live DB (not the backup) for convenience.
     # They may diverge slightly from the backup contents if writes occurred
@@ -349,8 +372,8 @@ def download_checkpoint_to_local(
 ) -> bool:
     """Download a remote checkpoint directory to a local db_dir.
 
-    Looks for controller.sqlite3(.zst) and auth.sqlite3(.zst) in the
-    checkpoint directory. Compressed files are preferred; uncompressed
+    Looks for controller.sqlite3(.zst), auth.sqlite3(.zst), and
+    profiles.sqlite3(.zst) in the checkpoint directory. Compressed files are preferred; uncompressed
     files are accepted as a fallback.
 
     If ``checkpoint_dir`` is not provided, finds the most recent
@@ -390,5 +413,14 @@ def download_checkpoint_to_local(
         local_auth = local_db_dir / ControllerDB.AUTH_DB_FILENAME
         _download_one(auth_source, local_auth, compressed=auth_compressed)
         logger.info("Downloaded auth checkpoint from %s to %s", auth_source, local_auth)
+
+    # Download profiles DB if available
+    profiles_zst = f"{source_dir}/{ControllerDB.PROFILES_DB_FILENAME}.zst"
+    profiles_plain = f"{source_dir}/{ControllerDB.PROFILES_DB_FILENAME}"
+    profiles_source, profiles_compressed = _pick_remote(profiles_zst, profiles_plain)
+    if profiles_source is not None:
+        local_profiles = local_db_dir / ControllerDB.PROFILES_DB_FILENAME
+        _download_one(profiles_source, local_profiles, compressed=profiles_compressed)
+        logger.info("Downloaded profiles checkpoint from %s to %s", profiles_source, local_profiles)
 
     return True
