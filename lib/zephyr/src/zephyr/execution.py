@@ -1220,66 +1220,75 @@ class ZephyrWorker:
         future_start = 0.0
         warned = False
 
-        while not self._shutdown_event.is_set():
-            if future is None:
-                future = coordinator.pull_task.remote(self._worker_id)
-                future_start = time.monotonic()
-                warned = False
+        try:
+            while not self._shutdown_event.is_set():
+                if future is None:
+                    future = coordinator.pull_task.remote(self._worker_id)
+                    future_start = time.monotonic()
+                    warned = False
 
-            try:
-                response = future.result(timeout=0.5)
-            except TimeoutError:
-                elapsed = time.monotonic() - future_start
-                if elapsed > 30 and not warned:
-                    logger.warning("[%s] Waiting for coordinator pull_task response (%.0fs)", self._worker_id, elapsed)
-                    warned = True
-                continue
-            except Exception as e:
-                logger.info("[%s] pull_task failed (coordinator may be dead): %s", self._worker_id, e)
-                break
+                try:
+                    response = future.result(timeout=0.5)
+                except TimeoutError:
+                    elapsed = time.monotonic() - future_start
+                    if elapsed > 30 and not warned:
+                        logger.warning(
+                            "[%s] Waiting for coordinator pull_task response (%.0fs)", self._worker_id, elapsed
+                        )
+                        warned = True
+                    continue
+                except Exception as e:
+                    logger.info("[%s] pull_task failed (coordinator may be dead): %s", self._worker_id, e)
+                    return
 
-            future = None
+                future = None
 
-            if response == "SHUTDOWN":
-                logger.info("[%s] Received SHUTDOWN", self._worker_id)
-                break
+                if response == "SHUTDOWN":
+                    logger.info("[%s] Received SHUTDOWN", self._worker_id)
+                    return
 
-            # No task available — exit (coordinator will spawn more workers if needed)
-            if response is None:
-                logger.info("[%s] No task available, exiting", self._worker_id)
-                break
+                # No task available — exit (coordinator will spawn more workers if needed)
+                if response is None:
+                    logger.info("[%s] No task available, exiting", self._worker_id)
+                    return
 
-            task, attempt, config = response
+                task, attempt, config = response
 
-            logger.info("[%s] Executing task for shard %d (attempt %d)", self._worker_id, task.shard_idx, attempt)
-            try:
-                t_0 = time.monotonic()
-                result = self._execute_shard(task, config)
-                logger.info(
-                    "[%s] Task for shard %d completed in %.2f seconds",
-                    self._worker_id,
-                    task.shard_idx,
-                    time.monotonic() - t_0,
-                )
-                coordinator.report_result.remote(
-                    self._worker_id,
-                    task.shard_idx,
-                    attempt,
-                    result,
-                    self.get_counter_snapshot(),
-                ).result()
-            except Exception as e:
-                logger.error("Worker %s error on shard %d: %s", self._worker_id, task.shard_idx, e)
-                coordinator.report_error.remote(
-                    self._worker_id,
-                    task.shard_idx,
-                    "".join(tb_mod.format_exc()),
-                ).result()
+                logger.info("[%s] Executing task for shard %d (attempt %d)", self._worker_id, task.shard_idx, attempt)
+                try:
+                    t_0 = time.monotonic()
+                    result = self._execute_shard(task, config)
+                    logger.info(
+                        "[%s] Task for shard %d completed in %.2f seconds",
+                        self._worker_id,
+                        task.shard_idx,
+                        time.monotonic() - t_0,
+                    )
+                    coordinator.report_result.remote(
+                        self._worker_id,
+                        task.shard_idx,
+                        attempt,
+                        result,
+                        self.get_counter_snapshot(),
+                    ).result()
+                except Exception as e:
+                    logger.error("Worker %s error on shard %d: %s", self._worker_id, task.shard_idx, e)
+                    coordinator.report_error.remote(
+                        self._worker_id,
+                        task.shard_idx,
+                        "".join(tb_mod.format_exc()),
+                    ).result()
 
-            # Single-task worker: deregister and exit after one task
+                return
+        finally:
+            # Always deregister before exiting so the coordinator drops the
+            # worker from its alive-count bookkeeping. Without this, exit
+            # paths other than the task-executed one (SHUTDOWN, empty queue,
+            # RPC failure) leave a stale READY entry in _worker_states, and
+            # the next stage can stall until check_heartbeats reclassifies
+            # the phantom worker as FAILED.
             with suppress(Exception):
                 coordinator.deregister_worker.remote(self._worker_id).result(timeout=5.0)
-            break
 
     def _execute_shard(self, task: ShardTask, config: dict) -> TaskResult:
         """Execute a stage's operations on a single shard.
