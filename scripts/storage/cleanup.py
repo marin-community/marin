@@ -28,15 +28,17 @@ from __future__ import annotations
 import csv
 import logging
 import queue
+import random
 import shutil
 import threading
+import time
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import click
-from google.api_core.exceptions import NotFound
+from google.api_core.exceptions import NotFound, TooManyRequests
 from tqdm.auto import tqdm
 
 from scripts.storage.db import (
@@ -558,13 +560,24 @@ def _delete_worker(
     batch: list[str] = []
 
     def flush() -> None:
-        try:
-            with client.batch():
-                for name in batch:
-                    bucket_obj.blob(name).delete()
-        except NotFound:
-            # Some objects were already deleted; treat as success for idempotency.
-            pass
+        # Retry on 429 with exponential backoff + jitter; GCS requires gradual ramp-up.
+        max_attempts = 9
+        delay = 2.0
+        for attempt in range(max_attempts):
+            try:
+                with client.batch():
+                    for name in batch:
+                        bucket_obj.blob(name).delete()
+                break
+            except NotFound:
+                # Some objects already deleted; treat as success for idempotency.
+                break
+            except TooManyRequests:
+                if attempt == max_attempts - 1:
+                    raise
+                sleep = delay * (2**attempt) + random.uniform(0, 1)
+                log.warning("429 from GCS batch delete; sleeping %.1fs (attempt %d)", sleep, attempt + 1)
+                time.sleep(sleep)
         progress.update(len(batch))
         batch.clear()
 
@@ -609,6 +622,10 @@ def run_delete(ctx: Context) -> None:
             f"  deleting from {bucket_name}: {total_objects:,} objects, " f"{len(rows)} prefixes, {n_workers} workers"
         )
 
+        # Shuffle prefixes to spread load across bucket keyspace rather than hammering one hotspot.
+        shuffled_rows = list(rows)
+        random.shuffle(shuffled_rows)
+
         # Bounded queue provides backpressure: feeder blocks when workers fall behind.
         q: queue.Queue[str | None] = queue.Queue(maxsize=10_000)
 
@@ -618,7 +635,7 @@ def run_delete(ctx: Context) -> None:
             ]
             for w in workers:
                 w.start()
-            for row in rows:
+            for row in shuffled_rows:
                 for name in _iter_prefix(ctx, bucket_name, row["prefix"]):
                     q.put(name)
             for _ in workers:

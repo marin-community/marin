@@ -7,7 +7,9 @@ function authHeaders() {
 
 function redirectToLogin() {
   localStorage.removeItem('storage_token')
-  location.href = '/login'
+  if (location.pathname !== '/login') {
+    location.href = '/login'
+  }
 }
 
 async function fetchJSON(url) {

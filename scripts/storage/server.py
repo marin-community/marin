@@ -124,7 +124,7 @@ def _run_sync(gcs_prefix: str, catalog: StorageCatalog) -> None:
             local = catalog.root / name
             if local.exists():
                 subprocess.run(
-                    ["gsutil", "cp", str(local), f"{gcs_prefix}/{name}"],
+                    ["gcloud", "storage", "cp", str(local), f"{gcs_prefix}/{name}"],
                     check=True,
                     capture_output=True,
                 )
@@ -143,7 +143,8 @@ def _run_sync(gcs_prefix: str, catalog: StorageCatalog) -> None:
             for name in ("protect_rules.json", "delete_rules.json"):
                 subprocess.run(
                     [
-                        "gsutil",
+                        "gcloud",
+                        "storage",
                         "cp",
                         f"{gcs_prefix}/{name}",
                         f"{gcs_prefix}/archive/{name.replace('.json', '')}_{ts}.json",
@@ -271,22 +272,18 @@ def _query_explore_segments(
 # ---------------------------------------------------------------------------
 
 # Tokens are HMAC-SHA256(secret_key, token_nonce). The secret_key is derived
-# from the DASHBOARD_PASSWORD env var and resets on server restart, so tokens
-# are invalidated by a restart (acceptable for an internal tool).
-_token_store: set[str] = set()
-_secret_key: bytes = secrets.token_bytes(32)
+# from DASHBOARD_PASSWORD so tokens survive server restarts.
+_secret_key: bytes = hashlib.sha256(os.environ.get("DASHBOARD_PASSWORD", "").encode()).digest()
 
 
 def _make_token() -> str:
     nonce = secrets.token_hex(32)
     sig = hmac.new(_secret_key, nonce.encode(), hashlib.sha256).hexdigest()
-    token = f"{nonce}.{sig}"
-    _token_store.add(token)
-    return token
+    return f"{nonce}.{sig}"
 
 
 def _verify_token(token: str) -> bool:
-    if not token or token not in _token_store:
+    if not token:
         return False
     try:
         nonce, sig = token.rsplit(".", 1)
@@ -340,41 +337,39 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
 
     @app.on_event("startup")
     async def _download_data() -> None:
-        """On cold start, download data from GCS if local data is missing."""
+        """Sync all data from GCS at startup."""
         gcs_prefix = os.environ.get("GCS_DATA_PREFIX")
         if not gcs_prefix:
             return
         for name in ("protect_rules.json", "delete_rules.json"):
             local = catalog.root / name
-            if not local.exists():
-                log.info("downloading %s from %s", name, gcs_prefix)
-                try:
-                    subprocess.run(
-                        ["gsutil", "cp", f"{gcs_prefix}/{name}", str(local)],
-                        check=True,
-                        capture_output=True,
-                    )
-                except subprocess.CalledProcessError:
-                    log.warning("could not download %s — starting with empty rules", name)
+            log.info("downloading %s from %s", name, gcs_prefix)
+            try:
+                subprocess.run(
+                    ["gcloud", "storage", "cp", f"{gcs_prefix}/{name}", str(local)],
+                    check=True,
+                    capture_output=True,
+                )
+            except subprocess.CalledProcessError:
+                log.warning("could not download %s — starting with empty rules", name)
         for name, local_dir in [
             ("objects_parquet", catalog.objects_parquet_dir),
             ("dir_summary_parquet", catalog.dir_summary_parquet_dir),
         ]:
-            if not local_dir.exists() or not any(local_dir.glob("*.parquet")):
-                local_dir.mkdir(parents=True, exist_ok=True)
-                log.info("downloading %s from %s", name, gcs_prefix)
-                subprocess.run(
-                    [
-                        "gsutil",
-                        "-m",
-                        "rsync",
-                        "-r",
-                        f"{gcs_prefix}/{name}/",
-                        str(local_dir) + "/",
-                    ],
-                    check=True,
-                    capture_output=True,
-                )
+            local_dir.mkdir(parents=True, exist_ok=True)
+            log.info("syncing %s from %s", name, gcs_prefix)
+            subprocess.run(
+                [
+                    "gcloud",
+                    "storage",
+                    "rsync",
+                    "--recursive",
+                    f"{gcs_prefix}/{name}/",
+                    str(local_dir) + "/",
+                ],
+                check=True,
+                capture_output=True,
+            )
 
     def _cache_dir_summary(conn: duckdb.DuckDBPyConnection) -> None:
         """Load the parquet-backed dir_summary view into a temp table for fast queries.
