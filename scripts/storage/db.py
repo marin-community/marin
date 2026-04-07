@@ -467,8 +467,14 @@ def _migrate_to_14(conn: duckdb.DuckDBPyConnection, catalog: StorageCatalog) -> 
 # Migrations 11-13 take (conn); migration 14 also needs the catalog.
 def _migrate_to_16(conn: duckdb.DuckDBPyConnection) -> None:
     """Drop rules tables; replaced by views over JSON files."""
-    for table in ("delete_rule_costs", "rule_costs", "delete_rules", "protect_rules"):
-        conn.execute(f"DROP TABLE IF EXISTS {table}")
+    for name in ("delete_rule_costs", "rule_costs", "delete_rules", "protect_rules"):
+        # DuckDB's IF EXISTS only suppresses "not found", not "wrong type" errors,
+        # so we try both and absorb whichever type-mismatch exception is raised.
+        for kind in ("TABLE", "VIEW"):
+            try:
+                conn.execute(f"DROP {kind} IF EXISTS {name}")
+            except duckdb.CatalogException:
+                pass
     for seq in ("protect_rules_id_seq", "delete_rules_id_seq"):
         conn.execute(f"DROP SEQUENCE IF EXISTS {seq}")
 

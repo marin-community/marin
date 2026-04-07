@@ -1186,17 +1186,89 @@ const App = {
 }
 
 // ---------------------------------------------------------------------------
+// Login
+// ---------------------------------------------------------------------------
+
+const LoginView = {
+  setup() {
+    const password = ref('')
+    const error = ref('')
+    const loading = ref(false)
+
+    async function submit() {
+      error.value = ''
+      loading.value = true
+      try {
+        const resp = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: password.value }),
+        })
+        if (resp.ok) {
+          const { token } = await resp.json()
+          localStorage.setItem('storage_token', token)
+          router.push('/')
+        } else {
+          error.value = 'Incorrect password.'
+          password.value = ''
+        }
+      } finally {
+        loading.value = false
+      }
+    }
+
+    return { password, error, loading, submit }
+  },
+  template: `
+    <div class="min-h-screen bg-surface flex items-center justify-center">
+      <div class="w-full max-w-sm">
+        <h1 class="text-2xl font-bold text-text text-center mb-8 font-mono tracking-tight">delete-o-tron</h1>
+        <div class="bg-surface-raised border border-surface-border rounded-lg p-8">
+          <form @submit.prevent="submit" class="space-y-4">
+            <div>
+              <label class="block text-sm text-text-secondary mb-1.5">Password</label>
+              <input
+                v-model="password"
+                type="password"
+                autofocus
+                class="w-full bg-surface-sunken border border-surface-border rounded px-3 py-2 text-text font-mono text-sm focus:outline-none focus:border-accent"
+                placeholder="••••••••"
+              />
+            </div>
+            <p v-if="error" class="text-sm text-status-danger">{{ error }}</p>
+            <button
+              type="submit"
+              :disabled="loading || !password"
+              class="w-full bg-accent hover:bg-accent-hover disabled:opacity-40 text-white rounded px-4 py-2 text-sm font-medium transition-colors"
+            >
+              {{ loading ? 'Signing in…' : 'Sign in' }}
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  `,
+}
+
+// ---------------------------------------------------------------------------
 // Router + mount
 // ---------------------------------------------------------------------------
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
+    { path: '/login', component: LoginView },
     { path: '/', component: OverviewDashboard },
     { path: '/rules', component: SavePatterns },
     { path: '/delete-rules', component: DeleteRulesManager },
     { path: '/explore', component: UnifiedExplorer },
   ],
+})
+
+router.beforeEach((to) => {
+  if (to.path !== '/login' && !localStorage.getItem('storage_token')) {
+    return '/login'
+  }
 })
 
 const app = createApp(App)

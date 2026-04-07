@@ -5,9 +5,14 @@ function authHeaders() {
   return headers
 }
 
+function redirectToLogin() {
+  localStorage.removeItem('storage_token')
+  location.href = '/login'
+}
+
 async function fetchJSON(url) {
   const resp = await fetch(url, { headers: authHeaders() })
-  if (resp.status === 401) { location.href = '/'; return }
+  if (resp.status === 401) { redirectToLogin(); return }
   if (!resp.ok) throw new Error(`${url}: ${resp.status} ${resp.statusText}`)
   return resp.json()
 }
@@ -40,7 +45,7 @@ export async function fetchDeleteEstimate(patterns) {
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ patterns }),
   })
-  if (resp.status === 401) { location.href = '/'; return }
+  if (resp.status === 401) { redirectToLogin(); return }
   if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
   return resp.json()
 }
@@ -56,14 +61,14 @@ export async function createDeleteRule(rule) {
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(rule),
   })
-  if (resp.status === 401) { location.href = '/'; return }
+  if (resp.status === 401) { redirectToLogin(); return }
   if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
   return resp.json()
 }
 
 export async function removeDeleteRule(id) {
   const resp = await fetch(`/api/delete-rules/${id}`, { method: 'DELETE', headers: authHeaders() })
-  if (resp.status === 401) { location.href = '/'; return }
+  if (resp.status === 401) { redirectToLogin(); return }
   if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
   return resp.json()
 }
@@ -76,14 +81,14 @@ export async function createProtectRule(rule) {
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(rule),
   })
-  if (resp.status === 401) { location.href = '/'; return }
+  if (resp.status === 401) { redirectToLogin(); return }
   if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
   return resp.json()
 }
 
 export async function removeProtectRule(id) {
   const resp = await fetch(`/api/rules/${id}`, { method: 'DELETE', headers: authHeaders() })
-  if (resp.status === 401) { location.href = '/'; return }
+  if (resp.status === 401) { redirectToLogin(); return }
   if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
   return resp.json()
 }
@@ -101,7 +106,7 @@ export async function fetchUnifiedExplore(prefix = '', bucket = '', storageClass
 // Sync
 export async function triggerSync() {
   const resp = await fetch('/api/sync', { method: 'POST', headers: authHeaders() })
-  if (resp.status === 401) { location.href = '/'; return }
+  if (resp.status === 401) { redirectToLogin(); return }
   if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
   return resp.json()
 }

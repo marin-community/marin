@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import click
-from google.cloud import storage
+from google.api_core.exceptions import NotFound
 from tqdm.auto import tqdm
 
 from scripts.storage.db import (
@@ -506,8 +506,8 @@ def run_soft_enable(ctx: Context) -> None:
                 )
 
 
-def _load_manifest(ctx: Context) -> dict[str, list[str]]:
-    """Load the deletion manifest CSV and return prefixes grouped by bucket.
+def _load_manifest(ctx: Context) -> dict[str, list[dict[str, str]]]:
+    """Load the deletion manifest CSV and return full rows grouped by bucket.
 
     Validates the CSV fingerprint against the .sha256 sidecar if it exists.
     """
@@ -528,104 +528,105 @@ def _load_manifest(ctx: Context) -> dict[str, list[str]]:
                 "Re-run the compute step with --force to regenerate."
             )
 
-    by_bucket: dict[str, list[str]] = defaultdict(list)
+    by_bucket: dict[str, list[dict[str, str]]] = defaultdict(list)
     with manifest_path.open(newline="") as f:
         for row in csv.DictReader(f):
-            by_bucket[row["bucket"]].append(row["prefix"])
+            by_bucket[row["bucket"]].append(row)
     return dict(by_bucket)
 
 
-def _delete_manifest_prefix(
+def _iter_prefix(ctx: Context, bucket_name: str, prefix: str):
+    """Yield object names matching prefix, streaming from DB without materializing."""
+    cursor = ctx.conn.cursor()
+    cursor.execute(
+        "SELECT o.name FROM objects o WHERE o.bucket = ? AND o.name LIKE ? || '%'",
+        (bucket_name, prefix),
+    )
+    while (row := cursor.fetchone()) is not None:
+        yield row[0]
+
+
+def _delete_worker(
     ctx: Context,
     bucket_name: str,
-    prefix: str,
-) -> tuple[int, int, dict[str, int]]:
-    """Delete all objects under a manifest prefix from GCS.
-
-    Returns (count, bytes, by_class).
-    """
-    with ctx.db_lock:
-        rows = _fetchall_dicts(
-            ctx.conn.execute(
-                """
-            SELECT o.name, o.size_bytes, sc.name as storage_class
-            FROM objects o
-            JOIN storage_classes sc ON o.storage_class_id = sc.id
-            WHERE o.bucket = ?
-              AND o.name LIKE ? || '%'
-            ORDER BY o.name
-            """,
-                (bucket_name, prefix),
-            )
-        )
-
-    if not rows:
-        return 0, 0, {}
-
+    q: queue.Queue[str | None],
+    progress: tqdm,
+    batch_size: int = 100,
+) -> None:
     client = storage_client(ctx)
     bucket_obj = client.bucket(bucket_name)
-    deleted_count = 0
-    deleted_bytes = 0
-    deleted_by_class: dict[str, int] = defaultdict(int)
-    batch: list[storage.Blob] = []
+    batch: list[str] = []
 
-    for row in rows:
-        deleted_count += 1
-        deleted_bytes += int(row["size_bytes"])
-        deleted_by_class[row["storage_class"]] += 1
-        batch.append(bucket_obj.blob(row["name"]))
+    def flush() -> None:
+        try:
+            with client.batch():
+                for name in batch:
+                    bucket_obj.blob(name).delete()
+        except NotFound:
+            # Some objects were already deleted; treat as success for idempotency.
+            pass
+        progress.update(len(batch))
+        batch.clear()
 
-        if len(batch) >= DELETE_BATCH_SIZE:
-            if not ctx.dry_run:
-                with client.batch():
-                    for b in batch:
-                        b.delete()
-            batch.clear()
-
-    if batch and not ctx.dry_run:
-        with client.batch():
-            for b in batch:
-                b.delete()
-
-    return deleted_count, deleted_bytes, dict(deleted_by_class)
+    while True:
+        name = q.get()
+        if name is None:
+            if batch:
+                flush()
+            break
+        progress.set_postfix(file=name, refresh=False)
+        batch.append(name)
+        if len(batch) >= batch_size:
+            flush()
 
 
 def run_delete(ctx: Context) -> None:
     """Delete objects listed in the pre-computed deletion manifest."""
     manifest = _load_manifest(ctx)
 
-    for row in plan_rows():
-        region = row["region"]
-        bucket_name = row["bucket"]
-        prefixes = manifest.get(bucket_name, [])
+    if ctx.dry_run:
+        for plan_row in plan_rows():
+            rows = manifest.get(plan_row["bucket"], [])
+            if not rows:
+                continue
+            total_count = sum(int(r["object_count"]) for r in rows)
+            total_bytes = sum(int(r["total_bytes"]) for r in rows)
+            print_summary(
+                f"  would delete {total_count:,} objects ({human_bytes(total_bytes)}) from {plan_row['bucket']}"
+            )
+        return
 
-        if not prefixes:
-            print_summary(f"  {bucket_name}: no prefixes in manifest, skipping")
+    for plan_row in plan_rows():
+        bucket_name = plan_row["bucket"]
+        rows = manifest.get(bucket_name, [])
+        if not rows:
+            print_summary(f"  {bucket_name}: not in manifest, skipping")
             continue
 
+        total_objects = sum(int(r["object_count"]) for r in rows)
+        n_workers = max(1, min(ctx.scan_workers, total_objects))
         print_summary(
-            f"  deleting objects from {bucket_name} " f"({len(prefixes)} manifest prefixes, {ctx.scan_workers} workers)"
+            f"  deleting from {bucket_name}: {total_objects:,} objects, " f"{len(rows)} prefixes, {n_workers} workers"
         )
 
-        total_deleted_count = 0
-        total_deleted_bytes = 0
+        # Bounded queue provides backpressure: feeder blocks when workers fall behind.
+        q: queue.Queue[str | None] = queue.Queue(maxsize=10_000)
 
-        progress = tqdm(total=len(prefixes), desc=f"delete {bucket_name}", unit="prefix", leave=True)
-        workers = max(1, min(ctx.scan_workers, len(prefixes) or 1))
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_prefix = {executor.submit(_delete_manifest_prefix, ctx, bucket_name, p): p for p in prefixes}
-            for future in as_completed(future_to_prefix):
-                p = future_to_prefix[future]
-                count, nbytes, _by_class = future.result()
-                total_deleted_count += count
-                total_deleted_bytes += nbytes
-                verb = "would del" if ctx.dry_run else "del"
-                progress.set_postfix_str(f"{p[:50]} ({count} {verb})")
-                progress.update(1)
-        progress.close()
+        with tqdm(total=total_objects, desc=f"delete {bucket_name}", unit="obj", leave=True) as progress:
+            workers = [
+                threading.Thread(target=_delete_worker, args=(ctx, bucket_name, q, progress)) for _ in range(n_workers)
+            ]
+            for w in workers:
+                w.start()
+            for row in rows:
+                for name in _iter_prefix(ctx, bucket_name, row["prefix"]):
+                    q.put(name)
+            for _ in workers:
+                q.put(None)
+            for w in workers:
+                w.join()
 
-        verb = "would delete" if ctx.dry_run else "deleted"
-        print_summary(f"  {region}: {verb} {total_deleted_count} objects ({human_bytes(total_deleted_bytes)})")
+        print_summary(f"  {bucket_name}: done")
 
 
 def run_soft_disable(ctx: Context) -> None:

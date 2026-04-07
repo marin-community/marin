@@ -33,6 +33,13 @@ def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=True, **kwargs)
 
 
+def _get_dashboard_password() -> str:
+    password = os.environ.get("DASHBOARD_PASSWORD")
+    if not password:
+        raise click.ClickException("DASHBOARD_PASSWORD env var must be set for deployment")
+    return password
+
+
 def _get_project() -> str:
     project = os.environ.get("GCP_PROJECT")
     if project:
@@ -60,7 +67,8 @@ def cli():
 @click.option("--machine-type", default=DEFAULT_MACHINE_TYPE, show_default=True)
 @click.option("--skip-build", is_flag=True, help="Skip Docker build and restart; only sync data.")
 @click.option("--skip-data", is_flag=True, help="Skip syncing data to GCS.")
-def deploy(zone: str, machine_type: str, skip_build: bool, skip_data: bool):
+@click.option("--force-rules", is_flag=True, help="Overwrite rule JSON files on GCS from local copies.")
+def deploy(zone: str, machine_type: str, skip_build: bool, skip_data: bool, force_rules: bool):
     """Build and deploy the dashboard to a GCP VM.
 
     Syncs source to the VM, builds the Docker image there, and restarts the container.
@@ -73,7 +81,7 @@ def deploy(zone: str, machine_type: str, skip_build: bool, skip_data: bool):
 
     # Sync data
     if not skip_data:
-        _sync_data(gcs_prefix)
+        _sync_data(gcs_prefix, force_rules=force_rules)
 
     # Create VM if it doesn't exist
     click.echo(f"\n==> Checking VM {VM_NAME} in {zone}...")
@@ -146,11 +154,12 @@ def deploy(zone: str, machine_type: str, skip_build: bool, skip_data: bool):
 
 @cli.command("sync-data")
 @click.option("--region", default="us-central2", show_default=True)
-def sync_data_cmd(region: str):
-    """Sync local parquet data and DB to GCS."""
+@click.option("--force-rules", is_flag=True, help="Overwrite rule JSON files on GCS from local copies.")
+def sync_data_cmd(region: str, force_rules: bool):
+    """Sync local parquet data to GCS. Rule JSON files are skipped unless --force-rules."""
     temp_bucket = f"marin-tmp-{region}"
     gcs_prefix = f"gs://{temp_bucket}/ttl=30d/delete-o-tron"
-    _sync_data(gcs_prefix)
+    _sync_data(gcs_prefix, force_rules=force_rules)
 
 
 def _build_on_vm(zone: str, project: str, gcs_prefix: str):
@@ -208,6 +217,7 @@ def _build_on_vm(zone: str, project: str, gcs_prefix: str):
             f"docker rm -f {VM_NAME} 2>/dev/null || true",
             f"docker run -d --name {VM_NAME} -p 8000:8000"
             f" -e GCS_DATA_PREFIX={gcs_prefix}"
+            f" -e DASHBOARD_PASSWORD={_get_dashboard_password()}"
             f" -v /mnt/stateful_partition/delete-o-tron-data:/app/scripts/storage/purge"
             f" {IMAGE_NAME}:latest",
         ]
@@ -215,17 +225,76 @@ def _build_on_vm(zone: str, project: str, gcs_prefix: str):
     _run([*ssh_base, "--command", build_and_restart])
 
 
-def _sync_data(gcs_prefix: str):
-    """Sync parquet dirs and DB to GCS."""
+@cli.command()
+@click.option("--zone", default=DEFAULT_ZONE, show_default=True)
+def ssh(zone: str):
+    """Open an interactive SSH session to the VM."""
+    project = _get_project()
+    os.execvp(
+        "gcloud",
+        ["gcloud", "compute", "ssh", VM_NAME, f"--zone={zone}", f"--project={project}"],
+    )
+
+
+@cli.command()
+@click.option("--zone", default=DEFAULT_ZONE, show_default=True)
+@click.option("--follow", "-f", is_flag=True, help="Follow log output.")
+@click.option("--tail", default=100, show_default=True, help="Number of lines to show from the end.")
+def logs(zone: str, follow: bool, tail: int):
+    """Fetch Docker logs from the running container on the VM."""
+    project = _get_project()
+    ssh_base = ["gcloud", "compute", "ssh", VM_NAME, f"--zone={zone}", f"--project={project}"]
+    docker_cmd = f"docker logs --tail={tail}"
+    if follow:
+        docker_cmd += " -f"
+    docker_cmd += f" {VM_NAME}"
+    _run([*ssh_base, "--command", docker_cmd])
+
+
+@cli.command()
+@click.option("--zone", default=DEFAULT_ZONE, show_default=True)
+def status(zone: str):
+    """Show VM and container status."""
+    project = _get_project()
+    click.echo(f"==> VM {VM_NAME} in {zone}:")
+    subprocess.run(
+        [
+            "gcloud",
+            "compute",
+            "instances",
+            "describe",
+            VM_NAME,
+            f"--zone={zone}",
+            f"--project={project}",
+            "--format=table(name,status,networkInterfaces[0].accessConfigs[0].natIP:label=EXTERNAL_IP)",
+        ],
+        check=False,
+    )
+    ssh_base = ["gcloud", "compute", "ssh", VM_NAME, f"--zone={zone}", f"--project={project}"]
+    click.echo(f"\n==> Container {VM_NAME}:")
+    subprocess.run(
+        [
+            *ssh_base,
+            "--command",
+            f"docker ps --filter name={VM_NAME} --format 'table {{{{.Names}}}}\\t{{{{.Status}}}}\\t{{{{.Ports}}}}'",
+        ],
+        check=False,
+    )
+
+
+def _sync_data(gcs_prefix: str, force_rules: bool = False):
+    """Sync parquet dirs to GCS. Rule JSON files are server-canonical and skipped unless force_rules=True."""
     click.echo("\n==> Syncing data to GCS...")
     for name in ["objects_parquet", "dir_summary_parquet"]:
         local = PURGE_DIR / name
         if local.is_dir():
             _run(["gcloud", "storage", "rsync", "--recursive", str(local) + "/", f"{gcs_prefix}/{name}/"])
-    for rule_file in ["protect_rules.json", "delete_rules.json"]:
-        rule_path = PURGE_DIR / rule_file
-        if rule_path.exists():
-            _run(["gcloud", "storage", "cp", str(rule_path), f"{gcs_prefix}/{rule_file}"])
+    if force_rules:
+        click.echo("\n==> Force-syncing rule files to GCS...")
+        for rule_file in ["protect_rules.json", "delete_rules.json"]:
+            rule_path = PURGE_DIR / rule_file
+            if rule_path.exists():
+                _run(["gcloud", "storage", "cp", str(rule_path), f"{gcs_prefix}/{rule_file}"])
 
 
 if __name__ == "__main__":

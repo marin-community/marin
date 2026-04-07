@@ -15,11 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
+import hmac
 import logging
-from collections import defaultdict
 import os
+import secrets
 import subprocess
 import threading
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,10 +31,10 @@ from typing import Any
 import click
 import duckdb
 import uvicorn
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, JSONResponse
 
 
 from scripts.storage.db import (
@@ -43,6 +46,7 @@ from scripts.storage.db import (
     flush_delete_rules,
     flush_protect_rules,
     human_bytes,
+    init_db,
     plan_rows,
     region_from_bucket,
 )
@@ -55,6 +59,10 @@ SYNC_INTERVAL = 600  # 10 minutes
 ARCHIVE_INTERVAL = 3600  # 1 hour
 
 _db_lock = threading.RLock()
+
+
+class _LoginRequest(BaseModel):
+    password: str
 
 
 class DeletePatternsRequest(BaseModel):
@@ -86,7 +94,7 @@ _sync_state = SyncState()
 
 
 def open_db(catalog: StorageCatalog) -> duckdb.DuckDBPyConnection:
-    return catalog.open_db()
+    return init_db(catalog)
 
 
 def _fetchall(conn: duckdb.DuckDBPyConnection, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
@@ -258,10 +266,58 @@ def _query_explore_segments(
     return _fetchall(conn, query, tuple(all_params))
 
 
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+# Tokens are HMAC-SHA256(secret_key, token_nonce). The secret_key is derived
+# from the DASHBOARD_PASSWORD env var and resets on server restart, so tokens
+# are invalidated by a restart (acceptable for an internal tool).
+_token_store: set[str] = set()
+_secret_key: bytes = secrets.token_bytes(32)
+
+
+def _make_token() -> str:
+    nonce = secrets.token_hex(32)
+    sig = hmac.new(_secret_key, nonce.encode(), hashlib.sha256).hexdigest()
+    token = f"{nonce}.{sig}"
+    _token_store.add(token)
+    return token
+
+
+def _verify_token(token: str) -> bool:
+    if not token or token not in _token_store:
+        return False
+    try:
+        nonce, sig = token.rsplit(".", 1)
+    except ValueError:
+        return False
+    expected = hmac.new(_secret_key, nonce.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, expected)
+
+
 def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     app = FastAPI(title="storage-dashboard", docs_url="/api/docs")
     _db: duckdb.DuckDBPyConnection | None = None
     _background_tasks: set[asyncio.Task] = set()
+
+    @app.middleware("http")
+    async def auth_middleware(request: Request, call_next):
+        path = request.url.path
+        if path.startswith("/api/") and path != "/api/login":
+            auth = request.headers.get("Authorization", "")
+            token = auth.removeprefix("Bearer ").strip()
+            if not _verify_token(token):
+                log.warning("401 Unauthorized: %s %s (token=%r)", request.method, path, token[:8] if token else "")
+                return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        return await call_next(request)
+
+    @app.post("/api/login")
+    def login(body: _LoginRequest) -> dict[str, str]:
+        password = os.environ.get("DASHBOARD_PASSWORD", "")
+        if not hmac.compare_digest(body.password, password):
+            raise HTTPException(status_code=401, detail="Incorrect password")
+        return {"token": _make_token()}
 
     def db() -> duckdb.DuckDBPyConnection:
         if _db is None:
@@ -1355,6 +1411,19 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     def sync_status() -> dict[str, Any]:
         return _sync_state.__dict__
 
+    @app.middleware("http")
+    async def no_cache_static(request: Request, call_next):
+        """Add Cache-Control: no-cache to all non-API responses.
+
+        ETags are already emitted by Starlette, so browsers will still do
+        conditional GETs (304 Not Modified) for unchanged files — this just
+        prevents stale JS from being served after a deploy.
+        """
+        response = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     # Serve dashboard static files (no build step — plain JS + HTML)
     app.mount("/static", StaticFiles(directory=DASHBOARD_DIR), name="static")
 
@@ -1372,7 +1441,8 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
 @click.option("--dev", is_flag=True, help="Enable auto-reload for development.")
 def main(port: int, host: str, dev: bool) -> None:
     """Start the storage dashboard server."""
-    log_level = "info" if dev else "warning"
+    if not os.environ.get("DASHBOARD_PASSWORD"):
+        raise SystemExit("DASHBOARD_PASSWORD env var must be set")
     if dev:
         uvicorn.run(
             "scripts.storage.server:create_app",
@@ -1381,11 +1451,12 @@ def main(port: int, host: str, dev: bool) -> None:
             port=port,
             reload=True,
             reload_dirs=["scripts/storage"],
-            log_level=log_level,
+            log_level="debug",
+            access_log=True,
         )
     else:
         app = create_app()
-        uvicorn.run(app, host=host, port=port, log_level=log_level)
+        uvicorn.run(app, host=host, port=port, log_level="info", access_log=True)
 
 
 if __name__ == "__main__":
