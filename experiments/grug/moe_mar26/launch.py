@@ -75,6 +75,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mesh=MeshConfig(axes={"expert": 4}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
+        allow_partial_checkpoint=True,
         load_checkpoint_path=getattr(config, "load_checkpoint_path", None),
         checkpointer=CheckpointerConfig(
             base_path=os.path.join(config.output_path, "checkpoints"),
@@ -285,8 +286,63 @@ def create_1e22_run() -> list[ExecutorStep]:
 e22_run_steps = create_1e22_run()
 
 
+def create_1e22_v2_run() -> list[ExecutorStep]:
+    """Resume 1e22 d3200 from step-69000 with QB-in-JIT fix, writing to v2 output."""
+    hidden_dim = 3200
+    tokens_target = 326e9
+    model_cfg = HEURISTIC.build_model_config(hidden_dim)
+
+    batch_size = 1024
+    train_steps = max(1, round(tokens_target / (batch_size * SEQ_LEN)))
+    actual_tokens = train_steps * batch_size * SEQ_LEN
+    optimizer = HEURISTIC.build_optimizer_config(batch_size, actual_tokens)
+
+    run_id = "moe-v7-1e22-d3200-v2"
+
+    config = GrugMoeLaunchConfig(
+        model=versioned(model_cfg),
+        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+        output_path=this_output_path(),
+        run_id=run_id,
+        resources=versioned(ResourceConfig.with_tpu("v4-512")),
+        steps=versioned(train_steps),
+        batch_size=versioned(batch_size),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="dial_moe",
+            tags=["grug", "moe-core", "v7", "budget=1e+22", "d=3200", "qb-jit-fix"],
+            group="moe-1e22",
+            name=run_id,
+        ),
+        optimizer=versioned(optimizer),
+        grug_trainer=versioned(
+            GrugTrainerConfig(
+                z_loss_weight=HEURISTIC.z_loss_weight,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            GrugEvalConfig(
+                eval_batch_size=512,
+                steps_per_eval=None,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+        load_checkpoint_path="gs://marin-us-central2/grug/moe-v7-1e22-d3200-5a4518/checkpoints/step-69000",
+    )
+
+    return [ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config)]
+
+
+e22_v2_steps = create_1e22_v2_run()
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=e22_run_steps,
-        description="MoE v7: 1e22 d=3200, 326B tokens",
+        steps=e22_v2_steps,
+        description="MoE v7: 1e22 d=3200 v2 resume from step-69000 with QB-in-JIT fix",
     )
