@@ -57,6 +57,9 @@ PROJECT_USER_IMPERSONATION_ROLES = (
     "roles/iam.serviceAccountTokenCreator",
     "roles/iam.serviceAccountUser",
 )
+# Project-level roles granted to human users so they can SSH to instances
+# via metadata-style keys (gcloud compute ssh).
+USER_PROJECT_ROLES = ("roles/compute.instanceAdmin.v1",)
 
 
 def _principal_member(principal: str) -> str:
@@ -141,6 +144,16 @@ def _project_user_members(project: str) -> list[str]:
     return sorted(users)
 
 
+def _project_member_roles(project: str, member: str) -> set[str]:
+    """Return the set of project-level IAM roles bound to *member*."""
+    result = _run(
+        ["gcloud", "projects", "get-iam-policy", project, "--format=json"],
+        capture_output=True,
+    )
+    policy = json.loads(result.stdout)
+    return {binding["role"] for binding in policy.get("bindings", []) if member in binding.get("members", [])}
+
+
 def _service_account_policy(service_account: str) -> dict[str, set[str]]:
     result = _run(
         [
@@ -180,41 +193,51 @@ def _ensure_service_account(project: str, sa_id: str, display_name: str, *, dry_
     return email
 
 
-def _bind_project_role(project: str, *, member: str, role: str, dry_run: bool) -> None:
-    _run(
-        [
-            "gcloud",
-            "projects",
-            "add-iam-policy-binding",
-            project,
-            f"--member={member}",
-            f"--role={role}",
-            "--condition=None",
-        ],
-        dry_run=dry_run,
-    )
+def _add_policy_binding(policy: dict, role: str, member: str) -> bool:
+    """Add *member* to *role* in a raw IAM policy dict. Returns True if the binding was new."""
+    for binding in policy.get("bindings", []):
+        if binding["role"] == role:
+            members = set(binding.get("members", []))
+            if member in members:
+                return False
+            members.add(member)
+            binding["members"] = sorted(members)
+            return True
+    policy.setdefault("bindings", []).append({"role": role, "members": [member]})
+    return True
 
 
-def _bind_service_account_role(
-    service_account: str,
-    *,
-    member: str,
-    role: str,
-    dry_run: bool,
-) -> None:
-    _run(
-        [
-            "gcloud",
-            "iam",
-            "service-accounts",
-            "add-iam-policy-binding",
-            service_account,
-            f"--member={member}",
-            f"--role={role}",
-            "--condition=None",
-        ],
-        dry_run=dry_run,
-    )
+def _set_project_iam_policy(project: str, policy: dict, *, dry_run: bool) -> None:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(policy, f)
+        policy_path = f.name
+    try:
+        _run(
+            ["gcloud", "projects", "set-iam-policy", project, policy_path, "--format=json"],
+            dry_run=dry_run,
+            capture_output=True,
+        )
+    finally:
+        os.unlink(policy_path)
+
+
+def _set_sa_iam_policy(service_account: str, policy: dict, *, dry_run: bool) -> None:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(policy, f)
+        policy_path = f.name
+    try:
+        _run(
+            ["gcloud", "iam", "service-accounts", "set-iam-policy", service_account, policy_path, "--format=json"],
+            dry_run=dry_run,
+            capture_output=True,
+        )
+    finally:
+        os.unlink(policy_path)
+
+
+def _get_raw_policy(cmd: list[str]) -> dict:
+    result = subprocess.run(cmd, check=True, text=True, capture_output=True)
+    return json.loads(result.stdout)
 
 
 def _print_summary(summary: dict[str, object]) -> None:
@@ -271,7 +294,11 @@ def init(
     worker_sa_id: str,
     dry_run: bool,
 ) -> None:
-    """Create service accounts and wire IAM bindings."""
+    """Create service accounts and wire IAM bindings.
+
+    Fetches each IAM policy once, computes all missing bindings in memory,
+    then writes each policy back in a single set-iam-policy call.
+    """
     logging.getLogger().setLevel(logging.INFO)
     operator_member = _principal_member(operator_principal)
     ci_member = _principal_member(ci_principal)
@@ -282,9 +309,27 @@ def init(
         project, controller_sa_id, "Iris controller service account", dry_run=dry_run
     )
     worker_sa = _ensure_service_account(project, worker_sa_id, "Iris worker service account", dry_run=dry_run)
-    project_user_members = _project_user_members(project)
-    controller_policy = {} if dry_run else _service_account_policy(controller_sa)
-    worker_policy = {} if dry_run else _service_account_policy(worker_sa)
+
+    # Fetch raw policies (with etags) so we can batch-update them.
+    if dry_run:
+        proj_policy = {"bindings": []}
+        ctrl_policy = {"bindings": []}
+        wrkr_policy = {"bindings": []}
+    else:
+        proj_policy = _get_raw_policy(["gcloud", "projects", "get-iam-policy", project, "--format=json"])
+        ctrl_policy = _get_raw_policy(
+            ["gcloud", "iam", "service-accounts", "get-iam-policy", controller_sa, "--format=json"]
+        )
+        wrkr_policy = _get_raw_policy(
+            ["gcloud", "iam", "service-accounts", "get-iam-policy", worker_sa, "--format=json"]
+        )
+
+    project_user_members = sorted(
+        {m for b in proj_policy.get("bindings", []) for m in b.get("members", []) if m.startswith("user:")}
+    )
+
+    controller_sa_member = f"serviceAccount:{controller_sa}"
+    worker_sa_member = f"serviceAccount:{worker_sa}"
 
     summary = {
         "project": project,
@@ -295,52 +340,100 @@ def init(
         "ci_principal": ci_member,
         "project_user_count": len(project_user_members),
         "project_user_members": project_user_members,
-        "controller_project_roles": list(CONTROLLER_PROJECT_ROLES),
-        "worker_project_roles": list(WORKER_PROJECT_ROLES),
-        "impersonation_roles": list(IMPERSONATION_ROLES),
-        "project_user_impersonation_roles": list(PROJECT_USER_IMPERSONATION_ROLES),
     }
     _print_summary(summary)
 
+    # -- Project-level bindings (single set-iam-policy call) -------------------
+    proj_additions: list[str] = []
     for role in CONTROLLER_PROJECT_ROLES:
-        _bind_project_role(project, member=f"serviceAccount:{controller_sa}", role=role, dry_run=dry_run)
-
+        if _add_policy_binding(proj_policy, role, controller_sa_member):
+            proj_additions.append(f"  {controller_sa_member} -> {role}")
     for role in WORKER_PROJECT_ROLES:
-        _bind_project_role(project, member=f"serviceAccount:{worker_sa}", role=role, dry_run=dry_run)
+        if _add_policy_binding(proj_policy, role, worker_sa_member):
+            proj_additions.append(f"  {worker_sa_member} -> {role}")
+    for principal in {operator_member, *project_user_members}:
+        for role in USER_PROJECT_ROLES:
+            if _add_policy_binding(proj_policy, role, principal):
+                proj_additions.append(f"  {principal} -> {role}")
 
+    if proj_additions:
+        logger.info("Adding %d project-level bindings:\n%s", len(proj_additions), "\n".join(proj_additions))
+        _set_project_iam_policy(project, proj_policy, dry_run=dry_run)
+    else:
+        logger.info("Project IAM policy already up to date")
+
+    # -- Controller SA bindings (single set-iam-policy call) -------------------
+    ctrl_additions: list[str] = []
     for principal in (operator_member, ci_member):
         for role in IMPERSONATION_ROLES:
-            if principal not in controller_policy.get(role, set()):
-                _bind_service_account_role(controller_sa, member=principal, role=role, dry_run=dry_run)
-            if principal not in worker_policy.get(role, set()):
-                _bind_service_account_role(worker_sa, member=principal, role=role, dry_run=dry_run)
-
+            if _add_policy_binding(ctrl_policy, role, principal):
+                ctrl_additions.append(f"  {principal} -> {role}")
     for principal in project_user_members:
         for role in PROJECT_USER_IMPERSONATION_ROLES:
-            if principal not in controller_policy.get(role, set()):
-                _bind_service_account_role(controller_sa, member=principal, role=role, dry_run=dry_run)
-            if principal not in worker_policy.get(role, set()):
-                _bind_service_account_role(worker_sa, member=principal, role=role, dry_run=dry_run)
-
-    for service_account in (controller_sa, worker_sa):
-        self_member = f"serviceAccount:{service_account}"
-        policy = controller_policy if service_account == controller_sa else worker_policy
-        for role in IMPERSONATION_ROLES:
-            if self_member not in policy.get(role, set()):
-                _bind_service_account_role(service_account, member=self_member, role=role, dry_run=dry_run)
-
-    controller_member = f"serviceAccount:{controller_sa}"
+            if _add_policy_binding(ctrl_policy, role, principal):
+                ctrl_additions.append(f"  {principal} -> {role}")
     for role in IMPERSONATION_ROLES:
-        if controller_member not in worker_policy.get(role, set()):
-            _bind_service_account_role(worker_sa, member=controller_member, role=role, dry_run=dry_run)
+        if _add_policy_binding(ctrl_policy, role, controller_sa_member):
+            ctrl_additions.append(f"  {controller_sa_member} -> {role} (self)")
+
+    if ctrl_additions:
+        logger.info("Adding %d controller SA bindings:\n%s", len(ctrl_additions), "\n".join(ctrl_additions))
+        _set_sa_iam_policy(controller_sa, ctrl_policy, dry_run=dry_run)
+    else:
+        logger.info("Controller SA IAM policy already up to date")
+
+    # -- Worker SA bindings (single set-iam-policy call) -----------------------
+    wrkr_additions: list[str] = []
+    for principal in (operator_member, ci_member):
+        for role in IMPERSONATION_ROLES:
+            if _add_policy_binding(wrkr_policy, role, principal):
+                wrkr_additions.append(f"  {principal} -> {role}")
+    for principal in project_user_members:
+        for role in PROJECT_USER_IMPERSONATION_ROLES:
+            if _add_policy_binding(wrkr_policy, role, principal):
+                wrkr_additions.append(f"  {principal} -> {role}")
+    for role in IMPERSONATION_ROLES:
+        if _add_policy_binding(wrkr_policy, role, worker_sa_member):
+            wrkr_additions.append(f"  {worker_sa_member} -> {role} (self)")
+        if _add_policy_binding(wrkr_policy, role, controller_sa_member):
+            wrkr_additions.append(f"  {controller_sa_member} -> {role}")
+
+    if wrkr_additions:
+        logger.info("Adding %d worker SA bindings:\n%s", len(wrkr_additions), "\n".join(wrkr_additions))
+        _set_sa_iam_policy(worker_sa, wrkr_policy, dry_run=dry_run)
+    else:
+        logger.info("Worker SA IAM policy already up to date")
 
 
-def _check_result(label: str, passed: bool, detail: str = "") -> bool:
+def _print_results_table(results: list[tuple[str, bool]]) -> None:
+    if not results:
+        return
+    click.echo()
+    label_width = max(len(label) for label, _ in results)
+    click.echo(f"  {'Check':<{label_width}}  Status")
+    click.echo(f"  {'─' * label_width}  ──────")
+    for label, passed in results:
+        status = "OK" if passed else "FAIL"
+        click.echo(f"  {label:<{label_width}}  {status}")
+    passed_count = sum(1 for _, p in results if p)
+    click.echo()
+    click.echo(f"  {passed_count}/{len(results)} checks passed.")
+
+
+def _check_result(
+    label: str,
+    passed: bool,
+    detail: str = "",
+    *,
+    results: list[tuple[str, bool]] | None = None,
+) -> bool:
     tag = "[OK]  " if passed else "[FAIL]"
     click.echo(f"  {tag} {label}")
     if not passed and detail:
         for line in detail.splitlines():
             click.echo(f"         {line}")
+    if results is not None:
+        results.append((label, passed))
     return passed
 
 
@@ -375,29 +468,38 @@ def check(project: str, controller_sa_id: str, worker_sa_id: str, email: str) ->
     click.echo()
 
     ok = True
+    results: list[tuple[str, bool]] = []
     can_do_live = active_account is not None and active_account == checked_email
 
     # -- 1. Project membership -------------------------------------------------
     click.echo("1. Project membership")
     project_users = _project_user_members(project)
     if member in project_users:
-        _check_result(f"{member} is a direct user: member on project {project}", True)
+        _check_result(f"{member} is a direct user: member on project {project}", True, results=results)
     else:
         _check_result(
             f"{member} is NOT a direct user: member on project {project}",
             False,
             "Access may come via group/domain/org — the init command won't discover this user.",
+            results=results,
         )
         # Not fatal — they might still have SA bindings from a manual grant.
 
-    # -- 2. IAM bindings on service accounts -----------------------------------
+    # -- 2. Project-level compute roles (metadata-style SSH) ------------------
     click.echo()
-    click.echo("2. IAM policy bindings on service accounts")
+    click.echo("2. Project-level IAM roles (metadata-style SSH)")
+    user_roles = _project_member_roles(project, member)
+    for role in USER_PROJECT_ROLES:
+        ok &= _check_result(f"project role — {role}", role in user_roles, results=results)
+
+    # -- 3. IAM bindings on service accounts -----------------------------------
+    click.echo()
+    click.echo("3. IAM policy bindings on service accounts")
     for sa_label, sa_email in [("controller", controller_sa), ("worker", worker_sa)]:
         policy = _service_account_policy(sa_email)
         for role in IMPERSONATION_ROLES:
             has_role = member in policy.get(role, set())
-            ok &= _check_result(f"{sa_label} SA — {role}", has_role)
+            ok &= _check_result(f"{sa_label} SA — {role}", has_role, results=results)
 
     if not can_do_live:
         click.echo()
@@ -409,25 +511,21 @@ def check(project: str, controller_sa_id: str, worker_sa_id: str, email: str) ->
         else:
             click.echo("Skipping live probes: no active gcloud account. Run: gcloud auth login")
 
-        click.echo()
-        if ok:
-            click.echo("IAM bindings look correct. Run live probes to confirm end-to-end.")
-        else:
-            click.echo("Some checks FAILED.")
+        _print_results_table(results)
         raise SystemExit(0 if ok else 1)
 
-    # -- 3. Live: impersonate SA (generate access token) -----------------------
+    # -- 4. Live: impersonate SA (generate access token) -----------------------
     click.echo()
-    click.echo("3. Live: impersonate service account (generate access token)")
+    click.echo("4. Live: impersonate service account (generate access token)")
     for sa_label, sa_email in [("controller", controller_sa), ("worker", worker_sa)]:
         passed, detail = _gcloud_probe(
             ["gcloud", "auth", "print-access-token", f"--impersonate-service-account={sa_email}"]
         )
-        ok &= _check_result(f"impersonate {sa_label} SA ({sa_email})", passed, detail)
+        ok &= _check_result(f"impersonate {sa_label} SA ({sa_email})", passed, detail, results=results)
 
-    # -- 4. Live: OS Login SSH key registration --------------------------------
+    # -- 5. Live: OS Login SSH key registration --------------------------------
     click.echo()
-    click.echo("4. Live: OS Login SSH key registration (controller SA)")
+    click.echo("5. Live: OS Login SSH key registration (controller SA)")
     with tempfile.TemporaryDirectory() as tmpdir:
         test_key = os.path.join(tmpdir, "test_key")
         subprocess.run(
@@ -446,7 +544,7 @@ def check(project: str, controller_sa_id: str, worker_sa_id: str, email: str) ->
                 f"--impersonate-service-account={controller_sa}",
             ]
         )
-        ok &= _check_result("register SSH key via OS Login", passed, detail)
+        ok &= _check_result("register SSH key via OS Login", passed, detail, results=results)
 
         # Clean up the test key from OS Login
         if passed:
@@ -463,9 +561,9 @@ def check(project: str, controller_sa_id: str, worker_sa_id: str, email: str) ->
                 capture_output=True,
             )
 
-    # -- 5. Live: OS Login profile resolution ----------------------------------
+    # -- 6. Live: OS Login profile resolution ----------------------------------
     click.echo()
-    click.echo("5. Live: OS Login profile resolution (controller SA)")
+    click.echo("6. Live: OS Login profile resolution (controller SA)")
     passed, detail = _gcloud_probe(
         [
             "gcloud",
@@ -475,11 +573,11 @@ def check(project: str, controller_sa_id: str, worker_sa_id: str, email: str) ->
             f"--impersonate-service-account={controller_sa}",
         ]
     )
-    ok &= _check_result("resolve OS Login profile", passed, detail)
+    ok &= _check_result("resolve OS Login profile", passed, detail, results=results)
 
-    # -- 6. Live: compute instance listing -------------------------------------
+    # -- 7. Live: compute instance listing -------------------------------------
     click.echo()
-    click.echo("6. Live: compute instance listing (controller SA)")
+    click.echo("7. Live: compute instance listing (controller SA)")
     passed, detail = _gcloud_probe(
         [
             "gcloud",
@@ -492,11 +590,11 @@ def check(project: str, controller_sa_id: str, worker_sa_id: str, email: str) ->
             f"--impersonate-service-account={controller_sa}",
         ]
     )
-    ok &= _check_result("list compute instances", passed, detail)
+    ok &= _check_result("list compute instances", passed, detail, results=results)
 
-    # -- 7. Live: set instance metadata (old-style SSH) ------------------------
+    # -- 8. Live: set instance metadata (old-style SSH) ------------------------
     click.echo()
-    click.echo("7. Live: project metadata read (needed for metadata-style SSH)")
+    click.echo("8. Live: project metadata read (needed for metadata-style SSH)")
     passed, detail = _gcloud_probe(
         [
             "gcloud",
@@ -508,14 +606,10 @@ def check(project: str, controller_sa_id: str, worker_sa_id: str, email: str) ->
             f"--impersonate-service-account={controller_sa}",
         ]
     )
-    ok &= _check_result("read project metadata", passed, detail)
+    ok &= _check_result("read project metadata", passed, detail, results=results)
 
-    # -- Summary ---------------------------------------------------------------
-    click.echo()
-    if ok:
-        click.echo("All checks passed.")
-    else:
-        click.echo("Some checks FAILED. See above for details.")
+    # -- Summary table ---------------------------------------------------------
+    _print_results_table(results)
     raise SystemExit(0 if ok else 1)
 
 
