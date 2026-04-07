@@ -87,7 +87,7 @@ import re
 import subprocess
 import time
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -96,17 +96,13 @@ from urllib.parse import urlparse
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray.v2.client import current_client
-from fray.v2.iris_backend import FrayIrisClient
 from fray.v2.types import TpuConfig
-from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import WellKnownAttribute
 from rigging.filesystem import collect_gcs_paths
 from rigging.filesystem import get_bucket_location, open_url
 from rigging.filesystem import marin_prefix
 from rigging.filesystem import region_from_prefix
 from rigging.filesystem import split_gcs_path
-from iris.rpc import config_pb2
 
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner, worker_id
@@ -307,6 +303,10 @@ def _allowed_regions_for_step(
 
 
 def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
+    from fray.v2.client import current_client
+    from fray.v2.iris_backend import FrayIrisClient
+    from iris.rpc import config_pb2
+
     try:
         client = current_client()
     except Exception:
@@ -359,6 +359,17 @@ def _regions_for_tpu_variants_from_iris(
             return None
         inferred_regions |= cached
     return inferred_regions
+
+
+def infer_tpu_variant_regions_from_iris(variants: Sequence[str]) -> list[str] | None:
+    """Return sorted TPU-capable regions for the requested variants, if known."""
+    inferred_regions = _regions_for_tpu_variants_from_iris(
+        list(variants),
+        variant_region_cache={},
+    )
+    if not inferred_regions:
+        return None
+    return sorted(inferred_regions)
 
 
 def _tpu_regions_for_remote_callable(
@@ -527,6 +538,9 @@ def _component_tpu_pins(
 
 
 def _iris_backend_is_active() -> bool:
+    from fray.v2.client import current_client
+    from fray.v2.iris_backend import FrayIrisClient
+
     try:
         client = current_client()
     except Exception:
@@ -535,6 +549,8 @@ def _iris_backend_is_active() -> bool:
 
 
 def _iris_worker_region_pin() -> str | None:
+    from iris.cluster.client.job_info import get_job_info
+
     job_info = get_job_info()
     if job_info is None:
         return None

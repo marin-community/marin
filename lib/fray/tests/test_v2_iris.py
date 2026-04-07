@@ -57,6 +57,17 @@ class TestConvertConstraints:
         assert c.op == ConstraintOp.IN
         assert c.values == ("us-central1", "us-central2")
 
+    def test_zone_produces_eq_constraint(self):
+        resources = ResourceConfig(zone="us-east1-d")
+        constraints = convert_constraints(resources)
+        zone_constraints = [c for c in constraints if c.key == "zone"]
+        assert len(zone_constraints) == 1
+        c = zone_constraints[0]
+        from iris.cluster.constraints import ConstraintOp
+
+        assert c.op == ConstraintOp.EQ
+        assert c.value == "us-east1-d"
+
 
 class TestConvertConstraintsDeviceAlternatives:
     def test_no_alternatives_produces_no_device_constraint(self):

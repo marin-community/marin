@@ -97,7 +97,6 @@ class LevanterInferenceContext(BaseInferenceContext):
         system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
         """Call OpenAI API in batches with concurrency control."""
-
         if max_tokens is None:
             max_tokens = self.max_tokens
 
