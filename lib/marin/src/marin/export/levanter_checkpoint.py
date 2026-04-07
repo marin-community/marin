@@ -30,7 +30,8 @@ from marin.execution.executor import (
     ensure_versioned,
     this_output_path,
 )
-from marin.training.training import _add_default_env_variables, _add_run_env_variables
+from marin.training.run_environment import add_run_env_variables
+from marin.training.training import _add_default_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
@@ -89,7 +90,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
         {},
         default_launch_config.env_for_accel(config.resources.device.variant),
     )
-    env = _add_run_env_variables(env)
+    env = add_run_env_variables(env)
 
     def convert_task():
         export_lm_to_hf.main(convert_config)

@@ -331,6 +331,7 @@ class ResourceConfig:
     device: DeviceConfig = field(default_factory=CpuConfig)
     preemptible: bool = True
     regions: Sequence[str] | None = None
+    zone: str | None = None
     replicas: int = 1
     device_alternatives: Sequence[str] | None = None
 

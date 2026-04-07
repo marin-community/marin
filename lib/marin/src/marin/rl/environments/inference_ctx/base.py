@@ -9,6 +9,8 @@ as well as methods for tokenization and logprob extraction from an OpenAI ChatCo
 """
 
 import logging
+from typing import Any
+
 import numpy as np
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
@@ -27,6 +29,10 @@ class BaseInferenceContext:
 
     def shutdown(self) -> None:
         raise NotImplementedError
+
+    def get_metrics(self) -> dict[str, Any]:
+        """Return implementation-specific metrics for tracker logging."""
+        return {}
 
     def batch_completions(
         self,
