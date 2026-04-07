@@ -397,6 +397,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
+        init_shardings = jax.tree.map(lambda x: x.sharding if hasattr(x, "sharding") else None, state)
+
         checkpointer = trainer.checkpointer.create(run_id)
         checkpoint_path = trainer.load_checkpoint_path
         if checkpoint_path is None and checkpointer is not None:
@@ -408,6 +410,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+
+        def _reshard_leaf(leaf, sharding):
+            if sharding is not None and hasattr(leaf, "sharding") and leaf.sharding != sharding:
+                return jax.device_put(leaf, sharding)
+            return leaf
+
+        state = jax.tree.map(_reshard_leaf, state, init_shardings)
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
@@ -528,9 +537,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
-                # if checkpointer is not None:
-                #     checkpointer.on_step(tree=state, step=int(state.step))
-                pass
+                if checkpointer is not None:
+                    checkpointer.on_step(tree=state, step=int(state.step))
         except BaseException:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
