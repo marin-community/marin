@@ -20,7 +20,7 @@ from marin.execution.executor import (
 )
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate, ConsolidateConfig
-from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
+from marin.processing.classification.deduplication.exact import dedup_exact_document, dedup_exact_paragraph
 from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
 from marin.processing.tokenize import lm_data_config
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
@@ -90,13 +90,13 @@ def validate_exact_dedup_output(config: ValidateExactDedupConfig):
 
 
 @dataclasses.dataclass(frozen=True)
-class ValidateFuzzyDedupConfig:
+class ValidateDocumentDedupConfig:
     data_path: str
     expected_dups: int
 
 
-def validate_fuzzy_dedup_output(config: ValidateFuzzyDedupConfig):
-    """Validate fuzzy dedup output: directory exists, files are vortex, has expected dup counts."""
+def validate_document_dedup_output(config: ValidateDocumentDedupConfig):
+    """Validate document-level dedup output (exact or fuzzy): vortex files with expected dup counts."""
     import vortex
 
     vortex_files = fsspec_glob(os.path.join(config.data_path, "**/*.vortex"))
@@ -108,7 +108,7 @@ def validate_fuzzy_dedup_output(config: ValidateFuzzyDedupConfig):
         total_dups += len(table)
 
     assert total_dups == config.expected_dups, f"Expected {config.expected_dups} dups, got {total_dups}"
-    logger.info(f"Validated fuzzy dedup: {total_dups} dups in {len(vortex_files)} vortex files")
+    logger.info(f"Validated document dedup: {total_dups} dups in {len(vortex_files)} vortex files")
 
 
 def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
@@ -161,6 +161,17 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             worker_resources=ResourceConfig(cpu=1, ram="1g"),
         ),
     )
+    dedup_exact_document_spec = StepSpec(
+        name=os.path.join(prefix, "dedup_exact_document"),
+        hash_attrs={"mode": "exact_document"},
+        deps=[transform_hq_data_spec],
+        fn=lambda output_path: dedup_exact_document(
+            input_paths=transform_hq_data_spec.output_path,
+            output_path=output_path,
+            max_parallelism=4,
+            worker_resources=ResourceConfig(cpu=1, ram="1g"),
+        ),
+    )
     dedup_fuzzy_document_spec = StepSpec(
         name=os.path.join(prefix, "dedup_fuzzy_document"),
         hash_attrs={"mode": "fuzzy_document"},
@@ -175,6 +186,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     # Bridge to ExecutorStep for downstream ExecutorStep consumers
     dedup_exact_paragraph_step = dedup_exact_paragraph_spec.as_executor_step()
+    dedup_exact_document_step = dedup_exact_document_spec.as_executor_step()
     dedup_fuzzy_document_step = dedup_fuzzy_document_spec.as_executor_step()
 
     ############################################################
@@ -192,9 +204,19 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     validate_fuzzy_dedup_step = ExecutorStep(
         name=os.path.join(prefix, "validate_fuzzy_dedup"),
-        fn=validate_fuzzy_dedup_output,
-        config=ValidateFuzzyDedupConfig(
+        fn=validate_document_dedup_output,
+        config=ValidateDocumentDedupConfig(
             data_path=dedup_fuzzy_document_step.cd("data"),
+            expected_dups=2,
+        ),
+    )
+
+    # Two HQ docs repeat verbatim, so exact document dedup must flag exactly 2 duplicates.
+    validate_exact_document_dedup_step = ExecutorStep(
+        name=os.path.join(prefix, "validate_exact_document_dedup"),
+        fn=validate_document_dedup_output,
+        config=ValidateDocumentDedupConfig(
+            data_path=dedup_exact_document_step.cd("data"),
             expected_dups=2,
         ),
     )
@@ -215,6 +237,13 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                     type=FilterType.REMOVE_SPANS,
                     attribute_path=dedup_exact_paragraph_step.cd("data"),
                     name="dup_spans",
+                    attribute_filetype="vortex",
+                    keep_if_missing=True,
+                ),
+                FilterConfig(
+                    type=FilterType.REMOVE_DOC,
+                    attribute_path=dedup_exact_document_step.cd("data"),
+                    name="dup_doc",
                     attribute_filetype="vortex",
                     keep_if_missing=True,
                 ),
@@ -288,8 +317,10 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         transform_hq_data_step,
         transform_lq_data_step,
         dedup_exact_paragraph_step,
+        dedup_exact_document_step,
         dedup_fuzzy_document_step,
         validate_exact_dedup_step,
+        validate_exact_document_dedup_step,
         validate_fuzzy_dedup_step,
         consolidate_step,
         tokenize_step,
