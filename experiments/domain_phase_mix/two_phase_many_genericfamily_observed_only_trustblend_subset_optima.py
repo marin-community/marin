@@ -22,6 +22,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.dataset_metadata im
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
     GenericFamilyPacket,
+    GenericFamilySignalTransform,
     GenericFamilyRetainedTotalSurrogate,
     family_shares,
     load_generic_family_packet,
@@ -72,6 +73,13 @@ OBSERVED_ONLY_START_PARAM_BANK: tuple[dict[str, float], ...] = (
     {"alpha": 16.0, "eta": 8.0, "lam": 0.20, "tau": 2.7, "reg": 3e-4, "beta": 0.90},
     {"alpha": 4.0, "eta": 16.0, "lam": 0.02, "tau": 3.5, "reg": 3e-3, "beta": 0.50},
 )
+OBSERVED_ONLY_POWER_START_PARAM_BANK: tuple[dict[str, float], ...] = (
+    {"alpha": 0.20, "eta": 8.0, "lam": 0.05, "tau": 3.0, "reg": 1e-3, "beta": 0.70},
+    {"alpha": 0.35, "eta": 8.0, "lam": 0.20, "tau": 2.7, "reg": 3e-4, "beta": 0.90},
+    {"alpha": 0.70, "eta": 16.0, "lam": 0.02, "tau": 3.5, "reg": 3e-3, "beta": 0.50},
+)
+OBSERVED_ONLY_LOG_SATIETY_ALPHA_LOG_BOUNDS = (-8.0, 8.0)
+OBSERVED_ONLY_POWER_ALPHA_LOG_BOUNDS = (-4.0, 1.0)
 
 
 @dataclass(frozen=True)
@@ -144,9 +152,22 @@ def _pack_params_observed_only(params: dict[str, float]) -> np.ndarray:
     )
 
 
-def _unpack_params_observed_only(z: np.ndarray) -> dict[str, float]:
+def _alpha_log_bounds(signal_transform: GenericFamilySignalTransform) -> tuple[float, float]:
+    if signal_transform == GenericFamilySignalTransform.LOG_SATIETY:
+        return OBSERVED_ONLY_LOG_SATIETY_ALPHA_LOG_BOUNDS
+    if signal_transform == GenericFamilySignalTransform.POWER:
+        return OBSERVED_ONLY_POWER_ALPHA_LOG_BOUNDS
+    raise ValueError(f"Unsupported signal_transform: {signal_transform}")
+
+
+def _unpack_params_observed_only(
+    z: np.ndarray,
+    *,
+    signal_transform: GenericFamilySignalTransform = GenericFamilySignalTransform.LOG_SATIETY,
+) -> dict[str, float]:
+    alpha_lo, alpha_hi = _alpha_log_bounds(signal_transform)
     return {
-        "alpha": float(np.exp(np.clip(z[0], -8.0, 8.0))),
+        "alpha": float(np.exp(np.clip(z[0], alpha_lo, alpha_hi))),
         "eta": float(np.exp(np.clip(z[1], -8.0, 8.0))),
         "lam": float(np.exp(np.clip(z[2], -12.0, 4.0))),
         "tau": float(np.clip(z[3], -2.0, 8.0)),
@@ -161,14 +182,19 @@ def _evaluate_params_observed_only(
     *,
     seed: int = 0,
     lower_tail_frac: float = OBSERVED_ONLY_LOWER_TAIL_FRAC,
+    signal_transform: GenericFamilySignalTransform = GenericFamilySignalTransform.LOG_SATIETY,
 ) -> dict[str, float | bool]:
-    params = _unpack_params_observed_only(z)
+    params = _unpack_params_observed_only(z, signal_transform=signal_transform)
     kf = KFold(n_splits=5, shuffle=True, random_state=seed)
     oof = np.zeros_like(packet.base.y)
     fold_regrets: list[float] = []
 
     for tr, te in kf.split(packet.base.w):
-        model = GenericFamilyRetainedTotalSurrogate(packet, params=params).fit(packet.base.w[tr], packet.base.y[tr])
+        model = GenericFamilyRetainedTotalSurrogate(
+            packet,
+            params=params,
+            signal_transform=signal_transform,
+        ).fit(packet.base.w[tr], packet.base.y[tr])
         pred = model.predict(packet.base.w[te])
         oof[te] = pred
         fold_regrets.append(float(packet.base.y[te][int(np.argmin(pred))] - np.min(packet.base.y[te])))
@@ -200,10 +226,17 @@ def tune_genericfamily_subset_params_observed_only(
     packet: GenericFamilyPacket,
     *,
     method: str = DEFAULT_TUNING_METHOD,
-    start_bank: tuple[dict[str, float], ...] | list[dict[str, float]] = OBSERVED_ONLY_START_PARAM_BANK,
+    start_bank: tuple[dict[str, float], ...] | list[dict[str, float]] | None = None,
     seed: int = 0,
+    signal_transform: GenericFamilySignalTransform = GenericFamilySignalTransform.LOG_SATIETY,
 ) -> tuple[dict[str, float | bool], Any]:
     """Tune nonlinear GRP params using the observed-only tail-aware CV objective."""
+    if start_bank is None:
+        start_bank = (
+            OBSERVED_ONLY_START_PARAM_BANK
+            if signal_transform == GenericFamilySignalTransform.LOG_SATIETY
+            else OBSERVED_ONLY_POWER_START_PARAM_BANK
+        )
     best_metrics: dict[str, float | bool] | None = None
     best_result: Any | None = None
     best_objective = float("inf")
@@ -217,10 +250,22 @@ def tune_genericfamily_subset_params_observed_only(
         start = _pack_params_observed_only(start_params)
 
         def objective(z: np.ndarray) -> float:
-            return float(_evaluate_params_observed_only(z, packet, seed=seed)["objective"])
+            return float(
+                _evaluate_params_observed_only(
+                    z,
+                    packet,
+                    seed=seed,
+                    signal_transform=signal_transform,
+                )["objective"]
+            )
 
         result = minimize(objective, start, method=method, options=options)
-        metrics = _evaluate_params_observed_only(np.asarray(result.x, dtype=float), packet, seed=seed)
+        metrics = _evaluate_params_observed_only(
+            np.asarray(result.x, dtype=float),
+            packet,
+            seed=seed,
+            signal_transform=signal_transform,
+        )
         metrics = {
             "success": bool(result.success),
             "message": str(result.message),

@@ -25,6 +25,7 @@ from experiments.domain_phase_mix import (
 )
 from experiments.domain_phase_mix import (
     launch_two_phase_many_genericfamily_observed_only_trustblend_baseline as obs_trustblend_baseline_launch,
+    launch_two_phase_many_genericfamily_power_observed_only_trustblend_baseline as power_obs_trustblend_baseline_launch,
     launch_two_phase_many_genericfamily_observed_only_trustblend_subset_optima as obs_trustblend_subset_launch,
 )
 from experiments.domain_phase_mix import (
@@ -228,6 +229,10 @@ from experiments.domain_phase_mix.two_phase_many_genericfamily_observed_only_tru
 from experiments.domain_phase_mix.two_phase_many_genericfamily_observed_only_trustblend_baseline import (
     GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_RUN_NAME,
     GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_SOURCE_EXPERIMENT,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_power_observed_only_trustblend_baseline import (
+    GENERICFAMILY_POWER_OBSERVED_ONLY_TRUSTBLEND_RUN_NAME,
+    GENERICFAMILY_POWER_OBSERVED_ONLY_TRUSTBLEND_SOURCE_EXPERIMENT,
 )
 from experiments.domain_phase_mix.two_phase_many_genericfamily_no_penalty_baseline import (
     GENERICFAMILY_NO_PENALTY_RUN_NAME,
@@ -1891,6 +1896,68 @@ def test_genericfamily_observed_only_trustblend_baseline_main_wires_training_ste
     assert captured["config"].max_concurrent == 1
     assert len(captured["steps"]) == 1
     assert "observed-only trustblend GRP baseline" in captured["description"]
+
+
+def test_genericfamily_power_observed_only_trustblend_baseline_run_name_and_source_experiment():
+    assert (
+        GENERICFAMILY_POWER_OBSERVED_ONLY_TRUSTBLEND_RUN_NAME
+        == "baseline_genericfamily_power_observed_only_trustblend_top8actual_cap"
+    )
+    assert GENERICFAMILY_POWER_OBSERVED_ONLY_TRUSTBLEND_SOURCE_EXPERIMENT.endswith(
+        "genericfamily_power_observed_only_trustblend_top8actual_cap_uncheatable_bpb"
+    )
+
+
+def test_genericfamily_power_observed_only_trustblend_baseline_main_wires_training_step(monkeypatch):
+    captured: dict[str, object] = {}
+
+    fake_summary = SimpleNamespace(
+        run_name="baseline_genericfamily_power_observed_only_trustblend_top8actual_cap",
+        predicted_optimum_value=1.044,
+        deployment_delta=0.112,
+        deployment_gain_budget=0.012,
+        nearest_observed_tv_distance=0.308,
+    )
+    fake_weight_config = WeightConfig(run_id=408, phase_weights={"phase_0": {"a": 1.0}, "phase_1": {"a": 1.0}})
+
+    class DummyExperiment:
+        def create_training_step(self, **kwargs):
+            return SimpleNamespace(name=kwargs["run_name"], kwargs=kwargs)
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(
+        power_obs_trustblend_baseline_launch,
+        "create_two_phase_dolma3_dolmino_top_level_experiment",
+        lambda **_: DummyExperiment(),
+    )
+    monkeypatch.setattr(
+        power_obs_trustblend_baseline_launch,
+        "genericfamily_power_observed_only_trustblend_summary",
+        lambda: fake_summary,
+    )
+    monkeypatch.setattr(
+        power_obs_trustblend_baseline_launch,
+        "create_genericfamily_power_observed_only_trustblend_weight_config",
+        lambda: fake_weight_config,
+    )
+
+    def fake_executor_main(config=None, *, steps, description):
+        captured["config"] = config
+        captured["steps"] = steps
+        captured["description"] = description
+
+    monkeypatch.setattr(power_obs_trustblend_baseline_launch, "executor_main", fake_executor_main)
+    monkeypatch.setattr(
+        power_obs_trustblend_baseline_launch.sys,
+        "argv",
+        ["launcher"],
+    )
+
+    power_obs_trustblend_baseline_launch.main()
+
+    assert captured["config"].max_concurrent == 1
+    assert len(captured["steps"]) == 1
+    assert "observed-only trustblend power-law GRP baseline" in captured["description"]
 
 
 def test_genericfamily_no_penalty_baseline_run_name_and_source_experiment():

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 import numpy as np
@@ -28,6 +29,13 @@ TUNED_GENERIC_FAMILY_PARAMS = {
     "reg": 0.0010114720923828182,
     "beta": 0.6634021668256815,
 }
+
+
+class GenericFamilySignalTransform(StrEnum):
+    """Signal feature transform for GRP-family surrogates."""
+
+    LOG_SATIETY = "log_satiety"
+    POWER = "power"
 
 
 @dataclass(frozen=True)
@@ -173,6 +181,7 @@ class GenericFamilyRetainedTotalSurrogate:
         quality_discount: bool = True,
         pair_cc_domains: bool = True,
         include_penalty: bool = True,
+        signal_transform: GenericFamilySignalTransform = GenericFamilySignalTransform.LOG_SATIETY,
     ):
         self.packet = packet
         self.params = dict(TUNED_GENERIC_FAMILY_PARAMS if params is None else params)
@@ -180,6 +189,7 @@ class GenericFamilyRetainedTotalSurrogate:
         self.quality_discount = bool(quality_discount)
         self.pair_cc_domains = bool(pair_cc_domains)
         self.include_penalty = bool(include_penalty)
+        self.signal_transform = signal_transform
         self.coef_: np.ndarray | None = None
         self.intercept_: float | None = None
 
@@ -205,18 +215,18 @@ class GenericFamilyRetainedTotalSurrogate:
         pair_map = self.packet.pairs if self.pair_cc_domains else []
 
         for idx in singleton_indices:
-            features.append(np.log1p(alpha * x[:, idx : idx + 1]))
+            features.append(self._signal_feature(x[:, idx : idx + 1], alpha))
             group_totals.append(x[:, idx])
 
         for hi, lo in pair_map:
             pair_signal_total = x[:, hi] + (beta * x[:, lo] if self.quality_discount else x[:, lo])
-            features.append(np.log1p(alpha * pair_signal_total)[:, None])
+            features.append(self._signal_feature(pair_signal_total[:, None], alpha))
             group_totals.append(x[:, hi] + x[:, lo])
 
         for family_name in self.family_totals:
             family_indices = self.packet.family_map[family_name]
             family_total = np.sum(x[:, family_indices], axis=1)
-            features.append(np.log1p(alpha * family_total)[:, None])
+            features.append(self._signal_feature(family_total[:, None], alpha))
 
         if self.include_penalty:
             penalty_inputs = np.stack(group_totals, axis=1)
@@ -227,6 +237,16 @@ class GenericFamilyRetainedTotalSurrogate:
         num_signal = design.shape[1] - 1
         design[:, :num_signal] *= -1.0
         return design
+
+    def _signal_feature(self, signal: np.ndarray, alpha: float) -> np.ndarray:
+        """Map retained totals to a one-column signal feature."""
+        if self.signal_transform == GenericFamilySignalTransform.LOG_SATIETY:
+            return np.log1p(alpha * signal)
+        if self.signal_transform == GenericFamilySignalTransform.POWER:
+            if alpha <= 0.0:
+                raise ValueError(f"Power-law alpha must be positive, got {alpha}")
+            return np.power(np.clip(signal, 0.0, None), alpha)
+        raise ValueError(f"Unsupported signal_transform: {self.signal_transform}")
 
     def fit(self, weights: np.ndarray, targets: np.ndarray) -> GenericFamilyRetainedTotalSurrogate:
         design = self.build_design(weights)
@@ -311,6 +331,7 @@ def optimize_generic_family_model(
     tau = float(model.params["tau"])
     beta = float(model.params["beta"]) if model.quality_discount else 1.0
     rng = np.random.default_rng(seed)
+    power_eps = 1e-12
 
     pair_topics = packet.pair_topics if model.pair_cc_domains else []
     pair_map = packet.pairs if model.pair_cc_domains else []
@@ -318,6 +339,14 @@ def optimize_generic_family_model(
     family_indices = {
         family_name: np.asarray(packet.family_map[family_name], dtype=int) for family_name in model.family_totals
     }
+
+    def signal_value_grad(total: float) -> tuple[float, float]:
+        if model.signal_transform == GenericFamilySignalTransform.LOG_SATIETY:
+            return np.log1p(alpha * total), alpha / (1.0 + alpha * total)
+        if model.signal_transform == GenericFamilySignalTransform.POWER:
+            safe_total = max(total, power_eps)
+            return safe_total**alpha, alpha * safe_total ** (alpha - 1.0)
+        raise ValueError(f"Unsupported signal_transform: {model.signal_transform}")
 
     def value_grad_logits(z: np.ndarray) -> tuple[float, np.ndarray]:
         logits0 = z[:n_domains]
@@ -338,17 +367,17 @@ def optimize_generic_family_model(
 
         for local_idx, domain_idx in enumerate(singleton_indices):
             coef = float(singleton_coef[local_idx])
-            signal = np.log1p(alpha * x[domain_idx])
+            signal, signal_grad = signal_value_grad(float(x[domain_idx]))
             value -= coef * signal
-            grad_x[domain_idx] -= coef * alpha / (1.0 + alpha * x[domain_idx])
+            grad_x[domain_idx] -= coef * signal_grad
 
         for local_idx, ((hi, lo), topic) in enumerate(zip(pair_map, pair_topics, strict=True)):
             del topic
             coef = float(pair_coef[local_idx])
             total = x[hi] + beta * x[lo]
-            signal = np.log1p(alpha * total)
+            signal, signal_grad = signal_value_grad(float(total))
             value -= coef * signal
-            common = coef * alpha / (1.0 + alpha * total)
+            common = coef * signal_grad
             grad_x[hi] -= common
             grad_x[lo] -= common * beta
 
@@ -356,9 +385,9 @@ def optimize_generic_family_model(
             coef = float(family_coef[family_name])
             members = family_indices[family_name]
             total = float(np.sum(x[members]))
-            signal = np.log1p(alpha * total)
+            signal, signal_grad = signal_value_grad(total)
             value -= coef * signal
-            grad_x[members] -= coef * alpha / (1.0 + alpha * total)
+            grad_x[members] -= coef * signal_grad
 
         if penalty_coef != 0.0:
             for domain_idx in singleton_indices:

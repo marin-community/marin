@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.structured_epoch_family import (
     PENALTY_KIND_GROUP_LOG_THRESHOLD,
     PENALTY_KIND_PER_DOMAIN_LOG_THRESHOLD,
@@ -20,8 +22,19 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.st
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
     GENERIC_FAMILY_NAMES,
+    GenericFamilySignalTransform,
     GenericFamilyRetainedTotalSurrogate,
+    TUNED_GENERIC_FAMILY_PARAMS,
     load_generic_family_packet,
+    optimize_generic_family_model,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.intrinsic_domain_followup import (
+    DEFAULT_INTRINSIC_DOMAIN_COUNT,
+    IntrinsicDomainRetainedTotalSurrogate,
+    IntrinsicFeatureMode,
+    IntrinsicPenaltyMode,
+    learn_intrinsic_group_basis,
+    optimize_intrinsic_domain_model,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.phase_composition_sparse_pls import (
     load_phase_composition_packet,
@@ -160,6 +173,97 @@ def test_generic_family_packet_and_surrogate_fit_expected_structure():
     assert packet.family_map["tech_code"]
     assert packet.family_map["reasoning"]
     assert pred.shape == (4,)
+
+
+def test_generic_family_power_signal_surrogate_fit_produces_finite_predictions():
+    packet = load_generic_family_packet()
+    params = {
+        "alpha": 0.3,
+        "eta": 13.229384772843037,
+        "lam": 0.035627177458741076,
+        "tau": 3.2740751832677875,
+        "reg": 0.0010114720923828182,
+        "beta": 0.6634021668256815,
+    }
+    model = GenericFamilyRetainedTotalSurrogate(
+        packet,
+        params=params,
+        signal_transform=GenericFamilySignalTransform.POWER,
+    ).fit(packet.base.w, packet.base.y)
+    pred = model.predict(packet.base.w[:4])
+
+    assert pred.shape == (4,)
+    assert np.isfinite(pred).all()
+
+
+def test_generic_family_power_signal_optimizer_returns_normalized_schedule():
+    packet = load_generic_family_packet()
+    params = {
+        "alpha": 0.258973,
+        "eta": 6.0834,
+        "lam": 0.0518,
+        "tau": 1.8276,
+        "reg": 1.0,
+        "beta": 0.29,
+    }
+    model = GenericFamilyRetainedTotalSurrogate(
+        packet,
+        params=params,
+        signal_transform=GenericFamilySignalTransform.POWER,
+    ).fit(packet.base.w, packet.base.y)
+    _, phase0, phase1 = optimize_generic_family_model(packet, model, n_random=0, seed=0)
+
+    assert phase0.shape == (packet.base.m,)
+    assert phase1.shape == (packet.base.m,)
+    assert phase0.min() >= 0.0
+    assert phase1.min() >= 0.0
+    assert abs(float(phase0.sum()) - 1.0) < 1e-8
+    assert abs(float(phase1.sum()) - 1.0) < 1e-8
+
+
+def test_intrinsic_group_basis_has_expected_shape_and_row_normalization():
+    packet = load_generic_family_packet()
+    basis = learn_intrinsic_group_basis(packet, params=TUNED_GENERIC_FAMILY_PARAMS)
+
+    assert basis.memberships.shape == (26, DEFAULT_INTRINSIC_DOMAIN_COUNT)
+    assert np.allclose(basis.memberships.sum(axis=1), 1.0)
+    assert len(basis.group_names) == 26
+
+
+def test_intrinsic_soft_family_surrogate_fit_produces_finite_predictions():
+    packet = load_generic_family_packet()
+    basis = learn_intrinsic_group_basis(packet, params=TUNED_GENERIC_FAMILY_PARAMS)
+    model = IntrinsicDomainRetainedTotalSurrogate(
+        packet,
+        basis,
+        params=TUNED_GENERIC_FAMILY_PARAMS,
+        feature_mode=IntrinsicFeatureMode.SOFT_FAMILY,
+        penalty_mode=IntrinsicPenaltyMode.GROUP,
+    ).fit(packet.base.w, packet.base.y)
+    pred = model.predict(packet.base.w[:4])
+
+    assert pred.shape == (4,)
+    assert np.isfinite(pred).all()
+
+
+def test_intrinsic_latent_bottleneck_optimizer_returns_normalized_schedule():
+    packet = load_generic_family_packet()
+    basis = learn_intrinsic_group_basis(packet, params=TUNED_GENERIC_FAMILY_PARAMS)
+    model = IntrinsicDomainRetainedTotalSurrogate(
+        packet,
+        basis,
+        params=TUNED_GENERIC_FAMILY_PARAMS,
+        feature_mode=IntrinsicFeatureMode.LATENT_BOTTLENECK,
+        penalty_mode=IntrinsicPenaltyMode.LATENT,
+    ).fit(packet.base.w, packet.base.y)
+    _, phase0, phase1 = optimize_intrinsic_domain_model(packet, model, n_random=0, seed=0)
+
+    assert phase0.shape == (packet.base.m,)
+    assert phase1.shape == (packet.base.m,)
+    assert phase0.min() >= 0.0
+    assert phase1.min() >= 0.0
+    assert abs(float(phase0.sum()) - 1.0) < 1e-8
+    assert abs(float(phase1.sum()) - 1.0) < 1e-8
 
 
 def test_phase_composition_sparse_pls_reproduces_downloaded_cv_summary():

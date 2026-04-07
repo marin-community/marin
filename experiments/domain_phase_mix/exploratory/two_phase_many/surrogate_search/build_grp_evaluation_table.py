@@ -45,8 +45,13 @@ from experiments.domain_phase_mix.exploratory.scaling_models import fit_ces as s
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
     GENERIC_FAMILY_NAMES,
     TUNED_GENERIC_FAMILY_PARAMS,
+    GenericFamilySignalTransform,
     GenericFamilyRetainedTotalSurrogate,
     load_generic_family_packet,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_observed_only_trustblend_subset_optima import (
+    DEFAULT_TUNING_METHOD as OBSERVED_ONLY_TUNING_METHOD,
+    tune_genericfamily_subset_params_observed_only,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.structured_epoch_family import (
     MANY_DOMAIN_TARGET,
@@ -67,6 +72,7 @@ DEFAULT_DSRE_CV_SOURCE = SCRIPT_DIR / "power_ridge_single.md"
 
 MODEL_ORDER = (
     "GRP",
+    "GRP w/ power-law satiety",
     "GRP w/o family signals",
     "GRP w/o retention",
     "GRP w/o overexposure penalty",
@@ -198,10 +204,12 @@ def compute_grp_metrics(
     active_shape_parameters: int = SHAPE_PARAMETER_COUNT,
     pair_cc_domains: bool = True,
     include_penalty: bool = True,
+    signal_transform: GenericFamilySignalTransform = GenericFamilySignalTransform.LOG_SATIETY,
+    packet: Any | None = None,
     notes: str | None = None,
 ) -> dict[str, Any]:
     """Compute GRP-family train and CV metrics in-repo."""
-    packet = load_generic_family_packet(target=MANY_DOMAIN_TARGET)
+    packet = load_generic_family_packet(target=MANY_DOMAIN_TARGET) if packet is None else packet
     weights = packet.base.w
     y = packet.base.y
     frame = packet.base.frame
@@ -215,6 +223,7 @@ def compute_grp_metrics(
         quality_discount=True,
         pair_cc_domains=pair_cc_domains,
         include_penalty=include_penalty,
+        signal_transform=signal_transform,
     ).fit(weights, y)
     train_pred = model.predict(weights)
     train = regression_metrics(frame, name_col, y, train_pred)
@@ -232,6 +241,7 @@ def compute_grp_metrics(
             quality_discount=True,
             pair_cc_domains=pair_cc_domains,
             include_penalty=include_penalty,
+            signal_transform=signal_transform,
         ).fit(weights[tr], y[tr])
         pred = fold_model.predict(weights[te])
         oof[te] = pred
@@ -256,6 +266,42 @@ def compute_grp_metrics(
         "source_cv": "in_repo_generic_family_followup",
         "notes": notes or "Computed from fixed tuned GRP parameters with 5-fold CV.",
     }
+
+
+def compute_power_signal_grp_metrics(
+    *,
+    cv_seed: int,
+    model_name: str = "GRP w/ power-law satiety",
+) -> dict[str, Any]:
+    """Compute local GRP metrics with power-law signal features and full observed-only retuning."""
+    packet = load_generic_family_packet(target=MANY_DOMAIN_TARGET)
+    tuning_metrics, _ = tune_genericfamily_subset_params_observed_only(
+        packet,
+        method=OBSERVED_ONLY_TUNING_METHOD,
+        seed=cv_seed,
+        signal_transform=GenericFamilySignalTransform.POWER,
+    )
+    params = {key: float(tuning_metrics[key]) for key in TUNED_GENERIC_FAMILY_PARAMS}
+    row = compute_grp_metrics(
+        cv_seed=cv_seed,
+        model_name=model_name,
+        family_totals=GENERIC_FAMILY_NAMES,
+        params=params,
+        active_shape_parameters=SHAPE_PARAMETER_COUNT,
+        signal_transform=GenericFamilySignalTransform.POWER,
+        packet=packet,
+        notes="",
+    )
+    row["power_alpha"] = params["alpha"]
+    row["source_train"] = "in_repo_generic_family_followup_power_observed_only_tune"
+    row["source_cv"] = "in_repo_generic_family_followup_power_observed_only_tune"
+    row["notes"] = (
+        "Computed from a full observed-only tail-aware retune of the GRP nonlinear parameters using the "
+        f"{OBSERVED_ONLY_TUNING_METHOD} optimizer with power-law signal features. "
+        f"Chosen alpha={params['alpha']:.4f}, eta={params['eta']:.4f}, lam={params['lam']:.4f}, "
+        f"tau={params['tau']:.4f}, reg={params['reg']:.6f}, beta={params['beta']:.4f}."
+    )
+    return row
 
 
 def _load_train_cache(path: Path) -> pd.DataFrame:
@@ -590,6 +636,10 @@ def main() -> None:
         family_totals=GENERIC_FAMILY_NAMES,
         notes="Computed from fixed tuned GRP parameters with 5-fold CV.",
     )
+    grp_power_signal_row = compute_power_signal_grp_metrics(
+        cv_seed=args.cv_seed,
+        model_name="GRP w/ power-law satiety",
+    )
     grp_ablation_row = compute_grp_metrics(
         cv_seed=args.cv_seed,
         model_name="GRP w/o family signals",
@@ -672,6 +722,7 @@ def main() -> None:
     full = pd.DataFrame(
         [
             grp_row,
+            grp_power_signal_row,
             grp_ablation_row,
             grp_no_retention_row,
             grp_no_penalty_row,
