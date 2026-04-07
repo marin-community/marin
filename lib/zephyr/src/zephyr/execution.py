@@ -396,6 +396,11 @@ class ZephyrCoordinator:
         self._worker_batch_counter: int = 0
         """Counts the number of batches spawned so far, used for unique worker
         group naming when spawning on-demand batches."""
+        self._pending_worker_count: int = 0
+        """Workers requested from the backend that have not yet called
+        register_worker. The spawn loop counts these as in-flight so it
+        does not over-provision while a slow backend is still bringing up
+        the previous batch."""
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
@@ -480,6 +485,10 @@ class ZephyrCoordinator:
             self._worker_handles[worker_id] = worker_handle
             self._worker_states[worker_id] = WorkerState.READY
             self._last_seen[worker_id] = time.monotonic()
+            # A pending spawn has materialized — drop it from the in-flight
+            # request count so the spawn loop can decide based on real state.
+            if self._pending_worker_count > 0:
+                self._pending_worker_count -= 1
 
             logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
 
@@ -746,12 +755,17 @@ class ZephyrCoordinator:
             self._in_flight = {}
             self._task_attempts = {task.shard_idx: 0 for task in tasks}
             self._fatal_error = None
+            # Pending worker requests are per-stage: each stage starts with no
+            # outstanding spawns. A leftover counter from a prior stage would
+            # block the new stage from spawning its first batch.
+            self._pending_worker_count = 0
             # Only reset in-flight worker snapshots; completed snapshots
             # accumulate across stages for full pipeline visibility.
             self._worker_counters = {}
 
     def _wait_for_stage(
         self,
+        # TODO: when would spawn_fn be None?
         spawn_fn: Callable[[int], None] | None = None,
     ) -> None:
         """Block until current stage completes or error occurs.
@@ -786,8 +800,15 @@ class ZephyrCoordinator:
                 alive_workers = sum(
                     1 for s in self._worker_states.values() if s in {WorkerState.READY, WorkerState.BUSY}
                 )
+                # Count workers we have asked the backend to spawn but that
+                # have not yet called register_worker. Without this, a slow
+                # backend (e.g. Iris waiting on scheduler capacity) makes the
+                # spawn loop think there is no in-flight work and over-spawn.
+                pending_workers = self._pending_worker_count
 
-            if alive_workers == 0:
+            in_flight_workers = alive_workers + pending_workers
+
+            if in_flight_workers == 0:
                 if queue_depth > 0 and spawn_fn is not None:
                     # Tasks waiting but no workers — spawn a batch
                     spawn_fn(queue_depth)
@@ -847,14 +868,21 @@ class ZephyrCoordinator:
         self._worker_batch_counter += 1
         name = f"zephyr-{self._pipeline_name}-p{self._pipeline_id}-a{self._attempt_id}-b{batch_id}"
         logger.info("Creating worker batch %s: %d workers, resources=%s", name, count, resources)
-        group = self._client.create_actor_group(
-            ZephyrWorker,
-            self._self_handle,
-            name=name,
-            count=count,
-            resources=resources,
-            actor_config=ActorConfig(max_task_retries=10),
-        )
+        with self._lock:
+            self._pending_worker_count += count
+        try:
+            group = self._client.create_actor_group(
+                ZephyrWorker,
+                self._self_handle,
+                name=name,
+                count=count,
+                resources=resources,
+                actor_config=ActorConfig(max_task_retries=10),
+            )
+        except Exception:
+            with self._lock:
+                self._pending_worker_count = max(0, self._pending_worker_count - count)
+            raise
         group.wait_ready(count=1)
         self._await_first_registration(name, timeout=3600.0)
         return group
