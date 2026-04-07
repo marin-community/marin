@@ -96,8 +96,6 @@ DEFAULT_MAX_LOCAL_SEGMENTS = 50
 DEFAULT_MAX_LOCAL_BYTES = 5 * 1024**3  # 5 GB
 
 # GCS offload retry policy: 4 attempts with exponential backoff (~1s → ~8s).
-GCS_OFFLOAD_MAX_ATTEMPTS = 4
-_GCS_OFFLOAD_BACKOFF = ExponentialBackoff(initial=1.0, maximum=8.0, factor=2.0)
 
 _ROW_GROUP_SIZE = 16_384
 
@@ -734,17 +732,17 @@ class DuckDBLogStore:
     def _offload_to_gcs(self, filename: str, filepath: Path) -> None:
         """Copy a Parquet file to GCS with bounded exponential backoff.
 
-        Retries transient failures up to ``gcs_offload_max_attempts`` times.
-        If every attempt fails, logs an error (not a warning) so the failure
-        surfaces in alerting. Never raises — the local segment remains
-        available for reads regardless.
+        Retries transient failures a few times. If every attempt fails, logs
+        an error (not a warning) so the failure surfaces in alerting. Never
+        raises — the local segment remains available for reads regardless.
         """
         if not self._remote_log_dir:
             return
         remote_path = f"{self._remote_log_dir.rstrip('/')}/{filename}"
-        backoff = _GCS_OFFLOAD_BACKOFF.copy()
+        backoff = ExponentialBackoff(initial=1.0, maximum=8.0, factor=2.0)
+        max_attempts = 4
         last_exc: Exception | None = None
-        for attempt in range(1, GCS_OFFLOAD_MAX_ATTEMPTS + 1):
+        for attempt in range(1, max_attempts + 1):
             try:
                 _fsspec_copy(str(filepath), remote_path)
                 if attempt > 1:
@@ -752,20 +750,20 @@ class DuckDBLogStore:
                 return
             except Exception as exc:
                 last_exc = exc
-                if attempt < GCS_OFFLOAD_MAX_ATTEMPTS:
+                if attempt < max_attempts:
                     delay = backoff.next_interval()
                     logger.warning(
                         "GCS offload of %s failed on attempt %d/%d, retrying in %.1fs",
                         filename,
                         attempt,
-                        GCS_OFFLOAD_MAX_ATTEMPTS,
+                        max_attempts,
                         delay,
                     )
                     time.sleep(delay)
         logger.error(
             "GCS offload of %s permanently failed after %d attempts",
             filename,
-            GCS_OFFLOAD_MAX_ATTEMPTS,
+            max_attempts,
             exc_info=last_exc,
         )
 
