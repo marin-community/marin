@@ -11,13 +11,14 @@ from iris.cluster.controller.budget import (
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from iris.rpc.proto_utils import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
 from rigging.timing import Timestamp
 
-PRODUCTION = cluster_pb2.PRIORITY_BAND_PRODUCTION
-INTERACTIVE = cluster_pb2.PRIORITY_BAND_INTERACTIVE
-BATCH = cluster_pb2.PRIORITY_BAND_BATCH
+PRODUCTION = job_pb2.PRIORITY_BAND_PRODUCTION
+INTERACTIVE = job_pb2.PRIORITY_BAND_INTERACTIVE
+BATCH = job_pb2.PRIORITY_BAND_BATCH
 
 GiB = 1024**3
 
@@ -145,8 +146,8 @@ def test_priority_band_name_roundtrip():
 
 def test_priority_band_values_are_ordered():
     """Proto enum values are ordered: PRODUCTION < INTERACTIVE < BATCH."""
-    assert cluster_pb2.PRIORITY_BAND_PRODUCTION < cluster_pb2.PRIORITY_BAND_INTERACTIVE
-    assert cluster_pb2.PRIORITY_BAND_INTERACTIVE < cluster_pb2.PRIORITY_BAND_BATCH
+    assert job_pb2.PRIORITY_BAND_PRODUCTION < job_pb2.PRIORITY_BAND_INTERACTIVE
+    assert job_pb2.PRIORITY_BAND_INTERACTIVE < job_pb2.PRIORITY_BAND_BATCH
 
 
 # ---------------------------------------------------------------------------
@@ -172,11 +173,11 @@ def test_compute_user_spend_counts_running_tasks(tmp_path):
     try:
         # Submit a job with 2 tasks
         job_id = JobName.root("alice", "test-job")
-        request = cluster_pb2.Controller.LaunchJobRequest(
+        request = controller_pb2.Controller.LaunchJobRequest(
             name=job_id.to_wire(),
-            entrypoint=cluster_pb2.RuntimeEntrypoint(),
-            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=4000, memory_bytes=16 * GiB),
-            environment=cluster_pb2.EnvironmentConfig(),
+            entrypoint=job_pb2.RuntimeEntrypoint(),
+            resources=job_pb2.ResourceSpecProto(cpu_millicores=4000, memory_bytes=16 * GiB),
+            environment=job_pb2.EnvironmentConfig(),
             replicas=2,
         )
         request.entrypoint.run_command.argv[:] = ["echo", "hi"]
@@ -187,7 +188,7 @@ def test_compute_user_spend_counts_running_tasks(tmp_path):
         state.register_or_refresh_worker(
             worker_id=w1,
             address="w1:8080",
-            metadata=cluster_pb2.WorkerMetadata(
+            metadata=job_pb2.WorkerMetadata(
                 hostname="w1",
                 ip_address="127.0.0.1",
                 cpu_count=16,
@@ -206,7 +207,7 @@ def test_compute_user_spend_counts_running_tasks(tmp_path):
                 HeartbeatApplyRequest(
                     worker_id=w1,
                     worker_resource_snapshot=None,
-                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING)],
+                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
                 )
             )
 
@@ -226,11 +227,11 @@ def test_compute_user_spend_only_counts_active_states(tmp_path):
     state = ControllerTransitions(db=db)
     try:
         job_id = JobName.root("bob", "done-job")
-        request = cluster_pb2.Controller.LaunchJobRequest(
+        request = controller_pb2.Controller.LaunchJobRequest(
             name=job_id.to_wire(),
-            entrypoint=cluster_pb2.RuntimeEntrypoint(),
-            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=8 * GiB),
-            environment=cluster_pb2.EnvironmentConfig(),
+            entrypoint=job_pb2.RuntimeEntrypoint(),
+            resources=job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=8 * GiB),
+            environment=job_pb2.EnvironmentConfig(),
             replicas=1,
         )
         request.entrypoint.run_command.argv[:] = ["echo", "hi"]
@@ -260,10 +261,10 @@ def test_compute_user_spend_null_resources_proto(tmp_path):
     try:
         job_id = JobName.root("carol", "no-resources")
         # Intentionally omit the `resources` field
-        request = cluster_pb2.Controller.LaunchJobRequest(
+        request = controller_pb2.Controller.LaunchJobRequest(
             name=job_id.to_wire(),
-            entrypoint=cluster_pb2.RuntimeEntrypoint(),
-            environment=cluster_pb2.EnvironmentConfig(),
+            entrypoint=job_pb2.RuntimeEntrypoint(),
+            environment=job_pb2.EnvironmentConfig(),
             replicas=1,
         )
         request.entrypoint.run_command.argv[:] = ["echo", "hi"]
@@ -274,7 +275,7 @@ def test_compute_user_spend_null_resources_proto(tmp_path):
         state.register_or_refresh_worker(
             worker_id=w1,
             address="w1:8080",
-            metadata=cluster_pb2.WorkerMetadata(
+            metadata=job_pb2.WorkerMetadata(
                 hostname="w1",
                 ip_address="127.0.0.1",
                 cpu_count=8,
@@ -291,7 +292,7 @@ def test_compute_user_spend_null_resources_proto(tmp_path):
             HeartbeatApplyRequest(
                 worker_id=w1,
                 worker_resource_snapshot=None,
-                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING)],
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
             )
         )
 

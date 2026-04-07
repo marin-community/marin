@@ -8,10 +8,8 @@ import gc
 import logging as pylogging
 import operator
 import os
-import shutil
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, TypeVar, Union
 
@@ -430,27 +428,34 @@ def consolidate_shard_caches(
 
     logger.info(f"Consolidating {len(shard_cache_paths)} shard caches into {output_path}")
 
-    shard_ledgers = [CacheLedger.load(p, metadata) for p in shard_cache_paths]
-
-    if len(shard_cache_paths) == 1:
-        shard_path = shard_cache_paths[0]
-        logger.info(f"Single shard cache detected; copying {shard_path} into {output_path} without reopening it.")
-        _copy_tree_contents(shard_path, output_path)
-        return _merge_ledgers(output_path, shard_cache_paths, shard_ledgers, metadata)
-
-    first_cache = TreeStore.open(exemplar, shard_cache_paths[0], mode="r", cache_metadata=True)
-    data_offset_tree = jax.tree.map(lambda x: 0, first_cache.tree)
+    with _no_cache_read_context():
+        first_cache = TreeStore.open(exemplar, shard_cache_paths[0], mode="r", cache_metadata=True)
+        data_offset_tree = jax.tree.map(lambda x: 0, first_cache.tree)
 
     shard_info: list[dict] = []
     total_rows = 0
 
-    # Parallel: open each TreeStore to read data_size (dominates wall time on remote storage)
-    def _get_data_sizes(shard_path):
+    # Distributed: load ledger + read data_size for each shard in parallel.
+    # Both operations are S3 I/O-bound; distributing across zephyr workers
+    # avoids serializing thousands of S3 calls in the coordinator process.
+    def _probe_shard(shard_path):
+        ledger = CacheLedger.load(shard_path, metadata)
         store = TreeStore.open(exemplar, shard_path, mode="r", cache_metadata=True)
-        return jax.tree.map(lambda x: x.data_size, store.tree)
+        data_sizes = jax.tree.map(lambda x: x.data_size, store.tree)
+        return (data_sizes, ledger)
 
-    with ThreadPoolExecutor(max_workers=CONSOLIDATE_DATA_SIZE_WORKERS) as executor:
-        per_shard_sizes = list(executor.map(_get_data_sizes, shard_cache_paths))
+    probe_ctx = ZephyrContext(
+        resources=ResourceConfig(ram="5g", cpu=2),
+        max_workers=min(CONSOLIDATE_DATA_SIZE_WORKERS, len(shard_cache_paths)),
+        name="levanter-cache-probe",
+    )
+    probe_results = list(
+        probe_ctx.execute(
+            Dataset.from_list(shard_cache_paths).map(_probe_shard),
+        )
+    )
+    per_shard_sizes = [r[0] for r in probe_results]
+    shard_ledgers = [r[1] for r in probe_results]
 
     # Serial: accumulate row_offset and data_offset_tree (order-dependent)
     for shard_path, ledger, this_offsets in zip(shard_cache_paths, shard_ledgers, per_shard_sizes):
@@ -477,7 +482,7 @@ def consolidate_shard_caches(
         )
 
     ctx = ZephyrContext(
-        resources=ResourceConfig(ram="32g", disk="16g"),
+        resources=ResourceConfig(ram="10g", disk="16g"),
         max_workers=min(copy_max_workers, len(shard_info)),
         name="levanter-cache-copy",
     )
@@ -493,30 +498,6 @@ def consolidate_shard_caches(
     # as a final step, set the total num rows in the final cache
     _expose_cache_rows(output_path, exemplar, final_ledger.total_num_rows)
     return final_ledger
-
-
-def _copy_tree_contents(source_path: str, dest_path: str) -> None:
-    src_fs, src_root = url_to_fs(source_path)
-    dest_fs, dest_root = url_to_fs(dest_path)
-
-    dest_fs.makedirs(dest_root, exist_ok=True)
-    entries = src_fs.find(src_root, withdirs=True, detail=True)
-
-    for src_file, info in entries.items():
-        if info.get("type") == "directory":
-            continue
-
-        rel_path = os.path.relpath(src_file, src_root)
-        dest_file = os.path.join(dest_root, rel_path)
-        dest_parent = os.path.dirname(dest_file)
-        if dest_parent:
-            dest_fs.makedirs(dest_parent, exist_ok=True)
-
-        if type(src_fs) is type(dest_fs):
-            src_fs.copy(src_file, dest_file)
-        else:
-            with src_fs.open(src_file, "rb") as src_f, dest_fs.open(dest_file, "wb") as dest_f:
-                shutil.copyfileobj(src_f, dest_f)
 
 
 def _merge_ledgers(
@@ -666,7 +647,8 @@ async def _consolidate_metadata(dest_path: str, exemplar: dict, shard_infos: lis
         try:
             async with ts.Transaction() as txn:
                 for info in shard_infos:
-                    source = TreeStore.open(exemplar, info["path"], mode="r", cache_metadata=True)
+                    with _no_cache_read_context():
+                        source = TreeStore.open(exemplar, info["path"], mode="r", cache_metadata=True)
                     source_num_rows = info["ledger"].total_num_rows
                     row_offset = info["row_offset"]
 

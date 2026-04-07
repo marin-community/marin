@@ -42,7 +42,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, on_shutdown, static_files_mount
 from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
-from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
+from iris.rpc.controller_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
 from iris.rpc.logging_connect import LogServiceWSGIApplication
 

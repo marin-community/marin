@@ -28,7 +28,7 @@ from iris.cluster.providers.k8s.tasks import (
 )
 from iris.cluster.providers.k8s.types import ExecResult
 from iris.cluster.types import JobName
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 from .conftest import make_batch, make_run_req, populate_node, populate_pod, populate_running_pod_resource
 
@@ -78,7 +78,7 @@ def test_sync_catches_kubectl_error_and_returns_task_failure(provider, k8s):
 
     assert len(result.updates) == 1
     update = result.updates[0]
-    assert update.new_state == cluster_pb2.TASK_STATE_FAILED
+    assert update.new_state == job_pb2.TASK_STATE_FAILED
     assert "RequestEntityTooLarge" in update.error
 
 
@@ -154,7 +154,7 @@ def test_sync_running_task_returns_running_state(provider, k8s):
     result = provider.sync(batch)
 
     assert len(result.updates) == 1
-    assert result.updates[0].new_state == cluster_pb2.TASK_STATE_RUNNING
+    assert result.updates[0].new_state == job_pb2.TASK_STATE_RUNNING
 
 
 def test_sync_pod_not_found_marks_failed(provider, k8s):
@@ -167,11 +167,11 @@ def test_sync_pod_not_found_marks_failed(provider, k8s):
     for _ in range(_POD_NOT_FOUND_GRACE_CYCLES - 1):
         result = provider.sync(batch)
         assert len(result.updates) == 1
-        assert result.updates[0].new_state == cluster_pb2.TASK_STATE_RUNNING
+        assert result.updates[0].new_state == job_pb2.TASK_STATE_RUNNING
 
     result = provider.sync(batch)
     assert len(result.updates) == 1
-    assert result.updates[0].new_state == cluster_pb2.TASK_STATE_FAILED
+    assert result.updates[0].new_state == job_pb2.TASK_STATE_FAILED
     assert result.updates[0].error == "Pod not found"
 
 
@@ -182,7 +182,7 @@ def test_pod_not_found_grace_period(provider, k8s):
 
     result = provider.sync(make_batch(running_tasks=[entry]))
     assert len(result.updates) == 1
-    assert result.updates[0].new_state == cluster_pb2.TASK_STATE_RUNNING
+    assert result.updates[0].new_state == job_pb2.TASK_STATE_RUNNING
 
 
 def test_pod_not_found_grace_resets_when_pod_reappears(provider, k8s):
@@ -196,22 +196,22 @@ def test_pod_not_found_grace_resets_when_pod_reappears(provider, k8s):
     # Miss for (grace - 1) cycles.
     for _ in range(_POD_NOT_FOUND_GRACE_CYCLES - 1):
         result = provider.sync(batch)
-        assert result.updates[0].new_state == cluster_pb2.TASK_STATE_RUNNING
+        assert result.updates[0].new_state == job_pb2.TASK_STATE_RUNNING
 
     # Pod reappears — counter should reset.
     populate_pod(k8s, pod_name, "Running")
     k8s.set_top_pod(pod_name, None)
     result = provider.sync(batch)
-    assert result.updates[0].new_state == cluster_pb2.TASK_STATE_RUNNING
+    assert result.updates[0].new_state == job_pb2.TASK_STATE_RUNNING
 
     # Now disappear again: need full grace cycles again before failure.
     k8s.delete("pod", pod_name)
     for _ in range(_POD_NOT_FOUND_GRACE_CYCLES - 1):
         result = provider.sync(batch)
-        assert result.updates[0].new_state == cluster_pb2.TASK_STATE_RUNNING
+        assert result.updates[0].new_state == job_pb2.TASK_STATE_RUNNING
 
     result = provider.sync(batch)
-    assert result.updates[0].new_state == cluster_pb2.TASK_STATE_FAILED
+    assert result.updates[0].new_state == job_pb2.TASK_STATE_FAILED
 
 
 def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceImpl):
@@ -226,7 +226,7 @@ def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceI
     batch = make_batch(running_tasks=[entry])
     result = provider.sync(batch)
 
-    assert result.updates[0].new_state == cluster_pb2.TASK_STATE_SUCCEEDED
+    assert result.updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
     # Logs are pushed through the LogService via LogCollector (untrack does a synchronous final fetch).
     key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
     logs = _fetch_logs(log_service, key)
@@ -258,7 +258,7 @@ def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_servi
     result = provider.sync(batch)
 
     assert len(result.updates) == 1
-    assert result.updates[0].new_state == cluster_pb2.TASK_STATE_RUNNING
+    assert result.updates[0].new_state == job_pb2.TASK_STATE_RUNNING
     # Logs are collected by the background LogCollector thread.
     # Give it time to run one cycle.
     time.sleep(3)
@@ -307,7 +307,7 @@ def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServic
 
     result = provider.sync(make_batch(running_tasks=[entry]))
 
-    assert result.updates[0].new_state == cluster_pb2.TASK_STATE_SUCCEEDED
+    assert result.updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
     # untrack() does a synchronous final fetch — logs should be in the service.
     key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
     logs = _fetch_logs(log_service, key)
@@ -577,11 +577,11 @@ def test_profile_threads_via_kubectl_exec(provider, k8s):
     populate_pod(k8s, pod_name, "Running")
     k8s.set_exec_response(pod_name, _success_cp(stdout="Thread 0x7f00 (idle)\n  main.py:42"))
 
-    request = cluster_pb2.ProfileTaskRequest(
+    request = job_pb2.ProfileTaskRequest(
         target="/job/0",
         duration_seconds=5,
-        profile_type=cluster_pb2.ProfileType(
-            threads=cluster_pb2.ThreadsProfile(locals=False),
+        profile_type=job_pb2.ProfileType(
+            threads=job_pb2.ThreadsProfile(locals=False),
         ),
     )
     resp = provider.profile_task("/job/0", 0, request)
@@ -596,11 +596,11 @@ def test_profile_threads_with_locals(provider, k8s):
     populate_pod(k8s, pod_name, "Running")
     k8s.set_exec_response(pod_name, _success_cp(stdout="Thread 0x7f00\n  x = 42"))
 
-    request = cluster_pb2.ProfileTaskRequest(
+    request = job_pb2.ProfileTaskRequest(
         target="/job/0",
         duration_seconds=5,
-        profile_type=cluster_pb2.ProfileType(
-            threads=cluster_pb2.ThreadsProfile(locals=True),
+        profile_type=job_pb2.ProfileType(
+            threads=job_pb2.ThreadsProfile(locals=True),
         ),
     )
     resp = provider.profile_task("/job/0", 0, request)
@@ -616,11 +616,11 @@ def test_profile_cpu_via_kubectl_exec(provider, k8s):
     k8s.set_exec_response(pod_name, _success_cp())
     k8s.set_file_content(pod_name, "/tmp/iris-profile.svg", b"<svg>flamegraph</svg>")
 
-    request = cluster_pb2.ProfileTaskRequest(
+    request = job_pb2.ProfileTaskRequest(
         target="/job/0",
         duration_seconds=3,
-        profile_type=cluster_pb2.ProfileType(
-            cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.FLAMEGRAPH),
+        profile_type=job_pb2.ProfileType(
+            cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH),
         ),
     )
     resp = provider.profile_task("/job/0", 1, request)
@@ -639,11 +639,11 @@ def test_profile_memory_flamegraph_via_kubectl_exec(provider, k8s):
     k8s.set_exec_response(pod_name, _success_cp())
     k8s.set_file_content(pod_name, "/tmp/iris-memray.html", b"<html>flamegraph</html>")
 
-    request = cluster_pb2.ProfileTaskRequest(
+    request = job_pb2.ProfileTaskRequest(
         target="/job/0",
         duration_seconds=5,
-        profile_type=cluster_pb2.ProfileType(
-            memory=cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.FLAMEGRAPH),
+        profile_type=job_pb2.ProfileType(
+            memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.FLAMEGRAPH),
         ),
     )
     resp = provider.profile_task("/job/0", 0, request)
@@ -660,11 +660,11 @@ def test_profile_memory_table_returns_stdout(provider, k8s):
     k8s.set_exec_response(pod_name, _success_cp())  # attach
     k8s.set_exec_response(pod_name, _success_cp(stdout="ALLOC  SIZE  FILE\n100  1KB  main.py"))  # table transform
 
-    request = cluster_pb2.ProfileTaskRequest(
+    request = job_pb2.ProfileTaskRequest(
         target="/job/0",
         duration_seconds=5,
-        profile_type=cluster_pb2.ProfileType(
-            memory=cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.TABLE),
+        profile_type=job_pb2.ProfileType(
+            memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.TABLE),
         ),
     )
     resp = provider.profile_task("/job/0", 0, request)
@@ -676,10 +676,10 @@ def test_profile_memory_table_returns_stdout(provider, k8s):
 
 def test_profile_unknown_type_returns_error(provider, k8s):
     """An empty ProfileType (no profiler selected) returns an error."""
-    request = cluster_pb2.ProfileTaskRequest(
+    request = job_pb2.ProfileTaskRequest(
         target="/job/0",
         duration_seconds=5,
-        profile_type=cluster_pb2.ProfileType(),
+        profile_type=job_pb2.ProfileType(),
     )
     resp = provider.profile_task("/job/0", 0, request)
 
@@ -693,11 +693,11 @@ def test_profile_kubectl_exec_failure_returns_error(provider, k8s):
     populate_pod(k8s, pod_name, "Running")
     k8s.set_exec_response(pod_name, _failure_cp(stderr="container not running"))
 
-    request = cluster_pb2.ProfileTaskRequest(
+    request = job_pb2.ProfileTaskRequest(
         target="/job/0",
         duration_seconds=5,
-        profile_type=cluster_pb2.ProfileType(
-            threads=cluster_pb2.ThreadsProfile(),
+        profile_type=job_pb2.ProfileType(
+            threads=job_pb2.ThreadsProfile(),
         ),
     )
     resp = provider.profile_task("/job/0", 0, request)
@@ -765,3 +765,48 @@ def test_configmap_cleaned_up_on_delete(provider, k8s):
 
     assert k8s.get_json("pod", "iris-pod-1") is None
     assert k8s.get_json("configmap", "iris-pod-1-wf") is None
+
+
+# ---------------------------------------------------------------------------
+# PodDisruptionBudget for coordinator tasks
+# ---------------------------------------------------------------------------
+
+
+def test_sync_creates_pdb_for_coordinator_task(provider, k8s):
+    """Coordinator tasks (single-task, no accelerator) get a PDB."""
+    req = make_run_req("/coord-job/0")
+    req.num_tasks = 1
+    batch = make_batch(tasks_to_run=[req])
+
+    provider.sync(batch)
+
+    pdbs = k8s.list_json("poddisruptionbudget")
+    assert len(pdbs) == 1
+    pdb = pdbs[0]
+    assert pdb["spec"]["minAvailable"] == 1
+    assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == _task_hash("/coord-job/0")
+
+
+def test_bulk_delete_cleans_up_pdbs(provider, k8s):
+    """_bulk_delete_task_pods also deletes associated PDBs."""
+    task_id = "/coord-job/0"
+    task_hash = _task_hash(task_id)
+    labels = {
+        _LABEL_MANAGED: "true",
+        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+        _LABEL_TASK_HASH: task_hash,
+    }
+
+    populate_pod(k8s, "iris-coord-pod", "Running", labels={_LABEL_TASK_HASH: task_hash})
+    pdb = {
+        "kind": "PodDisruptionBudget",
+        "metadata": {"name": "iris-coord-pod-pdb", "labels": labels},
+        "spec": {"minAvailable": 1},
+    }
+    k8s.seed_resource("poddisruptionbudget", "iris-coord-pod-pdb", pdb)
+
+    cached_pods = k8s.list_json("pods", labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
+    provider._bulk_delete_task_pods([task_id], cached_pods)
+
+    assert k8s.get_json("pod", "iris-coord-pod") is None
+    assert k8s.get_json("poddisruptionbudget", "iris-coord-pod-pdb") is None

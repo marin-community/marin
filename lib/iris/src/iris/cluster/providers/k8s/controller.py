@@ -326,6 +326,18 @@ class K8sControllerProvider:
         self._kubectl.apply_json(svc_manifest)
         logger.info("Controller Service %s applied", service_name)
 
+        pdb_manifest = {
+            "apiVersion": "policy/v1",
+            "kind": "PodDisruptionBudget",
+            "metadata": {"name": "iris-controller-pdb", "namespace": self._namespace},
+            "spec": {
+                "minAvailable": 1,
+                "selector": {"matchLabels": {"app": "iris-controller"}},
+            },
+        }
+        self._kubectl.apply_json(pdb_manifest)
+        logger.info("PodDisruptionBudget iris-controller-pdb applied")
+
         self.wait_for_deployment_ready()
         self._kubectl.rollout_status("deployment", "iris-controller", namespaced=True)
 
@@ -340,6 +352,7 @@ class K8sControllerProvider:
 
         self._kubectl.delete("deployment", "iris-controller")
         self._kubectl.delete("service", service_name)
+        self._kubectl.delete("pdb", "iris-controller-pdb")
         self._kubectl.delete("configmap", "iris-cluster-config")
         if self.uses_s3_storage(config):
             self._kubectl.delete("secret", _S3_SECRET_NAME)
@@ -473,6 +486,11 @@ class K8sControllerProvider:
                     "apiGroups": ["metrics.k8s.io"],
                     "resources": ["pods"],
                     "verbs": ["get", "list"],
+                },
+                {
+                    "apiGroups": ["policy"],
+                    "resources": ["poddisruptionbudgets"],
+                    "verbs": ["get", "list", "create", "update", "patch", "delete"],
                 },
             ],
         }

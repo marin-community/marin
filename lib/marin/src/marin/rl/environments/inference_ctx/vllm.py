@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 import numpy as np
-from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.models.lm_model import LmHeadModel
+from levanter.tokenizers import load_tokenizer
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
@@ -111,6 +111,8 @@ class vLLMInferenceContext(BaseInferenceContext):
         self.mesh = None
         self.axis_mapping = {}
         self.tokenizer = load_tokenizer(inference_config.model_name)
+        # Reverse vocab map for logprob token string display
+        self._id_to_token: dict[int, str] = {v: k for k, v in self.tokenizer.get_vocab().items()}
         self.model_name = inference_config.model_name
         self.canonical_model_name = inference_config.canonical_model_name or inference_config.model_name
         self.sampling_config = inference_config.sampling_params
@@ -219,7 +221,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             logprobs_content = []
             for token_id, logprob_dict in zip(output.token_ids, output.logprobs, strict=False):
                 # Get the token string (may be None for padding token IDs)
-                token = self.tokenizer.convert_ids_to_tokens(token_id)
+                token = self._id_to_token.get(token_id)
                 if token is None:
                     token = f"<id_{token_id}>"
 
@@ -231,7 +233,7 @@ class vLLMInferenceContext(BaseInferenceContext):
                     if logprob_obj.rank == 1:
                         selected_logprob = logprob_obj.logprob
 
-                    token_str = self.tokenizer.convert_ids_to_tokens(tid)
+                    token_str = self._id_to_token.get(tid)
                     if token_str is None:
                         token_str = f"<id_{tid}>"
                     top_logprobs.append(

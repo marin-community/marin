@@ -18,7 +18,8 @@ from iris.cluster.providers.k8s.tasks import (
     _RUNTIME_LABEL_VALUE,
 )
 from iris.log_server.server import LogServiceImpl
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
 
 
 class InProcessLogPusher:
@@ -68,8 +69,8 @@ def pod_config(
     return PodConfig(namespace=namespace, default_image=default_image, **kwargs)
 
 
-def make_run_req(task_id: str, attempt_id: int = 0, cpu_mc: int = 1000) -> cluster_pb2.Worker.RunTaskRequest:
-    req = cluster_pb2.Worker.RunTaskRequest()
+def make_run_req(task_id: str, attempt_id: int = 0, cpu_mc: int = 1000) -> job_pb2.RunTaskRequest:
+    req = job_pb2.RunTaskRequest()
     req.task_id = task_id
     req.attempt_id = attempt_id
     req.entrypoint.run_command.argv.extend(["python", "train.py"])
@@ -179,16 +180,16 @@ def populate_running_pod_resource(
     k8s.seed_resource("pod", name, pod)
 
 
-def add_eq_constraint(req: cluster_pb2.Worker.RunTaskRequest, key: str, value: str) -> None:
+def add_eq_constraint(req: job_pb2.RunTaskRequest, key: str, value: str) -> None:
     """Add an EQ string constraint to a RunTaskRequest."""
     c = req.constraints.add()
     c.key = key
-    c.op = cluster_pb2.CONSTRAINT_OP_EQ
+    c.op = job_pb2.CONSTRAINT_OP_EQ
     c.value.string_value = value
 
 
 def common_env_from_req(
-    req: cluster_pb2.Worker.RunTaskRequest,
+    req: job_pb2.RunTaskRequest,
     controller_address: str | None = None,
 ) -> dict[str, str]:
     """Call build_common_iris_env with fields extracted from a RunTaskRequest."""

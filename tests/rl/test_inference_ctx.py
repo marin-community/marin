@@ -257,7 +257,7 @@ def test_vllm_inference_context_uses_canonical_model_name(monkeypatch):
     )
     monkeypatch.setattr(
         "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
-        lambda _path: SimpleNamespace(),
+        lambda _path: SimpleNamespace(get_vocab=lambda: {}),
     )
     monkeypatch.setattr(
         vLLMInferenceContext,

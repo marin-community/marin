@@ -66,11 +66,12 @@ class BaseInferenceContext:
         if not choice.logprobs or not choice.logprobs.content:
             raise ValueError("Choice missing logprobs. Use logprobs=True in API call.")
 
+        vocab = self.tokenizer.get_vocab()
         tokens = []
         for t in choice.logprobs.content:
-            # Use convert_tokens_to_ids for correct BPE round-trip
-            # The server uses convert_ids_to_tokens which preserves BPE format (e.g., Ġ for spaces)
-            token_id = self.tokenizer.convert_tokens_to_ids(t.token)
+            token_id = vocab.get(t.token)
+            if token_id is None:
+                raise ValueError(f"Token {t.token!r} not found in vocabulary")
             tokens.append(token_id)
 
         if not tokens:
