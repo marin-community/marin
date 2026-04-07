@@ -666,6 +666,8 @@ class InMemoryK8sService:
     ) -> list[dict]:
         self._check_failure("list_json")
         normalized = _normalize_resource(resource)
+        # Check for resource-specific failure (e.g. "list_json:node").
+        self._check_failure(f"list_json:{normalized}")
 
         # Nodes: merge FakeNode objects and any raw node manifests in _resources
         if normalized == "node":
