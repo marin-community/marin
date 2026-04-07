@@ -417,7 +417,7 @@ class ZephyrCoordinator:
         """Initialize coordinator for push-based worker registration.
 
         Workers register themselves by calling register_worker() when they start.
-        Workers are created on-demand per stage via _spawn_worker_batch().
+        Workers are created on-demand per stage via spawn_worker_batch().
 
         Args:
             chunk_prefix: Storage prefix for intermediate chunks
@@ -827,7 +827,7 @@ class ZephyrCoordinator:
         with self._lock:
             return dict(self._results)
 
-    def _spawn_worker_batch(self, count: int, resources: ResourceConfig) -> Any:
+    def spawn_worker_batch(self, count: int, resources: ResourceConfig) -> Any:
         """Create a batch of single-task workers.
 
         Each worker pulls one task, executes it, reports the result, and exits.
@@ -875,7 +875,7 @@ class ZephyrCoordinator:
 
         def spawn_fn(queue_depth: int) -> None:
             batch_size = min(self._max_workers, queue_depth)
-            group = self._spawn_worker_batch(batch_size, resources)
+            group = self.spawn_worker_batch(batch_size, resources)
             worker_groups.append(group)
 
         try:
