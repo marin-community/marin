@@ -36,11 +36,11 @@ from marin.utils import remove_tpu_lockfile_on_exit
 logger = logging.getLogger(__name__)
 
 
-# Default CPU resources for checkpoint export. Levanter's `_restore_old_ts` deserializes with
-# `concurrent_gb=300`, and the HF conversion must hold the full unsharded model in host RAM,
-# so small defaults (`ResourceConfig.with_cpu()` is 128m RAM / 1g disk) OOM on 50B+ models.
+# Default CPU resources for checkpoint export. The HF conversion streams one weight tensor
+# at a time, so a moderate RAM/disk budget is sufficient; `ResourceConfig.with_cpu()`'s
+# 128m/1g defaults are too small though.
 def _default_export_resources() -> ResourceConfig:
-    return ResourceConfig.with_cpu(cpu=8, ram="400g", disk="400g")
+    return ResourceConfig.with_cpu(cpu=8, ram="64g", disk="64g")
 
 
 @dataclass(frozen=True)
@@ -146,8 +146,7 @@ def convert_checkpoint_to_hf_step(
         trainer: TrainerConfig that matches the topology the checkpoint was saved with.
         model: Model configuration that produced the checkpoint.
         resources: Hardware resources to use when running the conversion. Defaults to CPU-only
-            execution sized for large models (8 CPU, 400g RAM, 400g disk); override for smaller
-            models or when using an accelerator.
+            execution (8 CPU, 64g RAM, 64g disk); override when using an accelerator.
         upload_to_hf: Optional HuggingFace repo reference (bool, repo-id string, or RepoRef).
         tokenizer: Optional tokenizer override. Defaults to the tokenizer specified by ``model``.
         override_vocab_size: If provided, resizes the vocabulary before exporting.
