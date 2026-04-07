@@ -58,6 +58,7 @@ from iris.cluster.log_store._types import _EST_BYTES_PER_ROW, REGEX_META_RE, Log
 from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
+from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -94,11 +95,9 @@ DEFAULT_FLUSH_INTERVAL_SEC = 600.0  # 10 minutes
 DEFAULT_MAX_LOCAL_SEGMENTS = 50
 DEFAULT_MAX_LOCAL_BYTES = 5 * 1024**3  # 5 GB
 
-# GCS offload retry policy. Total wall time at default settings:
-# 1 + 2 + 4 = 7 seconds of backoff across 4 attempts.
-DEFAULT_GCS_OFFLOAD_MAX_ATTEMPTS = 4
-DEFAULT_GCS_OFFLOAD_INITIAL_BACKOFF_SEC = 1.0
-DEFAULT_GCS_OFFLOAD_BACKOFF_MULTIPLIER = 2.0
+# GCS offload retry policy: 4 attempts with exponential backoff (~1s → ~8s).
+GCS_OFFLOAD_MAX_ATTEMPTS = 4
+_GCS_OFFLOAD_BACKOFF = ExponentialBackoff(initial=1.0, maximum=8.0, factor=2.0)
 
 _ROW_GROUP_SIZE = 16_384
 
@@ -397,9 +396,6 @@ class DuckDBLogStore:
         flush_interval_sec: float = DEFAULT_FLUSH_INTERVAL_SEC,
         segment_target_bytes: int = SEGMENT_TARGET_BYTES,
         duckdb_memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT,
-        gcs_offload_max_attempts: int = DEFAULT_GCS_OFFLOAD_MAX_ATTEMPTS,
-        gcs_offload_initial_backoff_sec: float = DEFAULT_GCS_OFFLOAD_INITIAL_BACKOFF_SEC,
-        gcs_offload_backoff_multiplier: float = DEFAULT_GCS_OFFLOAD_BACKOFF_MULTIPLIER,
     ):
         self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
         if log_dir is not None:
@@ -414,11 +410,6 @@ class DuckDBLogStore:
         self._max_local_bytes = max_local_bytes
         self._flush_interval_sec = flush_interval_sec
         self._segment_target_bytes = segment_target_bytes
-        if gcs_offload_max_attempts < 1:
-            raise ValueError("gcs_offload_max_attempts must be >= 1")
-        self._gcs_offload_max_attempts = gcs_offload_max_attempts
-        self._gcs_offload_initial_backoff_sec = gcs_offload_initial_backoff_sec
-        self._gcs_offload_backoff_multiplier = gcs_offload_backoff_multiplier
 
         # ---- shared mutable state (all guarded by _lock) ----
         self._lock = Lock()
@@ -751,9 +742,9 @@ class DuckDBLogStore:
         if not self._remote_log_dir:
             return
         remote_path = f"{self._remote_log_dir.rstrip('/')}/{filename}"
-        backoff = self._gcs_offload_initial_backoff_sec
+        backoff = _GCS_OFFLOAD_BACKOFF.copy()
         last_exc: Exception | None = None
-        for attempt in range(1, self._gcs_offload_max_attempts + 1):
+        for attempt in range(1, GCS_OFFLOAD_MAX_ATTEMPTS + 1):
             try:
                 _fsspec_copy(str(filepath), remote_path)
                 if attempt > 1:
@@ -761,20 +752,20 @@ class DuckDBLogStore:
                 return
             except Exception as exc:
                 last_exc = exc
-                if attempt < self._gcs_offload_max_attempts:
+                if attempt < GCS_OFFLOAD_MAX_ATTEMPTS:
+                    delay = backoff.next_interval()
                     logger.warning(
                         "GCS offload of %s failed on attempt %d/%d, retrying in %.1fs",
                         filename,
                         attempt,
-                        self._gcs_offload_max_attempts,
-                        backoff,
+                        GCS_OFFLOAD_MAX_ATTEMPTS,
+                        delay,
                     )
-                    time.sleep(backoff)
-                    backoff *= self._gcs_offload_backoff_multiplier
+                    time.sleep(delay)
         logger.error(
             "GCS offload of %s permanently failed after %d attempts",
             filename,
-            self._gcs_offload_max_attempts,
+            GCS_OFFLOAD_MAX_ATTEMPTS,
             exc_info=last_exc,
         )
 
