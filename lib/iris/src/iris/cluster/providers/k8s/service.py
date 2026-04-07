@@ -349,7 +349,7 @@ class CloudK8sService:
             args.extend(["-c", container])
         if since_time is not None:
             args.append(f"--since-time={since_time.strftime('%Y-%m-%dT%H:%M:%S.%f')}Z")
-        result = self._run(args, namespaced=True)
+        result = self._run(args, namespaced=True, timeout=15.0)
         if result.returncode != 0:
             return KubectlLogResult(lines=[], last_timestamp=since_time)
 
