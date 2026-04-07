@@ -68,7 +68,9 @@ from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc import config_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 from tests.cluster.providers.conftest import make_mock_platform
@@ -116,8 +118,8 @@ class FakeProvider:
         self,
         worker_id: WorkerId,
         address: str | None,
-        request: cluster_pb2.GetProcessStatusRequest,
-    ) -> cluster_pb2.GetProcessStatusResponse:
+        request: job_pb2.GetProcessStatusRequest,
+    ) -> job_pb2.GetProcessStatusResponse:
         raise ProviderUnsupportedError("fake")
 
     def on_worker_failed(self, worker_id: WorkerId, address: str | None) -> None:
@@ -126,9 +128,9 @@ class FakeProvider:
     def profile_task(
         self,
         address: str,
-        request: cluster_pb2.ProfileTaskRequest,
+        request: job_pb2.ProfileTaskRequest,
         timeout_ms: int,
-    ) -> cluster_pb2.ProfileTaskResponse:
+    ) -> job_pb2.ProfileTaskResponse:
         raise ProviderUnsupportedError("fake")
 
     def close(self) -> None:
@@ -197,19 +199,19 @@ def make_controller_state(**kwargs):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    entrypoint = cluster_pb2.RuntimeEntrypoint()
+def make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:
+    entrypoint = job_pb2.RuntimeEntrypoint()
     entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
 
 
-def make_direct_job_request(name: str = "test-job", replicas: int = 1) -> cluster_pb2.Controller.LaunchJobRequest:
+def make_direct_job_request(name: str = "test-job", replicas: int = 1) -> controller_pb2.Controller.LaunchJobRequest:
     job_name = JobName.root("test-user", name)
-    return cluster_pb2.Controller.LaunchJobRequest(
+    return controller_pb2.Controller.LaunchJobRequest(
         name=job_name.to_wire(),
         entrypoint=make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=replicas,
     )
 
@@ -297,8 +299,8 @@ def building_counts(state: ControllerTransitions) -> dict[WorkerId, int]:
             "WHERE t.state IN (?, ?) AND j.is_reservation_holder = 0 "
             "GROUP BY a.worker_id ORDER BY a.worker_id ASC",
             (
-                cluster_pb2.TASK_STATE_BUILDING,
-                cluster_pb2.TASK_STATE_ASSIGNED,
+                job_pb2.TASK_STATE_BUILDING,
+                job_pb2.TASK_STATE_ASSIGNED,
             ),
             decoders={"worker_id": WorkerId, "c": int},
         )
@@ -309,7 +311,7 @@ def register_worker(
     state: ControllerTransitions,
     worker_id: str,
     address: str,
-    metadata: cluster_pb2.WorkerMetadata,
+    metadata: job_pb2.WorkerMetadata,
     healthy: bool = True,
     slice_id: str = "",
     scale_group: str = "",
@@ -328,7 +330,7 @@ def register_worker(
     return wid
 
 
-def inject_device_constraints(request: cluster_pb2.Controller.LaunchJobRequest) -> None:
+def inject_device_constraints(request: controller_pb2.Controller.LaunchJobRequest) -> None:
     """Auto-inject device constraints from the resource spec, mirroring service.py.
 
     In production, the service layer merges auto-generated device constraints
@@ -348,7 +350,7 @@ def inject_device_constraints(request: cluster_pb2.Controller.LaunchJobRequest) 
 def submit_job(
     state: ControllerTransitions,
     job_id: str,
-    request: cluster_pb2.Controller.LaunchJobRequest,
+    request: controller_pb2.Controller.LaunchJobRequest,
     timestamp_ms: int | None = None,
 ) -> list:
     """Submit a job and return created task rows.
@@ -411,13 +413,13 @@ def make_job_request(
     max_retries_preemption: int = 0,
     scheduling_timeout_seconds: int = 0,
     priority_band: int = 0,
-) -> cluster_pb2.Controller.LaunchJobRequest:
+) -> controller_pb2.Controller.LaunchJobRequest:
     job_name = JobName.from_string(name) if name.startswith("/") else JobName.root("test-user", name)
-    request = cluster_pb2.Controller.LaunchJobRequest(
+    request = controller_pb2.Controller.LaunchJobRequest(
         name=job_name.to_wire(),
         entrypoint=make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=cpu * 1000, memory_bytes=memory_bytes),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=cpu * 1000, memory_bytes=memory_bytes),
+        environment=job_pb2.EnvironmentConfig(),
         max_retries_failure=max_retries_failure,
         max_retries_preemption=max_retries_preemption,
         replicas=replicas,
@@ -435,21 +437,21 @@ def make_worker_metadata(
     gpu_count: int = 0,
     gpu_name: str = "",
     tpu_name: str = "",
-) -> cluster_pb2.WorkerMetadata:
+) -> job_pb2.WorkerMetadata:
     """Build WorkerMetadata with device config and well-known attributes.
 
     Populates device-type and device-variant attributes so constraint-based
     scheduling works the same way as production.
     """
-    device = cluster_pb2.DeviceConfig()
+    device = job_pb2.DeviceConfig()
     if tpu_name:
-        device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=tpu_name))
+        device.tpu.CopyFrom(job_pb2.TpuDevice(variant=tpu_name))
     elif gpu_count > 0:
-        device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant=gpu_name or "auto", count=gpu_count))
+        device.gpu.CopyFrom(job_pb2.GpuDevice(variant=gpu_name or "auto", count=gpu_count))
     else:
-        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+        device.cpu.CopyFrom(job_pb2.CpuDevice(variant="cpu"))
 
-    meta = cluster_pb2.WorkerMetadata(
+    meta = job_pb2.WorkerMetadata(
         hostname="test-worker",
         ip_address="127.0.0.1",
         cpu_count=cpu,
@@ -527,7 +529,7 @@ def dispatch_task(state: ControllerTransitions, task: TaskDetailRow, worker_id: 
                 TaskUpdate(
                     task_id=task.task_id,
                     attempt_id=query_task(state, task.task_id).current_attempt_id,
-                    new_state=cluster_pb2.TASK_STATE_RUNNING,
+                    new_state=job_pb2.TASK_STATE_RUNNING,
                 )
             ],
         )
@@ -544,7 +546,7 @@ def transition_task(
 ) -> object:
     task = query_task_with_attempts(state, task_id)
     assert task is not None
-    if new_state == cluster_pb2.TASK_STATE_KILLED:
+    if new_state == job_pb2.TASK_STATE_KILLED:
         return state.cancel_job(task.job_id, reason=error or "killed")
     # Compute worker_id: prefer current attempt's worker, fall back to current_worker_id.
     current_attempt = task.attempts[-1] if task.attempts else None
@@ -713,7 +715,7 @@ def make_demand_entries(
 ) -> list[DemandEntry]:
     if count <= 0:
         return []
-    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
+    resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
     if device_type == DeviceType.TPU:
         resources.device.tpu.variant = device_variant or ""
     elif device_type == DeviceType.GPU:
@@ -772,7 +774,7 @@ def make_big_demand_entries(
     coschedule_group_id: str | None = None,
 ) -> list[DemandEntry]:
     """Create demand entries with explicit resource sizes for packing tests."""
-    resources = cluster_pb2.ResourceSpecProto(
+    resources = job_pb2.ResourceSpecProto(
         cpu_millicores=cpu_millicores,
         memory_bytes=memory_bytes,
         disk_bytes=disk_bytes,

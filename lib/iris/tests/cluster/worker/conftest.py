@@ -15,7 +15,7 @@ from iris.cluster.runtime.types import ContainerPhase, ContainerStats, Container
 from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration
 
@@ -109,7 +109,7 @@ class FakeContainerHandle:
     def disk_usage_mb(self) -> int:
         return 0
 
-    def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
         raise RuntimeError("profiling not supported in FakeContainerHandle")
 
     def cleanup(self) -> None:
@@ -173,7 +173,7 @@ def create_run_task_request(
 
     entrypoint_proto = Entrypoint.from_callable(test_fn).to_proto()
 
-    env_config = cluster_pb2.EnvironmentConfig(
+    env_config = job_pb2.EnvironmentConfig(
         env_vars={
             "TEST_VAR": "value",
             "TASK_VAR": "task_value",
@@ -182,9 +182,9 @@ def create_run_task_request(
         dockerfile="FROM python:3.11-slim\nRUN echo test",
     )
 
-    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3)
+    resources = job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3)
 
-    request = cluster_pb2.Worker.RunTaskRequest(
+    request = job_pb2.RunTaskRequest(
         task_id=task_id,
         num_tasks=num_tasks,
         attempt_id=attempt_id,

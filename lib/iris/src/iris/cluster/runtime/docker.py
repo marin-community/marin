@@ -50,7 +50,7 @@ from iris.cluster.runtime.types import (
     MountSpec,
 )
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
@@ -309,7 +309,7 @@ class DockerContainerHandle:
         # which don't reference config fields.
         config = ContainerConfig(
             image="",
-            entrypoint=cluster_pb2.RuntimeEntrypoint(),
+            entrypoint=job_pb2.RuntimeEntrypoint(),
             env={},
         )
         handle = cls(config=config, runtime=runtime, _run_container_id=container_id)
@@ -490,7 +490,7 @@ exec {quoted_cmd}
                     return int(shutil.disk_usage(path).used / (1024 * 1024))
         return 0
 
-    def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
+    def profile(self, duration_seconds: int, profile_type: "job_pb2.ProfileType") -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
         container_id = self._run_container_id
         if not container_id:
@@ -528,7 +528,7 @@ exec {quoted_cmd}
         self._docker_exec(container_id, ["rm", "-f", *paths], capture_output=True, timeout=10)
 
     def _profile_cpu(
-        self, container_id: str, duration_seconds: int, cpu_config: "cluster_pb2.CpuProfile", profile_id: str
+        self, container_id: str, duration_seconds: int, cpu_config: "job_pb2.CpuProfile", profile_id: str
     ) -> bytes:
         """Profile CPU using py-spy."""
         spec = resolve_cpu_spec(cpu_config, duration_seconds, pid="1")
@@ -552,7 +552,7 @@ exec {quoted_cmd}
             self._docker_rm_files(container_id, [output_path])
 
     def _profile_memory(
-        self, container_id: str, duration_seconds: int, memory_config: "cluster_pb2.MemoryProfile", profile_id: str
+        self, container_id: str, duration_seconds: int, memory_config: "job_pb2.MemoryProfile", profile_id: str
     ) -> bytes:
         """Profile memory using memray."""
         spec = resolve_memory_spec(memory_config, duration_seconds, pid="1")

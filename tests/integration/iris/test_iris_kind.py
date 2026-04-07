@@ -37,7 +37,8 @@ from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sServic
 from iris.cluster.providers.k8s.service import CloudK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider, _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, TaskAttempt
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from rigging.timing import Duration
 
 # ---------------------------------------------------------------------------
@@ -78,8 +79,8 @@ class ServiceTestHarness:
         self.state.apply_direct_provider_updates(result.updates)
 
 
-def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    entrypoint = cluster_pb2.RuntimeEntrypoint()
+def _make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:
+    entrypoint = job_pb2.RuntimeEntrypoint()
     entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
 
@@ -112,18 +113,18 @@ skip_no_kind = pytest.mark.skipif(
 )
 
 
-def _gpu_resources() -> cluster_pb2.ResourceSpecProto:
-    resources = cluster_pb2.ResourceSpecProto(
+def _gpu_resources() -> job_pb2.ResourceSpecProto:
+    resources = job_pb2.ResourceSpecProto(
         cpu_millicores=32_000,
         memory_bytes=256 * 1024**3,
         disk_bytes=256 * 1024**3,
     )
-    resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="H100", count=8))
+    resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
     return resources
 
 
-def _cpu_resources() -> cluster_pb2.ResourceSpecProto:
-    return cluster_pb2.ResourceSpecProto(
+def _cpu_resources() -> job_pb2.ResourceSpecProto:
+    return job_pb2.ResourceSpecProto(
         cpu_millicores=1000,
         memory_bytes=16 * 1024**3,
         disk_bytes=16 * 1024**3,
@@ -318,21 +319,21 @@ def test_gpu_pod_attributes_with_in_memory_k8s(tmp_path: Path) -> None:
     harness = _make_coreweave_harness(tmp_path)
     try:
         launcher_id = JobName.root("runner", "canary-launcher")
-        launcher_request = cluster_pb2.Controller.LaunchJobRequest(
+        launcher_request = controller_pb2.Controller.LaunchJobRequest(
             name=launcher_id.to_wire(),
             entrypoint=_make_test_entrypoint(),
             resources=_cpu_resources(),
-            environment=cluster_pb2.EnvironmentConfig(),
+            environment=job_pb2.EnvironmentConfig(),
             replicas=1,
         )
         harness.service.launch_job(launcher_request, None)
         harness.sync_k8s()
 
-        child_request = cluster_pb2.Controller.LaunchJobRequest(
+        child_request = controller_pb2.Controller.LaunchJobRequest(
             name=launcher_id.child("grug-train").to_wire(),
             entrypoint=_make_test_entrypoint(),
             resources=_gpu_resources(),
-            environment=cluster_pb2.EnvironmentConfig(),
+            environment=job_pb2.EnvironmentConfig(),
             replicas=1,
         )
         harness.service.launch_job(child_request, None)

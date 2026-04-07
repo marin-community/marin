@@ -13,9 +13,11 @@ from dataclasses import dataclass, field
 
 from iris.cluster.log_store import build_log_source
 from iris.cluster.types import JobName
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.logging_connect import LogServiceClientSync
 from iris.time_proto import timestamp_from_proto
 
@@ -122,15 +124,15 @@ def _gather(
     tail: int,
 ) -> BugReport:
     # 1. Job status + original request
-    resp = client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire()))
+    resp = client.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire()))
     job = resp.job
     request = resp.request
 
     # 2. List tasks
-    tasks_resp = client.list_tasks(cluster_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()))
+    tasks_resp = client.list_tasks(controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()))
 
     # 3. List workers, filter to those involved in this job
-    workers_resp = client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+    workers_resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
     involved_worker_ids: set[str] = set()
     for t in tasks_resp.tasks:
         if t.worker_id:
@@ -206,7 +208,7 @@ def _gather(
 # ---------------------------------------------------------------------------
 
 
-def _build_task_report(task: cluster_pb2.TaskStatus, logs: list[str]) -> TaskReport:
+def _build_task_report(task: job_pb2.TaskStatus, logs: list[str]) -> TaskReport:
     attempts = [
         AttemptReport(
             attempt_id=a.attempt_id,
@@ -237,7 +239,7 @@ def _build_task_report(task: cluster_pb2.TaskStatus, logs: list[str]) -> TaskRep
 
 
 def _build_worker_report(
-    w: cluster_pb2.Controller.WorkerHealthStatus,
+    w: controller_pb2.Controller.WorkerHealthStatus,
 ) -> WorkerReport:
     meta = w.metadata
     gpu_info = ""
@@ -270,12 +272,12 @@ def _build_worker_report(
 # ---------------------------------------------------------------------------
 
 
-def _job_state_name(state: cluster_pb2.JobState) -> str:
-    return cluster_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
+def _job_state_name(state: job_pb2.JobState) -> str:
+    return job_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
 
 
-def _task_state_name(state: cluster_pb2.TaskState) -> str:
-    return cluster_pb2.TaskState.Name(state).replace("TASK_STATE_", "").lower()
+def _task_state_name(state: job_pb2.TaskState) -> str:
+    return job_pb2.TaskState.Name(state).replace("TASK_STATE_", "").lower()
 
 
 def _format_timestamp(ts) -> str:
@@ -312,7 +314,7 @@ def _format_exit_code(code: int) -> str:
     return str(code)
 
 
-def _format_resources(resources: cluster_pb2.ResourceSpecProto | None) -> str:
+def _format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
     if not resources:
         return "-"
     parts: list[str] = []

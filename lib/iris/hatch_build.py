@@ -3,10 +3,11 @@
 
 """Hatchling custom build hook for Iris.
 
-Regenerates protobuf files from .proto sources when source files are newer
-than their generated outputs. This runs automatically during ``uv sync`` /
-``pip install -e .`` / wheel builds, eliminating the need to check generated
-files into git or manually run build steps.
+Regenerates protobuf files from .proto sources when source files have changed
+since the last generation. Generated files are checked into git, so this hook
+only triggers a rebuild when .proto sources are modified. Requires ``npx``
+(Node.js) and buf to be available; if they are absent and generated files are
+already present, the existing outputs are used as-is.
 
 Dashboard assets are built separately via ``iris build dashboard`` or
 ``_ensure_dashboard_dist()`` in the Docker image build pipeline.

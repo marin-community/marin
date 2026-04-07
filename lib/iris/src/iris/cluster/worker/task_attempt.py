@@ -41,8 +41,10 @@ from iris.cluster.log_store._types import task_log_key
 from iris.log_server.client import LogPusher
 from iris.logging import str_to_log_level
 from rigging.log_setup import parse_log_level
-from iris.rpc import cluster_pb2, logging_pb2
-from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
+from iris.rpc import worker_pb2
+from iris.rpc.job_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Duration, Timestamp
@@ -98,7 +100,7 @@ class TaskAttemptConfig:
 
     task_attempt: TaskAttemptIdentity
     num_tasks: int
-    request: cluster_pb2.Worker.RunTaskRequest
+    request: job_pb2.RunTaskRequest
     cache_dir: Path
 
     @property
@@ -231,7 +233,7 @@ class TaskAttempt:
         """
         self._bundle_store = bundle_store
         self._runtime = container_runtime
-        self._worker_metadata = worker_metadata or cluster_pb2.WorkerMetadata()
+        self._worker_metadata = worker_metadata or job_pb2.WorkerMetadata()
         self._worker_id = worker_id
         self._controller_address = controller_address
         self._task_env = task_env or {}
@@ -247,12 +249,12 @@ class TaskAttempt:
         self.task_id: JobName = config.task_id
         self.num_tasks: int = config.num_tasks
         self.attempt_id: int = config.attempt_id
-        self.request: cluster_pb2.Worker.RunTaskRequest = config.request
+        self.request: job_pb2.RunTaskRequest = config.request
         self.ports: dict[str, int] = {}
         self.workdir: Path | None = None
         self._cache_dir: Path = config.cache_dir
         # Task state
-        self.status: TaskState = initial_status or cluster_pb2.TASK_STATE_PENDING
+        self.status: TaskState = initial_status or job_pb2.TASK_STATE_PENDING
         self.exit_code: int | None = None
         self.error: str | None = None
         self.started_at: Timestamp | None = None
@@ -299,7 +301,7 @@ class TaskAttempt:
         attempt_id = discovered.attempt_id
         identity = TaskAttemptIdentity(task_id=task_id, attempt_id=attempt_id)
 
-        request = cluster_pb2.Worker.RunTaskRequest(
+        request = job_pb2.RunTaskRequest(
             task_id=discovered.task_id,
             attempt_id=attempt_id,
         )
@@ -324,7 +326,7 @@ class TaskAttempt:
             log_pusher=log_pusher,
             poll_interval_seconds=poll_interval_seconds,
             container_handle=container_handle,
-            initial_status=cluster_pb2.TASK_STATE_RUNNING,
+            initial_status=job_pb2.TASK_STATE_RUNNING,
         )
         instance.started_at = Timestamp.now()
         instance.status_message = "adopted"
@@ -353,7 +355,7 @@ class TaskAttempt:
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
             self._append_log(source="error", data=f"Monitoring failed:\n{error_msg}")
-            self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
+            self.transition_to(job_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
             self._cleanup()
             logger.info(
@@ -392,7 +394,7 @@ class TaskAttempt:
         """Whether this attempt has an active container handle."""
         return self._container_handle is not None
 
-    def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
         """Profile the running container process.
 
         Args:
@@ -411,20 +413,20 @@ class TaskAttempt:
 
     def exec_in_container(
         self, command: list[str], timeout_seconds: int = 60
-    ) -> cluster_pb2.Worker.ExecInContainerResponse:
+    ) -> worker_pb2.Worker.ExecInContainerResponse:
         """Execute a command in this task's container.
 
         Uses docker exec for Docker containers, subprocess for process containers.
         A negative timeout_seconds means no timeout.
         """
         if not self._container_handle:
-            return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {self.task_id} has no container handle")
+            return worker_pb2.Worker.ExecInContainerResponse(error=f"Task {self.task_id} has no container handle")
 
         import subprocess as _subprocess
 
         container_id = self._container_handle.container_id
         if not container_id:
-            return cluster_pb2.Worker.ExecInContainerResponse(error="No container ID available")
+            return worker_pb2.Worker.ExecInContainerResponse(error="No container ID available")
 
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
 
@@ -438,7 +440,7 @@ class TaskAttempt:
                 text=True,
                 timeout=effective_timeout,
             )
-            return cluster_pb2.Worker.ExecInContainerResponse(
+            return worker_pb2.Worker.ExecInContainerResponse(
                 exit_code=result.returncode,
                 stdout=result.stdout,
                 stderr=result.stderr,
@@ -451,7 +453,7 @@ class TaskAttempt:
             text=True,
             timeout=effective_timeout,
         )
-        return cluster_pb2.Worker.ExecInContainerResponse(
+        return worker_pb2.Worker.ExecInContainerResponse(
             exit_code=result.returncode,
             stdout=result.stdout,
             stderr=result.stderr,
@@ -485,8 +487,8 @@ class TaskAttempt:
         elapsed_ms = self.finished_at.epoch_ms() - self.started_at.epoch_ms()
         return Duration.from_ms(elapsed_ms)
 
-    def to_proto(self) -> cluster_pb2.TaskStatus:
-        proto = cluster_pb2.TaskStatus(
+    def to_proto(self) -> job_pb2.TaskStatus:
+        proto = job_pb2.TaskStatus(
             task_id=self.task_id.to_wire(),
             state=self.status,
             exit_code=self.exit_code or 0,
@@ -494,7 +496,7 @@ class TaskAttempt:
             ports=self.ports,
             current_attempt_id=self.attempt_id,
             container_id=self.platform_container_id or "",
-            resource_usage=cluster_pb2.ResourceUsage(
+            resource_usage=job_pb2.ResourceUsage(
                 memory_mb=self.current_memory_mb,
                 memory_peak_mb=self.peak_memory_mb,
                 disk_mb=self.disk_mb,
@@ -502,7 +504,7 @@ class TaskAttempt:
                 cpu_percent=self.current_cpu_percent,
                 process_count=self.process_count,
             ),
-            build_metrics=cluster_pb2.BuildMetrics(
+            build_metrics=job_pb2.BuildMetrics(
                 from_cache=self.build_from_cache,
                 image_tag=self.image_tag,
             ),
@@ -582,15 +584,15 @@ class TaskAttempt:
             self._run_container()
             self._monitor()
         except TaskCancelled:
-            self.transition_to(cluster_pb2.TASK_STATE_KILLED)
+            self.transition_to(job_pb2.TASK_STATE_KILLED)
         except ContainerInfraError as e:
             error_msg = format_exception_with_traceback(e)
             self._append_log(source="error", data=f"Infrastructure error:\n{error_msg}")
-            self.transition_to(cluster_pb2.TASK_STATE_WORKER_FAILED, error=error_msg)
+            self.transition_to(job_pb2.TASK_STATE_WORKER_FAILED, error=error_msg)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
             self._append_log(source="error", data=f"Task failed:\n{error_msg}")
-            self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
+            self.transition_to(job_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
             self._cleanup()
             logger.info(
@@ -607,7 +609,7 @@ class TaskAttempt:
         Transitions task to BUILDING state and performs chaos injection checks
         for testing delayed builds.
         """
-        self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
+        self.transition_to(job_pb2.TASK_STATE_BUILDING, message="downloading bundle")
         self.started_at = Timestamp.now()
         self._build_phase_start = time.monotonic()
 
@@ -726,7 +728,7 @@ class TaskAttempt:
         assert self._container_handle is not None
 
         if self.request.entrypoint.setup_commands:
-            self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="syncing dependencies")
+            self.transition_to(job_pb2.TASK_STATE_BUILDING, message="syncing dependencies")
             self.build_started = Timestamp.now()
 
         def on_build_logs(lines: list[LogLine]) -> None:
@@ -778,7 +780,7 @@ class TaskAttempt:
         while True:
             if rule := chaos("worker.task_monitor"):
                 time.sleep(rule.delay_seconds)
-                self.transition_to(cluster_pb2.TASK_STATE_FAILED, error="chaos: monitor crashed")
+                self.transition_to(job_pb2.TASK_STATE_FAILED, error="chaos: monitor crashed")
                 break
 
             # Check if we should stop
@@ -786,16 +788,16 @@ class TaskAttempt:
                 handle.stop(force=True)
                 logger.info("Task %s requested stop; killing container %s", self.task_id, self.container_id)
                 self._stream_logs(log_reader)  # Capture final logs
-                self.transition_to(cluster_pb2.TASK_STATE_KILLED)
+                self.transition_to(job_pb2.TASK_STATE_KILLED)
                 break
 
             # Check container status
             status = handle.status()
 
-            if self.status == cluster_pb2.TASK_STATE_BUILDING and status.phase == ContainerPhase.RUNNING:
+            if self.status == job_pb2.TASK_STATE_BUILDING and status.phase == ContainerPhase.RUNNING:
                 building_duration = time.monotonic() - self._build_phase_start
                 logger.info("Task %s BUILDING→RUNNING after %.1fs", self.task_id, building_duration)
-                self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
+                self.transition_to(job_pb2.TASK_STATE_RUNNING)
 
             if status.phase == ContainerPhase.STOPPED:
                 logger.info(
@@ -810,12 +812,12 @@ class TaskAttempt:
 
                 # Container has stopped
                 if status.error:
-                    failure_state = cluster_pb2.TASK_STATE_FAILED
+                    failure_state = job_pb2.TASK_STATE_FAILED
                     if status.error_kind == ContainerErrorKind.INFRA_NOT_FOUND:
-                        failure_state = cluster_pb2.TASK_STATE_WORKER_FAILED
+                        failure_state = job_pb2.TASK_STATE_WORKER_FAILED
                     self.transition_to(failure_state, error=status.error, exit_code=status.exit_code or -1)
                 elif status.exit_code == 0:
-                    self.transition_to(cluster_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
+                    self.transition_to(job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
                 else:
                     stderr_line = None
                     for entry in reversed(log_reader.read_all()):
@@ -828,7 +830,7 @@ class TaskAttempt:
                     if status.oom_killed:
                         self._append_log(source="error", data="Container was OOM killed by the kernel")
                     self.transition_to(
-                        cluster_pb2.TASK_STATE_FAILED,
+                        job_pb2.TASK_STATE_FAILED,
                         error=error,
                         exit_code=status.exit_code or -1,
                     )

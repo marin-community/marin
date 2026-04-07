@@ -20,7 +20,9 @@ from iris.cluster.types import (
     ResourceSpec,
     gpu_device,
 )
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from rigging.timing import Duration, ExponentialBackoff
 
 from .jobs import (
@@ -47,14 +49,14 @@ def test_submit_and_succeed(integration_cluster):
     """Submit a simple job and verify it succeeds."""
     job = integration_cluster.submit(quick, "itest-simple")
     status = integration_cluster.wait(job, timeout=integration_cluster.job_timeout)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_submit_and_fail(integration_cluster):
     """Submit a failing job and verify it reports failure."""
     job = integration_cluster.submit(fail, "itest-fail")
     status = integration_cluster.wait(job, timeout=integration_cluster.job_timeout)
-    assert status.state == cluster_pb2.JOB_STATE_FAILED
+    assert status.state == job_pb2.JOB_STATE_FAILED
 
 
 def test_cancel_job_releases_resources(integration_cluster):
@@ -64,15 +66,15 @@ def test_cancel_job_releases_resources(integration_cluster):
     """
     heavy_cpu = 2
     job = integration_cluster.submit(sleep, "itest-cancel-heavy", 30, cpu=heavy_cpu)
-    integration_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=integration_cluster.job_timeout)
+    integration_cluster.wait_for_state(job, job_pb2.JOB_STATE_RUNNING, timeout=integration_cluster.job_timeout)
 
     integration_cluster.kill(job)
     killed_status = integration_cluster.wait(job, timeout=integration_cluster.job_timeout)
-    assert killed_status.state == cluster_pb2.JOB_STATE_KILLED
+    assert killed_status.state == job_pb2.JOB_STATE_KILLED
 
     followup = integration_cluster.submit(quick, "itest-cancel-followup", cpu=heavy_cpu)
     followup_status = integration_cluster.wait(followup, timeout=integration_cluster.job_timeout)
-    assert followup_status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    assert followup_status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 # ============================================================================
@@ -85,7 +87,7 @@ def test_endpoint_registration(integration_cluster):
     prefix = f"itest-ep-{uuid.uuid4().hex[:8]}"
     job = integration_cluster.submit(register_endpoint, "itest-endpoint", prefix)
     status = integration_cluster.wait(job, timeout=integration_cluster.job_timeout)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_reservation_gates_scheduling(integration_cluster):
@@ -98,11 +100,11 @@ def test_reservation_gates_scheduling(integration_cluster):
         ],
     ) as reserved:
         reserved_status = integration_cluster.status(reserved)
-        assert reserved_status.state == cluster_pb2.JOB_STATE_PENDING
+        assert reserved_status.state == job_pb2.JOB_STATE_PENDING
 
         regular = integration_cluster.submit(quick, "itest-regular-while-reserved")
         status = integration_cluster.wait(regular, timeout=integration_cluster.job_timeout)
-        assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+        assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 # ============================================================================
@@ -166,7 +168,7 @@ def test_log_level_filter(integration_cluster, verbose_job):
 def test_region_constrained_routing(integration_cluster):
     """Job with region constraint lands on correct worker."""
     # Query workers to check for multi-region support
-    request = cluster_pb2.Controller.ListWorkersRequest()
+    request = controller_pb2.Controller.ListWorkersRequest()
     response = integration_cluster.controller_client.list_workers(request)
 
     from iris.cluster.constraints import WellKnownAttribute
@@ -220,7 +222,7 @@ def test_profile_running_task(integration_cluster):
         nonlocal last_state
         task = integration_cluster.task_status(job, task_index=0)
         last_state = task.state
-        return last_state == cluster_pb2.TASK_STATE_RUNNING
+        return last_state == job_pb2.TASK_STATE_RUNNING
 
     ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
         _is_running,
@@ -229,10 +231,10 @@ def test_profile_running_task(integration_cluster):
     )
     task_id = integration_cluster.task_status(job, task_index=0).task_id
 
-    request = cluster_pb2.ProfileTaskRequest(
+    request = job_pb2.ProfileTaskRequest(
         target=task_id,
         duration_seconds=1,
-        profile_type=cluster_pb2.ProfileType(cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.FLAMEGRAPH)),
+        profile_type=job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH)),
     )
     response = integration_cluster.controller_client.profile_task(request, timeout_ms=3000)
     assert len(response.profile_data) > 0
@@ -251,11 +253,11 @@ def test_exec_in_container(integration_cluster):
     """Exec a command in a running task's container."""
     job = integration_cluster.submit(sleep, "itest-exec", 120)
     task = integration_cluster.wait_for_task_state(
-        job, cluster_pb2.TASK_STATE_RUNNING, timeout=integration_cluster.job_timeout
+        job, job_pb2.TASK_STATE_RUNNING, timeout=integration_cluster.job_timeout
     )
     task_id = task.task_id
 
-    request = cluster_pb2.Controller.ExecInContainerRequest(
+    request = controller_pb2.Controller.ExecInContainerRequest(
         task_id=task_id,
         command=["echo", "hello"],
     )
@@ -282,4 +284,4 @@ def test_stress_50_tasks(integration_cluster):
         replicas=50,
     )
     status = integration_cluster.wait(job, timeout=integration_cluster.job_timeout * 2)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED

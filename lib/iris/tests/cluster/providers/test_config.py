@@ -24,8 +24,9 @@ from iris.cluster.config import (
 )
 from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.constraints import WellKnownAttribute
-from iris.rpc import cluster_pb2, config_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc import config_pb2
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, ExponentialBackoff
 
@@ -1890,7 +1891,7 @@ def test_smoke_gcp_config_boots_locally():
         # worker to confirm the config boots.
 
         def _has_healthy_worker() -> bool:
-            workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
+            workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
             return any(w.healthy for w in workers)
 
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until_or_raise(
