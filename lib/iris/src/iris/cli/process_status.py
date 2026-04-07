@@ -13,13 +13,14 @@ import click
 import humanfriendly
 
 from iris.cli.main import require_controller_url, rpc_client
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
 from iris.rpc.logging_connect import LogServiceClientSync
 
 _CONTROLLER_LOG_TARGET = "/system/controller"
 
 
-def _print_status(resp: cluster_pb2.GetProcessStatusResponse, label: str) -> None:
+def _print_status(resp: job_pb2.GetProcessStatusResponse, label: str) -> None:
     """Print process status to stdout in human-readable form."""
     info = resp.process_info
     click.echo(f"=== {label} Process Status ===")
@@ -57,7 +58,7 @@ def status(ctx, target: str | None, as_json: bool):
     label = target or "Controller"
     with rpc_client(url) as client:
         # GetProcessStatus uses empty string for controller
-        resp = client.get_process_status(cluster_pb2.GetProcessStatusRequest(max_log_lines=0, target=target or ""))
+        resp = client.get_process_status(job_pb2.GetProcessStatusRequest(max_log_lines=0, target=target or ""))
     if as_json:
         click.echo(json_format.MessageToJson(resp.process_info, preserving_proto_field_name=True, indent=2))
     else:
@@ -144,20 +145,18 @@ def profile(
     label = target or "Controller"
 
     if profiler == "threads":
-        profile_type = cluster_pb2.ProfileType(threads=cluster_pb2.ThreadsProfile(locals=include_locals))
+        profile_type = job_pb2.ProfileType(threads=job_pb2.ThreadsProfile(locals=include_locals))
     elif profiler == "cpu":
-        profile_type = cluster_pb2.ProfileType(cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.SPEEDSCOPE))
+        profile_type = job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.SPEEDSCOPE))
     elif profiler == "mem":
-        profile_type = cluster_pb2.ProfileType(
-            memory=cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.FLAMEGRAPH)
-        )
+        profile_type = job_pb2.ProfileType(memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.FLAMEGRAPH))
     else:
         raise click.ClickException(f"Unknown profiler type: {profiler}")
 
     click.echo(f"Profiling {label} ({profiler}, {duration}s)...")
     with rpc_client(url) as client:
         resp = client.profile_task(
-            cluster_pb2.ProfileTaskRequest(
+            job_pb2.ProfileTaskRequest(
                 target=rpc_target,
                 duration_seconds=duration,
                 profile_type=profile_type,

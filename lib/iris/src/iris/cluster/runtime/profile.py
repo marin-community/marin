@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from iris.cluster.types import TaskAttempt
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +31,16 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROCESS_TARGET = "/system/process"
 
 CPU_FORMAT_MAP: dict[int, tuple[str, str]] = {
-    cluster_pb2.CpuProfile.FLAMEGRAPH: ("flamegraph", "svg"),
-    cluster_pb2.CpuProfile.SPEEDSCOPE: ("speedscope", "json"),
-    cluster_pb2.CpuProfile.RAW: ("raw", "txt"),
+    job_pb2.CpuProfile.FLAMEGRAPH: ("flamegraph", "svg"),
+    job_pb2.CpuProfile.SPEEDSCOPE: ("speedscope", "json"),
+    job_pb2.CpuProfile.RAW: ("raw", "txt"),
 }
 
 MEMORY_FORMAT_MAP: dict[int, tuple[str, str]] = {
-    cluster_pb2.MemoryProfile.FLAMEGRAPH: ("flamegraph", "html"),
-    cluster_pb2.MemoryProfile.TABLE: ("table", "txt"),
-    cluster_pb2.MemoryProfile.STATS: ("stats", "json"),
-    cluster_pb2.MemoryProfile.RAW: ("raw", "bin"),
+    job_pb2.MemoryProfile.FLAMEGRAPH: ("flamegraph", "html"),
+    job_pb2.MemoryProfile.TABLE: ("table", "txt"),
+    job_pb2.MemoryProfile.STATS: ("stats", "json"),
+    job_pb2.MemoryProfile.RAW: ("raw", "bin"),
 }
 
 
@@ -73,7 +73,7 @@ class MemoryProfileSpec:
         return self.reporter in ("flamegraph", "stats")
 
 
-def resolve_cpu_spec(cpu_config: cluster_pb2.CpuProfile, duration_seconds: int, pid: str) -> CpuProfileSpec:
+def resolve_cpu_spec(cpu_config: job_pb2.CpuProfile, duration_seconds: int, pid: str) -> CpuProfileSpec:
     py_spy_format, ext = CPU_FORMAT_MAP.get(cpu_config.format, ("flamegraph", "svg"))
     rate_hz = cpu_config.rate_hz if cpu_config.rate_hz > 0 else 20
     native = cpu_config.native if cpu_config.HasField("native") else True
@@ -87,7 +87,7 @@ def resolve_cpu_spec(cpu_config: cluster_pb2.CpuProfile, duration_seconds: int, 
     )
 
 
-def resolve_memory_spec(memory_config: cluster_pb2.MemoryProfile, duration_seconds: int, pid: str) -> MemoryProfileSpec:
+def resolve_memory_spec(memory_config: job_pb2.MemoryProfile, duration_seconds: int, pid: str) -> MemoryProfileSpec:
     reporter, ext = MEMORY_FORMAT_MAP.get(memory_config.format, ("flamegraph", "html"))
     return MemoryProfileSpec(
         reporter=reporter,
@@ -151,7 +151,7 @@ def build_pyspy_dump_cmd(pid: str, py_spy_bin: str = "py-spy", *, include_locals
     return cmd
 
 
-def profile_local_process(duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+def profile_local_process(duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
     """Profile the current interpreter process using py-spy or memray.
 
     Used by the controller and worker to handle /system/process targets.
@@ -181,7 +181,7 @@ def run_pyspy_dump(pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool
     return result.stdout.encode("utf-8")
 
 
-def _run_pyspy_record(pid: str, duration_seconds: int, cpu_config: cluster_pb2.CpuProfile) -> bytes:
+def _run_pyspy_record(pid: str, duration_seconds: int, cpu_config: job_pb2.CpuProfile) -> bytes:
     """Run py-spy record against a local process and return the output."""
     spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=pid)
     output_path = None
@@ -199,7 +199,7 @@ def _run_pyspy_record(pid: str, duration_seconds: int, cpu_config: cluster_pb2.C
             Path(output_path).unlink(missing_ok=True)
 
 
-def _run_memray_profile(pid: str, duration_seconds: int, memory_config: cluster_pb2.MemoryProfile) -> bytes:
+def _run_memray_profile(pid: str, duration_seconds: int, memory_config: job_pb2.MemoryProfile) -> bytes:
     """Profile memory of the current process using memray's in-process Tracker.
 
     Uses the programmatic Tracker API instead of ``memray attach``, avoiding

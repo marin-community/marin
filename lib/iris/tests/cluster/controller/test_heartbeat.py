@@ -27,7 +27,9 @@ from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.log_store._types import TaskAttempt, task_log_key
 from iris.cluster.types import JobName, WorkerId
 from iris.log_server.server import LogServiceImpl
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from rigging.timing import Duration, Timestamp
 
 
@@ -41,7 +43,7 @@ def state(tmp_path):
 
 @pytest.fixture
 def worker_metadata():
-    return cluster_pb2.WorkerMetadata(
+    return job_pb2.WorkerMetadata(
         hostname="test-host",
         ip_address="192.168.1.1",
         cpu_count=8,
@@ -97,7 +99,7 @@ def test_complete_heartbeat_success(state, worker_metadata):
     _register_worker(state, "worker1", worker_metadata)
     snapshot = _make_snapshot("worker1")
 
-    response = cluster_pb2.HeartbeatResponse(worker_healthy=True)
+    response = job_pb2.HeartbeatResponse(worker_healthy=True)
     result = state.complete_heartbeat(snapshot, response)
 
     assert result.action == HeartbeatAction.OK
@@ -149,7 +151,7 @@ def test_complete_heartbeat_unhealthy_worker_increments_failures(state, worker_m
     _register_worker(state, "worker1", worker_metadata)
     snapshot = _make_snapshot("worker1")
 
-    response = cluster_pb2.HeartbeatResponse(
+    response = job_pb2.HeartbeatResponse(
         worker_healthy=False,
         health_error="disk free space 2.1% below threshold 5%",
     )
@@ -168,7 +170,7 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
     """
     db = ControllerDB(db_dir=tmp_path)
     state = ControllerTransitions(db=db, heartbeat_failure_threshold=1)
-    worker_metadata = cluster_pb2.WorkerMetadata(
+    worker_metadata = job_pb2.WorkerMetadata(
         hostname="test-host",
         ip_address="192.168.1.1",
         cpu_count=8,
@@ -180,7 +182,7 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
     job_id = JobName.from_wire("/user/test-job")
     state.submit_job(
         job_id,
-        cluster_pb2.Controller.LaunchJobRequest(
+        controller_pb2.Controller.LaunchJobRequest(
             name="/user/test-job",
             replicas=1,
         ),
@@ -196,21 +198,21 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
                 TaskUpdate(
                     task_id=task_id,
                     attempt_id=0,
-                    new_state=cluster_pb2.TASK_STATE_RUNNING,
+                    new_state=job_pb2.TASK_STATE_RUNNING,
                 )
             ],
         )
     )
 
     snapshot = _make_snapshot("worker1", running_tasks=[RunningTaskEntry(task_id, 0)])
-    response = cluster_pb2.HeartbeatResponse(
+    response = job_pb2.HeartbeatResponse(
         worker_healthy=False,
         health_error="tempfile write failed",
         tasks=[
-            cluster_pb2.Controller.WorkerTaskStatus(
+            job_pb2.WorkerTaskStatus(
                 task_id=task_id.to_wire(),
                 attempt_id=0,
-                state=cluster_pb2.TASK_STATE_RUNNING,
+                state=job_pb2.TASK_STATE_RUNNING,
             )
         ],
     )
@@ -222,7 +224,7 @@ def test_unhealthy_worker_cascades_to_tasks(tmp_path):
             q.fetchall("SELECT * FROM tasks WHERE task_id = ? LIMIT 1", (task_id.to_wire(),)),
         )
     assert task is not None
-    assert task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert task.state == job_pb2.TASK_STATE_WORKER_FAILED
 
 
 def test_reap_stale_workers_removes_old_heartbeat(tmp_path, worker_metadata):
@@ -286,10 +288,10 @@ def test_reap_stale_workers_no_op_when_all_fresh(tmp_path, worker_metadata):
 class _FakeStub:
     """Stub that returns a canned HeartbeatResponse."""
 
-    def __init__(self, response: cluster_pb2.HeartbeatResponse):
+    def __init__(self, response: job_pb2.HeartbeatResponse):
         self._response = response
 
-    def heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse:
+    def heartbeat(self, request: job_pb2.HeartbeatRequest) -> job_pb2.HeartbeatResponse:
         return self._response
 
 
@@ -327,13 +329,13 @@ def test_heartbeat_forwards_old_worker_log_entries(tmp_path):
     log_entry = logging_pb2.LogEntry(source="stdout", data="old-worker log line")
     log_entry.timestamp.epoch_ms = 42000
 
-    response = cluster_pb2.HeartbeatResponse(
+    response = job_pb2.HeartbeatResponse(
         worker_healthy=True,
         tasks=[
-            cluster_pb2.Controller.WorkerTaskStatus(
+            job_pb2.WorkerTaskStatus(
                 task_id=task_id.to_wire(),
                 attempt_id=attempt_id,
-                state=cluster_pb2.TASK_STATE_RUNNING,
+                state=job_pb2.TASK_STATE_RUNNING,
                 log_entries=[log_entry],
             )
         ],
@@ -373,13 +375,13 @@ def test_heartbeat_no_log_entries_no_push(tmp_path):
     attempt_id = 0
     log_key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
 
-    response = cluster_pb2.HeartbeatResponse(
+    response = job_pb2.HeartbeatResponse(
         worker_healthy=True,
         tasks=[
-            cluster_pb2.Controller.WorkerTaskStatus(
+            job_pb2.WorkerTaskStatus(
                 task_id=task_id.to_wire(),
                 attempt_id=attempt_id,
-                state=cluster_pb2.TASK_STATE_RUNNING,
+                state=job_pb2.TASK_STATE_RUNNING,
             )
         ],
     )
@@ -416,19 +418,19 @@ def test_heartbeat_forwards_logs_for_multiple_tasks(tmp_path):
     entry_1 = logging_pb2.LogEntry(source="stderr", data="task-1 error")
     entry_1.timestamp.epoch_ms = 2000
 
-    response = cluster_pb2.HeartbeatResponse(
+    response = job_pb2.HeartbeatResponse(
         worker_healthy=True,
         tasks=[
-            cluster_pb2.Controller.WorkerTaskStatus(
+            job_pb2.WorkerTaskStatus(
                 task_id=task_id_0.to_wire(),
                 attempt_id=0,
-                state=cluster_pb2.TASK_STATE_RUNNING,
+                state=job_pb2.TASK_STATE_RUNNING,
                 log_entries=[entry_0],
             ),
-            cluster_pb2.Controller.WorkerTaskStatus(
+            job_pb2.WorkerTaskStatus(
                 task_id=task_id_1.to_wire(),
                 attempt_id=0,
-                state=cluster_pb2.TASK_STATE_RUNNING,
+                state=job_pb2.TASK_STATE_RUNNING,
                 log_entries=[entry_1],
             ),
         ],

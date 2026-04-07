@@ -51,7 +51,7 @@ from iris.cluster.types import (
     TaskAttempt,
     adjust_tpu_replicas,
 )
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 from iris.time_proto import timestamp_from_proto
 from rigging.timing import Duration, Timestamp
 
@@ -90,10 +90,10 @@ def _task_id_from_key(key: str) -> JobName:
 class JobFailedError(Exception):
     """Raised when a job ends in a non-SUCCESS terminal state."""
 
-    def __init__(self, job_id: JobName, status: cluster_pb2.JobStatus):
+    def __init__(self, job_id: JobName, status: job_pb2.JobStatus):
         self.job_id = job_id
         self.status = status
-        state_name = cluster_pb2.JobState.Name(status.state)
+        state_name = job_pb2.JobState.Name(status.state)
         msg = f"Job {job_id} {state_name}"
         if status.error:
             msg += f": {status.error}"
@@ -141,7 +141,7 @@ class Task:
         """Parent job identifier."""
         return self._task_name.parent or self._task_name
 
-    def status(self) -> cluster_pb2.TaskStatus:
+    def status(self) -> job_pb2.TaskStatus:
         """Get current task status.
 
         Returns:
@@ -150,7 +150,7 @@ class Task:
         return self._client._cluster_client.get_task_status(self.task_id)
 
     @property
-    def state(self) -> cluster_pb2.TaskState:
+    def state(self) -> job_pb2.TaskState:
         """Get current task state (shortcut for status().state)."""
         return self.status().state
 
@@ -216,7 +216,7 @@ class Job:
     def __repr__(self) -> str:
         return f"Job({self._job_id!r})"
 
-    def status(self) -> cluster_pb2.JobStatus:
+    def status(self) -> job_pb2.JobStatus:
         """Get current job status.
 
         Returns:
@@ -233,7 +233,7 @@ class Job:
         return states[wire_id]
 
     @property
-    def state(self) -> cluster_pb2.JobState:
+    def state(self) -> job_pb2.JobState:
         """Get current job state (shortcut for status().state)."""
         return self.status().state
 
@@ -255,7 +255,7 @@ class Job:
         stream_logs: bool = False,
         since_ms: int = 0,
         min_level: str = "",
-    ) -> cluster_pb2.JobStatus:
+    ) -> job_pb2.JobStatus:
         """Wait for job to complete.
 
         Args:
@@ -284,7 +284,7 @@ class Job:
                 min_level=min_level,
             )
 
-        if raise_on_failure and status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
+        if raise_on_failure and status.state != job_pb2.JOB_STATE_SUCCEEDED:
             raise JobFailedError(self._job_id, status)
 
         return status
@@ -562,8 +562,8 @@ class IrisClient:
         timeout: Duration | None = None,
         user: str | None = None,
         reservation: list[ReservationEntry] | None = None,
-        preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
-        existing_job_policy: cluster_pb2.ExistingJobPolicy = cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+        existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -653,7 +653,7 @@ class IrisClient:
         coscheduling_proto = coscheduling.to_proto() if coscheduling else None
         reservation_proto = None
         if reservation:
-            reservation_proto = cluster_pb2.ReservationConfig(
+            reservation_proto = job_pb2.ReservationConfig(
                 entries=[e.to_proto() for e in reservation],
             )
 
@@ -682,7 +682,7 @@ class IrisClient:
 
         return Job(self, canonical_id)
 
-    def status(self, job_id: JobName) -> cluster_pb2.JobStatus:
+    def status(self, job_id: JobName) -> job_pb2.JobStatus:
         """Get job status.
 
         Args:
@@ -704,9 +704,9 @@ class IrisClient:
     def list_jobs(
         self,
         *,
-        states: list[cluster_pb2.JobState] | None = None,
+        states: list[job_pb2.JobState] | None = None,
         prefix: JobName | None = None,
-    ) -> list[cluster_pb2.JobStatus]:
+    ) -> list[job_pb2.JobStatus]:
         """List jobs with optional filtering.
 
         Args:
@@ -743,10 +743,10 @@ class IrisClient:
             List of job IDs that were terminated
         """
         terminal_states = {
-            cluster_pb2.JOB_STATE_SUCCEEDED,
-            cluster_pb2.JOB_STATE_FAILED,
-            cluster_pb2.JOB_STATE_KILLED,
-            cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+            job_pb2.JOB_STATE_SUCCEEDED,
+            job_pb2.JOB_STATE_FAILED,
+            job_pb2.JOB_STATE_KILLED,
+            job_pb2.JOB_STATE_UNSCHEDULABLE,
         }
 
         jobs = self.list_jobs(prefix=prefix)
@@ -759,7 +759,7 @@ class IrisClient:
             terminated.append(job_id)
         return terminated
 
-    def task_status(self, task_name: JobName) -> cluster_pb2.TaskStatus:
+    def task_status(self, task_name: JobName) -> job_pb2.TaskStatus:
         """Get status of a specific task.
 
         Args:
@@ -770,7 +770,7 @@ class IrisClient:
         """
         return self._cluster_client.get_task_status(task_name)
 
-    def list_tasks(self, job_id: JobName) -> list[cluster_pb2.TaskStatus]:
+    def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.
 
         Args:

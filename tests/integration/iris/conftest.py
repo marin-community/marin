@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from iris.client.client import IrisClient
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.logging_connect import LogServiceClientSync
 
 from .cluster import IrisIntegrationCluster

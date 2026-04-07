@@ -107,13 +107,15 @@ from iris.cluster.types import (
 )
 from rigging.log_setup import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from iris.rpc.auth import TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp, TokenBucket
 
 logger = logging.getLogger(__name__)
 
-_RESOURCE_SPEC_DECODER = proto_decoder(cluster_pb2.ResourceSpecProto)
+_RESOURCE_SPEC_DECODER = proto_decoder(job_pb2.ResourceSpecProto)
 
 # Sentinel for dry-run scheduling with per-worker limits disabled.
 _UNLIMITED = sys.maxsize
@@ -166,7 +168,7 @@ class RunningTaskInfo:
     band_sort_key: int  # 1=production, 2=interactive, 3=batch
     resource_value: int
     is_coscheduled: bool
-    resources: cluster_pb2.ResourceSpecProto
+    resources: job_pb2.ResourceSpecProto
     already_preempted: bool = False
 
 
@@ -221,7 +223,7 @@ class _SchedulingOrder:
 def job_requirements_from_job(job: JobSchedulingRow) -> JobRequirements:
     """Convert a job row to scheduler-compatible JobRequirements."""
     return JobRequirements(
-        resources=job.resources or cluster_pb2.ResourceSpecProto(),
+        resources=job.resources or job_pb2.ResourceSpecProto(),
         constraints=job.constraints,
         is_coscheduled=job.has_coscheduling,
         coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
@@ -327,7 +329,7 @@ def compute_demand_entries(
             continue
 
         job_constraints = job.constraints
-        job_resources = job.resources or cluster_pb2.ResourceSpecProto()
+        job_resources = job.resources or job_pb2.ResourceSpecProto()
 
         invalid_reason: str | None = None
         try:
@@ -443,7 +445,7 @@ def _get_running_tasks_with_band_and_value(
             "FROM tasks t "
             "JOIN jobs j ON j.job_id = t.job_id "
             "WHERE t.state = ? AND t.current_worker_id IS NOT NULL",
-            (cluster_pb2.TASK_STATE_RUNNING,),
+            (job_pb2.TASK_STATE_RUNNING,),
             decoders={
                 "task_id": JobName.from_wire,
                 "priority_band": int,
@@ -498,7 +500,7 @@ def _run_preemption_pass(
     for candidate in unscheduled_tasks:
         task_id, req, task_band_key = candidate.job_name, candidate.requirements, candidate.band
         # Batch never preempts
-        if task_band_key >= cluster_pb2.PRIORITY_BAND_BATCH:
+        if task_band_key >= job_pb2.PRIORITY_BAND_BATCH:
             continue
 
         for victim in victims:
@@ -548,7 +550,7 @@ def _schedulable_tasks(queries: ControllerDB) -> list[TaskRow]:
                 f"SELECT {TASK_ROW_PROJECTION.select_clause()} FROM tasks t WHERE t.state = ? "
                 "ORDER BY t.priority_band ASC, t.priority_neg_depth ASC, t.priority_root_submitted_ms ASC, "
                 "t.submitted_at_ms ASC, t.priority_insertion ASC",
-                (cluster_pb2.TASK_STATE_PENDING,),
+                (job_pb2.TASK_STATE_PENDING,),
             ),
         )
     return [task for task in tasks if task_row_can_be_scheduled(task)]
@@ -593,7 +595,7 @@ def _building_counts(queries: ControllerDB, workers: list[WorkerRow]) -> dict[Wo
     with queries.read_snapshot() as q:
         rows = q.raw(
             sql,
-            (*worker_ids, cluster_pb2.TASK_STATE_BUILDING, cluster_pb2.TASK_STATE_ASSIGNED),
+            (*worker_ids, job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED),
             decoders={"worker_id": WorkerId, "cnt": int},
         )
     return {row.worker_id: row.cnt for row in rows}
@@ -628,7 +630,7 @@ def _task_worker_mapping(queries: ControllerDB, task_ids: set[JobName]) -> dict[
 
 def _worker_matches_reservation_entry(
     worker: WorkerRow,
-    res_entry: cluster_pb2.ReservationEntry,
+    res_entry: job_pb2.ReservationEntry,
 ) -> bool:
     """Check if a worker is eligible for a reservation entry.
 
@@ -699,18 +701,18 @@ def _inject_taint_constraints(
     if has_direct_reservation is None:
         has_direct_reservation = set()
 
-    taint_constraint = cluster_pb2.Constraint(
+    taint_constraint = job_pb2.Constraint(
         key=RESERVATION_TAINT_KEY,
-        op=cluster_pb2.CONSTRAINT_OP_NOT_EXISTS,
+        op=job_pb2.CONSTRAINT_OP_NOT_EXISTS,
     )
 
     modified: dict[JobName, JobRequirements] = {}
     for job_id, req in jobs.items():
         if job_id in has_direct_reservation:
-            eq_constraint = cluster_pb2.Constraint(
+            eq_constraint = job_pb2.Constraint(
                 key=RESERVATION_TAINT_KEY,
-                op=cluster_pb2.CONSTRAINT_OP_EQ,
-                value=cluster_pb2.AttributeValue(string_value=job_id.to_wire()),
+                op=job_pb2.CONSTRAINT_OP_EQ,
+                value=job_pb2.AttributeValue(string_value=job_id.to_wire()),
             )
             modified[job_id] = replace(
                 req,
@@ -749,8 +751,8 @@ def _reservation_region_constraints(
     job_id_wire: str,
     claims: dict[WorkerId, ReservationClaim],
     queries: ControllerDB,
-    existing_constraints: list[cluster_pb2.Constraint],
-) -> list[cluster_pb2.Constraint]:
+    existing_constraints: list[job_pb2.Constraint],
+) -> list[job_pb2.Constraint]:
     """Derive region constraints from claimed reservation workers.
 
     When a reservation job has no explicit region constraint, this function
@@ -781,16 +783,16 @@ def _reservation_region_constraints(
 
     region_list = sorted(regions)
     if len(region_list) == 1:
-        region_constraint = cluster_pb2.Constraint(
+        region_constraint = job_pb2.Constraint(
             key=WellKnownAttribute.REGION,
-            op=cluster_pb2.CONSTRAINT_OP_EQ,
-            value=cluster_pb2.AttributeValue(string_value=region_list[0]),
+            op=job_pb2.CONSTRAINT_OP_EQ,
+            value=job_pb2.AttributeValue(string_value=region_list[0]),
         )
     else:
-        region_constraint = cluster_pb2.Constraint(
+        region_constraint = job_pb2.Constraint(
             key=WellKnownAttribute.REGION,
-            op=cluster_pb2.CONSTRAINT_OP_IN,
-            values=[cluster_pb2.AttributeValue(string_value=r) for r in region_list],
+            op=job_pb2.CONSTRAINT_OP_IN,
+            values=[job_pb2.AttributeValue(string_value=r) for r in region_list],
         )
 
     return [*existing_constraints, region_constraint]
@@ -1405,13 +1407,13 @@ class Controller:
         if not profile_targets:
             return
 
-        cpu_profile_type = cluster_pb2.ProfileType(
-            cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.RAW),
+        cpu_profile_type = job_pb2.ProfileType(
+            cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.RAW),
         )
         self._dispatch_profiles(profile_targets, cpu_profile_type, "cpu", self._config.profile_duration)
 
-        memory_profile_type = cluster_pb2.ProfileType(
-            memory=cluster_pb2.MemoryProfile(format=cluster_pb2.MemoryProfile.STATS),
+        memory_profile_type = job_pb2.ProfileType(
+            memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.STATS),
         )
         self._dispatch_profiles(profile_targets, memory_profile_type, "memory", self._config.profile_duration)
 
@@ -1420,7 +1422,7 @@ class Controller:
     def _dispatch_profiles(
         self,
         targets: list[tuple[JobName, WorkerRow]],
-        profile_type: cluster_pb2.ProfileType,
+        profile_type: job_pb2.ProfileType,
         profile_kind: str,
         duration: int,
     ) -> None:
@@ -1438,13 +1440,13 @@ class Controller:
         self,
         task_id: JobName,
         worker: WorkerRow,
-        profile_type: cluster_pb2.ProfileType,
+        profile_type: job_pb2.ProfileType,
         profile_kind: str,
         duration: int,
     ) -> None:
         """Capture a single task profile via RPC and store it in the DB."""
         try:
-            request = cluster_pb2.ProfileTaskRequest(
+            request = job_pb2.ProfileTaskRequest(
                 target=task_id.to_wire(),
                 duration_seconds=duration,
                 profile_type=profile_type,
@@ -1500,7 +1502,7 @@ class Controller:
             row = q.fetchone("SELECT request_proto FROM jobs WHERE job_id = ?", (job_id.to_wire(),))
         if row is None:
             return 0
-        req = cluster_pb2.Controller.LaunchJobRequest()
+        req = controller_pb2.Controller.LaunchJobRequest()
         req.ParseFromString(row[0])
         return len(req.reservation.entries) if req.HasField("reservation") else 0
 
@@ -1548,9 +1550,9 @@ class Controller:
         changed = False
 
         reservable_states = (
-            cluster_pb2.JOB_STATE_PENDING,
-            cluster_pb2.JOB_STATE_BUILDING,
-            cluster_pb2.JOB_STATE_RUNNING,
+            job_pb2.JOB_STATE_PENDING,
+            job_pb2.JOB_STATE_BUILDING,
+            job_pb2.JOB_STATE_RUNNING,
         )
         reservation_jobs = _jobs_with_reservations(self._db, reservable_states)
         for job in reservation_jobs:
@@ -1728,7 +1730,7 @@ class Controller:
         }
         tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
         for task_id in schedulable_task_ids:
-            band = task_band_map.get(task_id, cluster_pb2.PRIORITY_BAND_INTERACTIVE)
+            band = task_band_map.get(task_id, job_pb2.PRIORITY_BAND_INTERACTIVE)
             tasks_by_band[band].append(task_id)
 
         interleaved: list[JobName] = []
@@ -1811,7 +1813,7 @@ class Controller:
             PreemptionCandidate(
                 job_name=tid,
                 requirements=jobs[tid.parent],
-                band=order.task_band_map.get(tid, cluster_pb2.PRIORITY_BAND_INTERACTIVE),
+                band=order.task_band_map.get(tid, job_pb2.PRIORITY_BAND_INTERACTIVE),
             )
             for tid in order.ordered_task_ids
             if tid not in assigned_ids and tid.parent is not None and tid.parent in jobs
@@ -2156,9 +2158,7 @@ class Controller:
         if _HEALTH_SUMMARY_INTERVAL.should_run():
             workers = healthy_active_workers_with_attributes(self._db)
             with self._db.read_snapshot() as snap:
-                active = snap.fetchone(
-                    "SELECT COUNT(*) FROM jobs j WHERE j.state = ?", (cluster_pb2.JOB_STATE_RUNNING,)
-                )[
+                active = snap.fetchone("SELECT COUNT(*) FROM jobs j WHERE j.state = ?", (job_pb2.JOB_STATE_RUNNING,))[
                     0
                 ]  # type: ignore[index]
             pending = len(_schedulable_tasks(self._db))
@@ -2239,25 +2239,25 @@ class Controller:
 
     def launch_job(
         self,
-        request: cluster_pb2.Controller.LaunchJobRequest,
-    ) -> cluster_pb2.Controller.LaunchJobResponse:
+        request: controller_pb2.Controller.LaunchJobRequest,
+    ) -> controller_pb2.Controller.LaunchJobResponse:
         """Submit a job to the controller."""
         return self._service.launch_job(request, None)
 
     def get_job_status(
         self,
         job_id: str,
-    ) -> cluster_pb2.Controller.GetJobStatusResponse:
+    ) -> controller_pb2.Controller.GetJobStatusResponse:
         """Get the status of a job."""
-        request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id)
+        request = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id)
         return self._service.get_job_status(request, None)
 
     def terminate_job(
         self,
         job_id: str,
-    ) -> cluster_pb2.Empty:
+    ) -> job_pb2.Empty:
         """Terminate a running job."""
-        request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
+        request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id)
         return self._service.terminate_job(request, None)
 
     # Properties

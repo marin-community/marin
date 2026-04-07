@@ -32,7 +32,10 @@ from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_re
 from iris.cluster.types import JobName, get_gpu_count
 from iris.logging import str_to_log_level
 from rigging.log_setup import parse_log_level
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+from iris.rpc import worker_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
 
@@ -78,7 +81,7 @@ _INFRASTRUCTURE_FAILURE_REASONS = frozenset({"Evicted", "DeadlineExceeded", "Pre
 
 
 def _constraints_to_node_selector(
-    constraints: Sequence[cluster_pb2.Constraint],
+    constraints: Sequence[job_pb2.Constraint],
 ) -> dict[str, str]:
     """Map Iris constraints to k8s nodeSelector entries.
 
@@ -90,7 +93,7 @@ def _constraints_to_node_selector(
         label_key = _CONSTRAINT_KEY_TO_NODE_LABEL.get(c.key)
         if label_key is None:
             continue
-        if c.op == cluster_pb2.CONSTRAINT_OP_EQ and c.HasField("value"):
+        if c.op == job_pb2.CONSTRAINT_OP_EQ and c.HasField("value"):
             node_selector[label_key] = c.value.string_value
         else:
             raise ValueError(
@@ -227,7 +230,7 @@ class PodConfig:
     task_env: dict[str, str] = field(default_factory=dict)
 
 
-def _build_task_script(run_req: cluster_pb2.Worker.RunTaskRequest) -> str:
+def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
     """Build a shell script that runs setup_commands then the run_command."""
     lines = ["set -e", "ulimit -c 0", "mkdir -p /app", "cd /app"]
     for cmd in run_req.entrypoint.setup_commands:
@@ -238,7 +241,7 @@ def _build_task_script(run_req: cluster_pb2.Worker.RunTaskRequest) -> str:
 
 
 def _build_init_container_spec(
-    run_req: cluster_pb2.Worker.RunTaskRequest,
+    run_req: job_pb2.RunTaskRequest,
     pod_name: str,
     default_image: str,
     controller_address: str | None,
@@ -307,7 +310,7 @@ def _build_init_container_spec(
     return init_containers, extra_volumes, configmap_name
 
 
-def _is_coordinator_task(run_req: cluster_pb2.Worker.RunTaskRequest) -> bool:
+def _is_coordinator_task(run_req: job_pb2.RunTaskRequest) -> bool:
     """Heuristic: single-task job with no accelerators is a coordinator/orchestrator.
 
     Coordinator pods (e.g. zephyr *-coord jobs) are single-replica, CPU-only
@@ -358,7 +361,7 @@ def _build_pdb_manifest(
 
 
 def _build_pod_manifest(
-    run_req: cluster_pb2.Worker.RunTaskRequest,
+    run_req: job_pb2.RunTaskRequest,
     config: PodConfig,
 ) -> dict:
     """Build a Pod manifest dict from a RunTaskRequest and cluster config."""
@@ -559,29 +562,29 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
         return TaskUpdate(
             task_id=task_id,
             attempt_id=attempt_id,
-            new_state=cluster_pb2.TASK_STATE_BUILDING,
+            new_state=job_pb2.TASK_STATE_BUILDING,
         )
 
     if phase == "Running":
         return TaskUpdate(
             task_id=task_id,
             attempt_id=attempt_id,
-            new_state=cluster_pb2.TASK_STATE_RUNNING,
+            new_state=job_pb2.TASK_STATE_RUNNING,
         )
 
     if phase == "Succeeded":
         return TaskUpdate(
             task_id=task_id,
             attempt_id=attempt_id,
-            new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+            new_state=job_pb2.TASK_STATE_SUCCEEDED,
         )
 
     # Failed or Unknown -- distinguish infrastructure vs application failure.
     exit_code = _extract_exit_code(pod)
     if _is_infrastructure_failure(pod):
-        new_state = cluster_pb2.TASK_STATE_WORKER_FAILED
+        new_state = job_pb2.TASK_STATE_WORKER_FAILED
     else:
-        new_state = cluster_pb2.TASK_STATE_FAILED
+        new_state = job_pb2.TASK_STATE_FAILED
     return TaskUpdate(
         task_id=task_id,
         attempt_id=attempt_id,
@@ -730,7 +733,7 @@ class ResourceCollector:
     def __init__(self, kubectl: K8sService, concurrency: int = 8):
         self._kubectl = kubectl
         self._pods: dict[str, str] = {}  # cursor_key -> pod_name
-        self._results: dict[str, cluster_pb2.ResourceUsage] = {}  # cursor_key -> latest reading
+        self._results: dict[str, job_pb2.ResourceUsage] = {}  # cursor_key -> latest reading
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._executor = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="resource-collect")
@@ -748,7 +751,7 @@ class ResourceCollector:
             self._pods.pop(key, None)
             self._results.pop(key, None)
 
-    def get(self, task_id: JobName, attempt_id: int) -> cluster_pb2.ResourceUsage | None:
+    def get(self, task_id: JobName, attempt_id: int) -> job_pb2.ResourceUsage | None:
         """Return the latest resource reading for a pod (non-blocking)."""
         key = f"{task_id.to_wire()}:{attempt_id}"
         with self._lock:
@@ -772,7 +775,7 @@ class ResourceCollector:
             top = self._kubectl.top_pod(pod_name)
             if top is not None:
                 cpu_mc, mem_bytes = top
-                usage = cluster_pb2.ResourceUsage(
+                usage = job_pb2.ResourceUsage(
                     cpu_millicores=cpu_mc,
                     memory_mb=mem_bytes // (1024 * 1024),
                 )
@@ -858,7 +861,7 @@ class K8sTaskProvider:
                     TaskUpdate(
                         task_id=JobName.from_wire(run_req.task_id),
                         attempt_id=run_req.attempt_id,
-                        new_state=cluster_pb2.TASK_STATE_FAILED,
+                        new_state=job_pb2.TASK_STATE_FAILED,
                         error=str(exc),
                     )
                 )
@@ -880,8 +883,8 @@ class K8sTaskProvider:
         self,
         task_id: str,
         attempt_id: int,
-        request: cluster_pb2.ProfileTaskRequest,
-    ) -> cluster_pb2.ProfileTaskResponse:
+        request: job_pb2.ProfileTaskRequest,
+    ) -> job_pb2.ProfileTaskResponse:
         """Profile a running task pod via kubectl exec."""
         pod_name = _pod_name(JobName.from_wire(task_id), attempt_id)
         duration = request.duration_seconds or 10
@@ -895,9 +898,9 @@ class K8sTaskProvider:
             elif profile_type.HasField("memory"):
                 return self._profile_memory(pod_name, profile_type.memory, duration)
             else:
-                return cluster_pb2.ProfileTaskResponse(error="Unknown profile type")
+                return job_pb2.ProfileTaskResponse(error="Unknown profile type")
         except Exception as e:
-            return cluster_pb2.ProfileTaskResponse(error=str(e))
+            return job_pb2.ProfileTaskResponse(error=str(e))
 
     def exec_in_container(
         self,
@@ -905,19 +908,19 @@ class K8sTaskProvider:
         attempt_id: int,
         command: list[str],
         timeout_seconds: int = 60,
-    ) -> cluster_pb2.Worker.ExecInContainerResponse:
+    ) -> worker_pb2.Worker.ExecInContainerResponse:
         """Execute a command in a running task pod via kubectl exec."""
         pod_name = _pod_name(JobName.from_wire(task_id), attempt_id)
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
         try:
             result = self.kubectl.exec(pod_name, command, container="task", timeout=effective_timeout)
-            return cluster_pb2.Worker.ExecInContainerResponse(
+            return worker_pb2.Worker.ExecInContainerResponse(
                 exit_code=result.returncode,
                 stdout=result.stdout,
                 stderr=result.stderr,
             )
         except Exception as e:
-            return cluster_pb2.Worker.ExecInContainerResponse(error=str(e))
+            return worker_pb2.Worker.ExecInContainerResponse(error=str(e))
 
     def close(self) -> None:
         if self._log_collector is not None:
@@ -925,7 +928,7 @@ class K8sTaskProvider:
         if self._resource_collector is not None:
             self._resource_collector.close()
 
-    def get_cluster_status(self) -> cluster_pb2.Controller.GetKubernetesClusterStatusResponse:
+    def get_cluster_status(self) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Query Kubernetes for cluster-level status: node counts, capacity, and recent pod statuses."""
         nodes: list[dict] = []
         try:
@@ -954,7 +957,7 @@ class K8sTaskProvider:
         allocatable_cpu = f"{total_cpu_mc / 1000:.1f} cores" if total_cpu_mc else "0 cores"
         allocatable_memory = _format_bytes(total_memory_bytes)
 
-        pod_statuses: list[cluster_pb2.Controller.KubernetesPodStatus] = []
+        pod_statuses: list[controller_pb2.Controller.KubernetesPodStatus] = []
         try:
             pods = self.kubectl.list_json(
                 "pods",
@@ -994,7 +997,7 @@ class K8sTaskProvider:
                                     pass
                             break
 
-                ps = cluster_pb2.Controller.KubernetesPodStatus(
+                ps = controller_pb2.Controller.KubernetesPodStatus(
                     pod_name=pod_name,
                     task_id=task_id,
                     phase=phase,
@@ -1007,7 +1010,7 @@ class K8sTaskProvider:
         except Exception as e:
             logger.warning("Failed to query pod statuses: %s", e)
 
-        node_pools: list[cluster_pb2.Controller.NodePoolStatus] = []
+        node_pools: list[controller_pb2.Controller.NodePoolStatus] = []
         try:
             np_labels = {self.managed_label: "true"} if self.managed_label else None
             pools = self.kubectl.list_json("nodepools", labels=np_labels, cluster_scoped=True)
@@ -1022,7 +1025,7 @@ class K8sTaskProvider:
                         scale_group = lv
                         break
                 node_pools.append(
-                    cluster_pb2.Controller.NodePoolStatus(
+                    controller_pb2.Controller.NodePoolStatus(
                         name=meta.get("name", ""),
                         instance_type=spec.get("instanceType", ""),
                         scale_group=scale_group,
@@ -1040,7 +1043,7 @@ class K8sTaskProvider:
         except Exception as e:
             logger.warning("Failed to query nodepools: %s", e)
 
-        return cluster_pb2.Controller.GetKubernetesClusterStatusResponse(
+        return controller_pb2.Controller.GetKubernetesClusterStatusResponse(
             namespace=self.namespace,
             total_nodes=total_nodes,
             schedulable_nodes=schedulable_nodes,
@@ -1066,19 +1069,15 @@ class K8sTaskProvider:
             raise RuntimeError(f"kubectl exec failed (exit {result.returncode}): {result.stderr}")
         return result.stdout
 
-    def _profile_threads(
-        self, pod_name: str, threads_config: cluster_pb2.ThreadsProfile
-    ) -> cluster_pb2.ProfileTaskResponse:
+    def _profile_threads(self, pod_name: str, threads_config: job_pb2.ThreadsProfile) -> job_pb2.ProfileTaskResponse:
         """Get thread stacks via py-spy dump."""
         from iris.cluster.runtime.profile import build_pyspy_dump_cmd
 
         cmd = shlex.join(build_pyspy_dump_cmd("1", include_locals=threads_config.locals))
         stdout = self._kubectl_exec_shell(pod_name, cmd, timeout=30)
-        return cluster_pb2.ProfileTaskResponse(profile_data=stdout.encode("utf-8"))
+        return job_pb2.ProfileTaskResponse(profile_data=stdout.encode("utf-8"))
 
-    def _profile_cpu(
-        self, pod_name: str, cpu_config: cluster_pb2.CpuProfile, duration: int
-    ) -> cluster_pb2.ProfileTaskResponse:
+    def _profile_cpu(self, pod_name: str, cpu_config: job_pb2.CpuProfile, duration: int) -> job_pb2.ProfileTaskResponse:
         """Record CPU profile via py-spy."""
         from iris.cluster.runtime.profile import build_pyspy_cmd, resolve_cpu_spec
 
@@ -1088,11 +1087,11 @@ class K8sTaskProvider:
         self._kubectl_exec_shell(pod_name, cmd, timeout=duration + 30)
         data = self.kubectl.read_file(pod_name, output_path, container="task")
         self.kubectl.rm_files(pod_name, [output_path], container="task")
-        return cluster_pb2.ProfileTaskResponse(profile_data=data)
+        return job_pb2.ProfileTaskResponse(profile_data=data)
 
     def _profile_memory(
-        self, pod_name: str, memory_config: cluster_pb2.MemoryProfile, duration: int
-    ) -> cluster_pb2.ProfileTaskResponse:
+        self, pod_name: str, memory_config: job_pb2.MemoryProfile, duration: int
+    ) -> job_pb2.ProfileTaskResponse:
         """Record memory profile via memray."""
         from iris.cluster.runtime.profile import (
             build_memray_attach_cmd,
@@ -1110,7 +1109,7 @@ class K8sTaskProvider:
         if spec.is_raw:
             data = self.kubectl.read_file(pod_name, trace_path, container="task")
             self.kubectl.rm_files(pod_name, [trace_path], container="task")
-            return cluster_pb2.ProfileTaskResponse(profile_data=data)
+            return job_pb2.ProfileTaskResponse(profile_data=data)
 
         transform_cmd = shlex.join(
             build_memray_transform_cmd(spec, memray_bin="memray", trace_path=trace_path, output_path=output_path)
@@ -1123,7 +1122,7 @@ class K8sTaskProvider:
             data = transform_stdout.encode("utf-8")
 
         self.kubectl.rm_files(pod_name, [trace_path, output_path], container="task")
-        return cluster_pb2.ProfileTaskResponse(profile_data=data)
+        return job_pb2.ProfileTaskResponse(profile_data=data)
 
     # -------------------------------------------------------------------------
     # Internal helpers
@@ -1144,7 +1143,7 @@ class K8sTaskProvider:
             task_env=self.task_env,
         )
 
-    def _apply_pod(self, run_req: cluster_pb2.Worker.RunTaskRequest) -> None:
+    def _apply_pod(self, run_req: job_pb2.RunTaskRequest) -> None:
         """Create or update the Pod for a task attempt."""
         manifest = _build_pod_manifest(run_req, self.pod_config)
 
@@ -1313,7 +1312,7 @@ class K8sTaskProvider:
                         TaskUpdate(
                             task_id=entry.task_id,
                             attempt_id=entry.attempt_id,
-                            new_state=cluster_pb2.TASK_STATE_RUNNING,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
                         )
                     )
                     continue
@@ -1324,7 +1323,7 @@ class K8sTaskProvider:
                     TaskUpdate(
                         task_id=entry.task_id,
                         attempt_id=entry.attempt_id,
-                        new_state=cluster_pb2.TASK_STATE_FAILED,
+                        new_state=job_pb2.TASK_STATE_FAILED,
                         error="Pod not found",
                     )
                 )

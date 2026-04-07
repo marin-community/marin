@@ -24,7 +24,7 @@ from typing import Protocol
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 
 class ContainerInfraError(RuntimeError):
@@ -82,10 +82,10 @@ class ContainerConfig:
     """Configuration for running a container."""
 
     image: str
-    entrypoint: cluster_pb2.RuntimeEntrypoint
+    entrypoint: job_pb2.RuntimeEntrypoint
     env: dict[str, str]
     workdir: str = "/app"
-    resources: cluster_pb2.ResourceSpecProto | None = None
+    resources: job_pb2.ResourceSpecProto | None = None
     timeout_seconds: int | None = None
     mounts: list[MountSpec] = field(default_factory=list)
     network_mode: str = "host"  # e.g. "host" for --network=host
@@ -94,7 +94,7 @@ class ContainerConfig:
     attempt_id: int | None = None
     job_id: str | None = None
     worker_id: str | None = None
-    worker_metadata: cluster_pb2.WorkerMetadata | None = None
+    worker_metadata: job_pb2.WorkerMetadata | None = None
 
     def get_cpu_millicores(self) -> int | None:
         if not self.resources or not self.resources.cpu_millicores:
@@ -250,7 +250,7 @@ class ContainerHandle(Protocol):
         """
         ...
 
-    def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump.
 
         Args:
