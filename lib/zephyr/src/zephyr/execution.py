@@ -771,9 +771,10 @@ class ZephyrCoordinator:
         """Block until current stage completes or error occurs.
 
         Args:
-            spawn_fn: If provided, called with queue_depth when workers need to
-                be spawned (tasks are queued but no workers are alive). Used for
-                on-demand worker creation.
+            spawn_fn: If provided, called with the desired number of additional
+                workers when the in-flight count is below
+                ``min(max_workers, queue_depth)``. Used for on-demand worker
+                creation.
         """
         backoff = ExponentialBackoff(initial=0.1, maximum=1.0)
         last_log_completed = -1
@@ -808,14 +809,29 @@ class ZephyrCoordinator:
 
             in_flight_workers = alive_workers + pending_workers
 
-            if in_flight_workers == 0:
-                if queue_depth > 0 and spawn_fn is not None:
-                    # Tasks waiting but no workers — spawn a batch
-                    spawn_fn(queue_depth)
-                    all_dead_since = None
-                    backoff.reset()
-                    continue
+            # In single-task mode, alive workers in BUSY state are processing
+            # an already-pulled task and will not pull more from the queue.
+            # Demand for new workers is therefore `queue_depth - pending` —
+            # the queued tasks that have not been promised to a worker yet.
+            # The budget is `max_workers - in_flight`, the slots remaining
+            # within the user's concurrency limit. Spawn the deficit.
+            queue_demand = max(0, queue_depth - pending_workers)
+            slot_budget = max(0, self._max_workers - in_flight_workers)
+            needed = min(queue_demand, slot_budget)
 
+            if needed > 0 and spawn_fn is not None:
+                spawn_fn(needed)
+                all_dead_since = None
+                backoff.reset()
+                continue
+
+            if in_flight_workers > 0:
+                # Workers are alive or pending — reset the dead timer.
+                all_dead_since = None
+            else:
+                # Nothing in flight and we don't need to spawn (queue is
+                # empty but the stage isn't done — tasks are stuck in the
+                # `_in_flight` map waiting for heartbeat to requeue them).
                 now = time.monotonic()
                 elapsed = now - start_time
 
@@ -831,9 +847,6 @@ class ZephyrCoordinator:
                         f"All {len(self._worker_handles)} registered workers are dead/failed. "
                         "Check cluster resources and worker group configuration."
                     )
-            else:
-                # Workers are alive — reset the dead timer
-                all_dead_since = None
 
             if completed != last_log_completed:
                 logger.info("[%s] %d/%d tasks completed", self._stage_name, completed, total)
@@ -925,9 +938,10 @@ class ZephyrCoordinator:
     ) -> None:
         """Load tasks, spawn workers on-demand, and wait until all tasks complete.
 
-        Workers are created in batches. Each worker executes a single task and
-        exits. When all workers in a batch finish and tasks remain (from the
-        initial queue or from failure requeues), a new batch is spawned.
+        Workers are created in batches. ``_wait_for_stage`` calls ``spawn_fn``
+        with the desired number of additional workers whenever the in-flight
+        count is below ``min(max_workers, queue_depth)``. Each worker executes
+        a single task and exits.
         """
         self._start_stage(stage_label, tasks)
         if not tasks:
@@ -935,9 +949,8 @@ class ZephyrCoordinator:
 
         worker_groups: list = []
 
-        def spawn_fn(queue_depth: int) -> None:
-            batch_size = min(self._max_workers, queue_depth)
-            group = self.spawn_worker_batch(batch_size, resources)
+        def spawn_fn(count: int) -> None:
+            group = self.spawn_worker_batch(count, resources)
             worker_groups.append(group)
 
         try:
