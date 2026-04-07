@@ -852,6 +852,11 @@ class ClusterState:
         )
 
 
+# After this many consecutive fetch failures, the LogCollector/ResourceCollector
+# will auto-untrack a pod (it's likely been deleted).
+_COLLECTOR_MAX_CONSECUTIVE_FAILURES = 5
+
+
 @dataclass
 class _LogPod:
     """A pod tracked by LogCollector for incremental log fetching."""
@@ -860,6 +865,7 @@ class _LogPod:
     task_id: JobName
     attempt_id: int
     last_timestamp: datetime | None = None
+    consecutive_failures: int = 0
 
 
 class LogCollector:
@@ -916,11 +922,25 @@ class LogCollector:
             return
         try:
             self._fetch_and_store(pod)
+            if pod.consecutive_failures >= _COLLECTOR_MAX_CONSECUTIVE_FAILURES:
+                key = f"{pod.task_id.to_wire()}:{pod.attempt_id}"
+                logger.info(
+                    "LogCollector: auto-untracking pod %s after %d consecutive failures",
+                    pod.pod_name,
+                    pod.consecutive_failures,
+                )
+                with self._lock:
+                    self._pods.pop(key, None)
+                    self._pod_locks.pop(key, None)
         finally:
             pod_lock.release()
 
-    def _fetch_and_store(self, pod: _LogPod) -> None:
-        """Fetch logs since last timestamp and advance. Must be called under pod lock."""
+    def _fetch_and_store(self, pod: _LogPod) -> bool:
+        """Fetch logs since last timestamp and advance. Must be called under pod lock.
+
+        Returns True on success, False on failure. Consecutive failures are tracked
+        so the collector can stop polling deleted pods.
+        """
         try:
             result = self._kubectl.stream_logs(pod.pod_name, container="task", since_time=pod.last_timestamp)
             if result.lines:
@@ -928,8 +948,18 @@ class LogCollector:
                 key = task_log_key(TaskAttempt(task_id=pod.task_id, attempt_id=pod.attempt_id))
                 self._log_pusher.push(key, entries)
             pod.last_timestamp = result.last_timestamp
+            pod.consecutive_failures = 0
+            return True
         except Exception as e:
-            logger.warning("LogCollector: fetch failed for pod %s: %s", pod.pod_name, e)
+            pod.consecutive_failures += 1
+            logger.warning(
+                "LogCollector: fetch failed for pod %s (%d/%d): %s",
+                pod.pod_name,
+                pod.consecutive_failures,
+                _COLLECTOR_MAX_CONSECUTIVE_FAILURES,
+                e,
+            )
+            return False
 
     def close(self) -> None:
         self._stop.set()
@@ -948,6 +978,7 @@ class ResourceCollector:
     def __init__(self, kubectl: K8sService, concurrency: int = 8):
         self._kubectl = kubectl
         self._pods: dict[str, str] = {}  # cursor_key -> pod_name
+        self._consecutive_failures: dict[str, int] = {}  # cursor_key -> failure count
         self._results: dict[str, job_pb2.ResourceUsage] = {}  # cursor_key -> latest reading
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -965,6 +996,7 @@ class ResourceCollector:
         with self._lock:
             self._pods.pop(key, None)
             self._results.pop(key, None)
+            self._consecutive_failures.pop(key, None)
 
     def get(self, task_id: JobName, attempt_id: int) -> job_pb2.ResourceUsage | None:
         """Return the latest resource reading for a pod (non-blocking)."""
@@ -988,16 +1020,35 @@ class ResourceCollector:
     def _fetch_one(self, key: str, pod_name: str) -> None:
         try:
             top = self._kubectl.top_pod(pod_name)
-            if top is not None:
-                cpu_mc, mem_bytes = top
-                usage = job_pb2.ResourceUsage(
-                    cpu_millicores=cpu_mc,
-                    memory_mb=mem_bytes // (1024 * 1024),
-                )
-                with self._lock:
-                    self._results[key] = usage
         except Exception as e:
-            logger.debug("ResourceCollector: failed for pod %s: %s", pod_name, e)
+            logger.debug("ResourceCollector: top_pod raised for pod %s: %s", pod_name, e)
+            top = None
+
+        if top is not None:
+            cpu_mc, mem_bytes = top
+            usage = job_pb2.ResourceUsage(
+                cpu_millicores=cpu_mc,
+                memory_mb=mem_bytes // (1024 * 1024),
+            )
+            with self._lock:
+                self._results[key] = usage
+                self._consecutive_failures[key] = 0
+            return
+
+        # top_pod returned None (metrics unavailable) or raised — treat as a miss.
+        with self._lock:
+            count = self._consecutive_failures.get(key, 0) + 1
+            self._consecutive_failures[key] = count
+        if count >= _COLLECTOR_MAX_CONSECUTIVE_FAILURES:
+            logger.info(
+                "ResourceCollector: auto-untracking pod %s after %d consecutive misses",
+                pod_name,
+                count,
+            )
+            with self._lock:
+                self._pods.pop(key, None)
+                self._results.pop(key, None)
+                self._consecutive_failures.pop(key, None)
 
     def close(self) -> None:
         self._stop.set()
@@ -1040,6 +1091,7 @@ class K8sTaskProvider:
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_gc_time: float = field(default=0.0, init=False, repr=False)
+    _pending_gc_hashes: set[str] = field(default_factory=set, init=False, repr=False)
 
     def _ensure_resource_collector(self) -> ResourceCollector:
         if self._resource_collector is None:
@@ -1310,7 +1362,10 @@ class K8sTaskProvider:
             logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
 
     def _bulk_delete_task_pods(self, task_ids: list[str], cached_pods: list[dict]) -> None:
-        """Delete pods, configmaps, and PDBs for multiple tasks in one kubectl call per resource type."""
+        """Delete pods for killed tasks. ConfigMaps and PDBs are cleaned up by the
+        periodic GC pass (_gc_terminal_resources) to avoid listing all configmaps/PDBs
+        on every sync cycle — which was an O(total_resources) scan on the hot path.
+        """
         if not task_ids:
             return
         task_hashes = {_task_hash(tid) for tid in task_ids}
@@ -1321,36 +1376,13 @@ class K8sTaskProvider:
             if p.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH) in task_hashes
         ]
 
-        managed_labels = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE}
-
-        all_cms = self.kubectl.list_json("configmaps", labels=managed_labels)
-        cm_names = [
-            c["metadata"]["name"]
-            for c in all_cms
-            if c.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH) in task_hashes
-        ]
-
-        all_pdbs = self.kubectl.list_json("poddisruptionbudgets", labels=managed_labels)
-        pdb_names = [
-            p["metadata"]["name"]
-            for p in all_pdbs
-            if p.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH) in task_hashes
-        ]
-
         if pod_names:
             self.kubectl.delete_many("pods", pod_names, wait=False)
-        if cm_names:
-            self.kubectl.delete_many("configmaps", cm_names, wait=False)
-        if pdb_names:
-            self.kubectl.delete_many("poddisruptionbudgets", pdb_names, wait=False)
 
-        logger.info(
-            "Deleted %d pods, %d configmaps, %d PDBs for %d tasks",
-            len(pod_names),
-            len(cm_names),
-            len(pdb_names),
-            len(task_ids),
-        )
+        # Enqueue task hashes for deferred configmap/PDB cleanup by the GC pass.
+        self._pending_gc_hashes.update(task_hashes)
+
+        logger.info("Deleted %d pods for %d tasks (CM/PDB cleanup deferred to GC)", len(pod_names), len(task_ids))
 
     def _maybe_gc_terminal_resources(self) -> None:
         """Periodically delete terminal (Succeeded/Failed) pods and their associated
@@ -1372,7 +1404,20 @@ class K8sTaskProvider:
     def _gc_terminal_resources(self) -> None:
         cutoff = datetime.now(timezone.utc).timestamp() - _GC_MAX_AGE_SECONDS
 
-        # Collect terminal pods older than the cutoff.
+        # 1. Targeted cleanup: delete configmaps/PDBs for tasks that were killed
+        #    since last GC. Uses label-selector deletes (one kubectl call per hash)
+        #    instead of listing all resources and filtering client-side.
+        pending = self._pending_gc_hashes.copy()
+        self._pending_gc_hashes.clear()
+        for task_hash in pending:
+            labels = {**_MANAGED_POD_LABELS, _LABEL_TASK_HASH: task_hash}
+            self.kubectl.delete_by_labels("configmaps", labels, wait=False)
+            self.kubectl.delete_by_labels("poddisruptionbudgets", labels, wait=False)
+        if pending:
+            logger.info("GC: cleaned up CMs/PDBs for %d killed task hashes", len(pending))
+
+        # 2. Age-based sweep: delete terminal pods older than the cutoff, and
+        #    their associated configmaps/PDBs (by task_hash label-selector delete).
         old_pod_names: list[str] = []
         old_task_hashes: set[str] = set()
         for phase in ("Succeeded", "Failed"):
@@ -1393,47 +1438,18 @@ class K8sTaskProvider:
                     if task_hash:
                         old_task_hashes.add(task_hash)
 
-        # Collect configmaps whose task_hash belongs to a terminal pod, or that are old
-        # and have no corresponding active pod.
-        all_cms = self.kubectl.list_json("configmaps", labels=_MANAGED_POD_LABELS)
-        old_cm_names: list[str] = []
-        for cm in all_cms:
-            meta = cm.get("metadata", {})
-            task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
-            created = meta.get("creationTimestamp", "")
-            if not created:
-                continue
-            ts = datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
-            if ts < cutoff and task_hash in old_task_hashes:
-                old_cm_names.append(meta["name"])
-
-        # Collect PDBs the same way.
-        all_pdbs = self.kubectl.list_json("poddisruptionbudgets", labels=_MANAGED_POD_LABELS)
-        old_pdb_names: list[str] = []
-        for pdb in all_pdbs:
-            meta = pdb.get("metadata", {})
-            task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
-            created = meta.get("creationTimestamp", "")
-            if not created:
-                continue
-            ts = datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
-            if ts < cutoff and task_hash in old_task_hashes:
-                old_pdb_names.append(meta["name"])
-
         if old_pod_names:
             self.kubectl.delete_many("pods", old_pod_names, wait=False)
-        if old_cm_names:
-            self.kubectl.delete_many("configmaps", old_cm_names, wait=False)
-        if old_pdb_names:
-            self.kubectl.delete_many("poddisruptionbudgets", old_pdb_names, wait=False)
+        for task_hash in old_task_hashes:
+            labels = {**_MANAGED_POD_LABELS, _LABEL_TASK_HASH: task_hash}
+            self.kubectl.delete_by_labels("configmaps", labels, wait=False)
+            self.kubectl.delete_by_labels("poddisruptionbudgets", labels, wait=False)
 
-        total = len(old_pod_names) + len(old_cm_names) + len(old_pdb_names)
-        if total > 0:
+        if old_pod_names:
             logger.info(
-                "GC: deleted %d terminal pods, %d configmaps, %d PDBs (age > %ds)",
+                "GC: deleted %d terminal pods + CMs/PDBs for %d task hashes (age > %ds)",
                 len(old_pod_names),
-                len(old_cm_names),
-                len(old_pdb_names),
+                len(old_task_hashes),
                 _GC_MAX_AGE_SECONDS,
             )
 

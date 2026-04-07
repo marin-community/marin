@@ -62,6 +62,12 @@ class K8sService(Protocol):
         """Delete multiple resources by name in a single kubectl call."""
         ...
 
+    def delete_by_labels(
+        self, resource: str, labels: dict[str, str], *, cluster_scoped: bool = False, wait: bool = False
+    ) -> None:
+        """Delete all resources matching the given label selector."""
+        ...
+
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str: ...
 
     def stream_logs(
@@ -247,6 +253,20 @@ class CloudK8sService:
         result = self._run(args, namespaced=not cluster_scoped)
         if result.returncode != 0:
             raise KubectlError(f"kubectl delete {resource} failed: {result.stderr.strip()}")
+
+    def delete_by_labels(
+        self, resource: str, labels: dict[str, str], *, cluster_scoped: bool = False, wait: bool = False
+    ) -> None:
+        """Delete all resources matching the given label selector in a single kubectl call."""
+        if not labels:
+            return
+        selector = ",".join(f"{k}={v}" for k, v in labels.items())
+        args = ["delete", resource, "-l", selector, "--ignore-not-found"]
+        if not wait:
+            args.append("--wait=false")
+        result = self._run(args, namespaced=not cluster_scoped)
+        if result.returncode != 0:
+            raise KubectlError(f"kubectl delete {resource} -l {selector} failed: {result.stderr.strip()}")
 
     def set_image(self, resource: str, name: str, container: str, image: str, *, namespaced: bool = False) -> None:
         """Set the container image on a resource via ``kubectl set image``."""

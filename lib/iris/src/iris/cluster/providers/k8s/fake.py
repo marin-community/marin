@@ -719,6 +719,24 @@ class InMemoryK8sService:
         for name in names:
             self.delete(resource, name)
 
+    def delete_by_labels(
+        self, resource: str, labels: dict[str, str], *, cluster_scoped: bool = False, wait: bool = False
+    ) -> None:
+        """Delete all resources matching the given label selector."""
+        self._check_failure("delete_by_labels")
+        if not labels:
+            return
+        normalized = _normalize_resource(resource)
+        to_delete = []
+        for (kind, name), manifest in self._resources.items():
+            if kind != normalized:
+                continue
+            res_labels = manifest.get("metadata", {}).get("labels", {})
+            if all(res_labels.get(k) == v for k, v in labels.items()):
+                to_delete.append(name)
+        for name in to_delete:
+            self.delete(resource, name)
+
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str:
         self._check_failure("logs")
         text = self._logs.get(pod_name, "")
@@ -736,6 +754,10 @@ class InMemoryK8sService:
         since_time: datetime | None = None,
     ) -> KubectlLogResult:
         self._check_failure("stream_logs")
+        pod_exists = any(name == pod_name for (_, name) in self._resources)
+        has_logs = pod_name in self._logs
+        if not pod_exists and not has_logs:
+            raise KubectlError(f"pod {pod_name!r} not found")
         text = self._logs.get(pod_name, "")
         raw = text.encode("utf-8")
         watermark = self._log_watermarks.get(pod_name, 0) if since_time is not None else 0

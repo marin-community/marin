@@ -15,6 +15,7 @@ from iris.log_server.server import LogServiceImpl
 from iris.rpc import logging_pb2
 from iris.cluster.providers.k8s.tasks import (
     K8sTaskProvider,
+    _COLLECTOR_MAX_CONSECUTIVE_FAILURES,
     _GC_MAX_AGE_SECONDS,
     _LABEL_JOB_ID,
     _LABEL_MANAGED,
@@ -880,8 +881,8 @@ def test_sync_creates_pdb_for_coordinator_task(provider, k8s):
     assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == _task_hash("/coord-job/0")
 
 
-def test_bulk_delete_cleans_up_pdbs(provider, k8s):
-    """_bulk_delete_task_pods also deletes associated PDBs."""
+def test_bulk_delete_defers_pdb_cleanup_to_gc(provider, k8s):
+    """_bulk_delete_task_pods deletes pods immediately but defers PDB/CM cleanup to GC."""
     task_id = "/coord-job/0"
     task_hash = _task_hash(task_id)
     labels = {
@@ -901,7 +902,13 @@ def test_bulk_delete_cleans_up_pdbs(provider, k8s):
     cached_pods = k8s.list_json("pods", labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
     provider._bulk_delete_task_pods([task_id], cached_pods)
 
+    # Pod deleted immediately.
     assert k8s.get_json("pod", "iris-coord-pod") is None
+    # PDB still exists — deferred to GC.
+    assert k8s.get_json("poddisruptionbudget", "iris-coord-pod-pdb") is not None
+
+    # GC pass cleans up the deferred PDB.
+    provider._gc_terminal_resources()
     assert k8s.get_json("poddisruptionbudget", "iris-coord-pod-pdb") is None
 
 
@@ -994,3 +1001,91 @@ def test_gc_respects_interval(provider, k8s):
     _seed_terminal_pod(k8s, "gc-pod-2", "Succeeded", "bbbb444455556666", old_ts)
     provider._maybe_gc_terminal_resources()
     assert k8s.get_json("pod", "gc-pod-2") is not None  # Still exists
+
+
+def test_gc_cleans_up_deferred_configmaps(provider, k8s):
+    """GC deletes configmaps for task hashes enqueued by _bulk_delete_task_pods."""
+    task_id = "/deferred-job/0"
+    task_hash = _task_hash(task_id)
+    labels = {
+        _LABEL_MANAGED: "true",
+        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+        _LABEL_TASK_HASH: task_hash,
+    }
+
+    # Seed a configmap (no pod needed — the hash is what matters).
+    cm = {
+        "kind": "ConfigMap",
+        "metadata": {"name": "deferred-cm", "labels": labels},
+    }
+    k8s.seed_resource("configmap", "deferred-cm", cm)
+
+    # Simulate _bulk_delete_task_pods enqueuing the hash.
+    provider._pending_gc_hashes.add(task_hash)
+
+    # GC picks it up and deletes the configmap.
+    provider._gc_terminal_resources()
+    assert k8s.get_json("configmap", "deferred-cm") is None
+
+
+# ---------------------------------------------------------------------------
+# Collector auto-untrack on consecutive failures
+# ---------------------------------------------------------------------------
+
+
+def test_log_collector_auto_untracks_after_consecutive_failures(k8s, log_pusher):
+    """LogCollector stops polling a pod after it fails stream_logs enough times.
+
+    The fake K8sService raises KubectlError for stream_logs on nonexistent pods,
+    matching real kubectl behavior.
+    """
+    from iris.cluster.providers.k8s.tasks import LogCollector
+    from iris.cluster.types import JobName
+
+    collector = LogCollector(k8s, log_pusher, concurrency=1)
+    task_id = JobName.from_wire("/fail-job/0")
+
+    # Track a pod that doesn't exist — stream_logs will raise on each fetch.
+    collector.track("nonexistent-pod", task_id, 0)
+    key = f"{task_id.to_wire()}:0"
+
+    for _ in range(_COLLECTOR_MAX_CONSECUTIVE_FAILURES):
+        with collector._lock:
+            pod = collector._pods.get(key)
+        if pod is None:
+            break
+        pod_lock = collector._pod_locks.get(key)
+        if pod_lock is None:
+            break
+        collector._guarded_fetch(pod, pod_lock)
+
+    with collector._lock:
+        assert key not in collector._pods
+    collector.close()
+
+
+def test_resource_collector_auto_untracks_after_consecutive_failures(k8s):
+    """ResourceCollector stops polling a pod that consistently returns no metrics.
+
+    The fake K8sService returns None from top_pod for nonexistent pods,
+    matching real kubectl behavior (metrics-server has no data).
+    """
+    from iris.cluster.providers.k8s.tasks import ResourceCollector
+    from iris.cluster.types import JobName
+
+    collector = ResourceCollector(k8s, concurrency=1)
+    task_id = JobName.from_wire("/fail-job/0")
+
+    # Track a pod that doesn't exist — top_pod will return None on each fetch.
+    collector.track("nonexistent-pod", task_id, 0)
+    key = f"{task_id.to_wire()}:0"
+
+    for _ in range(_COLLECTOR_MAX_CONSECUTIVE_FAILURES):
+        with collector._lock:
+            if key not in collector._pods:
+                break
+        collector._fetch_one(key, "nonexistent-pod")
+
+    with collector._lock:
+        assert key not in collector._pods
+    collector.close()
