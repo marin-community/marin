@@ -24,7 +24,7 @@ import jax
 import jax.numpy as jnp
 from haliax.jax_utils import named_call, tree_checkpoint_name
 from jax import shard_map
-from jax.sharding import PartitionSpec as P, get_abstract_mesh
+from jax.sharding import PartitionSpec as P, get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
@@ -493,6 +493,13 @@ def moe_mlp(
 
     batch_spec = _batch_spec_from_x(x, mesh)
     local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
+
+    # JAX 0.9 validates shard_map inputs against in_specs strictly. These kernels
+    # operate on weights that are only expert-sharded at the shard_map boundary,
+    # so make that re-sharding explicit instead of relying on older implicit
+    # behavior.
+    w_up_gate = reshard(w_up_gate, local_expert_spec)
+    w_down = reshard(w_down, local_expert_spec)
 
     if has_expert_axis and expert_axis_size > 1:
         if num_experts % expert_axis_size != 0:

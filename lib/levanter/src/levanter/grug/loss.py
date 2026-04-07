@@ -9,7 +9,7 @@ reference implementation on non-TPU backends.
 
 import jax
 import jax.numpy as jnp
-from jax.sharding import PartitionSpec as P
+from jax.sharding import PartitionSpec as P, reshard
 
 from haliax.jax_utils import named_call
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
@@ -93,6 +93,11 @@ def fused_linear_softmax_cross_entropy_loss(
     weight_array = weight if weight is not None else jnp.ones_like(labels, dtype=dtype)
     batch_axis_spec = _batch_axis_spec(hidden)
     batch_axis_names = _axis_names_from_spec(batch_axis_spec)
+
+    # JAX 0.9 enforces shard_map input specs strictly. The local fused loss shard
+    # expects a replicated LM head at the shard_map boundary, so make that
+    # resharding explicit instead of relying on older implicit behavior.
+    lm_head = reshard(lm_head, P(None, None))
 
     def _loss_shard(
         shard_hidden: jax.Array,
