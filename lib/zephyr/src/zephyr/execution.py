@@ -831,6 +831,17 @@ class ZephyrCoordinator:
 
         Each worker pulls one task, executes it, reports the result, and exits.
         Returns the ActorGroup for lifecycle management.
+
+        Blocks until at least one worker from the batch has called
+        ``register_worker``. ``ActorGroup.wait_ready`` is the backend's
+        notion of "the actor object exists" — on Local and Ray it returns
+        immediately; on Iris it waits for the actor to be discoverable
+        and fails fast if the underlying job died. None of the backends
+        wait for the actor's ``__init__`` to finish, so we follow up with
+        ``_await_first_registration`` which polls the coordinator's own
+        worker map. Without this, ``_wait_for_stage`` would see
+        ``alive_workers == 0`` right after spawning and immediately call
+        ``spawn_fn`` again, producing a tight spawn-storm.
         """
         batch_id = self._worker_batch_counter
         self._worker_batch_counter += 1
@@ -844,8 +855,33 @@ class ZephyrCoordinator:
             resources=resources,
             actor_config=ActorConfig(max_task_retries=10),
         )
-        group.wait_ready(count=1, timeout=3600.0)
+        group.wait_ready(count=1)
+        self._await_first_registration(name, timeout=3600.0)
         return group
+
+    def _await_first_registration(self, batch_name: str, timeout: float) -> None:
+        """Block until at least one worker whose id starts with ``batch_name`` has registered.
+
+        Workers register themselves from ``ZephyrWorker.__init__``, but on
+        Ray that runs asynchronously after ``wait_ready`` returns. Polling
+        ``_worker_handles`` here keeps the spawn loop in sync with actual
+        worker startup. Checks presence rather than state because a fast
+        single-task worker may already have run its task and transitioned
+        to DEAD by the time we observe it — that still counts as a
+        successful registration for spawn-decision purposes.
+        """
+        prefix = f"{batch_name}-"
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._lock:
+                for worker_id in self._worker_handles:
+                    if worker_id.startswith(prefix):
+                        return
+            time.sleep(0.05)
+        raise ZephyrWorkerError(
+            f"No worker from batch {batch_name} registered within {timeout:.0f}s. "
+            "Check cluster resources and worker startup logs."
+        )
 
     def _stage_resources(self, stage: Any) -> ResourceConfig:
         """Return the resource config for a stage."""
