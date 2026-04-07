@@ -17,7 +17,8 @@ Lifecycle of a log entry:
        b. If the newest segment is already large (>= ``SEGMENT_TARGET_BYTES``),
           a new Parquet file is created.
        c. The sealed RAM buffer is removed (readers no longer need it).
-       d. The new/updated file is copied to GCS (best-effort).
+       d. The new/updated file is copied to GCS with bounded retry;
+          permanent failures are logged at ERROR.
        e. GC drops oldest local segments past count/byte limits.
 
 Read path: DuckDB ``read_parquet()`` over the snapshot of local Parquet files
@@ -92,6 +93,12 @@ DEFAULT_FLUSH_INTERVAL_SEC = 600.0  # 10 minutes
 # Default caps for local Parquet retention.
 DEFAULT_MAX_LOCAL_SEGMENTS = 50
 DEFAULT_MAX_LOCAL_BYTES = 5 * 1024**3  # 5 GB
+
+# GCS offload retry policy. Total wall time at default settings:
+# 1 + 2 + 4 = 7 seconds of backoff across 4 attempts.
+DEFAULT_GCS_OFFLOAD_MAX_ATTEMPTS = 4
+DEFAULT_GCS_OFFLOAD_INITIAL_BACKOFF_SEC = 1.0
+DEFAULT_GCS_OFFLOAD_BACKOFF_MULTIPLIER = 2.0
 
 _ROW_GROUP_SIZE = 16_384
 
@@ -390,6 +397,9 @@ class DuckDBLogStore:
         flush_interval_sec: float = DEFAULT_FLUSH_INTERVAL_SEC,
         segment_target_bytes: int = SEGMENT_TARGET_BYTES,
         duckdb_memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT,
+        gcs_offload_max_attempts: int = DEFAULT_GCS_OFFLOAD_MAX_ATTEMPTS,
+        gcs_offload_initial_backoff_sec: float = DEFAULT_GCS_OFFLOAD_INITIAL_BACKOFF_SEC,
+        gcs_offload_backoff_multiplier: float = DEFAULT_GCS_OFFLOAD_BACKOFF_MULTIPLIER,
     ):
         self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
         if log_dir is not None:
@@ -404,6 +414,11 @@ class DuckDBLogStore:
         self._max_local_bytes = max_local_bytes
         self._flush_interval_sec = flush_interval_sec
         self._segment_target_bytes = segment_target_bytes
+        if gcs_offload_max_attempts < 1:
+            raise ValueError("gcs_offload_max_attempts must be >= 1")
+        self._gcs_offload_max_attempts = gcs_offload_max_attempts
+        self._gcs_offload_initial_backoff_sec = gcs_offload_initial_backoff_sec
+        self._gcs_offload_backoff_multiplier = gcs_offload_backoff_multiplier
 
         # ---- shared mutable state (all guarded by _lock) ----
         self._lock = Lock()
@@ -726,14 +741,42 @@ class DuckDBLogStore:
         self._gc_local_segments()
 
     def _offload_to_gcs(self, filename: str, filepath: Path) -> None:
-        """Copy a Parquet file to GCS (best-effort)."""
+        """Copy a Parquet file to GCS with bounded exponential backoff.
+
+        Retries transient failures up to ``gcs_offload_max_attempts`` times.
+        If every attempt fails, logs an error (not a warning) so the failure
+        surfaces in alerting. Never raises — the local segment remains
+        available for reads regardless.
+        """
         if not self._remote_log_dir:
             return
         remote_path = f"{self._remote_log_dir.rstrip('/')}/{filename}"
-        try:
-            _fsspec_copy(str(filepath), remote_path)
-        except Exception:
-            logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
+        backoff = self._gcs_offload_initial_backoff_sec
+        last_exc: Exception | None = None
+        for attempt in range(1, self._gcs_offload_max_attempts + 1):
+            try:
+                _fsspec_copy(str(filepath), remote_path)
+                if attempt > 1:
+                    logger.info("GCS offload of %s succeeded on attempt %d", filename, attempt)
+                return
+            except Exception as exc:
+                last_exc = exc
+                if attempt < self._gcs_offload_max_attempts:
+                    logger.warning(
+                        "GCS offload of %s failed on attempt %d/%d, retrying in %.1fs",
+                        filename,
+                        attempt,
+                        self._gcs_offload_max_attempts,
+                        backoff,
+                    )
+                    time.sleep(backoff)
+                    backoff *= self._gcs_offload_backoff_multiplier
+        logger.error(
+            "GCS offload of %s permanently failed after %d attempts",
+            filename,
+            self._gcs_offload_max_attempts,
+            exc_info=last_exc,
+        )
 
     def _gc_local_segments(self) -> None:
         """Drop oldest local Parquet segments if count or size exceeds limits.

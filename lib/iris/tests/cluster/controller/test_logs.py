@@ -616,6 +616,87 @@ def test_concurrent_reads_no_concat_copy(tmp_path: Path):
     store.close()
 
 
+def test_gcs_offload_retries_transient_failure(tmp_path: Path, monkeypatch):
+    """`_offload_to_gcs` retries transient failures and eventually succeeds."""
+    from iris.cluster.log_store import duckdb_store as duckdb_store_mod
+
+    log_dir = tmp_path / "logs"
+    remote_dir = tmp_path / "remote"
+    remote_dir.mkdir()
+
+    calls: list[int] = []
+    real_copy = duckdb_store_mod._fsspec_copy
+
+    def flaky_copy(src: str, dst: str) -> None:
+        calls.append(len(calls) + 1)
+        if len(calls) < 3:
+            raise RuntimeError("simulated transient GCS failure")
+        real_copy(src, dst)
+
+    monkeypatch.setattr(duckdb_store_mod, "_fsspec_copy", flaky_copy)
+
+    store = DuckDBLogStore(
+        log_dir=log_dir,
+        remote_log_dir=str(remote_dir),
+        segment_target_bytes=1,
+        gcs_offload_max_attempts=4,
+        gcs_offload_initial_backoff_sec=0.0,
+        gcs_offload_backoff_multiplier=1.0,
+    )
+    try:
+        store.append(KEY, [_make_entry("hello", epoch_ms=1)])
+        store._executor.shutdown(wait=True)
+        store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        assert len(calls) == 3, f"expected 3 copy attempts, got {len(calls)}"
+        uploaded = sorted(remote_dir.glob("logs_*_*.parquet"))
+        assert len(uploaded) == 1
+    finally:
+        store.close()
+
+
+def test_gcs_offload_gives_up_after_max_attempts(tmp_path: Path, monkeypatch, caplog):
+    """After ``gcs_offload_max_attempts`` failures, an ERROR is logged and the
+    store continues serving reads locally."""
+    import logging as _logging
+
+    from iris.cluster.log_store import duckdb_store as duckdb_store_mod
+
+    log_dir = tmp_path / "logs"
+    remote_dir = tmp_path / "remote"
+    remote_dir.mkdir()
+
+    attempts: list[int] = []
+
+    def always_fail(src: str, dst: str) -> None:
+        attempts.append(1)
+        raise RuntimeError("simulated permanent GCS failure")
+
+    monkeypatch.setattr(duckdb_store_mod, "_fsspec_copy", always_fail)
+
+    store = DuckDBLogStore(
+        log_dir=log_dir,
+        remote_log_dir=str(remote_dir),
+        segment_target_bytes=1,
+        gcs_offload_max_attempts=3,
+        gcs_offload_initial_backoff_sec=0.0,
+        gcs_offload_backoff_multiplier=1.0,
+    )
+    try:
+        with caplog.at_level(_logging.ERROR, logger="iris.cluster.log_store.duckdb_store"):
+            store.append(KEY, [_make_entry("hello", epoch_ms=1)])
+            store._executor.shutdown(wait=True)
+            store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
+
+        assert len(attempts) == 3
+        assert any("permanently failed" in r.message for r in caplog.records)
+        # Local reads still work.
+        result = store.get_logs(KEY)
+        assert len(result.entries) == 1
+    finally:
+        store.close()
+
+
 def test_sealed_buffers_readable_before_flush(tmp_path: Path):
     """Data in sealed buffers is still readable even before Parquet flush completes."""
     log_dir = tmp_path / "logs"
