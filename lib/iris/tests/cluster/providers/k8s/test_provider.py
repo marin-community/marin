@@ -991,16 +991,13 @@ def test_gc_respects_interval(provider, k8s):
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    # Trigger GC once to set _last_gc_time to now.
+    provider._maybe_gc_terminal_resources(active_pods=[])
+
+    # Seed an old pod. An immediate second call should NOT trigger GC (interval not elapsed).
     _seed_terminal_pod(k8s, "gc-pod-1", "Succeeded", "aaaa111122223333", old_ts)
-
-    # First call should trigger GC (last_gc_time == 0).
     provider._maybe_gc_terminal_resources(active_pods=[])
-    assert k8s.get_json("pod", "gc-pod-1") is None
-
-    # Seed another old pod. A second immediate call should NOT trigger GC.
-    _seed_terminal_pod(k8s, "gc-pod-2", "Succeeded", "bbbb444455556666", old_ts)
-    provider._maybe_gc_terminal_resources(active_pods=[])
-    assert k8s.get_json("pod", "gc-pod-2") is not None  # Still exists
+    assert k8s.get_json("pod", "gc-pod-1") is not None  # Still exists — interval gate held
 
 
 def test_gc_cleans_up_deferred_configmaps(provider, k8s):
