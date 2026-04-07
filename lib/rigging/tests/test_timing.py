@@ -7,7 +7,16 @@ import time
 
 import pytest
 
-from rigging.timing import Deadline, Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket, log_time
+from rigging.timing import (
+    Deadline,
+    Duration,
+    ExponentialBackoff,
+    RateLimiter,
+    Timestamp,
+    TokenBucket,
+    log_time,
+    retry_with_backoff,
+)
 
 
 def _records_for(caplog, logger_name: str) -> list[logging.LogRecord]:
@@ -343,3 +352,96 @@ def test_token_bucket_available_refills():
     # Drain the bucket using wall-clock time (available uses Timestamp.now()).
     assert bucket.try_acquire(n=10)
     assert bucket.available == 0
+
+
+# --- retry_with_backoff tests ---
+
+_FAST_BACKOFF = ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0)
+
+
+def test_retry_with_backoff_succeeds_first_attempt():
+    result = retry_with_backoff(lambda: 42)
+    assert result == 42
+
+
+def test_retry_with_backoff_retries_then_succeeds():
+    attempts = []
+
+    def fn():
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise ValueError("not yet")
+        return "done"
+
+    result = retry_with_backoff(fn, backoff=_FAST_BACKOFF)
+    assert result == "done"
+    assert len(attempts) == 3
+
+
+def test_retry_with_backoff_raises_immediately_on_non_retryable():
+    called = []
+
+    def fn():
+        called.append(1)
+        raise TypeError("bad type")
+
+    with pytest.raises(TypeError, match="bad type"):
+        retry_with_backoff(fn, retryable=lambda e: not isinstance(e, TypeError))
+    assert len(called) == 1
+
+
+def test_retry_with_backoff_exhausts_max_attempts():
+    attempts = []
+
+    def fn():
+        attempts.append(1)
+        raise ValueError("fail")
+
+    with pytest.raises(ValueError, match="fail"):
+        retry_with_backoff(fn, max_attempts=3, backoff=_FAST_BACKOFF)
+    assert len(attempts) == 3
+
+
+def test_retry_with_backoff_calls_on_retry():
+    retries: list[tuple[Exception, int]] = []
+
+    def fn():
+        if len(retries) < 2:
+            raise OSError("transient")
+        return "ok"
+
+    result = retry_with_backoff(
+        fn,
+        on_retry=lambda exc, attempt: retries.append((exc, attempt)),
+        backoff=_FAST_BACKOFF,
+    )
+    assert result == "ok"
+    assert [attempt for _, attempt in retries] == [0, 1]
+
+
+def test_retry_with_backoff_respects_max_elapsed():
+    start = time.monotonic()
+    with pytest.raises(OSError):
+        retry_with_backoff(
+            lambda: (_ for _ in ()).throw(OSError("slow")),
+            max_attempts=1000,
+            max_elapsed=0.05,
+            backoff=_FAST_BACKOFF,
+        )
+    # Should stop well before 1000 * 0.001s = 1s
+    assert time.monotonic() - start < 1.0
+
+
+def test_retry_with_backoff_does_not_mutate_caller_backoff():
+    backoff = ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0)
+    attempts = []
+
+    def fn():
+        attempts.append(1)
+        if len(attempts) < 2:
+            raise OSError("x")
+        return "ok"
+
+    retry_with_backoff(fn, backoff=backoff)
+    # Caller's backoff was not advanced by the internal retry loop
+    assert backoff._attempt == 0
