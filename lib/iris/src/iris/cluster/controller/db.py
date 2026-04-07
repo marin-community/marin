@@ -18,7 +18,8 @@ from typing import Any
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -112,13 +113,13 @@ def task_is_finished(
     state: int, failure_count: int, max_retries_failure: int, preemption_count: int, max_retries_preemption: int
 ) -> bool:
     """Whether a task has reached a terminal state with no remaining retries."""
-    if state == cluster_pb2.TASK_STATE_SUCCEEDED:
+    if state == job_pb2.TASK_STATE_SUCCEEDED:
         return True
-    if state in (cluster_pb2.TASK_STATE_KILLED, cluster_pb2.TASK_STATE_UNSCHEDULABLE):
+    if state in (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_UNSCHEDULABLE):
         return True
-    if state == cluster_pb2.TASK_STATE_FAILED:
+    if state == job_pb2.TASK_STATE_FAILED:
         return failure_count > max_retries_failure
-    if state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PREEMPTED):
+    if state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED):
         return preemption_count > max_retries_preemption
     return False
 
@@ -131,7 +132,7 @@ def task_can_be_scheduled(
     preemption_count: int,
     max_retries_preemption: int,
 ) -> bool:
-    if state != cluster_pb2.TASK_STATE_PENDING:
+    if state != job_pb2.TASK_STATE_PENDING:
         return False
     return current_attempt_id < 0 or not task_is_finished(
         state, failure_count, max_retries_failure, preemption_count, max_retries_preemption
@@ -141,9 +142,9 @@ def task_can_be_scheduled(
 def task_is_retry_exhausted(
     state: int, failure_count: int, max_retries_failure: int, preemption_count: int, max_retries_preemption: int
 ) -> bool:
-    if state == cluster_pb2.TASK_STATE_FAILED:
+    if state == job_pb2.TASK_STATE_FAILED:
         return failure_count > max_retries_failure
-    if state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PREEMPTED):
+    if state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED):
         return preemption_count > max_retries_preemption
     return False
 
@@ -183,47 +184,47 @@ def worker_available_tpus(total_tpu_count: int, committed_tpu: int) -> int:
 
 TERMINAL_TASK_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.TASK_STATE_SUCCEEDED,
-        cluster_pb2.TASK_STATE_FAILED,
-        cluster_pb2.TASK_STATE_KILLED,
-        cluster_pb2.TASK_STATE_UNSCHEDULABLE,
-        cluster_pb2.TASK_STATE_WORKER_FAILED,
-        cluster_pb2.TASK_STATE_PREEMPTED,
+        job_pb2.TASK_STATE_SUCCEEDED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_KILLED,
+        job_pb2.TASK_STATE_UNSCHEDULABLE,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_PREEMPTED,
     }
 )
 
 TERMINAL_JOB_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.JOB_STATE_SUCCEEDED,
-        cluster_pb2.JOB_STATE_FAILED,
-        cluster_pb2.JOB_STATE_KILLED,
-        cluster_pb2.JOB_STATE_WORKER_FAILED,
-        cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+        job_pb2.JOB_STATE_SUCCEEDED,
+        job_pb2.JOB_STATE_FAILED,
+        job_pb2.JOB_STATE_KILLED,
+        job_pb2.JOB_STATE_WORKER_FAILED,
+        job_pb2.JOB_STATE_UNSCHEDULABLE,
     }
 )
 
 ACTIVE_TASK_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.TASK_STATE_ASSIGNED,
-        cluster_pb2.TASK_STATE_BUILDING,
-        cluster_pb2.TASK_STATE_RUNNING,
+        job_pb2.TASK_STATE_ASSIGNED,
+        job_pb2.TASK_STATE_BUILDING,
+        job_pb2.TASK_STATE_RUNNING,
     }
 )
 
 # Tasks executing on a worker (subset of ACTIVE that excludes ASSIGNED).
 EXECUTING_TASK_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.TASK_STATE_BUILDING,
-        cluster_pb2.TASK_STATE_RUNNING,
+        job_pb2.TASK_STATE_BUILDING,
+        job_pb2.TASK_STATE_RUNNING,
     }
 )
 
 # Failure states that trigger coscheduled sibling cascades.
 FAILURE_TASK_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.TASK_STATE_FAILED,
-        cluster_pb2.TASK_STATE_WORKER_FAILED,
-        cluster_pb2.TASK_STATE_PREEMPTED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_PREEMPTED,
     }
 )
 
@@ -257,7 +258,7 @@ def attempt_is_terminal(state: int) -> bool:
 
 def attempt_is_worker_failure(state: int) -> bool:
     """Check if an attempt is a worker failure or preemption."""
-    return state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PREEMPTED)
+    return state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED)
 
 
 @dataclass(frozen=True)
@@ -857,7 +858,7 @@ def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOut
     """
     from iris.cluster.controller.schema import proto_cache, proto_decoder
 
-    decoder = proto_decoder(cluster_pb2.Controller.LaunchJobRequest)
+    decoder = proto_decoder(controller_pb2.Controller.LaunchJobRequest)
     now_ms = now.epoch_ms()
     executing_states = tuple(sorted(EXECUTING_TASK_STATES))
     placeholders = ",".join("?" for _ in executing_states)

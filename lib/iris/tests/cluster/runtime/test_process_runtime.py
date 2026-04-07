@@ -7,14 +7,14 @@ from pathlib import Path
 
 from iris.cluster.runtime.process import _resolve_mount_map
 from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 
 def _make_config(mounts: list[MountSpec], workdir_host_path: Path | None = None) -> ContainerConfig:
     """Build a minimal ContainerConfig for mount resolution tests."""
     return ContainerConfig(
         image="test:latest",
-        entrypoint=cluster_pb2.RuntimeEntrypoint(),
+        entrypoint=job_pb2.RuntimeEntrypoint(),
         env={},
         mounts=mounts,
         workdir_host_path=workdir_host_path,

@@ -28,7 +28,9 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2, config_pb2, vm_pb2
+from iris.rpc import config_pb2, vm_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
 
@@ -48,7 +50,7 @@ from .conftest import (
 def submit_job(
     state: ControllerTransitions,
     job_id: str,
-    request: cluster_pb2.Controller.LaunchJobRequest,
+    request: controller_pb2.Controller.LaunchJobRequest,
 ) -> JobName:
     """Submit a job through the state command API."""
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
@@ -112,8 +114,8 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
                 "WHERE t.state IN (?, ?) AND j.is_reservation_holder = 0 "
                 "GROUP BY a.worker_id ORDER BY a.worker_id ASC",
                 (
-                    cluster_pb2.TASK_STATE_BUILDING,
-                    cluster_pb2.TASK_STATE_ASSIGNED,
+                    job_pb2.TASK_STATE_BUILDING,
+                    job_pb2.TASK_STATE_ASSIGNED,
                 ),
                 decoders={"worker_id": WorkerId, "c": int},
             )
@@ -127,7 +129,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         if not rows:
             return None
         job = rows[0]
-        if job.state != cluster_pb2.JOB_STATE_PENDING:
+        if job.state != job_pb2.JOB_STATE_PENDING:
             return None
         req = JobRequirements(
             resources=job.request.resources,
@@ -197,18 +199,18 @@ def rpc_post(client: TestClient, method: str, body: dict | None = None):
 
 @pytest.fixture
 def job_request():
-    return cluster_pb2.Controller.LaunchJobRequest(
+    return controller_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-user", "test-job").to_wire(),
         entrypoint=make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
 
 
 @pytest.fixture
 def resource_spec():
-    return cluster_pb2.ResourceSpecProto(cpu_millicores=4000, memory_bytes=8 * 1024**3, disk_bytes=100 * 1024**3)
+    return job_pb2.ResourceSpecProto(cpu_millicores=4000, memory_bytes=8 * 1024**3, disk_bytes=100 * 1024**3)
 
 
 def test_list_jobs_returns_job_state_counts(client, state, job_request):
@@ -218,8 +220,8 @@ def test_list_jobs_returns_job_state_counts(client, state, job_request):
 
     building_id = submit_job(state, "building", job_request)
     running_id = submit_job(state, "running", job_request)
-    set_job_state(state, building_id, cluster_pb2.JOB_STATE_BUILDING)
-    set_job_state(state, running_id, cluster_pb2.JOB_STATE_RUNNING)
+    set_job_state(state, building_id, job_pb2.JOB_STATE_BUILDING)
+    set_job_state(state, running_id, job_pb2.JOB_STATE_RUNNING)
 
     resp = rpc_post(client, "ListJobs")
     jobs = resp.get("jobs", [])
@@ -238,10 +240,10 @@ def test_list_jobs_includes_terminal_states(client, state, job_request):
     """ListJobs RPC returns jobs with terminal states."""
     overrides: list[tuple[JobName, int]] = []
     for job_state in [
-        cluster_pb2.JOB_STATE_SUCCEEDED,
-        cluster_pb2.JOB_STATE_FAILED,
-        cluster_pb2.JOB_STATE_KILLED,
-        cluster_pb2.JOB_STATE_WORKER_FAILED,
+        job_pb2.JOB_STATE_SUCCEEDED,
+        job_pb2.JOB_STATE_FAILED,
+        job_pb2.JOB_STATE_KILLED,
+        job_pb2.JOB_STATE_WORKER_FAILED,
     ]:
         job_id = submit_job(state, f"job-{job_state}", job_request)
         overrides.append((job_id, job_state))
@@ -281,11 +283,11 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     pending_id = submit_job(state, "pending", job_request)
 
     running_id = submit_job(state, "running", job_request)
-    set_job_state(state, running_id, cluster_pb2.JOB_STATE_RUNNING)
+    set_job_state(state, running_id, job_pb2.JOB_STATE_RUNNING)
 
     # No endpoint for succeeded job — endpoints are deleted when tasks go terminal
     succeeded_id = submit_job(state, "succeeded", job_request)
-    set_job_state(state, succeeded_id, cluster_pb2.JOB_STATE_SUCCEEDED)
+    set_job_state(state, succeeded_id, job_pb2.JOB_STATE_SUCCEEDED)
 
     # Add endpoints only for non-terminal jobs
     state.add_endpoint(
@@ -322,7 +324,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
 def test_list_jobs_includes_retry_counts(client, state, job_request):
     """ListJobs RPC includes retry count fields aggregated from tasks."""
     job_id = submit_job(state, "test-job", job_request)
-    set_job_state(state, job_id, cluster_pb2.JOB_STATE_RUNNING)
+    set_job_state(state, job_id, job_pb2.JOB_STATE_RUNNING)
 
     # Set retry counts on tasks (the RPC aggregates from tasks, not job)
     tasks = _query_tasks_with_attempts(state, job_id)
@@ -340,22 +342,22 @@ def test_list_jobs_includes_retry_counts(client, state, job_request):
 def test_list_jobs_includes_task_counts(client, state):
     """ListJobs RPC returns taskCount, completedCount, and taskStateCounts for compact view."""
     # Submit a job with multiple replicas (replicas is on ResourceSpecProto)
-    request = cluster_pb2.Controller.LaunchJobRequest(
+    request = controller_pb2.Controller.LaunchJobRequest(
         name="multi-replica-job",
         entrypoint=make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=3,
-        environment=cluster_pb2.EnvironmentConfig(),
+        environment=job_pb2.EnvironmentConfig(),
     )
     job_id = submit_job(state, "multi", request)
-    set_job_state(state, job_id, cluster_pb2.JOB_STATE_RUNNING)
+    set_job_state(state, job_id, job_pb2.JOB_STATE_RUNNING)
 
     # Get the tasks and set their states
     tasks = _query_tasks_with_attempts(state, job_id)
     assert len(tasks) == 3
-    set_task_state(state, tasks[0].task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
-    set_task_state(state, tasks[1].task_id, cluster_pb2.TASK_STATE_RUNNING)
-    set_task_state(state, tasks[2].task_id, cluster_pb2.TASK_STATE_PENDING)
+    set_task_state(state, tasks[0].task_id, job_pb2.TASK_STATE_SUCCEEDED)
+    set_task_state(state, tasks[1].task_id, job_pb2.TASK_STATE_RUNNING)
+    set_task_state(state, tasks[2].task_id, job_pb2.TASK_STATE_PENDING)
 
     resp = rpc_post(client, "ListJobs")
     jobs = resp.get("jobs", [])
@@ -372,10 +374,10 @@ def test_list_jobs_includes_task_counts(client, state):
 
 def test_list_users_returns_aggregates(client, state):
     """ListUsers RPC returns one aggregate row per user."""
-    request = cluster_pb2.Controller.LaunchJobRequest(
+    request = controller_pb2.Controller.LaunchJobRequest(
         entrypoint=make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
     submit_job(state, "/alice/train", request)
@@ -398,7 +400,7 @@ def test_get_job_status_returns_retry_info(client, state, job_request):
     aggregate retry information for the job.
     """
     job_id = submit_job(state, "test-job", job_request)
-    set_job_state(state, job_id, cluster_pb2.JOB_STATE_RUNNING, started_at_ms=3000)
+    set_job_state(state, job_id, job_pb2.JOB_STATE_RUNNING, started_at_ms=3000)
 
     # Set retry counts on tasks (the RPC aggregates from tasks)
     tasks = _query_tasks_with_attempts(state, job_id)
@@ -417,27 +419,27 @@ def test_get_job_status_returns_retry_info(client, state, job_request):
 
 def test_get_job_status_returns_original_request(client, state):
     """GetJobStatus RPC returns the original LaunchJobRequest for the job detail page."""
-    request = cluster_pb2.Controller.LaunchJobRequest(
+    request = controller_pb2.Controller.LaunchJobRequest(
         name="request-detail-job",
         entrypoint=make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(
+        resources=job_pb2.ResourceSpecProto(
             cpu_millicores=4000,
             memory_bytes=8 * 1024**3,
             disk_bytes=100 * 1024**3,
         ),
-        environment=cluster_pb2.EnvironmentConfig(
+        environment=job_pb2.EnvironmentConfig(
             pip_packages=["torch", "numpy"],
             python_version="3.11",
         ),
         replicas=2,
         constraints=[
-            cluster_pb2.Constraint(
+            job_pb2.Constraint(
                 key=WellKnownAttribute.TPU_NAME,
-                op=cluster_pb2.CONSTRAINT_OP_EQ,
-                value=cluster_pb2.AttributeValue(string_value="my-tpu"),
+                op=job_pb2.CONSTRAINT_OP_EQ,
+                value=job_pb2.AttributeValue(string_value="my-tpu"),
             ),
         ],
-        coscheduling=cluster_pb2.CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
+        coscheduling=job_pb2.CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
     )
     job_id = submit_job(state, "request-detail-job", request)
 
@@ -639,17 +641,17 @@ def test_pending_reason_uses_passive_autoscaler_hint_over_scheduler(
     """GetJobStatus should use autoscaler passive-wait hint even when no active launch."""
     register_worker(state, "w1", "h1:8080", make_worker_metadata())
 
-    request = cluster_pb2.Controller.LaunchJobRequest(
+    request = controller_pb2.Controller.LaunchJobRequest(
         name="diag-constraint",
         entrypoint=make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
         constraints=[
-            cluster_pb2.Constraint(
+            job_pb2.Constraint(
                 key="nonexistent-attr",
-                op=cluster_pb2.CONSTRAINT_OP_EQ,
-                value=cluster_pb2.AttributeValue(string_value="x"),
+                op=job_pb2.CONSTRAINT_OP_EQ,
+                value=job_pb2.AttributeValue(string_value="x"),
             )
         ],
     )
@@ -725,14 +727,14 @@ def test_get_worker_status_recent_tasks_have_timestamps(client, state, job_reque
         HeartbeatApplyRequest(
             worker_id=wid,
             worker_resource_snapshot=None,
-            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING)],
+            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
         )
     )
     state.apply_task_updates(
         HeartbeatApplyRequest(
             worker_id=wid,
             worker_resource_snapshot=None,
-            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_SUCCEEDED)],
+            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
         )
     )
 
@@ -761,8 +763,8 @@ def test_get_worker_status_includes_running_tasks_and_resource_history(client, s
     task_id = job_id.task(0)
     state.queue_assignments([Assignment(task_id=task_id, worker_id=wid)])
 
-    first = cluster_pb2.WorkerResourceSnapshot(cpu_percent=25, running_task_count=1)
-    second = cluster_pb2.WorkerResourceSnapshot(cpu_percent=50, running_task_count=1)
+    first = job_pb2.WorkerResourceSnapshot(cpu_percent=25, running_task_count=1)
+    second = job_pb2.WorkerResourceSnapshot(cpu_percent=50, running_task_count=1)
     state.apply_task_updates(HeartbeatApplyRequest(worker_id=wid, worker_resource_snapshot=first, updates=[]))
     state.apply_task_updates(HeartbeatApplyRequest(worker_id=wid, worker_resource_snapshot=second, updates=[]))
 
@@ -849,20 +851,20 @@ def test_coscheduling_failure_reason_no_workers(client, state):
 
     Diagnostics are on the job-level (via GetJobStatus), not per-task in ListTasks.
     """
-    request = cluster_pb2.Controller.LaunchJobRequest(
+    request = controller_pb2.Controller.LaunchJobRequest(
         name="cosched-job",
         entrypoint=make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=2,
-        environment=cluster_pb2.EnvironmentConfig(),
+        environment=job_pb2.EnvironmentConfig(),
         constraints=[
-            cluster_pb2.Constraint(
+            job_pb2.Constraint(
                 key=WellKnownAttribute.TPU_NAME,
-                op=cluster_pb2.CONSTRAINT_OP_EQ,
-                value=cluster_pb2.AttributeValue(string_value="nonexistent-tpu"),
+                op=job_pb2.CONSTRAINT_OP_EQ,
+                value=job_pb2.AttributeValue(string_value="nonexistent-tpu"),
             ),
         ],
-        coscheduling=cluster_pb2.CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
+        coscheduling=job_pb2.CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
     )
     submit_job(state, "cosched-job", request)
 
@@ -880,25 +882,25 @@ def test_coscheduling_failure_reason_insufficient_group(client, state):
     # Register 2 workers with tpu-name=my-tpu
     for i in range(2):
         meta = make_worker_metadata()
-        meta.attributes[WellKnownAttribute.TPU_NAME].CopyFrom(cluster_pb2.AttributeValue(string_value="my-tpu"))
-        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].CopyFrom(cluster_pb2.AttributeValue(int_value=i))
+        meta.attributes[WellKnownAttribute.TPU_NAME].CopyFrom(job_pb2.AttributeValue(string_value="my-tpu"))
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].CopyFrom(job_pb2.AttributeValue(int_value=i))
         register_worker(state, f"w{i}", f"h{i}:8080", meta)
 
     # Submit a coscheduled job needing 4 replicas
-    request = cluster_pb2.Controller.LaunchJobRequest(
+    request = controller_pb2.Controller.LaunchJobRequest(
         name="big-cosched",
         entrypoint=make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
-        environment=cluster_pb2.EnvironmentConfig(),
+        environment=job_pb2.EnvironmentConfig(),
         constraints=[
-            cluster_pb2.Constraint(
+            job_pb2.Constraint(
                 key=WellKnownAttribute.TPU_NAME,
-                op=cluster_pb2.CONSTRAINT_OP_EQ,
-                value=cluster_pb2.AttributeValue(string_value="my-tpu"),
+                op=job_pb2.CONSTRAINT_OP_EQ,
+                value=job_pb2.AttributeValue(string_value="my-tpu"),
             ),
         ],
-        coscheduling=cluster_pb2.CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
+        coscheduling=job_pb2.CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
     )
     submit_job(state, "big-cosched", request)
 
@@ -917,8 +919,8 @@ def test_coscheduling_failure_reason_insufficient_group(client, state):
 def test_worker_attributes_in_list_workers(client, state):
     """ListWorkers RPC returns worker attributes in metadata."""
     meta = make_worker_metadata()
-    meta.attributes[WellKnownAttribute.TPU_NAME].CopyFrom(cluster_pb2.AttributeValue(string_value="v5litepod-16"))
-    meta.attributes[WellKnownAttribute.TPU_WORKER_ID].CopyFrom(cluster_pb2.AttributeValue(int_value=0))
+    meta.attributes[WellKnownAttribute.TPU_NAME].CopyFrom(job_pb2.AttributeValue(string_value="v5litepod-16"))
+    meta.attributes[WellKnownAttribute.TPU_WORKER_ID].CopyFrom(job_pb2.AttributeValue(int_value=0))
     register_worker(state, "tpu-worker", "h1:8080", meta)
 
     resp = rpc_post(client, "ListWorkers")
@@ -938,11 +940,11 @@ def test_worker_attributes_in_list_workers(client, state):
 def test_list_jobs_returns_all_jobs_for_pagination(client, state):
     """ListJobs RPC returns all jobs even with many entries (pagination is client-side)."""
     for i in range(60):
-        request = cluster_pb2.Controller.LaunchJobRequest(
+        request = controller_pb2.Controller.LaunchJobRequest(
             name=f"job-{i:03d}",
             entrypoint=make_test_entrypoint(),
-            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-            environment=cluster_pb2.EnvironmentConfig(),
+            resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            environment=job_pb2.EnvironmentConfig(),
         )
         submit_job(state, f"job-{i:03d}", request)
 

@@ -37,7 +37,8 @@ from iris.cluster.types import (
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import cluster_pb2, config_pb2, time_pb2, vm_pb2
+from iris.rpc import config_pb2, time_pb2, vm_pb2
+from iris.rpc import job_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Deadline, Duration, Timestamp, TokenBucket
 
@@ -617,11 +618,11 @@ class ScalingGroup:
         self._current_demand = demand
         self._peak_demand = max(self._peak_demand, demand)
 
-    def can_fit_resources(self, resources: cluster_pb2.ResourceSpecProto) -> bool:
+    def can_fit_resources(self, resources: job_pb2.ResourceSpecProto) -> bool:
         """Check whether a demand entry's resources fit within one VM."""
         return self.check_resource_fit(resources) is None
 
-    def check_resource_fit(self, resources: cluster_pb2.ResourceSpecProto) -> str | None:
+    def check_resource_fit(self, resources: job_pb2.ResourceSpecProto) -> str | None:
         """Check whether a demand entry's resources fit within one VM.
 
         Unconfigured group resource values (0 in the proto) are passed as None
@@ -980,7 +981,7 @@ class ScalingGroup:
             attrs[WellKnownAttribute.ZONE] = AttributeValue(zone)
         return attrs
 
-    def matches_constraints(self, constraints: Sequence[cluster_pb2.Constraint]) -> bool:
+    def matches_constraints(self, constraints: Sequence[job_pb2.Constraint]) -> bool:
         """Check if this group satisfies the given proto constraints.
 
         Only evaluates routing constraints (device-type, device-variant,

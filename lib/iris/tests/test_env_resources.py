@@ -9,7 +9,7 @@ import pytest
 from google.protobuf import json_format
 
 from iris.env_resources import TaskResources, _read_iris_resource_proto, _read_proc_meminfo_total
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 
 @pytest.fixture(autouse=True)
@@ -27,14 +27,14 @@ def _make_resource_env(
     tpu_count: int = 0,
 ) -> str:
     """Build an IRIS_TASK_RESOURCES JSON string from a proto."""
-    proto = cluster_pb2.ResourceSpecProto(
+    proto = job_pb2.ResourceSpecProto(
         cpu_millicores=cpu_millicores,
         memory_bytes=memory_bytes,
     )
     if gpu_count:
-        proto.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="H100", count=gpu_count))
+        proto.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=gpu_count))
     if tpu_count:
-        proto.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v4", count=tpu_count))
+        proto.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=tpu_count))
     return json_format.MessageToJson(proto, preserving_proto_field_name=True)
 
 

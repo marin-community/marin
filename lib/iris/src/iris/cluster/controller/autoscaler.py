@@ -59,7 +59,8 @@ from iris.cluster.controller.scaling_group import (
     restore_scaling_group,
 )
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, config_pb2, vm_pb2
+from iris.rpc import config_pb2, vm_pb2
+from iris.rpc import job_pb2
 from iris.time_proto import duration_from_proto, timestamp_to_proto
 from rigging.timing import Duration, Timestamp
 
@@ -191,8 +192,8 @@ class DemandEntry:
     task_ids: list[str]
     coschedule_group_id: str | None
     normalized: PlacementRequirements
-    constraints: list[cluster_pb2.Constraint]
-    resources: cluster_pb2.ResourceSpecProto
+    constraints: list[job_pb2.Constraint]
+    resources: job_pb2.ResourceSpecProto
     invalid_reason: str | None = None
 
 
@@ -1504,7 +1505,7 @@ class Autoscaler:
     def check_coscheduling_feasibility(
         self,
         replicas: int,
-        constraints: list[cluster_pb2.Constraint],
+        constraints: list[job_pb2.Constraint],
     ) -> str | None:
         """Check if a coscheduled job with the given replicas can ever be scheduled.
 
@@ -1550,7 +1551,7 @@ class Autoscaler:
         return status
 
     def _routing_decision_to_proto(self, decision: RoutingDecision) -> vm_pb2.RoutingDecision:
-        def _resource_spec_proto(resources: cluster_pb2.ResourceSpecProto) -> vm_pb2.ResourceSpec:
+        def _resource_spec_proto(resources: job_pb2.ResourceSpecProto) -> vm_pb2.ResourceSpec:
             gpu_count = 0
             tpu_count = 0
             if resources.HasField("device"):
