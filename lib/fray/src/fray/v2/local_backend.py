@@ -275,13 +275,20 @@ class LocalActorMethod:
 
         Uses a dedicated thread per call instead of a thread pool to avoid
         backpressure when many actors make concurrent remote calls.
+
+        Copies the caller's contextvars into the worker thread so that
+        callees see the same context (e.g. ``set_current_client``) as the
+        in-process caller. ``LocalClient.submit`` does the same; without
+        this, an actor method that calls ``current_client()`` would fall
+        back to auto-detection and pick up an unrelated backend.
         """
         future: Future[Any] = Future()
         method_name = getattr(self._method, "__name__", repr(self._method))
+        ctx = contextvars.copy_context()
 
         def run():
             try:
-                result = self._method(*args, **kwargs)
+                result = ctx.run(self._method, *args, **kwargs)
                 future.set_result(result)
             except Exception as e:
                 logger.warning("Actor method %r failed: %s", method_name, e, exc_info=True)
