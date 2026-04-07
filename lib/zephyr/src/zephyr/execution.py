@@ -349,8 +349,8 @@ class ZephyrCoordinator:
 
     The coordinator creates workers via current_client(), runs a background
     loop for discovery and heartbeat checking, and manages all pipeline
-    execution internally. Workers poll the coordinator for tasks until
-    receiving a SHUTDOWN signal.
+    execution internally. Each worker pulls a single task, executes it,
+    reports the result, and exits.
     """
 
     def __init__(self):
@@ -382,7 +382,6 @@ class ZephyrCoordinator:
         self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
-        self._is_last_stage: bool = False
         self._initialized: bool = False
         self._pipeline_running: bool = False
 
@@ -394,7 +393,7 @@ class ZephyrCoordinator:
         self._pipeline_name: str = ""
         self._pipeline_id: int = 0
         self._attempt_id: int = 0
-        self._batch_counter: int = 0
+        self._worker_batch_counter: int = 0
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
@@ -516,8 +515,8 @@ class ZephyrCoordinator:
         """Abort the pipeline if the worker job has permanently terminated."""
         if self._worker_group is None or self._fatal_error is not None:
             return
-        # After the last stage completes, workers exit cleanly via SHUTDOWN.
-        # The worker job finishing at that point is expected, not a crash.
+        # Single-task workers exit cleanly after each task. The worker job
+        # finishing once all shards are done is expected, not a crash.
         with self._lock:
             if self._total_shards > 0 and self._completed_shards >= self._total_shards:
                 return
@@ -581,7 +580,9 @@ class ZephyrCoordinator:
         Returns:
             - (task, attempt, config) tuple if task available
             - "SHUTDOWN" string if coordinator is shutting down
-            - None if no task available (worker should backoff and retry)
+            - None if no task is currently available; single-task workers
+              treat this as a signal to exit (the coordinator will spawn
+              another batch if more tasks need running)
         """
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
@@ -595,9 +596,6 @@ class ZephyrCoordinator:
                 return None
 
             if not self._task_queue:
-                if self._is_last_stage and not self._in_flight:
-                    self._worker_states[worker_id] = WorkerState.DEAD
-                    return "SHUTDOWN"
                 return None
 
             task = self._task_queue.popleft()
@@ -734,7 +732,7 @@ class ZephyrCoordinator:
                 logger.error("Coordinator aborted: %s", reason)
                 self._fatal_error = reason
 
-    def _start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
+    def _start_stage(self, stage_name: str, tasks: list[ShardTask]) -> None:
         """Load a new stage's tasks into the queue."""
         with self._lock:
             self._task_queue = deque(tasks)
@@ -746,7 +744,6 @@ class ZephyrCoordinator:
             self._in_flight = {}
             self._task_attempts = {task.shard_idx: 0 for task in tasks}
             self._fatal_error = None
-            self._is_last_stage = is_last_stage
             # Only reset in-flight worker snapshots; completed snapshots
             # accumulate across stages for full pipeline visibility.
             self._worker_counters = {}
@@ -833,8 +830,8 @@ class ZephyrCoordinator:
         Each worker pulls one task, executes it, reports the result, and exits.
         Returns the ActorGroup for lifecycle management.
         """
-        batch_id = self._batch_counter
-        self._batch_counter += 1
+        batch_id = self._worker_batch_counter
+        self._worker_batch_counter += 1
         name = f"zephyr-{self._pipeline_name}-p{self._pipeline_id}-a{self._attempt_id}-b{batch_id}"
         logger.info("Creating worker batch %s: %d workers, resources=%s", name, count, resources)
         group = self._client.create_actor_group(
@@ -859,7 +856,6 @@ class ZephyrCoordinator:
         stage_label: str,
         tasks: list[ShardTask],
         resources: ResourceConfig,
-        is_last_stage: bool,
     ) -> None:
         """Load tasks, spawn workers on-demand, and wait until all tasks complete.
 
@@ -867,7 +863,7 @@ class ZephyrCoordinator:
         exits. When all workers in a batch finish and tasks remain (from the
         initial queue or from failure requeues), a new batch is spawned.
         """
-        self._start_stage(stage_label, tasks, is_last_stage=is_last_stage)
+        self._start_stage(stage_label, tasks)
         if not tasks:
             return
 
@@ -903,15 +899,6 @@ class ZephyrCoordinator:
             if not shards:
                 return []
 
-            # Identify the last stage that dispatches work to workers (non-RESHARD).
-            # On that stage, idle workers receive SHUTDOWN once all tasks are
-            # in-flight, so they exit eagerly instead of polling until
-            # coordinator.shutdown().
-            last_worker_stage_idx = max(
-                (i for i, s in enumerate(plan.stages) if s.stage_type != StageType.RESHARD),
-                default=-1,
-            )
-
             for stage_idx, stage in enumerate(plan.stages):
                 stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"
 
@@ -933,7 +920,6 @@ class ZephyrCoordinator:
                     stage_label,
                     tasks,
                     stage_resources,
-                    is_last_stage=(stage_idx == last_worker_stage_idx),
                 )
 
                 # Collect and regroup results for next stage
@@ -995,7 +981,6 @@ class ZephyrCoordinator:
                     join_stage_label,
                     right_tasks,
                     join_resources,
-                    is_last_stage=False,
                 )
                 raw = self._collect_results()
                 right_is_scatter = any(isinstance(op, Scatter) for op in right_stage.operations)
@@ -1055,9 +1040,9 @@ class ZephyrCoordinator:
                 "execution_id": self._execution_id,
             }
 
-    def start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
+    def start_stage(self, stage_name: str, tasks: list[ShardTask]) -> None:
         """Load a new stage's tasks into the queue (legacy compat)."""
-        self._start_stage(stage_name, tasks, is_last_stage=is_last_stage)
+        self._start_stage(stage_name, tasks)
 
     def check_heartbeats(self, timeout: float = 120.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""

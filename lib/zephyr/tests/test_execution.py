@@ -568,8 +568,8 @@ def test_pipeline_id_increments(local_client, tmp_path):
     assert ctx._pipeline_id == 1
 
 
-def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp_path):
-    """When the last stage's tasks are all in-flight or done, pull_task returns SHUTDOWN."""
+def test_pull_task_returns_none_on_empty_queue(actor_context, tmp_path):
+    """Empty queue returns None; single-task workers treat that as exit."""
     from zephyr.execution import ListShard, ShardTask, TaskResult, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
@@ -583,34 +583,18 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
         stage_name="test",
     )
 
-    # Non-last stage: empty queue returns None
-    coord.start_stage("stage-0", [task], is_last_stage=False)
+    coord.start_stage("stage-0", [task])
     pulled = coord.pull_task("worker-A")
     assert pulled is not None and pulled != "SHUTDOWN"
     _task, attempt, _config = pulled
     coord.report_result("worker-A", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
-    # Queue empty, but not last stage -> None
-    result = coord.pull_task("worker-A")
-    assert result is None
+    # Queue drained -> None (worker exits, coordinator may spawn another batch)
+    assert coord.pull_task("worker-A") is None
 
-    # Last stage: empty queue returns SHUTDOWN
-    task2 = ShardTask(
-        shard_idx=0,
-        total_shards=1,
-        shard=ListShard(refs=[]),
-        operations=[],
-        stage_name="test-last",
-    )
-    coord.start_stage("stage-1", [task2], is_last_stage=True)
-    pulled = coord.pull_task("worker-A")
-    assert pulled is not None and pulled != "SHUTDOWN"
-    _task, attempt, _config = pulled
-    coord.report_result("worker-A", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
-
-    # Queue empty on last stage, nothing in-flight -> SHUTDOWN
-    result = coord.pull_task("worker-A")
-    assert result == "SHUTDOWN"
+    # Coordinator shutdown takes precedence and returns SHUTDOWN.
+    coord.shutdown()
+    assert coord.pull_task("worker-A") == "SHUTDOWN"
 
 
 def test_last_shard_requeued_after_worker_crash(actor_context, tmp_path):
@@ -624,7 +608,7 @@ def test_last_shard_requeued_after_worker_crash(actor_context, tmp_path):
         ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test")
         for i in range(2)
     ]
-    coord.start_stage("last-stage", tasks, is_last_stage=True)
+    coord.start_stage("last-stage", tasks)
 
     coord.heartbeat("worker-A")
     coord.heartbeat("worker-B")
@@ -648,7 +632,8 @@ def test_last_shard_requeued_after_worker_crash(actor_context, tmp_path):
     coord.report_result(
         "worker-A", _task.shard_idx, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
     )
-    assert coord.pull_task("worker-A") == "SHUTDOWN"
+    # Stage drained — empty queue returns None (worker exits).
+    assert coord.pull_task("worker-A") is None
 
 
 def test_coordinator_loop_crash_aborts_pipeline(actor_context, tmp_path):
