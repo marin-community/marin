@@ -16,7 +16,7 @@ from io import BytesIO
 
 import requests
 from marin.execution.step_spec import StepSpec
-from zephyr import Dataset, ZephyrContext
+from zephyr import Dataset, ZephyrContext, counters
 from zephyr.writers import write_parquet_file
 
 logger = logging.getLogger(__name__)
@@ -81,46 +81,32 @@ def download_and_convert_year(year: int, download_url: str, output_path: str) ->
     response.raise_for_status()
 
     records = []
-    num_total = 0
-    num_missing_abstract = 0
-    num_missing_field = {k: 0 for k in KEEP_FIELDS}
     with zipfile.ZipFile(BytesIO(response.content)) as z:
         for name in z.namelist():
             if not name.endswith(".json"):
                 continue
             with z.open(name) as f:
                 award = json.load(f)
-            num_total += 1
+            counters.increment("awards_total")
             record = _award_to_record(award)
             if record is None:
-                num_missing_abstract += 1
+                counters.increment("awards_missing_abstract")
                 continue
             for k in KEEP_FIELDS:
                 if not award.get(k):
-                    num_missing_field[k] += 1
+                    counters.increment(f"awards_missing_field.{k}")
             records.append(record)
-
-    counters = {
-        "num_total": num_total,
-        "num_kept": len(records),
-        "num_missing_abstract": num_missing_abstract,
-        "num_missing_field": num_missing_field,
-    }
-    logger.info(
-        f"Year {year}: {num_total} awards, {len(records)} kept, "
-        f"{num_missing_abstract} filtered out (missing abstract). "
-        f"Missing-field counts among kept: {num_missing_field}"
-    )
+    counters.increment("awards_kept", len(records))
 
     if not records:
         logger.warning(f"No awards with abstracts for {year}, skipping.")
-        return {"year": year, "num_awards": 0, **counters}
+        return {"year": year, "num_awards": 0}
 
     output_file = os.path.join(output_path, f"{year}.parquet")
     result = write_parquet_file(records, output_file)
 
     logger.info(f"Wrote {len(records)} awards for {year} to {output_file}")
-    return {"year": year, "num_awards": len(records), **counters, **result}
+    return {"year": year, "num_awards": len(records), **result}
 
 
 def download_nsf_awards(min_year: int, max_year: int, output_path: str) -> None:
