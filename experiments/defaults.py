@@ -37,10 +37,8 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils import fsspec_utils
 
-from experiments.evals.task_configs import (
-    CORE_TASKS,
-    convert_to_levanter_task_config,
-)
+from experiments.evals.task_configs import CORE_TASKS
+from marin.evaluation.evaluation_config import convert_to_levanter_task_config
 from experiments.paloma import paloma_tokenized
 from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.simple_sft_config import SimpleSFTConfig

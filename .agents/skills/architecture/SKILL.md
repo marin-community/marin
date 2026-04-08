@@ -36,7 +36,7 @@ marin/
 │   ├── generation/             # LLM inference (inference.py, llm_generation.py, pipeline.py)
 │   ├── markdown/               # HTML → markdown (markdown.py, guess_code.py)
 │   ├── core/                   # Data types (data.py, conversation.py)
-│   └── utilities/, validation/, cluster/, infra/, speedrun/, scaling_laws/, schemas/, web/
+│   └── utilities/, validation/, cluster/, infra/, scaling_laws/, schemas/, web/
 │
 ├── experiments/                # Experiment scripts
 │   ├── defaults.py             # default_download, default_tokenize, default_train, default_eval
@@ -47,7 +47,7 @@ marin/
 │   ├── tutorials/              # Tutorial experiments
 │   ├── tootsie/                # Tootsie model experiments (8B, 32B, 70B)
 │   ├── evals/                  # Evaluation runners (evals.py, task_configs.py, engine_configs.py, run_*.py)
-│   └── speedrun/, posttrain/, dclm/, dolma/, pretraining_datasets/, multilingual_fineweb2_hq/, metrics/
+│   └── posttrain/, dclm/, dolma/, pretraining_datasets/, multilingual_fineweb2_hq/, metrics/
 │
 ├── tests/                      # Test suite
 │   ├── integration_test.py     # Full pipeline smoke test (<10min, no GPU)
