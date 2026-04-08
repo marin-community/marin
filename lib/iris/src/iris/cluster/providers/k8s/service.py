@@ -37,9 +37,6 @@ DEFAULT_TIMEOUT: float = 60.0
 # Slow-operation warning threshold (milliseconds)
 _SLOW_THRESHOLD_MS: float = 2000.0
 
-# Field manager name for server-side apply
-_FIELD_MANAGER: str = "iris"
-
 
 @runtime_checkable
 class K8sService(Protocol):
@@ -319,27 +316,41 @@ class CloudK8sService:
     # -- apply ---------------------------------------------------------------
 
     def apply_json(self, manifest: dict) -> None:
-        """Server-side apply a Kubernetes manifest dict."""
-        path = _api_path_for_manifest(manifest, self.namespace)
-        body = json.dumps(manifest)
-        logger.info("k8s: SSA PATCH %s", path)
+        """Create-or-patch a manifest, matching kubectl apply (client-side) semantics.
+
+        Tries POST (create) first. On 409 Conflict (already exists), falls back
+        to strategic merge PATCH. This avoids SSA-specific RBAC requirements.
+        """
+        kind = manifest.get("kind", "?")
+        name = manifest["metadata"]["name"]
+        item_path = _api_path_for_manifest(manifest, self.namespace)
+        # Collection path is the item path without the trailing /{name}
+        collection_path = item_path.rsplit("/", 1)[0]
+
+        logger.info("k8s: apply %s/%s", kind, name)
         t0 = time.monotonic()
         try:
-            self._api_client.call_api(
-                path,
-                "PATCH",
-                query_params=[("fieldManager", _FIELD_MANAGER), ("force", "true")],
-                body=body,
-                header_params={
-                    "Content-Type": "application/apply-patch+yaml",
-                    "Accept": "application/json",
-                },
-                response_type="object",
-                _request_timeout=self.timeout,
-            )
+            self._call_api("POST", collection_path, body=manifest)
         except ApiException as e:
-            raise KubectlError(f"SSA apply failed ({e.status}): {e.reason} {(e.body or '')[:500]}") from e
-        _log_operation(f"apply {manifest.get('kind')}/{manifest['metadata']['name']}", t0)
+            if e.status == 409:
+                # Already exists — update via strategic merge patch
+                try:
+                    self._call_api(
+                        "PATCH",
+                        item_path,
+                        body=manifest,
+                        content_type="application/strategic-merge-patch+json",
+                    )
+                except ApiException as patch_err:
+                    raise KubectlError(
+                        f"apply patch {kind}/{name} failed ({patch_err.status}): "
+                        f"{patch_err.reason} {(patch_err.body or '')[:500]}"
+                    ) from patch_err
+            else:
+                raise KubectlError(
+                    f"apply create {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}"
+                ) from e
+        _log_operation(f"apply {kind}/{name}", t0)
 
     # -- get -----------------------------------------------------------------
 
