@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 SUBPROCESS_COUNTER_FLUSH_INTERVAL = 5.0
-"""How often the subprocess flushes its counter snapshot to the sidecar file.
+"""How often the subprocess flushes its counter snapshot to the counter file.
 
 Matches the parent worker's heartbeat interval so each heartbeat reads at most
 one stale snapshot before the next flush lands.
@@ -72,35 +72,35 @@ class _SubprocessWorkerContext:
         return CounterSnapshot(counters=dict(self._counters), generation=self._generation)
 
 
-def _write_counter_sidecar(sidecar_path: str, counters: dict[str, int]) -> None:
-    """Atomically replace ``sidecar_path`` with a pickled counters dict.
+def _write_counter_file(counter_file: str, counters: dict[str, int]) -> None:
+    """Atomically replace ``counter_file`` with a pickled counters dict.
 
     Writing to a temp file then renaming guarantees the parent never reads a
     half-written file: ``os.rename`` is atomic on POSIX.
     """
-    tmp_path = f"{sidecar_path}.tmp"
+    tmp_path = f"{counter_file}.tmp"
     with open(tmp_path, "wb") as f:
         cloudpickle.dump(counters, f)
-    os.rename(tmp_path, sidecar_path)
+    os.rename(tmp_path, counter_file)
 
 
 def _periodic_counter_writer(
     stop_event: threading.Event,
     ctx: _SubprocessWorkerContext,
-    sidecar_path: str,
+    counter_file: str,
     interval: float,
 ) -> None:
-    """Background loop that flushes ``ctx._counters`` to ``sidecar_path``.
+    """Background loop that flushes ``ctx._counters`` to ``counter_file``.
 
-    The parent worker's heartbeat thread reads the sidecar to forward live
-    counter updates to the coordinator while the subprocess is still running.
-    Exits when ``stop_event`` is set.
+    The parent worker's heartbeat thread reads the counter file to forward
+    live counter updates to the coordinator while the subprocess is still
+    running. Exits when ``stop_event`` is set.
     """
     while not stop_event.wait(timeout=interval):
         try:
-            _write_counter_sidecar(sidecar_path, dict(ctx._counters))
+            _write_counter_file(counter_file, dict(ctx._counters))
         except Exception:
-            logger.warning("Failed to flush counter sidecar to %s", sidecar_path, exc_info=True)
+            logger.warning("Failed to flush counter file to %s", counter_file, exc_info=True)
 
 
 def execute_shard(task_file: str, result_file: str) -> None:
@@ -121,11 +121,11 @@ def execute_shard(task_file: str, result_file: str) -> None:
     configure_logging(level=logging.INFO)
 
     ctx = _SubprocessWorkerContext("", "")
-    sidecar_counter_path = f"{result_file}.counters"
+    counter_file = f"{result_file}.counters"
     stop_event = threading.Event()
     flusher = threading.Thread(
         target=_periodic_counter_writer,
-        args=(stop_event, ctx, sidecar_counter_path, SUBPROCESS_COUNTER_FLUSH_INTERVAL),
+        args=(stop_event, ctx, counter_file, SUBPROCESS_COUNTER_FLUSH_INTERVAL),
         daemon=True,
         name="zephyr-subprocess-counter-flusher",
     )
