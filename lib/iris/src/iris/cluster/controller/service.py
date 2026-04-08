@@ -86,7 +86,7 @@ from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.log_store import CONTROLLER_LOG_KEY, build_log_source, worker_log_key
+from iris.cluster.log_store import build_log_source, worker_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, WorkerId, get_gpu_count, get_tpu_count
@@ -1735,15 +1735,15 @@ class ControllerServiceImpl:
         request: job_pb2.GetProcessStatusRequest,
         ctx: Any,
     ) -> job_pb2.GetProcessStatusResponse:
-        """Return process info and recent logs.
+        """Return process info (no logs — use FetchLogs instead).
 
         Target routing (same convention as ProfileTask):
         - empty or /system/process: the controller process itself
-        - /system/worker/<worker_id>: proxy to a specific worker (process info only)
+        - /system/worker/<worker_id>: proxy to a specific worker
         """
         target = request.target
         if not target or target == "/system/process":
-            return get_process_status(request, self._log_service, self._timer, log_key=CONTROLLER_LOG_KEY)
+            return get_process_status(self._timer)
 
         # Parse /system/worker/<worker_id>
         worker_id = _parse_worker_target(target)

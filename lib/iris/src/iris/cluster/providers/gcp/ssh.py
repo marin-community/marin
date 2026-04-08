@@ -64,6 +64,7 @@ class OsLoginKeyProvisioner:
         )
 
     def _register_os_login(self, pub_key_path: str, impersonate_sa: str | None) -> None:
+        self._purge_expired_keys(impersonate_sa)
         cmd = [
             "gcloud",
             "compute",
@@ -80,6 +81,43 @@ class OsLoginKeyProvisioner:
         if result.returncode != 0:
             raise RuntimeError(f"Failed to register SSH key with OS Login: {result.stderr.strip()}")
         self._registration_expiry = time.monotonic() + self._TTL - self._REFRESH_MARGIN
+
+    def _purge_expired_keys(self, impersonate_sa: str | None) -> None:
+        """Remove expired SSH keys from the OS Login profile to stay under the 32 KiB limit."""
+        list_cmd = [
+            "gcloud",
+            "compute",
+            "os-login",
+            "ssh-keys",
+            "list",
+            "--format=value(fingerprint,expirationTimeUsec)",
+        ]
+        if impersonate_sa:
+            list_cmd.append(f"--impersonate-service-account={impersonate_sa}")
+        result = subprocess.run(list_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.warning("Failed to list OS Login keys for purge: %s", result.stderr.strip())
+            return
+
+        now_us = int(time.time() * 1e6)
+        removed = 0
+        for line in (result.stdout or "").splitlines():
+            parts = line.split()
+            if len(parts) != 2:
+                continue
+            fingerprint, expiry_us_str = parts
+            try:
+                expiry_us = int(expiry_us_str)
+            except ValueError:
+                continue
+            if 0 < expiry_us < now_us:
+                rm_cmd = ["gcloud", "compute", "os-login", "ssh-keys", "remove", f"--key={fingerprint}"]
+                if impersonate_sa:
+                    rm_cmd.append(f"--impersonate-service-account={impersonate_sa}")
+                subprocess.run(rm_cmd, capture_output=True, text=True)
+                removed += 1
+        if removed:
+            logger.info("Purged %d expired OS Login SSH keys", removed)
 
 
 _os_login_key_provisioner = OsLoginKeyProvisioner()
