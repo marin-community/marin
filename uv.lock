@@ -2758,6 +2758,22 @@ wheels = [
 ]
 
 [[package]]
+name = "google-cloud-tpu"
+version = "1.26.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "grpcio" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7c/8a/8d510bda239e3ca0796b11a5e52a33f57c8cfc2ed894e2b9c74e5d496009/google_cloud_tpu-1.26.0.tar.gz", hash = "sha256:3f28e47c79e9075434be2dca206f4d9c879fd434d994162a09a4d43fff37f7bb", size = 255052, upload-time = "2026-03-26T22:17:21.744Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/77/c1/2bf6995ccc2e9fb37f0fac7f0bd2de6d7b3adbb1eea16302c784d9f49dc6/google_cloud_tpu-1.26.0-py3-none-any.whl", hash = "sha256:3ab17595302c2cd5ce8c1193fdf5d60023f6eb285e36f767ee79679f3e6e68e2", size = 200265, upload-time = "2026-03-26T22:15:53.762Z" },
+]
+
+[[package]]
 name = "google-crc32c"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3579,6 +3595,7 @@ dependencies = [
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "google-auth" },
+    { name = "google-cloud-tpu" },
     { name = "grpcio" },
     { name = "httpx" },
     { name = "humanfriendly" },
@@ -3633,6 +3650,7 @@ requires-dist = [
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "google-auth", specifier = ">=2.0" },
+    { name = "google-cloud-tpu", specifier = ">=1.18.0" },
     { name = "grpcio", specifier = ">=1.76.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "humanfriendly", specifier = ">=10.0" },
