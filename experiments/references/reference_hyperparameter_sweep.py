@@ -4,6 +4,8 @@
 """AdamH hyperparameter sweep for a ~130M Grug model on Nemotron mix."""
 
 import json
+import logging
+import math
 import os
 import re
 import shutil
@@ -25,6 +27,8 @@ from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.execution.remote import remote
 from marin.processing.tokenize import add_validation_sets_to_mixture
+
+logger = logging.getLogger(__name__)
 
 FloatRange = tuple[float, float]
 
@@ -156,13 +160,12 @@ class VizierOptimalConfig:
     output_path: str
 
 
-def best_run(runs, mode="min"):
-    """Return the run with the best metric."""
-
-    def metric_key(record: dict) -> float:
-        return record["metric"]
-
-    return min(runs, key=metric_key) if mode == "min" else max(runs, key=metric_key)
+def best_run(runs: list[dict], mode: str = "min") -> dict | None:
+    """Return the run with the best finite metric, or None if all are infeasible."""
+    feasible = [r for r in runs if r.get("feasible", True)]
+    if not feasible:
+        return None
+    return min(feasible, key=lambda r: r["metric"]) if mode == "min" else max(feasible, key=lambda r: r["metric"])
 
 
 def _local_vizier_db_path(study_id: str) -> str:
@@ -447,6 +450,8 @@ def run_vizier_update(config: VizierUpdateConfig) -> None:
         raise ValueError(
             f"Expected {len(suggestions)} run paths but got {len(config.run_paths)} for loop {config.loop_index}"
         )
+    if not suggestions:
+        raise RuntimeError("No suggestions found")
 
     results = []
     for run_path, suggestion in zip(config.run_paths, suggestions, strict=True):
@@ -461,23 +466,37 @@ def run_vizier_update(config: VizierUpdateConfig) -> None:
         value = data["summary"][config.metric_key]
         trial_id = int(suggestion["trial_id"])
         trial = study.get_trial(trial_id)
-        measurement = vz.Measurement({config.metric_key: float(value)})
-        trial.complete(measurement)
 
+        # Note: pyvizier maps protobuf SUCCEEDED/INFEASIBLE → TrialStatus.COMPLETED
+        if trial.materialize().status == vz.TrialStatus.COMPLETED:
+            logger.info(f"Trial {trial_id}: already completed, skipping")
+        elif math.isnan(float(value)) or math.isinf(float(value)):
+            trial.complete(infeasible_reason=f"metric is {value}")
+            logger.info(f"Trial {trial_id}: infeasible ({config.metric_key} = {value})")
+        else:
+            measurement = vz.Measurement({config.metric_key: float(value)})
+            trial.complete(measurement)
+            logger.info(f"Trial {trial_id}: {config.metric_key} = {value}")
+
+        feasible = math.isfinite(float(value))
         results.append(
             {
                 "trial_id": trial_id,
-                "metric": float(value),
+                "metric": float(value) if feasible else None,
+                "feasible": feasible,
                 "hparams": suggestion["parameters"],
                 "run_path": run_path,
             }
         )
-        print(f"Trial {trial_id}: {config.metric_key} = {value}")
-
-    if not results:
-        raise RuntimeError("No valid results found")
 
     best = best_run(results, config.mode)
+    if best is None:
+        raise RuntimeError(f"All {len(results)} trials were infeasible (NaN/Inf loss)")
+
+    # Infeasible results (metric=None) sort last regardless of mode
+    def _sort_key(r: dict) -> tuple[bool, float]:
+        m = r["metric"] or 0.0
+        return (not r["feasible"], m if config.mode == "min" else -m)
 
     fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
     fs.makedirs(config.output_path, exist_ok=True)
@@ -487,7 +506,7 @@ def run_vizier_update(config: VizierUpdateConfig) -> None:
         "best_hparams": best["hparams"],
         "best_metric": best["metric"],
         "best_run_path": best["run_path"],
-        "all_results": sorted(results, key=lambda r: r["metric"], reverse=(config.mode == "max")),
+        "all_results": sorted(results, key=_sort_key),
     }
 
     with fs.open(os.path.join(config.output_path, UPDATE_FILENAME), "w") as f:
