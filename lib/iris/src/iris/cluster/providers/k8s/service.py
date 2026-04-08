@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import socket
@@ -205,7 +204,7 @@ class CloudK8sService:
         path: str,
         method: str,
         *,
-        body: str | None = None,
+        body: dict | None = None,
         query_params: list[tuple[str, str]] | None = None,
         content_type: str = "application/json",
         timeout: float | None = None,
@@ -233,8 +232,6 @@ class CloudK8sService:
         ns = manifest["metadata"].get("namespace", self.namespace)
         item_path = res.item_path(name, ns)
         collection_path = res.collection_path(ns)
-        body = json.dumps(manifest)
-
         logger.info("k8s: apply %s/%s", kind, name)
         t0 = time.monotonic()
 
@@ -250,9 +247,9 @@ class CloudK8sService:
 
         try:
             if exists:
-                self._call_api(item_path, "PATCH", body=body, content_type="application/strategic-merge-patch+json")
+                self._call_api(item_path, "PATCH", body=manifest, content_type="application/strategic-merge-patch+json")
             else:
-                self._call_api(collection_path, "POST", body=body)
+                self._call_api(collection_path, "POST", body=manifest)
         except ApiException as e:
             op = "patch" if exists else "create"
             raise KubectlError(f"apply {op} {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}") from e
@@ -370,9 +367,7 @@ class CloudK8sService:
         logger.info("k8s: PATCH set_image %s/%s container=%s image=%s", resource.plural, name, container, image)
         t0 = time.monotonic()
         try:
-            self._call_api(
-                path, "PATCH", body=json.dumps(patch_body), content_type="application/strategic-merge-patch+json"
-            )
+            self._call_api(path, "PATCH", body=patch_body, content_type="application/strategic-merge-patch+json")
         except ApiException as e:
             raise KubectlError(f"set_image {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
         _log_operation(f"set_image {resource.plural}/{name}", t0)
@@ -397,9 +392,7 @@ class CloudK8sService:
         logger.info("k8s: PATCH rollout_restart %s/%s", resource.plural, name)
         t0 = time.monotonic()
         try:
-            self._call_api(
-                path, "PATCH", body=json.dumps(patch_body), content_type="application/strategic-merge-patch+json"
-            )
+            self._call_api(path, "PATCH", body=patch_body, content_type="application/strategic-merge-patch+json")
         except ApiException as e:
             raise KubectlError(f"rollout_restart {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
         _log_operation(f"rollout_restart {resource.plural}/{name}", t0)
