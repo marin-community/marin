@@ -208,6 +208,7 @@ def default_tokenize(
     *,
     sample_count: int | VersionedValue[int] | None = None,
     is_validation: bool = False,
+    worker_resources: ResourceConfig | None = None,
 ) -> ExecutorStep:
     """
     Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
@@ -262,6 +263,8 @@ def default_tokenize(
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
+        if worker_resources is not None:
+            config = dataclasses.replace(config, worker_resources=worker_resources)
 
     return ExecutorStep(
         name=os.path.join("tokenized", name),

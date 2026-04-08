@@ -33,7 +33,7 @@ def get_steps(dataset_names: list[str], *, download: bool = False, tokenize: boo
             dataset_family, subset = name.split(":", 1)
         else:
             dataset_family = name
-            subset = "all"
+            subset = None
 
         if dataset_family not in DATASETS:
             click.echo(f"Error: Unknown dataset '{dataset_family}'", err=True)
@@ -42,6 +42,8 @@ def get_steps(dataset_names: list[str], *, download: bool = False, tokenize: boo
             sys.exit(1)
 
         dataset_info = DATASETS[dataset_family]
+        if subset is None:
+            subset = dataset_info.get("default_subset", "all")
         available_subsets = dataset_info["subsets"]
 
         if subset == "all":
@@ -54,7 +56,15 @@ def get_steps(dataset_names: list[str], *, download: bool = False, tokenize: boo
             sys.exit(1)
 
         if download:
-            steps.append(dataset_info["download"])
+            downloads = dataset_info["downloads"]
+            seen_downloads = set()
+            for sub in subsets_to_process:
+                step = downloads[sub]
+                step_id = id(step)
+                if step_id in seen_downloads:
+                    continue
+                seen_downloads.add(step_id)
+                steps.append(step)
 
         if tokenize:
             tokenize_result = dataset_info["tokenize_fn"]()
