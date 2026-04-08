@@ -150,7 +150,7 @@ scale_groups:
     num_vms: 1
     priority: 500
     resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
-    buffer_slices: 2
+    buffer_slices: 0
     max_slices: 4
     slice_template:
       gcp:
