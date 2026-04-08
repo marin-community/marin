@@ -965,16 +965,9 @@ class ZephyrWorker:
         from fray.v2 import current_actor
 
         self._coordinator = coordinator_handle
-        self._shared_data_cache: dict[str, Any] = {}
         self._shutdown_event = threading.Event()
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
-        # The parent worker no longer holds a counter dict of its own. User
-        # code runs inside the subprocess (`_SubprocessWorkerContext`) and
-        # the subprocess flushes a sidecar file the heartbeat thread reads.
-        # The post-shard report_result call carries the final counters
-        # straight from the subprocess result file — there is nothing on the
-        # parent to keep in sync.
         self._counter_generation: int = 0
         self._last_reported_counters: dict[str, int] = {}
         self._subprocess_counter_file: str | None = None
@@ -997,61 +990,36 @@ class ZephyrWorker:
         )
         self._polling_thread.start()
 
-    def get_shared(self, name: str) -> Any:
-        if name not in self._shared_data_cache:
-            path = _shared_data_path(self._chunk_prefix, self._execution_id, name)
-            logger.info("[%s] Loading shared data '%s' from %s", self._worker_id, name, path)
-            t0 = time.monotonic()
-            with open_url(path, "rb") as f:
-                data = f.read()
-            elapsed = time.monotonic() - t0
-            self._shared_data_cache[name] = cloudpickle.loads(data)
-            logger.info(
-                "[%s] Loaded shared data '%s' in %.2fs (%d bytes)",
-                self._worker_id,
-                name,
-                elapsed,
-                len(data),
-            )
-        return self._shared_data_cache[name]
+    def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
+        """Read the live subprocess sidecar and return a snapshot if changed.
 
-    def _current_counters_snapshot(self) -> dict[str, int]:
-        """Return the live subprocess counter snapshot, or ``{}`` if none.
-
-        While ``_subprocess_counter_file`` is set, the subprocess flushes its
-        counter dict to that path every ``SUBPROCESS_COUNTER_FLUSH_INTERVAL``
-        seconds via an atomic temp-write + rename. The heartbeat thread calls
-        this helper to forward those updates to the coordinator. A missing or
-        partially-written file (race against the atomic rename, file cleaned
-        up post-task) falls through to an empty dict — the post-shard
-        ``report_result`` call is the source of truth for the final values.
+        Called once per heartbeat. While ``_subprocess_counter_file`` is set,
+        the subprocess flushes its counter dict to that path every
+        ``SUBPROCESS_COUNTER_FLUSH_INTERVAL`` seconds via an atomic temp-write
+        + rename. We re-read it on each beat, compare to the last reported
+        value, and emit a fresh ``CounterSnapshot`` only when something has
+        actually changed — heartbeats with ``None`` are cheap on the
+        coordinator side. A missing or partially-written sidecar (race
+        against the atomic rename, file already cleaned up post-task) is
+        treated as an empty snapshot; the post-shard ``report_result`` call
+        is the source of truth for the final per-task values.
         """
-        counters_file = self._subprocess_counter_file
-        if counters_file is None:
-            return {}
-        try:
-            with open(counters_file, "rb") as f:
-                return cloudpickle.load(f)
-        except (FileNotFoundError, EOFError, pickle.UnpicklingError):
-            return {}
-        except Exception:
-            logger.warning("Failed to read counter sidecar %s", counters_file, exc_info=True)
-            return {}
+        sidecar = self._subprocess_counter_file
+        current: dict[str, int] = {}
+        if sidecar is not None:
+            try:
+                with open(sidecar, "rb") as f:
+                    current = cloudpickle.load(f)
+            except (FileNotFoundError, EOFError, pickle.UnpicklingError):
+                pass
+            except Exception:
+                logger.warning("Failed to read counter sidecar %s", sidecar, exc_info=True)
 
-    def get_counter_snapshot(self) -> CounterSnapshot:
-        self._counter_generation += 1
-        return CounterSnapshot(
-            counters=self._current_counters_snapshot(),
-            generation=self._counter_generation,
-        )
-
-    def _counters_changed(self) -> bool:
-        """Return True if counters have changed since the last heartbeat report."""
-        current = self._current_counters_snapshot()
         if current == self._last_reported_counters:
-            return False
+            return None
         self._last_reported_counters = current
-        return True
+        self._counter_generation += 1
+        return CounterSnapshot(counters=current, generation=self._counter_generation)
 
     def _run_polling(self, coordinator: ActorHandle) -> None:
         """Main polling loop. Runs in a background thread started by __init__."""
@@ -1086,7 +1054,7 @@ class ZephyrWorker:
                 # Block on result to avoid congesting the coordinator RPC pipe
                 # with fire-and-forget heartbeats. Only send counter snapshot
                 # when values have changed.
-                snapshot = self.get_counter_snapshot() if self._counters_changed() else None
+                snapshot = self._heartbeat_counter_snapshot()
                 coordinator.heartbeat.remote(
                     self._worker_id,
                     snapshot,
