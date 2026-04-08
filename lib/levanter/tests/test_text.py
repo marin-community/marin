@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from levanter.data.text import (
     PreferenceChatLmDatasetFormat,
     PreferenceChatProcessor,
     PrebuiltLmDatasetFormat,
+    TextLmDatasetFormat,
     UrlDatasetSourceConfig,
     build_lm_dataset_cache,
     dataset_for_component,
@@ -31,6 +33,7 @@ from levanter.data.text import (
     named_lm_example_from_grug,
     preprocessor_for_format,
 )
+from levanter.data.text.datasets import PackedTokenDataset, _effective_pack
 from levanter.tokenizers import load_tokenizer
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
@@ -227,6 +230,84 @@ def test_train_set_last_mile_wraps_to_named(tmp_path):
     named_train_set = config.train_set(Pos, BatchSchedule(1), key=jax.random.PRNGKey(0)).as_sync_dataset()
     named_example = named_train_set[0]
     assert isinstance(named_example, LmExample)
+
+
+def test_effective_pack_honors_text_format_pack():
+    # Component override wins over the format field.
+    override_component = DatasetComponent(format=TextLmDatasetFormat(pack=True), pack=False)
+    assert _effective_pack(override_component) is False
+
+    # Format-level pack is used when component.pack is None.
+    assert _effective_pack(DatasetComponent(format=TextLmDatasetFormat(pack=True))) is True
+    assert _effective_pack(DatasetComponent(format=TextLmDatasetFormat(pack=4))) == 4
+
+    # Default (None) preserves historical concat behavior for text.
+    assert _effective_pack(DatasetComponent(format=TextLmDatasetFormat())) is False
+
+
+def _make_gpt2_tokenizer_dir(tmp_path: Path) -> Path:
+    # Same layout as the session-scoped `local_gpt2_tokenizer` fixture in conftest,
+    # but rooted in the test's tmp_path so it can live next to the text cache.
+    src = Path(__file__).parent / "gpt2_tokenizer_config.json"
+    tok_dir = tmp_path / "tokenizer"
+    tok_dir.mkdir()
+    shutil.copy(src, tok_dir / "tokenizer.json")
+    shutil.copy(src, tok_dir / "tokenizer_config.json")
+    (tok_dir / "config.json").write_text(json.dumps({"model_type": "gpt2", "vocab_size": 5027}))
+    return tok_dir
+
+
+def test_text_format_pack_uses_packed_token_dataset(tmp_path):
+    tokenizer_dir = _make_gpt2_tokenizer_dir(tmp_path)
+
+    # Pick three short documents whose total length exceeds seq_len, so packing
+    # must split them across examples. Whole-document packing must keep each
+    # document's tokens contiguous — the concat-and-slice path would not.
+    records = [
+        {"text": "The quick brown fox"},
+        {"text": "jumps over the lazy dog"},
+        {"text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit"},
+    ]
+    data_path = tmp_path / "text.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    cache_dir = tmp_path / "cache"
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
+        format=TextLmDatasetFormat(pack=True),
+        cache_dir=str(cache_dir),
+    )
+    config = LmDataConfig(
+        components={"text": component},
+        tokenizer=str(tokenizer_dir),
+        enforce_eos=False,
+    )
+
+    cache = config.build_caches("train")["text"]
+    Pos = hax.Axis("position", 16)
+    ds = dataset_for_component(
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=config.block_cross_document_attention,
+    )
+    assert isinstance(ds, PackedTokenDataset)
+
+    sync_ds = ds.as_sync_dataset()
+    assert len(sync_ds) >= 1
+    for example in sync_ds:
+        assert example.attn_mask.segment_ids is not None
+        seg_ids = np.asarray(example.attn_mask.segment_ids[0])
+        real_seg_ids = seg_ids[seg_ids >= 0]
+        # Contiguous segment ids = whole documents; no document is split mid-sequence.
+        for doc_id in np.unique(real_seg_ids):
+            positions = np.where(real_seg_ids == doc_id)[0]
+            assert np.all(
+                np.diff(positions) == 1
+            ), f"Document {doc_id} was split across non-contiguous positions {positions}"
 
 
 def test_dataset_for_component_rejects_preference_format():

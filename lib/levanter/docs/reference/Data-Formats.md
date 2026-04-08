@@ -38,7 +38,23 @@ This is the default format used for pretraining.
 format:
   type: text
   text_key: text  # optional, default is "text"
+  pack: false  # optional, default. See below.
 ```
+
+* `pack` is unset or `false` (default): documents are concatenated and sliced
+  into fixed-length sequences. This may split a single document across
+  example boundaries and is the most token-efficient option for natural
+  language pretraining.
+* `pack: true`: packs whole documents greedily into each example without
+  splitting them across boundaries (documents longer than the context length
+  are left-sliced). Prefer this for non-natural-language domains (e.g. protein
+  sequences, code, structured data) where the latter half of a document is
+  meaningless without the first half.
+* `pack: <int>`: same as `pack: true` but caps the number of documents packed
+  into each example at the given integer.
+
+The `pack` field can also be set on the surrounding `DatasetComponent`, which
+takes precedence when both are specified.
 
 #### Processing:
 - Tokenizes the value in `text_key`

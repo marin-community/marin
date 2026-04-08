@@ -33,9 +33,23 @@ class LmDatasetFormatBase(ChoiceRegistry):
 @LmDatasetFormatBase.register_subclass("text")
 @dataclass(frozen=True)
 class TextLmDatasetFormat(LmDatasetFormatBase):
-    """Dataset configuration for raw text examples."""
+    """Dataset configuration for raw text examples.
+
+    Attributes:
+        text_key: Key for the text field in the jsonl file.
+        pack: Whole-document packing policy. ``None`` (default) preserves the
+            historical concat-and-slice behavior, producing fixed-length
+            sequences that may split documents at arbitrary boundaries.
+            ``True`` packs whole documents greedily into a single sequence
+            without splitting them across example boundaries (documents
+            longer than the context length are left-sliced). An ``int``
+            caps the number of documents packed per example; ``"pad"`` is
+            reserved for a future padding mode. Useful for non-natural-language
+            domains where partial documents are meaningless.
+    """
 
     text_key: str = "text"  # key for the text field in the jsonl file
+    pack: bool | int | Literal["pad"] | None = None
 
     def build_preprocessor(
         self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
