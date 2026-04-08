@@ -659,7 +659,9 @@ exec {quoted_cmd}
 
         if not is_tpu_run:
             cmd.extend(["--cap-drop", "ALL"])
-            cmd.extend(["--cap-add", "SYS_PTRACE"])
+        # Always add SYS_PTRACE so py-spy can attach via docker exec regardless of TPU/CPU.
+        # TPU containers use --privileged but docker exec processes don't reliably inherit it.
+        cmd.extend(["--cap-add", "SYS_PTRACE"])
 
         # Device flags (TPU passthrough etc) - only for run container
         if include_devices:
