@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Download SWE-bench traces for the top finetunes of a given base model from the OT Agent leaderboard.
 
 Downloads parquet trace datasets from HuggingFace to GCS, then converts to jsonl.gz.
@@ -58,16 +61,16 @@ def get_top_k_runs(k: int, leaderboard_url: str, benchmark: str, base_model: str
         if b and b.get("accuracy") is not None:
             traces_url = b.get("hfTracesLink", "")
             dataset_id = traces_url.replace("https://huggingface.co/datasets/", "")
-            results.append({
-                "model": entry["canonicalModelName"],
-                "accuracy": b["accuracy"],
-                "dataset_id": dataset_id,
-            })
+            results.append(
+                {
+                    "model": entry["canonicalModelName"],
+                    "accuracy": b["accuracy"],
+                    "dataset_id": dataset_id,
+                }
+            )
 
     results.sort(key=lambda x: x["accuracy"], reverse=True)
     return results[:k]
-
-
 
 
 @dataclass(frozen=True)
@@ -91,8 +94,8 @@ def convert_parquet_to_jsonl(cfg: ConvertTracesConfig):
                 f.write(json.dumps(record) + "\n")
 
 
-
 # --- Build steps ---
+
 
 def build_steps(k: int = K, base_model: str = BASE_MODEL) -> dict[str, dict[str, ExecutorStep]]:
     runs = get_top_k_runs(
@@ -107,10 +110,12 @@ def build_steps(k: int = K, base_model: str = BASE_MODEL) -> dict[str, dict[str,
     for run in runs:
         name = get_directory_friendly_name(run["model"])
 
-        model_step = download_model_step(ModelConfig(
-            hf_repo_id=run["model"],
-            hf_revision="main",
-        ))
+        model_step = download_model_step(
+            ModelConfig(
+                hf_repo_id=run["model"],
+                hf_revision="main",
+            )
+        )
 
         trace_dl_step = ExecutorStep(
             name=f"raw/ot_traces/{name}",

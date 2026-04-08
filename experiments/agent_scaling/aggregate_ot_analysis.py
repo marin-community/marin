@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Aggregate per-pair loss summaries for OT Agent trace evaluations.
 
 Adds an aggregation executor step that depends on the logprobs steps from
@@ -75,21 +78,15 @@ def aggregate_results(config: AggregateConfig):
 
     eval_models = config.eval_step_paths.keys()
     trace_models = config.trace_step_paths.keys()
-    pairs = [
-        {"eval_model": em, "trace_model": tm}
-        for em in eval_models
-        for tm in trace_models
-    ]
+    pairs = [{"eval_model": em, "trace_model": tm} for em in eval_models for tm in trace_models]
 
     ctx = ZephyrContext(name="aggregate-ot-results")
-    pipeline = Dataset.from_list(pairs).map(
-        lambda p: compute_pair_stats(p["eval_model"], p["trace_model"])
-    )
+    pipeline = Dataset.from_list(pairs).map(lambda p: compute_pair_stats(p["eval_model"], p["trace_model"]))
     results = list(ctx.execute(pipeline))
 
     output_file = os.path.join(config.output_path, "results.jsonl.gz")
     with fsspec.open(output_file, "wt", compression="gzip") as f:
-        for pair, result in zip(pairs, results):
+        for pair, result in zip(pairs, results, strict=True):
             row = {**pair, **result}
             f.write(json.dumps(row) + "\n")
 
@@ -99,12 +96,10 @@ def build_aggregate_step() -> ExecutorStep:
     trace_steps_dict = build_trace_steps()
 
     eval_step_paths = {
-        eval_dir: output_path_of(step_info["logprobs"])
-        for eval_dir, step_info in eval_steps_dict.items()
+        eval_dir: output_path_of(step_info["logprobs"]) for eval_dir, step_info in eval_steps_dict.items()
     }
     trace_step_paths = {
-        trace_dir: output_path_of(step_info["traces"])
-        for trace_dir, step_info in trace_steps_dict.items()
+        trace_dir: output_path_of(step_info["traces"]) for trace_dir, step_info in trace_steps_dict.items()
     }
 
     return ExecutorStep(

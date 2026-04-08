@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Tokenize OT Agent traces and evaluate logprobs with a configurable model.
 
 Reuses the trace download/convert steps from download_ot_traces.py, tokenizes
@@ -12,7 +15,6 @@ import argparse
 import os
 import sys
 
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data.text import ChatLmDatasetFormat
 from levanter.models.qwen import Qwen3Config
 
@@ -94,9 +96,7 @@ def build_steps(
 ) -> dict[str, dict]:
     trace_steps = build_trace_steps(k=top_k_traces, base_model=base_model)
 
-    base_model_step = download_model_step(
-        ModelConfig(hf_repo_id=base_model, hf_revision="main")
-    )
+    base_model_step = download_model_step(ModelConfig(hf_repo_id=base_model, hf_revision="main"))
 
     eval_model_steps = [base_model_step]
     for step_dict in trace_steps.values():
@@ -110,7 +110,11 @@ def build_steps(
         eval_model = unwrap_versioned_value(model_step.config.hf_dataset_id)
         name = get_directory_friendly_name(eval_model)
         logprobs_step = build_logprobs_step_for_model(
-            model_step, eval_data, tpu_type, logprobs_top_k, max_eval_length,
+            model_step,
+            eval_data,
+            tpu_type,
+            logprobs_top_k,
+            max_eval_length,
         )
         steps[name] = {"logprobs": logprobs_step, "tokenized": tokenized_traces}
 
