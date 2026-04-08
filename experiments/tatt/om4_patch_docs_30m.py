@@ -1,0 +1,86 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""OM4 patch docs: Qwen3 ~30M pretraining on pre-tokenized ocean grid data (ocean-tokens/om4-patch-docs).
+
+Trains to 1B tokens on v5p-8 with AdamH. Dataset is already tokenized (vocab_size=1027).
+
+Run with Iris::
+
+    uv run iris --config lib/iris/examples/marin.yaml job run \
+        --extra marin:tpu --tpu v5p-8 -- \
+        python experiments/tatt/om4_patch_docs_30m.py
+"""
+
+from levanter.data.text import PrebuiltLmDatasetFormat
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from levanter.models.qwen import Qwen3Config
+from levanter.optim import AdamHConfig
+
+from experiments.defaults import default_tokenize, default_train
+from experiments.simple_train_config import SimpleTrainConfig
+from fray.cluster import ResourceConfig
+from marin.execution.executor import executor_main
+from marin.processing.tokenize.data_configs import lm_data_config
+
+TOKENIZER = "WillHeld/om4-patch-tokenizer"
+
+model = Qwen3Config(
+    max_seq_len=4096,
+    hidden_dim=512,
+    intermediate_dim=2048,
+    num_heads=4,
+    num_kv_heads=4,
+    num_layers=6,
+    rope=Llama3RotaryEmbeddingsConfig(),
+)
+
+BATCH_SIZE = 64
+SEQ_LEN = 4096
+TARGET_TOKENS = 1_000_000_000
+NUM_STEPS = TARGET_TOKENS // (BATCH_SIZE * SEQ_LEN)
+
+train_config = SimpleTrainConfig(
+    resources=ResourceConfig.with_tpu("v5p-8"),
+    train_batch_size=BATCH_SIZE,
+    num_train_steps=NUM_STEPS,
+    learning_rate=0.00864,
+    train_seq_len=SEQ_LEN,
+    z_loss_weight=1.10e-05,
+    optimizer_config=AdamHConfig(
+        learning_rate=0.00864,
+        adam_lr=0.000502,
+        min_lr_ratio=0.0,
+        warmup=0.1,
+        decay=0.2,
+        lr_schedule="linear",
+        beta1=0.894,
+        beta2=0.999,
+        epsilon=2.32e-07,
+        max_grad_norm=0.1,
+        nesterov=False,
+    ),
+    steps_per_eval=500,
+)
+
+om4_tokenized = default_tokenize(
+    name="om4-patch-docs",
+    dataset="ocean-tokens/om4-patch-docs",
+    tokenizer=TOKENIZER,
+    format=PrebuiltLmDatasetFormat(input_ids_key="input_ids"),
+)
+
+om4_data = lm_data_config(om4_tokenized)
+
+training_step = default_train(
+    name="om4-patch-docs-30m",
+    tokenized=om4_data,
+    model_config=model,
+    train_config=train_config,
+    tags=["om4", "30m", "qwen3", "adamh"],
+    use_default_validation=False,
+    eval_harness_tasks=[],
+)
+
+if __name__ == "__main__":
+    executor_main(steps=[training_step])
