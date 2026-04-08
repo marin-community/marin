@@ -28,7 +28,7 @@ from iris.cluster.providers.k8s.tasks import (
     _sanitize_label_value,
     _task_hash,
 )
-from iris.cluster.providers.k8s.types import ExecResult
+from iris.cluster.providers.k8s.types import ExecResult, K8sResource, PodResourceUsage
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
@@ -51,7 +51,7 @@ def test_sync_applies_pods_for_tasks_to_run(provider, k8s):
 
     result = provider.sync(batch)
 
-    pods = k8s.list_json("pods", labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
+    pods = k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
     assert len(pods) == 1
     assert pods[0]["kind"] == "Pod"
     assert result.updates == []
@@ -101,7 +101,7 @@ def test_sync_deletes_pods_for_tasks_to_kill(provider, k8s):
 
     result = provider.sync(batch)
 
-    assert k8s.get_json("pod", "iris-test-job-0-0") is None
+    assert k8s.get_json(K8sResource.PODS, "iris-test-job-0-0") is None
     assert result.updates == []
 
 
@@ -115,8 +115,8 @@ def test_delete_pods_uses_task_hash_label(provider, k8s):
 
     provider._delete_pods_by_task_id(task_id)
 
-    assert k8s.get_json("pod", "iris-test-pod") is None
-    assert k8s.get_json("pod", "iris-other-pod") is not None
+    assert k8s.get_json(K8sResource.PODS, "iris-test-pod") is None
+    assert k8s.get_json(K8sResource.PODS, "iris-other-pod") is not None
 
 
 def test_delete_pods_does_not_delete_colliding_task(provider, k8s):
@@ -135,8 +135,8 @@ def test_delete_pods_does_not_delete_colliding_task(provider, k8s):
 
     provider._delete_pods_by_task_id(task_id_a)
 
-    assert k8s.get_json("pod", "pod-a") is None
-    assert k8s.get_json("pod", "pod-b") is not None
+    assert k8s.get_json(K8sResource.PODS, "pod-a") is None
+    assert k8s.get_json(K8sResource.PODS, "pod-b") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +207,7 @@ def test_pod_not_found_grace_resets_when_pod_reappears(provider, k8s):
     assert result.updates[0].new_state == job_pb2.TASK_STATE_RUNNING
 
     # Now disappear again: need full grace cycles again before failure.
-    k8s.delete("pod", pod_name)
+    k8s.delete(K8sResource.PODS, pod_name)
     for _ in range(_POD_NOT_FOUND_GRACE_CYCLES - 1):
         result = provider.sync(batch)
         assert result.updates[0].new_state == job_pb2.TASK_STATE_RUNNING
@@ -392,9 +392,9 @@ def test_fetch_scheduling_events_returns_events(provider, k8s):
         "reason": "FailedScheduling",
         "message": "0/3 nodes available",
     }
-    k8s.seed_resource("event", "evt-1", event)
+    k8s.seed_resource(K8sResource.EVENTS, "evt-1", event)
 
-    events = provider._fetch_scheduling_events(k8s.list_json("pods", labels=_MANAGED_POD_LABELS))
+    events = provider._fetch_scheduling_events(k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS))
     assert len(events) == 1
     assert isinstance(events[0], SchedulingEvent)
     assert events[0].task_id == "test-job.0"
@@ -411,9 +411,9 @@ def test_fetch_scheduling_events_ignores_non_iris_events(provider, k8s):
         "reason": "FailedScheduling",
         "message": "0/3 nodes available",
     }
-    k8s.seed_resource("event", "evt-non-iris", event)
+    k8s.seed_resource(K8sResource.EVENTS, "evt-non-iris", event)
 
-    events = provider._fetch_scheduling_events(k8s.list_json("pods", labels=_MANAGED_POD_LABELS))
+    events = provider._fetch_scheduling_events(k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS))
     assert events == []
 
 
@@ -421,7 +421,7 @@ def test_fetch_scheduling_events_returns_empty_on_failure(provider, k8s):
     """Events fetch failure returns empty list (pods are pre-cached, only events call can fail)."""
     # Seed a pod so pod_names is non-empty, then fail the events list call.
     populate_pod(k8s, "iris-test-0", "Running")
-    cached_pods = k8s.list_json("pods", labels=_MANAGED_POD_LABELS)
+    cached_pods = k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
     k8s.inject_failure("list_json", RuntimeError("events API unavailable"))
     events = provider._fetch_scheduling_events(cached_pods)
     assert events == []
@@ -441,7 +441,7 @@ def test_get_cluster_status_basic(k8s):
         "spec": {"taints": [{"effect": "NoSchedule", "key": "k"}]},
         "status": {"allocatable": {"cpu": "4", "memory": "8Gi"}},
     }
-    k8s.seed_resource("node", "node-2", node_tainted)
+    k8s.seed_resource(K8sResource.NODES, "node-2", node_tainted)
 
     populate_pod(
         k8s,
@@ -452,7 +452,7 @@ def test_get_cluster_status_basic(k8s):
             "iris.attempt_id": "0",
         },
     )
-    pod = k8s.get_json("pod", "iris-task-0")
+    pod = k8s.get_json(K8sResource.PODS, "iris-task-0")
     pod["status"]["conditions"] = []
 
     p = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
@@ -513,7 +513,7 @@ def test_get_cluster_status_uses_sync_cache(provider, k8s):
     provider.sync(make_batch())
 
     # Delete the pod from the fake k8s store. A fresh kubectl call would return 0 pods.
-    k8s.delete("pod", "iris-task-0")
+    k8s.delete(K8sResource.PODS, "iris-task-0")
 
     resp = provider.get_cluster_status()
 
@@ -540,7 +540,7 @@ def test_sync_cache_excludes_terminal_pods(provider, k8s):
 def test_get_cluster_status_includes_node_pools(provider, k8s):
     """Node pools fetched during sync() are included in get_cluster_status() response."""
     k8s.seed_resource(
-        "nodepool",
+        K8sResource.NODE_POOLS,
         "gpu-pool",
         {
             "kind": "NodePool",
@@ -580,7 +580,7 @@ def test_resource_stats_from_kubectl_top(provider, k8s):
     entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
 
     populate_pod(k8s, pod_name, "Running")
-    k8s.set_top_pod(pod_name, (500, 1024 * 1024 * 1024))
+    k8s.set_top_pod(pod_name, PodResourceUsage(cpu_millicores=500, memory_bytes=1024 * 1024 * 1024))
 
     batch = make_batch(running_tasks=[entry])
     # First sync registers the pod with the ResourceCollector.
@@ -812,8 +812,8 @@ def test_configmap_created_for_workdir_files(provider, k8s):
 
     provider._apply_pod(req)
 
-    configmaps = k8s.list_json("configmap")
-    pods = k8s.list_json("pod")
+    configmaps = k8s.list_json(K8sResource.CONFIGMAPS)
+    pods = k8s.list_json(K8sResource.PODS)
     assert len(configmaps) == 1
     assert configmaps[0]["kind"] == "ConfigMap"
     assert configmaps[0]["metadata"]["namespace"] == "iris"
@@ -831,8 +831,8 @@ def test_no_configmap_when_no_workdir_files(provider, k8s):
 
     provider._apply_pod(req)
 
-    configmaps = k8s.list_json("configmap")
-    pods = k8s.list_json("pod")
+    configmaps = k8s.list_json(K8sResource.CONFIGMAPS)
+    pods = k8s.list_json(K8sResource.PODS)
     assert len(configmaps) == 0
     assert len(pods) == 1
     assert pods[0]["kind"] == "Pod"
@@ -853,12 +853,12 @@ def test_configmap_cleaned_up_on_delete(provider, k8s):
         "kind": "ConfigMap",
         "metadata": {"name": "iris-pod-1-wf", "labels": labels},
     }
-    k8s.seed_resource("configmap", "iris-pod-1-wf", cm)
+    k8s.seed_resource(K8sResource.CONFIGMAPS, "iris-pod-1-wf", cm)
 
     provider._delete_pods_by_task_id(task_id)
 
-    assert k8s.get_json("pod", "iris-pod-1") is None
-    assert k8s.get_json("configmap", "iris-pod-1-wf") is None
+    assert k8s.get_json(K8sResource.PODS, "iris-pod-1") is None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-pod-1-wf") is None
 
 
 # ---------------------------------------------------------------------------
@@ -874,7 +874,7 @@ def test_sync_creates_pdb_for_coordinator_task(provider, k8s):
 
     provider.sync(batch)
 
-    pdbs = k8s.list_json("poddisruptionbudget")
+    pdbs = k8s.list_json(K8sResource.PDBS)
     assert len(pdbs) == 1
     pdb = pdbs[0]
     assert pdb["spec"]["minAvailable"] == 1
@@ -897,19 +897,19 @@ def test_bulk_delete_defers_pdb_cleanup_to_gc(provider, k8s):
         "metadata": {"name": "iris-coord-pod-pdb", "labels": labels},
         "spec": {"minAvailable": 1},
     }
-    k8s.seed_resource("poddisruptionbudget", "iris-coord-pod-pdb", pdb)
+    k8s.seed_resource(K8sResource.PDBS, "iris-coord-pod-pdb", pdb)
 
-    cached_pods = k8s.list_json("pods", labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
+    cached_pods = k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
     provider._bulk_delete_task_pods([task_id], cached_pods)
 
     # Pod deleted immediately.
-    assert k8s.get_json("pod", "iris-coord-pod") is None
+    assert k8s.get_json(K8sResource.PODS, "iris-coord-pod") is None
     # PDB still exists — deferred to GC.
-    assert k8s.get_json("poddisruptionbudget", "iris-coord-pod-pdb") is not None
+    assert k8s.get_json(K8sResource.PDBS, "iris-coord-pod-pdb") is not None
 
     # GC pass cleans up the deferred PDB.
     provider._gc_terminal_resources(active_pods=[])
-    assert k8s.get_json("poddisruptionbudget", "iris-coord-pod-pdb") is None
+    assert k8s.get_json(K8sResource.PDBS, "iris-coord-pod-pdb") is None
 
 
 # ---------------------------------------------------------------------------
@@ -932,7 +932,7 @@ def _seed_terminal_pod(k8s, name: str, phase: str, task_hash: str, created: str)
         },
         "status": {"phase": phase},
     }
-    k8s.seed_resource("pod", name, pod)
+    k8s.seed_resource(K8sResource.PODS, name, pod)
 
 
 def _seed_configmap(k8s, name: str, task_hash: str, created: str) -> None:
@@ -948,7 +948,7 @@ def _seed_configmap(k8s, name: str, task_hash: str, created: str) -> None:
             },
         },
     }
-    k8s.seed_resource("configmap", name, cm)
+    k8s.seed_resource(K8sResource.CONFIGMAPS, name, cm)
 
 
 def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
@@ -975,13 +975,13 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
     provider._gc_terminal_resources(active_pods=[])
 
     # Old resources deleted.
-    assert k8s.get_json("pod", "old-succeeded-pod") is None
-    assert k8s.get_json("configmap", "old-succeeded-pod-wf") is None
-    assert k8s.get_json("pod", "old-failed-pod") is None
+    assert k8s.get_json(K8sResource.PODS, "old-succeeded-pod") is None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "old-succeeded-pod-wf") is None
+    assert k8s.get_json(K8sResource.PODS, "old-failed-pod") is None
 
     # Recent resources preserved.
-    assert k8s.get_json("pod", "recent-succeeded-pod") is not None
-    assert k8s.get_json("configmap", "recent-succeeded-pod-wf") is not None
+    assert k8s.get_json(K8sResource.PODS, "recent-succeeded-pod") is not None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "recent-succeeded-pod-wf") is not None
 
 
 def test_gc_respects_interval(provider, k8s):
@@ -997,7 +997,7 @@ def test_gc_respects_interval(provider, k8s):
     # Seed an old pod. An immediate second call should NOT trigger GC (interval not elapsed).
     _seed_terminal_pod(k8s, "gc-pod-1", "Succeeded", "aaaa111122223333", old_ts)
     provider._maybe_gc_terminal_resources(active_pods=[])
-    assert k8s.get_json("pod", "gc-pod-1") is not None  # Still exists — interval gate held
+    assert k8s.get_json(K8sResource.PODS, "gc-pod-1") is not None  # Still exists — interval gate held
 
 
 def test_gc_cleans_up_deferred_configmaps(provider, k8s):
@@ -1015,14 +1015,14 @@ def test_gc_cleans_up_deferred_configmaps(provider, k8s):
         "kind": "ConfigMap",
         "metadata": {"name": "deferred-cm", "labels": labels},
     }
-    k8s.seed_resource("configmap", "deferred-cm", cm)
+    k8s.seed_resource(K8sResource.CONFIGMAPS, "deferred-cm", cm)
 
     # Simulate _bulk_delete_task_pods enqueuing the hash.
     provider._pending_gc_hashes.add(task_hash)
 
     # GC picks it up and deletes the configmap.
     provider._gc_terminal_resources(active_pods=[])
-    assert k8s.get_json("configmap", "deferred-cm") is None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "deferred-cm") is None
 
 
 def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
@@ -1040,24 +1040,26 @@ def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
     # Seed the pod and its configmap.
     populate_pod(k8s, "iris-kill-me-0-0", "Running", labels={_LABEL_TASK_HASH: task_hash})
     cm = {"kind": "ConfigMap", "metadata": {"name": "iris-kill-me-0-0-wf", "labels": labels}}
-    k8s.seed_resource("configmap", "iris-kill-me-0-0-wf", cm)
+    k8s.seed_resource(K8sResource.CONFIGMAPS, "iris-kill-me-0-0-wf", cm)
 
     # Snapshot managed pods BEFORE delete (as sync() does).
-    pre_delete_pods = k8s.list_json("pods", labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
+    pre_delete_pods = k8s.list_json(
+        K8sResource.PODS, labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE}
+    )
 
     # Kill the pod — hash goes into _pending_gc_hashes.
     provider._bulk_delete_task_pods([task_id], pre_delete_pods)
-    assert k8s.get_json("pod", "iris-kill-me-0-0") is None
+    assert k8s.get_json(K8sResource.PODS, "iris-kill-me-0-0") is None
     assert task_hash in provider._pending_gc_hashes
 
     # GC with the stale snapshot — hash should be skipped but NOT discarded.
     provider._gc_terminal_resources(active_pods=pre_delete_pods)
-    assert k8s.get_json("configmap", "iris-kill-me-0-0-wf") is not None  # Not yet cleaned
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-kill-me-0-0-wf") is not None  # Not yet cleaned
     assert task_hash in provider._pending_gc_hashes  # Retained for next cycle
 
     # Next GC cycle with empty active pods — now the CM is cleaned up.
     provider._gc_terminal_resources(active_pods=[])
-    assert k8s.get_json("configmap", "iris-kill-me-0-0-wf") is None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-kill-me-0-0-wf") is None
     assert task_hash not in provider._pending_gc_hashes
 
 
@@ -1085,13 +1087,13 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
         _LABEL_TASK_HASH: shared_hash,
     }
     cm = {"kind": "ConfigMap", "metadata": {"name": "active-retry-cm", "labels": active_labels}}
-    k8s.seed_resource("configmap", "active-retry-cm", cm)
+    k8s.seed_resource(K8sResource.CONFIGMAPS, "active-retry-cm", cm)
     pdb = {
         "kind": "PodDisruptionBudget",
         "metadata": {"name": "active-retry-pdb", "labels": active_labels},
         "spec": {"minAvailable": 1},
     }
-    k8s.seed_resource("poddisruptionbudget", "active-retry-pdb", pdb)
+    k8s.seed_resource(K8sResource.PDBS, "active-retry-pdb", pdb)
 
     # Simulate the active pod (from the sync loop's managed_pods list).
     active_pod = {
@@ -1102,10 +1104,10 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
     provider._gc_terminal_resources(active_pods=[active_pod])
 
     # Terminal pod is deleted (by name, not by hash).
-    assert k8s.get_json("pod", "old-attempt-0") is None
+    assert k8s.get_json(K8sResource.PODS, "old-attempt-0") is None
     # But configmap and PDB are preserved because the hash is still active.
-    assert k8s.get_json("configmap", "active-retry-cm") is not None
-    assert k8s.get_json("poddisruptionbudget", "active-retry-pdb") is not None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "active-retry-cm") is not None
+    assert k8s.get_json(K8sResource.PDBS, "active-retry-pdb") is not None
 
 
 # ---------------------------------------------------------------------------

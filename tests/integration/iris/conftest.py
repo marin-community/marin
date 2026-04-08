@@ -11,8 +11,6 @@ from pathlib import Path
 
 import pytest
 from iris.client.client import IrisClient
-from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.logging_connect import LogServiceClientSync
 
 from .cluster import IrisIntegrationCluster
 
@@ -20,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 MARIN_ROOT = Path(__file__).resolve().parents[3]
 IRIS_ROOT = MARIN_ROOT / "lib" / "iris"
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 # Module-scoped fixtures (integration_cluster) may need extra time for worker
 # registration.  Apply this timeout to the first test in every module so the
@@ -52,15 +49,4 @@ def integration_cluster(request):
     if not url:
         pytest.skip("--controller-url not provided")
     client = IrisClient.remote(url, workspace=MARIN_ROOT)
-    controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-    log_client = LogServiceClientSync(address=url, timeout_ms=30000)
-    tc = IrisIntegrationCluster(
-        url=url,
-        client=client,
-        controller_client=controller_client,
-        log_client=log_client,
-        job_timeout=120.0,
-    )
-    yield tc
-    log_client.close()
-    controller_client.close()
+    yield IrisIntegrationCluster(url=url, client=client, job_timeout=120.0)
