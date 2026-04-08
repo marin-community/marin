@@ -81,6 +81,46 @@ def test_subprocess_propagates_user_counters(zephyr_ctx):
     assert "'doubled_sum': 30" in last, f"expected 'doubled_sum': 30 in {last!r}"
 
 
+def test_subprocess_exception_includes_subprocess_traceback(zephyr_ctx):
+    """Exceptions raised inside the shard subprocess surface with the original frame info.
+
+    Cloudpickling an exception drops ``__traceback__`` so a naive re-raise in
+    the parent shows only the parent's stack at the re-raise site, not where
+    the exception actually happened in the user lambda. The subprocess
+    attaches the formatted traceback as a ``__notes__`` entry, which Python
+    prints inline when the exception finally propagates. Verify both the
+    original exception type AND a snippet from the user-code frame survive
+    the round-trip.
+    """
+    from zephyr.execution import ZephyrWorkerError
+
+    def buggy_index_lookup(x: int) -> int:
+        # Force a non-trivial subprocess-side exception with a recognizable
+        # source line. The parent should surface the function name and the
+        # offending statement, not just the bare `IndexError`.
+        empty: tuple = ()
+        return empty[x]
+
+    ds = Dataset.from_list([0]).map(buggy_index_lookup)
+
+    with pytest.raises(ZephyrWorkerError) as exc_info:
+        list(zephyr_ctx.execute(ds))
+
+    rendered = str(exc_info.value) + "".join(getattr(exc_info.value, "__notes__", []))
+    # The wrapping ZephyrWorkerError should chain through the parent's
+    # report_error path. Either the chained cause or the notes payload
+    # must contain the user-frame breadcrumb.
+    chained = rendered
+    cur: BaseException | None = exc_info.value
+    while cur is not None:
+        chained += str(cur) + "".join(getattr(cur, "__notes__", []))
+        cur = cur.__cause__ or cur.__context__
+
+    assert (
+        "buggy_index_lookup" in chained or "tuple index out of range" in chained
+    ), f"subprocess traceback was not preserved through report_error; got: {chained!r}"
+
+
 def test_shared_data(integration_client, tmp_path):
     """Workers can access shared data via zephyr_worker_ctx().
 
