@@ -38,7 +38,20 @@ This is the default format used for pretraining.
 format:
   type: text
   text_key: text  # optional, default is "text"
+  pack: false     # optional, default is `false` (see below)
 ```
+
+* `pack: false` (default) concatenates the token streams of all documents and then
+  slices them into fixed-length windows. This is the most throughput-efficient
+  option but means individual examples can mix the tail of one document with the
+  head of another.
+* `pack: true` greedily packs whole documents into each example until they fill
+  the context window and emits segment ids so attention stays within a single
+  document. Mirrors the chat format's `pack: true` and is the recommended
+  setting for non-natural-language domains (e.g. proteins, genomics, code) where
+  seeing a document split at an arbitrary boundary would be harmful.
+* `pack: <int>` is equivalent to `pack: true` but caps the number of documents
+  packed per example at the given integer.
 
 #### Processing:
 - Tokenizes the value in `text_key`

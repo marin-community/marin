@@ -15,6 +15,7 @@ import haliax as hax
 
 from levanter.data.text import (
     BatchTokenizer,
+    CausalLmDataset,
     ChatLmDatasetFormat,
     ChatDataset,
     DatasetComponent,
@@ -24,6 +25,7 @@ from levanter.data.text import (
     PreferenceChatLmDatasetFormat,
     PreferenceChatProcessor,
     PrebuiltLmDatasetFormat,
+    TextLmDatasetFormat,
     UrlDatasetSourceConfig,
     build_lm_dataset_cache,
     dataset_for_component,
@@ -31,6 +33,7 @@ from levanter.data.text import (
     named_lm_example_from_grug,
     preprocessor_for_format,
 )
+from levanter.data.text.datasets import PackedTokenDataset
 from levanter.tokenizers import load_tokenizer
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
@@ -227,6 +230,116 @@ def test_train_set_last_mile_wraps_to_named(tmp_path):
     named_train_set = config.train_set(Pos, BatchSchedule(1), key=jax.random.PRNGKey(0)).as_sync_dataset()
     named_example = named_train_set[0]
     assert isinstance(named_example, LmExample)
+
+
+def _build_text_cache(tmp_path: Path, documents: list[list[int]], vocab_size: int = 64):
+    """Build a token cache whose tree layout matches what ``TextLmDatasetFormat`` produces.
+
+    Uses :class:`PrebuiltLmDatasetFormat` under the hood to sidestep tokenization while
+    exercising the text packing dispatch path in ``dataset_for_component``. Both formats
+    produce a cache with a single ``input_ids`` leaf, so the resulting cache is a faithful
+    stand-in for a tokenized text cache.
+    """
+    data_path = tmp_path / "text.jsonl"
+    with data_path.open("w") as f:
+        for ids in documents:
+            f.write(json.dumps({"input_ids": ids}) + "\n")
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
+        format=PrebuiltLmDatasetFormat(),
+        cache_dir=str(tmp_path),
+    )
+    config = LmDataConfig(
+        components={"text": component},
+        tokenizer="passthrough",
+        vocab_size=vocab_size,
+    )
+    return config.build_caches("train")["text"]
+
+
+def test_text_format_default_is_unpacked(tmp_path):
+    cache = _build_text_cache(tmp_path, [[1, 2, 3], [4, 5, 6, 7]])
+    component = DatasetComponent(
+        format=TextLmDatasetFormat(),
+        cache_dir=str(tmp_path),
+    )
+    Pos = hax.Axis("position", 4)
+    ds = dataset_for_component(
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=True,
+    )
+    # default for text is concatenate-and-slice, not whole-document packing
+    assert isinstance(ds, CausalLmDataset)
+
+
+def test_text_format_pack_true_uses_packed_dataset(tmp_path):
+    # Three short "documents" that together fit inside a single window of 16 tokens.
+    cache = _build_text_cache(tmp_path, [[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+    component = DatasetComponent(
+        format=TextLmDatasetFormat(pack=True),
+        cache_dir=str(tmp_path),
+    )
+    Pos = hax.Axis("position", 16)
+    ds = dataset_for_component(
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=True,
+    )
+    assert isinstance(ds, PackedTokenDataset)
+
+    sync_ds = ds.as_sync_dataset()
+    # three whole documents should fit inside one packed example
+    assert len(sync_ds) == 1
+    example = sync_ds[0]
+    assert example.tokens.shape == (Pos.size,)
+    # the three docs produce three distinct non-padding segment ids
+    segment_ids = np.asarray(example.attn_mask.segment_ids[0])
+    non_pad = segment_ids[segment_ids >= 0]
+    assert len(np.unique(non_pad)) == 3
+
+
+def test_text_format_pack_int_caps_segments_per_example(tmp_path):
+    cache = _build_text_cache(tmp_path, [[1, 2], [3, 4], [5, 6], [7, 8]])
+    component = DatasetComponent(
+        format=TextLmDatasetFormat(pack=2),
+        cache_dir=str(tmp_path),
+    )
+    Pos = hax.Axis("position", 16)
+    ds = dataset_for_component(
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=True,
+    )
+    assert isinstance(ds, PackedTokenDataset)
+    # at most two docs per example, so four docs produce two packed examples
+    assert len(ds.as_sync_dataset()) == 2
+
+
+def test_text_format_component_pack_overrides_format_pack(tmp_path):
+    cache = _build_text_cache(tmp_path, [[1, 2, 3], [4, 5, 6]])
+    component = DatasetComponent(
+        format=TextLmDatasetFormat(pack=True),
+        pack=False,
+        cache_dir=str(tmp_path),
+    )
+    Pos = hax.Axis("position", 4)
+    ds = dataset_for_component(
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=True,
+    )
+    # explicit component.pack wins over format.pack
+    assert isinstance(ds, CausalLmDataset)
 
 
 def test_dataset_for_component_rejects_preference_format():
