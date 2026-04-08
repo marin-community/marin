@@ -49,10 +49,8 @@ from zephyr.plan import (
     Scatter,
     Shard,
     SourceItem,
-    StageContext,
     StageType,
     compute_plan,
-    run_stage,
 )
 from zephyr.writers import ensure_parent_dir
 
@@ -160,135 +158,6 @@ def _generate_execution_id() -> str:
 def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
     """Path for a shared data object: {prefix}/{execution_id}/shared/{name}.pkl"""
     return f"{prefix}/{execution_id}/shared/{name}.pkl"
-
-
-class _SubprocessWorkerContext:
-    """Lightweight WorkerContext for subprocess shard execution.
-
-    Provides ``get_shared`` (loads from GCS on demand) and counter tracking.
-    Counters are collected after the subprocess exits via the result file.
-    """
-
-    def __init__(self, chunk_prefix: str, execution_id: str):
-        self._chunk_prefix = chunk_prefix
-        self._execution_id = execution_id
-        self._shared_data_cache: dict[str, Any] = {}
-        self._counters: dict[str, int] = {}
-        self._generation = 0
-
-    def get_shared(self, name: str) -> Any:
-        if name not in self._shared_data_cache:
-            path = _shared_data_path(self._chunk_prefix, self._execution_id, name)
-            logger.info("Loading shared data '%s' from %s", name, path)
-            with open_url(path, "rb") as f:
-                self._shared_data_cache[name] = cloudpickle.loads(f.read())
-        return self._shared_data_cache[name]
-
-    def increment_counter(self, name: str, value: int = 1) -> None:
-        self._counters[name] = self._counters.get(name, 0) + value
-
-    def get_counter_snapshot(self) -> CounterSnapshot:
-        self._generation += 1
-        return CounterSnapshot(counters=dict(self._counters), generation=self._generation)
-
-
-SUBPROCESS_COUNTER_FLUSH_INTERVAL = 5.0
-"""How often the subprocess flushes its counter snapshot to the sidecar file.
-
-Matches the parent worker's heartbeat interval so each heartbeat reads at most
-one stale snapshot before the next flush lands.
-"""
-
-
-def _write_counter_sidecar(sidecar_path: str, counters: dict[str, int]) -> None:
-    """Atomically replace ``sidecar_path`` with a pickled counters dict.
-
-    Writing to a temp file then renaming guarantees the parent never reads a
-    half-written file: ``os.rename`` is atomic on POSIX.
-    """
-    tmp_path = f"{sidecar_path}.tmp"
-    with open(tmp_path, "wb") as f:
-        cloudpickle.dump(counters, f)
-    os.rename(tmp_path, sidecar_path)
-
-
-def _periodic_counter_writer(
-    stop_event: threading.Event,
-    ctx: _SubprocessWorkerContext,
-    sidecar_path: str,
-    interval: float,
-) -> None:
-    """Background loop that flushes ``ctx._counters`` to ``sidecar_path``.
-
-    The parent worker's heartbeat thread reads the sidecar to forward live
-    counter updates to the coordinator while the subprocess is still running.
-    Exits when ``stop_event`` is set.
-    """
-    while not stop_event.wait(timeout=interval):
-        try:
-            _write_counter_sidecar(sidecar_path, dict(ctx._counters))
-        except Exception:
-            logger.warning("Failed to flush counter sidecar to %s", sidecar_path, exc_info=True)
-
-
-def _subprocess_execute_shard(task_file: str, result_file: str) -> None:
-    """Entry point for subprocess shard execution.
-
-    Reads ``(task, chunk_prefix, execution_id)`` from *task_file*, executes the
-    shard inline, and writes ``(result_or_error, counters)`` to *result_file*.
-    """
-    from rigging.log_setup import configure_logging
-
-    configure_logging(level=logging.INFO)
-
-    ctx = _SubprocessWorkerContext("", "")
-    sidecar_counter_path = f"{result_file}.counters"
-    stop_event = threading.Event()
-    flusher = threading.Thread(
-        target=_periodic_counter_writer,
-        args=(stop_event, ctx, sidecar_counter_path, SUBPROCESS_COUNTER_FLUSH_INTERVAL),
-        daemon=True,
-        name="zephyr-subprocess-counter-flusher",
-    )
-    result_or_error: Any
-    try:
-        with open(task_file, "rb") as f:
-            task, chunk_prefix, execution_id = cloudpickle.load(f)
-
-        ctx = _SubprocessWorkerContext(chunk_prefix, execution_id)
-        _worker_ctx_var.set(ctx)
-
-        flusher.start()
-
-        stage_ctx = StageContext(
-            shard=task.shard,
-            shard_idx=task.shard_idx,
-            total_shards=task.total_shards,
-            aux_shards=task.aux_shards,
-        )
-
-        stage_dir = f"{chunk_prefix}/{execution_id}/{task.stage_name}"
-        external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
-        scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
-
-        result_or_error = _write_stage_output(
-            run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir),
-            source_shard=task.shard_idx,
-            stage_dir=stage_dir,
-            shard_idx=task.shard_idx,
-            scatter_op=scatter_op,
-            total_shards=task.total_shards,
-        )
-    except Exception as e:
-        logger.exception("Subprocess shard execution failed")
-        result_or_error = e
-    finally:
-        stop_event.set()
-        if flusher.is_alive():
-            flusher.join(timeout=2.0)
-
-    with open(result_file, "wb") as f:
-        cloudpickle.dump((result_or_error, dict(ctx._counters)), f)
 
 
 def _cleanup_execution(prefix: str, execution_id: str) -> None:
