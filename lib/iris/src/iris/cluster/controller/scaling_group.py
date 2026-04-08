@@ -787,7 +787,7 @@ class ScalingGroup:
         if ready <= target_capacity:
             return []
 
-        if not self.can_scale_down(timestamp):
+        if not self.can_scale_down():
             return []
 
         terminated: list[SliceHandle] = []
@@ -874,7 +874,7 @@ class ScalingGroup:
             return False
         return True
 
-    def can_scale_down(self, timestamp: Timestamp | None = None) -> bool:
+    def can_scale_down(self) -> bool:
         """Check if scale-down is allowed.
 
         Always allowed — the caller's target_capacity (which incorporates
