@@ -118,6 +118,7 @@ def execute_shard(task_file: str, result_file: str) -> None:
     """
     import faulthandler
 
+    import pyarrow as pa
     from rigging.log_setup import configure_logging
 
     # Dump a Python traceback to stderr if the subprocess hits a fatal signal
@@ -125,6 +126,12 @@ def execute_shard(task_file: str, result_file: str) -> None:
     # a C extension (Arrow, NumPy, ...) is invisible to the parent — it just
     # sees `proc.returncode` < 0 with no diagnostic.
     faulthandler.enable()
+
+    # Each shard already runs in its own subprocess, so PyArrow's internal
+    # I/O and CPU thread pools provide redundant parallelism — we get
+    # shard-level parallelism from the parent spawning multiple subprocesses.
+    pa.set_io_thread_count(1)
+    pa.set_cpu_count(1)
 
     configure_logging(level=logging.INFO)
 
