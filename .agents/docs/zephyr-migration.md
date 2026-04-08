@@ -21,22 +21,19 @@ Use `flow_backend()` to get the backend configured via the zephyr CLI. This is t
 from zephyr import Dataset, flow_backend
 
 def main():
-    backend = flow_backend()  # Get backend from CLI context
+    backend = flow_backend()  # Get backend from environment
     pipeline = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
     backend.execute(pipeline)
 ```
 
-Run with: `uv run zephyr --backend=ray --max-parallelism=1000 --memory=8GB script.py`
-
-**Override specific parameters** while inheriting other settings from CLI:
+**Override specific parameters** while inheriting other settings from the ambient context:
 ```python
-# CLI: zephyr --backend=ray --max-parallelism=50 --memory=2GB
-outer_backend = flow_backend()              # Uses CLI config: 50 workers, 2GB
-inner_backend = flow_backend(max_parallelism=16)  # Override: 16 workers, 2GB (inherited)
+outer_backend = flow_backend()              # Uses ambient config
+inner_backend = flow_backend(max_parallelism=16)  # Override worker count
 ```
 
 ### `create_backend()` (Advanced)
-Only use `create_backend()` when you need programmatic backend creation outside the CLI context:
+Only use `create_backend()` when you need programmatic backend creation outside an ambient `flow_backend()` context:
 
 ```python
 from zephyr import Dataset, create_backend
