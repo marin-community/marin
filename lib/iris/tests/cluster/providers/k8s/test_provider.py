@@ -15,12 +15,12 @@ from iris.log_server.server import LogServiceImpl
 from iris.rpc import logging_pb2
 from iris.cluster.providers.k8s.tasks import (
     K8sTaskProvider,
-    _COLLECTOR_MAX_CONSECUTIVE_FAILURES,
     _GC_MAX_AGE_SECONDS,
     _LABEL_JOB_ID,
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
     _LABEL_TASK_HASH,
+    _LogPod,
     _MANAGED_POD_LABELS,
     _POD_NOT_FOUND_GRACE_CYCLES,
     _RUNTIME_LABEL_VALUE,
@@ -229,7 +229,7 @@ def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceI
     result = provider.sync(batch)
 
     assert result.updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
-    # Logs are pushed through the LogService via LogCollector (untrack does a synchronous final fetch).
+    # Logs are pushed through the LogService via LogCollector (set_pods removal does a final fetch).
     key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
     logs = _fetch_logs(log_service, key)
     assert any(e.data == "task complete" for e in logs)
@@ -298,7 +298,7 @@ def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogS
 
 
 def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServiceImpl):
-    """Completed pods get a final full-log fetch via LogCollector.untrack()."""
+    """Completed pods get a final log fetch when removed from the collector's tracked set."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
@@ -310,7 +310,7 @@ def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServic
     result = provider.sync(make_batch(running_tasks=[entry]))
 
     assert result.updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
-    # untrack() does a synchronous final fetch — logs should be in the service.
+    # set_pods() removal does a synchronous final fetch — logs should be in the service.
     key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
     logs = _fetch_logs(log_service, key)
     assert len(logs) == 3
@@ -1109,63 +1109,104 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
 
 
 # ---------------------------------------------------------------------------
-# Collector auto-untrack on consecutive failures
+# Collector set_pods
 # ---------------------------------------------------------------------------
 
 
-def test_log_collector_auto_untracks_after_consecutive_failures(k8s, log_pusher):
-    """LogCollector stops polling a pod after it fails stream_logs enough times.
-
-    The fake K8sService raises KubectlError for stream_logs on nonexistent pods,
-    matching real kubectl behavior.
-    """
+def test_log_collector_set_pods_adds_and_removes(k8s, log_pusher):
+    """LogCollector.set_pods() adds new pods and removes absent ones."""
     from iris.cluster.providers.k8s.tasks import LogCollector
     from iris.cluster.types import JobName
 
     collector = LogCollector(k8s, log_pusher, concurrency=1)
-    task_id = JobName.from_wire("/fail-job/0")
+    task_a = JobName.from_wire("/job/0")
+    task_b = JobName.from_wire("/job/1")
+    key_a = f"{task_a.to_wire()}:0"
+    key_b = f"{task_b.to_wire()}:0"
 
-    # Track a pod that doesn't exist — stream_logs will raise on each fetch.
-    collector.track("nonexistent-pod", task_id, 0)
-    key = f"{task_id.to_wire()}:0"
-
-    for _ in range(_COLLECTOR_MAX_CONSECUTIVE_FAILURES):
-        with collector._lock:
-            pod = collector._pods.get(key)
-        if pod is None:
-            break
-        pod_lock = collector._pod_locks.get(key)
-        if pod_lock is None:
-            break
-        collector._guarded_fetch(pod, pod_lock)
-
+    collector.set_pods(
+        {
+            key_a: _LogPod(pod_name="pod-a", task_id=task_a, attempt_id=0),
+            key_b: _LogPod(pod_name="pod-b", task_id=task_b, attempt_id=0),
+        }
+    )
     with collector._lock:
-        assert key not in collector._pods
+        assert key_a in collector._pods
+        assert key_b in collector._pods
+
+    # Remove pod A, keep pod B.
+    collector.set_pods(
+        {
+            key_b: _LogPod(pod_name="pod-b", task_id=task_b, attempt_id=0),
+        }
+    )
+    with collector._lock:
+        assert key_a not in collector._pods
+        assert key_b in collector._pods
+
+    # Clear all.
+    collector.set_pods({})
+    with collector._lock:
+        assert len(collector._pods) == 0
+
     collector.close()
 
 
-def test_resource_collector_auto_untracks_after_consecutive_failures(k8s):
-    """ResourceCollector stops polling a pod that consistently returns no metrics.
-
-    The fake K8sService returns None from top_pod for nonexistent pods,
-    matching real kubectl behavior (metrics-server has no data).
-    """
-    from iris.cluster.providers.k8s.tasks import ResourceCollector
+def test_log_collector_set_pods_preserves_cursor_state(k8s, log_pusher):
+    """set_pods() preserves last_timestamp for pods that remain tracked."""
+    from iris.cluster.providers.k8s.tasks import LogCollector
     from iris.cluster.types import JobName
+    from datetime import datetime, timezone
 
-    collector = ResourceCollector(k8s, concurrency=1)
-    task_id = JobName.from_wire("/fail-job/0")
-
-    # Track a pod that doesn't exist — top_pod will return None on each fetch.
-    collector.track("nonexistent-pod", task_id, 0)
+    collector = LogCollector(k8s, log_pusher, concurrency=1)
+    task_id = JobName.from_wire("/job/0")
     key = f"{task_id.to_wire()}:0"
 
-    for _ in range(_COLLECTOR_MAX_CONSECUTIVE_FAILURES):
-        with collector._lock:
-            if key not in collector._pods:
-                break
-        collector._fetch_one(key, "nonexistent-pod")
+    collector.set_pods(
+        {
+            key: _LogPod(pod_name="pod-0", task_id=task_id, attempt_id=0),
+        }
+    )
 
+    # Simulate the collector having advanced the cursor.
+    marker = datetime(2026, 1, 1, tzinfo=timezone.utc)
     with collector._lock:
-        assert key not in collector._pods
+        collector._pods[key].last_timestamp = marker
+
+    # Re-declare the same pod — cursor should be preserved.
+    collector.set_pods(
+        {
+            key: _LogPod(pod_name="pod-0", task_id=task_id, attempt_id=0),
+        }
+    )
+    with collector._lock:
+        assert collector._pods[key].last_timestamp == marker
+
+    collector.close()
+
+
+def test_resource_collector_set_pods_adds_and_removes(k8s):
+    """ResourceCollector.set_pods() adds new pods and cleans up removed ones."""
+    from iris.cluster.providers.k8s.tasks import ResourceCollector
+
+    collector = ResourceCollector(k8s, concurrency=1)
+    key_a = "/job/0:0"
+    key_b = "/job/1:0"
+
+    collector.set_pods({key_a: "pod-a", key_b: "pod-b"})
+    with collector._lock:
+        assert key_a in collector._pods
+        assert key_b in collector._pods
+
+    # Inject a cached result for pod A.
+    with collector._lock:
+        collector._results[key_a] = job_pb2.ResourceUsage(cpu_millicores=100, memory_mb=512)
+
+    # Remove pod A — its cached result should also be cleaned up.
+    collector.set_pods({key_b: "pod-b"})
+    with collector._lock:
+        assert key_a not in collector._pods
+        assert key_a not in collector._results
+        assert key_b in collector._pods
+
     collector.close()
