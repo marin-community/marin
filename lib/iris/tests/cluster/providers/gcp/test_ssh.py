@@ -60,13 +60,15 @@ def provisioner():
 def test_ensure_key_generates_and_registers(mock_makedirs, mock_exists, mock_run, provisioner):
     provisioner.ensure_key("/tmp/test_key", "sa@project.iam.gserviceaccount.com")
 
-    assert mock_run.call_count == 2
+    # keygen + purge list + add = 3 calls
+    assert mock_run.call_count == 3
     keygen_call = mock_run.call_args_list[0]
     assert "ssh-keygen" in keygen_call.args[0]
     assert "/tmp/test_key" in keygen_call.args[0]
 
-    register_call = mock_run.call_args_list[1]
-    assert "os-login" in register_call.args[0]
+    register_call = mock_run.call_args_list[2]
+    assert "ssh-keys" in register_call.args[0]
+    assert "add" in register_call.args[0]
     assert "--impersonate-service-account=sa@project.iam.gserviceaccount.com" in register_call.args[0]
 
 
@@ -93,9 +95,9 @@ def test_ensure_key_reregisters_on_expiry(mock_monotonic, mock_exists, mock_run,
 
     provisioner.ensure_key("/tmp/test_key", "sa@project.iam.gserviceaccount.com")
 
-    # Should only register (not keygen, since key exists)
-    assert mock_run.call_count == 1
-    assert "os-login" in mock_run.call_args.args[0]
+    # Should only register (not keygen, since key exists): purge list + add = 2 calls
+    assert mock_run.call_count == 2
+    assert "add" in mock_run.call_args.args[0]
 
 
 @patch(
@@ -107,8 +109,9 @@ def test_ensure_key_reregisters_on_expiry(mock_monotonic, mock_exists, mock_run,
 def test_ensure_key_no_impersonate_sa(mock_makedirs, mock_exists, mock_run, provisioner):
     provisioner.ensure_key("/tmp/test_key", None)
 
-    register_call = mock_run.call_args_list[1]
+    register_call = mock_run.call_args_list[2]
     cmd = register_call.args[0]
+    assert "add" in cmd
     assert not any("--impersonate-service-account" in arg for arg in cmd)
 
 
