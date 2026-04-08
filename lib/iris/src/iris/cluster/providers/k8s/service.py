@@ -28,10 +28,7 @@ except ImportError:
     kubernetes = None  # type: ignore[assignment]
     ApiException = Exception  # type: ignore[assignment,misc]
     NotFoundError = Exception  # type: ignore[assignment,misc]
-
-    class DynamicClient:  # type: ignore[no-redef]
-        def __init__(self, *args, **kwargs) -> None:
-            raise ImportError("Install iris[controller] to use CloudK8sService")
+    DynamicClient = None  # type: ignore[assignment,misc]
 
 
 from iris.cluster.providers.k8s.types import (
@@ -179,6 +176,8 @@ class CloudK8sService:
     _kubectl_prefix: list[str] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if kubernetes is None:
+            raise ImportError("Install iris[controller] to use CloudK8sService")
         if self.kubeconfig_path:
             self.kubeconfig_path = os.path.expanduser(self.kubeconfig_path)
             self._api_client = kubernetes.config.new_client_from_config(
@@ -191,6 +190,7 @@ class CloudK8sService:
             except kubernetes.config.ConfigException:
                 self._api_client = kubernetes.config.new_client_from_config()
 
+        assert DynamicClient is not None
         self._dyn = DynamicClient(self._api_client)
         self._core_v1 = kubernetes.client.CoreV1Api(self._api_client)
         self._custom = kubernetes.client.CustomObjectsApi(self._api_client)
