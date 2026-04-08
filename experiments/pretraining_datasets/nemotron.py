@@ -7,6 +7,7 @@ import dataclasses
 import os.path
 
 from fray.v2.types import ResourceConfig
+from levanter.tokenizers import TokenizerBackend
 
 from experiments.defaults import DEFAULT_NEW_RUN_DATA_SHUFFLE
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
@@ -71,6 +72,7 @@ def _get_nemotron_split_paths(split: str):
 def tokenize_nemotron(
     *,
     tokenizer: str | None = None,
+    tokenizer_backend: TokenizerBackend = TokenizerBackend.HF,
     max_workers: int = 4096,
     cache_copy_max_workers: int = 128,
 ) -> dict[str, TokenizerStep]:
@@ -100,6 +102,7 @@ def tokenize_nemotron(
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
+                tokenizer_backend=versioned(tokenizer_backend),
                 max_workers=max_workers,
                 cache_copy_max_workers=cache_copy_max_workers,
             ),
@@ -133,7 +136,11 @@ nemotron_mix = lm_mixture_data_config(
 nemotron_mix_block_shuffle = dataclasses.replace(nemotron_mix, shuffle=DEFAULT_NEW_RUN_DATA_SHUFFLE)
 
 
-def tokenize_nemotron_subset(name: str, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:
+def tokenize_nemotron_subset(
+    name: str,
+    tokenizer: str | None = None,
+    tokenizer_backend: TokenizerBackend = TokenizerBackend.HF,
+) -> ExecutorStep[TokenizeConfig]:
     """Get a specific nemotron split tokenization step."""
     assert name in NEMOTRON_DATASETS, f"Split {name} not found in NEMOTRON_DATASETS"
-    return tokenize_nemotron(tokenizer=tokenizer)[f"nemotron_cc/{name}"]
+    return tokenize_nemotron(tokenizer=tokenizer, tokenizer_backend=tokenizer_backend)[f"nemotron_cc/{name}"]
