@@ -31,6 +31,56 @@ def test_filter(zephyr_ctx):
     assert sorted(results) == [4, 5]
 
 
+def test_subprocess_propagates_user_counters(zephyr_ctx):
+    """User counters incremented inside the shard subprocess flow back to the coordinator.
+
+    Each task runs in a fresh Python subprocess, so ``counters.increment`` writes
+    into a ``_SubprocessWorkerContext`` that lives only in the child. This test
+    verifies the result file ships those increments back to the parent worker,
+    which then forwards them to the coordinator via ``report_result``. Without
+    that round-trip, the coordinator's ``get_counters`` would silently report 0.
+
+    Uses a direct logging handler attachment (rather than ``caplog``) so the
+    test works whether or not pytest's logging plugin is enabled.
+    """
+    import logging
+
+    from zephyr import counters
+
+    def increment_per_item(x: int) -> int:
+        counters.increment("docs", 1)
+        counters.increment("doubled_sum", x * 2)
+        return x
+
+    captured: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record.getMessage())
+
+    handler = _Capture(level=logging.INFO)
+    target_logger = logging.getLogger("zephyr.execution")
+    prior_level = target_logger.level
+    target_logger.addHandler(handler)
+    target_logger.setLevel(logging.INFO)
+    try:
+        ds = Dataset.from_list([1, 2, 3, 4, 5]).map(increment_per_item)
+        results = list(zephyr_ctx.execute(ds))
+    finally:
+        target_logger.removeHandler(handler)
+        target_logger.setLevel(prior_level)
+
+    assert sorted(results) == [1, 2, 3, 4, 5]
+
+    # Coordinator logs the aggregated counters on shutdown. Look for the most
+    # recent "Final counters:" line and check the dict it printed.
+    final_lines = [m for m in captured if "Final counters:" in m]
+    assert final_lines, "coordinator did not log Final counters — counter plumbing is broken"
+    last = final_lines[-1]
+    assert "'docs': 5" in last, f"expected 'docs': 5 in {last!r}"
+    assert "'doubled_sum': 30" in last, f"expected 'doubled_sum': 30 in {last!r}"
+
+
 def test_shared_data(integration_client, tmp_path):
     """Workers can access shared data via zephyr_worker_ctx().
 
