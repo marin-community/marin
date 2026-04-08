@@ -420,5 +420,5 @@ src/iris/
 
 ## References
 
-- [Original Design](docs/fray-zero.md) - Design rationale and architectural decisions
-- [Autoscaler Design](docs/autoscaler-v0-design.md) - Technical specification for VM autoscaling
+- [Task States](docs/task-states.md) - Task state machine and retry semantics
+- [Constraints](docs/constraints.md) - Constraint system design
