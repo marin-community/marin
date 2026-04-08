@@ -136,6 +136,81 @@ def test_consolidate_filters_and_writes_output(tmp_path):
     assert kept_ids == {"doc-1", "doc-2"}, f"Expected to keep doc-1 and doc-2, but got {kept_ids}"
 
 
+def _run_classify_consolidate(
+    tmp_path: Path,
+    input_rows: list[dict],
+    attribute_rows: list[dict],
+    lower_threshold: float,
+) -> list[dict]:
+    input_root = tmp_path / "input"
+    attributes_root = tmp_path / "attributes"
+    output_root = tmp_path / "output"
+    input_root.mkdir()
+    attributes_root.mkdir()
+    output_root.mkdir()
+
+    _write_jsonl_gz(input_root / "part-0000.jsonl.gz", input_rows)
+    _write_jsonl_gz(attributes_root / "part-0000.jsonl.gz", attribute_rows)
+
+    config = ConsolidateConfig(
+        input_path=str(input_root),
+        output_path=str(output_root),
+        filters=[
+            FilterConfig(
+                type=FilterType.CLASSIFY,
+                attribute_path=str(attributes_root),
+                name="quality",
+                label="good",
+                lower_threshold=lower_threshold,
+            )
+        ],
+    )
+    consolidate(config)
+
+    rows: list[dict] = []
+    for pq in sorted(output_root.glob("*.parquet")):
+        rows.extend(load_parquet(str(pq)))
+    return rows
+
+
+def test_consolidate_empty_input(tmp_path):
+    """Empty input shard produces no kept rows and does not error."""
+    rows = _run_classify_consolidate(tmp_path, input_rows=[], attribute_rows=[], lower_threshold=0.5)
+    assert rows == []
+
+
+def test_consolidate_all_filtered(tmp_path):
+    """Every doc below threshold: output is empty."""
+    input_rows = [
+        {"id": "doc-0", "text": "a"},
+        {"id": "doc-1", "text": "b"},
+    ]
+    attribute_rows = [
+        {"id": "doc-0", "attributes": {"quality": {"good": 0.1}}},
+        {"id": "doc-1", "attributes": {"quality": {"good": 0.2}}},
+    ]
+    rows = _run_classify_consolidate(tmp_path, input_rows, attribute_rows, lower_threshold=0.9)
+    assert rows == []
+
+
+def test_consolidate_mixed_quality_tiers(tmp_path):
+    """Low/mid/high tiers: threshold keeps only high tier; parquet preserves id and text."""
+    input_rows = [
+        {"id": "low-0", "text": "low-text"},
+        {"id": "mid-0", "text": "mid-text"},
+        {"id": "high-0", "text": "high-text"},
+    ]
+    attribute_rows = [
+        {"id": "low-0", "attributes": {"quality": {"good": 0.1}}},
+        {"id": "mid-0", "attributes": {"quality": {"good": 0.5}}},
+        {"id": "high-0", "attributes": {"quality": {"good": 0.9}}},
+    ]
+    rows = _run_classify_consolidate(tmp_path, input_rows, attribute_rows, lower_threshold=0.8)
+    assert len(rows) == 1
+    assert rows[0]["id"] == "high-0"
+    assert rows[0]["text"] == "high-text"
+
+
 def test_dedupe_consolidate_integration(fox_corpus):
     """Integration test: dedupe generates attributes, consolidate filters based on them.
 
