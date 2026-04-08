@@ -351,7 +351,8 @@ def _effective_pack(component: DatasetComponent) -> bool | int | Literal["pad"]:
         return component.pack
     fmt = component.format
     if isinstance(fmt, TextLmDatasetFormat):
-        return False if fmt.pack is None else fmt.pack
+        # partial_pack=True => greedy whole-document packing; False => concat-and-slice.
+        return fmt.partial_pack
     if isinstance(fmt, ChatLmDatasetFormat):
         return True if fmt.pack is None else fmt.pack
     return False

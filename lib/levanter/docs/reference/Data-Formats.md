@@ -38,23 +38,25 @@ This is the default format used for pretraining.
 format:
   type: text
   text_key: text  # optional, default is "text"
-  pack: false  # optional, default. See below.
+  partial_pack: false  # optional, default. See below.
 ```
 
-* `pack` is unset or `false` (default): documents are concatenated and sliced
-  into fixed-length sequences. This may split a single document across
-  example boundaries and is the most token-efficient option for natural
-  language pretraining.
-* `pack: true`: packs whole documents greedily into each example without
-  splitting them across boundaries (documents longer than the context length
-  are left-sliced). Prefer this for non-natural-language domains (e.g. protein
-  sequences, code, structured data) where the latter half of a document is
-  meaningless without the first half.
-* `pack: <int>`: same as `pack: true` but caps the number of documents packed
-  into each example at the given integer.
+* `partial_pack` is unset or `false` (default): documents are concatenated and
+  sliced into fixed-length sequences. This may split a single document across
+  example boundaries and is the most aggressive (most token-efficient) form
+  of packing. This is the right default for natural-language pretraining.
+* `partial_pack: true`: whole documents are packed greedily into each example
+  until the next document would overflow the sequence length, at which point
+  a new example is started (documents longer than the context length are
+  left-sliced). This matches the `chat` format's `pack: true` semantics, but
+  in the `text` context it is the *less* aggressive form of packing because
+  the tail of each example may be wasted. Prefer this for
+  non-natural-language domains (e.g. protein sequences, code, structured
+  data) where the latter half of a document is meaningless without the first
+  half.
 
 The `pack` field can also be set on the surrounding `DatasetComponent`, which
-takes precedence when both are specified.
+takes precedence over `partial_pack` when set.
 
 #### Processing:
 - Tokenizes the value in `text_key`

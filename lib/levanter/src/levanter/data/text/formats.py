@@ -37,19 +37,22 @@ class TextLmDatasetFormat(LmDatasetFormatBase):
 
     Attributes:
         text_key: Key for the text field in the jsonl file.
-        pack: Whole-document packing policy. ``None`` (default) preserves the
-            historical concat-and-slice behavior, producing fixed-length
-            sequences that may split documents at arbitrary boundaries.
-            ``True`` packs whole documents greedily into a single sequence
-            without splitting them across example boundaries (documents
-            longer than the context length are left-sliced). An ``int``
-            caps the number of documents packed per example; ``"pad"`` is
-            reserved for a future padding mode. Useful for non-natural-language
-            domains where partial documents are meaningless.
+        partial_pack: If ``False`` (default), documents are concatenated and
+            sliced into fixed-length sequences, splitting individual documents
+            across example boundaries. This is the most aggressive form of
+            packing and the right default for natural-language pretraining.
+            If ``True``, whole documents are packed greedily into each example
+            until the next document would overflow the sequence length, at
+            which point a new example is started. This matches
+            :class:`ChatLmDatasetFormat`'s ``pack=True`` semantics and is
+            useful for non-natural-language domains (e.g. protein sequences,
+            code, structured data) where splitting a document mid-sequence
+            degrades training signal. The surrounding ``DatasetComponent.pack``
+            field takes precedence when set.
     """
 
     text_key: str = "text"  # key for the text field in the jsonl file
-    pack: bool | int | Literal["pad"] | None = None
+    partial_pack: bool = False
 
     def build_preprocessor(
         self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True

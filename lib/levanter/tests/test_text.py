@@ -232,16 +232,18 @@ def test_train_set_last_mile_wraps_to_named(tmp_path):
     assert isinstance(named_example, LmExample)
 
 
-def test_effective_pack_honors_text_format_pack():
+def test_effective_pack_honors_text_format_partial_pack():
     # Component override wins over the format field.
-    override_component = DatasetComponent(format=TextLmDatasetFormat(pack=True), pack=False)
+    override_component = DatasetComponent(format=TextLmDatasetFormat(partial_pack=True), pack=False)
     assert _effective_pack(override_component) is False
 
-    # Format-level pack is used when component.pack is None.
-    assert _effective_pack(DatasetComponent(format=TextLmDatasetFormat(pack=True))) is True
-    assert _effective_pack(DatasetComponent(format=TextLmDatasetFormat(pack=4))) == 4
+    # Component pack can also upgrade a format that opts out of partial packing.
+    assert _effective_pack(DatasetComponent(format=TextLmDatasetFormat(), pack=4)) == 4
 
-    # Default (None) preserves historical concat behavior for text.
+    # Format-level partial_pack is used when component.pack is None.
+    assert _effective_pack(DatasetComponent(format=TextLmDatasetFormat(partial_pack=True))) is True
+
+    # Default (partial_pack=False) preserves concat-and-slice behavior for text.
     assert _effective_pack(DatasetComponent(format=TextLmDatasetFormat())) is False
 
 
@@ -257,12 +259,12 @@ def _make_gpt2_tokenizer_dir(tmp_path: Path) -> Path:
     return tok_dir
 
 
-def test_text_format_pack_uses_packed_token_dataset(tmp_path):
+def test_text_format_partial_pack_uses_packed_token_dataset(tmp_path):
     tokenizer_dir = _make_gpt2_tokenizer_dir(tmp_path)
 
     # Pick three short documents whose total length exceeds seq_len, so packing
-    # must split them across examples. Whole-document packing must keep each
-    # document's tokens contiguous — the concat-and-slice path would not.
+    # must split them across examples. Greedy whole-document packing must keep
+    # each document's tokens contiguous — the concat-and-slice path would not.
     records = [
         {"text": "The quick brown fox"},
         {"text": "jumps over the lazy dog"},
@@ -276,7 +278,7 @@ def test_text_format_pack_uses_packed_token_dataset(tmp_path):
     cache_dir = tmp_path / "cache"
     component = DatasetComponent(
         source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
-        format=TextLmDatasetFormat(pack=True),
+        format=TextLmDatasetFormat(partial_pack=True),
         cache_dir=str(cache_dir),
     )
     config = LmDataConfig(
