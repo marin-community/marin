@@ -104,4 +104,4 @@ scale_groups:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         mode: GCP_SLICE_MODE_VM
-        machine_type: e2-highmem-2
+        machine_type: n2-highmem-2
