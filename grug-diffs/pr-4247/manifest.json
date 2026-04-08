@@ -1,0 +1,35 @@
+{
+  "added_variants": [
+    "modular_opt",
+    "moe"
+  ],
+  "base_sha": "8819cc193856acd21dfe5499bc64dd12ab5acc72",
+  "head_sha": "9a589c9740634b62552d2b60556399e0c2fc7f2e",
+  "report_count": 2,
+  "reports": [
+    {
+      "closest_variant": "base",
+      "distance_score": 347,
+      "report_relpath": "modular_opt/index.html",
+      "status_counts": {
+        "added": 0,
+        "changed": 4,
+        "removed": 0,
+        "unchanged": 0
+      },
+      "variant": "modular_opt"
+    },
+    {
+      "closest_variant": "base",
+      "distance_score": 990,
+      "report_relpath": "moe/index.html",
+      "status_counts": {
+        "added": 2,
+        "changed": 4,
+        "removed": 0,
+        "unchanged": 0
+      },
+      "variant": "moe"
+    }
+  ]
+}
