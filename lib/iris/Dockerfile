@@ -79,6 +79,23 @@ ARG IRIS_GIT_HASH=unknown
 ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
 
 
+# ── Stage: docker-cli ────────────────────────────────────────────────
+# Built from base (not deps) so it stays cached across source changes.
+FROM base AS docker-cli
+
+# Docker CLI and buildx (buildx required for BuildKit).
+# TODO(#3341): TPU host VMs ship Docker daemon 24.0 (API 1.43). Pinning the
+# CLI to the same major keeps client and daemon compatible. Revisit once GCP
+# updates the base TPU VM image.
+RUN install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
+    chmod a+r /etc/apt/keyrings/docker.asc && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends 'docker-ce-cli=5:24.0*' 'docker-buildx-plugin=0.11*' && \
+    rm -rf /var/lib/apt/lists/*
+
+
 # ── Stage: controller ────────────────────────────────────────────────
 FROM deps AS controller
 
@@ -99,17 +116,10 @@ FROM deps AS worker
 
 LABEL org.opencontainers.image.description="Iris worker image"
 
-# Docker CLI and buildx (buildx required for BuildKit).
-# TODO(#3341): TPU host VMs ship Docker daemon 24.0 (API 1.43). Pinning the
-# CLI to the same major keeps client and daemon compatible. Revisit once GCP
-# updates the base TPU VM image.
-RUN install -m 0755 -d /etc/apt/keyrings && \
-    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
-    chmod a+r /etc/apt/keyrings/docker.asc && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends 'docker-ce-cli=5:24.0*' 'docker-buildx-plugin=0.11*' && \
-    rm -rf /var/lib/apt/lists/*
+# Copy pre-built Docker CLI + buildx from the docker-cli stage (cached
+# independently of Python source changes).
+COPY --from=docker-cli /usr/bin/docker /usr/bin/docker
+COPY --from=docker-cli /usr/libexec/docker/cli-plugins/ /usr/libexec/docker/cli-plugins/
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:10001/health || exit 1
