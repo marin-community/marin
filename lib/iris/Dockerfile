@@ -53,19 +53,22 @@ WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Rigging is a workspace-local dep not on PyPI with a compatible API.
-# Copy it alongside iris and create a minimal workspace so uv resolves it
-# from source instead of downloading the unrelated "rigging" package from PyPI.
-COPY lib/rigging/ ./lib/rigging/
+# Copy only metadata first so source changes don't bust the dep cache.
+COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
 COPY lib/iris/pyproject.toml lib/iris/hatch_build.py ./lib/iris/
-RUN printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nrigging = { workspace = true }\n' > pyproject.toml \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nrigging = { workspace = true }\n' > pyproject.toml \
     && uv sync --package iris --no-install-project
 
-# Iris source: install the project itself.
+# Now copy full source for both rigging and iris, then install.
+COPY lib/rigging/src/ ./lib/rigging/src/
 COPY lib/iris/src/ ./lib/iris/src/
-RUN uv sync --package iris
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --package iris
 
 # Profiling tools — installed after uv sync so they aren't pruned by the exact sync.
-RUN uv pip install py-spy memray
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install py-spy memray
 
 # Dashboard assets (pre-built by `iris build dashboard` before docker build)
 COPY lib/iris/dashboard/dist ./lib/iris/dashboard/dist
