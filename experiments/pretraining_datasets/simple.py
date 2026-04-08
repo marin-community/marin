@@ -7,6 +7,8 @@ Simple single-corpus dataset definitions and tokenization.
 This module defines raw dataset downloads and their tokenized versions
 for simple datasets that don't have multiple splits.
 """
+from fray import ResourceConfig
+from marin.execution.remote import remote
 
 import os.path
 
@@ -44,7 +46,8 @@ def _tokenize_simple(
 
     step = ExecutorStep(
         name=os.path.join("tokenized", name),
-        fn=tokenize,
+        # TODO: `tokenize` shouldn't require this much RAM - fix after levanter store consolidation
+        fn=remote(tokenize, resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g")),
         config=config,
     )
 
