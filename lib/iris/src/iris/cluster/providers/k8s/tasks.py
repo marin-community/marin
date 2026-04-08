@@ -1016,10 +1016,9 @@ class ResourceCollector:
             top = None
 
         if top is not None:
-            cpu_mc, mem_bytes = top
             usage = job_pb2.ResourceUsage(
-                cpu_millicores=cpu_mc,
-                memory_mb=mem_bytes // (1024 * 1024),
+                cpu_millicores=top.cpu_millicores,
+                memory_mb=top.memory_bytes // (1024 * 1024),
             )
             with self._lock:
                 # Only store if the key is still tracked (may have been removed by set_pods).

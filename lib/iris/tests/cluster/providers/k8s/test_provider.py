@@ -28,7 +28,7 @@ from iris.cluster.providers.k8s.tasks import (
     _sanitize_label_value,
     _task_hash,
 )
-from iris.cluster.providers.k8s.types import ExecResult, K8sResource
+from iris.cluster.providers.k8s.types import ExecResult, K8sResource, PodResourceUsage
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
@@ -392,7 +392,7 @@ def test_fetch_scheduling_events_returns_events(provider, k8s):
         "reason": "FailedScheduling",
         "message": "0/3 nodes available",
     }
-    k8s.seed_resource("event", "evt-1", event)
+    k8s.seed_resource(K8sResource.EVENTS, "evt-1", event)
 
     events = provider._fetch_scheduling_events(k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS))
     assert len(events) == 1
@@ -411,7 +411,7 @@ def test_fetch_scheduling_events_ignores_non_iris_events(provider, k8s):
         "reason": "FailedScheduling",
         "message": "0/3 nodes available",
     }
-    k8s.seed_resource("event", "evt-non-iris", event)
+    k8s.seed_resource(K8sResource.EVENTS, "evt-non-iris", event)
 
     events = provider._fetch_scheduling_events(k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS))
     assert events == []
@@ -441,7 +441,7 @@ def test_get_cluster_status_basic(k8s):
         "spec": {"taints": [{"effect": "NoSchedule", "key": "k"}]},
         "status": {"allocatable": {"cpu": "4", "memory": "8Gi"}},
     }
-    k8s.seed_resource("node", "node-2", node_tainted)
+    k8s.seed_resource(K8sResource.NODES, "node-2", node_tainted)
 
     populate_pod(
         k8s,
@@ -540,7 +540,7 @@ def test_sync_cache_excludes_terminal_pods(provider, k8s):
 def test_get_cluster_status_includes_node_pools(provider, k8s):
     """Node pools fetched during sync() are included in get_cluster_status() response."""
     k8s.seed_resource(
-        "nodepool",
+        K8sResource.NODE_POOLS,
         "gpu-pool",
         {
             "kind": "NodePool",
@@ -580,7 +580,7 @@ def test_resource_stats_from_kubectl_top(provider, k8s):
     entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
 
     populate_pod(k8s, pod_name, "Running")
-    k8s.set_top_pod(pod_name, (500, 1024 * 1024 * 1024))
+    k8s.set_top_pod(pod_name, PodResourceUsage(cpu_millicores=500, memory_bytes=1024 * 1024 * 1024))
 
     batch = make_batch(running_tasks=[entry])
     # First sync registers the pod with the ResourceCollector.
@@ -853,7 +853,7 @@ def test_configmap_cleaned_up_on_delete(provider, k8s):
         "kind": "ConfigMap",
         "metadata": {"name": "iris-pod-1-wf", "labels": labels},
     }
-    k8s.seed_resource("configmap", "iris-pod-1-wf", cm)
+    k8s.seed_resource(K8sResource.CONFIGMAPS, "iris-pod-1-wf", cm)
 
     provider._delete_pods_by_task_id(task_id)
 
@@ -897,7 +897,7 @@ def test_bulk_delete_defers_pdb_cleanup_to_gc(provider, k8s):
         "metadata": {"name": "iris-coord-pod-pdb", "labels": labels},
         "spec": {"minAvailable": 1},
     }
-    k8s.seed_resource("poddisruptionbudget", "iris-coord-pod-pdb", pdb)
+    k8s.seed_resource(K8sResource.PDBS, "iris-coord-pod-pdb", pdb)
 
     cached_pods = k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
     provider._bulk_delete_task_pods([task_id], cached_pods)
@@ -932,7 +932,7 @@ def _seed_terminal_pod(k8s, name: str, phase: str, task_hash: str, created: str)
         },
         "status": {"phase": phase},
     }
-    k8s.seed_resource("pod", name, pod)
+    k8s.seed_resource(K8sResource.PODS, name, pod)
 
 
 def _seed_configmap(k8s, name: str, task_hash: str, created: str) -> None:
@@ -948,7 +948,7 @@ def _seed_configmap(k8s, name: str, task_hash: str, created: str) -> None:
             },
         },
     }
-    k8s.seed_resource("configmap", name, cm)
+    k8s.seed_resource(K8sResource.CONFIGMAPS, name, cm)
 
 
 def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
@@ -1015,7 +1015,7 @@ def test_gc_cleans_up_deferred_configmaps(provider, k8s):
         "kind": "ConfigMap",
         "metadata": {"name": "deferred-cm", "labels": labels},
     }
-    k8s.seed_resource("configmap", "deferred-cm", cm)
+    k8s.seed_resource(K8sResource.CONFIGMAPS, "deferred-cm", cm)
 
     # Simulate _bulk_delete_task_pods enqueuing the hash.
     provider._pending_gc_hashes.add(task_hash)
@@ -1040,7 +1040,7 @@ def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
     # Seed the pod and its configmap.
     populate_pod(k8s, "iris-kill-me-0-0", "Running", labels={_LABEL_TASK_HASH: task_hash})
     cm = {"kind": "ConfigMap", "metadata": {"name": "iris-kill-me-0-0-wf", "labels": labels}}
-    k8s.seed_resource("configmap", "iris-kill-me-0-0-wf", cm)
+    k8s.seed_resource(K8sResource.CONFIGMAPS, "iris-kill-me-0-0-wf", cm)
 
     # Snapshot managed pods BEFORE delete (as sync() does).
     pre_delete_pods = k8s.list_json(
@@ -1087,13 +1087,13 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
         _LABEL_TASK_HASH: shared_hash,
     }
     cm = {"kind": "ConfigMap", "metadata": {"name": "active-retry-cm", "labels": active_labels}}
-    k8s.seed_resource("configmap", "active-retry-cm", cm)
+    k8s.seed_resource(K8sResource.CONFIGMAPS, "active-retry-cm", cm)
     pdb = {
         "kind": "PodDisruptionBudget",
         "metadata": {"name": "active-retry-pdb", "labels": active_labels},
         "spec": {"minAvailable": 1},
     }
-    k8s.seed_resource("poddisruptionbudget", "active-retry-pdb", pdb)
+    k8s.seed_resource(K8sResource.PDBS, "active-retry-pdb", pdb)
 
     # Simulate the active pod (from the sync loop's managed_pods list).
     active_pod = {

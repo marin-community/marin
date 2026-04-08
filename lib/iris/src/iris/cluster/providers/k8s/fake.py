@@ -30,6 +30,7 @@ from iris.cluster.providers.k8s.types import (
     KubectlError,
     KubectlLogLine,
     KubectlLogResult,
+    PodResourceUsage,
     parse_k8s_quantity,
 )
 
@@ -124,21 +125,6 @@ class NodePoolConfig:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
-
-
-def _resolve_resource(resource: K8sResource | str) -> K8sResource:
-    """Resolve a K8sResource enum or a legacy string to K8sResource.
-
-    Accepts the enum directly, a manifest Kind (e.g. "Pod"), a plural form
-    (e.g. "pods"), or a singular form (e.g. "pod") for backward compatibility.
-    """
-    if isinstance(resource, K8sResource):
-        return resource
-    lower = resource.lower()
-    for member in K8sResource:
-        if member.kind == resource or member.plural == lower or member.plural.rstrip("s") == lower:
-            return member
-    raise KubectlError(f"Unknown resource type: {resource!r}")
 
 
 def _extract_resource_requests(spec: dict) -> dict[str, int]:
@@ -295,7 +281,7 @@ class InMemoryK8sService:
         self._exec_responses: dict[str, list[ExecResult]] = {}
         self._file_contents: dict[tuple[str, str], bytes] = {}  # (pod_name, path) -> data
         self._rm_files_calls: list[tuple[str, list[str]]] = []
-        self._top_pod_overrides: dict[str, tuple[int, int] | None] = {}
+        self._top_pod_overrides: dict[str, PodResourceUsage | None] = {}
         self._log_watermarks: dict[str, int] = {}  # pod_name -> bytes consumed
 
         # Node model
@@ -616,21 +602,17 @@ class InMemoryK8sService:
         """Pre-populate file content readable via read_file."""
         self._file_contents[(pod_name, path)] = data
 
-    def set_top_pod(self, pod_name: str, result: tuple[int, int] | None) -> None:
+    def set_top_pod(self, pod_name: str, result: PodResourceUsage | None) -> None:
         """Configure a specific top_pod result for a pod."""
         self._top_pod_overrides[pod_name] = result
 
-    def seed_resource(self, kind: str, name: str, manifest: dict) -> None:
+    def seed_resource(self, resource: K8sResource, name: str, manifest: dict) -> None:
         """Directly insert a resource into the in-memory store for test setup.
 
         Use this to pre-populate pods, nodes, etc. without going through
         apply_json validation and scheduling.
-
-        Accepts the manifest Kind (e.g. "Pod"), the plural resource name
-        (e.g. "pods"), or a legacy singular form (e.g. "pod").
         """
-        resolved = _resolve_resource(kind)
-        self._resources[(resolved.plural, name)] = manifest
+        self._resources[(resource.plural, name)] = manifest
 
     # -- Protocol methods --
 
@@ -652,31 +634,23 @@ class InMemoryK8sService:
         if self._mode == ServiceMode.LOCAL and resource is K8sResource.PODS:
             self._run_pod_locally(name, manifest)
 
-    def get_json(self, resource: K8sResource | str, name: str) -> dict | None:
+    def get_json(self, resource: K8sResource, name: str) -> dict | None:
         self._check_failure("get_json")
-        resolved = _resolve_resource(resource)
-        return self._resources.get((resolved.plural, name))
+        return self._resources.get((resource.plural, name))
 
     def list_json(
         self,
-        resource: K8sResource | str,
+        resource: K8sResource,
         *,
         labels: dict[str, str] | None = None,
         field_selector: str | None = None,
-        cluster_scoped: bool = False,  # Ignored; kept for backward compatibility.
     ) -> list[dict]:
         self._check_failure("list_json")
-        resolved = _resolve_resource(resource)
-        plural = resolved.plural
-        # Check for resource-specific failure using both plural and singular
-        # forms for backward compatibility (e.g. "list_json:nodes" or "list_json:node").
+        plural = resource.plural
         self._check_failure(f"list_json:{plural}")
-        singular = plural.rstrip("s") if plural.endswith("s") else plural
-        if singular != plural:
-            self._check_failure(f"list_json:{singular}")
 
         # Nodes: merge FakeNode objects and any raw node manifests in _resources
-        if resolved is K8sResource.NODES:
+        if resource is K8sResource.NODES:
             results = []
             seen_names: set[str] = set()
             for node in self._nodes.values():
@@ -709,27 +683,25 @@ class InMemoryK8sService:
             results.append(manifest)
         return results
 
-    def delete(self, resource: K8sResource | str, name: str, *, force: bool = False, wait: bool = True) -> None:
+    def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None:
         self._check_failure("delete")
-        resolved = _resolve_resource(resource)
-        self._resources.pop((resolved.plural, name), None)
+        self._resources.pop((resource.plural, name), None)
 
         # Release resources when deleting a pod
-        if resolved is K8sResource.PODS:
+        if resource is K8sResource.PODS:
             self._release_pod_resources(name)
 
-    def delete_many(self, resource: K8sResource | str, names: list[str], *, wait: bool = False) -> None:
+    def delete_many(self, resource: K8sResource, names: list[str], *, wait: bool = False) -> None:
         """Delete multiple resources by name."""
         for name in names:
             self.delete(resource, name)
 
-    def delete_by_labels(self, resource: K8sResource | str, labels: dict[str, str], *, wait: bool = False) -> None:
+    def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
         """Delete all resources matching the given label selector."""
         self._check_failure("delete_by_labels")
         if not labels:
             return
-        resolved = _resolve_resource(resource)
-        plural = resolved.plural
+        plural = resource.plural
         to_delete = []
         for (stored_plural, name), manifest in self._resources.items():
             if stored_plural != plural:
@@ -792,17 +764,16 @@ class InMemoryK8sService:
             return ExecResult(returncode=1, stdout="", stderr=f"pod {pod_name!r} not found")
         return ExecResult(returncode=0, stdout="", stderr="")
 
-    def set_image(self, resource: K8sResource | str, name: str, container: str, image: str) -> None:
+    def set_image(self, resource: K8sResource, name: str, container: str, image: str) -> None:
         self._check_failure("set_image")
-        resolved = _resolve_resource(resource)
-        manifest = self._resources.get((resolved.plural, name))
+        manifest = self._resources.get((resource.plural, name))
         if manifest is None:
-            raise KubectlError(f"{resolved.plural}/{name} not found")
+            raise KubectlError(f"{resource.plural}/{name} not found")
 
-    def rollout_restart(self, resource: K8sResource | str, name: str) -> None:
+    def rollout_restart(self, resource: K8sResource, name: str) -> None:
         self._check_failure("rollout_restart")
 
-    def rollout_status(self, resource: K8sResource | str, name: str, *, timeout: float = 600.0) -> None:
+    def rollout_status(self, resource: K8sResource, name: str, *, timeout: float = 600.0) -> None:
         self._check_failure("rollout_status")
 
     def get_events(self, field_selector: str | None = None) -> list[dict]:
@@ -815,12 +786,12 @@ class InMemoryK8sService:
                 results.append(event)
         return results
 
-    def top_pod(self, pod_name: str) -> tuple[int, int] | None:
+    def top_pod(self, pod_name: str) -> PodResourceUsage | None:
         self._check_failure("top_pod")
         if pod_name in self._top_pod_overrides:
             return self._top_pod_overrides[pod_name]
         if any(name == pod_name for (_, name) in self._resources):
-            return (100, 256 * 1024 * 1024)  # 100m CPU, 256Mi memory
+            return PodResourceUsage(cpu_millicores=100, memory_bytes=256 * 1024 * 1024)
         return None
 
     def read_file(

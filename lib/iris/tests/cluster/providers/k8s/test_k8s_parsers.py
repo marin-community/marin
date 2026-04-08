@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from iris.cluster.providers.k8s.types import parse_k8s_cpu, parse_k8s_memory
+from iris.cluster.providers.k8s.types import parse_k8s_cpu, parse_k8s_quantity
 
 
 @pytest.mark.parametrize(
@@ -38,4 +38,4 @@ def test_parse_k8s_cpu(value: str, expected: int):
     ],
 )
 def test_parse_k8s_memory(value: str, expected: int):
-    assert parse_k8s_memory(value) == expected
+    assert parse_k8s_quantity(value) == expected
