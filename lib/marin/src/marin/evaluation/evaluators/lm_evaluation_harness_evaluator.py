@@ -88,6 +88,10 @@ class LMEvaluationHarnessEvaluator(Evaluator):
 
         mode_str = resolve_vllm_mode(None)
         pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
+        env_vars: dict[str, str] = {"HF_ALLOW_CODE_EVAL": "1"}
+        wandb_key = os.environ.get("WANDB_API_KEY")
+        if wandb_key:
+            env_vars["WANDB_API_KEY"] = wandb_key
         launch_evaluate_with_ray(
             evaluator=self,
             job_name="lm-eval",
@@ -99,7 +103,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
             wandb_tags=wandb_tags,
             extras=("eval", "tpu"),
             pip_packages=pip_packages,
-            env_vars={"HF_ALLOW_CODE_EVAL": "1"},
+            env_vars=env_vars,
         )
 
     def evaluate(
@@ -144,15 +148,6 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                         evaluation_tracker_args = simple_parse_args_string(f",output_path={result_filepath}")
                         evaluation_tracker = EvaluationTracker(**evaluation_tracker_args)
 
-                        wandb_args_dict = {
-                            "project": "marin",
-                            "job_type": "eval",
-                            "name": resolved_model.name,
-                            "tags": wandb_tags,
-                        }
-                        # wandb_config_args_dict = simple_parse_args_string("")
-                        wandb_logger = WandbLogger(init_args=wandb_args_dict)
-
                         results = simple_evaluate(
                             model=lm_eval_model_local,
                             tasks=[eval_task.name],
@@ -170,6 +165,13 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                             evaluation_tracker.save_results_aggregated(results=results, samples=samples)
 
                             try:
+                                wandb_args_dict = {
+                                    "project": "marin",
+                                    "job_type": "eval",
+                                    "name": resolved_model.name,
+                                    "tags": wandb_tags,
+                                }
+                                wandb_logger = WandbLogger(init_args=wandb_args_dict)
                                 wandb_logger.post_init(results)
                                 wandb_logger.log_eval_result()
                                 wandb_logger.log_eval_samples(samples)
@@ -192,7 +194,8 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                             f"model={env.model_id},"
                             f"base_url={env.server_url}/chat/completions,"
                             "tokenizer_backend=huggingface,"
-                            "tokenized_requests=False"
+                            "tokenized_requests=True,"
+                            "num_concurrent=64"
                         )
                     else:
                         lm_eval_model_local = "local-completions"
@@ -200,7 +203,8 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                             f"model={env.model_id},"
                             f"base_url={env.server_url}/completions,"
                             "tokenizer_backend=huggingface,"
-                            "tokenized_requests=False"
+                            "tokenized_requests=True,"
+                            "num_concurrent=64"
                         )
                     if tokenizer is not None:
                         pretrained_args_local += f",tokenizer={tokenizer}"
