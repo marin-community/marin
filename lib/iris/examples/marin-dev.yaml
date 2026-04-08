@@ -92,6 +92,18 @@ tpu_pools:
       8:  { max_slices: 2048 }
       16: { max_slices: 1024 }
 
+  v4-reserved:
+    family: v4
+    zones: [us-central2-b]
+    base_priority: 30
+    resources: { cpu: 240, ram: 400GB, disk: 100GB, capacity_type: reserved }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: tpu-ubuntu2204-base
+    sizes:
+      32: { max_slices: 1 }
+
 scale_groups:
   cpu_vm_e2_highmem_2_ondemand:
     zones: [us-central1-a, us-central2-b, us-east1-b, us-east1-d, us-east5-a, us-east5-b, us-west1-a, us-west4-a, europe-west4-a, europe-west4-b]
