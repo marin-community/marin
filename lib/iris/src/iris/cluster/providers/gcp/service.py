@@ -383,7 +383,13 @@ class CloudGcpService:
         self._expires_at: float = 0.0
         self._valid_zones: set[str] = set(KNOWN_GCP_ZONES)
         self._valid_accelerator_types: set[str] = set(KNOWN_TPU_TYPES)
-        self._tpu_alpha_client = tpu_v2alpha1.TpuClient()
+        self._tpu_alpha_client_cached: tpu_v2alpha1.TpuClient | None = None
+
+    @property
+    def _tpu_alpha_client(self) -> tpu_v2alpha1.TpuClient:
+        if self._tpu_alpha_client_cached is None:
+            self._tpu_alpha_client_cached = tpu_v2alpha1.TpuClient()
+        return self._tpu_alpha_client_cached
 
     @property
     def mode(self) -> ServiceMode:
