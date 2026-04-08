@@ -5,12 +5,22 @@
 
 from __future__ import annotations
 
+import queue
+import threading
+
+import pytest
+from google.api_core.exceptions import ServiceUnavailable
 
 from scripts.storage.cleanup import (
+    DELETE_BATCH_TIMEOUT,
+    DELETE_PREFLIGHT_LIST_TIMEOUT,
     DirEntry,
     _collapse_deletions,
+    _delete_worker,
     _most_common_rule,
     _parent_prefix,
+    _preflight_delete_prefixes,
+    _queue_put_with_worker_checks,
 )
 
 
@@ -213,3 +223,135 @@ def test_depth():
     assert _make_entry("a/").depth == 1
     assert _make_entry("a/b/").depth == 2
     assert _make_entry("a/b/c/").depth == 3
+
+
+class _FakeProgress:
+    def __init__(self) -> None:
+        self.updated: list[int] = []
+
+    def update(self, amount: int) -> None:
+        self.updated.append(amount)
+
+    def set_postfix(self, **_: object) -> None:
+        pass
+
+
+def test_delete_worker_passes_timeout_to_batch_deletes(monkeypatch: pytest.MonkeyPatch):
+    delete_calls: list[tuple[str, tuple[int, int]]] = []
+
+    class FakeBlob:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def delete(self, *, timeout: tuple[int, int]) -> None:
+            delete_calls.append((self.name, timeout))
+
+    class FakeBucket:
+        def blob(self, name: str) -> FakeBlob:
+            return FakeBlob(name)
+
+    class FakeBatch:
+        def __enter__(self) -> FakeBatch:
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+            return None
+
+    class FakeClient:
+        def bucket(self, name: str) -> FakeBucket:
+            assert name == "bucket"
+            return FakeBucket()
+
+        def batch(self) -> FakeBatch:
+            return FakeBatch()
+
+    monkeypatch.setattr("scripts.storage.cleanup.storage_client", lambda ctx: FakeClient())
+
+    q: queue.Queue[str | None] = queue.Queue()
+    q.put("a")
+    q.put("b")
+    q.put(None)
+    progress = _FakeProgress()
+    stop_event = threading.Event()
+    failures: queue.Queue[Exception] = queue.Queue()
+
+    _delete_worker(
+        ctx=None,
+        bucket_name="bucket",
+        q=q,
+        progress=progress,
+        stop_event=stop_event,
+        failures=failures,
+        batch_size=2,
+    )
+
+    assert delete_calls == [("a", DELETE_BATCH_TIMEOUT), ("b", DELETE_BATCH_TIMEOUT)]
+    assert progress.updated == [2]
+    assert failures.empty()
+
+
+def test_queue_put_with_worker_checks_raises_after_worker_failure():
+    q: queue.Queue[str | None] = queue.Queue(maxsize=1)
+    q.put("existing")
+    stop_event = threading.Event()
+    failures: queue.Queue[Exception] = queue.Queue()
+    failures.put(ServiceUnavailable("boom"))
+
+    with pytest.raises(RuntimeError, match="Delete failed for bucket") as exc_info:
+        _queue_put_with_worker_checks("bucket", q, "next", stop_event, failures)
+
+    assert isinstance(exc_info.value.__cause__, ServiceUnavailable)
+
+
+def test_preflight_delete_prefixes_lists_each_prefix(monkeypatch: pytest.MonkeyPatch):
+    calls: list[dict[str, object]] = []
+
+    class FakeClient:
+        def list_blobs(
+            self,
+            bucket_name: str,
+            *,
+            prefix: str,
+            page_size: int,
+            max_results: int,
+            fields: str,
+            timeout: int,
+        ):
+            calls.append(
+                {
+                    "bucket_name": bucket_name,
+                    "prefix": prefix,
+                    "page_size": page_size,
+                    "max_results": max_results,
+                    "fields": fields,
+                    "timeout": timeout,
+                }
+            )
+            return iter([object()])
+
+    monkeypatch.setattr("scripts.storage.cleanup.storage_client", lambda ctx: FakeClient())
+
+    _preflight_delete_prefixes(
+        ctx=None,
+        bucket_name="bucket",
+        rows=[{"prefix": "a/"}, {"prefix": "b/"}],
+    )
+
+    assert calls == [
+        {
+            "bucket_name": "bucket",
+            "prefix": "a/",
+            "page_size": 1,
+            "max_results": 1,
+            "fields": "items(name),nextPageToken",
+            "timeout": DELETE_PREFLIGHT_LIST_TIMEOUT,
+        },
+        {
+            "bucket_name": "bucket",
+            "prefix": "b/",
+            "page_size": 1,
+            "max_results": 1,
+            "fields": "items(name),nextPageToken",
+            "timeout": DELETE_PREFLIGHT_LIST_TIMEOUT,
+        },
+    ]

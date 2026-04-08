@@ -23,12 +23,20 @@ export function fetchOverview() {
   return fetchJSON('/api/overview')
 }
 
+export function fetchBuckets() {
+  return fetchJSON('/api/buckets')
+}
+
 export function fetchSavings() {
   return fetchJSON('/api/savings')
 }
 
 export function fetchRules() {
   return fetchJSON('/api/rules')
+}
+
+export function fetchRuleCost(id) {
+  return fetchJSON('/api/rules/' + id + '/cost')
 }
 
 export function fetchSimulate(excludeIds) {
@@ -53,8 +61,12 @@ export async function fetchDeleteEstimate(patterns) {
 }
 
 // Delete rules CRUD
-export async function fetchDeleteRules() {
+export function fetchDeleteRules() {
   return fetchJSON('/api/delete-rules')
+}
+
+export function fetchDeleteRuleCost(id) {
+  return fetchJSON('/api/delete-rules/' + id + '/cost')
 }
 
 export async function createDeleteRule(rule) {

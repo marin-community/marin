@@ -16,15 +16,17 @@ import { createApp, ref, computed, watch, onMounted } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import { humanBytes, humanCost, humanCount } from './format.js'
 import {
-  fetchOverview, fetchSavings, fetchRules, fetchSimulate, fetchDeleteEstimate, fetchExplore,
-  fetchDeleteRules, createDeleteRule, removeDeleteRule,
+  fetchOverview, fetchSavings, fetchRules, fetchRuleCost, fetchSimulate, fetchDeleteEstimate, fetchExplore,
+  fetchDeleteRules, fetchDeleteRuleCost, createDeleteRule, removeDeleteRule,
   createProtectRule, removeProtectRule,
-  fetchUnifiedExplore, triggerSync, fetchSyncStatus,
+  fetchUnifiedExplore, triggerSync, fetchSyncStatus, fetchBuckets,
 } from './api.js'
 
 // ---------------------------------------------------------------------------
 // StorageClassBreakdown
 // ---------------------------------------------------------------------------
+
+const PAGE_SIZE = 20
 
 const CLASS_COLORS = {
   STANDARD: 'bg-emerald-500',
@@ -210,27 +212,30 @@ const COLUMNS = [
 ]
 
 const RuleCostTable = {
-  props: { rules: Array },
-  emits: ['update:excluded', 'remove'],
+  props: { rules: Array, costs: Object },
+  emits: ['update:excluded', 'fetch-cost', 'remove'],
   setup(props, { emit }) {
+    const sortKey = ref('pattern')
+    const sortDir = ref('asc')
     const search = ref('')
-    const sortKey = ref('monthly_cost_usd')
-    const sortDir = ref('desc')
+    const page = ref(1)
     const excluded = ref(new Set())
 
+    watch(search, () => { page.value = 1 })
+
     const filteredRules = computed(() => {
-      const q = search.value.toLowerCase()
-      let rows = props.rules
-      if (q) {
-        rows = rows.filter(r =>
-          r.pattern.toLowerCase().includes(q) ||
-          r.owners.toLowerCase().includes(q) ||
-          r.bucket.toLowerCase().includes(q)
+      let list = props.rules
+      if (search.value) {
+        const q = search.value.toLowerCase()
+        list = list.filter(r =>
+          (r.pattern || '').toLowerCase().includes(q) ||
+          (r.owners || '').toLowerCase().includes(q) ||
+          (r.bucket || '').toLowerCase().includes(q)
         )
       }
-      return [...rows].sort((a, b) => {
-        const av = a[sortKey.value]
-        const bv = b[sortKey.value]
+      return [...list].sort((a, b) => {
+        const av = a[sortKey.value] ?? ''
+        const bv = b[sortKey.value] ?? ''
         if (typeof av === 'number' && typeof bv === 'number') {
           return sortDir.value === 'asc' ? av - bv : bv - av
         }
@@ -240,12 +245,21 @@ const RuleCostTable = {
       })
     })
 
+    const pageCount = computed(() => Math.max(1, Math.ceil(filteredRules.value.length / PAGE_SIZE)))
+    const pagedRules = computed(() => {
+      const start = (page.value - 1) * PAGE_SIZE
+      return filteredRules.value.slice(start, start + PAGE_SIZE)
+    })
+
+    // Reset excluded when page changes so cost calculator only sees visible rules
+    watch(page, () => { excluded.value = new Set() })
+
     function toggleSort(key) {
       if (sortKey.value === key) {
         sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
       } else {
         sortKey.value = key
-        sortDir.value = 'desc'
+        sortDir.value = 'asc'
       }
     }
 
@@ -264,7 +278,8 @@ const RuleCostTable = {
     }
 
     return {
-      search, sortKey, sortDir, excluded, filteredRules, COLUMNS,
+      sortKey, sortDir, search, page, pageCount, pagedRules, filteredRules,
+      excluded, COLUMNS,
       toggleSort, toggleExcluded, sortIndicator,
       humanBytes, humanCost, humanCount,
       emit,
@@ -291,11 +306,11 @@ const RuleCostTable = {
                   @click="toggleSort(col.key)">
                 {{ col.label }}{{ sortIndicator(col.key) }}
               </th>
-              <th class="px-3 py-2 w-16"><span class="sr-only">Actions</span></th>
+              <th class="px-3 py-2 w-24"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="rule in filteredRules" :key="rule.id"
+            <tr v-for="rule in pagedRules" :key="rule.id"
                 :class="[
                   'border-b border-surface-border-subtle transition-colors',
                   excluded.has(rule.id) ? 'opacity-40' : 'hover:bg-surface-raised',
@@ -307,23 +322,55 @@ const RuleCostTable = {
               <td class="px-3 py-2 text-[13px] font-mono text-text max-w-xs truncate" :title="rule.pattern">{{ rule.pattern }}</td>
               <td class="px-3 py-2 text-[13px] text-text-secondary">{{ rule.bucket }}</td>
               <td class="px-3 py-2 text-[13px] text-text-secondary">{{ rule.owners }}</td>
-              <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ humanCount(rule.total_objects) }}</td>
-              <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ humanBytes(rule.total_bytes) }}</td>
-              <td class="px-3 py-2 text-[13px] text-right font-mono font-semibold text-accent">{{ humanCost(rule.monthly_cost_usd) }}</td>
-              <td class="px-3 py-2 text-right">
+              <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">
+                {{ costs[rule.id]?.data ? humanCount(costs[rule.id].data.total_objects) : '\u2013' }}
+              </td>
+              <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">
+                {{ costs[rule.id]?.data ? humanBytes(costs[rule.id].data.total_bytes) : '\u2013' }}
+              </td>
+              <td class="px-3 py-2 text-[13px] text-right font-mono font-semibold text-accent">
+                {{ costs[rule.id]?.data ? humanCost(costs[rule.id].data.monthly_cost_usd) : '\u2013' }}
+              </td>
+              <td class="px-3 py-2 text-right flex items-center justify-end gap-2">
+                <button v-if="!costs[rule.id] || costs[rule.id]?.error"
+                        @click="emit('fetch-cost', rule.id)"
+                        class="text-xs text-accent hover:text-accent-hover transition-colors">
+                  Compute
+                </button>
+                <svg v-if="costs[rule.id]?.loading" class="animate-spin h-3 w-3 text-text-muted" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <span v-if="costs[rule.id]?.error" class="text-status-danger text-xs font-bold cursor-help" :title="costs[rule.id]?.error">!</span>
                 <button @click="emit('remove', rule.id)"
                         class="text-xs text-text-muted hover:text-status-danger transition-colors">
                   Remove
                 </button>
               </td>
             </tr>
-            <tr v-if="filteredRules.length === 0">
+            <tr v-if="pagedRules.length === 0">
               <td :colspan="COLUMNS.length + 2" class="px-3 py-8 text-center text-sm text-text-muted">
                 No matching rules
               </td>
             </tr>
           </tbody>
         </table>
+      </div>
+      <div v-if="pageCount > 1" class="mt-3 flex items-center justify-between text-sm">
+        <span class="text-text-muted">
+          {{ (page - 1) * ${PAGE_SIZE} + 1 }}\u2013{{ Math.min(page * ${PAGE_SIZE}, filteredRules.length) }} of {{ filteredRules.length }}
+        </span>
+        <div class="flex items-center gap-1">
+          <button @click="page = page - 1" :disabled="page === 1"
+                  class="px-2 py-1 rounded border border-surface-border text-text-secondary hover:text-text hover:bg-surface-raised disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+            \u2039
+          </button>
+          <span class="px-2 text-text-secondary">{{ page }} / {{ pageCount }}</span>
+          <button @click="page = page + 1" :disabled="page === pageCount"
+                  class="px-2 py-1 rounded border border-surface-border text-text-secondary hover:text-text hover:bg-surface-raised disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+            \u203a
+          </button>
+        </div>
       </div>
     </div>
   `,
@@ -439,12 +486,25 @@ const SavePatterns = {
     const addError = ref(null)
     const bucketOptions = ref(MARIN_BUCKET_OPTIONS)
     const newRule = ref({ pattern: '', bucket: '*', owners: '', reasons: '' })
+    const costs = ref({})
+
+    async function computeRuleCost(id) {
+      costs.value = { ...costs.value, [id]: { loading: true, error: null, data: null } }
+      try {
+        const data = await fetchRuleCost(id)
+        costs.value = { ...costs.value, [id]: { loading: false, error: null, data } }
+      } catch (e) {
+        costs.value = { ...costs.value, [id]: { loading: false, error: e.message || String(e), data: null } }
+      }
+    }
+
+    function onExcludedUpdate(ids) { excluded.value = ids }
 
     onMounted(async () => {
       try {
-        const [rulesResp, overviewResp] = await Promise.all([fetchRules(), fetchOverview()])
+        const [rulesResp, bucketsResp] = await Promise.all([fetchRules(), fetchBuckets()])
         rules.value = rulesResp.rules
-        const buckets = overviewResp.regions.map(r => r.bucket)
+        const buckets = bucketsResp.buckets.map(r => r.bucket)
         bucketOptions.value = ['*', ...buckets]
       } catch (e) {
         error.value = e.message || String(e)
@@ -452,10 +512,6 @@ const SavePatterns = {
         loading.value = false
       }
     })
-
-    function onExcludedUpdate(ids) {
-      excluded.value = ids
-    }
 
     async function addRule() {
       addError.value = null
@@ -479,7 +535,11 @@ const SavePatterns = {
       }
     }
 
-    return { rules, excluded, loading, error, addError, newRule, bucketOptions, onExcludedUpdate, addRule, removeRule }
+    return {
+      rules, excluded, loading, error, addError, newRule, bucketOptions, costs,
+      onExcludedUpdate, computeRuleCost,
+      addRule, removeRule,
+    }
   },
   template: `
     <div>
@@ -530,7 +590,12 @@ const SavePatterns = {
       </div>
       <div v-else class="flex gap-6">
         <div class="flex-1 min-w-0">
-          <RuleCostTable :rules="rules" @update:excluded="onExcludedUpdate" @remove="removeRule" />
+          <RuleCostTable
+            :rules="rules" :costs="costs"
+            @update:excluded="onExcludedUpdate"
+            @fetch-cost="computeRuleCost"
+            @remove="removeRule"
+          />
         </div>
         <div class="w-80 flex-shrink-0">
           <CostCalculator :excluded="excluded" :rules="rules" />
@@ -635,8 +700,8 @@ const Explorer = {
 
     onMounted(async () => {
       try {
-        const overview = await fetchOverview()
-        buckets.value = overview.regions.map(r => ({ bucket: r.bucket, region: r.region }))
+        const bucketsResp = await fetchBuckets()
+        buckets.value = bucketsResp.buckets.map(r => ({ bucket: r.bucket, region: r.region }))
         if (buckets.value.length > 0) {
           selectedBucket.value = buckets.value[0].bucket
           load()
@@ -773,13 +838,57 @@ const DeleteRulesManager = {
     const rules = ref([])
     const newRule = ref({ pattern: '', storage_class: null, description: '' })
     const loading = ref(false)
+    const costs = ref({})
 
-    const totalObjects = computed(() => rules.value.reduce((s, r) => s + (r.total_objects || 0), 0))
-    const totalCost = computed(() => rules.value.reduce((s, r) => s + (r.monthly_cost_usd || 0), 0))
-    const totalBytesHuman = computed(() => {
-      const bytes = rules.value.reduce((s, r) => s + (r.total_bytes || 0), 0)
-      return humanBytes(bytes)
+    const search = ref('')
+    const sortKey = ref('pattern')
+    const sortDir = ref('asc')
+    const page = ref(1)
+
+    watch(search, () => { page.value = 1 })
+
+    const filteredRules = computed(() => {
+      let list = rules.value
+      if (search.value) {
+        const q = search.value.toLowerCase()
+        list = list.filter(r =>
+          (r.pattern || '').toLowerCase().includes(q) ||
+          (r.description || '').toLowerCase().includes(q)
+        )
+      }
+      return [...list].sort((a, b) => {
+        const av = a[sortKey.value] ?? ''
+        const bv = b[sortKey.value] ?? ''
+        if (typeof av === 'number' && typeof bv === 'number') {
+          return sortDir.value === 'asc' ? av - bv : bv - av
+        }
+        return sortDir.value === 'asc'
+          ? String(av).localeCompare(String(bv))
+          : String(bv).localeCompare(String(av))
+      })
     })
+
+    const pageCount = computed(() => Math.max(1, Math.ceil(filteredRules.value.length / PAGE_SIZE)))
+    const pagedRules = computed(() => {
+      const start = (page.value - 1) * PAGE_SIZE
+      return filteredRules.value.slice(start, start + PAGE_SIZE)
+    })
+
+    // Only sum rules that have computed cost data
+    const hasAnyCost = computed(() => rules.value.some(r => costs.value[r.id]?.data))
+    const totalObjects = computed(() => rules.value.reduce((s, r) => s + (costs.value[r.id]?.data?.total_objects || 0), 0))
+    const totalCost = computed(() => rules.value.reduce((s, r) => s + (costs.value[r.id]?.data?.monthly_cost_usd || 0), 0))
+    const totalBytesHuman = computed(() => humanBytes(rules.value.reduce((s, r) => s + (costs.value[r.id]?.data?.total_bytes || 0), 0)))
+
+    async function computeRuleCost(id) {
+      costs.value = { ...costs.value, [id]: { loading: true, error: null, data: null } }
+      try {
+        const data = await fetchDeleteRuleCost(id)
+        costs.value = { ...costs.value, [id]: { loading: false, error: null, data } }
+      } catch (e) {
+        costs.value = { ...costs.value, [id]: { loading: false, error: e.message || String(e), data: null } }
+      }
+    }
 
     async function load() {
       loading.value = true
@@ -789,6 +898,20 @@ const DeleteRulesManager = {
       } finally {
         loading.value = false
       }
+    }
+
+    function toggleSort(key) {
+      if (sortKey.value === key) {
+        sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+      } else {
+        sortKey.value = key
+        sortDir.value = 'asc'
+      }
+    }
+
+    function sortIndicator(key) {
+      if (sortKey.value !== key) return ''
+      return sortDir.value === 'asc' ? ' \u2191' : ' \u2193'
     }
 
     async function addRule() {
@@ -804,7 +927,13 @@ const DeleteRulesManager = {
 
     onMounted(load)
 
-    return { rules, newRule, loading, totalObjects, totalCost, totalBytesHuman, addRule, removeRule, humanBytes, humanCost }
+    return {
+      rules, pagedRules, newRule, loading, costs,
+      page, pageCount, search, sortKey, sortDir, filteredRules,
+      hasAnyCost, totalObjects, totalCost, totalBytesHuman,
+      toggleSort, sortIndicator, computeRuleCost,
+      addRule, removeRule, humanBytes, humanCost,
+    }
   },
   template: `
     <div class="space-y-6">
@@ -844,37 +973,68 @@ const DeleteRulesManager = {
         </div>
       </div>
 
+      <!-- Search -->
+      <input v-model="search" type="text"
+             placeholder="Filter by pattern or description..."
+             class="w-full px-3 py-2 text-sm rounded border border-surface-border bg-surface-sunken text-text placeholder-text-muted focus:outline-none focus:border-accent" />
+
       <!-- Rules table -->
       <div class="overflow-x-auto rounded-lg border border-surface-border">
         <table class="w-full border-collapse">
           <thead>
             <tr class="border-b border-surface-border bg-surface-sunken">
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Pattern</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none hover:text-text transition-colors"
+                  :class="sortKey === 'pattern' ? 'text-accent' : 'text-text-secondary'"
+                  @click="toggleSort('pattern')">Pattern{{ sortIndicator('pattern') }}</th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Storage Class</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Description</th>
-              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Objects</th>
-              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Size</th>
-              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">$/mo</th>
-              <th class="px-3 py-2 w-16"></th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none hover:text-text transition-colors"
+                  :class="sortKey === 'description' ? 'text-accent' : 'text-text-secondary'"
+                  @click="toggleSort('description')">Description{{ sortIndicator('description') }}</th>
+              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider cursor-pointer select-none hover:text-text transition-colors"
+                  :class="sortKey === 'total_objects' ? 'text-accent' : 'text-text-secondary'"
+                  @click="toggleSort('total_objects')">Objects{{ sortIndicator('total_objects') }}</th>
+              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider cursor-pointer select-none hover:text-text transition-colors"
+                  :class="sortKey === 'total_bytes' ? 'text-accent' : 'text-text-secondary'"
+                  @click="toggleSort('total_bytes')">Size{{ sortIndicator('total_bytes') }}</th>
+              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider cursor-pointer select-none hover:text-text transition-colors"
+                  :class="sortKey === 'monthly_cost_usd' ? 'text-accent' : 'text-text-secondary'"
+                  @click="toggleSort('monthly_cost_usd')">$/mo{{ sortIndicator('monthly_cost_usd') }}</th>
+              <th class="px-3 py-2 w-24"></th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="rule in rules" :key="rule.id"
+            <tr v-for="rule in pagedRules" :key="rule.id"
                 class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors">
               <td class="px-3 py-2 text-[13px] font-mono text-text max-w-xs truncate" :title="rule.pattern">{{ rule.pattern }}</td>
               <td class="px-3 py-2 text-[13px] text-text-secondary">{{ rule.storage_class || 'Any' }}</td>
               <td class="px-3 py-2 text-[13px] text-text-secondary">{{ rule.description }}</td>
-              <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ (rule.total_objects || 0).toLocaleString() }}</td>
-              <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">{{ humanBytes(rule.total_bytes || 0) }}</td>
-              <td class="px-3 py-2 text-[13px] text-right font-mono font-semibold text-status-danger">\${{ (rule.monthly_cost_usd || 0).toFixed(2) }}</td>
-              <td class="px-3 py-2 text-right">
+              <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">
+                {{ costs[rule.id]?.data ? costs[rule.id].data.total_objects.toLocaleString() : '\u2013' }}
+              </td>
+              <td class="px-3 py-2 text-[13px] text-right font-mono text-text-secondary">
+                {{ costs[rule.id]?.data ? humanBytes(costs[rule.id].data.total_bytes) : '\u2013' }}
+              </td>
+              <td class="px-3 py-2 text-[13px] text-right font-mono font-semibold text-status-danger">
+                {{ costs[rule.id]?.data ? '$' + costs[rule.id].data.monthly_cost_usd.toFixed(2) : '\u2013' }}
+              </td>
+              <td class="px-3 py-2 text-right flex items-center justify-end gap-2">
+                <button v-if="!costs[rule.id] || costs[rule.id]?.error"
+                        @click="computeRuleCost(rule.id)"
+                        class="text-xs text-accent hover:text-accent-hover transition-colors">
+                  Compute
+                </button>
+                <svg v-if="costs[rule.id]?.loading" class="animate-spin h-3 w-3 text-text-muted" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <span v-if="costs[rule.id]?.error" class="text-status-danger text-xs font-bold cursor-help" :title="costs[rule.id]?.error">!</span>
                 <button @click="removeRule(rule.id)" :disabled="loading"
                         class="text-xs text-text-muted hover:text-status-danger transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                   Remove
                 </button>
               </td>
             </tr>
-            <tr v-if="!rules.length">
+            <tr v-if="!pagedRules.length">
               <td colspan="7" class="px-3 py-8 text-center text-sm text-text-muted">
                 No delete rules configured. Add one above.
               </td>
@@ -883,10 +1043,30 @@ const DeleteRulesManager = {
         </table>
       </div>
 
-      <!-- Totals -->
-      <div v-if="rules.length"
+      <!-- Pagination -->
+      <div v-if="pageCount > 1" class="flex items-center justify-between text-sm">
+        <span class="text-text-muted">
+          {{ (page - 1) * ${PAGE_SIZE} + 1 }}\u2013{{ Math.min(page * ${PAGE_SIZE}, filteredRules.length) }} of {{ filteredRules.length }}
+        </span>
+        <div class="flex items-center gap-1">
+          <button @click="page = page - 1" :disabled="page === 1"
+                  class="px-2 py-1 rounded border border-surface-border text-text-secondary hover:text-text hover:bg-surface-raised disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+            \u2039
+          </button>
+          <span class="px-2 text-text-secondary">{{ page }} / {{ pageCount }}</span>
+          <button @click="page = page + 1" :disabled="page === pageCount"
+                  class="px-2 py-1 rounded border border-surface-border text-text-secondary hover:text-text hover:bg-surface-raised disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+            \u203a
+          </button>
+        </div>
+      </div>
+
+      <!-- Totals (only shown when at least one rule has computed cost) -->
+      <div v-if="hasAnyCost"
            class="rounded-lg border border-status-danger-border bg-status-danger-bg p-4">
-        <div class="text-xs text-text-secondary uppercase tracking-wider mb-1">Total deletion impact</div>
+        <div class="text-xs text-text-secondary uppercase tracking-wider mb-1">
+          Deletion impact (computed rules)
+        </div>
         <div class="text-lg font-mono font-semibold text-status-danger">
           {{ totalObjects.toLocaleString() }} objects &middot; {{ totalBytesHuman }} &middot; \${{ totalCost.toFixed(2) }}/mo
         </div>
@@ -978,8 +1158,8 @@ const UnifiedExplorer = {
 
     onMounted(async () => {
       try {
-        const overview = await fetchOverview()
-        buckets.value = overview.regions.map(r => ({ bucket: r.bucket, region: r.region }))
+        const bucketsResp = await fetchBuckets()
+        buckets.value = bucketsResp.buckets.map(r => ({ bucket: r.bucket, region: r.region }))
         if (buckets.value.length > 0) {
           selectedBucket.value = buckets.value[0].bucket
           return // watcher will trigger load

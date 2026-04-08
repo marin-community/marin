@@ -22,7 +22,6 @@ import os
 import secrets
 import subprocess
 import threading
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,7 +55,6 @@ log = logging.getLogger(__name__)
 DASHBOARD_DIR = Path(__file__).parent / "dashboard"
 
 SYNC_INTERVAL = 600  # 10 minutes
-ARCHIVE_INTERVAL = 3600  # 1 hour
 
 _db_lock = threading.RLock()
 
@@ -85,7 +83,6 @@ class ProtectRuleCreate(BaseModel):
 @dataclass
 class SyncState:
     last_sync: str | None = None
-    last_archive: str | None = None
     syncing: bool = False
     error: str | None = None
 
@@ -115,11 +112,12 @@ STATUS_ORDER = {"delete": 0, "mixed": 1, "keep": 2}
 
 
 def _run_sync(gcs_prefix: str, catalog: StorageCatalog) -> None:
-    """Upload rules JSON files to GCS, optionally archiving hourly."""
+    """Upload rules JSON files to GCS and write a timestamped archive copy."""
     global _sync_state
     try:
         _sync_state.syncing = True
         _sync_state.error = None
+        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         for name in ("protect_rules.json", "delete_rules.json"):
             local = catalog.root / name
             if local.exists():
@@ -128,31 +126,19 @@ def _run_sync(gcs_prefix: str, catalog: StorageCatalog) -> None:
                     check=True,
                     capture_output=True,
                 )
-        now = datetime.now(UTC).isoformat()
-        _sync_state.last_sync = now
-
-        should_archive = (
-            _sync_state.last_archive is None
-            or (
-                datetime.fromisoformat(_sync_state.last_sync) - datetime.fromisoformat(_sync_state.last_archive)
-            ).total_seconds()
-            >= ARCHIVE_INTERVAL
-        )
-        if should_archive:
-            ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-            for name in ("protect_rules.json", "delete_rules.json"):
+                stem = name.replace(".json", "")
                 subprocess.run(
                     [
                         "gcloud",
                         "storage",
                         "cp",
-                        f"{gcs_prefix}/{name}",
-                        f"{gcs_prefix}/archive/{name.replace('.json', '')}_{ts}.json",
+                        str(local),
+                        f"{gcs_prefix}/archive/{stem}_{ts}.json",
                     ],
                     check=True,
                     capture_output=True,
                 )
-            _sync_state.last_archive = now
+        _sync_state.last_sync = datetime.now(UTC).isoformat()
     except Exception as e:
         log.exception("sync failed")
         _sync_state.error = str(e)
@@ -161,7 +147,7 @@ def _run_sync(gcs_prefix: str, catalog: StorageCatalog) -> None:
 
 
 async def _periodic_sync(gcs_prefix: str, catalog: StorageCatalog) -> None:
-    """Background task: sync rules JSON to GCS every 10 minutes, archive hourly."""
+    """Background task: sync rules JSON to GCS every 10 minutes with a timestamped archive copy."""
     while True:
         await asyncio.sleep(SYNC_INTERVAL)
         _run_sync(gcs_prefix, catalog)
@@ -673,10 +659,27 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
             },
         }
 
+    @app.get("/api/buckets")
+    def list_buckets() -> dict[str, Any]:
+        return {"buckets": plan_rows()}
+
     @app.get("/api/rules")
     @serialized
     def list_protect_rules() -> dict[str, Any]:
+        rows = _fetchall(
+            db(),
+            "SELECT id, bucket, pattern, pattern_type, owners, reasons FROM protect_rules ORDER BY pattern ASC",
+        )
+        return {"rules": rows}
+
+    @app.get("/api/rules/{rule_id}/cost")
+    @serialized
+    def get_protect_rule_cost(rule_id: int) -> dict[str, Any]:
         conn = db()
+        rule = _fetchone(conn, "SELECT id FROM protect_rules WHERE id = ?", (rule_id,))
+        if not rule:
+            raise HTTPException(status_code=404, detail="Rule not found")
+
         prices_us = {
             r["name"]: float(r["price"])
             for r in _fetchall(conn, "SELECT name, price_per_gib_month_us as price FROM storage_classes")
@@ -690,8 +693,7 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
         raw = _fetchall(
             conn,
             """
-            SELECT r.id, r.bucket, r.pattern, r.pattern_type, r.owners, r.reasons,
-                   d.bucket as data_bucket,
+            SELECT d.bucket as data_bucket,
                    SUM(d.standard_count) as standard_count, SUM(d.standard_bytes) as standard_bytes,
                    SUM(d.nearline_count) as nearline_count, SUM(d.nearline_bytes) as nearline_bytes,
                    SUM(d.coldline_count) as coldline_count, SUM(d.coldline_bytes) as coldline_bytes,
@@ -699,29 +701,18 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
             FROM protect_rules r
             LEFT JOIN dir_summary d ON d.dir_prefix LIKE r.pattern
                 AND (d.bucket = r.bucket OR r.bucket = '*')
-            GROUP BY r.id, r.bucket, r.pattern, r.pattern_type, r.owners, r.reasons, d.bucket
-        """,
+            WHERE r.id = ?
+            GROUP BY d.bucket
+            """,
+            (rule_id,),
         )
 
-        rules_agg: dict[int, dict[str, Any]] = {}
-        rules_by_class: dict[int, dict[str, dict[str, int | float]]] = defaultdict(dict)
+        total_objects = 0
+        total_bytes = 0
+        total_cost = 0.0
+        by_storage_class: dict[str, dict[str, int | float]] = {}
 
         for row in raw:
-            rid = row["id"]
-            if rid not in rules_agg:
-                rules_agg[rid] = {
-                    "id": rid,
-                    "bucket": row["bucket"],
-                    "region": region_from_bucket(row["bucket"]),
-                    "pattern": row["pattern"],
-                    "pattern_type": row["pattern_type"],
-                    "owners": row["owners"] or "",
-                    "reasons": row["reasons"] or "",
-                    "total_objects": 0,
-                    "total_bytes": 0,
-                    "monthly_cost_usd": 0.0,
-                }
-
             data_bucket = row["data_bucket"]
             if data_bucket is None:
                 continue
@@ -734,28 +725,25 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
                 if cnt == 0:
                     continue
                 cost = bts / (1024.0 * 1024.0 * 1024.0) * prices[sc_name] * discount_factor
-                rules_agg[rid]["total_objects"] += cnt
-                rules_agg[rid]["total_bytes"] += bts
-                rules_agg[rid]["monthly_cost_usd"] += cost
+                total_objects += cnt
+                total_bytes += bts
+                total_cost += cost
 
-                key = sc_name
-                if key not in rules_by_class[rid]:
-                    rules_by_class[rid][key] = {"class": sc_name, "objects": 0, "bytes": 0, "monthly_cost_usd": 0.0}
-                rules_by_class[rid][key]["objects"] += cnt
-                rules_by_class[rid][key]["bytes"] += bts
-                rules_by_class[rid][key]["monthly_cost_usd"] += cost
+                if sc_name not in by_storage_class:
+                    by_storage_class[sc_name] = {"class": sc_name, "objects": 0, "bytes": 0, "monthly_cost_usd": 0.0}
+                by_storage_class[sc_name]["objects"] += cnt
+                by_storage_class[sc_name]["bytes"] += bts
+                by_storage_class[sc_name]["monthly_cost_usd"] += cost
 
-        result_rules = []
-        for rid, info in rules_agg.items():
-            info["total_bytes_human"] = human_bytes(info["total_bytes"])
-            info["monthly_cost_usd"] = round(info["monthly_cost_usd"], 4)
-            info["by_storage_class"] = [
-                {**v, "monthly_cost_usd": round(v["monthly_cost_usd"], 4)} for v in rules_by_class.get(rid, {}).values()
-            ]
-            result_rules.append(info)
-
-        result_rules.sort(key=lambda r: r["monthly_cost_usd"], reverse=True)
-        return {"rules": result_rules}
+        return {
+            "total_objects": total_objects,
+            "total_bytes": total_bytes,
+            "total_bytes_human": human_bytes(total_bytes),
+            "monthly_cost_usd": round(total_cost, 4),
+            "by_storage_class": [
+                {**v, "monthly_cost_usd": round(v["monthly_cost_usd"], 4)} for v in by_storage_class.values()
+            ],
+        }
 
     @app.post("/api/rules")
     @serialized
@@ -918,7 +906,22 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     @app.get("/api/delete-rules")
     @serialized
     def list_delete_rules() -> dict[str, Any]:
+        rows = _fetchall(
+            db(),
+            "SELECT id, pattern, storage_class, description, created_at FROM delete_rules ORDER BY pattern ASC",
+        )
+        return {"rules": rows}
+
+    @app.get("/api/delete-rules/{rule_id}/cost")
+    @serialized
+    def get_delete_rule_cost(rule_id: int) -> dict[str, Any]:
         conn = db()
+        rule = _fetchone(conn, "SELECT id, storage_class FROM delete_rules WHERE id = ?", (rule_id,))
+        if not rule:
+            raise HTTPException(status_code=404, detail="Rule not found")
+
+        rule_sc = rule["storage_class"]
+
         prices_us = {
             r["name"]: float(r["price"])
             for r in _fetchall(conn, "SELECT name, price_per_gib_month_us as price FROM storage_classes")
@@ -932,8 +935,7 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
         raw = _fetchall(
             conn,
             """
-            SELECT dr.id, dr.pattern, dr.storage_class, dr.description, dr.created_at,
-                   d.bucket as data_bucket,
+            SELECT d.bucket as data_bucket,
                    SUM(d.standard_count) as standard_count, SUM(d.standard_bytes) as standard_bytes,
                    SUM(d.nearline_count) as nearline_count, SUM(d.nearline_bytes) as nearline_bytes,
                    SUM(d.coldline_count) as coldline_count, SUM(d.coldline_bytes) as coldline_bytes,
@@ -942,33 +944,21 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
             LEFT JOIN dir_summary d ON d.dir_prefix LIKE dr.pattern
             LEFT JOIN protect_rules p ON d.dir_prefix LIKE p.pattern
                 AND (d.bucket = p.bucket OR p.bucket = '*')
-            WHERE p.id IS NULL
-            GROUP BY dr.id, dr.pattern, dr.storage_class, dr.description, dr.created_at, d.bucket
-        """,
+            WHERE dr.id = ? AND p.id IS NULL
+            GROUP BY d.bucket
+            """,
+            (rule_id,),
         )
 
-        rules_agg: dict[int, dict[str, Any]] = {}
-        rules_by_class: dict[int, dict[str, dict[str, int | float]]] = defaultdict(dict)
+        total_objects = 0
+        total_bytes = 0
+        total_cost = 0.0
+        by_storage_class: dict[str, dict[str, int | float]] = {}
 
         for row in raw:
-            rid = row["id"]
-            if rid not in rules_agg:
-                rules_agg[rid] = {
-                    "id": rid,
-                    "pattern": row["pattern"],
-                    "storage_class": row["storage_class"] or "",
-                    "description": row["description"] or "",
-                    "created_at": row["created_at"],
-                    "total_objects": 0,
-                    "total_bytes": 0,
-                    "monthly_cost_usd": 0.0,
-                }
-
             data_bucket = row["data_bucket"]
             if data_bucket is None:
                 continue
-
-            rule_sc = row["storage_class"]
             continent = continent_for_region(region_from_bucket(data_bucket))
             prices = prices_us if continent == "US" else prices_eu
 
@@ -980,44 +970,25 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
                 if cnt == 0:
                     continue
                 cost = bts / (1024.0 * 1024.0 * 1024.0) * prices[sc_name] * discount_factor
-                rules_agg[rid]["total_objects"] += cnt
-                rules_agg[rid]["total_bytes"] += bts
-                rules_agg[rid]["monthly_cost_usd"] += cost
+                total_objects += cnt
+                total_bytes += bts
+                total_cost += cost
 
-                if sc_name not in rules_by_class[rid]:
-                    rules_by_class[rid][sc_name] = {"class": sc_name, "objects": 0, "bytes": 0, "monthly_cost_usd": 0.0}
-                rules_by_class[rid][sc_name]["objects"] += cnt
-                rules_by_class[rid][sc_name]["bytes"] += bts
-                rules_by_class[rid][sc_name]["monthly_cost_usd"] += cost
+                if sc_name not in by_storage_class:
+                    by_storage_class[sc_name] = {"class": sc_name, "objects": 0, "bytes": 0, "monthly_cost_usd": 0.0}
+                by_storage_class[sc_name]["objects"] += cnt
+                by_storage_class[sc_name]["bytes"] += bts
+                by_storage_class[sc_name]["monthly_cost_usd"] += cost
 
-        # Ensure rules with no matching data still appear
-        all_rules = _fetchall(
-            conn, "SELECT id, pattern, storage_class, description, created_at FROM delete_rules ORDER BY id"
-        )
-        for r in all_rules:
-            if r["id"] not in rules_agg:
-                rules_agg[r["id"]] = {
-                    "id": r["id"],
-                    "pattern": r["pattern"],
-                    "storage_class": r["storage_class"] or "",
-                    "description": r["description"] or "",
-                    "created_at": r["created_at"],
-                    "total_objects": 0,
-                    "total_bytes": 0,
-                    "monthly_cost_usd": 0.0,
-                }
-
-        result_rules = []
-        for rid, info in rules_agg.items():
-            info["total_bytes_human"] = human_bytes(info["total_bytes"])
-            info["monthly_cost_usd"] = round(info["monthly_cost_usd"], 4)
-            info["by_storage_class"] = [
-                {**v, "monthly_cost_usd": round(v["monthly_cost_usd"], 4)} for v in rules_by_class.get(rid, {}).values()
-            ]
-            result_rules.append(info)
-
-        result_rules.sort(key=lambda r: r["monthly_cost_usd"], reverse=True)
-        return {"rules": result_rules}
+        return {
+            "total_objects": total_objects,
+            "total_bytes": total_bytes,
+            "total_bytes_human": human_bytes(total_bytes),
+            "monthly_cost_usd": round(total_cost, 4),
+            "by_storage_class": [
+                {**v, "monthly_cost_usd": round(v["monthly_cost_usd"], 4)} for v in by_storage_class.values()
+            ],
+        }
 
     @app.post("/api/delete-rules")
     @serialized

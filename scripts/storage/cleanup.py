@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import click
-from google.api_core.exceptions import NotFound, TooManyRequests
+from google.api_core.exceptions import DeadlineExceeded, NotFound, ServiceUnavailable, TooManyRequests
 from tqdm.auto import tqdm
 
 from scripts.storage.db import (
@@ -67,6 +67,12 @@ from scripts.storage.scan import (
 )
 
 log = logging.getLogger(__name__)
+
+DELETE_PREFLIGHT_LIST_TIMEOUT = 30
+DELETE_BATCH_TIMEOUT = (10, 30)
+DELETE_BATCH_MAX_ATTEMPTS = 9
+DELETE_BATCH_INITIAL_BACKOFF = 2.0
+DELETE_WORKER_QUEUE_TIMEOUT = 1.0
 
 # ===========================================================================
 # Step dataclass
@@ -548,11 +554,54 @@ def _iter_prefix(ctx: Context, bucket_name: str, prefix: str):
         yield row[0]
 
 
+def _preflight_delete_prefixes(ctx: Context, bucket_name: str, rows: list[dict[str, str]]) -> None:
+    """Issue a cheap live list probe for each manifest prefix before deleting."""
+    client = storage_client(ctx)
+    for row in rows:
+        iterator = client.list_blobs(
+            bucket_name,
+            prefix=row["prefix"],
+            page_size=1,
+            max_results=1,
+            fields="items(name),nextPageToken",
+            timeout=DELETE_PREFLIGHT_LIST_TIMEOUT,
+        )
+        next(iter(iterator), None)
+
+
+def _raise_delete_worker_failure(bucket_name: str, failures: queue.Queue[Exception]) -> None:
+    try:
+        exc = failures.get_nowait()
+    except queue.Empty:
+        return
+    raise RuntimeError(f"Delete failed for {bucket_name}; aborting remaining work.") from exc
+
+
+def _queue_put_with_worker_checks(
+    bucket_name: str,
+    q: queue.Queue[str | None],
+    item: str | None,
+    stop_event: threading.Event,
+    failures: queue.Queue[Exception],
+) -> None:
+    while True:
+        _raise_delete_worker_failure(bucket_name, failures)
+        if stop_event.is_set():
+            raise RuntimeError(f"Delete aborted for {bucket_name} after a worker stopped.")
+        try:
+            q.put(item, timeout=DELETE_WORKER_QUEUE_TIMEOUT)
+            return
+        except queue.Full:
+            continue
+
+
 def _delete_worker(
     ctx: Context,
     bucket_name: str,
     q: queue.Queue[str | None],
     progress: tqdm,
+    stop_event: threading.Event,
+    failures: queue.Queue[Exception],
     batch_size: int = 100,
 ) -> None:
     client = storage_client(ctx)
@@ -560,37 +609,53 @@ def _delete_worker(
     batch: list[str] = []
 
     def flush() -> None:
-        # Retry on 429 with exponential backoff + jitter; GCS requires gradual ramp-up.
-        max_attempts = 9
-        delay = 2.0
-        for attempt in range(max_attempts):
+        # Retry on throttling and transient 5xx / deadline failures with exponential backoff.
+        for attempt in range(DELETE_BATCH_MAX_ATTEMPTS):
             try:
                 with client.batch():
                     for name in batch:
-                        bucket_obj.blob(name).delete()
-                break
+                        bucket_obj.blob(name).delete(timeout=DELETE_BATCH_TIMEOUT)
+                progress.update(len(batch))
+                batch.clear()
+                return
             except NotFound:
                 # Some objects already deleted; treat as success for idempotency.
-                break
-            except TooManyRequests:
-                if attempt == max_attempts - 1:
+                progress.update(len(batch))
+                batch.clear()
+                return
+            except (DeadlineExceeded, ServiceUnavailable, TooManyRequests) as exc:
+                if attempt == DELETE_BATCH_MAX_ATTEMPTS - 1:
                     raise
-                sleep = delay * (2**attempt) + random.uniform(0, 1)
-                log.warning("429 from GCS batch delete; sleeping %.1fs (attempt %d)", sleep, attempt + 1)
+                sleep = DELETE_BATCH_INITIAL_BACKOFF * (2**attempt) + random.uniform(0, 1)
+                log.warning(
+                    "%s from GCS batch delete for %d objects; sleeping %.1fs (attempt %d/%d)",
+                    exc.__class__.__name__,
+                    len(batch),
+                    sleep,
+                    attempt + 1,
+                    DELETE_BATCH_MAX_ATTEMPTS,
+                )
                 time.sleep(sleep)
-        progress.update(len(batch))
-        batch.clear()
 
-    while True:
-        name = q.get()
-        if name is None:
-            if batch:
+    try:
+        while True:
+            if stop_event.is_set():
+                return
+            try:
+                name = q.get(timeout=DELETE_WORKER_QUEUE_TIMEOUT)
+            except queue.Empty:
+                continue
+            if name is None:
+                if batch:
+                    flush()
+                return
+            progress.set_postfix(file=name, refresh=False)
+            batch.append(name)
+            if len(batch) >= batch_size:
                 flush()
-            break
-        progress.set_postfix(file=name, refresh=False)
-        batch.append(name)
-        if len(batch) >= batch_size:
-            flush()
+    except Exception as exc:
+        stop_event.set()
+        failures.put(exc)
 
 
 def run_delete(ctx: Context) -> None:
@@ -621,6 +686,8 @@ def run_delete(ctx: Context) -> None:
         print_summary(
             f"  deleting from {bucket_name}: {total_objects:,} objects, " f"{len(rows)} prefixes, {n_workers} workers"
         )
+        print_summary(f"  preflight listing {len(rows):,} prefixes in {bucket_name}")
+        _preflight_delete_prefixes(ctx, bucket_name, rows)
 
         # Shuffle prefixes to spread load across bucket keyspace rather than hammering one hotspot.
         shuffled_rows = list(rows)
@@ -628,20 +695,32 @@ def run_delete(ctx: Context) -> None:
 
         # Bounded queue provides backpressure: feeder blocks when workers fall behind.
         q: queue.Queue[str | None] = queue.Queue(maxsize=10_000)
+        stop_event = threading.Event()
+        failures: queue.Queue[Exception] = queue.Queue()
 
         with tqdm(total=total_objects, desc=f"delete {bucket_name}", unit="obj", leave=True) as progress:
             workers = [
-                threading.Thread(target=_delete_worker, args=(ctx, bucket_name, q, progress)) for _ in range(n_workers)
+                threading.Thread(
+                    target=_delete_worker,
+                    args=(ctx, bucket_name, q, progress, stop_event, failures),
+                    daemon=True,
+                )
+                for _ in range(n_workers)
             ]
             for w in workers:
                 w.start()
-            for row in shuffled_rows:
-                for name in _iter_prefix(ctx, bucket_name, row["prefix"]):
-                    q.put(name)
-            for _ in workers:
-                q.put(None)
-            for w in workers:
-                w.join()
+            try:
+                for row in shuffled_rows:
+                    for name in _iter_prefix(ctx, bucket_name, row["prefix"]):
+                        _queue_put_with_worker_checks(bucket_name, q, name, stop_event, failures)
+                for _ in workers:
+                    _queue_put_with_worker_checks(bucket_name, q, None, stop_event, failures)
+                for w in workers:
+                    w.join()
+                _raise_delete_worker_failure(bucket_name, failures)
+            except Exception:
+                stop_event.set()
+                raise
 
         print_summary(f"  {bucket_name}: done")
 

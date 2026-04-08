@@ -434,7 +434,7 @@
   {
     "id": 7491,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adam-lr1.25e-/%",
+    "pattern": "checkpoints/adam-lr1.25e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -443,7 +443,7 @@
   {
     "id": 7492,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adam-lr1.77e-/%",
+    "pattern": "checkpoints/adam-lr1.77e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -452,7 +452,7 @@
   {
     "id": 7493,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adam-lr2.50e-/%",
+    "pattern": "checkpoints/adam-lr2.50e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -461,7 +461,7 @@
   {
     "id": 7494,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adam-lr3.54e-/%",
+    "pattern": "checkpoints/adam-lr3.54e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -470,7 +470,7 @@
   {
     "id": 7495,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adam-lr5.00e-/%",
+    "pattern": "checkpoints/adam-lr5.00e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -479,7 +479,7 @@
   {
     "id": 7496,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adam-lr7.07e-/%",
+    "pattern": "checkpoints/adam-lr7.07e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -488,7 +488,7 @@
   {
     "id": 7497,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-bs128-/%",
+    "pattern": "checkpoints/adamh-bs128%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -497,7 +497,7 @@
   {
     "id": 7498,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr-/%",
+    "pattern": "checkpoints/adamh-lr%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -506,7 +506,7 @@
   {
     "id": 7499,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr1.00e-/%",
+    "pattern": "checkpoints/adamh-lr1.00e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -515,7 +515,7 @@
   {
     "id": 7500,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr1.25e-/%",
+    "pattern": "checkpoints/adamh-lr1.25e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -524,7 +524,7 @@
   {
     "id": 7501,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr1.41e-/%",
+    "pattern": "checkpoints/adamh-lr1.41e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -533,7 +533,7 @@
   {
     "id": 7502,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr1.77e-/%",
+    "pattern": "checkpoints/adamh-lr1.77e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -542,7 +542,7 @@
   {
     "id": 7503,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr2.00e-/%",
+    "pattern": "checkpoints/adamh-lr2.00e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -551,7 +551,7 @@
   {
     "id": 7504,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr2.50e-/%",
+    "pattern": "checkpoints/adamh-lr2.50e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -560,7 +560,7 @@
   {
     "id": 7505,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr2.83e-/%",
+    "pattern": "checkpoints/adamh-lr2.83e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -569,7 +569,7 @@
   {
     "id": 7506,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr3.13e-/%",
+    "pattern": "checkpoints/adamh-lr3.13e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -578,7 +578,7 @@
   {
     "id": 7507,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr3.54e-/%",
+    "pattern": "checkpoints/adamh-lr3.54e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -587,7 +587,7 @@
   {
     "id": 7508,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr4.00e-/%",
+    "pattern": "checkpoints/adamh-lr4.00e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -596,7 +596,7 @@
   {
     "id": 7509,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr5.00e-/%",
+    "pattern": "checkpoints/adamh-lr5.00e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -605,7 +605,7 @@
   {
     "id": 7510,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr6.25e-/%",
+    "pattern": "checkpoints/adamh-lr6.25e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -614,7 +614,7 @@
   {
     "id": 7511,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/adamh-lr7.07e-/%",
+    "pattern": "checkpoints/adamh-lr7.07e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -623,7 +623,7 @@
   {
     "id": 7512,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/baseline-muonh-/%",
+    "pattern": "checkpoints/baseline-muonh%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -632,7 +632,7 @@
   {
     "id": 7513,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/baseline-muonhc-/%",
+    "pattern": "checkpoints/baseline-muonhc%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -641,7 +641,7 @@
   {
     "id": 7514,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/baseline-muonht-/%",
+    "pattern": "checkpoints/baseline-muonht%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -650,7 +650,7 @@
   {
     "id": 7515,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/bsabl-magma_muonh-/%",
+    "pattern": "checkpoints/bsabl-magma_muonh%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -659,7 +659,7 @@
   {
     "id": 7516,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/bsabl-muonh-/%",
+    "pattern": "checkpoints/bsabl-muonh%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -668,7 +668,7 @@
   {
     "id": 7517,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden1024-mup-/%",
+    "pattern": "checkpoints/exp1570_hidden1024-mup%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -677,7 +677,7 @@
   {
     "id": 7518,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden1024-nl4-/%",
+    "pattern": "checkpoints/exp1570_hidden1024-nl4%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -686,7 +686,7 @@
   {
     "id": 7519,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-mup-/%",
+    "pattern": "checkpoints/exp1570_hidden128-mup%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -695,7 +695,7 @@
   {
     "id": 7520,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl1024-/%",
+    "pattern": "checkpoints/exp1570_hidden128-nl1024%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -704,7 +704,7 @@
   {
     "id": 7521,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl128-/%",
+    "pattern": "checkpoints/exp1570_hidden128-nl128%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -713,7 +713,7 @@
   {
     "id": 7522,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl16-/%",
+    "pattern": "checkpoints/exp1570_hidden128-nl16%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -722,7 +722,7 @@
   {
     "id": 7523,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl256-/%",
+    "pattern": "checkpoints/exp1570_hidden128-nl256%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -731,7 +731,7 @@
   {
     "id": 7524,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl32-/%",
+    "pattern": "checkpoints/exp1570_hidden128-nl32%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -740,7 +740,7 @@
   {
     "id": 7525,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl4-/%",
+    "pattern": "checkpoints/exp1570_hidden128-nl4%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -749,7 +749,7 @@
   {
     "id": 7526,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl512-/%",
+    "pattern": "checkpoints/exp1570_hidden128-nl512%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -758,7 +758,7 @@
   {
     "id": 7527,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl64-/%",
+    "pattern": "checkpoints/exp1570_hidden128-nl64%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -767,7 +767,7 @@
   {
     "id": 7528,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden128-nl8-/%",
+    "pattern": "checkpoints/exp1570_hidden128-nl8%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -776,7 +776,7 @@
   {
     "id": 7529,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden2048-nl4-/%",
+    "pattern": "checkpoints/exp1570_hidden2048-nl4%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -785,7 +785,7 @@
   {
     "id": 7530,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden256-mup-/%",
+    "pattern": "checkpoints/exp1570_hidden256-mup%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -794,7 +794,7 @@
   {
     "id": 7531,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden256-nl4-/%",
+    "pattern": "checkpoints/exp1570_hidden256-nl4%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -803,7 +803,7 @@
   {
     "id": 7532,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden512-mup-/%",
+    "pattern": "checkpoints/exp1570_hidden512-mup%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -812,7 +812,7 @@
   {
     "id": 7533,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/exp1570_hidden512-nl4-/%",
+    "pattern": "checkpoints/exp1570_hidden512-nl4%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -893,7 +893,7 @@
   {
     "id": 7542,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.003-/%",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.003%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -902,7 +902,7 @@
   {
     "id": 7543,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.006-/%",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.006%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -911,7 +911,7 @@
   {
     "id": 7544,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.009-/%",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.009%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -920,7 +920,7 @@
   {
     "id": 7545,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.012-/%",
+    "pattern": "checkpoints/ferry_muonh_qwen3_0_6b_shadow_feistel-lr0.012%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1001,7 +1001,7 @@
   {
     "id": 7554,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/hidden128-nl16-/%",
+    "pattern": "checkpoints/hidden128-nl16%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1010,7 +1010,7 @@
   {
     "id": 7555,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/hidden128-nl32-/%",
+    "pattern": "checkpoints/hidden128-nl32%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1019,7 +1019,7 @@
   {
     "id": 7556,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/hidden128-nl4-/%",
+    "pattern": "checkpoints/hidden128-nl4%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1028,7 +1028,7 @@
   {
     "id": 7557,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/hidden128-nl8-/%",
+    "pattern": "checkpoints/hidden128-nl8%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1037,7 +1037,7 @@
   {
     "id": 7558,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muon-lr1.25e-/%",
+    "pattern": "checkpoints/muon-lr1.25e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1046,7 +1046,7 @@
   {
     "id": 7559,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muon-lr1.77e-/%",
+    "pattern": "checkpoints/muon-lr1.77e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1055,7 +1055,7 @@
   {
     "id": 7560,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muon-lr2.50e-/%",
+    "pattern": "checkpoints/muon-lr2.50e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1064,7 +1064,7 @@
   {
     "id": 7561,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muon-lr3.54e-/%",
+    "pattern": "checkpoints/muon-lr3.54e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1073,7 +1073,7 @@
   {
     "id": 7562,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muon-lr5.00e-/%",
+    "pattern": "checkpoints/muon-lr5.00e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1082,7 +1082,7 @@
   {
     "id": 7563,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muon-lr7.07e-/%",
+    "pattern": "checkpoints/muon-lr7.07e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1091,7 +1091,7 @@
   {
     "id": 7564,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr1.00e-/%",
+    "pattern": "checkpoints/muonh-lr1.00e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1100,7 +1100,7 @@
   {
     "id": 7565,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr1.25e-/%",
+    "pattern": "checkpoints/muonh-lr1.25e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1109,7 +1109,7 @@
   {
     "id": 7566,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr1.41e-/%",
+    "pattern": "checkpoints/muonh-lr1.41e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1118,7 +1118,7 @@
   {
     "id": 7567,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr1.77e-/%",
+    "pattern": "checkpoints/muonh-lr1.77e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1127,7 +1127,7 @@
   {
     "id": 7568,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr2.00e-/%",
+    "pattern": "checkpoints/muonh-lr2.00e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1136,7 +1136,7 @@
   {
     "id": 7569,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr2.50e-/%",
+    "pattern": "checkpoints/muonh-lr2.50e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1145,7 +1145,7 @@
   {
     "id": 7570,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr2.83e-/%",
+    "pattern": "checkpoints/muonh-lr2.83e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1154,7 +1154,7 @@
   {
     "id": 7571,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr3.54e-/%",
+    "pattern": "checkpoints/muonh-lr3.54e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1163,7 +1163,7 @@
   {
     "id": 7572,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr4.00e-/%",
+    "pattern": "checkpoints/muonh-lr4.00e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1172,7 +1172,7 @@
   {
     "id": 7573,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr5.00e-/%",
+    "pattern": "checkpoints/muonh-lr5.00e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1181,7 +1181,7 @@
   {
     "id": 7574,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr5.66e-/%",
+    "pattern": "checkpoints/muonh-lr5.66e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1190,7 +1190,7 @@
   {
     "id": 7575,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-lr7.07e-/%",
+    "pattern": "checkpoints/muonh-lr7.07e%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1199,7 +1199,7 @@
   {
     "id": 7576,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/muonh-power0.2-/%",
+    "pattern": "checkpoints/muonh-power0.2%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1208,7 +1208,7 @@
   {
     "id": 7577,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/rerun_baseline-muonh-/%",
+    "pattern": "checkpoints/rerun_baseline-muonh%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -1217,7 +1217,7 @@
   {
     "id": 7578,
     "bucket": "marin-eu-west4",
-    "pattern": "checkpoints/test-weight-/%",
+    "pattern": "checkpoints/test-weight%",
     "pattern_type": "like",
     "owners": "Kaiyue",
     "reasons": "Hyperball experiments",
@@ -4147,5 +4147,14 @@
     "owners": null,
     "reasons": "default_download output",
     "sources": "high-value.csv:282"
+  },
+  {
+    "id": 7904,
+    "bucket": "*",
+    "pattern": "checkpoints/dpo/%",
+    "pattern_type": "like",
+    "owners": "ahmed",
+    "reasons": "cool",
+    "sources": null
   }
 ]

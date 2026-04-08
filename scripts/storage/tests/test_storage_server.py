@@ -53,11 +53,16 @@ def catalog(tmp_path: Path) -> StorageCatalog:
 
 @pytest.fixture
 def client(catalog: StorageCatalog):
-    """TestClient wired to an isolated StorageCatalog (temp directory)."""
+    """TestClient wired to an isolated StorageCatalog (temp directory).
+
+    Auth uses the default empty DASHBOARD_PASSWORD so no env setup is needed.
+    """
     from scripts.storage import server
 
     app = server.create_app(catalog)
     with TestClient(app) as c:
+        token = c.post("/api/login", json={"password": ""}).json()["token"]
+        c.headers.update({"Authorization": f"Bearer {token}"})
         yield c
 
 
@@ -235,18 +240,16 @@ def test_delete_delete_rule_removes_it(client):
 def test_delete_rule_costs_exclude_protected_dirs(client):
     """Delete rule costs should not count directories covered by a protect rule."""
     # Delete everything matching tmp/
-    client.post("/api/delete-rules", json={"pattern": "tmp/%"})
+    rule_id = client.post("/api/delete-rules", json={"pattern": "tmp/%"}).json()["id"]
 
     # Without protection, tmp/scratch/ should be counted
-    rules_before = client.get("/api/delete-rules").json()["rules"]
-    rule = next(r for r in rules_before if r["pattern"] == "tmp/%")
-    assert rule["total_objects"] > 0
+    cost_before = client.get(f"/api/delete-rules/{rule_id}/cost").json()
+    assert cost_before["total_objects"] > 0
 
     # Now protect tmp/ — costs should drop to zero on next read
     client.post("/api/rules", json={"bucket": "*", "pattern": "tmp/%"})
-    rules_after = client.get("/api/delete-rules").json()["rules"]
-    rule = next(r for r in rules_after if r["pattern"] == "tmp/%")
-    assert rule["total_objects"] == 0
+    cost_after = client.get(f"/api/delete-rules/{rule_id}/cost").json()
+    assert cost_after["total_objects"] == 0
 
 
 # ---------------------------------------------------------------------------
