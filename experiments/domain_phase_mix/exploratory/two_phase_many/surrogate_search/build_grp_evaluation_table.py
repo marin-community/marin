@@ -104,6 +104,10 @@ VALIDATED_RUN_SPECS: tuple[ValidatedRunSpec, ...] = (
         wandb_run_id="baseline_genericfamily_retainedtotal_tuned_uncheatable_bpb-d97130",
     ),
     ValidatedRunSpec(
+        model_name="GRP w/ power-law satiety",
+        wandb_run_id="baseline_genericfamily_power_observed_only_trustblend_top8actual_cap-3fe2f4",
+    ),
+    ValidatedRunSpec(
         model_name="GRP w/o family signals",
         wandb_run_id="baseline_genericfamily_no_groups_uncheatable_bpb-573c71",
     ),
