@@ -1,6 +1,3 @@
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -33,7 +30,7 @@ import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
-from levanter.data.text import DatasetComponent, LmDataConfig, LMMixtureDatasetConfig
+from levanter.data.text import LmDataConfig, LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
@@ -47,6 +44,7 @@ from fray.v2 import current_client
 from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
+from marin.utils import fsspec_exists
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 logger = logging.getLogger(__name__)
@@ -76,7 +74,7 @@ class SaveLogprobsOnPodConfig:
 
 def _force_pack_data(data: LmDataConfig) -> LmDataConfig:
     packed_components = {
-        name: replace(component, pack=True) if isinstance(component, DatasetComponent) else component
+        name: replace(component, pack=True)
         for name, component in data.components.items()
     }
     packed_data = replace(data, components=packed_components, block_cross_document_attention=True)
@@ -117,17 +115,13 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
             activations = model.activations(example.tokens, example.attn_mask, key=key)
             logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)
             loss = next_token_loss(
-                model.Pos,
-                model.Vocab,
-                logits=logits,
-                true_ids=example.tokens,
-                loss_weight=example.loss_weight,
-                reduction=None,
+                model.Pos, model.Vocab, logits=logits,
+                true_ids=example.tokens, loss_weight=example.loss_weight, reduction=None,
             )
             logprobs = hax.nn.log_softmax(logits, axis=model.Vocab)
-
+        
             return loss.rearrange((EvalBatch, Pos)), logprobs.rearrange((EvalBatch, Pos, model.Vocab))
-
+        
         @hax.named_jit
         def compute_top(logprobs: hax.NamedArray, k: int):
             top_k_values, top_k_indices = hax.top_k(logprobs, model.Vocab, k=k, new_axis="top_k")
@@ -146,11 +140,20 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
                 raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
             converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
             converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
-            model = converter.load_pretrained(model_config.model_type, ref=hf_checkpoint, dtype=mp.compute_dtype)
+            model = converter.load_pretrained(
+                model_config.model_type, ref=hf_checkpoint, dtype=mp.compute_dtype
+            )
         else:
-            raise AssertionError("Should not get here")
+            assert False, "Should not get here"
 
         for name, dataset in validation_sets.items():
+            output_file = os.path.join(config.output_path, name, "outputs.jsonl.gz")
+            success_file = output_file + ".SUCCESS"
+            if fsspec_exists(success_file):
+                if jax.process_index() == 0:
+                    logger.info(f"Skipping {name}: already completed")
+                continue
+
             loader = DataLoader(
                 dataset,
                 config.trainer.eval_batch_size,
@@ -158,7 +161,6 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
                 axis_resources=compute_axis_mapping,
             )
 
-            output_file = os.path.join(config.output_path, name, "outputs.jsonl.gz")
             cm = fsspec.open(output_file, "wt", compression="gzip") if jax.process_index() == 0 else nullcontext()
             with cm as f:
                 for batch in loader:
@@ -172,9 +174,7 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
                                 (b_topk_vals, b_topk_ids), tiled=True
                             )
 
-                        b_tokens, b_seg_ids = batch.tokens.rearrange((EvalBatch, Pos)), batch.attn_mask.segment_ids[
-                            0
-                        ].rearrange((EvalBatch, Pos))
+                        b_tokens, b_seg_ids = batch.tokens.rearrange((EvalBatch, Pos)), batch.attn_mask.segment_ids[0].rearrange((EvalBatch, Pos))
                         b_loss, b_tokens, b_seg_ids = multihost_utils.process_allgather(
                             (b_loss, b_tokens, b_seg_ids), tiled=True
                         )
@@ -208,6 +208,8 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
 
             if jax.process_index() == 0:
                 logger.info(f"Saved logprobs to {output_file}")
+                with fsspec.open(success_file, "w") as marker:
+                    marker.write("")
 
     levanter.tracker.current_tracker().finish()
 
@@ -238,6 +240,7 @@ def default_save_logprobs(
     checkpoint_is_hf: bool,
     per_device_batch_size: int = 4,
     top_k: int | None = None,
+    max_eval_length: int = 4096,
     name: str | None = None,
 ) -> ExecutorStep:
     """Creates an ExecutorStep that saves per-token logprobs to disk."""
@@ -253,6 +256,7 @@ def default_save_logprobs(
                 checkpoint_is_hf=checkpoint_is_hf,
                 model=model,
                 data=data,
+                max_eval_length=max_eval_length,
                 trainer=TrainerConfig(
                     tracker=NoopConfig(),
                     ray=RayConfig(auto_start_cluster=False),
