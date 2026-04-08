@@ -192,24 +192,73 @@ class _SubprocessWorkerContext:
         return CounterSnapshot(counters=dict(self._counters), generation=self._generation)
 
 
+SUBPROCESS_COUNTER_FLUSH_INTERVAL = 5.0
+"""How often the subprocess flushes its counter snapshot to the sidecar file.
+
+Matches the parent worker's heartbeat interval so each heartbeat reads at most
+one stale snapshot before the next flush lands.
+"""
+
+
+def _write_counter_sidecar(sidecar_path: str, counters: dict[str, int]) -> None:
+    """Atomically replace ``sidecar_path`` with a pickled counters dict.
+
+    Writing to a temp file then renaming guarantees the parent never reads a
+    half-written file: ``os.rename`` is atomic on POSIX.
+    """
+    tmp_path = f"{sidecar_path}.tmp"
+    with open(tmp_path, "wb") as f:
+        cloudpickle.dump(counters, f)
+    os.rename(tmp_path, sidecar_path)
+
+
+def _periodic_counter_writer(
+    stop_event: threading.Event,
+    ctx: _SubprocessWorkerContext,
+    sidecar_path: str,
+    interval: float,
+) -> None:
+    """Background loop that flushes ``ctx._counters`` to ``sidecar_path``.
+
+    The parent worker's heartbeat thread reads the sidecar to forward live
+    counter updates to the coordinator while the subprocess is still running.
+    Exits when ``stop_event`` is set.
+    """
+    while not stop_event.wait(timeout=interval):
+        try:
+            _write_counter_sidecar(sidecar_path, dict(ctx._counters))
+        except Exception:
+            logger.warning("Failed to flush counter sidecar to %s", sidecar_path, exc_info=True)
+
+
 def _subprocess_execute_shard(task_file: str, result_file: str) -> None:
     """Entry point for subprocess shard execution.
 
     Reads ``(task, chunk_prefix, execution_id)`` from *task_file*, executes the
-    shard inline, and writes the resulting ``TaskResult`` (or the raised
-    exception) to *result_file*. Invoked by ``zephyr.subprocess_worker``.
+    shard inline, and writes ``(result_or_error, counters)`` to *result_file*.
     """
     from rigging.log_setup import configure_logging
 
     configure_logging(level=logging.INFO)
 
+    ctx = _SubprocessWorkerContext("", "")
+    sidecar_counter_path = f"{result_file}.counters"
+    stop_event = threading.Event()
+    flusher = threading.Thread(
+        target=_periodic_counter_writer,
+        args=(stop_event, ctx, sidecar_counter_path, SUBPROCESS_COUNTER_FLUSH_INTERVAL),
+        daemon=True,
+        name="zephyr-subprocess-counter-flusher",
+    )
+    result_or_error: Any
     try:
         with open(task_file, "rb") as f:
             task, chunk_prefix, execution_id = cloudpickle.load(f)
 
-        # Set up worker context so get_shared() and counters work
         ctx = _SubprocessWorkerContext(chunk_prefix, execution_id)
-        _worker_ctx_var.set(ctx)  # type: ignore[arg-type]
+        _worker_ctx_var.set(ctx)
+
+        flusher.start()
 
         stage_ctx = StageContext(
             shard=task.shard,
@@ -222,7 +271,7 @@ def _subprocess_execute_shard(task_file: str, result_file: str) -> None:
         external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
         scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
 
-        result = _write_stage_output(
+        result_or_error = _write_stage_output(
             run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir),
             source_shard=task.shard_idx,
             stage_dir=stage_dir,
@@ -230,13 +279,16 @@ def _subprocess_execute_shard(task_file: str, result_file: str) -> None:
             scatter_op=scatter_op,
             total_shards=task.total_shards,
         )
-
-        with open(result_file, "wb") as f:
-            cloudpickle.dump(result, f)
     except Exception as e:
         logger.exception("Subprocess shard execution failed")
-        with open(result_file, "wb") as f:
-            cloudpickle.dump(e, f)
+        result_or_error = e
+    finally:
+        stop_event.set()
+        if flusher.is_alive():
+            flusher.join(timeout=2.0)
+
+    with open(result_file, "wb") as f:
+        cloudpickle.dump((result_or_error, dict(ctx._counters)), f)
 
 
 def _cleanup_execution(prefix: str, execution_id: str) -> None:
@@ -392,7 +444,7 @@ class WorkerContext(Protocol):
     def get_counter_snapshot(self) -> CounterSnapshot: ...
 
 
-_worker_ctx_var: ContextVar[ZephyrWorker | None] = ContextVar("zephyr_worker_ctx", default=None)
+_worker_ctx_var: ContextVar[WorkerContext | None] = ContextVar("zephyr_worker_ctx", default=None)
 
 
 def zephyr_worker_ctx() -> WorkerContext:
@@ -1048,12 +1100,10 @@ class ZephyrWorker:
         self._shutdown_event = threading.Event()
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
-        # Single-writer (task thread) / single-reader (heartbeat thread).
-        # increment_counter is lock-free.  The heartbeat thread copies
-        # _counters via dict() which is safe for approximate reads.
         self._counters: dict[str, int] = {}
         self._counter_generation: int = 0
         self._last_reported_counters: dict[str, int] = {}
+        self._subprocess_counter_file: str | None = None
 
         # Capture shutdown_event from the actor context while the ContextVar
         # is still set (child threads in Python <3.12 don't inherit it).
@@ -1091,23 +1141,44 @@ class ZephyrWorker:
             )
         return self._shared_data_cache[name]
 
-    def increment_counter(self, name: str, value: int = 1) -> None:
-        self._counters[name] = self._counters.get(name, 0) + value
+    def _current_counters_snapshot(self) -> dict[str, int]:
+        """Return the current counter values without mutating worker state.
+
+        If a subprocess is running and has flushed at least one sidecar
+        snapshot, return that; otherwise fall back to ``self._counters``.
+        Best-effort: a missing or unreadable sidecar (race against the
+        atomic rename, file already cleaned up, partial write) silently
+        falls back to ``self._counters``.
+        """
+        sidecar = self._subprocess_counter_file
+        if sidecar is not None:
+            try:
+                with open(sidecar, "rb") as f:
+                    return cloudpickle.load(f)
+            except (FileNotFoundError, EOFError, pickle.UnpicklingError):
+                pass
+            except Exception:
+                logger.debug("Failed to read counter sidecar %s", sidecar, exc_info=True)
+        return dict(self._counters)
 
     def get_counter_snapshot(self) -> CounterSnapshot:
         self._counter_generation += 1
-        return CounterSnapshot(counters=dict(self._counters), generation=self._counter_generation)
+        return CounterSnapshot(
+            counters=self._current_counters_snapshot(),
+            generation=self._counter_generation,
+        )
 
     def _reset_counters(self) -> None:
-        """Clear counters for a new task."""
+        """Clear counters for a new task. Called only from the task thread."""
+        logger.info("[%s] Resetting counters for new task", self._worker_id)
         self._counters = {}
 
     def _counters_changed(self) -> bool:
         """Return True if counters have changed since the last heartbeat report."""
-        current = self._counters
+        current = self._current_counters_snapshot()
         if current == self._last_reported_counters:
             return False
-        self._last_reported_counters = dict(current)
+        self._last_reported_counters = current
         return True
 
     def _run_polling(self, coordinator: ActorHandle) -> None:
@@ -1268,10 +1339,7 @@ class ZephyrWorker:
         self._chunk_prefix = config["chunk_prefix"]
         self._execution_id = config["execution_id"]
 
-        # Reset counters for the new task
         self._reset_counters()
-
-        _worker_ctx_var.set(self)
 
         logger.info(
             "[%s] [shard %d/%d] Starting stage=%s, %d ops",
@@ -1282,13 +1350,19 @@ class ZephyrWorker:
             len(task.operations),
         )
 
-        result_file = tempfile.mktemp(suffix=".pkl")
-        task_file = tempfile.mktemp(suffix=".pkl")
+        # NamedTemporaryFile gives us a securely-created path (no mktemp race)
+        # while letting the file outlive the with-block via delete=False —
+        # the subprocess and the post-run reader open them by name, and the
+        # finally block below cleans up.
+        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
+            cloudpickle.dump((task, self._chunk_prefix, self._execution_id), f)
+            task_file = f.name
+        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
+            result_file = f.name
+        sidecar_file = f"{result_file}.counters"
+        self._subprocess_counter_file = sidecar_file
 
         try:
-            with open(task_file, "wb") as f:
-                cloudpickle.dump((task, self._chunk_prefix, self._execution_id), f)
-
             proc = sp.run(
                 [sys.executable, "-m", "zephyr.subprocess_worker", task_file, result_file],
                 stdout=sys.stdout,
@@ -1299,7 +1373,17 @@ class ZephyrWorker:
                 raise RuntimeError(f"Subprocess for shard {task.shard_idx} exited with code {proc.returncode}")
 
             with open(result_file, "rb") as f:
-                result_or_error = cloudpickle.load(f)
+                result_or_error, child_counters = cloudpickle.load(f)
+
+            # Adopt the subprocess's final counter snapshot so the next
+            # ``get_counter_snapshot()`` call (from ``_poll_loop`` immediately
+            # after this returns) reports the user-supplied counters from
+            # the just-executed shard. Order matters: assign ``_counters``
+            # before clearing ``_subprocess_counter_file`` so a heartbeat
+            # racing in between still falls back to the just-flushed sidecar
+            # rather than to an empty ``_counters`` dict.
+            self._counters = dict(child_counters)
+            self._subprocess_counter_file = None
 
             if isinstance(result_or_error, Exception):
                 raise result_or_error
@@ -1311,7 +1395,8 @@ class ZephyrWorker:
             )
             return result_or_error
         finally:
-            for p in (task_file, result_file):
+            self._subprocess_counter_file = None
+            for p in (task_file, result_file, sidecar_file, f"{sidecar_file}.tmp"):
                 with suppress(FileNotFoundError):
                     os.unlink(p)
 
