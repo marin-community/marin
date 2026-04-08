@@ -16,8 +16,8 @@ import datetime
 import logging
 import os
 
-from levanter.checkpoint import CheckpointDebugConfig
-from fray.v2.types import ResourceConfig
+from experiments.models import llama_3_1_8b_instruct
+from fray.types import ResourceConfig
 from levanter.checkpoint import CheckpointDebugConfig
 from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
@@ -31,8 +31,6 @@ from marin.rl.rl_experiment_utils import (
     make_rl_step,
 )
 from marin.rl.rl_losses import RLOOLoss
-
-from experiments.models import llama_3_1_8b_instruct
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +76,7 @@ def _tpu_resources(
     zone: str | None,
     slice_count: int = 1,
 ) -> ResourceConfig:
-    kwargs = {"ram": ram}
+    kwargs: dict[str, object] = {"ram": ram}
     if zone is not None:
         kwargs["zone"] = zone
         kwargs["regions"] = [zone.rsplit("-", 1)[0]]

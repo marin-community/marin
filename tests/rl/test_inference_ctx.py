@@ -432,7 +432,7 @@ def test_vllm_batch_completions_uses_request_generation_count(monkeypatch):
     )
     monkeypatch.setattr(
         "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
-        lambda _path: SimpleNamespace(),
+        lambda _path: SimpleNamespace(get_vocab=lambda: {"tok0": 0, "tok1": 1, "tok2": 2}),
     )
     monkeypatch.setattr(
         vLLMInferenceContext,
