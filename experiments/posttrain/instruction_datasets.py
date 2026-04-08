@@ -486,6 +486,15 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         subsets=[],
         splits=["train"],
     ),
+    "teetone/qwen3_4b_openthoughts4_science26K_instill_n1_valredundancy3_round1": InstructionDatasetConfig(
+        hf_dataset_id="teetone/qwen3_4b_openthoughts4_science26K_instill_n1_valredundancy3_round1",
+        revision="74286ca",
+        adapter=multi_turn_adapter(),
+        metadata_columns=[],
+        name="teetone/qwen3_4b_openthoughts4_science26K_instill_n1_valredundancy3_round1",
+        subsets=[],
+        splits=["train"],
+    ),
     "teetone/qwen3_4b_openthoughts4_code9K_instill_n4_valredundancy3_round1": InstructionDatasetConfig(
         hf_dataset_id="teetone/qwen3_4b_openthoughts4_code9K_instill_n4_valredundancy3_round1",
         revision="35c8f18",
