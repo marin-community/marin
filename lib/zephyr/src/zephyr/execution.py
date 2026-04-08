@@ -1100,7 +1100,12 @@ class ZephyrWorker:
         self._shutdown_event = threading.Event()
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
-        self._counters: dict[str, int] = {}
+        # The parent worker no longer holds a counter dict of its own. User
+        # code runs inside the subprocess (`_SubprocessWorkerContext`) and
+        # the subprocess flushes a sidecar file the heartbeat thread reads.
+        # The post-shard report_result call carries the final counters
+        # straight from the subprocess result file — there is nothing on the
+        # parent to keep in sync.
         self._counter_generation: int = 0
         self._last_reported_counters: dict[str, int] = {}
         self._subprocess_counter_file: str | None = None
@@ -1142,24 +1147,27 @@ class ZephyrWorker:
         return self._shared_data_cache[name]
 
     def _current_counters_snapshot(self) -> dict[str, int]:
-        """Return the current counter values without mutating worker state.
+        """Return the live subprocess counter snapshot, or ``{}`` if none.
 
-        If a subprocess is running and has flushed at least one sidecar
-        snapshot, return that; otherwise fall back to ``self._counters``.
-        Best-effort: a missing or unreadable sidecar (race against the
-        atomic rename, file already cleaned up, partial write) silently
-        falls back to ``self._counters``.
+        While ``_subprocess_counter_file`` is set, the subprocess flushes its
+        counter dict to that path every ``SUBPROCESS_COUNTER_FLUSH_INTERVAL``
+        seconds via an atomic temp-write + rename. The heartbeat thread calls
+        this helper to forward those updates to the coordinator. A missing or
+        partially-written file (race against the atomic rename, file cleaned
+        up post-task) falls through to an empty dict — the post-shard
+        ``report_result`` call is the source of truth for the final values.
         """
-        sidecar = self._subprocess_counter_file
-        if sidecar is not None:
-            try:
-                with open(sidecar, "rb") as f:
-                    return cloudpickle.load(f)
-            except (FileNotFoundError, EOFError, pickle.UnpicklingError):
-                pass
-            except Exception:
-                logger.debug("Failed to read counter sidecar %s", sidecar, exc_info=True)
-        return dict(self._counters)
+        counters_file = self._subprocess_counter_file
+        if counters_file is None:
+            return {}
+        try:
+            with open(counters_file, "rb") as f:
+                return cloudpickle.load(f)
+        except (FileNotFoundError, EOFError, pickle.UnpicklingError):
+            return {}
+        except Exception:
+            logger.warning("Failed to read counter sidecar %s", counters_file, exc_info=True)
+            return {}
 
     def get_counter_snapshot(self) -> CounterSnapshot:
         self._counter_generation += 1
@@ -1167,11 +1175,6 @@ class ZephyrWorker:
             counters=self._current_counters_snapshot(),
             generation=self._counter_generation,
         )
-
-    def _reset_counters(self) -> None:
-        """Clear counters for a new task. Called only from the task thread."""
-        logger.info("[%s] Resetting counters for new task", self._worker_id)
-        self._counters = {}
 
     def _counters_changed(self) -> bool:
         """Return True if counters have changed since the last heartbeat report."""
@@ -1294,7 +1297,7 @@ class ZephyrWorker:
             logger.info("[%s] Executing task for shard %d (attempt %d)", self._worker_id, task.shard_idx, attempt)
             try:
                 t_0 = time.monotonic()
-                result = self._execute_shard(task, config)
+                result, task_counters = self._execute_shard(task, config)
                 logger.info(
                     "[%s] Task for shard %d completed in %.2f seconds",
                     self._worker_id,
@@ -1303,14 +1306,16 @@ class ZephyrWorker:
                 )
                 # Block until coordinator records the result. This ensures
                 # report_result is fully processed before the next pull_task,
-                # preventing _in_flight tracking races.  Send the final counter
-                # snapshot so no increments are lost between heartbeats.
+                # preventing _in_flight tracking races. The counter snapshot
+                # is built directly from the subprocess result file so no
+                # parent-side counter state needs to be kept in sync.
+                self._counter_generation += 1
                 coordinator.report_result.remote(
                     self._worker_id,
                     task.shard_idx,
                     attempt,
                     result,
-                    self.get_counter_snapshot(),
+                    CounterSnapshot(counters=dict(task_counters), generation=self._counter_generation),
                 ).result()
                 task_count += 1
             except Exception as e:
@@ -1323,14 +1328,16 @@ class ZephyrWorker:
                     "".join(traceback.format_exc()),
                 ).result()
 
-    def _execute_shard(self, task: ShardTask, config: dict) -> TaskResult:
+    def _execute_shard(self, task: ShardTask, config: dict) -> tuple[TaskResult, dict[str, int]]:
         """Execute a stage's operations in a child process for memory isolation.
 
         Serializes the task via cloudpickle, runs it in a subprocess via
-        ``python -m zephyr.subprocess_worker``, and returns the deserialized
-        ``TaskResult``. All child memory (page cache, Arrow pool, Python heap)
-        is reclaimed when the child exits, so successive tasks on the same
-        worker actor do not accumulate state.
+        ``python -m zephyr.subprocess_worker``, and returns
+        ``(TaskResult, counters)`` — the latter is the user counter dict
+        accumulated inside the subprocess, which the caller hands straight
+        to ``coordinator.report_result``. All child memory (page cache,
+        Arrow pool, Python heap) is reclaimed when the child exits, so
+        successive tasks on the same worker actor do not accumulate state.
         """
         import subprocess as sp
         import tempfile
@@ -1338,8 +1345,6 @@ class ZephyrWorker:
         # Update config for this execution
         self._chunk_prefix = config["chunk_prefix"]
         self._execution_id = config["execution_id"]
-
-        self._reset_counters()
 
         logger.info(
             "[%s] [shard %d/%d] Starting stage=%s, %d ops",
@@ -1350,17 +1355,13 @@ class ZephyrWorker:
             len(task.operations),
         )
 
-        # NamedTemporaryFile gives us a securely-created path (no mktemp race)
-        # while letting the file outlive the with-block via delete=False —
-        # the subprocess and the post-run reader open them by name, and the
-        # finally block below cleans up.
         with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
             cloudpickle.dump((task, self._chunk_prefix, self._execution_id), f)
             task_file = f.name
         with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
             result_file = f.name
-        sidecar_file = f"{result_file}.counters"
-        self._subprocess_counter_file = sidecar_file
+        counters_file = f"{result_file}.counters"
+        self._subprocess_counter_file = counters_file
 
         try:
             proc = sp.run(
@@ -1375,14 +1376,12 @@ class ZephyrWorker:
             with open(result_file, "rb") as f:
                 result_or_error, child_counters = cloudpickle.load(f)
 
-            # Adopt the subprocess's final counter snapshot so the next
-            # ``get_counter_snapshot()`` call (from ``_poll_loop`` immediately
-            # after this returns) reports the user-supplied counters from
-            # the just-executed shard. Order matters: assign ``_counters``
-            # before clearing ``_subprocess_counter_file`` so a heartbeat
-            # racing in between still falls back to the just-flushed sidecar
-            # rather than to an empty ``_counters`` dict.
-            self._counters = dict(child_counters)
+            # Clear the sidecar pointer BEFORE returning so any heartbeat
+            # racing between this point and the report_result call in
+            # _poll_loop reads an empty snapshot rather than stale subprocess
+            # data — otherwise the live counters would be double-counted on
+            # top of the final ones the caller is about to ship via
+            # report_result.
             self._subprocess_counter_file = None
 
             if isinstance(result_or_error, Exception):
@@ -1393,10 +1392,10 @@ class ZephyrWorker:
                 task.shard_idx,
                 len(result_or_error.shard.refs),
             )
-            return result_or_error
+            return result_or_error, dict(child_counters)
         finally:
             self._subprocess_counter_file = None
-            for p in (task_file, result_file, sidecar_file, f"{sidecar_file}.tmp"):
+            for p in (task_file, result_file, counters_file, f"{counters_file}.tmp"):
                 with suppress(FileNotFoundError):
                     os.unlink(p)
 
