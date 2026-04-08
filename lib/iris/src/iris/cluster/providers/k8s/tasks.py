@@ -28,7 +28,7 @@ from iris.cluster.controller.transitions import DirectProviderBatch, RunningTask
 from iris.cluster.log_store._types import LogPusherProtocol, TaskAttempt, task_log_key
 from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
-from iris.cluster.providers.k8s.types import KubectlError, KubectlLogLine, parse_k8s_quantity
+from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
 from iris.cluster.types import JobName, get_gpu_count
 from iris.logging import str_to_log_level
@@ -698,7 +698,7 @@ def _fetch_node_pools(kubectl: K8sService, managed_label: str) -> list[controlle
     """Fetch node pool statuses from the cluster."""
     try:
         np_labels = {managed_label: "true"} if managed_label else None
-        pools = kubectl.list_json("nodepools", labels=np_labels, cluster_scoped=True)
+        pools = kubectl.list_json(K8sResource.NODE_POOLS, labels=np_labels)
     except Exception as e:
         logger.warning("Failed to query nodepools: %s", e)
         return []
@@ -1101,7 +1101,7 @@ class K8sTaskProvider:
 
         # Single pod list for the entire cycle — excludes terminal pods via field selector.
         managed_pods = self.kubectl.list_json(
-            "pods",
+            K8sResource.PODS,
             labels=_MANAGED_POD_LABELS,
             field_selector=_ACTIVE_PODS_FIELD_SELECTOR,
         )
@@ -1111,7 +1111,7 @@ class K8sTaskProvider:
         scheduling_events = self._fetch_scheduling_events(managed_pods)
 
         try:
-            nodes = self.kubectl.list_json("nodes", cluster_scoped=True)
+            nodes = self.kubectl.list_json(K8sResource.NODES)
         except Exception as e:
             logger.warning("Failed to query node resources: %s", e)
             nodes = []
@@ -1341,7 +1341,7 @@ class K8sTaskProvider:
         ]
 
         if pod_names:
-            self.kubectl.delete_many("pods", pod_names, wait=False)
+            self.kubectl.delete_many(K8sResource.PODS, pod_names, wait=False)
 
         # Enqueue task hashes for deferred configmap/PDB cleanup by the GC pass.
         self._pending_gc_hashes.update(task_hashes)
@@ -1389,8 +1389,8 @@ class K8sTaskProvider:
         self._pending_gc_hashes -= safe_pending
         for task_hash in safe_pending:
             labels = {**_MANAGED_POD_LABELS, _LABEL_TASK_HASH: task_hash}
-            self.kubectl.delete_by_labels("configmaps", labels, wait=False)
-            self.kubectl.delete_by_labels("poddisruptionbudgets", labels, wait=False)
+            self.kubectl.delete_by_labels(K8sResource.CONFIGMAPS, labels, wait=False)
+            self.kubectl.delete_by_labels(K8sResource.PDBS, labels, wait=False)
         if safe_pending:
             logger.info("GC: cleaned up CMs/PDBs for %d killed task hashes", len(safe_pending))
 
@@ -1401,7 +1401,7 @@ class K8sTaskProvider:
         old_task_hashes: set[str] = set()
         for phase in ("Succeeded", "Failed"):
             pods = self.kubectl.list_json(
-                "pods",
+                K8sResource.PODS,
                 labels=_MANAGED_POD_LABELS,
                 field_selector=f"status.phase={phase}",
             )
@@ -1418,12 +1418,12 @@ class K8sTaskProvider:
                         old_task_hashes.add(task_hash)
 
         if old_pod_names:
-            self.kubectl.delete_many("pods", old_pod_names, wait=False)
+            self.kubectl.delete_many(K8sResource.PODS, old_pod_names, wait=False)
         safe_hashes = old_task_hashes - active_hashes
         for task_hash in safe_hashes:
             labels = {**_MANAGED_POD_LABELS, _LABEL_TASK_HASH: task_hash}
-            self.kubectl.delete_by_labels("configmaps", labels, wait=False)
-            self.kubectl.delete_by_labels("poddisruptionbudgets", labels, wait=False)
+            self.kubectl.delete_by_labels(K8sResource.CONFIGMAPS, labels, wait=False)
+            self.kubectl.delete_by_labels(K8sResource.PDBS, labels, wait=False)
 
         if old_pod_names:
             logger.info(
@@ -1443,27 +1443,27 @@ class K8sTaskProvider:
         """
         task_hash = _task_hash(task_id)
         managed_labels = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: task_hash}
-        pods = self.kubectl.list_json("pods", labels=managed_labels)
+        pods = self.kubectl.list_json(K8sResource.PODS, labels=managed_labels)
         for pod in pods:
             pod_name = pod.get("metadata", {}).get("name", "")
             if pod_name:
-                self.kubectl.delete("pod", pod_name)
+                self.kubectl.delete(K8sResource.PODS, pod_name)
                 logger.info("Deleted pod %s for task %s", pod_name, task_id)
 
         # Clean up associated ConfigMaps (workdir files).
-        configmaps = self.kubectl.list_json("configmaps", labels=managed_labels)
+        configmaps = self.kubectl.list_json(K8sResource.CONFIGMAPS, labels=managed_labels)
         for cm in configmaps:
             cm_name = cm.get("metadata", {}).get("name", "")
             if cm_name:
-                self.kubectl.delete("configmap", cm_name)
+                self.kubectl.delete(K8sResource.CONFIGMAPS, cm_name)
                 logger.info("Deleted configmap %s for task %s", cm_name, task_id)
 
         # Clean up associated PDBs (coordinator tasks).
-        pdbs = self.kubectl.list_json("poddisruptionbudgets", labels=managed_labels)
+        pdbs = self.kubectl.list_json(K8sResource.PDBS, labels=managed_labels)
         for pdb in pdbs:
             pdb_name = pdb.get("metadata", {}).get("name", "")
             if pdb_name:
-                self.kubectl.delete("pdb", pdb_name)
+                self.kubectl.delete(K8sResource.PDBS, pdb_name)
                 logger.info("Deleted PDB %s for task %s", pdb_name, task_id)
 
     def _poll_pods(self, running: list[RunningTaskEntry], cached_pods: list[dict]) -> list[TaskUpdate]:
@@ -1503,7 +1503,7 @@ class K8sTaskProvider:
 
             if pod is None:
                 # Pod not in active list — may have completed or truly vanished.
-                pod = self.kubectl.get_json("pods", pod_name)
+                pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
 
             if pod is None:
                 count = self._pod_not_found_counts.get(cursor_key, 0) + 1
@@ -1587,7 +1587,7 @@ class K8sTaskProvider:
             return []
 
         try:
-            events = self.kubectl.list_json("events")
+            events = self.kubectl.list_json(K8sResource.EVENTS)
         except Exception as e:
             logger.warning("Failed to fetch scheduling events: %s", e)
             return []

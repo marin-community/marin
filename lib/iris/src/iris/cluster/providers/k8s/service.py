@@ -23,7 +23,7 @@ import kubernetes.config
 import kubernetes.stream
 from kubernetes.client.exceptions import ApiException
 
-from iris.cluster.providers.k8s.types import ExecResult, KubectlError, KubectlLogLine, KubectlLogResult
+from iris.cluster.providers.k8s.types import ExecResult, K8sResource, KubectlError, KubectlLogLine, KubectlLogResult
 from iris.cluster.providers.k8s.types import parse_k8s_cpu as _parse_k8s_cpu
 from iris.cluster.providers.k8s.types import parse_k8s_memory as _parse_k8s_memory
 from iris.cluster.providers.types import find_free_port
@@ -52,28 +52,23 @@ class K8sService(Protocol):
 
     def apply_json(self, manifest: dict) -> None: ...
 
-    def get_json(self, resource: str, name: str, *, cluster_scoped: bool = False) -> dict | None: ...
+    def get_json(self, resource: K8sResource, name: str) -> dict | None: ...
 
     def list_json(
         self,
-        resource: str,
+        resource: K8sResource,
         *,
         labels: dict[str, str] | None = None,
         field_selector: str | None = None,
-        cluster_scoped: bool = False,
     ) -> list[dict]: ...
 
-    def delete(
-        self, resource: str, name: str, *, cluster_scoped: bool = False, force: bool = False, wait: bool = True
-    ) -> None: ...
+    def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None: ...
 
-    def delete_many(self, resource: str, names: list[str], *, cluster_scoped: bool = False, wait: bool = False) -> None:
+    def delete_many(self, resource: K8sResource, names: list[str], *, wait: bool = False) -> None:
         """Delete multiple resources by name in a single kubectl call."""
         ...
 
-    def delete_by_labels(
-        self, resource: str, labels: dict[str, str], *, cluster_scoped: bool = False, wait: bool = False
-    ) -> None:
+    def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
         """Delete all resources matching the given label selector."""
         ...
 
@@ -96,11 +91,11 @@ class K8sService(Protocol):
         timeout: float | None = None,
     ) -> ExecResult: ...
 
-    def set_image(self, resource: str, name: str, container: str, image: str, *, namespaced: bool = False) -> None: ...
+    def set_image(self, resource: K8sResource, name: str, container: str, image: str) -> None: ...
 
-    def rollout_restart(self, resource: str, name: str, *, namespaced: bool = False) -> None: ...
+    def rollout_restart(self, resource: K8sResource, name: str) -> None: ...
 
-    def rollout_status(self, resource: str, name: str, *, timeout: float = 600.0, namespaced: bool = False) -> None: ...
+    def rollout_status(self, resource: K8sResource, name: str, *, timeout: float = 600.0) -> None: ...
 
     def get_events(
         self,
@@ -143,118 +138,8 @@ class K8sService(Protocol):
         ...
 
 
-# ---------------------------------------------------------------------------
-# Resource-type dispatch helpers
-# ---------------------------------------------------------------------------
-
-# Maps resource type strings to (api_group, api_version, is_namespaced, plural_name).
-# For core/v1 resources, api_group is "".
-_RESOURCE_INFO: dict[str, tuple[str, str, bool, str]] = {
-    "pods": ("", "v1", True, "pods"),
-    "configmaps": ("", "v1", True, "configmaps"),
-    "services": ("", "v1", True, "services"),
-    "secrets": ("", "v1", True, "secrets"),
-    "events": ("", "v1", True, "events"),
-    "namespaces": ("", "v1", False, "namespaces"),
-    "nodes": ("", "v1", False, "nodes"),
-    "deployments": ("apps", "v1", True, "deployments"),
-    "statefulsets": ("apps", "v1", True, "statefulsets"),
-    "poddisruptionbudgets": ("policy", "v1", True, "poddisruptionbudgets"),
-    "clusterroles": ("rbac.authorization.k8s.io", "v1", False, "clusterroles"),
-    "clusterrolebindings": ("rbac.authorization.k8s.io", "v1", False, "clusterrolebindings"),
-    "serviceaccounts": ("", "v1", True, "serviceaccounts"),
-    "nodepools": ("compute.coreweave.com", "v1alpha1", False, "nodepools"),
-    # Singular aliases used by callers (e.g. delete("pod", name))
-    "pod": ("", "v1", True, "pods"),
-    "configmap": ("", "v1", True, "configmaps"),
-    "service": ("", "v1", True, "services"),
-    "secret": ("", "v1", True, "secrets"),
-    "event": ("", "v1", True, "events"),
-    "namespace": ("", "v1", False, "namespaces"),
-    "node": ("", "v1", False, "nodes"),
-    "deployment": ("apps", "v1", True, "deployments"),
-    "statefulset": ("apps", "v1", True, "statefulsets"),
-    "pdb": ("policy", "v1", True, "poddisruptionbudgets"),
-    "clusterrole": ("rbac.authorization.k8s.io", "v1", False, "clusterroles"),
-    "clusterrolebinding": ("rbac.authorization.k8s.io", "v1", False, "clusterrolebindings"),
-    "serviceaccount": ("", "v1", True, "serviceaccounts"),
-    "nodepool": ("compute.coreweave.com", "v1alpha1", False, "nodepools"),
-}
-
-# Maps kind (from manifest) to resource plural for SSA URL construction.
-_KIND_TO_PLURAL: dict[str, str] = {
-    "Pod": "pods",
-    "ConfigMap": "configmaps",
-    "Service": "services",
-    "Secret": "secrets",
-    "Deployment": "deployments",
-    "StatefulSet": "statefulsets",
-    "PodDisruptionBudget": "poddisruptionbudgets",
-    "ClusterRole": "clusterroles",
-    "ClusterRoleBinding": "clusterrolebindings",
-    "ServiceAccount": "serviceaccounts",
-    "Namespace": "namespaces",
-    "NodePool": "nodepools",
-    "Node": "nodes",
-    "Event": "events",
-}
-
-
 def _label_selector(labels: dict[str, str]) -> str:
     return ",".join(f"{k}={v}" for k, v in labels.items())
-
-
-def _resource_info(resource: str) -> tuple[str, str, bool, str]:
-    """Look up resource metadata. Raises ValueError for unknown resources."""
-    info = _RESOURCE_INFO.get(resource)
-    if info is None:
-        raise ValueError(f"Unknown resource type: {resource!r}")
-    return info
-
-
-def _api_path_for_manifest(manifest: dict, namespace: str | None) -> str:
-    """Build the API URL path for server-side apply from a manifest dict."""
-    kind = manifest["kind"]
-    api_version = manifest["apiVersion"]
-    name = manifest["metadata"]["name"]
-    plural = _KIND_TO_PLURAL.get(kind)
-    if plural is None:
-        raise ValueError(f"Unknown kind for SSA: {kind!r}")
-
-    group, version, is_namespaced, _ = _resource_info(plural)
-
-    if "/" in api_version:
-        base = f"/apis/{api_version}"
-    elif group:
-        base = f"/apis/{group}/{version}"
-    else:
-        base = f"/api/{version}"
-
-    ns = manifest["metadata"].get("namespace", namespace)
-    if is_namespaced and ns:
-        return f"{base}/namespaces/{ns}/{plural}/{name}"
-    return f"{base}/{plural}/{name}"
-
-
-def _api_path_for_resource(
-    resource: str, namespace: str, *, name: str | None = None, cluster_scoped: bool = False
-) -> str:
-    """Build the API URL path for a resource type."""
-    group, version, is_namespaced, plural = _resource_info(resource)
-
-    if group:
-        base = f"/apis/{group}/{version}"
-    else:
-        base = f"/api/{version}"
-
-    if is_namespaced and not cluster_scoped:
-        path = f"{base}/namespaces/{namespace}/{plural}"
-    else:
-        path = f"{base}/{plural}"
-
-    if name:
-        path = f"{path}/{name}"
-    return path
 
 
 def _log_operation(operation: str, t0: float) -> None:
@@ -315,37 +200,47 @@ class CloudK8sService:
         """Convert a kubernetes client object to a camelCase dict."""
         return self._api_client.sanitize_for_serialization(obj)
 
+    def _call_api(
+        self,
+        path: str,
+        method: str,
+        *,
+        body: str | None = None,
+        query_params: list[tuple[str, str]] | None = None,
+        content_type: str = "application/json",
+        timeout: float | None = None,
+    ) -> dict:
+        """Central API dispatch. Injects auth and timeout for every call."""
+        resp = self._api_client.call_api(
+            path,
+            method,
+            body=body,
+            query_params=query_params or [],
+            header_params={"Content-Type": content_type, "Accept": "application/json"},
+            response_type="object",
+            auth_settings=["BearerToken"],
+            _request_timeout=timeout or self.timeout,
+        )
+        return resp[0]  # call_api returns (data, status, headers)
+
     # -- apply ---------------------------------------------------------------
 
     def apply_json(self, manifest: dict) -> None:
-        """Apply a manifest using GET-then-create-or-patch, matching kubectl apply.
-
-        Checks if the resource exists first. If it does, patches it; if not,
-        creates it. This matches kubectl apply's RBAC requirements: only needs
-        ``get`` + ``patch`` for existing resources, or ``get`` + ``create`` for new ones.
-        """
+        """Apply a manifest using GET-then-create-or-patch, matching kubectl apply."""
         kind = manifest.get("kind", "?")
         name = manifest["metadata"]["name"]
-        item_path = _api_path_for_manifest(manifest, self.namespace)
-        collection_path = item_path.rsplit("/", 1)[0]
-
-        headers_json = {"Content-Type": "application/json", "Accept": "application/json"}
-        headers_patch = {"Content-Type": "application/strategic-merge-patch+json", "Accept": "application/json"}
+        res = K8sResource.from_kind(manifest["kind"])
+        ns = manifest["metadata"].get("namespace", self.namespace)
+        item_path = res.item_path(name, ns)
+        collection_path = res.collection_path(ns)
         body = json.dumps(manifest)
 
         logger.info("k8s: apply %s/%s", kind, name)
         t0 = time.monotonic()
 
-        # Check if resource exists
         exists = False
         try:
-            self._api_client.call_api(
-                item_path,
-                "GET",
-                header_params={"Accept": "application/json"},
-                response_type="object",
-                _request_timeout=self.timeout,
-            )
+            self._call_api(item_path, "GET")
             exists = True
         except ApiException as e:
             if e.status != 404:
@@ -355,23 +250,9 @@ class CloudK8sService:
 
         try:
             if exists:
-                self._api_client.call_api(
-                    item_path,
-                    "PATCH",
-                    body=body,
-                    header_params=headers_patch,
-                    response_type="object",
-                    _request_timeout=self.timeout,
-                )
+                self._call_api(item_path, "PATCH", body=body, content_type="application/strategic-merge-patch+json")
             else:
-                self._api_client.call_api(
-                    collection_path,
-                    "POST",
-                    body=body,
-                    header_params=headers_json,
-                    response_type="object",
-                    _request_timeout=self.timeout,
-                )
+                self._call_api(collection_path, "POST", body=body)
         except ApiException as e:
             op = "patch" if exists else "create"
             raise KubectlError(f"apply {op} {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}") from e
@@ -379,39 +260,31 @@ class CloudK8sService:
 
     # -- get -----------------------------------------------------------------
 
-    def get_json(self, resource: str, name: str, *, cluster_scoped: bool = False) -> dict | None:
+    def get_json(self, resource: K8sResource, name: str) -> dict | None:
         """Get a Kubernetes resource as a parsed dict. Returns None if not found."""
-        path = _api_path_for_resource(resource, self.namespace, name=name, cluster_scoped=cluster_scoped)
+        path = resource.item_path(name, self.namespace)
         logger.info("k8s: GET %s", path)
         t0 = time.monotonic()
         try:
-            resp = self._api_client.call_api(
-                path,
-                "GET",
-                header_params={"Accept": "application/json"},
-                response_type="object",
-                _request_timeout=self.timeout,
-            )
-            _log_operation(f"get {resource}/{name}", t0)
-            # call_api returns (data, status, headers)
-            return resp[0]
+            result = self._call_api(path, "GET")
+            _log_operation(f"get {resource.plural}/{name}", t0)
+            return result
         except ApiException as e:
             if e.status == 404:
                 return None
-            raise KubectlError(f"get {resource}/{name} failed ({e.status}): {e.reason}") from e
+            raise KubectlError(f"get {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
 
     # -- list ----------------------------------------------------------------
 
     def list_json(
         self,
-        resource: str,
+        resource: K8sResource,
         *,
         labels: dict[str, str] | None = None,
         field_selector: str | None = None,
-        cluster_scoped: bool = False,
     ) -> list[dict]:
         """List Kubernetes resources, optionally filtered by labels and/or field selectors."""
-        path = _api_path_for_resource(resource, self.namespace, cluster_scoped=cluster_scoped)
+        path = resource.collection_path(self.namespace)
         query_params: list[tuple[str, str]] = []
         if labels:
             query_params.append(("labelSelector", _label_selector(labels)))
@@ -421,27 +294,17 @@ class CloudK8sService:
         logger.info("k8s: LIST %s labels=%s field_selector=%s", path, labels, field_selector)
         t0 = time.monotonic()
         try:
-            resp = self._api_client.call_api(
-                path,
-                "GET",
-                query_params=query_params,
-                header_params={"Accept": "application/json"},
-                response_type="object",
-                _request_timeout=self.timeout,
-            )
-            _log_operation(f"list {resource}", t0)
-            data = resp[0]
+            data = self._call_api(path, "GET", query_params=query_params)
+            _log_operation(f"list {resource.plural}", t0)
             return data.get("items", [])
         except ApiException as e:
-            raise KubectlError(f"list {resource} failed ({e.status}): {e.reason}") from e
+            raise KubectlError(f"list {resource.plural} failed ({e.status}): {e.reason}") from e
 
     # -- delete --------------------------------------------------------------
 
-    def delete(
-        self, resource: str, name: str, *, cluster_scoped: bool = False, force: bool = False, wait: bool = True
-    ) -> None:
+    def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None:
         """Delete a Kubernetes resource, ignoring NotFound errors."""
-        path = _api_path_for_resource(resource, self.namespace, name=name, cluster_scoped=cluster_scoped)
+        path = resource.item_path(name, self.namespace)
         query_params: list[tuple[str, str]] = []
         if force:
             query_params.append(("gracePeriodSeconds", "0"))
@@ -451,37 +314,28 @@ class CloudK8sService:
         logger.info("k8s: DELETE %s force=%s wait=%s", path, force, wait)
         t0 = time.monotonic()
         try:
-            self._api_client.call_api(
-                path,
-                "DELETE",
-                query_params=query_params,
-                header_params={"Accept": "application/json"},
-                response_type="object",
-                _request_timeout=self.timeout,
-            )
+            self._call_api(path, "DELETE", query_params=query_params)
         except ApiException as e:
             if e.status == 404:
                 return
-            raise KubectlError(f"delete {resource}/{name} failed ({e.status}): {e.reason}") from e
-        _log_operation(f"delete {resource}/{name}", t0)
+            raise KubectlError(f"delete {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
+        _log_operation(f"delete {resource.plural}/{name}", t0)
 
-    def delete_many(self, resource: str, names: list[str], *, cluster_scoped: bool = False, wait: bool = False) -> None:
+    def delete_many(self, resource: K8sResource, names: list[str], *, wait: bool = False) -> None:
         """Delete multiple resources by name via individual API calls."""
         if not names:
             return
-        logger.info("k8s: DELETE_MANY %s count=%d", resource, len(names))
+        logger.info("k8s: DELETE_MANY %s count=%d", resource.plural, len(names))
         t0 = time.monotonic()
         for name in names:
-            self.delete(resource, name, cluster_scoped=cluster_scoped, wait=wait)
-        _log_operation(f"delete_many {resource} ({len(names)})", t0)
+            self.delete(resource, name, wait=wait)
+        _log_operation(f"delete_many {resource.plural} ({len(names)})", t0)
 
-    def delete_by_labels(
-        self, resource: str, labels: dict[str, str], *, cluster_scoped: bool = False, wait: bool = False
-    ) -> None:
+    def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
         """Delete all resources matching the given label selector."""
         if not labels:
             return
-        path = _api_path_for_resource(resource, self.namespace, cluster_scoped=cluster_scoped)
+        path = resource.collection_path(self.namespace)
         selector = _label_selector(labels)
         query_params: list[tuple[str, str]] = [("labelSelector", selector)]
         if not wait:
@@ -490,23 +344,18 @@ class CloudK8sService:
         logger.info("k8s: DELETE_COLLECTION %s labels=%s", path, labels)
         t0 = time.monotonic()
         try:
-            self._api_client.call_api(
-                path,
-                "DELETE",
-                query_params=query_params,
-                header_params={"Accept": "application/json"},
-                response_type="object",
-                _request_timeout=self.timeout,
-            )
+            self._call_api(path, "DELETE", query_params=query_params)
         except ApiException as e:
             if e.status == 404:
                 return
-            raise KubectlError(f"delete_by_labels {resource} -l {selector} failed ({e.status}): {e.reason}") from e
-        _log_operation(f"delete_by_labels {resource} -l {selector}", t0)
+            raise KubectlError(
+                f"delete_by_labels {resource.plural} -l {selector} failed ({e.status}): {e.reason}"
+            ) from e
+        _log_operation(f"delete_by_labels {resource.plural} -l {selector}", t0)
 
     # -- set_image -----------------------------------------------------------
 
-    def set_image(self, resource: str, name: str, container: str, image: str, *, namespaced: bool = False) -> None:
+    def set_image(self, resource: K8sResource, name: str, container: str, image: str) -> None:
         """Set the container image on a deployment/statefulset."""
         patch_body = {
             "spec": {
@@ -517,28 +366,20 @@ class CloudK8sService:
                 }
             }
         }
-        path = _api_path_for_resource(resource, self.namespace, name=name, cluster_scoped=not namespaced)
-        logger.info("k8s: PATCH set_image %s/%s container=%s image=%s", resource, name, container, image)
+        path = resource.item_path(name, self.namespace)
+        logger.info("k8s: PATCH set_image %s/%s container=%s image=%s", resource.plural, name, container, image)
         t0 = time.monotonic()
         try:
-            self._api_client.call_api(
-                path,
-                "PATCH",
-                body=json.dumps(patch_body),
-                header_params={
-                    "Content-Type": "application/strategic-merge-patch+json",
-                    "Accept": "application/json",
-                },
-                response_type="object",
-                _request_timeout=self.timeout,
+            self._call_api(
+                path, "PATCH", body=json.dumps(patch_body), content_type="application/strategic-merge-patch+json"
             )
         except ApiException as e:
-            raise KubectlError(f"set_image {resource}/{name} failed ({e.status}): {e.reason}") from e
-        _log_operation(f"set_image {resource}/{name}", t0)
+            raise KubectlError(f"set_image {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
+        _log_operation(f"set_image {resource.plural}/{name}", t0)
 
     # -- rollout_restart -----------------------------------------------------
 
-    def rollout_restart(self, resource: str, name: str, *, namespaced: bool = False) -> None:
+    def rollout_restart(self, resource: K8sResource, name: str) -> None:
         """Restart a rollout by patching the restart annotation."""
         now = datetime.now(timezone.utc).isoformat()
         patch_body = {
@@ -552,46 +393,31 @@ class CloudK8sService:
                 }
             }
         }
-        path = _api_path_for_resource(resource, self.namespace, name=name, cluster_scoped=not namespaced)
-        logger.info("k8s: PATCH rollout_restart %s/%s", resource, name)
+        path = resource.item_path(name, self.namespace)
+        logger.info("k8s: PATCH rollout_restart %s/%s", resource.plural, name)
         t0 = time.monotonic()
         try:
-            self._api_client.call_api(
-                path,
-                "PATCH",
-                body=json.dumps(patch_body),
-                header_params={
-                    "Content-Type": "application/strategic-merge-patch+json",
-                    "Accept": "application/json",
-                },
-                response_type="object",
-                _request_timeout=self.timeout,
+            self._call_api(
+                path, "PATCH", body=json.dumps(patch_body), content_type="application/strategic-merge-patch+json"
             )
         except ApiException as e:
-            raise KubectlError(f"rollout_restart {resource}/{name} failed ({e.status}): {e.reason}") from e
-        _log_operation(f"rollout_restart {resource}/{name}", t0)
+            raise KubectlError(f"rollout_restart {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
+        _log_operation(f"rollout_restart {resource.plural}/{name}", t0)
 
     # -- rollout_status ------------------------------------------------------
 
-    def rollout_status(self, resource: str, name: str, *, timeout: float = 600.0, namespaced: bool = False) -> None:
+    def rollout_status(self, resource: K8sResource, name: str, *, timeout: float = 600.0) -> None:
         """Wait for a rollout to complete by polling deployment conditions."""
         deadline = Deadline.from_seconds(timeout)
         backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
-        path = _api_path_for_resource(resource, self.namespace, name=name, cluster_scoped=not namespaced)
-        logger.info("k8s: rollout_status %s/%s timeout=%.0fs", resource, name, timeout)
+        path = resource.item_path(name, self.namespace)
+        logger.info("k8s: rollout_status %s/%s timeout=%.0fs", resource.plural, name, timeout)
 
         while not deadline.expired():
             try:
-                resp = self._api_client.call_api(
-                    path,
-                    "GET",
-                    header_params={"Accept": "application/json"},
-                    response_type="object",
-                    _request_timeout=self.timeout,
-                )
-                obj = resp[0]
+                obj = self._call_api(path, "GET")
             except ApiException as e:
-                raise KubectlError(f"rollout_status {resource}/{name} failed ({e.status}): {e.reason}") from e
+                raise KubectlError(f"rollout_status {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
 
             status = obj.get("status", {})
             spec = obj.get("spec", {})
@@ -605,12 +431,12 @@ class CloudK8sService:
                 observed = status.get("observedGeneration", 0)
                 generation = obj.get("metadata", {}).get("generation", 0)
                 if observed >= generation:
-                    logger.info("k8s: rollout_status %s/%s complete", resource, name)
+                    logger.info("k8s: rollout_status %s/%s complete", resource.plural, name)
                     return
 
             time.sleep(min(backoff.next_interval(), max(0, deadline.remaining_seconds())))
 
-        raise KubectlError(f"rollout_status {resource}/{name} timed out after {timeout}s")
+        raise KubectlError(f"rollout_status {resource.plural}/{name} timed out after {timeout}s")
 
     # -- events --------------------------------------------------------------
 

@@ -7,10 +7,78 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 
 
 class KubectlError(RuntimeError):
     """Error raised for kubectl command failures."""
+
+
+class K8sResource(Enum):
+    """Kubernetes resource type with API metadata.
+
+    Each member carries the information needed to construct API URL paths:
+    (api_group, api_version, is_namespaced, plural, kind).
+
+    Use the enum members instead of freeform strings when calling K8sService
+    methods like get_json, list_json, delete, etc.
+    """
+
+    # Core v1
+    PODS = ("", "v1", True, "pods", "Pod")
+    CONFIGMAPS = ("", "v1", True, "configmaps", "ConfigMap")
+    SERVICES = ("", "v1", True, "services", "Service")
+    SECRETS = ("", "v1", True, "secrets", "Secret")
+    EVENTS = ("", "v1", True, "events", "Event")
+    NAMESPACES = ("", "v1", False, "namespaces", "Namespace")
+    NODES = ("", "v1", False, "nodes", "Node")
+    SERVICE_ACCOUNTS = ("", "v1", True, "serviceaccounts", "ServiceAccount")
+
+    # Apps v1
+    DEPLOYMENTS = ("apps", "v1", True, "deployments", "Deployment")
+    STATEFULSETS = ("apps", "v1", True, "statefulsets", "StatefulSet")
+
+    # Policy v1
+    PDBS = ("policy", "v1", True, "poddisruptionbudgets", "PodDisruptionBudget")
+
+    # RBAC v1
+    CLUSTER_ROLES = ("rbac.authorization.k8s.io", "v1", False, "clusterroles", "ClusterRole")
+    CLUSTER_ROLE_BINDINGS = ("rbac.authorization.k8s.io", "v1", False, "clusterrolebindings", "ClusterRoleBinding")
+
+    # CoreWeave custom resources
+    NODE_POOLS = ("compute.coreweave.com", "v1alpha1", False, "nodepools", "NodePool")
+
+    def __init__(self, api_group: str, api_version: str, is_namespaced: bool, plural: str, kind: str) -> None:
+        self.api_group = api_group
+        self.api_version = api_version
+        self.is_namespaced = is_namespaced
+        self.plural = plural
+        self.kind = kind
+
+    def api_base(self) -> str:
+        """URL prefix for this resource type (e.g. '/api/v1' or '/apis/apps/v1')."""
+        if self.api_group:
+            return f"/apis/{self.api_group}/{self.api_version}"
+        return f"/api/{self.api_version}"
+
+    def collection_path(self, namespace: str | None = None) -> str:
+        """URL path for listing/creating resources."""
+        base = self.api_base()
+        if self.is_namespaced and namespace:
+            return f"{base}/namespaces/{namespace}/{self.plural}"
+        return f"{base}/{self.plural}"
+
+    def item_path(self, name: str, namespace: str | None = None) -> str:
+        """URL path for a specific resource by name."""
+        return f"{self.collection_path(namespace)}/{name}"
+
+    @classmethod
+    def from_kind(cls, kind: str) -> K8sResource:
+        """Look up a resource by its manifest kind string."""
+        for member in cls:
+            if member.kind == kind:
+                return member
+        raise ValueError(f"Unknown kind: {kind!r}")
 
 
 @dataclass

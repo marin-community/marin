@@ -32,6 +32,7 @@ from iris.cluster.controller.transitions import (
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
+from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
@@ -307,7 +308,7 @@ class ServiceTestHarness:
         expected_hash = hashlib.sha256(task_id.to_wire().encode()).hexdigest()[:16]
         best_name: str | None = None
         best_attempt = -1
-        for pod in self.k8s.list_json("pod"):
+        for pod in self.k8s.list_json(K8sResource.PODS):
             labels = pod.get("metadata", {}).get("labels", {})
             if labels.get("iris.task_hash") == expected_hash:
                 attempt = int(labels.get("iris.attempt_id", "0"))
