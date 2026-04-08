@@ -44,6 +44,7 @@ from fray.v2 import current_client
 from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
+from marin.utils import fsspec_exists
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,13 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
             assert False, "Should not get here"
 
         for name, dataset in validation_sets.items():
+            output_file = os.path.join(config.output_path, name, "outputs.jsonl.gz")
+            success_file = output_file + ".SUCCESS"
+            if fsspec_exists(success_file):
+                if jax.process_index() == 0:
+                    logger.info(f"Skipping {name}: already completed")
+                continue
+
             loader = DataLoader(
                 dataset,
                 config.trainer.eval_batch_size,
@@ -153,7 +161,6 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
                 axis_resources=compute_axis_mapping,
             )
 
-            output_file = os.path.join(config.output_path, name, "outputs.jsonl.gz")
             cm = fsspec.open(output_file, "wt", compression="gzip") if jax.process_index() == 0 else nullcontext()
             with cm as f:
                 for batch in loader:
@@ -201,6 +208,8 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
 
             if jax.process_index() == 0:
                 logger.info(f"Saved logprobs to {output_file}")
+                with fsspec.open(success_file, "w") as marker:
+                    marker.write("")
 
     levanter.tracker.current_tracker().finish()
 
@@ -231,6 +240,7 @@ def default_save_logprobs(
     checkpoint_is_hf: bool,
     per_device_batch_size: int = 4,
     top_k: int | None = None,
+    max_eval_length: int = 4096,
     name: str | None = None,
 ) -> ExecutorStep:
     """Creates an ExecutorStep that saves per-token logprobs to disk."""
@@ -246,6 +256,7 @@ def default_save_logprobs(
                 checkpoint_is_hf=checkpoint_is_hf,
                 model=model,
                 data=data,
+                max_eval_length=max_eval_length,
                 trainer=TrainerConfig(
                     tracker=NoopConfig(),
                     ray=RayConfig(auto_start_cluster=False),

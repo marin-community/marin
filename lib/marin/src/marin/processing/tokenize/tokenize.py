@@ -22,6 +22,7 @@ from iris.marin_fs import open_url
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig
 from fray.v2.local_backend import LocalClient
+from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -385,7 +386,7 @@ def tokenize(config: TokenizeConfigBase):
         )
 
         # Broadcast the tokenizer to all workers via ZephyrContext
-        ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
+        ctx.put("tokenizer", load_tokenizer(config.tokenizer))
 
         tokenize_start = time.monotonic()
         shard_paths = ctx.execute(temp_shards)
