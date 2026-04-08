@@ -604,6 +604,7 @@ class CloudGcpService:
         validate_tpu_create(request, self._valid_zones, self._valid_accelerator_types)
 
         node_spec: dict = {
+            "parent": f"projects/{self._project_id}/locations/{request.zone}",
             "node": {
                 "acceleratorType": request.accelerator_type,
                 "runtimeVersion": request.runtime_version,
