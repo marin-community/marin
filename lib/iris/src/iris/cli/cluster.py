@@ -210,6 +210,20 @@ def cluster(ctx):
 # =============================================================================
 
 
+@cluster.command("list")
+def cluster_list():
+    """List available cluster configurations."""
+    from rigging.config_discovery import list_cluster_configs
+
+    configs = list_cluster_configs()
+    if not configs:
+        click.echo("No cluster configurations found.")
+        return
+    click.echo("Available clusters:")
+    for name, path in sorted(configs.items()):
+        click.echo(f"  {name:30s} {path}")
+
+
 @cluster.command("start")
 @click.option("--local", is_flag=True, help="Create a local cluster for testing that mimics the original config")
 @click.pass_context

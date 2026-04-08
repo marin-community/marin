@@ -140,7 +140,12 @@ def require_controller_url(ctx: click.Context) -> str:
 @click.option("--traceback", "show_traceback", is_flag=True, help="Show full stack traces on errors")
 @click.option("--controller-url", help="Controller URL (e.g., http://localhost:10000)")
 @click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config file")
-@click.option("--cluster", "cluster_name", default=None, help="Cluster name for token lookup")
+@click.option(
+    "--cluster",
+    "cluster_name",
+    default=None,
+    help="Cluster name (resolves config automatically) or used for token lookup",
+)
 @click.pass_context
 def iris(
     ctx,
@@ -160,6 +165,17 @@ def iris(
         configure_logging(level=_logging_module.DEBUG)
     else:
         configure_logging(level=_logging_module.INFO)
+
+    # Resolve cluster name to config file if no explicit config or URL given
+    if cluster_name and not config_file and not controller_url:
+        from rigging.config_discovery import resolve_cluster_config
+
+        try:
+            resolved = resolve_cluster_config(cluster_name)
+            logger.info("Resolved cluster %r to config: %s", cluster_name, resolved)
+            config_file = str(resolved)
+        except FileNotFoundError:
+            pass  # Fall through to token-only mode; error will surface if a command needs a controller
 
     # Validate mutually exclusive options
     if controller_url and config_file:

@@ -1,4 +1,6 @@
 # Iris local configuration for development testing
+# Usage: iris --cluster=local cluster start --local
+#   (or: iris --config=lib/iris/examples/local.yaml cluster start --local)
 # Usage with zephyr: --backend=iris --cluster=lib/iris/examples/local.yaml
 # Will be converted to local mode by iris cluster start --local
 

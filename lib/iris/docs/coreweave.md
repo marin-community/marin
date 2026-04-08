@@ -137,6 +137,10 @@ environment variables automatically.
 ### Step 3: Start the cluster
 
 ```bash
+# Using cluster name (works from any directory):
+iris --cluster=coreweave cluster start
+
+# Using explicit config path:
 iris --config=lib/iris/examples/coreweave.yaml cluster start
 ```
 
@@ -151,14 +155,16 @@ This is fully idempotent. It creates/reconciles:
 ### Step 4: Use the cluster
 
 ```bash
-iris --config=lib/iris/examples/coreweave.yaml cluster status
-iris --config=lib/iris/examples/coreweave.yaml cluster dashboard
+iris --cluster=coreweave cluster status
+iris --cluster=coreweave cluster dashboard
+# (or: iris --config=lib/iris/examples/coreweave.yaml cluster status / dashboard)
 ```
 
 ### Step 5: Stop
 
 ```bash
-iris --config=lib/iris/examples/coreweave.yaml cluster stop
+iris --cluster=coreweave cluster stop
+# (or: iris --config=lib/iris/examples/coreweave.yaml cluster stop)
 ```
 
 Deletes worker Pods and controller resources. NodePools are left in place (they
