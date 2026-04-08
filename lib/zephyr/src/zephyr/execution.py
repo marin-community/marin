@@ -991,7 +991,7 @@ class ZephyrWorker:
         self._polling_thread.start()
 
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
-        """Read the live subprocess sidecar and return a snapshot if changed.
+        """Read the live subprocess counter file and return a snapshot if changed.
 
         Called once per heartbeat. While ``_subprocess_counter_file`` is set,
         the subprocess flushes its counter dict to that path every
@@ -999,21 +999,21 @@ class ZephyrWorker:
         + rename. We re-read it on each beat, compare to the last reported
         value, and emit a fresh ``CounterSnapshot`` only when something has
         actually changed — heartbeats with ``None`` are cheap on the
-        coordinator side. A missing or partially-written sidecar (race
+        coordinator side. A missing or partially-written counter file (race
         against the atomic rename, file already cleaned up post-task) is
         treated as an empty snapshot; the post-shard ``report_result`` call
         is the source of truth for the final per-task values.
         """
-        sidecar = self._subprocess_counter_file
+        counter_file = self._subprocess_counter_file
         current: dict[str, int] = {}
-        if sidecar is not None:
+        if counter_file is not None:
             try:
-                with open(sidecar, "rb") as f:
+                with open(counter_file, "rb") as f:
                     current = cloudpickle.load(f)
             except (FileNotFoundError, EOFError, pickle.UnpicklingError):
                 pass
             except Exception:
-                logger.warning("Failed to read counter sidecar %s", sidecar, exc_info=True)
+                logger.warning("Failed to read counter file %s", counter_file, exc_info=True)
 
         if current == self._last_reported_counters:
             return None
@@ -1213,7 +1213,7 @@ class ZephyrWorker:
             with open(result_file, "rb") as f:
                 result_or_error, child_counters = cloudpickle.load(f)
 
-            # Clear the sidecar pointer BEFORE returning so any heartbeat
+            # Clear the counter file pointer BEFORE returning so any heartbeat
             # racing between this point and the report_result call in
             # _poll_loop reads an empty snapshot rather than stale subprocess
             # data — otherwise the live counters would be double-counted on
