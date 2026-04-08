@@ -31,7 +31,7 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
-      4:   { min_slices: 3, max_slices: 1024 }
+      4:   { buffer_slices: 3, max_slices: 1024 }
       8:   { max_slices: 512 }
       16:  { max_slices: 256 }
 ```
@@ -48,7 +48,7 @@ The pool name (`v5e-preemptible`) is an operator-chosen label, independent of th
 - **priority**: `base_priority + (tier_index × 10)` where tier_index is the 0-based position in sorted sizes
 - **quota_pool**: `{pool_name}/{zone}` (e.g., `v5e-preemptible/europe-west4-b`). Per-zone because GCP quota is per-zone — a failure in one zone should not block allocation in another.
 - **allocation_tier**: `tier_index + 1` (1-based)
-- **min_slices**: from size entry, default 0
+- **buffer_slices**: from size entry, default 0
 - **max_slices**: from size entry (required)
 - **zone, region**: set on `slice_template.gcp.zone` and `worker.attributes`
 

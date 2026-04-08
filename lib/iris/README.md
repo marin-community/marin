@@ -367,7 +367,7 @@ scale_groups:
       device_variant: v5litepod-4
       device_count: 4
       preemptible: true
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 10
     slice_template:
       gcp:
@@ -382,7 +382,7 @@ scale_groups:
       disk: 100GB
       device_type: cpu
       preemptible: false
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 2
     slice_template:
       manual:

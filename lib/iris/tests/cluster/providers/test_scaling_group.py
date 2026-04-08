@@ -95,7 +95,7 @@ def scale_group_config() -> config_pb2.ScaleGroupConfig:
     """A standard scale group configuration for tests."""
     config = config_pb2.ScaleGroupConfig(
         name="test-group",
-        min_slices=1,
+        buffer_slices=1,
         max_slices=5,
     )
     config.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
@@ -108,7 +108,7 @@ def unbounded_config() -> config_pb2.ScaleGroupConfig:
     """A scale group with no min/max constraints."""
     config = config_pb2.ScaleGroupConfig(
         name="unbounded-group",
-        min_slices=0,
+        buffer_slices=0,
         max_slices=100,
     )
     config.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
@@ -289,26 +289,15 @@ class TestScalingGroupScalingPolicy:
         # After cooldown expires
         assert group.can_scale_up(timestamp=Timestamp.from_ms(1015000))
 
-    def test_can_scale_down_when_above_min(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """can_scale_down() returns True when above min_slices."""
-        discovered = [make_fake_slice_handle("slice-001"), make_fake_slice_handle("slice-002")]
-        platform = make_mock_platform(slices_to_discover=discovered)
-        group = ScalingGroup(scale_group_config, platform)
-        group.reconcile()
-
-        assert group.slice_count() == 2
-        assert scale_group_config.min_slices == 1
-        assert group.can_scale_down()
-
-    def test_cannot_scale_down_at_min_slices(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """can_scale_down() returns False when at min_slices."""
+    def test_can_scale_down_always_allowed(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """can_scale_down() always returns True (target_capacity gates actual scale-down)."""
         discovered = [make_fake_slice_handle("slice-001")]
         platform = make_mock_platform(slices_to_discover=discovered)
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
 
-        assert group.slice_count() == 1  # min_slices
-        assert not group.can_scale_down()
+        assert group.slice_count() == 1
+        assert group.can_scale_down()
 
     def test_scale_down_rate_limited_by_token_bucket(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """acquire_scale_down_token() returns False when the token bucket is exhausted."""
@@ -744,7 +733,7 @@ class TestScalingGroupAvailability:
         config = _with_resources(
             config_pb2.ScaleGroupConfig(
                 name="test-group",
-                min_slices=0,
+                buffer_slices=0,
                 max_slices=2,
             ),
         )
@@ -784,7 +773,7 @@ class TestScalingGroupAvailability:
         config = _with_resources(
             config_pb2.ScaleGroupConfig(
                 name="test-group",
-                min_slices=0,
+                buffer_slices=0,
                 max_slices=1,
             ),
         )
@@ -879,7 +868,7 @@ class TestScalingGroupAvailability:
         config = _with_resources(
             config_pb2.ScaleGroupConfig(
                 name="test-group",
-                min_slices=0,
+                buffer_slices=0,
                 max_slices=10,
             ),
         )
@@ -906,7 +895,7 @@ class TestScalingGroupAvailability:
         config = _with_resources(
             config_pb2.ScaleGroupConfig(
                 name="test-group",
-                min_slices=0,
+                buffer_slices=0,
                 max_slices=10,
             ),
         )
@@ -930,7 +919,7 @@ class TestScalingGroupAvailability:
         config = _with_resources(
             config_pb2.ScaleGroupConfig(
                 name="test-group",
-                min_slices=0,
+                buffer_slices=0,
                 max_slices=1,
             ),
         )
@@ -1232,7 +1221,7 @@ def _make_slice_handle(
 def _make_multi_vm_config(num_vms: int = 4) -> config_pb2.ScaleGroupConfig:
     config = config_pb2.ScaleGroupConfig(
         name="multi-vm-group",
-        min_slices=0,
+        buffer_slices=0,
         max_slices=10,
         num_vms=num_vms,
     )

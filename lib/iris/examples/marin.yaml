@@ -54,12 +54,12 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
-      4:   { min_slices: 3, max_slices: 1024 }
+      4:   { buffer_slices: 2, max_slices: 1024 }
       8:   { max_slices: 512 }
       16:  { max_slices: 256 }
       32:  { max_slices: 128 }
       64:  { max_slices: 64 }
-      128: { min_slices: 1, max_slices: 32 }
+      128: { buffer_slices: 1, max_slices: 32 }
       256: { max_slices: 16 }
 
   # v6e — europe-west4-a, us-east1-d, us-east5-b
@@ -74,12 +74,12 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv6e
     sizes:
-      4:   { min_slices: 1, max_slices: 1024 }
+      4:   { buffer_slices: 2, max_slices: 1024 }
       8:   { max_slices: 512 }
       16:  { max_slices: 256 }
       32:  { max_slices: 128 }
       64:  { max_slices: 64 }
-      128: { min_slices: 1, max_slices: 32 }
+      128: { buffer_slices: 1, max_slices: 32 }
       256: { max_slices: 16 }
 
   # v5p — us-central1-a, us-east5-a
@@ -94,7 +94,7 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5
     sizes:
-      8:    { min_slices: 8, max_slices: 2048 }
+      8:    { buffer_slices: 8, max_slices: 2048 }
       16:   { max_slices: 1024 }
       32:   { max_slices: 512 }
       64:   { max_slices: 256 }
@@ -116,7 +116,7 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: tpu-ubuntu2204-base
     sizes:
-      8:    { min_slices: 2, max_slices: 2048 }
+      8:    { buffer_slices: 2, max_slices: 2048 }
       16:   { max_slices: 1024 }
       32:   { max_slices: 512 }
       64:   { max_slices: 256 }
@@ -137,7 +137,7 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: tpu-ubuntu2204-base
     sizes:
-      32: { min_slices: 0, max_slices: 4 }
+      32: { buffer_slices: 0, max_slices: 4 }
 
 # ---------------------------------------------------------------------------
 # Non-TPU scale groups (not part of tpu_pools)
@@ -150,7 +150,7 @@ scale_groups:
     num_vms: 1
     priority: 500
     resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
-    min_slices: 0
+    buffer_slices: 2
     max_slices: 4
     slice_template:
       gcp:

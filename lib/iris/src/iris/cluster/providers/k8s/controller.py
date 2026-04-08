@@ -543,7 +543,7 @@ class K8sControllerProvider:
             pool_name = self._nodepool_name(name)
             expected_names.add(pool_name)
             num_vms = max(1, sg.slice_template.num_vms)
-            min_nodes = sg.min_slices * num_vms
+            min_nodes = sg.buffer_slices * num_vms
             max_nodes = sg.max_slices * num_vms
             futures.append(
                 self._executor.submit(

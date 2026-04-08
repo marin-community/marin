@@ -44,7 +44,7 @@ scale_groups:
       device_variant: v5litepod-4
       device_count: 4
       capacity_type: on-demand
-    min_slices: 2
+    buffer_slices: 2
     max_slices: 10
     slice_template:
       num_vms: 1
@@ -63,7 +63,7 @@ scale_groups:
       device_variant: v5litepod-16
       device_count: 8
       capacity_type: preemptible
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 5
     slice_template:
       num_vms: 4
@@ -82,7 +82,7 @@ scale_groups:
       device_variant: v6e-256
       device_count: 8
       capacity_type: preemptible
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 0  # ZERO MAX - simulates no quota available
     slice_template:
       num_vms: 64
@@ -101,7 +101,7 @@ scale_groups:
       device_variant: a100-40gb
       device_count: 1
       capacity_type: on-demand
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 0
     slice_template:
       num_vms: 1
@@ -120,7 +120,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 4
       capacity_type: preemptible
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 1
     slice_template:
       num_vms: 1
@@ -138,7 +138,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 4
       capacity_type: preemptible
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 1
     slice_template:
       num_vms: 1
@@ -156,7 +156,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 4
       capacity_type: preemptible
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 1
     slice_template:
       num_vms: 1

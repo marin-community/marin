@@ -289,7 +289,7 @@ def test_bootstrap_state_with_worker_config():
     """With worker_config, the slice enters BOOTSTRAPPING state when cloud is READY."""
     sg_config = make_scale_group_config(
         name="test-group",
-        min_slices=0,
+        buffer_slices=0,
         max_slices=4,
         zones=["us-central1-a"],
     )
@@ -336,7 +336,7 @@ def test_no_bootstrap_without_worker_config():
     """Without worker_config, slices go directly to READY when cloud is READY."""
     sg_config = make_scale_group_config(
         name="test-group",
-        min_slices=0,
+        buffer_slices=0,
         max_slices=4,
         zones=["us-central1-a"],
     )
@@ -392,7 +392,7 @@ def test_pending_counter_prevents_double_scaleup():
 
     sg_config = make_scale_group_config(
         name="test-group",
-        min_slices=1,
+        buffer_slices=0,
         max_slices=4,
         zones=["us-central1-a"],
     )
@@ -413,7 +413,7 @@ def test_pending_counter_prevents_double_scaleup():
     demand = make_demand_entries(1)
     t0 = Timestamp.from_ms(1_000_000)
 
-    # First run_once: demand=1, current=0, below min_slices -> scale up.
+    # First run_once: demand=1, current=0 -> scale up.
     decisions1 = autoscaler.run_once(demand, {}, t0)
     assert len(decisions1) == 1
     assert decisions1[0].action == ScalingAction.SCALE_UP

@@ -373,9 +373,9 @@ class ScalingGroup:
         return None
 
     @property
-    def min_slices(self) -> int:
-        """Minimum number of VM groups to maintain."""
-        return self._config.min_slices
+    def buffer_slices(self) -> int:
+        """Extra slices to keep warm beyond current demand."""
+        return self._config.buffer_slices
 
     @property
     def max_slices(self) -> int:
@@ -765,7 +765,7 @@ class ScalingGroup:
 
         Args:
             worker_status_map: Map of worker_id to worker status
-            target_capacity: Target number of slices (typically max(demand, min_slices))
+            target_capacity: Target number of slices (typically min(demand + buffer_slices, max_slices))
             timestamp: Current timestamp for idle calculation
 
         Returns:
@@ -788,7 +788,6 @@ class ScalingGroup:
             return []
 
         if not self.can_scale_down(timestamp):
-            logger.debug("Scale group %s: scale down blocked (at min_slices)", self.name)
             return []
 
         terminated: list[SliceHandle] = []
@@ -798,12 +797,6 @@ class ScalingGroup:
         for slice_state in idle_slices:
             # Stop once we've scaled down to the target
             if ready - len(terminated) <= target_capacity:
-                break
-
-            # Stop once we've scaled down to min_slices
-            with self._slices_lock:
-                current_count = len(self._slices)
-            if current_count <= self._config.min_slices:
                 break
 
             # Verify idle before acquiring a rate-limit token so that
@@ -884,14 +877,10 @@ class ScalingGroup:
     def can_scale_down(self, timestamp: Timestamp | None = None) -> bool:
         """Check if scale-down is allowed.
 
-        Scale-down is blocked if already at min_slices.
+        Always allowed — the caller's target_capacity (which incorporates
+        buffer_slices) determines how far down we actually go.
         Per-operation rate limiting is handled by acquire_scale_down_token().
         """
-        timestamp = timestamp or Timestamp.now()
-        with self._slices_lock:
-            count = len(self._slices)
-        if count <= self._config.min_slices:
-            return False
         return True
 
     def acquire_scale_up_token(self, timestamp: Timestamp | None = None) -> bool:
