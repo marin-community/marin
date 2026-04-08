@@ -852,11 +852,6 @@ class ClusterState:
         )
 
 
-# After this many consecutive fetch failures, the LogCollector/ResourceCollector
-# will auto-untrack a pod (it's likely been deleted).
-_COLLECTOR_MAX_CONSECUTIVE_FAILURES = 5
-
-
 @dataclass
 class _LogPod:
     """A pod tracked by LogCollector for incremental log fetching."""
@@ -872,14 +867,23 @@ class LogCollector:
     """Background log fetcher that pushes entries to the LogService.
 
     Runs on its own daemon thread with a bounded ThreadPoolExecutor.
-    The sync loop calls track()/untrack() to manage the set of pods;
-    the collector independently fetches logs and pushes them via the
-    LogPusher without blocking the scheduling path.
+    The sync loop calls set_pods() once per cycle with the authoritative
+    set of pods to track. The collector diffs against its internal state,
+    does a final fetch for removed pods, and starts tracking new ones.
+    This avoids drift between what the sync loop thinks is tracked and
+    what the collector is actually polling.
     """
 
-    def __init__(self, kubectl: K8sService, log_pusher: LogPusherProtocol, concurrency: int = 8):
+    def __init__(
+        self,
+        kubectl: K8sService,
+        log_pusher: LogPusherProtocol,
+        concurrency: int = 8,
+        poll_interval: float = 15.0,
+    ):
         self._kubectl = kubectl
         self._log_pusher = log_pusher
+        self._poll_interval = poll_interval
         self._pods: dict[str, _LogPod] = {}
         self._lock = threading.Lock()
         self._pod_locks: dict[str, threading.Lock] = {}
@@ -888,23 +892,29 @@ class LogCollector:
         self._thread = threading.Thread(target=self._run, daemon=True, name="log-collector")
         self._thread.start()
 
-    def track(self, pod_name: str, task_id: JobName, attempt_id: int) -> None:
-        """Start collecting logs for a pod."""
-        key = f"{task_id.to_wire()}:{attempt_id}"
-        with self._lock:
-            if key not in self._pods:
-                self._pods[key] = _LogPod(pod_name=pod_name, task_id=task_id, attempt_id=attempt_id)
-                self._pod_locks[key] = threading.Lock()
+    def set_pods(self, pods: dict[str, _LogPod]) -> None:
+        """Declare the authoritative set of pods to collect logs for.
 
-    def untrack(self, task_id: JobName, attempt_id: int) -> None:
-        """Stop collecting logs for a pod. Does one final incremental fetch."""
-        key = f"{task_id.to_wire()}:{attempt_id}"
+        New keys are added. Keys absent from `pods` are removed after a
+        synchronous final log fetch. Existing keys are preserved (keeping
+        their cursor state).
+        """
         with self._lock:
-            pod = self._pods.pop(key, None)
-            pod_lock = self._pod_locks.pop(key, None)
-        if pod is not None and pod_lock is not None:
-            with pod_lock:
-                self._fetch_and_store(pod)
+            removed_keys = self._pods.keys() - pods.keys()
+            removed = [(key, self._pods[key], self._pod_locks.get(key)) for key in removed_keys]
+            for key in removed_keys:
+                del self._pods[key]
+                self._pod_locks.pop(key, None)
+            for key, pod in pods.items():
+                if key not in self._pods:
+                    self._pods[key] = pod
+                    self._pod_locks[key] = threading.Lock()
+
+        # Final fetch for removed pods (outside lock to avoid holding it during I/O).
+        for _key, pod, pod_lock in removed:
+            if pod_lock is not None:
+                with pod_lock:
+                    self._fetch_and_store(pod)
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -914,33 +924,19 @@ class LogCollector:
                 with self._lock:
                     pod_lock = self._pod_locks.get(key)
                 if pod_lock is not None:
-                    self._executor.submit(self._guarded_fetch, pod, pod_lock)
-            self._stop.wait(timeout=2.0)
+                    self._executor.submit(self._guarded_fetch, key, pod, pod_lock)
+            self._stop.wait(timeout=self._poll_interval)
 
-    def _guarded_fetch(self, pod: _LogPod, pod_lock: threading.Lock) -> None:
+    def _guarded_fetch(self, key: str, pod: _LogPod, pod_lock: threading.Lock) -> None:
         if not pod_lock.acquire(blocking=False):
             return
         try:
             self._fetch_and_store(pod)
-            if pod.consecutive_failures >= _COLLECTOR_MAX_CONSECUTIVE_FAILURES:
-                key = f"{pod.task_id.to_wire()}:{pod.attempt_id}"
-                logger.info(
-                    "LogCollector: auto-untracking pod %s after %d consecutive failures",
-                    pod.pod_name,
-                    pod.consecutive_failures,
-                )
-                with self._lock:
-                    self._pods.pop(key, None)
-                    self._pod_locks.pop(key, None)
         finally:
             pod_lock.release()
 
     def _fetch_and_store(self, pod: _LogPod) -> bool:
-        """Fetch logs since last timestamp and advance. Must be called under pod lock.
-
-        Returns True on success, False on failure. Consecutive failures are tracked
-        so the collector can stop polling deleted pods.
-        """
+        """Fetch logs since last timestamp and advance. Must be called under pod lock."""
         try:
             result = self._kubectl.stream_logs(pod.pod_name, container="task", since_time=pod.last_timestamp)
             if result.lines:
@@ -952,13 +948,8 @@ class LogCollector:
             return True
         except Exception as e:
             pod.consecutive_failures += 1
-            logger.warning(
-                "LogCollector: fetch failed for pod %s (%d/%d): %s",
-                pod.pod_name,
-                pod.consecutive_failures,
-                _COLLECTOR_MAX_CONSECUTIVE_FAILURES,
-                e,
-            )
+            if pod.consecutive_failures <= 1:
+                logger.warning("LogCollector: fetch failed for pod %s: %s", pod.pod_name, e)
             return False
 
     def close(self) -> None:
@@ -968,17 +959,17 @@ class LogCollector:
 
 
 class ResourceCollector:
-    """Background resource usage collector that writes to TaskUpdate-compatible storage.
+    """Background resource usage collector.
 
-    Same pattern as LogCollector: runs on its own daemon thread with a bounded
-    ThreadPoolExecutor. Calls kubectl top pod for each tracked pod and stores
-    the latest reading so the sync loop can pick it up without blocking.
+    Same set_pods() pattern as LogCollector: the sync loop declares the
+    authoritative set of running pods once per cycle, and the collector
+    diffs internally. Pods removed from the set have their cached results
+    cleaned up immediately.
     """
 
     def __init__(self, kubectl: K8sService, concurrency: int = 8):
         self._kubectl = kubectl
         self._pods: dict[str, str] = {}  # cursor_key -> pod_name
-        self._consecutive_failures: dict[str, int] = {}  # cursor_key -> failure count
         self._results: dict[str, job_pb2.ResourceUsage] = {}  # cursor_key -> latest reading
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -986,17 +977,17 @@ class ResourceCollector:
         self._thread = threading.Thread(target=self._run, daemon=True, name="resource-collector")
         self._thread.start()
 
-    def track(self, pod_name: str, task_id: JobName, attempt_id: int) -> None:
-        key = f"{task_id.to_wire()}:{attempt_id}"
-        with self._lock:
-            self._pods[key] = pod_name
+    def set_pods(self, pods: dict[str, str]) -> None:
+        """Declare the authoritative set of pods to collect resources for.
 
-    def untrack(self, task_id: JobName, attempt_id: int) -> None:
-        key = f"{task_id.to_wire()}:{attempt_id}"
+        `pods` maps cursor_key -> pod_name. Keys absent from `pods` are
+        removed along with their cached results.
+        """
         with self._lock:
-            self._pods.pop(key, None)
-            self._results.pop(key, None)
-            self._consecutive_failures.pop(key, None)
+            removed_keys = self._pods.keys() - pods.keys()
+            for key in removed_keys:
+                self._results.pop(key, None)
+            self._pods = dict(pods)
 
     def get(self, task_id: JobName, attempt_id: int) -> job_pb2.ResourceUsage | None:
         """Return the latest resource reading for a pod (non-blocking)."""
@@ -1031,24 +1022,9 @@ class ResourceCollector:
                 memory_mb=mem_bytes // (1024 * 1024),
             )
             with self._lock:
-                self._results[key] = usage
-                self._consecutive_failures[key] = 0
-            return
-
-        # top_pod returned None (metrics unavailable) or raised — treat as a miss.
-        with self._lock:
-            count = self._consecutive_failures.get(key, 0) + 1
-            self._consecutive_failures[key] = count
-        if count >= _COLLECTOR_MAX_CONSECUTIVE_FAILURES:
-            logger.info(
-                "ResourceCollector: auto-untracking pod %s after %d consecutive misses",
-                pod_name,
-                count,
-            )
-            with self._lock:
-                self._pods.pop(key, None)
-                self._results.pop(key, None)
-                self._consecutive_failures.pop(key, None)
+                # Only store if the key is still tracked (may have been removed by set_pods).
+                if key in self._pods:
+                    self._results[key] = usage
 
     def close(self) -> None:
         self._stop.set()
@@ -1086,6 +1062,7 @@ class K8sTaskProvider:
     task_env: dict[str, str] = field(default_factory=dict)
     log_pusher: LogPusherProtocol | None = None
     poll_concurrency: int = 32
+    log_poll_interval: float = 15.0
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _log_collector: LogCollector | None = field(default=None, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
@@ -1100,23 +1077,10 @@ class K8sTaskProvider:
 
     def _ensure_log_collector(self) -> LogCollector | None:
         if self._log_collector is None and self.log_pusher is not None:
-            self._log_collector = LogCollector(self.kubectl, self.log_pusher, concurrency=self.poll_concurrency)
+            self._log_collector = LogCollector(
+                self.kubectl, self.log_pusher, concurrency=self.poll_concurrency, poll_interval=self.log_poll_interval
+            )
         return self._log_collector
-
-    def _track_pod(self, pod_name: str, task_id: JobName, attempt_id: int, phase: str) -> None:
-        """Register a pod with background collectors, creating them lazily."""
-        log_collector = self._ensure_log_collector()
-        if log_collector is not None:
-            log_collector.track(pod_name, task_id, attempt_id)
-        if phase == "Running":
-            self._ensure_resource_collector().track(pod_name, task_id, attempt_id)
-
-    def _untrack_pod(self, task_id: JobName, attempt_id: int) -> None:
-        """Remove a pod from all background collectors."""
-        if self._log_collector is not None:
-            self._log_collector.untrack(task_id, attempt_id)
-        if self._resource_collector is not None:
-            self._resource_collector.untrack(task_id, attempt_id)
 
     def sync(self, batch: DirectProviderBatch) -> DirectProviderSyncResult:
         """Sync task state: apply new pods, delete killed pods, poll running pods."""
@@ -1511,14 +1475,26 @@ class K8sTaskProvider:
         period-to-FAILED path for legitimately Succeeded pods.
 
         Log fetching and resource usage collection are handled by background
-        LogCollector and ResourceCollector threads. This method only reads pod
-        phase and the latest cached resource snapshot.
+        LogCollector and ResourceCollector threads. After building updates,
+        this method calls set_pods() on each collector with the authoritative
+        set of non-terminal pods, so the collectors can never drift.
         """
         if not running:
+            # No running tasks — clear all collectors.
+            log_collector = self._ensure_log_collector()
+            if log_collector is not None:
+                log_collector.set_pods({})
+            if self._resource_collector is not None:
+                self._resource_collector.set_pods({})
             return []
 
         pods_by_name: dict[str, dict] = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
         updates: list[TaskUpdate] = []
+
+        # Build up the authoritative pod sets for collectors.
+        log_pods: dict[str, _LogPod] = {}
+        resource_pods: dict[str, str] = {}  # cursor_key -> pod_name
+        terminal_log_pods: dict[str, _LogPod] = {}  # pods that completed this cycle
 
         for entry in running:
             pod_name = _pod_name(entry.task_id, entry.attempt_id)
@@ -1543,7 +1519,6 @@ class K8sTaskProvider:
                     continue
                 # Grace exhausted — pod is truly gone.
                 self._pod_not_found_counts.pop(cursor_key, None)
-                self._untrack_pod(entry.task_id, entry.attempt_id)
                 updates.append(
                     TaskUpdate(
                         task_id=entry.task_id,
@@ -1558,15 +1533,19 @@ class K8sTaskProvider:
             update = _task_update_from_pod(entry, pod)
             phase = pod.get("status", {}).get("phase", "")
 
-            self._track_pod(pod_name, entry.task_id, entry.attempt_id, phase)
+            if phase not in ("Succeeded", "Failed"):
+                log_pods[cursor_key] = _LogPod(pod_name=pod_name, task_id=entry.task_id, attempt_id=entry.attempt_id)
+                if phase == "Running":
+                    resource_pods[cursor_key] = pod_name
+            else:
+                terminal_log_pods[cursor_key] = _LogPod(
+                    pod_name=pod_name, task_id=entry.task_id, attempt_id=entry.attempt_id
+                )
 
             # Read latest cached resource usage (non-blocking).
             resource_usage = None
             if self._resource_collector is not None:
                 resource_usage = self._resource_collector.get(entry.task_id, entry.attempt_id)
-
-            if phase in ("Succeeded", "Failed"):
-                self._untrack_pod(entry.task_id, entry.attempt_id)
 
             updates.append(
                 TaskUpdate(
@@ -1578,6 +1557,18 @@ class K8sTaskProvider:
                     resource_usage=resource_usage or update.resource_usage,
                 )
             )
+
+        # Sync collectors with the authoritative pod sets.
+        # set_pods() does a final log fetch for pods that drop out of the set.
+        # For pods that completed this cycle, we include them first so they're
+        # added (if not already tracked), then call set_pods again without them
+        # to trigger the final fetch on removal.
+        log_collector = self._ensure_log_collector()
+        if log_collector is not None:
+            if terminal_log_pods:
+                log_collector.set_pods({**log_pods, **terminal_log_pods})
+            log_collector.set_pods(log_pods)
+        self._ensure_resource_collector().set_pods(resource_pods)
 
         return updates
 
