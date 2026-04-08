@@ -36,6 +36,7 @@ from iris.log_server.server import LogServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.service import CloudK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider, _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
+from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, TaskAttempt
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
@@ -132,7 +133,7 @@ def _cpu_resources() -> job_pb2.ResourceSpecProto:
 
 
 def _get_iris_pods(k8s: InMemoryK8sService) -> list[dict]:
-    return k8s.list_json("pod", labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
+    return k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
 
 
 def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
