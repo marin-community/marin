@@ -130,7 +130,7 @@ tpu_pools:
   v4-reserved:
     family: v4
     zones: [us-central2-b]
-    base_priority: 100
+    base_priority: 1000
     resources: { cpu: 240, ram: 400GB, disk: 100GB, capacity_type: reserved }
     slice_template:
       gcp:
@@ -148,7 +148,7 @@ scale_groups:
   cpu_vm_e2_highmem_2_ondemand:
     zones: [us-central1-a, us-central2-b, us-east1-b, us-east1-d, us-east5-a, us-east5-b, us-west1-a, us-west4-a, europe-west4-a, europe-west4-b]
     num_vms: 1
-    priority: 1000
+    priority: 500
     resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
     min_slices: 0
     max_slices: 4
