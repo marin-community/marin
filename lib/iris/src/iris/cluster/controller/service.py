@@ -1093,15 +1093,14 @@ class ControllerServiceImpl:
         jobs: list[JobRow],
         task_summaries: dict[JobName, TaskJobSummary],
         autoscaler_pending_hints: dict[str, PendingHint],
-        parent_job_ids: set[str] | None = None,
+        parent_job_ids: set[str],
     ) -> list[job_pb2.JobStatus]:
-        parents = parent_job_ids or set()
         return [
             self._job_to_proto(
                 j,
                 task_summaries.get(j.job_id),
                 autoscaler_pending_hints,
-                has_children=j.job_id.to_wire() in parents,
+                has_children=j.job_id.to_wire() in parent_job_ids,
             )
             for j in jobs
         ]
@@ -1126,7 +1125,7 @@ class ControllerServiceImpl:
         reverse = sort_dir == controller_pb2.Controller.SORT_DIRECTION_DESC
 
         offset = max(request.offset, 0)
-        limit = min(request.limit, 500) if request.limit > 0 else 0
+        limit = max(request.limit, 0)
 
         state_filter_int: int | None = None
         if state_filter:

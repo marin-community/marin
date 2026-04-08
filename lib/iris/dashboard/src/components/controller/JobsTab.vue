@@ -87,6 +87,13 @@ function saveExpandedJobs() {
 
 async function fetchAll() {
   await fetchJobs()
+  // Prune children whose parent is no longer on this page
+  const currentNames = new Set(jobs.value.map(j => j.name))
+  for (const key of childJobsMap.value.keys()) {
+    if (!currentNames.has(key)) {
+      childJobsMap.value.delete(key)
+    }
+  }
   await refreshExpandedChildren()
 }
 
@@ -118,7 +125,6 @@ const expandableJobs = computed(() => jobsWithChildren(allJobs.value))
 async function fetchChildJobs(jobName: string, jobId: string) {
   const resp = await controllerRpcCall<ListJobsResponse>('ListJobs', {
     parentJobId: jobId,
-    limit: 500,
   })
   childJobsMap.value.set(jobName, resp.jobs ?? [])
 }
