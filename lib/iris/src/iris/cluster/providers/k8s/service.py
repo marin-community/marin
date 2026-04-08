@@ -226,7 +226,11 @@ class CloudK8sService:
                 ) from e
 
             try:
-                if exists:
+                if exists and res is K8sResource.PODS:
+                    # Pods are mostly immutable — delete and recreate.
+                    api.delete(name=name, **({"namespace": ns} if ns else {}))
+                    api.create(body=manifest, **({"namespace": ns} if ns else {}))
+                elif exists:
                     api.patch(
                         body=manifest,
                         name=name,
@@ -236,7 +240,7 @@ class CloudK8sService:
                 else:
                     api.create(body=manifest, **({"namespace": ns} if ns else {}))
             except ApiException as e:
-                op = "patch" if exists else "create"
+                op = "apply" if res is K8sResource.PODS else ("patch" if exists else "create")
                 raise KubectlError(
                     f"apply {op} {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}"
                 ) from e
