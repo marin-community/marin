@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 
 from iris.cluster.service_mode import ServiceMode
 
+from iris.cluster.providers.k8s.service import _KIND_TO_PLURAL, _RESOURCE_INFO
 from iris.cluster.providers.k8s.types import (
     ExecResult,
     KubectlError,
@@ -46,24 +47,19 @@ VALID_RESOURCE_TYPES = frozenset(
     }
 )
 
-# kubectl accepts plural resource names (e.g. "pods") but manifests use
-# singular kind (e.g. "Pod"). Normalize for consistent internal lookup.
-_PLURAL_TO_SINGULAR = {
-    "pods": "pod",
-    "nodes": "node",
-    "configmaps": "configmap",
-    "events": "event",
-    "deployments": "deployment",
-    "replicasets": "replicaset",
-    "statefulsets": "statefulset",
-    "daemonsets": "daemonset",
-    "jobs": "job",
-    "services": "service",
-    "nodepools": "nodepool",
-    "poddisruptionbudgets": "poddisruptionbudget",
-    "pdb": "poddisruptionbudget",
-    "pdbs": "poddisruptionbudget",
-}
+# Build a normalization table from _RESOURCE_INFO and _KIND_TO_PLURAL:
+# map every known key (plural, singular alias, Kind name) to a canonical
+# singular form (e.g. "pods" -> "pod", "pdb" -> "poddisruptionbudget",
+# "PodDisruptionBudget" -> "poddisruptionbudget").
+_PLURAL_TO_SINGULAR: dict[str, str] = {}
+for _key, (_grp, _ver, _ns, _plural) in _RESOURCE_INFO.items():
+    _singular = _plural.rstrip("s") if _plural.endswith("s") else _plural
+    _PLURAL_TO_SINGULAR[_key] = _singular
+    _PLURAL_TO_SINGULAR[_plural] = _singular
+# Also map Kind names (e.g. "PodDisruptionBudget" -> "poddisruptionbudget")
+for _kind, _plural in _KIND_TO_PLURAL.items():
+    _singular = _plural.rstrip("s") if _plural.endswith("s") else _plural
+    _PLURAL_TO_SINGULAR[_kind.lower()] = _singular
 
 
 # ---------------------------------------------------------------------------
@@ -145,9 +141,14 @@ class NodePoolConfig:
 
 
 def _normalize_resource(resource: str) -> str:
-    """Normalize a resource type string to its singular lowercase form."""
+    """Normalize a resource type string to its singular lowercase form.
+
+    Raises KubectlError if the resource type is not recognized by _RESOURCE_INFO.
+    """
     lower = resource.lower()
-    return _PLURAL_TO_SINGULAR.get(lower, lower)
+    if lower not in _PLURAL_TO_SINGULAR:
+        raise KubectlError(f"Unknown resource type: {resource!r}")
+    return _PLURAL_TO_SINGULAR[lower]
 
 
 def _extract_resource_requests(spec: dict) -> dict[str, int]:
@@ -325,6 +326,9 @@ class InMemoryK8sService:
         kind = manifest.get("kind", "")
         if not kind:
             raise KubectlError("Manifest missing 'kind'")
+
+        if kind not in _KIND_TO_PLURAL:
+            raise KubectlError(f"Unknown manifest kind: {kind!r}")
 
         name = manifest.get("metadata", {}).get("name", "")
         if not name:

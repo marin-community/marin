@@ -316,15 +316,15 @@ class CloudK8sService:
     # -- apply ---------------------------------------------------------------
 
     def apply_json(self, manifest: dict) -> None:
-        """Create-or-patch a manifest, matching kubectl apply (client-side) semantics.
+        """Apply a manifest using GET-then-create-or-patch, matching kubectl apply.
 
-        Tries POST (create) first. On 409 Conflict (already exists), falls back
-        to strategic merge PATCH. This avoids SSA-specific RBAC requirements.
+        Checks if the resource exists first. If it does, patches it; if not,
+        creates it. This matches kubectl apply's RBAC requirements: only needs
+        ``get`` + ``patch`` for existing resources, or ``get`` + ``create`` for new ones.
         """
         kind = manifest.get("kind", "?")
         name = manifest["metadata"]["name"]
         item_path = _api_path_for_manifest(manifest, self.namespace)
-        # Collection path is the item path without the trailing /{name}
         collection_path = item_path.rsplit("/", 1)[0]
 
         headers_json = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -333,36 +333,46 @@ class CloudK8sService:
 
         logger.info("k8s: apply %s/%s", kind, name)
         t0 = time.monotonic()
+
+        # Check if resource exists
+        exists = False
         try:
             self._api_client.call_api(
-                collection_path,
-                "POST",
-                body=body,
-                header_params=headers_json,
+                item_path,
+                "GET",
+                header_params={"Accept": "application/json"},
                 response_type="object",
                 _request_timeout=self.timeout,
             )
+            exists = True
         except ApiException as e:
-            if e.status == 409:
-                # Already exists — update via strategic merge patch
-                try:
-                    self._api_client.call_api(
-                        item_path,
-                        "PATCH",
-                        body=body,
-                        header_params=headers_patch,
-                        response_type="object",
-                        _request_timeout=self.timeout,
-                    )
-                except ApiException as patch_err:
-                    raise KubectlError(
-                        f"apply patch {kind}/{name} failed ({patch_err.status}): "
-                        f"{patch_err.reason} {(patch_err.body or '')[:500]}"
-                    ) from patch_err
-            else:
+            if e.status != 404:
                 raise KubectlError(
-                    f"apply create {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}"
+                    f"apply get {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}"
                 ) from e
+
+        try:
+            if exists:
+                self._api_client.call_api(
+                    item_path,
+                    "PATCH",
+                    body=body,
+                    header_params=headers_patch,
+                    response_type="object",
+                    _request_timeout=self.timeout,
+                )
+            else:
+                self._api_client.call_api(
+                    collection_path,
+                    "POST",
+                    body=body,
+                    header_params=headers_json,
+                    response_type="object",
+                    _request_timeout=self.timeout,
+                )
+        except ApiException as e:
+            op = "patch" if exists else "create"
+            raise KubectlError(f"apply {op} {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}") from e
         _log_operation(f"apply {kind}/{name}", t0)
 
     # -- get -----------------------------------------------------------------

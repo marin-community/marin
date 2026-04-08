@@ -101,6 +101,31 @@ def test_unknown_resource_type(svc: InMemoryK8sService):
         svc.apply_json(manifest)
 
 
+def test_unknown_manifest_kind(svc: InMemoryK8sService):
+    """apply_json rejects manifests whose kind is not in _KIND_TO_PLURAL."""
+    manifest = {"apiVersion": "v1", "kind": "FancyWidget", "metadata": {"name": "w1"}}
+    with pytest.raises(KubectlError, match=r"Unknown manifest kind.*FancyWidget"):
+        svc.apply_json(manifest)
+
+
+def test_unknown_resource_type_on_get(svc: InMemoryK8sService):
+    """get_json rejects unknown resource type strings."""
+    with pytest.raises(KubectlError, match=r"Unknown resource type.*'foobar'"):
+        svc.get_json("foobar", "x")
+
+
+def test_unknown_resource_type_on_list(svc: InMemoryK8sService):
+    """list_json rejects unknown resource type strings."""
+    with pytest.raises(KubectlError, match=r"Unknown resource type.*'widgets'"):
+        svc.list_json("widgets")
+
+
+def test_unknown_resource_type_on_delete(svc: InMemoryK8sService):
+    """delete rejects unknown resource type strings."""
+    with pytest.raises(KubectlError, match=r"Unknown resource type.*'bogus'"):
+        svc.delete("bogus", "x")
+
+
 def test_deployment_node_pool_validation(svc: InMemoryK8sService):
     """Node pool validation works for nested pod specs (Deployments, Jobs)."""
     manifest = _deployment_manifest("d1", node_pool="nonexistent-pool")
