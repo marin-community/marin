@@ -56,6 +56,7 @@ def provider(k8s, log_pusher):
         default_image="myrepo/iris:latest",
         cache_dir="/cache",
         log_pusher=log_pusher,
+        log_poll_interval=1.0,
     )
     yield p
     p.close()
