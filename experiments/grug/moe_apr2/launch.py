@@ -81,7 +81,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
             base_path=os.path.join(config.output_path, "checkpoints"),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
-            keep=[{"every": 1000}],
+            keep=[{"every": 20000}],
         ),
     )
 
@@ -1073,8 +1073,61 @@ def create_d1024_v2_bs128() -> list[ExecutorStep]:
     return [ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config)]
 
 
+def create_3e20_sweep() -> list[ExecutorStep]:
+    """3e20 isoflop sweep at bs=256 on v4-128."""
+    steps = []
+    budget = 3e20
+    batch_size = 256
+
+    for hidden_dim in [1280, 1536, 1792, 2048, 2304]:
+        model_cfg = HEURISTIC.build_model_config(hidden_dim)
+        fpt = _compute_flops_per_token(model_cfg)
+        tokens = budget / (3 * fpt)
+        train_steps = max(1, round(tokens / (batch_size * SEQ_LEN)))
+        optimizer = HEURISTIC.build_optimizer_config(batch_size, tokens, hidden_dim)
+
+        run_id = f"isoflop-moe-v16-3e+20-d{hidden_dim}"
+        config = GrugMoeLaunchConfig(
+            model=versioned(model_cfg),
+            data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+            output_path=this_output_path(),
+            run_id=run_id,
+            resources=versioned(ResourceConfig.with_tpu("v4-128")),
+            steps=versioned(train_steps),
+            batch_size=versioned(batch_size),
+            seed=versioned(0),
+            mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+            tracker=WandbConfig(
+                project="dial_moe",
+                tags=["grug", "moe-core", "isoflop", "v16", "gqa4", f"budget=3e+20", f"d={hidden_dim}"],
+                group="isoflop-moe-v16",
+                name=run_id,
+            ),
+            optimizer=versioned(optimizer),
+            grug_trainer=versioned(
+                GrugTrainerConfig(
+                    z_loss_weight=HEURISTIC.z_loss_weight,
+                    ema_beta=None,
+                    log_every=1,
+                )
+            ),
+            eval=versioned(
+                GrugEvalConfig(
+                    eval_batch_size=64 if hidden_dim >= 2048 else 512,
+                    steps_per_eval=1000,
+                    max_eval_batches=64 if hidden_dim >= 2048 else 8,
+                    eval_current=True,
+                    eval_ema=False,
+                )
+            ),
+        )
+        steps.append(ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config))
+
+    return steps
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=create_v2_resume(1e20, 2048, "v2-a71c6a", 36000, suffix="-v3", tpu_type="v4-128"),
-        description="v16: resume 1e20-d2048-v3 from v2 step-36000 on v4-128",
+        steps=create_3e20_sweep(),
+        description="v16: 3e20 isoflop sweep d1280-d2304 bs=256 on v4-128",
     )
