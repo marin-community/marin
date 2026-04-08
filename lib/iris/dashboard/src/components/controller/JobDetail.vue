@@ -99,16 +99,26 @@ async function fetchData() {
     jobRequest.value = jobResp.request ?? null
     tasks.value = tasksResp.tasks ?? []
 
-    // Fetch child jobs using the job name as a prefix filter
-    const jobName = jobResp.job.name
-    if (jobName) {
-      const childResp = await controllerRpcCall<ListJobsResponse>('ListJobs', {
-        nameFilter: jobName,
-        limit: 500,
-      })
-      if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
-      const prefix = jobName + '/'
-      descendantJobs.value = (childResp.jobs ?? []).filter(j => j.name.startsWith(prefix))
+    // Fetch all descendants by walking the job tree level by level via parentJobId
+    const jobId = jobResp.job.jobId
+    if (jobId) {
+      const result: JobStatus[] = []
+      const queue = [jobId]
+      while (queue.length > 0) {
+        const parentId = queue.shift()!
+        const resp = await controllerRpcCall<ListJobsResponse>('ListJobs', {
+          parentJobId: parentId,
+        })
+        if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
+        const children = resp.jobs ?? []
+        result.push(...children)
+        for (const child of children) {
+          if (child.hasChildren) {
+            queue.push(child.jobId)
+          }
+        }
+      }
+      descendantJobs.value = result
     } else {
       descendantJobs.value = []
     }

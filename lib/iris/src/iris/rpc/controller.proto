@@ -152,6 +152,7 @@ message Controller {
     // Filtering
     string name_filter = 5;  // Filter by job name (substring match)
     string state_filter = 6; // Filter by state (exact match, e.g., "running")
+    string parent_job_id = 7; // Filter to children of this job ID
   }
 
   message ListJobsResponse {

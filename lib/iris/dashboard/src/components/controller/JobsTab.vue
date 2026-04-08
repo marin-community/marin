@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
-import { useControllerRpc } from '@/composables/useRpc'
+import { useControllerRpc, controllerRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName } from '@/types/status'
 import type { JobState } from '@/types/status'
@@ -85,32 +85,73 @@ function saveExpandedJobs() {
   }
 }
 
-onMounted(fetchJobs)
-useAutoRefresh(fetchJobs, 30_000)
+async function fetchAll() {
+  await fetchJobs()
+  // Prune children whose parent is no longer on this page
+  const currentNames = new Set(jobs.value.map(j => j.name))
+  for (const key of childJobsMap.value.keys()) {
+    if (!currentNames.has(key)) {
+      childJobsMap.value.delete(key)
+    }
+  }
+  await refreshExpandedChildren()
+}
+
+onMounted(fetchAll)
+useAutoRefresh(fetchAll, 30_000)
 
 watch([page, sortField, sortDir, nameFilter, stateFilter], () => {
-  fetchJobs()
+  childJobsMap.value = new Map()
+  fetchAll()
 })
 
 watch(stateFilter, () => {
   page.value = 0
 })
 
-// -- Job tree --
+// -- Job tree (lazy-loaded children) --
 
-const flattenedJobs = computed(() => flattenJobTree(jobs.value, expandedJobs.value))
+const childJobsMap = ref<Map<string, JobStatus[]>>(new Map())
 
-// Track which jobs have children for expand/collapse UI
-const expandableJobs = computed(() => jobsWithChildren(jobs.value))
+const allJobs = computed(() => {
+  const extra = [...childJobsMap.value.values()].flat()
+  return [...jobs.value, ...extra]
+})
+
+const flattenedJobs = computed(() => flattenJobTree(allJobs.value, expandedJobs.value))
+
+const expandableJobs = computed(() => jobsWithChildren(allJobs.value))
+
+async function fetchChildJobs(jobName: string, jobId: string) {
+  const resp = await controllerRpcCall<ListJobsResponse>('ListJobs', {
+    parentJobId: jobId,
+  })
+  childJobsMap.value.set(jobName, resp.jobs ?? [])
+}
+
+async function refreshExpandedChildren() {
+  const expanded = expandedJobs.value
+  const all = allJobs.value
+  for (const jobName of expanded) {
+    const job = all.find(j => j.name === jobName)
+    if (job) {
+      await fetchChildJobs(jobName, job.jobId)
+    }
+  }
+}
 
 // -- Interactions --
 
-function toggleExpanded(jobName: string) {
+async function toggleExpanded(jobName: string) {
   const next = new Set(expandedJobs.value)
   if (next.has(jobName)) {
     next.delete(jobName)
   } else {
     next.add(jobName)
+    const job = allJobs.value.find(j => j.name === jobName)
+    if (job && !childJobsMap.value.has(jobName)) {
+      await fetchChildJobs(jobName, job.jobId)
+    }
   }
   expandedJobs.value = next
   saveExpandedJobs()

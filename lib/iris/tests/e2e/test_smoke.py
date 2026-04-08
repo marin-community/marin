@@ -265,6 +265,57 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
     smoke_cluster.kill(running)
 
 
+def _parent_with_two_children():
+    """Parent callable that submits two child jobs and waits for both."""
+    from iris.client.client import iris_ctx
+    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+
+    ctx = iris_ctx()
+    res = ResourceSpec(cpu=1, memory="1g")
+    env = EnvironmentSpec()
+
+    job_a = ctx.client.submit(
+        Entrypoint.from_command("sh", "-c", "echo CHILD_A"),
+        "child-a",
+        res,
+        environment=env,
+    )
+    job_b = ctx.client.submit(
+        Entrypoint.from_command("sh", "-c", "echo CHILD_B"),
+        "child-b",
+        res,
+        environment=env,
+    )
+    job_a.wait(timeout=30, raise_on_failure=True)
+    job_b.wait(timeout=30, raise_on_failure=True)
+
+
+def test_dashboard_job_expand(smoke_cluster, smoke_page, smoke_screenshot):
+    """Expanding a parent job in the jobs tab shows its children."""
+    parent = smoke_cluster.submit(_parent_with_two_children, "smoke-expand-parent")
+    smoke_cluster.wait(parent, timeout=smoke_cluster.job_timeout)
+
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
+    wait_for_dashboard_ready(smoke_page)
+    assert_visible(smoke_page, "text=smoke-expand-parent")
+
+    # The parent should have an expand arrow (▶)
+    row = smoke_page.locator("tr", has_text="smoke-expand-parent")
+    expand_btn = row.get_by_role("button", name="▶")
+    expand_btn.click()
+
+    # After clicking, children should appear (wait for the child names to render)
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('child-a') && " "document.body.textContent.includes('child-b')",
+        timeout=10000,
+    )
+
+    # Verify the arrow changed to ▼
+    row.get_by_role("button", name="▼").wait_for(timeout=5000)
+
+    smoke_screenshot("job-expand", "Jobs tab with expanded parent showing child-a and child-b indented beneath")
+
+
 def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
     """SUCCEEDED job detail page."""
     job = smoke_cluster.submit(TestJobs.quick, "smoke-detail")

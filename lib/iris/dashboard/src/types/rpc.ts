@@ -120,6 +120,7 @@ export interface JobStatus {
   taskCount?: number
   completedCount?: number
   pendingReason?: string
+  hasChildren?: boolean
 }
 
 // -- Controller RPC Responses --
