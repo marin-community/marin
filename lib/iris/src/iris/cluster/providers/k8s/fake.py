@@ -727,6 +727,7 @@ class InMemoryK8sService:
         *,
         container: str | None = None,
         since_time: datetime | None = None,
+        limit_bytes: int | None = None,
     ) -> KubectlLogResult:
         self._check_failure("stream_logs")
         pod_exists = any(name == pod_name for (_, name) in self._resources)

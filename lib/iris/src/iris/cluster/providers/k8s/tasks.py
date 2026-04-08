@@ -874,16 +874,20 @@ class LogCollector:
     what the collector is actually polling.
     """
 
+    _DEFAULT_LIMIT_BYTES: int = 100_000
+
     def __init__(
         self,
         kubectl: K8sService,
         log_pusher: LogPusherProtocol,
         concurrency: int = 8,
         poll_interval: float = 15.0,
+        limit_bytes: int | None = _DEFAULT_LIMIT_BYTES,
     ):
         self._kubectl = kubectl
         self._log_pusher = log_pusher
         self._poll_interval = poll_interval
+        self._limit_bytes = limit_bytes
         self._pods: dict[str, _LogPod] = {}
         self._lock = threading.Lock()
         self._pod_locks: dict[str, threading.Lock] = {}
@@ -938,7 +942,9 @@ class LogCollector:
     def _fetch_and_store(self, pod: _LogPod) -> bool:
         """Fetch logs since last timestamp and advance. Must be called under pod lock."""
         try:
-            result = self._kubectl.stream_logs(pod.pod_name, container="task", since_time=pod.last_timestamp)
+            result = self._kubectl.stream_logs(
+                pod.pod_name, container="task", since_time=pod.last_timestamp, limit_bytes=self._limit_bytes
+            )
             if result.lines:
                 entries = [_kubectl_log_line_to_log_entry(kll, pod.attempt_id) for kll in result.lines]
                 key = task_log_key(TaskAttempt(task_id=pod.task_id, attempt_id=pod.attempt_id))
