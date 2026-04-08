@@ -16,13 +16,23 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
 
-import kubernetes
-import kubernetes.client
-import kubernetes.config
-import kubernetes.stream
-from kubernetes.client.exceptions import ApiException
-from kubernetes.dynamic import DynamicClient
-from kubernetes.dynamic.exceptions import NotFoundError
+try:
+    import kubernetes
+    import kubernetes.client
+    import kubernetes.config
+    import kubernetes.stream
+    from kubernetes.client.exceptions import ApiException
+    from kubernetes.dynamic import DynamicClient
+    from kubernetes.dynamic.exceptions import NotFoundError
+except ImportError:
+    kubernetes = None  # type: ignore[assignment]
+    ApiException = Exception  # type: ignore[assignment,misc]
+    NotFoundError = Exception  # type: ignore[assignment,misc]
+
+    class DynamicClient:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs) -> None:
+            raise ImportError("Install iris[controller] to use CloudK8sService")
+
 
 from iris.cluster.providers.k8s.types import (
     ExecResult,
