@@ -9,15 +9,6 @@ the attributes.  Handles two cases:
   (e.g., __label__hq), filter on threshold.
 - Span removal produces attributes (e.g., duplicate_text spans). Remove text spans.
 - Document removal via attribute produced by deduplication.
-
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --memory=512MB --cluster=us-central2 \\
-    --entry-point consolidate \\
-    lib/marin/src/marin/processing/classification/consolidate.py \\
-    --input_path gs://marin-us-central2/processed/documents \\
-    --output_path gs://marin-us-central2/processed/filtered \\
-    --filters '[{"type": "classify", "attribute_path": "gs://...attributes/quality",
-                 "name": "fasttext", "label": "__label__hq", "lower_threshold": 0.5}]'
 """
 
 import logging

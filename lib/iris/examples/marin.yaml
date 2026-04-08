@@ -132,7 +132,7 @@ tpu_pools:
 # ---------------------------------------------------------------------------
 scale_groups:
   # Low-priority fallback CPU VM group for on-demand scheduling.
-  # e2-highmem-2: best on-demand RAM/$ on GCP (~$0.09/hr, 8 GB/vCPU).
+  # n2-highmem-2: 2 vCPU / 16 GiB, available in all target zones including us-central2-b.
   cpu_vm_e2_highmem_2_ondemand:
     zones: [us-central1-a, us-central2-b, us-east1-b, us-east1-d, us-east5-a, us-east5-b, us-west1-a, us-west4-a, europe-west4-a, europe-west4-b]
     num_vms: 1
@@ -144,4 +144,4 @@ scale_groups:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         mode: GCP_SLICE_MODE_VM
-        machine_type: e2-highmem-2
+        machine_type: n2-highmem-2
