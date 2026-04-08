@@ -354,7 +354,7 @@ def test_gc_drops_oldest_segments_by_count(tmp_path: Path):
         store._executor.shutdown(wait=True)
         store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
 
-        remaining_files = sorted(store._log_dir.glob("logs_*_*.parquet"))
+        remaining_files = sorted(store._log_dir.glob("logs_*.parquet"))
         assert len(remaining_files) <= 2
 
         # The most recent data should still be readable.
@@ -381,7 +381,7 @@ def test_gc_drops_oldest_segments_by_bytes(tmp_path: Path):
         store._executor.shutdown(wait=True)
         store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
 
-        parquet_files = sorted(store._log_dir.glob("logs_*_*.parquet"))
+        parquet_files = sorted(store._log_dir.glob("logs_*.parquet"))
         assert len(parquet_files) == 4
         one_file_size = parquet_files[0].stat().st_size
 
@@ -389,7 +389,7 @@ def test_gc_drops_oldest_segments_by_bytes(tmp_path: Path):
         store._max_local_bytes = one_file_size * 2
         store._gc_local_segments()
 
-        remaining = sorted(store._log_dir.glob("logs_*_*.parquet"))
+        remaining = sorted(store._log_dir.glob("logs_*.parquet"))
         assert len(remaining) <= 2
 
         # The most recent data should still be readable.
@@ -415,7 +415,7 @@ def test_flush_creates_parquet_segment(tmp_path: Path):
         # Wait for background flush.
         store._executor.shutdown(wait=True)
         store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
-        parquet_files = list(log_dir.glob("logs_*_*.parquet"))
+        parquet_files = list(log_dir.glob("logs_*.parquet"))
         assert len(parquet_files) >= 1
     finally:
         store.close()
@@ -523,7 +523,7 @@ def test_small_segments_are_consolidated(tmp_path: Path):
             store._executor.shutdown(wait=True)
             store._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="log_flush")
 
-        parquet_files = list(log_dir.glob("logs_*_*.parquet"))
+        parquet_files = list(log_dir.glob("logs_*.parquet"))
         # All 5 batches should be consolidated into a single parquet file.
         assert len(parquet_files) == 1, f"Expected 1 consolidated file, got {len(parquet_files)}"
 
