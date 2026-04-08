@@ -145,7 +145,7 @@ def build_memray_transform_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_p
 
 def build_pyspy_dump_cmd(pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False) -> list[str]:
     """Build a py-spy dump command for thread-level stack traces."""
-    cmd = [py_spy_bin, "dump", "--pid", pid]
+    cmd = [py_spy_bin, "dump", "--pid", pid, "--subprocesses"]
     if include_locals:
         cmd.append("--locals")
     return cmd
