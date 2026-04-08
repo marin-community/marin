@@ -174,7 +174,15 @@ def execute_shard(task_file: str, result_file: str) -> None:
             total_shards=task.total_shards,
         )
     except Exception as e:
+        # Cloudpickling an exception drops ``__traceback__``, so the parent
+        # re-raise would otherwise show only the parent's stack with no hint
+        # at the subprocess origin. Attach the formatted traceback as a note
+        # — ``__notes__`` survives pickling and Python prints it inline when
+        # the exception eventually propagates.
+        import traceback
+
         logger.exception("Subprocess shard execution failed")
+        e.add_note(f"--- subprocess traceback ---\n{traceback.format_exc().rstrip()}")
         result_or_error = e
     finally:
         stop_event.set()
