@@ -205,45 +205,43 @@ class CloudK8sService:
     # -- apply ---------------------------------------------------------------
 
     def apply_json(self, manifest: dict) -> None:
-        """Apply a manifest using GET-then-create-or-patch, matching kubectl apply."""
+        """Apply a manifest via server-side apply, matching kubectl apply semantics.
+
+        Uses SSA (application/apply-patch+yaml) which correctly reconciles
+        field deletions, unlike merge-patch which only adds/overwrites.
+        Pods are immutable so they get delete-then-create instead.
+        """
         kind = manifest.get("kind", "?")
         name = manifest["metadata"]["name"]
         res = K8sResource.from_kind(manifest["kind"])
-        api = self._resource_api(res)
         ns = manifest["metadata"].get("namespace", self.namespace) if res.is_namespaced else None
 
         logger.info("k8s: apply %s/%s", kind, name)
         with slow_log(logger, f"apply {kind}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
-            exists = False
             try:
-                api.get(name=name, **({"namespace": ns} if ns else {}))
-                exists = True
-            except NotFoundError:
-                pass
-            except ApiException as e:
-                raise KubectlError(
-                    f"apply get {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}"
-                ) from e
-
-            try:
-                if exists and res is K8sResource.PODS:
-                    # Pods are mostly immutable — delete and recreate.
-                    api.delete(name=name, **({"namespace": ns} if ns else {}))
-                    api.create(body=manifest, **({"namespace": ns} if ns else {}))
-                elif exists:
-                    api.patch(
+                if res is K8sResource.PODS:
+                    self._apply_pod(res, name, ns, manifest)
+                else:
+                    self._dyn.server_side_apply(
+                        resource=self._resource_api(res),
                         body=manifest,
                         name=name,
-                        content_type="application/merge-patch+json",
+                        field_manager="iris",
+                        force_conflicts=True,
                         **({"namespace": ns} if ns else {}),
                     )
-                else:
-                    api.create(body=manifest, **({"namespace": ns} if ns else {}))
             except ApiException as e:
-                op = "apply" if res is K8sResource.PODS else ("patch" if exists else "create")
-                raise KubectlError(
-                    f"apply {op} {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}"
-                ) from e
+                raise KubectlError(f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}") from e
+
+    def _apply_pod(self, res: K8sResource, name: str, ns: str | None, manifest: dict) -> None:
+        """Apply a Pod manifest. Pods are mostly immutable, so delete-then-create."""
+        api = self._resource_api(res)
+        ns_kw = {"namespace": ns} if ns else {}
+        try:
+            api.delete(name=name, **ns_kw)
+        except (NotFoundError, ApiException):
+            pass
+        api.create(body=manifest, **ns_kw)
 
     # -- get -----------------------------------------------------------------
 
