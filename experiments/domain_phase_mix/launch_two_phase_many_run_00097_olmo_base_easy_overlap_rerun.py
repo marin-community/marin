@@ -1,14 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Rerun the OLMoBaseEval easy-suite overlap on the original two-phase-many swarm."""
+"""Rerun the OLMoBaseEval easy overlap suite for the original run_00097 seed study."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import logging
-import math
 import os
 import sys
 from dataclasses import asdict, dataclass, replace
@@ -28,13 +27,16 @@ from marin.execution.executor import (
 )
 
 from experiments.domain_phase_mix.determinism_analysis import RESULTS_CSV, RUN_MANIFEST_FILE
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_seed_study import (
+    NAME as SOURCE_EXPERIMENT,
+    build_run_specs as build_run_00097_seed_specs,
+)
 from experiments.domain_phase_mix.mmlu_sl_verb_rerun_common import (
     RESULTS_JSON,
     flatten_eval_results,
     phase_weights_to_columns,
     resolve_unique_checkpoint_root,
 )
-from experiments.domain_phase_mix.two_phase_many_observed_runs import load_original_qsplit240_with_core_baselines
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 from experiments.evals.olmo_base_easy_overlap import (
     OLMO_BASE_EASY_OVERLAP_CACHE_PATH,
@@ -44,18 +46,20 @@ from experiments.evals.olmo_base_easy_overlap import (
 
 logger = logging.getLogger(__name__)
 
-NAME = "pinlin_calvin_xu/data_mixture/ngd3dm2_qsplit240_olmo_base_easy_overlap_rerun"
-DEFAULT_MAX_CONCURRENT = 12
-EVAL_DATASETS_CACHE_PATH = OLMO_BASE_EASY_OVERLAP_CACHE_PATH
+NAME = "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_seed_study_olmo_base_easy_overlap_rerun"
+DEFAULT_MAX_CONCURRENT = 10
 
 
 @dataclass(frozen=True)
-class OriginalSwarmEvalSpec:
-    """Manifest entry for one original-swarm OLMoBaseEval-overlap rerun."""
+class Run00097EvalSpec:
+    """Manifest entry for one original run_00097 seed-sweep overlap rerun."""
 
     run_id: int
     run_name: str
-    cohort: Literal["original_swarm_olmo_base_easy_overlap_rerun"]
+    cohort: Literal["seed_sweep"]
+    trainer_seed: int
+    data_seed: int | None
+    source_run_name: str
     source_experiment: str
     checkpoint_root: str | None
     phase_weights: dict[str, dict[str, float]]
@@ -72,68 +76,44 @@ class SaveRunManifestConfig:
 
 @dataclass(frozen=True)
 class CollectEvalResultsConfig:
-    """Config for flattening eval-harness outputs from the original swarm rerun."""
+    """Config for flattening eval-harness outputs from the original run_00097 seed study."""
 
     output_path: str
     run_specs_json: str
     results_by_run: dict[str, InputName]
 
 
-def build_run_specs() -> list[OriginalSwarmEvalSpec]:
-    """Build rerun specs for the original qsplit240 swarm plus core baselines."""
-    observed_runs = load_original_qsplit240_with_core_baselines()
+def build_run_specs() -> list[Run00097EvalSpec]:
+    """Build rerun specs for the original 10 unfixed-subset run_00097 seed-sweep runs."""
+    original_seed_specs = [spec for spec in build_run_00097_seed_specs() if spec.cohort == "seed_sweep"]
     return [
-        OriginalSwarmEvalSpec(
-            run_id=observed.run_id,
-            run_name=observed.run_name,
-            cohort="original_swarm_olmo_base_easy_overlap_rerun",
-            source_experiment=observed.source_experiment,
+        Run00097EvalSpec(
+            run_id=spec.run_id,
+            run_name=spec.run_name,
+            cohort="seed_sweep",
+            trainer_seed=spec.trainer_seed,
+            data_seed=spec.data_seed,
+            source_run_name=spec.source_run_name,
+            source_experiment=SOURCE_EXPERIMENT,
             checkpoint_root=None,
-            phase_weights=observed.phase_weights,
+            phase_weights=spec.phase_weights,
         )
-        for observed in observed_runs
+        for spec in original_seed_specs
     ]
 
 
-def shard_label(*, shard_index: int, shard_count: int) -> str:
-    """Return a stable user-facing shard label."""
-    return f"shard_{shard_index + 1:02d}of{shard_count:02d}"
-
-
-def select_run_specs_for_shard(
-    run_specs: list[OriginalSwarmEvalSpec], *, shard_index: int, shard_count: int
-) -> list[OriginalSwarmEvalSpec]:
-    """Select one contiguous shard from the full overlap rerun manifest."""
-    if shard_count < 1:
-        raise ValueError(f"shard_count must be >= 1, got {shard_count}")
-    if not 0 <= shard_index < shard_count:
-        raise ValueError(f"shard_index must be in [0, {shard_count}), got {shard_index}")
-
-    shard_size = math.ceil(len(run_specs) / shard_count)
-    start = shard_index * shard_size
-    end = min(start + shard_size, len(run_specs))
-    return run_specs[start:end]
-
-
-def shard_execution_name_prefix(*, name_prefix: str, shard_index: int, shard_count: int) -> str:
-    """Return the executor-side name prefix for shard-local bookkeeping steps."""
-    if shard_count == 1:
-        return name_prefix
-    return f"{name_prefix}/{shard_label(shard_index=shard_index, shard_count=shard_count)}"
-
-
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:
-    parser = argparse.ArgumentParser(description="Rerun the OLMoBaseEval overlap suite for the original swarm.")
+    parser = argparse.ArgumentParser(
+        description="Rerun the OLMoBaseEval overlap suite for the original run_00097 seed study."
+    )
     parser.add_argument("--name-prefix", default=NAME)
     parser.add_argument("--tpu-type", default="v5p-8")
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
-    parser.add_argument("--shard-count", type=int, default=1)
-    parser.add_argument("--shard-index", type=int, default=0)
-    parser.add_argument("--eval-datasets-cache-path", default=EVAL_DATASETS_CACHE_PATH)
+    parser.add_argument("--eval-datasets-cache-path", default=OLMO_BASE_EASY_OVERLAP_CACHE_PATH)
     return parser.parse_known_args()
 
 
-def _resolve_checkpoint_root(spec: OriginalSwarmEvalSpec) -> OriginalSwarmEvalSpec:
+def _resolve_checkpoint_root(spec: Run00097EvalSpec) -> Run00097EvalSpec:
     return replace(
         spec,
         checkpoint_root=resolve_unique_checkpoint_root(
@@ -143,8 +123,8 @@ def _resolve_checkpoint_root(spec: OriginalSwarmEvalSpec) -> OriginalSwarmEvalSp
     )
 
 
-def resolve_checkpoint_roots(run_specs: list[OriginalSwarmEvalSpec]) -> list[OriginalSwarmEvalSpec]:
-    """Resolve the finished checkpoint root for every original-swarm run."""
+def resolve_checkpoint_roots(run_specs: list[Run00097EvalSpec]) -> list[Run00097EvalSpec]:
+    """Resolve the finished checkpoint root for every original run_00097 seed-sweep run."""
     return [_resolve_checkpoint_root(spec) for spec in run_specs]
 
 
@@ -163,28 +143,23 @@ def save_run_manifest(config: SaveRunManifestConfig) -> None:
         json.dump(payload, f, indent=2, sort_keys=True)
 
 
-def create_run_manifest_step(
-    *,
-    step_name_prefix: str,
-    experiment_name: str,
-    run_specs: list[OriginalSwarmEvalSpec],
-) -> ExecutorStep:
+def create_run_manifest_step(*, name_prefix: str, run_specs: list[Run00097EvalSpec]) -> ExecutorStep:
     """Create the manifest writer step."""
     return ExecutorStep(
-        name=f"{step_name_prefix}/run_manifest",
-        description=f"Save original-swarm OLMoBaseEval-overlap rerun manifest ({len(run_specs)} runs)",
+        name=f"{name_prefix}/run_manifest",
+        description=f"Save original run_00097 OLMoBaseEval-overlap rerun manifest ({len(run_specs)} runs)",
         fn=save_run_manifest,
         config=SaveRunManifestConfig(
             output_path=this_output_path(),
-            experiment_name=experiment_name,
+            experiment_name=name_prefix,
             run_specs_json=json.dumps([asdict(spec) for spec in run_specs], sort_keys=True),
         ),
     )
 
 
 def collect_eval_results(config: CollectEvalResultsConfig) -> None:
-    """Write flattened OLMoBaseEval-overlap results for the original swarm rerun."""
-    run_specs = [OriginalSwarmEvalSpec(**spec) for spec in json.loads(config.run_specs_json)]
+    """Write flattened OLMoBaseEval-overlap results for the original run_00097 seed study."""
+    run_specs = [Run00097EvalSpec(**spec) for spec in json.loads(config.run_specs_json)]
     rows: list[dict[str, Any]] = []
 
     for spec in run_specs:
@@ -199,6 +174,9 @@ def collect_eval_results(config: CollectEvalResultsConfig) -> None:
                 "run_id": spec.run_id,
                 "run_name": spec.run_name,
                 "cohort": spec.cohort,
+                "trainer_seed": spec.trainer_seed,
+                "data_seed": spec.data_seed,
+                "source_run_name": spec.source_run_name,
                 "source_experiment": spec.source_experiment,
                 "checkpoint_root": spec.checkpoint_root,
                 **phase_weights_to_columns(spec.phase_weights),
@@ -218,28 +196,15 @@ def main() -> None:
     sys.argv = [sys.argv[0], *remaining]
 
     if os.getenv("CI") is not None:
-        logger.info("Skipping original-swarm OLMoBaseEval-overlap rerun launch in CI environment")
+        logger.info("Skipping original run_00097 OLMoBaseEval-overlap rerun launch in CI environment")
         return
 
-    run_specs = select_run_specs_for_shard(
-        resolve_checkpoint_roots(build_run_specs()),
-        shard_index=args.shard_index,
-        shard_count=args.shard_count,
-    )
-    execution_name_prefix = shard_execution_name_prefix(
-        name_prefix=args.name_prefix,
-        shard_index=args.shard_index,
-        shard_count=args.shard_count,
-    )
-    run_manifest_step = create_run_manifest_step(
-        step_name_prefix=execution_name_prefix,
-        experiment_name=args.name_prefix,
-        run_specs=run_specs,
-    )
+    run_specs = resolve_checkpoint_roots(build_run_specs())
+    run_manifest_step = create_run_manifest_step(name_prefix=args.name_prefix, run_specs=run_specs)
     cache_eval_step = create_cache_eval_datasets_step(
         eval_tasks=OLMO_BASE_EASY_OVERLAP_TASKS,
         gcs_path=args.eval_datasets_cache_path,
-        name_prefix=execution_name_prefix,
+        name_prefix=args.name_prefix,
     )
 
     resource_config = ResourceConfig.with_tpu(args.tpu_type, regions=["us-east5"], zone="us-east5-a")
@@ -262,8 +227,8 @@ def main() -> None:
         results_by_run[spec.run_name] = output_path_of(eval_step, RESULTS_JSON)
 
     collect_step = ExecutorStep(
-        name=f"{execution_name_prefix}/collect_results",
-        description=f"Collect original-swarm OLMoBaseEval-overlap results for {len(run_specs)} runs",
+        name=f"{args.name_prefix}/collect_results",
+        description=f"Collect original run_00097 OLMoBaseEval-overlap results for {len(run_specs)} runs",
         fn=collect_eval_results,
         config=CollectEvalResultsConfig(
             output_path=this_output_path(),
@@ -273,23 +238,18 @@ def main() -> None:
     )
 
     logger.info(
-        "Launching shard %d/%d of the original-swarm OLMoBaseEval-overlap rerun for %d runs on %s with "
-        "max_concurrent=%d. Eval step outputs stay under %s; shard bookkeeping outputs go under %s. "
-        "Outputs will include %s and %s.",
-        args.shard_index + 1,
-        args.shard_count,
+        "Launching original run_00097 OLMoBaseEval-overlap rerun for %d unfixed-subset seed-sweep runs on %s "
+        "with max_concurrent=%d. Outputs will include %s and %s.",
         len(run_specs),
         args.tpu_type,
         args.max_concurrent,
-        args.name_prefix,
-        execution_name_prefix,
         RUN_MANIFEST_FILE,
         RESULTS_CSV,
     )
     executor_main(
         ExecutorMainConfig(max_concurrent=args.max_concurrent),
         steps=[run_manifest_step, cache_eval_step, *eval_steps, collect_step],
-        description=f"{execution_name_prefix}: original-swarm OLMoBaseEval-overlap rerun",
+        description=f"{args.name_prefix}: original run_00097 OLMoBaseEval-overlap rerun",
     )
 
 

@@ -25,6 +25,8 @@ from collections import defaultdict
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
+OLMO_BASE_EASY_OVERLAP_CACHE_PATH = "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1"
+
 OLMO_BASE_EASY_OVERLAP_TASKS = (
     EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),
     EvalTaskConfig("arc_easy", 5, task_alias="arc_easy_5shot"),

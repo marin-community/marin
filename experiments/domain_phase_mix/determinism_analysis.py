@@ -17,6 +17,7 @@ import fsspec
 import numpy as np
 import pandas as pd
 
+from experiments.domain_phase_mix.mmlu_sl_verb_rerun_common import resolve_unique_checkpoint_root
 from experiments.defaults import _truncate_wandb_name
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 from marin.speedrun.speedrun import get_step_times_from_wandb
@@ -61,6 +62,7 @@ PRESERVED_MANIFEST_METADATA_KEYS = (
     "experiment_budget",
     "num_train_steps",
 )
+CHECKPOINT_EVAL_METRICS_PATH = "checkpoints/eval_metrics.jsonl"
 
 
 @dataclass(frozen=True)
@@ -203,6 +205,32 @@ def _resolve_wandb_run_for_manifest_row(
     return None
 
 
+def _load_checkpoint_eval_metrics(*, experiment_name: str, run_name: str) -> tuple[str | None, dict[str, float]]:
+    checkpoint_root: str | None = None
+    try:
+        checkpoint_root = resolve_unique_checkpoint_root(source_experiment=experiment_name, run_name=run_name)
+    except ValueError:
+        return None, {}
+
+    metrics_path = os.path.join(checkpoint_root, CHECKPOINT_EVAL_METRICS_PATH)
+    try:
+        with fsspec.open(metrics_path, "r") as f:
+            lines = [line.strip() for line in f if line.strip()]
+    except FileNotFoundError:
+        logger.warning("Checkpoint metrics file missing for %s at %s", run_name, metrics_path)
+        return checkpoint_root, {}
+
+    if not lines:
+        logger.warning("Checkpoint metrics file is empty for %s at %s", run_name, metrics_path)
+        return checkpoint_root, {}
+
+    payload = json.loads(lines[-1])
+    checkpoint_metrics = {
+        key: float(value) for key, value in payload.items() if key.startswith("eval/") and isinstance(value, int | float)
+    }
+    return checkpoint_root, checkpoint_metrics
+
+
 def _collect_manifest_results_frame(
     *,
     manifest_payload: dict[str, Any],
@@ -271,14 +299,22 @@ def _collect_manifest_results_frame(
             if extra_key in manifest_row:
                 row[extra_key] = manifest_row[extra_key]
 
+        checkpoint_root, checkpoint_eval_metrics = _load_checkpoint_eval_metrics(
+            experiment_name=experiment_name,
+            run_name=run_name,
+        )
+        if checkpoint_root is not None:
+            row["checkpoint_root"] = checkpoint_root
+
         if wandb_row is None:
             row.update(
                 {
                     "wandb_run_id": None,
                     "wandb_run_name": None,
-                    "status": "not_found",
+                    "status": "checkpoint_eval_only" if checkpoint_eval_metrics else "not_found",
                 }
             )
+            row.update(checkpoint_eval_metrics)
             collected_rows.append(row)
             continue
 
@@ -292,6 +328,8 @@ def _collect_manifest_results_frame(
         for key, value in wandb_row.items():
             if isinstance(value, int | float) and any(key.startswith(prefix) for prefix in metric_prefixes):
                 row[key] = float(value)
+        for key, value in checkpoint_eval_metrics.items():
+            row.setdefault(key, value)
         collected_rows.append(row)
 
     return pd.DataFrame(collected_rows).sort_values("run_id").reset_index(drop=True)

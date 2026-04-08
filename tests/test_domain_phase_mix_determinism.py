@@ -128,6 +128,12 @@ from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_fixed_
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_mmlu_sl_verb_rerun import (
     build_run_specs as build_run_00097_mmlu_sl_verb_rerun_specs,
 )
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_run_00097_olmo_base_easy_overlap_rerun as run00097_olmo_base_easy_overlap_rerun,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_olmo_base_easy_overlap_rerun import (
+    build_run_specs as build_run_00097_olmo_base_easy_overlap_rerun_specs,
+)
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_fixed_subset_mmlu_sl_verb_rerun import (
     _eval_model_name as fixed_subset_run_00097_mmlu_sl_verb_eval_model_name,
     build_run_specs as build_run_00097_fixed_subset_mmlu_sl_verb_rerun_specs,
@@ -430,6 +436,23 @@ def test_run_00097_mmlu_sl_verb_rerun_builds_expected_manifest():
     assert all(spec.phase_weights == RUN_00097_PHASE_WEIGHTS for spec in run_specs)
 
 
+def test_run_00097_olmo_base_easy_overlap_rerun_builds_expected_manifest():
+    run_specs = build_run_00097_olmo_base_easy_overlap_rerun_specs()
+
+    assert len(run_specs) == 10
+    assert [spec.run_id for spec in run_specs] == list(range(10))
+    assert {spec.cohort for spec in run_specs} == {"seed_sweep"}
+    assert [spec.run_name for spec in run_specs] == [f"trainer_seed_{seed}" for seed in range(10_000, 10_010)]
+    assert [spec.trainer_seed for spec in run_specs] == list(range(10_000, 10_010))
+    assert all(spec.data_seed is None for spec in run_specs)
+    assert all(spec.source_run_name == SOURCE_RUN_NAME for spec in run_specs)
+    assert all(
+        spec.source_experiment == "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_seed_study" for spec in run_specs
+    )
+    assert all(spec.checkpoint_root is None for spec in run_specs)
+    assert all(spec.phase_weights == RUN_00097_PHASE_WEIGHTS for spec in run_specs)
+
+
 def test_run_00097_fixed_subset_mmlu_sl_verb_rerun_builds_expected_manifest():
     run_specs = build_run_00097_fixed_subset_mmlu_sl_verb_rerun_specs()
 
@@ -650,6 +673,22 @@ def test_qsplit240_olmo_base_easy_overlap_rerun_builds_expected_manifest():
     assert all(spec.checkpoint_root is None for spec in run_specs)
     assert all(abs(sum(spec.phase_weights["phase_0"].values()) - 1.0) < 1e-12 for spec in run_specs)
     assert all(abs(sum(spec.phase_weights["phase_1"].values()) - 1.0) < 1e-12 for spec in run_specs)
+
+
+def test_qsplit240_olmo_base_easy_overlap_rerun_select_run_specs_for_shard():
+    run_specs = build_qsplit240_olmo_base_easy_overlap_rerun_specs()
+    shard_run_specs = qsplit240_olmo_base_easy_overlap_rerun.select_run_specs_for_shard(
+        run_specs,
+        shard_index=2,
+        shard_count=8,
+    )
+
+    assert [spec.run_id for spec in shard_run_specs] == list(range(60, 90))
+    assert qsplit240_olmo_base_easy_overlap_rerun.shard_execution_name_prefix(
+        name_prefix=qsplit240_olmo_base_easy_overlap_rerun.NAME,
+        shard_index=2,
+        shard_count=8,
+    ).endswith("shard_03of08")
 
 
 def test_qsplit240_seedpanel_mmlu_sl_verb_rerun_builds_expected_manifest():
@@ -1125,6 +1164,70 @@ def test_collect_manifest_results_preserves_candidate_metadata(tmp_path, monkeyp
     assert results_df.loc[0, "simulated_epoch_subset_seed"] == SIMULATED_EPOCH_SUBSET_SEED
 
 
+def test_collect_manifest_results_backfills_eval_metrics_from_checkpoint_when_wandb_row_missing(tmp_path, monkeypatch):
+    manifest_path = tmp_path / RUN_MANIFEST_FILE
+    output_dir = tmp_path / "analysis"
+    checkpoint_root = tmp_path / "checkpoint_root"
+    metrics_path = checkpoint_root / determinism_analysis.CHECKPOINT_EVAL_METRICS_PATH
+    output_dir.mkdir()
+    metrics_path.parent.mkdir(parents=True)
+
+    manifest = {
+        "experiment_name": "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_seed_study",
+        "runs": [
+            {
+                "run_id": 0,
+                "run_name": "trainer_seed_10000",
+                "cohort": "seed_sweep",
+                "trainer_seed": 10_000,
+                "data_seed": None,
+                "source_run_name": SOURCE_RUN_NAME,
+                "phase_weights": RUN_00097_PHASE_WEIGHTS,
+            }
+        ],
+    }
+    manifest_path.write_text(json.dumps(manifest))
+    metrics_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"eval/uncheatable_eval/bpb": 1.7}),
+                json.dumps(
+                    {
+                        "eval/uncheatable_eval/bpb": 1.23,
+                        "eval/paloma/c4_en/bpb": 4.56,
+                        "lm_eval/mmlu_5shot/bpb": 9.99,
+                    }
+                ),
+            ]
+        )
+    )
+
+    monkeypatch.setattr("experiments.domain_phase_mix.analysis.query_wandb_runs", lambda **_: [])
+    monkeypatch.setattr("experiments.domain_phase_mix.analysis.query_wandb_runs_by_name_substrings", lambda **_: [])
+    monkeypatch.setattr(
+        determinism_analysis,
+        "resolve_unique_checkpoint_root",
+        lambda *, source_experiment, run_name: str(checkpoint_root),
+    )
+
+    collect_manifest_results(
+        CollectManifestResultsConfig(
+            output_path=str(output_dir),
+            run_manifest_path=str(manifest_path),
+            wandb_entity="marin-community",
+            wandb_project="marin",
+        )
+    )
+
+    results_df = pd.read_csv(output_dir / RESULTS_CSV)
+    assert len(results_df) == 1
+    assert results_df.loc[0, "status"] == "checkpoint_eval_only"
+    assert results_df.loc[0, "checkpoint_root"] == str(checkpoint_root)
+    assert results_df.loc[0, "eval/uncheatable_eval/bpb"] == pytest.approx(1.23)
+    assert results_df.loc[0, "eval/paloma/c4_en/bpb"] == pytest.approx(4.56)
+    assert "lm_eval/mmlu_5shot/bpb" not in results_df.columns
+
+
 def test_create_fit_dataset_export_writes_sorted_completed_long_csv(tmp_path):
     manifest_path = tmp_path / RUN_MANIFEST_FILE
     analysis_dir = tmp_path / "analysis"
@@ -1414,15 +1517,74 @@ def test_qsplit240_olmo_base_easy_overlap_rerun_main_wires_cache_and_max_concurr
     monkeypatch.setattr(
         qsplit240_olmo_base_easy_overlap_rerun.sys,
         "argv",
-        ["launcher", "--max-concurrent", "11"],
+        ["launcher", "--max-concurrent", "11", "--shard-count", "3", "--shard-index", "1"],
     )
 
     qsplit240_olmo_base_easy_overlap_rerun.main()
 
     assert captured["config"].max_concurrent == 11
-    assert len(captured["steps"]) == 9
-    assert "OLMoBaseEval-overlap rerun" in captured["description"]
+    assert len(captured["steps"]) == 5
+    assert "shard_02of03" in captured["description"]
     assert qsplit240_olmo_base_easy_overlap_rerun.DEFAULT_MAX_CONCURRENT == 12
+
+
+def test_run00097_olmo_base_easy_overlap_rerun_main_wires_cache_and_max_concurrent(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(
+        run00097_olmo_base_easy_overlap_rerun,
+        "resolve_checkpoint_roots",
+        lambda run_specs: [
+            replace(spec, checkpoint_root=f"gs://unit-test/checkpoints/{spec.run_name}") for spec in run_specs
+        ],
+    )
+    monkeypatch.setattr(
+        run00097_olmo_base_easy_overlap_rerun,
+        "evaluate_levanter_lm_evaluation_harness",
+        lambda **kwargs: SimpleNamespace(name=kwargs["model_name"]),
+    )
+    monkeypatch.setattr(
+        run00097_olmo_base_easy_overlap_rerun,
+        "output_path_of",
+        lambda step, filename=None: (
+            f"gs://unit-test/{step.name}" if filename is None else f"gs://unit-test/{step.name}/{filename}"
+        ),
+    )
+    monkeypatch.setattr(
+        run00097_olmo_base_easy_overlap_rerun,
+        "create_run_manifest_step",
+        lambda **_: SimpleNamespace(name="run_manifest"),
+    )
+    monkeypatch.setattr(
+        run00097_olmo_base_easy_overlap_rerun,
+        "create_cache_eval_datasets_step",
+        lambda **_: SimpleNamespace(name="cache_eval_datasets"),
+    )
+
+    def fake_executor_main(config=None, *, steps, description):
+        captured["config"] = config
+        captured["steps"] = steps
+        captured["description"] = description
+
+    monkeypatch.setattr(run00097_olmo_base_easy_overlap_rerun, "executor_main", fake_executor_main)
+    monkeypatch.setattr(
+        run00097_olmo_base_easy_overlap_rerun,
+        "build_run_specs",
+        lambda: build_run_00097_olmo_base_easy_overlap_rerun_specs()[:6],
+    )
+    monkeypatch.setattr(
+        run00097_olmo_base_easy_overlap_rerun.sys,
+        "argv",
+        ["launcher", "--max-concurrent", "7"],
+    )
+
+    run00097_olmo_base_easy_overlap_rerun.main()
+
+    assert captured["config"].max_concurrent == 7
+    assert len(captured["steps"]) == 9
+    assert "run_00097 OLMoBaseEval-overlap rerun" in captured["description"]
+    assert run00097_olmo_base_easy_overlap_rerun.DEFAULT_MAX_CONCURRENT == 10
 
 
 def test_genericfamily_subset_optimum_run_name_formats_subset_size():
