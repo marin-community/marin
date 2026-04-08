@@ -4,7 +4,7 @@
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
 from iris.cluster.controller.budget import compute_effective_band
-from iris.cluster.controller.transitions import _resolve_task_failure_state
+from iris.cluster.controller.transitions import RESERVATION_HOLDER_JOB_NAME, _resolve_task_failure_state
 from iris.cluster.controller.controller import (
     PreemptionCandidate,
     RunningTaskInfo,
@@ -25,7 +25,9 @@ from .conftest import (
     make_test_entrypoint,
     make_worker_metadata,
     query_attempt,
+    query_job,
     query_task,
+    query_tasks_for_job,
     register_worker,
     submit_job,
 )
@@ -796,3 +798,104 @@ def test_preempt_task_cascades_coscheduled_siblings():
         all_kills = result0.tasks_to_kill | result1.tasks_to_kill
         assert tasks[0].task_id in all_kills
         assert tasks[1].task_id in all_kills
+
+
+# ---------------------------------------------------------------------------
+# Reservation holder survival during preemption retry
+# ---------------------------------------------------------------------------
+
+
+def test_preemption_retry_preserves_reservation_holder():
+    """When a parent with a reservation retries after preemption, the :reservation: child is NOT killed.
+
+    Non-reservation children (e.g. train_lm) must still be killed by the cascade.
+    This prevents a deadlock where the killed reservation can never be re-satisfied,
+    leaving the parent stuck PENDING forever.
+    """
+
+    with make_controller_state() as state:
+        harness = ControllerTestHarness(state)
+        w1 = harness.add_worker("w1", cpu=4)
+        w2 = harness.add_worker("w2", cpu=4)
+
+        # Submit parent job with a reservation (has_reservation=1)
+        parent_job_id = JobName.root("test-user", "res-parent")
+        parent_req = controller_pb2.Controller.LaunchJobRequest(
+            name=parent_job_id.to_wire(),
+            entrypoint=make_test_entrypoint(),
+            resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            environment=job_pb2.EnvironmentConfig(),
+            replicas=1,
+            max_retries_preemption=5,
+        )
+        parent_req.reservation.entries.append(
+            job_pb2.ReservationEntry(
+                resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            )
+        )
+        submit_job(state, parent_job_id.to_wire(), parent_req)
+
+        holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
+
+        # Verify the reservation holder child was created
+        holder_tasks = [t for t in query_tasks_for_job(state, holder_job_id)]
+        assert len(holder_tasks) == 1, "reservation holder job should have 1 task"
+
+        # Submit a non-reservation child job under the parent (simulating train_lm)
+        child_job_id = parent_job_id.child("train_lm")
+        child_req = controller_pb2.Controller.LaunchJobRequest(
+            name=child_job_id.to_wire(),
+            entrypoint=make_test_entrypoint(),
+            resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            environment=job_pb2.EnvironmentConfig(),
+            replicas=1,
+            max_retries_preemption=0,
+        )
+        submit_job(state, child_job_id.to_wire(), child_req)
+        child_tasks = query_tasks_for_job(state, child_job_id)
+        assert len(child_tasks) == 1
+
+        # Dispatch parent task and advance to RUNNING
+        parent_tasks = query_tasks_for_job(state, parent_job_id)
+        assert len(parent_tasks) == 1
+        parent_task = parent_tasks[0]
+        dispatch_task(state, parent_task, w1)
+        assert query_task(state, parent_task.task_id).state == job_pb2.TASK_STATE_RUNNING
+
+        # Dispatch reservation holder task to w2
+        dispatch_task(state, holder_tasks[0], w2)
+
+        # Dispatch child task to w2
+        dispatch_task(state, child_tasks[0], w2)
+
+        # Preempt the parent task — it should retry (go PENDING)
+        state.preempt_task(parent_task.task_id, reason="Preempted by higher priority")
+
+        # Parent task should be PENDING (retry)
+        updated_parent = query_task(state, parent_task.task_id)
+        assert updated_parent.state == job_pb2.TASK_STATE_PENDING
+        assert updated_parent.preemption_count == 1
+
+        # Reservation holder job should NOT be killed
+        holder_job = query_job(state, holder_job_id)
+        assert (
+            holder_job.state != job_pb2.JOB_STATE_KILLED
+        ), "reservation holder job must survive parent preemption retry"
+
+        # Reservation holder task should NOT be killed
+        holder_task_updated = query_task(state, holder_tasks[0].task_id)
+        assert (
+            holder_task_updated.state != job_pb2.TASK_STATE_KILLED
+        ), "reservation holder task must survive parent preemption retry"
+
+        # Non-reservation child job SHOULD be killed
+        child_job = query_job(state, child_job_id)
+        assert (
+            child_job.state == job_pb2.JOB_STATE_KILLED
+        ), "non-reservation child job must be killed on parent preemption retry"
+
+        # Non-reservation child task SHOULD be killed
+        child_task_updated = query_task(state, child_tasks[0].task_id)
+        assert (
+            child_task_updated.state == job_pb2.TASK_STATE_KILLED
+        ), "non-reservation child task must be killed on parent preemption retry"

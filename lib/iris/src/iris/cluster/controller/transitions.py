@@ -524,19 +524,38 @@ def _cascade_children(
     job_id: JobName,
     now_ms: int,
     reason: str,
+    exclude_reservation_holders: bool = False,
 ) -> tuple[set[JobName], dict[JobName, WorkerId]]:
-    """Kill descendant jobs (not the job itself) when a parent reaches terminal state or is preempted."""
+    """Kill descendant jobs (not the job itself) when a parent reaches terminal state or is preempted.
+
+    When exclude_reservation_holders is True, reservation holder jobs and their
+    descendants are left alive. This is used during preemption retry: the parent
+    goes back to PENDING and needs its reservation to survive so the scheduler
+    can re-satisfy it.
+    """
     tasks_to_kill: set[JobName] = set()
     task_kill_workers: dict[JobName, WorkerId] = {}
 
-    descendants = cur.execute(
-        "WITH RECURSIVE subtree(job_id) AS ("
-        "  SELECT job_id FROM jobs WHERE parent_job_id = ? "
-        "  UNION ALL "
-        "  SELECT j.job_id FROM jobs j JOIN subtree s ON j.parent_job_id = s.job_id"
-        ") SELECT job_id FROM subtree",
-        (job_id.to_wire(),),
-    ).fetchall()
+    if exclude_reservation_holders:
+        # Skip reservation holder jobs and anything below them.
+        descendants = cur.execute(
+            "WITH RECURSIVE subtree(job_id) AS ("
+            "  SELECT job_id FROM jobs WHERE parent_job_id = ? AND is_reservation_holder = 0 "
+            "  UNION ALL "
+            "  SELECT j.job_id FROM jobs j JOIN subtree s ON j.parent_job_id = s.job_id"
+            "   WHERE j.is_reservation_holder = 0"
+            ") SELECT job_id FROM subtree",
+            (job_id.to_wire(),),
+        ).fetchall()
+    else:
+        descendants = cur.execute(
+            "WITH RECURSIVE subtree(job_id) AS ("
+            "  SELECT job_id FROM jobs WHERE parent_job_id = ? "
+            "  UNION ALL "
+            "  SELECT j.job_id FROM jobs j JOIN subtree s ON j.parent_job_id = s.job_id"
+            ") SELECT job_id FROM subtree",
+            (job_id.to_wire(),),
+        ).fetchall()
     for child_row in descendants:
         child_job_id = str(child_row["job_id"])
         child_tasks_to_kill, child_task_kill_workers = _kill_non_terminal_tasks(cur, child_job_id, reason, now_ms)
@@ -1847,7 +1866,11 @@ class ControllerTransitions:
                 policy = _resolve_preemption_policy(cur, parent_job_id)
                 if policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
                     child_tasks_to_kill, child_task_kill_workers = _cascade_children(
-                        cur, parent_job_id, now_ms, "Parent task preempted"
+                        cur,
+                        parent_job_id,
+                        now_ms,
+                        "Parent task preempted",
+                        exclude_reservation_holders=True,
                     )
                     tasks_to_kill.update(child_tasks_to_kill)
                     task_kill_workers.update(child_task_kill_workers)
@@ -2082,7 +2105,13 @@ class ControllerTransitions:
             elif new_state == job_pb2.TASK_STATE_PENDING:
                 policy = _resolve_preemption_policy(cur, job_id)
                 if policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
-                    child_kills, child_workers = _cascade_children(cur, job_id, now_ms, reason)
+                    child_kills, child_workers = _cascade_children(
+                        cur,
+                        job_id,
+                        now_ms,
+                        reason,
+                        exclude_reservation_holders=True,
+                    )
                     tasks_to_kill.update(child_kills)
                     task_kill_workers.update(child_workers)
 
