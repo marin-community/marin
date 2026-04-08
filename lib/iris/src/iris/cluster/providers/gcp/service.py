@@ -67,6 +67,7 @@ CAPACITY_TYPE_RESERVED_VALUE = "reserved"
 
 # REST API base URLs
 _TPU_BASE = "https://tpu.googleapis.com/v2"
+_TPU_QR_BASE = "https://tpu.googleapis.com/v2alpha1"
 _COMPUTE_BASE = "https://compute.googleapis.com/compute/v1"
 _LOGGING_BASE = "https://logging.googleapis.com/v2"
 
@@ -631,7 +632,7 @@ class CloudGcpService:
             request.accelerator_type,
             request.zone,
         )
-        url = f"{_TPU_BASE}/{self._tpu_parent(request.zone)}/queuedResources"
+        url = f"{_TPU_QR_BASE}/{self._tpu_parent(request.zone)}/queuedResources"
         resp = self._client.post(
             url,
             params={"queuedResourceId": request.name},
@@ -642,7 +643,7 @@ class CloudGcpService:
 
     def queued_resource_describe(self, name: str, zone: str) -> QueuedResourceInfo | None:
         try:
-            url = f"{_TPU_BASE}/{self._tpu_parent(zone)}/queuedResources/{name}"
+            url = f"{_TPU_QR_BASE}/{self._tpu_parent(zone)}/queuedResources/{name}"
             resp = self._client.get(url, headers=self._headers())
             self._classify_response(resp)
             data = resp.json()
@@ -653,7 +654,7 @@ class CloudGcpService:
 
     def queued_resource_delete(self, name: str, zone: str) -> None:
         logger.info("Deleting queued resource (force): %s", name)
-        url = f"{_TPU_BASE}/{self._tpu_parent(zone)}/queuedResources/{name}"
+        url = f"{_TPU_QR_BASE}/{self._tpu_parent(zone)}/queuedResources/{name}"
         resp = self._client.delete(url, params={"force": "true"}, headers=self._headers())
         if resp.status_code != 404:
             self._classify_response(resp)
@@ -664,7 +665,7 @@ class CloudGcpService:
         for zone in zone_list:
             try:
                 items = self._paginate(
-                    f"{_TPU_BASE}/{self._tpu_parent(zone)}/queuedResources",
+                    f"{_TPU_QR_BASE}/{self._tpu_parent(zone)}/queuedResources",
                     "queuedResources",
                 )
             except InfraError:
