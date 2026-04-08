@@ -29,6 +29,9 @@ _KNOWN_VOCAB_SIZES: dict[str, int] = {
     "gpt2": 50_257,
 }
 
+# The marin tokenizer is a re-upload of the llama3 tokenizer with a custom chat template.
+_EQUIVALENT_TOKENIZERS = frozenset({"meta-llama/Meta-Llama-3.1-8B", "marin-community/marin-tokenizer"})
+
 
 def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_raw_paths: bool) -> DatasetComponent:
     """
@@ -357,11 +360,9 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     tokenizer1 = unwrap_versioned_value(tokenizer1)
     tokenizer2 = unwrap_versioned_value(tokenizer2)
 
-    from experiments.llama import llama3_tokenizer
-    from experiments.marin_models import marin_tokenizer
-
-    # special case, i'm sorry
-    if tokenizer1 in {llama3_tokenizer, marin_tokenizer} and tokenizer2 in {llama3_tokenizer, marin_tokenizer}:
+    # The marin tokenizer is a re-upload of the llama3 tokenizer with a custom chat template,
+    # so they share the same vocabulary and token IDs.
+    if tokenizer1 in _EQUIVALENT_TOKENIZERS and tokenizer2 in _EQUIVALENT_TOKENIZERS:
         return True
 
     t1 = _load_tokenizer(tokenizer1)

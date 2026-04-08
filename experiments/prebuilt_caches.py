@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-
-Provides prebuilt "subcaches" of the fineweb-edu dataset for use in Marin Speedrun. There are currently two subcaches:
+Provides prebuilt "subcaches" of the fineweb-edu dataset for use in Marin experiments. There are currently two subcaches:
 
 1. A 10B token subcache, which is a subset of the original fineweb-edu dataset consisting of approximately 10B tokens.
 2. A 10M token subcache, which is a smaller subset of the original fineweb-edu dataset. (Mostly for testing purposes)
@@ -17,8 +16,6 @@ from experiments.prebuilt_caches import fineweb_edu_subcache_10B
 
 my_model = default_train(..., tokenized=fineweb_edu_subcache_10B, ...)
 ```
-
-They are built with experiments.speedrun.build_prebuilt_caches.py.
 
 """
 

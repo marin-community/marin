@@ -49,8 +49,6 @@ Before opening a pull request:
 7. Make sure the PR body references an issue with `Fixes #NNNN` or `Part of #NNNN`.
 8. After pushing, verify the relevant GitHub CI checks pass before considering the PR ready for review.
 
-For the end-to-end branch and fork workflow, follow the PR steps in [Submitting to the Marin Speedrun](../tutorials/submitting-speedrun.md#submit). The same GitHub push and PR process applies to non-speedrun changes.
-
 ## Guidelines
 
 Please see the [guidelines](../explanations/guidelines.md) for principles and practices for Marin.
