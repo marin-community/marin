@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""K8sService protocol and CloudK8sService (kubectl-backed) implementation."""
+"""K8sService protocol and CloudK8sService (kubernetes-client-backed) implementation."""
 
 from __future__ import annotations
 
@@ -17,6 +17,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
 
+import kubernetes
+import kubernetes.client
+import kubernetes.config
+import kubernetes.stream
+from kubernetes.client.exceptions import ApiException
+
 from iris.cluster.providers.k8s.types import ExecResult, KubectlError, KubectlLogLine, KubectlLogResult
 from iris.cluster.providers.k8s.types import parse_k8s_cpu as _parse_k8s_cpu
 from iris.cluster.providers.k8s.types import parse_k8s_memory as _parse_k8s_memory
@@ -25,8 +31,14 @@ from rigging.timing import Deadline, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
-# Default timeout for kubectl commands (seconds)
+# Default timeout for API calls (seconds)
 DEFAULT_TIMEOUT: float = 60.0
+
+# Slow-operation warning threshold (milliseconds)
+_SLOW_THRESHOLD_MS: float = 2000.0
+
+# Field manager name for server-side apply
+_FIELD_MANAGER: str = "iris"
 
 
 @runtime_checkable
@@ -135,76 +147,221 @@ class K8sService(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# CloudK8sService — kubectl-backed implementation
+# Resource-type dispatch helpers
+# ---------------------------------------------------------------------------
+
+# Maps resource type strings to (api_group, api_version, is_namespaced, plural_name).
+# For core/v1 resources, api_group is "".
+_RESOURCE_INFO: dict[str, tuple[str, str, bool, str]] = {
+    "pods": ("", "v1", True, "pods"),
+    "configmaps": ("", "v1", True, "configmaps"),
+    "services": ("", "v1", True, "services"),
+    "secrets": ("", "v1", True, "secrets"),
+    "events": ("", "v1", True, "events"),
+    "nodes": ("", "v1", False, "nodes"),
+    "deployments": ("apps", "v1", True, "deployments"),
+    "statefulsets": ("apps", "v1", True, "statefulsets"),
+    "poddisruptionbudgets": ("policy", "v1", True, "poddisruptionbudgets"),
+    "clusterroles": ("rbac.authorization.k8s.io", "v1", False, "clusterroles"),
+    "clusterrolebindings": ("rbac.authorization.k8s.io", "v1", False, "clusterrolebindings"),
+    "serviceaccounts": ("", "v1", True, "serviceaccounts"),
+    "nodepools": ("compute.coreweave.com", "v1alpha1", False, "nodepools"),
+    # Singular aliases used by callers (e.g. delete("pod", name))
+    "pod": ("", "v1", True, "pods"),
+    "configmap": ("", "v1", True, "configmaps"),
+    "service": ("", "v1", True, "services"),
+    "secret": ("", "v1", True, "secrets"),
+    "event": ("", "v1", True, "events"),
+    "node": ("", "v1", False, "nodes"),
+    "deployment": ("apps", "v1", True, "deployments"),
+    "statefulset": ("apps", "v1", True, "statefulsets"),
+    "pdb": ("policy", "v1", True, "poddisruptionbudgets"),
+    "clusterrole": ("rbac.authorization.k8s.io", "v1", False, "clusterroles"),
+    "clusterrolebinding": ("rbac.authorization.k8s.io", "v1", False, "clusterrolebindings"),
+    "serviceaccount": ("", "v1", True, "serviceaccounts"),
+    "nodepool": ("compute.coreweave.com", "v1alpha1", False, "nodepools"),
+}
+
+# Maps kind (from manifest) to resource plural for SSA URL construction.
+_KIND_TO_PLURAL: dict[str, str] = {
+    "Pod": "pods",
+    "ConfigMap": "configmaps",
+    "Service": "services",
+    "Secret": "secrets",
+    "Deployment": "deployments",
+    "StatefulSet": "statefulsets",
+    "PodDisruptionBudget": "poddisruptionbudgets",
+    "ClusterRole": "clusterroles",
+    "ClusterRoleBinding": "clusterrolebindings",
+    "ServiceAccount": "serviceaccounts",
+    "NodePool": "nodepools",
+    "Node": "nodes",
+    "Event": "events",
+}
+
+
+def _label_selector(labels: dict[str, str]) -> str:
+    return ",".join(f"{k}={v}" for k, v in labels.items())
+
+
+def _resource_info(resource: str) -> tuple[str, str, bool, str]:
+    """Look up resource metadata. Raises ValueError for unknown resources."""
+    info = _RESOURCE_INFO.get(resource)
+    if info is None:
+        raise ValueError(f"Unknown resource type: {resource!r}")
+    return info
+
+
+def _api_path_for_manifest(manifest: dict, namespace: str | None) -> str:
+    """Build the API URL path for server-side apply from a manifest dict."""
+    kind = manifest["kind"]
+    api_version = manifest["apiVersion"]
+    name = manifest["metadata"]["name"]
+    plural = _KIND_TO_PLURAL.get(kind)
+    if plural is None:
+        raise ValueError(f"Unknown kind for SSA: {kind!r}")
+
+    group, version, is_namespaced, _ = _resource_info(plural)
+
+    if "/" in api_version:
+        base = f"/apis/{api_version}"
+    elif group:
+        base = f"/apis/{group}/{version}"
+    else:
+        base = f"/api/{version}"
+
+    ns = manifest["metadata"].get("namespace", namespace)
+    if is_namespaced and ns:
+        return f"{base}/namespaces/{ns}/{plural}/{name}"
+    return f"{base}/{plural}/{name}"
+
+
+def _api_path_for_resource(
+    resource: str, namespace: str, *, name: str | None = None, cluster_scoped: bool = False
+) -> str:
+    """Build the API URL path for a resource type."""
+    group, version, is_namespaced, plural = _resource_info(resource)
+
+    if group:
+        base = f"/apis/{group}/{version}"
+    else:
+        base = f"/api/{version}"
+
+    if is_namespaced and not cluster_scoped:
+        path = f"{base}/namespaces/{namespace}/{plural}"
+    else:
+        path = f"{base}/{plural}"
+
+    if name:
+        path = f"{path}/{name}"
+    return path
+
+
+def _log_operation(operation: str, t0: float) -> None:
+    """Log elapsed time, warning if slow."""
+    elapsed_ms = (time.monotonic() - t0) * 1000
+    if elapsed_ms > _SLOW_THRESHOLD_MS:
+        logger.warning("k8s slow: %dms op=%s", elapsed_ms, operation)
+
+
+# ---------------------------------------------------------------------------
+# CloudK8sService — kubernetes-client-backed implementation
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class CloudK8sService:
-    """K8sService backed by the kubectl CLI. Used in CLOUD mode.
+    """K8sService backed by the kubernetes Python client. Used in CLOUD mode.
 
-    Encapsulates command prefix construction (including optional --kubeconfig),
-    namespace injection, JSON parsing, and error handling. All operations use
-    subprocess with a configurable timeout.
+    Encapsulates API client construction (including optional kubeconfig),
+    namespace injection, serialization, and error handling.
     """
 
     namespace: str
     kubeconfig_path: str | None = None
     timeout: float = DEFAULT_TIMEOUT
-    _prefix: list[str] = field(init=False, repr=False)
+    _api_client: kubernetes.client.ApiClient = field(init=False, repr=False)
+    _core_v1: kubernetes.client.CoreV1Api = field(init=False, repr=False)
+    _apps_v1: kubernetes.client.AppsV1Api = field(init=False, repr=False)
+    _policy_v1: kubernetes.client.PolicyV1Api = field(init=False, repr=False)
+    _custom: kubernetes.client.CustomObjectsApi = field(init=False, repr=False)
+    _kubectl_prefix: list[str] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.kubeconfig_path:
             self.kubeconfig_path = os.path.expanduser(self.kubeconfig_path)
+            kubernetes.config.load_kube_config(config_file=self.kubeconfig_path)
+        else:
+            try:
+                kubernetes.config.load_incluster_config()
+            except kubernetes.config.ConfigException:
+                kubernetes.config.load_kube_config()
+
+        self._api_client = kubernetes.client.ApiClient()
+        self._core_v1 = kubernetes.client.CoreV1Api(self._api_client)
+        self._apps_v1 = kubernetes.client.AppsV1Api(self._api_client)
+        self._policy_v1 = kubernetes.client.PolicyV1Api(self._api_client)
+        self._custom = kubernetes.client.CustomObjectsApi(self._api_client)
+
+        # Keep kubectl prefix for port-forward subprocess only.
         cmd = ["kubectl"]
         if self.kubeconfig_path:
             cmd.extend(["--kubeconfig", self.kubeconfig_path])
-        self._prefix = cmd
+        self._kubectl_prefix = cmd
 
-    def _run(
-        self,
-        args: list[str],
-        *,
-        namespaced: bool = False,
-        timeout: float | None = None,
-        stdin: str | None = None,
-    ) -> subprocess.CompletedProcess[str]:
-        """Run a kubectl command with consistent timeout and error capture."""
-        effective_timeout = timeout if timeout is not None else self.timeout
-        cmd = list(self._prefix)
-        if namespaced:
-            cmd.extend(["-n", self.namespace])
-        cmd.extend(args)
-        if stdin:
-            logger.info("kubectl: %s\n  stdin=%s", " ".join(cmd), stdin[:2000])
-        else:
-            logger.info("kubectl: %s", " ".join(cmd))
-        t0 = time.monotonic()
-        result = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=effective_timeout)
-        elapsed_ms = (time.monotonic() - t0) * 1000
-        if result.returncode != 0:
-            logger.info("kubectl exit %d: %dms stderr=%s", result.returncode, elapsed_ms, result.stderr.strip()[:500])
-        elif elapsed_ms > 2000:
-            logger.warning("kubectl slow: %dms cmd=%s", elapsed_ms, " ".join(args))
-        return result
+    def _serialize(self, obj: object) -> dict:
+        """Convert a kubernetes client object to a camelCase dict."""
+        return self._api_client.sanitize_for_serialization(obj)
+
+    # -- apply ---------------------------------------------------------------
 
     def apply_json(self, manifest: dict) -> None:
-        """Apply a Kubernetes manifest dict via ``kubectl apply -f -``."""
-        result = self._run(["apply", "-f", "-"], stdin=json.dumps(manifest))
-        if result.returncode != 0:
-            raise KubectlError(f"kubectl apply failed: {result.stderr.strip()}")
+        """Server-side apply a Kubernetes manifest dict."""
+        path = _api_path_for_manifest(manifest, self.namespace)
+        body = json.dumps(manifest)
+        logger.info("k8s: SSA PATCH %s", path)
+        t0 = time.monotonic()
+        try:
+            self._api_client.call_api(
+                path,
+                "PATCH",
+                query_params=[("fieldManager", _FIELD_MANAGER), ("force", "true")],
+                body=body,
+                header_params={
+                    "Content-Type": "application/apply-patch+yaml",
+                    "Accept": "application/json",
+                },
+                response_type="object",
+                _request_timeout=self.timeout,
+            )
+        except ApiException as e:
+            raise KubectlError(f"SSA apply failed ({e.status}): {e.reason} {(e.body or '')[:500]}") from e
+        _log_operation(f"apply {manifest.get('kind')}/{manifest['metadata']['name']}", t0)
+
+    # -- get -----------------------------------------------------------------
 
     def get_json(self, resource: str, name: str, *, cluster_scoped: bool = False) -> dict | None:
         """Get a Kubernetes resource as a parsed dict. Returns None if not found."""
-        result = self._run(
-            ["get", resource, name, "-o", "json"],
-            namespaced=not cluster_scoped,
-        )
-        if result.returncode != 0:
-            if "not found" in result.stderr.lower() or "NotFound" in result.stderr:
+        path = _api_path_for_resource(resource, self.namespace, name=name, cluster_scoped=cluster_scoped)
+        logger.info("k8s: GET %s", path)
+        t0 = time.monotonic()
+        try:
+            resp = self._api_client.call_api(
+                path,
+                "GET",
+                header_params={"Accept": "application/json"},
+                response_type="object",
+                _request_timeout=self.timeout,
+            )
+            _log_operation(f"get {resource}/{name}", t0)
+            # call_api returns (data, status, headers)
+            return resp[0]
+        except ApiException as e:
+            if e.status == 404:
                 return None
-            raise KubectlError(f"kubectl get {resource}/{name} failed: {result.stderr.strip()}")
-        return json.loads(result.stdout)
+            raise KubectlError(f"get {resource}/{name} failed ({e.status}): {e.reason}") from e
+
+    # -- list ----------------------------------------------------------------
 
     def list_json(
         self,
@@ -215,107 +372,296 @@ class CloudK8sService:
         cluster_scoped: bool = False,
     ) -> list[dict]:
         """List Kubernetes resources, optionally filtered by labels and/or field selectors."""
-        args = ["get", resource, "-o", "json"]
+        path = _api_path_for_resource(resource, self.namespace, cluster_scoped=cluster_scoped)
+        query_params: list[tuple[str, str]] = []
         if labels:
-            selector = ",".join(f"{k}={v}" for k, v in labels.items())
-            args.extend(["-l", selector])
+            query_params.append(("labelSelector", _label_selector(labels)))
         if field_selector:
-            args.extend(["--field-selector", field_selector])
-        result = self._run(args, namespaced=not cluster_scoped)
-        if result.returncode != 0:
-            raise KubectlError(f"kubectl get {resource} failed: {result.stderr.strip()}")
-        data = json.loads(result.stdout)
-        return data.get("items", [])
+            query_params.append(("fieldSelector", field_selector))
+
+        logger.info("k8s: LIST %s labels=%s field_selector=%s", path, labels, field_selector)
+        t0 = time.monotonic()
+        try:
+            resp = self._api_client.call_api(
+                path,
+                "GET",
+                query_params=query_params,
+                header_params={"Accept": "application/json"},
+                response_type="object",
+                _request_timeout=self.timeout,
+            )
+            _log_operation(f"list {resource}", t0)
+            data = resp[0]
+            return data.get("items", [])
+        except ApiException as e:
+            raise KubectlError(f"list {resource} failed ({e.status}): {e.reason}") from e
+
+    # -- delete --------------------------------------------------------------
 
     def delete(
         self, resource: str, name: str, *, cluster_scoped: bool = False, force: bool = False, wait: bool = True
     ) -> None:
         """Delete a Kubernetes resource, ignoring NotFound errors."""
-        args = ["delete", resource, name, "--ignore-not-found"]
+        path = _api_path_for_resource(resource, self.namespace, name=name, cluster_scoped=cluster_scoped)
+        query_params: list[tuple[str, str]] = []
         if force:
-            args.extend(["--grace-period=0", "--force"])
+            query_params.append(("gracePeriodSeconds", "0"))
         if not wait:
-            args.append("--wait=false")
-        result = self._run(
-            args,
-            namespaced=not cluster_scoped,
-        )
-        if result.returncode != 0:
-            raise KubectlError(f"kubectl delete {resource}/{name} failed: {result.stderr.strip()}")
+            query_params.append(("propagationPolicy", "Background"))
+
+        logger.info("k8s: DELETE %s force=%s wait=%s", path, force, wait)
+        t0 = time.monotonic()
+        try:
+            self._api_client.call_api(
+                path,
+                "DELETE",
+                query_params=query_params,
+                header_params={"Accept": "application/json"},
+                response_type="object",
+                _request_timeout=self.timeout,
+            )
+        except ApiException as e:
+            if e.status == 404:
+                return
+            raise KubectlError(f"delete {resource}/{name} failed ({e.status}): {e.reason}") from e
+        _log_operation(f"delete {resource}/{name}", t0)
 
     def delete_many(self, resource: str, names: list[str], *, cluster_scoped: bool = False, wait: bool = False) -> None:
-        """Delete multiple resources by name in a single kubectl call."""
+        """Delete multiple resources by name via individual API calls."""
         if not names:
             return
-        args = ["delete", resource, *names, "--ignore-not-found"]
-        if not wait:
-            args.append("--wait=false")
-        result = self._run(args, namespaced=not cluster_scoped)
-        if result.returncode != 0:
-            raise KubectlError(f"kubectl delete {resource} failed: {result.stderr.strip()}")
+        logger.info("k8s: DELETE_MANY %s count=%d", resource, len(names))
+        t0 = time.monotonic()
+        for name in names:
+            self.delete(resource, name, cluster_scoped=cluster_scoped, wait=wait)
+        _log_operation(f"delete_many {resource} ({len(names)})", t0)
 
     def delete_by_labels(
         self, resource: str, labels: dict[str, str], *, cluster_scoped: bool = False, wait: bool = False
     ) -> None:
-        """Delete all resources matching the given label selector in a single kubectl call."""
+        """Delete all resources matching the given label selector."""
         if not labels:
             return
-        selector = ",".join(f"{k}={v}" for k, v in labels.items())
-        args = ["delete", resource, "-l", selector, "--ignore-not-found"]
+        path = _api_path_for_resource(resource, self.namespace, cluster_scoped=cluster_scoped)
+        selector = _label_selector(labels)
+        query_params: list[tuple[str, str]] = [("labelSelector", selector)]
         if not wait:
-            args.append("--wait=false")
-        result = self._run(args, namespaced=not cluster_scoped)
-        if result.returncode != 0:
-            raise KubectlError(f"kubectl delete {resource} -l {selector} failed: {result.stderr.strip()}")
+            query_params.append(("propagationPolicy", "Background"))
+
+        logger.info("k8s: DELETE_COLLECTION %s labels=%s", path, labels)
+        t0 = time.monotonic()
+        try:
+            self._api_client.call_api(
+                path,
+                "DELETE",
+                query_params=query_params,
+                header_params={"Accept": "application/json"},
+                response_type="object",
+                _request_timeout=self.timeout,
+            )
+        except ApiException as e:
+            if e.status == 404:
+                return
+            raise KubectlError(f"delete_by_labels {resource} -l {selector} failed ({e.status}): {e.reason}") from e
+        _log_operation(f"delete_by_labels {resource} -l {selector}", t0)
+
+    # -- set_image -----------------------------------------------------------
 
     def set_image(self, resource: str, name: str, container: str, image: str, *, namespaced: bool = False) -> None:
-        """Set the container image on a resource via ``kubectl set image``."""
-        args = ["set", "image", f"{resource}/{name}", f"{container}={image}"]
-        result = self._run(args, namespaced=namespaced)
-        if result.returncode != 0:
-            raise KubectlError(f"kubectl set image failed: {result.stderr.strip()}")
+        """Set the container image on a deployment/statefulset."""
+        patch_body = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [{"name": container, "image": image}],
+                    }
+                }
+            }
+        }
+        path = _api_path_for_resource(resource, self.namespace, name=name, cluster_scoped=not namespaced)
+        logger.info("k8s: PATCH set_image %s/%s container=%s image=%s", resource, name, container, image)
+        t0 = time.monotonic()
+        try:
+            self._api_client.call_api(
+                path,
+                "PATCH",
+                body=json.dumps(patch_body),
+                header_params={
+                    "Content-Type": "application/strategic-merge-patch+json",
+                    "Accept": "application/json",
+                },
+                response_type="object",
+                _request_timeout=self.timeout,
+            )
+        except ApiException as e:
+            raise KubectlError(f"set_image {resource}/{name} failed ({e.status}): {e.reason}") from e
+        _log_operation(f"set_image {resource}/{name}", t0)
+
+    # -- rollout_restart -----------------------------------------------------
 
     def rollout_restart(self, resource: str, name: str, *, namespaced: bool = False) -> None:
-        """Restart a rollout via ``kubectl rollout restart``."""
-        args = ["rollout", "restart", f"{resource}/{name}"]
-        result = self._run(args, namespaced=namespaced)
-        if result.returncode != 0:
-            raise KubectlError(f"kubectl rollout restart failed: {result.stderr.strip()}")
+        """Restart a rollout by patching the restart annotation."""
+        now = datetime.now(timezone.utc).isoformat()
+        patch_body = {
+            "spec": {
+                "template": {
+                    "metadata": {
+                        "annotations": {
+                            "kubectl.kubernetes.io/restartedAt": now,
+                        }
+                    }
+                }
+            }
+        }
+        path = _api_path_for_resource(resource, self.namespace, name=name, cluster_scoped=not namespaced)
+        logger.info("k8s: PATCH rollout_restart %s/%s", resource, name)
+        t0 = time.monotonic()
+        try:
+            self._api_client.call_api(
+                path,
+                "PATCH",
+                body=json.dumps(patch_body),
+                header_params={
+                    "Content-Type": "application/strategic-merge-patch+json",
+                    "Accept": "application/json",
+                },
+                response_type="object",
+                _request_timeout=self.timeout,
+            )
+        except ApiException as e:
+            raise KubectlError(f"rollout_restart {resource}/{name} failed ({e.status}): {e.reason}") from e
+        _log_operation(f"rollout_restart {resource}/{name}", t0)
+
+    # -- rollout_status ------------------------------------------------------
 
     def rollout_status(self, resource: str, name: str, *, timeout: float = 600.0, namespaced: bool = False) -> None:
-        """Wait for a rollout to complete via ``kubectl rollout status``."""
-        args = ["rollout", "status", f"{resource}/{name}", f"--timeout={int(timeout)}s"]
-        result = self._run(args, namespaced=namespaced, timeout=timeout + 30)
-        if result.returncode != 0:
-            raise KubectlError(f"kubectl rollout status failed: {result.stderr.strip()}")
+        """Wait for a rollout to complete by polling deployment conditions."""
+        deadline = Deadline.from_seconds(timeout)
+        backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
+        path = _api_path_for_resource(resource, self.namespace, name=name, cluster_scoped=not namespaced)
+        logger.info("k8s: rollout_status %s/%s timeout=%.0fs", resource, name, timeout)
+
+        while not deadline.expired():
+            try:
+                resp = self._api_client.call_api(
+                    path,
+                    "GET",
+                    header_params={"Accept": "application/json"},
+                    response_type="object",
+                    _request_timeout=self.timeout,
+                )
+                obj = resp[0]
+            except ApiException as e:
+                raise KubectlError(f"rollout_status {resource}/{name} failed ({e.status}): {e.reason}") from e
+
+            status = obj.get("status", {})
+            spec = obj.get("spec", {})
+            desired = spec.get("replicas", 1)
+            updated = status.get("updatedReplicas", 0)
+            ready = status.get("readyReplicas", 0)
+            available = status.get("availableReplicas", 0)
+
+            if updated >= desired and ready >= desired and available >= desired:
+                # Check that observedGeneration matches metadata.generation
+                observed = status.get("observedGeneration", 0)
+                generation = obj.get("metadata", {}).get("generation", 0)
+                if observed >= generation:
+                    logger.info("k8s: rollout_status %s/%s complete", resource, name)
+                    return
+
+            time.sleep(min(backoff.next_interval(), max(0, deadline.remaining_seconds())))
+
+        raise KubectlError(f"rollout_status {resource}/{name} timed out after {timeout}s")
+
+    # -- events --------------------------------------------------------------
 
     def get_events(
         self,
         field_selector: str | None = None,
     ) -> list[dict]:
         """Get Kubernetes events, optionally filtered by field selector."""
-        args = ["get", "events", "-o", "json"]
-        if field_selector:
-            args.extend(["--field-selector", field_selector])
-        result = self._run(args, namespaced=True)
-        if result.returncode != 0:
-            logger.warning("kubectl get events failed: %s", result.stderr.strip()[:200])
+        logger.info("k8s: list events field_selector=%s", field_selector)
+        t0 = time.monotonic()
+        try:
+            kwargs: dict = {"namespace": self.namespace, "_request_timeout": self.timeout}
+            if field_selector:
+                kwargs["field_selector"] = field_selector
+            result = self._core_v1.list_namespaced_event(**kwargs)
+            _log_operation("get_events", t0)
+            return [self._serialize(item) for item in result.items]
+        except ApiException:
+            logger.warning("get_events failed", exc_info=True)
             return []
-        data = json.loads(result.stdout)
-        return data.get("items", [])
+
+    # -- logs ----------------------------------------------------------------
 
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str:
         """Fetch logs from a Pod container."""
-        args = ["logs", pod_name]
-        if container:
-            args.extend(["-c", container])
-        if previous:
-            args.append("--previous")
-        args.extend([f"--tail={tail}"])
-        result = self._run(args, namespaced=True)
-        if result.returncode != 0:
+        logger.info("k8s: logs %s container=%s tail=%d previous=%s", pod_name, container, tail, previous)
+        t0 = time.monotonic()
+        try:
+            kwargs: dict = {
+                "name": pod_name,
+                "namespace": self.namespace,
+                "tail_lines": tail,
+                "previous": previous,
+                "_request_timeout": self.timeout,
+            }
+            if container:
+                kwargs["container"] = container
+            result = self._core_v1.read_namespaced_pod_log(**kwargs)
+            _log_operation(f"logs {pod_name}", t0)
+            return result
+        except ApiException:
             return ""
-        return result.stdout
+
+    # -- stream_logs ---------------------------------------------------------
+
+    def stream_logs(
+        self,
+        pod_name: str,
+        *,
+        container: str | None = None,
+        since_time: datetime | None = None,
+    ) -> KubectlLogResult:
+        """Fetch new log lines from a pod, bounded by since_time."""
+        logger.info("k8s: stream_logs %s since=%s", pod_name, since_time)
+        t0 = time.monotonic()
+        try:
+            kwargs: dict = {
+                "name": pod_name,
+                "namespace": self.namespace,
+                "timestamps": True,
+                "_request_timeout": 15.0,
+            }
+            if container:
+                kwargs["container"] = container
+            if since_time is not None:
+                # Compute since_seconds from the delta. Add 1s margin to ensure
+                # we don't miss boundary lines (we filter duplicates below).
+                delta = datetime.now(timezone.utc) - since_time
+                since_sec = max(1, int(delta.total_seconds()) + 1)
+                kwargs["since_seconds"] = since_sec
+
+            raw = self._core_v1.read_namespaced_pod_log(**kwargs)
+            _log_operation(f"stream_logs {pod_name}", t0)
+        except ApiException:
+            return KubectlLogResult(lines=[], last_timestamp=since_time)
+
+        lines: list[KubectlLogLine] = []
+        for line_str in raw.splitlines():
+            if not line_str.strip():
+                continue
+            parsed = _parse_kubectl_log_line(line_str)
+            # since_seconds is inclusive; skip already-seen boundary lines
+            if since_time is not None and parsed.timestamp <= since_time:
+                continue
+            lines.append(parsed)
+
+        last_ts = lines[-1].timestamp if lines else since_time
+        return KubectlLogResult(lines=lines, last_timestamp=last_ts)
+
+    # -- exec ----------------------------------------------------------------
 
     def exec(
         self,
@@ -325,13 +671,38 @@ class CloudK8sService:
         container: str | None = None,
         timeout: float | None = None,
     ) -> ExecResult:
-        """Run a command inside a Pod container via ``kubectl exec``."""
-        args = ["exec", pod_name]
-        if container:
-            args.extend(["-c", container])
-        args.extend(["--", *cmd])
-        result = self._run(args, namespaced=True, timeout=timeout)
-        return ExecResult(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
+        """Run a command inside a Pod container."""
+        effective_timeout = timeout if timeout is not None else self.timeout
+        logger.info("k8s: exec %s cmd=%s container=%s", pod_name, cmd, container)
+        t0 = time.monotonic()
+        try:
+            kwargs: dict = {
+                "name": pod_name,
+                "namespace": self.namespace,
+                "command": cmd,
+                "stdout": True,
+                "stderr": True,
+                "stdin": False,
+                "tty": False,
+                "_request_timeout": effective_timeout,
+            }
+            if container:
+                kwargs["container"] = container
+
+            resp = kubernetes.stream.stream(
+                self._core_v1.connect_get_namespaced_pod_exec,
+                **kwargs,
+            )
+            _log_operation(f"exec {pod_name}", t0)
+            # stream() returns the combined stdout when not using a websocket client.
+            # For separate streams we'd need _preload_content=False, but the simple
+            # interface returns stdout as a string. stderr comes via the error channel.
+            return ExecResult(returncode=0, stdout=resp, stderr="")
+        except ApiException as e:
+            _log_operation(f"exec {pod_name} (error)", t0)
+            return ExecResult(returncode=1, stdout="", stderr=str(e))
+
+    # -- read_file / rm_files ------------------------------------------------
 
     def read_file(
         self,
@@ -356,50 +727,39 @@ class CloudK8sService:
         """Remove files inside a Pod container. Ignores missing files."""
         self.exec(pod_name, ["rm", "-f", *paths], container=container, timeout=10)
 
-    def stream_logs(
-        self,
-        pod_name: str,
-        *,
-        container: str | None = None,
-        since_time: datetime | None = None,
-    ) -> KubectlLogResult:
-        """Fetch new log lines from a pod, bounded by ``--since-time``."""
-        args = ["logs", pod_name, "--timestamps=true"]
-        if container:
-            args.extend(["-c", container])
-        if since_time is not None:
-            args.append(f"--since-time={since_time.strftime('%Y-%m-%dT%H:%M:%S.%f')}Z")
-        result = self._run(args, namespaced=True, timeout=15.0)
-        if result.returncode != 0:
-            return KubectlLogResult(lines=[], last_timestamp=since_time)
-
-        lines: list[KubectlLogLine] = []
-        for line_str in result.stdout.splitlines():
-            if not line_str.strip():
-                continue
-            parsed = _parse_kubectl_log_line(line_str)
-            # --since-time is inclusive; skip already-seen boundary lines
-            if since_time is not None and parsed.timestamp <= since_time:
-                continue
-            lines.append(parsed)
-
-        last_ts = lines[-1].timestamp if lines else since_time
-        return KubectlLogResult(lines=lines, last_timestamp=last_ts)
+    # -- top_pod -------------------------------------------------------------
 
     def top_pod(self, pod_name: str) -> tuple[int, int] | None:
-        """Get (cpu_millicores, memory_bytes) for a pod."""
-        result = self._run(
-            ["top", "pod", pod_name, "--no-headers", "--containers"],
-            namespaced=True,
-            timeout=10.0,
-        )
-        if result.returncode != 0:
+        """Get (cpu_millicores, memory_bytes) for a pod via metrics.k8s.io API."""
+        logger.info("k8s: top_pod %s", pod_name)
+        t0 = time.monotonic()
+        try:
+            result = self._custom.get_namespaced_custom_object(
+                group="metrics.k8s.io",
+                version="v1beta1",
+                namespace=self.namespace,
+                plural="pods",
+                name=pod_name,
+            )
+            _log_operation(f"top_pod {pod_name}", t0)
+        except ApiException:
             return None
-        for line in result.stdout.strip().splitlines():
-            parts = line.split()
-            if len(parts) >= 4:
-                return (_parse_k8s_cpu(parts[2]), _parse_k8s_memory(parts[3]))
-        return None
+
+        containers = result.get("containers", [])
+        if not containers:
+            return None
+
+        total_cpu = 0
+        total_mem = 0
+        for c in containers:
+            usage = c.get("usage", {})
+            if "cpu" in usage:
+                total_cpu += _parse_k8s_cpu(usage["cpu"])
+            if "memory" in usage:
+                total_mem += _parse_k8s_memory(usage["memory"])
+        return (total_cpu, total_mem)
+
+    # -- port_forward (subprocess-based) -------------------------------------
 
     def _popen(
         self,
@@ -409,7 +769,7 @@ class CloudK8sService:
         **kwargs,
     ) -> subprocess.Popen:
         """Start a kubectl subprocess without waiting for completion."""
-        cmd = list(self._prefix)
+        cmd = list(self._kubectl_prefix)
         if namespaced:
             cmd.extend(["-n", self.namespace])
         cmd.extend(args)
