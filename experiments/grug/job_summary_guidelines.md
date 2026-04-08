@@ -111,3 +111,17 @@ Define the scaling ratio: `r/r0 = (B * T0) / (B0 * T)`
 - **warmup** = 10% of training
 - **decay** = last 20% of training (linear decay to 0)
 - **lr_schedule** = linear
+
+## 5. Outputs
+
+- **GCS checkpoint path**: Full GCS path to the checkpoint directory
+- **WandB run link**: URL to the wandb run
+- **Final eval metrics**:
+  - eval/paloma/c4_en/bpb
+  - eval/paloma/macro_loss
+  - eval/uncheatable_eval/macro_loss
+- **Throughput** (compute mean over last 100 logged steps from wandb history):
+  - throughput/mfu
+  - throughput/tokens_per_second
+
+Mark fields as "pending" if the run is not yet complete.

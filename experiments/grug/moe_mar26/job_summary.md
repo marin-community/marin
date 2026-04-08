@@ -1,6 +1,6 @@
 # Job Summary: moe-v7-1e22-d3200
 
-MoE language model (4.7B active / 34.6B total params) trained at 1e22 FLOP budget on 326B tokens from Nemotron mix. Below are sections on model, optimizer, training, and scaling principles.
+MoE language model (4.7B active / 34.6B total params) trained at 1e22 FLOP budget on 326B tokens from Nemotron mix. Below are sections on model, optimizer, training, scaling principles, and outputs.
 
 ## 1. Model
 
@@ -83,3 +83,16 @@ All optimizer hyperparameters derived from reference point (B0=32, T0=1.4e9):
 - **beta2** = clip(0.999^(1024/32), 0.95, 0.9999) = 0.968
 - **epsilon** = 1e-15 * sqrt(1/0.1374) = 2.73e-15
 - **num_layers** = round(3200 / (64 + 4*log2(3200) - 9)) = 32
+
+## 5. Outputs
+
+| Field | Value |
+|-------|-------|
+| GCS checkpoint path | gs://marin-us-central2/grug/moe-v7-1e22-d3200-5a4518/checkpoints |
+| WandB run (v1) | https://wandb.ai/marin-community/dial_moe/runs/moe-v7-1e22-d3200 |
+| WandB run (v2) | https://wandb.ai/marin-community/dial_moe/runs/moe-v7-1e22-d3200-v2 |
+| eval/paloma/c4_en/bpb | 0.775 (v1 @ step 69k) |
+| eval/paloma/macro_loss | 2.563 (v1 @ step 69k) |
+| eval/uncheatable_eval/macro_loss | 2.135 (v1 @ step 69k) |
+| throughput/mfu (mean last 100 steps) | 22.7% |
+| throughput/tokens_per_second (mean last 100 steps) | 482,449 |

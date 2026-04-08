@@ -326,13 +326,13 @@ def create_1e22_v2_run() -> list[ExecutorStep]:
         eval=versioned(
             GrugEvalConfig(
                 eval_batch_size=512,
-                steps_per_eval=None,
+                steps_per_eval=1000,
                 max_eval_batches=8,
                 eval_current=True,
                 eval_ema=False,
             )
         ),
-        load_checkpoint_path="gs://marin-us-central2/grug/moe-v7-1e22-d3200-5a4518/checkpoints/step-69000",
+        load_checkpoint_path="gs://marin-us-central2/grug/moe-v7-1e22-d3200-v2-50b2f6/checkpoints/step-77724",
     )
 
     return [ExecutorStep(name=f"grug/{run_id}", fn=run_grug_moe_trial, config=config)]
@@ -344,5 +344,5 @@ e22_v2_steps = create_1e22_v2_run()
 if __name__ == "__main__":
     executor_main(
         steps=e22_v2_steps,
-        description="MoE v7: 1e22 d=3200 v2 resume from step-69000 with QB-in-JIT fix",
+        description="MoE v7: 1e22 d=3200 v2 eval-only from final checkpoint",
     )
