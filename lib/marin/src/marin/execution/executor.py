@@ -85,6 +85,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import time
 import urllib.parse
 from collections.abc import Callable, Sequence
@@ -1577,8 +1578,17 @@ def get_git_commit() -> str | None:
 
 
 def get_caller_path() -> str:
-    """Return the path of the file that called this function."""
-    return inspect.stack()[-1].filename
+    """Return the path of the file that called this function.
+
+    Walks the stack from the outermost frame inward, returning the first
+    frame that corresponds to a real file (skips ``<frozen runpy>`` and
+    similar synthetic frames produced by ``python -m`` invocation).
+    """
+    for frame_info in reversed(inspect.stack()):
+        if not frame_info.filename.startswith("<"):
+            return frame_info.filename
+    # All frames are synthetic (shouldn't happen in practice) — fall back to argv.
+    return sys.argv[0]
 
 
 def get_user() -> str | None:
