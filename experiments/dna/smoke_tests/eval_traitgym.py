@@ -157,8 +157,6 @@ def run_eval_traitgym(config: EvalTraitGymConfig):
     logger.info("Evaluation complete.")
 
 
-_ENV_KEYS_TO_FORWARD = ["WANDB_API_KEY", "HUGGING_FACE_HUB_TOKEN"]
-
 eval_step = ExecutorStep(
     name="eval/traitgym_mendelian_v2_train_nopack",
     description="Evaluate DNA checkpoint on TraitGym Mendelian (VEP) using LLR scoring.",
@@ -171,8 +169,6 @@ eval_step = ExecutorStep(
         wandb_api_key=os.environ.get("WANDB_API_KEY"),
         hf_token=os.environ.get("HUGGING_FACE_HUB_TOKEN") or os.environ.get("HF_TOKEN"),
     ),
-    # Also forward via env_vars as a belt-and-suspenders approach.
-    env_vars={k: os.environ[k] for k in _ENV_KEYS_TO_FORWARD if k in os.environ},
     # No TPU resources here — runs on CPU coordinator.
     # TPU resources are requested inside run_eval_traitgym via JobRequest.
 )
