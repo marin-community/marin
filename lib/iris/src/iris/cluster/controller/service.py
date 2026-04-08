@@ -439,10 +439,19 @@ def _jobs_paginated(
     descending: bool = True,
     offset: int = 0,
     limit: int = 50,
+    parent_job_id: str = "",
 ) -> tuple[list[JobRow], int]:
-    """Fetch a page of top-level jobs with SQL-level filtering, sorting, and pagination."""
-    conditions = ["j.depth = 1"]
-    params: list[object] = []
+    """Fetch a page of jobs with SQL-level filtering, sorting, and pagination.
+
+    When parent_job_id is set, returns direct children of that job instead of
+    top-level jobs.
+    """
+    if parent_job_id:
+        conditions = ["j.parent_job_id = ?"]
+        params: list[object] = [parent_job_id]
+    else:
+        conditions = ["j.depth = 1"]
+        params = []
 
     if state_filter_int is not None:
         conditions.append("j.state = ?")
@@ -507,19 +516,15 @@ def _jobs_paginated(
     return jobs, total
 
 
-def _descendants_for_roots(db: ControllerDB, root_job_ids: list[str]) -> list[JobRow]:
-    """Fetch all descendant jobs (depth > 1) for the given root job IDs in a single query."""
-    if not root_job_ids:
-        return []
-    placeholders = ",".join("?" for _ in root_job_ids)
-    sql = f"""
-        SELECT {JOB_ROW_PROJECTION.select_clause()}
-        FROM jobs j
-        WHERE j.root_job_id IN ({placeholders}) AND j.depth > 1
-    """
+def _jobs_with_children(db: ControllerDB, job_ids: list[str]) -> set[str]:
+    """Return the subset of job_ids that have at least one child job."""
+    if not job_ids:
+        return set()
+    placeholders = ",".join("?" for _ in job_ids)
+    sql = f"SELECT DISTINCT parent_job_id FROM jobs WHERE parent_job_id IN ({placeholders})"
     with db.read_snapshot() as q:
-        rows = q.fetchall(sql, tuple(root_job_ids))
-    return JOB_ROW_PROJECTION.decode(rows)
+        rows = q.fetchall(sql, tuple(job_ids))
+    return {row[0] for row in rows}
 
 
 def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
@@ -1039,6 +1044,7 @@ class ControllerServiceImpl:
         j: JobRow,
         task_summary: TaskJobSummary | None,
         autoscaler_pending_hints: dict[str, PendingHint],
+        has_children: bool = False,
     ) -> job_pb2.JobStatus:
         """Convert a JobRow + its task summary into a JobStatus proto."""
         job_name = j.name
@@ -1072,6 +1078,7 @@ class ControllerServiceImpl:
             task_count=task_summary.task_count if task_summary else 0,
             completed_count=task_summary.completed_count if task_summary else 0,
             pending_reason=pending_reason,
+            has_children=has_children,
         )
         if j.started_at:
             proto_job.started_at.CopyFrom(timestamp_to_proto(j.started_at))
@@ -1086,8 +1093,17 @@ class ControllerServiceImpl:
         jobs: list[JobRow],
         task_summaries: dict[JobName, TaskJobSummary],
         autoscaler_pending_hints: dict[str, PendingHint],
+        parent_job_ids: set[str],
     ) -> list[job_pb2.JobStatus]:
-        return [self._job_to_proto(j, task_summaries.get(j.job_id), autoscaler_pending_hints) for j in jobs]
+        return [
+            self._job_to_proto(
+                j,
+                task_summaries.get(j.job_id),
+                autoscaler_pending_hints,
+                has_children=j.job_id.to_wire() in parent_job_ids,
+            )
+            for j in jobs
+        ]
 
     def list_jobs(
         self,
@@ -1109,7 +1125,7 @@ class ControllerServiceImpl:
         reverse = sort_dir == controller_pb2.Controller.SORT_DIRECTION_DESC
 
         offset = max(request.offset, 0)
-        limit = min(request.limit, 500) if request.limit > 0 else 0
+        limit = max(request.limit, 0)
 
         state_filter_int: int | None = None
         if state_filter:
@@ -1129,14 +1145,13 @@ class ControllerServiceImpl:
             descending=reverse,
             offset=offset,
             limit=limit,
+            parent_job_id=request.parent_job_id,
         )
-        # Also fetch descendants so the dashboard can build the job tree.
-        descendants = _descendants_for_roots(self._db, [j.job_id.to_wire() for j in jobs])
-        all_db_jobs = jobs + descendants
-        task_summaries = _task_summaries_for_jobs(self._db, {j.job_id for j in all_db_jobs})
-        has_pending = any(j.state == job_pb2.JOB_STATE_PENDING for j in all_db_jobs)
+        task_summaries = _task_summaries_for_jobs(self._db, {j.job_id for j in jobs})
+        parent_job_ids = _jobs_with_children(self._db, [j.job_id.to_wire() for j in jobs])
+        has_pending = any(j.state == job_pb2.JOB_STATE_PENDING for j in jobs)
         autoscaler_pending_hints = self._get_autoscaler_pending_hints() if has_pending else {}
-        all_jobs = self._jobs_to_protos(all_db_jobs, task_summaries, autoscaler_pending_hints)
+        all_jobs = self._jobs_to_protos(jobs, task_summaries, autoscaler_pending_hints, parent_job_ids)
         has_more = limit > 0 and offset + limit < total_count
         return controller_pb2.Controller.ListJobsResponse(
             jobs=all_jobs,
