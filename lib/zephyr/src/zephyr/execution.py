@@ -162,6 +162,83 @@ def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
     return f"{prefix}/{execution_id}/shared/{name}.pkl"
 
 
+class _SubprocessWorkerContext:
+    """Lightweight WorkerContext for subprocess shard execution.
+
+    Provides ``get_shared`` (loads from GCS on demand) and counter tracking.
+    Counters are collected after the subprocess exits via the result file.
+    """
+
+    def __init__(self, chunk_prefix: str, execution_id: str):
+        self._chunk_prefix = chunk_prefix
+        self._execution_id = execution_id
+        self._shared_data_cache: dict[str, Any] = {}
+        self._counters: dict[str, int] = {}
+        self._generation = 0
+
+    def get_shared(self, name: str) -> Any:
+        if name not in self._shared_data_cache:
+            path = _shared_data_path(self._chunk_prefix, self._execution_id, name)
+            logger.info("Loading shared data '%s' from %s", name, path)
+            with open_url(path, "rb") as f:
+                self._shared_data_cache[name] = cloudpickle.loads(f.read())
+        return self._shared_data_cache[name]
+
+    def increment_counter(self, name: str, value: int = 1) -> None:
+        self._counters[name] = self._counters.get(name, 0) + value
+
+    def get_counter_snapshot(self) -> CounterSnapshot:
+        self._generation += 1
+        return CounterSnapshot(counters=dict(self._counters), generation=self._generation)
+
+
+def _subprocess_execute_shard(task_file: str, result_file: str) -> None:
+    """Entry point for subprocess shard execution.
+
+    Reads ``(task, chunk_prefix, execution_id)`` from *task_file*, executes the
+    shard inline, and writes the resulting ``TaskResult`` (or the raised
+    exception) to *result_file*. Invoked by ``zephyr.subprocess_worker``.
+    """
+    from rigging.log_setup import configure_logging
+
+    configure_logging(level=logging.INFO)
+
+    try:
+        with open(task_file, "rb") as f:
+            task, chunk_prefix, execution_id = cloudpickle.load(f)
+
+        # Set up worker context so get_shared() and counters work
+        ctx = _SubprocessWorkerContext(chunk_prefix, execution_id)
+        _worker_ctx_var.set(ctx)  # type: ignore[arg-type]
+
+        stage_ctx = StageContext(
+            shard=task.shard,
+            shard_idx=task.shard_idx,
+            total_shards=task.total_shards,
+            aux_shards=task.aux_shards,
+        )
+
+        stage_dir = f"{chunk_prefix}/{execution_id}/{task.stage_name}"
+        external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
+        scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
+
+        result = _write_stage_output(
+            run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir),
+            source_shard=task.shard_idx,
+            stage_dir=stage_dir,
+            shard_idx=task.shard_idx,
+            scatter_op=scatter_op,
+            total_shards=task.total_shards,
+        )
+
+        with open(result_file, "wb") as f:
+            cloudpickle.dump(result, f)
+    except Exception as e:
+        logger.exception("Subprocess shard execution failed")
+        with open(result_file, "wb") as f:
+            cloudpickle.dump(e, f)
+
+
 def _cleanup_execution(prefix: str, execution_id: str) -> None:
     """Remove all chunk files for an execution."""
     exec_dir = f"{prefix}/{execution_id}"
@@ -1176,10 +1253,17 @@ class ZephyrWorker:
                 ).result()
 
     def _execute_shard(self, task: ShardTask, config: dict) -> TaskResult:
-        """Execute a stage's operations on a single shard.
+        """Execute a stage's operations in a child process for memory isolation.
 
-        Returns list[TaskResult].
+        Serializes the task via cloudpickle, runs it in a subprocess via
+        ``python -m zephyr.subprocess_worker``, and returns the deserialized
+        ``TaskResult``. All child memory (page cache, Arrow pool, Python heap)
+        is reclaimed when the child exits, so successive tasks on the same
+        worker actor do not accumulate state.
         """
+        import subprocess as sp
+        import tempfile
+
         # Update config for this execution
         self._chunk_prefix = config["chunk_prefix"]
         self._execution_id = config["execution_id"]
@@ -1198,27 +1282,38 @@ class ZephyrWorker:
             len(task.operations),
         )
 
-        stage_ctx = StageContext(
-            shard=task.shard,
-            shard_idx=task.shard_idx,
-            total_shards=task.total_shards,
-            aux_shards=task.aux_shards,
-        )
+        result_file = tempfile.mktemp(suffix=".pkl")
+        task_file = tempfile.mktemp(suffix=".pkl")
 
-        stage_dir = f"{self._chunk_prefix}/{self._execution_id}/{task.stage_name}"
-        external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
-        scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
+        try:
+            with open(task_file, "wb") as f:
+                cloudpickle.dump((task, self._chunk_prefix, self._execution_id), f)
 
-        result = _write_stage_output(
-            run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir),
-            source_shard=task.shard_idx,
-            stage_dir=stage_dir,
-            shard_idx=task.shard_idx,
-            scatter_op=scatter_op,
-            total_shards=task.total_shards,
-        )
-        logger.info("[shard %d] Complete: %d refs produced", task.shard_idx, len(result.shard.refs))
-        return result
+            proc = sp.run(
+                [sys.executable, "-m", "zephyr.subprocess_worker", task_file, result_file],
+                stdout=sys.stdout,
+                stderr=sys.stderr,
+            )
+
+            if proc.returncode != 0:
+                raise RuntimeError(f"Subprocess for shard {task.shard_idx} exited with code {proc.returncode}")
+
+            with open(result_file, "rb") as f:
+                result_or_error = cloudpickle.load(f)
+
+            if isinstance(result_or_error, Exception):
+                raise result_or_error
+
+            logger.info(
+                "[shard %d] Complete: %d refs produced",
+                task.shard_idx,
+                len(result_or_error.shard.refs),
+            )
+            return result_or_error
+        finally:
+            for p in (task_file, result_file):
+                with suppress(FileNotFoundError):
+                    os.unlink(p)
 
     def __repr__(self) -> str:
         return f"ZephyrWorker(id={self._worker_id})"
