@@ -120,7 +120,7 @@ class WorkerServiceImpl:
         _ctx: RequestContext,
     ) -> job_pb2.GetProcessStatusResponse:
         """Return local process info (logs are in the central LogService)."""
-        return _get_process_status(request, None, self._timer)
+        return _get_process_status(self._timer)
 
     def profile_task(
         self,

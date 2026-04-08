@@ -3,8 +3,8 @@
 
 """Shared process status collection for controller and worker.
 
-Collects local process info (PID, memory, CPU, threads, etc.) and recent
-logs into a GetProcessStatusResponse. Used identically by both services.
+Collects local process info (PID, memory, CPU, threads, etc.)
+into a GetProcessStatusResponse. Used identically by both services.
 """
 
 import os
@@ -14,8 +14,6 @@ import sys
 import threading
 
 from iris.cluster.runtime.process import _read_proc_cpu_percent
-from iris.log_server.server import LogServiceImpl
-from iris.rpc import logging_pb2
 from iris.rpc import job_pb2
 from rigging.timing import Timer
 
@@ -92,32 +90,13 @@ def collect_process_info(timer: Timer) -> job_pb2.ProcessInfo:
 
 
 def get_process_status(
-    request: job_pb2.GetProcessStatusRequest,
-    log_service: LogServiceImpl | None,
     timer: Timer,
-    log_key: str = "",
 ) -> job_pb2.GetProcessStatusResponse:
-    """Build a GetProcessStatusResponse with local process info and recent logs.
+    """Build a GetProcessStatusResponse with local process info.
 
     This is the shared implementation used by both controller and worker services.
-    The caller must provide the log_key for the process (e.g. /system/controller).
+    Log fetching is handled separately via FetchLogs.
     """
-    process_info = collect_process_info(timer)
-
-    log_entries: list[logging_pb2.LogEntry] = []
-    if log_service and log_key:
-        max_lines = request.max_log_lines if request.max_log_lines > 0 else 200
-        fetch_req = logging_pb2.FetchLogsRequest(
-            source=log_key,
-            substring=request.log_substring or "",
-            max_lines=max_lines,
-            tail=True,
-            min_level=request.min_log_level or "",
-        )
-        fetch_resp = log_service.fetch_logs(fetch_req, None)
-        log_entries = list(fetch_resp.entries)
-
     return job_pb2.GetProcessStatusResponse(
-        process_info=process_info,
-        log_entries=log_entries,
+        process_info=collect_process_info(timer),
     )
