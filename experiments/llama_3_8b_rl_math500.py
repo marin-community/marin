@@ -17,7 +17,6 @@ import logging
 import os
 
 from experiments.models import llama_3_1_8b_instruct
-from levanter.checkpoint import CheckpointDebugConfig
 from fray.v2.types import ResourceConfig
 from levanter.checkpoint import CheckpointDebugConfig
 from levanter.models.llama import LlamaConfig
