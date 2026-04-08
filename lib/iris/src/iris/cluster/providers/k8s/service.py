@@ -89,6 +89,7 @@ class K8sService(Protocol):
         *,
         container: str | None = None,
         since_time: datetime | None = None,
+        limit_bytes: int | None = None,
     ) -> KubectlLogResult: ...
 
     def exec(
@@ -462,9 +463,15 @@ class CloudK8sService:
         *,
         container: str | None = None,
         since_time: datetime | None = None,
+        limit_bytes: int | None = None,
     ) -> KubectlLogResult:
-        """Fetch new log lines from a pod, bounded by since_time."""
-        logger.info("k8s: stream_logs %s since=%s", pod_name, since_time)
+        """Fetch new log lines from a pod, bounded by since_time.
+
+        When limit_bytes is set the K8s API caps the response size server-side.
+        The response may be cut mid-line, so we drop the trailing partial line
+        before parsing.
+        """
+        logger.info("k8s: stream_logs %s since=%s limit_bytes=%s", pod_name, since_time, limit_bytes)
         with slow_log(logger, f"stream_logs {pod_name}", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
                 kwargs: dict = {
@@ -479,12 +486,20 @@ class CloudK8sService:
                     delta = datetime.now(timezone.utc) - since_time
                     since_sec = max(1, int(delta.total_seconds()) + 1)
                     kwargs["since_seconds"] = since_sec
+                if limit_bytes is not None:
+                    kwargs["limit_bytes"] = limit_bytes
 
                 raw = self._core_v1.read_namespaced_pod_log(**kwargs)
             except ApiException as e:
                 if e.status == 404:
                     return KubectlLogResult(lines=[], last_timestamp=since_time)
                 raise
+
+        # When limit_bytes is active the response may be truncated mid-line.
+        # Drop the trailing partial line by trimming to the last newline.
+        if limit_bytes is not None and raw and not raw.endswith("\n"):
+            last_nl = raw.rfind("\n")
+            raw = raw[: last_nl + 1] if last_nl >= 0 else ""
 
         lines: list[KubectlLogLine] = []
         for line_str in raw.splitlines():
