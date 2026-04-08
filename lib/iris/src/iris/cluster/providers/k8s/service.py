@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""K8sService protocol and CloudK8sService (kubernetes-client-backed) implementation."""
+"""K8sService protocol and CloudK8sService (kubernetes DynamicClient) implementation."""
 
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ import kubernetes.client
 import kubernetes.config
 import kubernetes.stream
 from kubernetes.client.exceptions import ApiException
+from kubernetes.dynamic import DynamicClient
+from kubernetes.dynamic.exceptions import NotFoundError
 
 from iris.cluster.providers.k8s.types import ExecResult, K8sResource, KubectlError, KubectlLogLine, KubectlLogResult
 from iris.cluster.providers.k8s.types import parse_k8s_cpu as _parse_k8s_cpu
@@ -64,7 +66,7 @@ class K8sService(Protocol):
     def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None: ...
 
     def delete_many(self, resource: K8sResource, names: list[str], *, wait: bool = False) -> None:
-        """Delete multiple resources by name in a single kubectl call."""
+        """Delete multiple resources by name."""
         ...
 
     def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
@@ -126,14 +128,7 @@ class K8sService(Protocol):
         local_port: int | None = None,
         timeout: float = 90.0,
     ) -> AbstractContextManager[str]:
-        """Port-forward to a K8s Service, yielding the local URL.
-
-        The returned context manager keeps the tunnel alive for its duration.
-        Implementations may reconnect transparently on transient failures.
-
-        In DRY_RUN/LOCAL mode, returns a fake URL without spawning subprocesses.
-        In CLOUD mode, runs ``kubectl port-forward`` with reconnection.
-        """
+        """Port-forward to a K8s Service, yielding the local URL."""
         ...
 
 
@@ -149,25 +144,26 @@ def _log_operation(operation: str, t0: float) -> None:
 
 
 # ---------------------------------------------------------------------------
-# CloudK8sService — kubernetes-client-backed implementation
+# CloudK8sService — DynamicClient-backed implementation
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class CloudK8sService:
-    """K8sService backed by the kubernetes Python client. Used in CLOUD mode.
+    """K8sService backed by the kubernetes DynamicClient.
 
-    Encapsulates API client construction (including optional kubeconfig),
-    namespace injection, serialization, and error handling.
+    Uses DynamicClient for CRUD operations (handles auth, serialization,
+    content types, and URL construction automatically). Falls back to
+    typed CoreV1Api for subresource operations (logs, exec) and
+    subprocess for port-forward.
     """
 
     namespace: str
     kubeconfig_path: str | None = None
     timeout: float = DEFAULT_TIMEOUT
     _api_client: kubernetes.client.ApiClient = field(init=False, repr=False)
+    _dyn: DynamicClient = field(init=False, repr=False)
     _core_v1: kubernetes.client.CoreV1Api = field(init=False, repr=False)
-    _apps_v1: kubernetes.client.AppsV1Api = field(init=False, repr=False)
-    _policy_v1: kubernetes.client.PolicyV1Api = field(init=False, repr=False)
     _custom: kubernetes.client.CustomObjectsApi = field(init=False, repr=False)
     _kubectl_prefix: list[str] = field(init=False, repr=False)
 
@@ -184,43 +180,26 @@ class CloudK8sService:
             except kubernetes.config.ConfigException:
                 self._api_client = kubernetes.config.new_client_from_config()
 
+        self._dyn = DynamicClient(self._api_client)
         self._core_v1 = kubernetes.client.CoreV1Api(self._api_client)
-        self._apps_v1 = kubernetes.client.AppsV1Api(self._api_client)
-        self._policy_v1 = kubernetes.client.PolicyV1Api(self._api_client)
         self._custom = kubernetes.client.CustomObjectsApi(self._api_client)
 
-        # Keep kubectl prefix for port-forward subprocess only.
+        # kubectl prefix for port-forward subprocess only
         cmd = ["kubectl"]
         if self.kubeconfig_path:
             cmd.extend(["--kubeconfig", self.kubeconfig_path])
         self._kubectl_prefix = cmd
 
-    def _serialize(self, obj: object) -> dict:
-        """Convert a kubernetes client object to a camelCase dict."""
-        return self._api_client.sanitize_for_serialization(obj)
+    def _resource_api(self, resource: K8sResource):
+        """Get the DynamicClient resource handle for a K8sResource enum member."""
+        api_version = f"{resource.api_group}/{resource.api_version}" if resource.api_group else resource.api_version
+        return self._dyn.resources.get(api_version=api_version, kind=resource.kind)
 
-    def _call_api(
-        self,
-        path: str,
-        method: str,
-        *,
-        body: dict | None = None,
-        query_params: list[tuple[str, str]] | None = None,
-        content_type: str = "application/json",
-        timeout: float | None = None,
-    ) -> dict:
-        """Central API dispatch. Injects auth and timeout for every call."""
-        resp = self._api_client.call_api(
-            path,
-            method,
-            body=body,
-            query_params=query_params or [],
-            header_params={"Content-Type": content_type, "Accept": "application/json"},
-            response_type="object",
-            auth_settings=["BearerToken"],
-            _request_timeout=timeout or self.timeout,
-        )
-        return resp[0]  # call_api returns (data, status, headers)
+    def _ns_kwargs(self, resource: K8sResource) -> dict:
+        """Return namespace kwarg if the resource is namespaced."""
+        if resource.is_namespaced:
+            return {"namespace": self.namespace}
+        return {}
 
     # -- apply ---------------------------------------------------------------
 
@@ -229,16 +208,18 @@ class CloudK8sService:
         kind = manifest.get("kind", "?")
         name = manifest["metadata"]["name"]
         res = K8sResource.from_kind(manifest["kind"])
-        ns = manifest["metadata"].get("namespace", self.namespace)
-        item_path = res.item_path(name, ns)
-        collection_path = res.collection_path(ns)
+        api = self._resource_api(res)
+        ns = manifest["metadata"].get("namespace", self.namespace) if res.is_namespaced else None
+
         logger.info("k8s: apply %s/%s", kind, name)
         t0 = time.monotonic()
 
         exists = False
         try:
-            self._call_api(item_path, "GET")
+            api.get(name=name, **({"namespace": ns} if ns else {}))
             exists = True
+        except NotFoundError:
+            pass
         except ApiException as e:
             if e.status != 404:
                 raise KubectlError(
@@ -247,9 +228,14 @@ class CloudK8sService:
 
         try:
             if exists:
-                self._call_api(item_path, "PATCH", body=manifest, content_type="application/strategic-merge-patch+json")
+                api.patch(
+                    body=manifest,
+                    name=name,
+                    content_type="application/merge-patch+json",
+                    **({"namespace": ns} if ns else {}),
+                )
             else:
-                self._call_api(collection_path, "POST", body=manifest)
+                api.create(body=manifest, **({"namespace": ns} if ns else {}))
         except ApiException as e:
             op = "patch" if exists else "create"
             raise KubectlError(f"apply {op} {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}") from e
@@ -259,13 +245,14 @@ class CloudK8sService:
 
     def get_json(self, resource: K8sResource, name: str) -> dict | None:
         """Get a Kubernetes resource as a parsed dict. Returns None if not found."""
-        path = resource.item_path(name, self.namespace)
-        logger.info("k8s: GET %s", path)
+        logger.info("k8s: GET %s/%s", resource.plural, name)
         t0 = time.monotonic()
         try:
-            result = self._call_api(path, "GET")
+            result = self._resource_api(resource).get(name=name, **self._ns_kwargs(resource))
             _log_operation(f"get {resource.plural}/{name}", t0)
-            return result
+            return result.to_dict()
+        except NotFoundError:
+            return None
         except ApiException as e:
             if e.status == 404:
                 return None
@@ -281,19 +268,17 @@ class CloudK8sService:
         field_selector: str | None = None,
     ) -> list[dict]:
         """List Kubernetes resources, optionally filtered by labels and/or field selectors."""
-        path = resource.collection_path(self.namespace)
-        query_params: list[tuple[str, str]] = []
-        if labels:
-            query_params.append(("labelSelector", _label_selector(labels)))
-        if field_selector:
-            query_params.append(("fieldSelector", field_selector))
-
-        logger.info("k8s: LIST %s labels=%s field_selector=%s", path, labels, field_selector)
+        logger.info("k8s: LIST %s labels=%s field_selector=%s", resource.plural, labels, field_selector)
         t0 = time.monotonic()
+        kwargs = self._ns_kwargs(resource)
+        if labels:
+            kwargs["label_selector"] = _label_selector(labels)
+        if field_selector:
+            kwargs["field_selector"] = field_selector
         try:
-            data = self._call_api(path, "GET", query_params=query_params)
+            result = self._resource_api(resource).get(**kwargs)
             _log_operation(f"list {resource.plural}", t0)
-            return data.get("items", [])
+            return [item.to_dict() for item in result.items]
         except ApiException as e:
             raise KubectlError(f"list {resource.plural} failed ({e.status}): {e.reason}") from e
 
@@ -301,25 +286,24 @@ class CloudK8sService:
 
     def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None:
         """Delete a Kubernetes resource, ignoring NotFound errors."""
-        path = resource.item_path(name, self.namespace)
-        query_params: list[tuple[str, str]] = []
-        if force:
-            query_params.append(("gracePeriodSeconds", "0"))
-        if not wait:
-            query_params.append(("propagationPolicy", "Background"))
-
-        logger.info("k8s: DELETE %s force=%s wait=%s", path, force, wait)
+        logger.info("k8s: DELETE %s/%s force=%s wait=%s", resource.plural, name, force, wait)
         t0 = time.monotonic()
+        kwargs = self._ns_kwargs(resource)
+        body: dict = {}
+        if force:
+            body["gracePeriodSeconds"] = 0
+        if not wait:
+            body["propagationPolicy"] = "Background"
         try:
-            self._call_api(path, "DELETE", query_params=query_params)
-        except ApiException as e:
-            if e.status == 404:
+            self._resource_api(resource).delete(name=name, body=body, **kwargs)
+        except (NotFoundError, ApiException) as e:
+            if isinstance(e, NotFoundError) or (isinstance(e, ApiException) and e.status == 404):
                 return
             raise KubectlError(f"delete {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
         _log_operation(f"delete {resource.plural}/{name}", t0)
 
     def delete_many(self, resource: K8sResource, names: list[str], *, wait: bool = False) -> None:
-        """Delete multiple resources by name via individual API calls."""
+        """Delete multiple resources by name."""
         if not names:
             return
         logger.info("k8s: DELETE_MANY %s count=%d", resource.plural, len(names))
@@ -332,16 +316,19 @@ class CloudK8sService:
         """Delete all resources matching the given label selector."""
         if not labels:
             return
-        path = resource.collection_path(self.namespace)
         selector = _label_selector(labels)
-        query_params: list[tuple[str, str]] = [("labelSelector", selector)]
-        if not wait:
-            query_params.append(("propagationPolicy", "Background"))
-
-        logger.info("k8s: DELETE_COLLECTION %s labels=%s", path, labels)
+        logger.info("k8s: DELETE_COLLECTION %s labels=%s", resource.plural, labels)
         t0 = time.monotonic()
+        kwargs = self._ns_kwargs(resource)
+        kwargs["label_selector"] = selector
+        if not wait:
+            kwargs["propagation_policy"] = "Background"
         try:
-            self._call_api(path, "DELETE", query_params=query_params)
+            api = self._resource_api(resource)
+            # DynamicClient delete without name = deleteCollection
+            items = api.get(**{k: v for k, v in kwargs.items() if k != "propagation_policy"}).items
+            for item in items:
+                self.delete(resource, item.metadata.name, wait=wait)
         except ApiException as e:
             if e.status == 404:
                 return
@@ -363,11 +350,15 @@ class CloudK8sService:
                 }
             }
         }
-        path = resource.item_path(name, self.namespace)
         logger.info("k8s: PATCH set_image %s/%s container=%s image=%s", resource.plural, name, container, image)
         t0 = time.monotonic()
         try:
-            self._call_api(path, "PATCH", body=patch_body, content_type="application/strategic-merge-patch+json")
+            self._resource_api(resource).patch(
+                body=patch_body,
+                name=name,
+                content_type="application/strategic-merge-patch+json",
+                **self._ns_kwargs(resource),
+            )
         except ApiException as e:
             raise KubectlError(f"set_image {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
         _log_operation(f"set_image {resource.plural}/{name}", t0)
@@ -388,11 +379,15 @@ class CloudK8sService:
                 }
             }
         }
-        path = resource.item_path(name, self.namespace)
         logger.info("k8s: PATCH rollout_restart %s/%s", resource.plural, name)
         t0 = time.monotonic()
         try:
-            self._call_api(path, "PATCH", body=patch_body, content_type="application/strategic-merge-patch+json")
+            self._resource_api(resource).patch(
+                body=patch_body,
+                name=name,
+                content_type="application/strategic-merge-patch+json",
+                **self._ns_kwargs(resource),
+            )
         except ApiException as e:
             raise KubectlError(f"rollout_restart {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
         _log_operation(f"rollout_restart {resource.plural}/{name}", t0)
@@ -403,14 +398,12 @@ class CloudK8sService:
         """Wait for a rollout to complete by polling deployment conditions."""
         deadline = Deadline.from_seconds(timeout)
         backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
-        path = resource.item_path(name, self.namespace)
         logger.info("k8s: rollout_status %s/%s timeout=%.0fs", resource.plural, name, timeout)
 
         while not deadline.expired():
-            try:
-                obj = self._call_api(path, "GET")
-            except ApiException as e:
-                raise KubectlError(f"rollout_status {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
+            obj = self.get_json(resource, name)
+            if obj is None:
+                raise KubectlError(f"rollout_status {resource.plural}/{name} not found")
 
             status = obj.get("status", {})
             spec = obj.get("spec", {})
@@ -420,7 +413,6 @@ class CloudK8sService:
             available = status.get("availableReplicas", 0)
 
             if updated >= desired and ready >= desired and available >= desired:
-                # Check that observedGeneration matches metadata.generation
                 observed = status.get("observedGeneration", 0)
                 generation = obj.get("metadata", {}).get("generation", 0)
                 if observed >= generation:
@@ -433,10 +425,7 @@ class CloudK8sService:
 
     # -- events --------------------------------------------------------------
 
-    def get_events(
-        self,
-        field_selector: str | None = None,
-    ) -> list[dict]:
+    def get_events(self, field_selector: str | None = None) -> list[dict]:
         """Get Kubernetes events, optionally filtered by field selector."""
         logger.info("k8s: list events field_selector=%s", field_selector)
         t0 = time.monotonic()
@@ -446,7 +435,7 @@ class CloudK8sService:
                 kwargs["field_selector"] = field_selector
             result = self._core_v1.list_namespaced_event(**kwargs)
             _log_operation("get_events", t0)
-            return [self._serialize(item) for item in result.items]
+            return self._api_client.sanitize_for_serialization(result)["items"]
         except ApiException:
             logger.warning("get_events failed", exc_info=True)
             return []
@@ -495,8 +484,6 @@ class CloudK8sService:
             if container:
                 kwargs["container"] = container
             if since_time is not None:
-                # Compute since_seconds from the delta. Add 1s margin to ensure
-                # we don't miss boundary lines (we filter duplicates below).
                 delta = datetime.now(timezone.utc) - since_time
                 since_sec = max(1, int(delta.total_seconds()) + 1)
                 kwargs["since_seconds"] = since_sec
@@ -511,7 +498,6 @@ class CloudK8sService:
             if not line_str.strip():
                 continue
             parsed = _parse_kubectl_log_line(line_str)
-            # since_seconds is inclusive; skip already-seen boundary lines
             if since_time is not None and parsed.timestamp <= since_time:
                 continue
             lines.append(parsed)
@@ -552,9 +538,6 @@ class CloudK8sService:
                 **kwargs,
             )
             _log_operation(f"exec {pod_name}", t0)
-            # stream() returns the combined stdout when not using a websocket client.
-            # For separate streams we'd need _preload_content=False, but the simple
-            # interface returns stdout as a string. stderr comes via the error channel.
             return ExecResult(returncode=0, stdout=resp, stderr="")
         except ApiException as e:
             _log_operation(f"exec {pod_name} (error)", t0)
@@ -562,26 +545,14 @@ class CloudK8sService:
 
     # -- read_file / rm_files ------------------------------------------------
 
-    def read_file(
-        self,
-        pod_name: str,
-        path: str,
-        *,
-        container: str | None = None,
-    ) -> bytes:
+    def read_file(self, pod_name: str, path: str, *, container: str | None = None) -> bytes:
         """Read a file from inside a Pod container."""
         result = self.exec(pod_name, ["cat", path], container=container, timeout=10)
         if result.returncode != 0:
             raise RuntimeError(f"Failed to read {path}: {result.stderr}")
         return result.stdout.encode("utf-8")
 
-    def rm_files(
-        self,
-        pod_name: str,
-        paths: list[str],
-        *,
-        container: str | None = None,
-    ) -> None:
+    def rm_files(self, pod_name: str, paths: list[str], *, container: str | None = None) -> None:
         """Remove files inside a Pod container. Ignores missing files."""
         self.exec(pod_name, ["rm", "-f", *paths], container=container, timeout=10)
 
@@ -619,13 +590,7 @@ class CloudK8sService:
 
     # -- port_forward (subprocess-based) -------------------------------------
 
-    def _popen(
-        self,
-        args: list[str],
-        *,
-        namespaced: bool = False,
-        **kwargs,
-    ) -> subprocess.Popen:
+    def _popen(self, args: list[str], *, namespaced: bool = False, **kwargs) -> subprocess.Popen:
         """Start a kubectl subprocess without waiting for completion."""
         cmd = list(self._kubectl_prefix)
         if namespaced:
@@ -641,12 +606,7 @@ class CloudK8sService:
         local_port: int | None = None,
         timeout: float = 90.0,
     ) -> Iterator[str]:
-        """Port-forward to a K8s Service, yielding the local URL.
-
-        Uses exponential backoff to handle freshly provisioned nodes whose
-        konnectivity agent may not be ready when the pod first passes its
-        readiness probe. If the kubectl process exits, it is relaunched.
-        """
+        """Port-forward to a K8s Service, yielding the local URL."""
         if local_port is None:
             local_port = find_free_port(start=10000)
 
@@ -692,7 +652,6 @@ class CloudK8sService:
                 time.sleep(0.5)
         else:
             _stop()
-            # Capture konnectivity-agent state for diagnostics.
             try:
                 diag = self._popen(
                     ["get", "pods", "-n", "kube-system", "-o", "wide"],
@@ -715,22 +674,17 @@ class CloudK8sService:
 
 
 def _parse_kubectl_log_line(line: str) -> KubectlLogLine:
-    """Parse a ``kubectl logs --timestamps`` line.
-
-    Format: ``<RFC3339-timestamp> <message>``
-    e.g. ``2026-02-20T21:19:05.826882951Z Built haliax @ file:///app/lib/haliax``
-    """
+    """Parse a timestamped log line (format: ``<RFC3339> <message>``)."""
     parts = line.split(" ", 1)
     if len(parts) == 2:
         ts_str, payload = parts
         try:
-            # Truncate nanoseconds -> microseconds for fromisoformat
             if len(ts_str) > 27 and ts_str.endswith("Z"):
                 ts_str = ts_str[:26] + "Z"
             ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
             return KubectlLogLine(timestamp=ts, stream="stdout", data=payload)
         except ValueError:
-            logger.warning("Failed to parse timestamp from kubectl log line: %r", line[:120])
+            logger.warning("Failed to parse timestamp from log line: %r", line[:120])
     else:
-        logger.warning("Unexpected kubectl log line format (no space-separated timestamp): %r", line[:120])
+        logger.warning("Unexpected log line format (no space-separated timestamp): %r", line[:120])
     return KubectlLogLine(timestamp=datetime.now(timezone.utc), stream="stdout", data=line)
