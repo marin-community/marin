@@ -32,18 +32,14 @@ for filename in backend.execute(dataset):
 You focus on the individual operations, and the dataset & backend handle the
 scaling and load-management for you. To process a dataset, you need a `Backend`:
 we provide simple multi-processing and synchronous backends for small datasets,
-as well as a Ray backend which runs tasks on a cluster. A launcher script
-handles creating the backend for you and running your code against a Draccus compatible API:
+as well as a Ray backend which runs tasks on a cluster. Pipelines are invoked
+directly as Python functions:
 
 ```python
 # experiments/my_processor.py
 def my_entry_point(conf: Config, backend: zephyr.Backend):
   dataset = ...
   backend.execute(dataset)
-```
-
-```bash
-uv run zephyr experiments/my_processor.py --max-parallelism=100 --memory=1GB
 ```
 
 ## Datasets
@@ -254,13 +250,6 @@ individual tasks:
 ```
 backend = RayBackend(memory=1_000_000_000, cpu=1)
 backend.execute(ds)
-```
-
-Most usage will use the `zephyr` script to handle creating an appropriate
-backend for you and calling your entry point function:
-
-```
-uv run zephyr src/my/script.py --cluster=ray --cluster-config=xyz
 ```
 
 ### Optimizations
