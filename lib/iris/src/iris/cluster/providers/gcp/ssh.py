@@ -101,7 +101,7 @@ class OsLoginKeyProvisioner:
 
         now_us = int(time.time() * 1e6)
         removed = 0
-        for line in result.stdout.strip().splitlines():
+        for line in (result.stdout or "").splitlines():
             parts = line.split()
             if len(parts) != 2:
                 continue

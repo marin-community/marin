@@ -51,7 +51,10 @@ def provisioner():
     return OsLoginKeyProvisioner()
 
 
-@patch("iris.cluster.providers.gcp.ssh.subprocess.run", return_value=subprocess.CompletedProcess([], 0))
+@patch(
+    "iris.cluster.providers.gcp.ssh.subprocess.run",
+    return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+)
 @patch("iris.cluster.providers.gcp.ssh.os.path.exists", return_value=False)
 @patch("iris.cluster.providers.gcp.ssh.os.makedirs")
 def test_ensure_key_generates_and_registers(mock_makedirs, mock_exists, mock_run, provisioner):
@@ -78,7 +81,10 @@ def test_ensure_key_skips_when_valid(mock_exists, mock_run, provisioner):
     mock_run.assert_not_called()
 
 
-@patch("iris.cluster.providers.gcp.ssh.subprocess.run", return_value=subprocess.CompletedProcess([], 0))
+@patch(
+    "iris.cluster.providers.gcp.ssh.subprocess.run",
+    return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+)
 @patch("iris.cluster.providers.gcp.ssh.os.path.exists", return_value=True)
 @patch("iris.cluster.providers.gcp.ssh.time.monotonic", return_value=100000.0)
 def test_ensure_key_reregisters_on_expiry(mock_monotonic, mock_exists, mock_run, provisioner):
@@ -92,7 +98,10 @@ def test_ensure_key_reregisters_on_expiry(mock_monotonic, mock_exists, mock_run,
     assert "os-login" in mock_run.call_args.args[0]
 
 
-@patch("iris.cluster.providers.gcp.ssh.subprocess.run", return_value=subprocess.CompletedProcess([], 0))
+@patch(
+    "iris.cluster.providers.gcp.ssh.subprocess.run",
+    return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+)
 @patch("iris.cluster.providers.gcp.ssh.os.path.exists", return_value=False)
 @patch("iris.cluster.providers.gcp.ssh.os.makedirs")
 def test_ensure_key_no_impersonate_sa(mock_makedirs, mock_exists, mock_run, provisioner):
@@ -103,7 +112,10 @@ def test_ensure_key_no_impersonate_sa(mock_makedirs, mock_exists, mock_run, prov
     assert not any("--impersonate-service-account" in arg for arg in cmd)
 
 
-@patch("iris.cluster.providers.gcp.ssh.subprocess.run", return_value=subprocess.CompletedProcess([], 0))
+@patch(
+    "iris.cluster.providers.gcp.ssh.subprocess.run",
+    return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+)
 @patch("iris.cluster.providers.gcp.ssh.os.path.exists", return_value=False)
 @patch("iris.cluster.providers.gcp.ssh.os.makedirs")
 def test_ensure_key_thread_safety(mock_makedirs, mock_exists, mock_run, provisioner):
