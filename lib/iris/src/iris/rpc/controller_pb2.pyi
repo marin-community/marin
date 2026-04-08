@@ -119,20 +119,22 @@ class Controller(_message.Message):
         job_id: str
         def __init__(self, job_id: _Optional[str] = ...) -> None: ...
     class ListJobsRequest(_message.Message):
-        __slots__ = ("offset", "limit", "sort_field", "sort_direction", "name_filter", "state_filter")
+        __slots__ = ("offset", "limit", "sort_field", "sort_direction", "name_filter", "state_filter", "parent_job_id")
         OFFSET_FIELD_NUMBER: _ClassVar[int]
         LIMIT_FIELD_NUMBER: _ClassVar[int]
         SORT_FIELD_FIELD_NUMBER: _ClassVar[int]
         SORT_DIRECTION_FIELD_NUMBER: _ClassVar[int]
         NAME_FILTER_FIELD_NUMBER: _ClassVar[int]
         STATE_FILTER_FIELD_NUMBER: _ClassVar[int]
+        PARENT_JOB_ID_FIELD_NUMBER: _ClassVar[int]
         offset: int
         limit: int
         sort_field: Controller.JobSortField
         sort_direction: Controller.SortDirection
         name_filter: str
         state_filter: str
-        def __init__(self, offset: _Optional[int] = ..., limit: _Optional[int] = ..., sort_field: _Optional[_Union[Controller.JobSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., name_filter: _Optional[str] = ..., state_filter: _Optional[str] = ...) -> None: ...
+        parent_job_id: str
+        def __init__(self, offset: _Optional[int] = ..., limit: _Optional[int] = ..., sort_field: _Optional[_Union[Controller.JobSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., name_filter: _Optional[str] = ..., state_filter: _Optional[str] = ..., parent_job_id: _Optional[str] = ...) -> None: ...
     class ListJobsResponse(_message.Message):
         __slots__ = ("jobs", "total_count", "has_more")
         JOBS_FIELD_NUMBER: _ClassVar[int]
