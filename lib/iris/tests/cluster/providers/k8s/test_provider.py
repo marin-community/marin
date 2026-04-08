@@ -20,7 +20,7 @@ from iris.cluster.providers.k8s.tasks import (
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
     _LABEL_TASK_HASH,
-    _LogPod,
+    LogPod,
     _MANAGED_POD_LABELS,
     _POD_NOT_FOUND_GRACE_CYCLES,
     _RUNTIME_LABEL_VALUE,
@@ -1126,8 +1126,8 @@ def test_log_collector_set_pods_adds_and_removes(k8s, log_pusher):
 
     collector.set_pods(
         {
-            key_a: _LogPod(pod_name="pod-a", task_id=task_a, attempt_id=0),
-            key_b: _LogPod(pod_name="pod-b", task_id=task_b, attempt_id=0),
+            key_a: LogPod(pod_name="pod-a", task_id=task_a, attempt_id=0),
+            key_b: LogPod(pod_name="pod-b", task_id=task_b, attempt_id=0),
         }
     )
     with collector._lock:
@@ -1137,7 +1137,7 @@ def test_log_collector_set_pods_adds_and_removes(k8s, log_pusher):
     # Remove pod A, keep pod B.
     collector.set_pods(
         {
-            key_b: _LogPod(pod_name="pod-b", task_id=task_b, attempt_id=0),
+            key_b: LogPod(pod_name="pod-b", task_id=task_b, attempt_id=0),
         }
     )
     with collector._lock:
@@ -1164,7 +1164,7 @@ def test_log_collector_set_pods_preserves_cursor_state(k8s, log_pusher):
 
     collector.set_pods(
         {
-            key: _LogPod(pod_name="pod-0", task_id=task_id, attempt_id=0),
+            key: LogPod(pod_name="pod-0", task_id=task_id, attempt_id=0),
         }
     )
 
@@ -1176,7 +1176,7 @@ def test_log_collector_set_pods_preserves_cursor_state(k8s, log_pusher):
     # Re-declare the same pod — cursor should be preserved.
     collector.set_pods(
         {
-            key: _LogPod(pod_name="pod-0", task_id=task_id, attempt_id=0),
+            key: LogPod(pod_name="pod-0", task_id=task_id, attempt_id=0),
         }
     )
     with collector._lock:

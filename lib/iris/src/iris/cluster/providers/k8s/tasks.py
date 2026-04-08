@@ -853,14 +853,13 @@ class ClusterState:
 
 
 @dataclass
-class _LogPod:
+class LogPod:
     """A pod tracked by LogCollector for incremental log fetching."""
 
     pod_name: str
     task_id: JobName
     attempt_id: int
     last_timestamp: datetime | None = None
-    consecutive_failures: int = 0
 
 
 class LogCollector:
@@ -884,7 +883,7 @@ class LogCollector:
         self._kubectl = kubectl
         self._log_pusher = log_pusher
         self._poll_interval = poll_interval
-        self._pods: dict[str, _LogPod] = {}
+        self._pods: dict[str, LogPod] = {}
         self._lock = threading.Lock()
         self._pod_locks: dict[str, threading.Lock] = {}
         self._stop = threading.Event()
@@ -892,19 +891,31 @@ class LogCollector:
         self._thread = threading.Thread(target=self._run, daemon=True, name="log-collector")
         self._thread.start()
 
-    def set_pods(self, pods: dict[str, _LogPod]) -> None:
+    def set_pods(self, pods: dict[str, LogPod], drain: dict[str, LogPod] | None = None) -> None:
         """Declare the authoritative set of pods to collect logs for.
 
         New keys are added. Keys absent from `pods` are removed after a
         synchronous final log fetch. Existing keys are preserved (keeping
         their cursor state).
+
+        `drain` pods are added (so they get a final fetch) and then
+        immediately removed — use this for pods that completed this cycle.
         """
         with self._lock:
+            # Add drain pods so they are tracked (if not already).
+            if drain:
+                for key, pod in drain.items():
+                    if key not in self._pods:
+                        self._pods[key] = pod
+                        self._pod_locks[key] = threading.Lock()
+
+            # Compute removals: anything not in `pods` (including drain keys).
             removed_keys = self._pods.keys() - pods.keys()
             removed = [(key, self._pods[key], self._pod_locks.get(key)) for key in removed_keys]
             for key in removed_keys:
                 del self._pods[key]
                 self._pod_locks.pop(key, None)
+
             for key, pod in pods.items():
                 if key not in self._pods:
                     self._pods[key] = pod
@@ -927,7 +938,7 @@ class LogCollector:
                     self._executor.submit(self._guarded_fetch, key, pod, pod_lock)
             self._stop.wait(timeout=self._poll_interval)
 
-    def _guarded_fetch(self, key: str, pod: _LogPod, pod_lock: threading.Lock) -> None:
+    def _guarded_fetch(self, key: str, pod: LogPod, pod_lock: threading.Lock) -> None:
         if not pod_lock.acquire(blocking=False):
             return
         try:
@@ -935,7 +946,7 @@ class LogCollector:
         finally:
             pod_lock.release()
 
-    def _fetch_and_store(self, pod: _LogPod) -> bool:
+    def _fetch_and_store(self, pod: LogPod) -> bool:
         """Fetch logs since last timestamp and advance. Must be called under pod lock."""
         try:
             result = self._kubectl.stream_logs(pod.pod_name, container="task", since_time=pod.last_timestamp)
@@ -944,12 +955,9 @@ class LogCollector:
                 key = task_log_key(TaskAttempt(task_id=pod.task_id, attempt_id=pod.attempt_id))
                 self._log_pusher.push(key, entries)
             pod.last_timestamp = result.last_timestamp
-            pod.consecutive_failures = 0
             return True
         except Exception as e:
-            pod.consecutive_failures += 1
-            if pod.consecutive_failures <= 1:
-                logger.warning("LogCollector: fetch failed for pod %s: %s", pod.pod_name, e)
+            logger.warning("LogCollector: fetch failed for pod %s: %s", pod.pod_name, e)
             return False
 
     def close(self) -> None:
@@ -1492,9 +1500,9 @@ class K8sTaskProvider:
         updates: list[TaskUpdate] = []
 
         # Build up the authoritative pod sets for collectors.
-        log_pods: dict[str, _LogPod] = {}
+        log_pods: dict[str, LogPod] = {}
         resource_pods: dict[str, str] = {}  # cursor_key -> pod_name
-        terminal_log_pods: dict[str, _LogPod] = {}  # pods that completed this cycle
+        terminal_log_pods: dict[str, LogPod] = {}  # pods that completed this cycle
 
         for entry in running:
             pod_name = _pod_name(entry.task_id, entry.attempt_id)
@@ -1534,11 +1542,11 @@ class K8sTaskProvider:
             phase = pod.get("status", {}).get("phase", "")
 
             if phase not in ("Succeeded", "Failed"):
-                log_pods[cursor_key] = _LogPod(pod_name=pod_name, task_id=entry.task_id, attempt_id=entry.attempt_id)
+                log_pods[cursor_key] = LogPod(pod_name=pod_name, task_id=entry.task_id, attempt_id=entry.attempt_id)
                 if phase == "Running":
                     resource_pods[cursor_key] = pod_name
             else:
-                terminal_log_pods[cursor_key] = _LogPod(
+                terminal_log_pods[cursor_key] = LogPod(
                     pod_name=pod_name, task_id=entry.task_id, attempt_id=entry.attempt_id
                 )
 
@@ -1559,16 +1567,11 @@ class K8sTaskProvider:
             )
 
         # Sync collectors with the authoritative pod sets.
-        # set_pods() does a final log fetch for pods that drop out of the set.
-        # For pods that completed this cycle, we include them first so they're
-        # added (if not already tracked), then call set_pods again without them
-        # to trigger the final fetch on removal.
         log_collector = self._ensure_log_collector()
         if log_collector is not None:
-            if terminal_log_pods:
-                log_collector.set_pods({**log_pods, **terminal_log_pods})
-            log_collector.set_pods(log_pods)
-        self._ensure_resource_collector().set_pods(resource_pods)
+            log_collector.set_pods(log_pods, drain=terminal_log_pods or None)
+        if resource_pods or self._resource_collector is not None:
+            self._ensure_resource_collector().set_pods(resource_pods)
 
         return updates
 
