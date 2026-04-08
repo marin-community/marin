@@ -1,6 +1,5 @@
 # Iris production configuration for Marin cluster
 # Usage: uv run iris --cluster=marin cluster start
-#   (or: uv run iris --config=examples/marin.yaml cluster start)
 
 platform:
   label_prefix: marin

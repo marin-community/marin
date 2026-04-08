@@ -185,7 +185,6 @@ uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http
 
 # Cloud mode: full lifecycle (start cluster, then pass URL to pytest)
 # Step 1: iris --cluster=smoke-gcp cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
-#   (or: iris --config=examples/smoke-gcp.yaml cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1)
 # Step 2: uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # K8s runtime tests (requires a running cluster — kind, k3d, minikube, etc.)

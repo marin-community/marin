@@ -1,7 +1,6 @@
 # Iris development cluster configuration
 # Mirrors production marin.yaml with isolated state and smaller scale caps.
 # Usage: uv run iris --cluster=marin-dev cluster start
-#   (or: uv run iris --config=examples/marin-dev.yaml cluster start)
 
 platform:
   label_prefix: marin-dev

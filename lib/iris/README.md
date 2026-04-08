@@ -9,7 +9,6 @@ Distributed job orchestration replacing Ray with simpler primitives.
 ```bash
 # Start controller VM (runs autoscaler internally)
 uv run iris --cluster=marin cluster start
-# (or: uv run iris --config=examples/marin.yaml cluster start)
 
 # Start a local cluster for testing (mimics the config without GCP)
 # Dashboard is available at the printed URL; press Ctrl+C to stop.
@@ -234,7 +233,7 @@ The controller will **fail at startup** if `storage.remote_state_dir` is not con
 
 ## CLI Reference
 
-**Note:** The `--cluster` option resolves a cluster name to a config file (e.g., `--cluster=marin` finds `lib/iris/examples/marin.yaml`) and works from any directory. The `--config` option accepts an explicit path and is equivalent. Both are global options that must appear after `iris` but before the subcommand (e.g., `iris --cluster=marin cluster start` or `iris --config cluster.yaml cluster start`).
+**Note:** The `--cluster` option resolves a cluster name to a config file (e.g., `--cluster=marin` finds `lib/iris/examples/marin.yaml`) and works from any directory. It is a global option that must appear after `iris` but before the subcommand (e.g., `iris --cluster=marin cluster start`).
 
 ### Cluster Commands
 
@@ -245,9 +244,6 @@ iris --cluster=marin cluster start --local   # Local cluster for testing
 iris --cluster=marin cluster stop
 iris --cluster=marin cluster restart
 iris --cluster=marin cluster status
-
-# Using explicit config path (equivalent):
-iris --config=cluster.yaml cluster start
 ```
 
 ### Controller Subcommands
@@ -315,7 +311,6 @@ uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts=" -v
 
 # Cloud mode: start cluster via CLI, then run tests against it
 # iris --cluster=smoke-gcp cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
-# (or: iris --config=examples/smoke-gcp.yaml cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1)
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # Cloud mode: connect to existing cluster
