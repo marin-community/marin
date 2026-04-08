@@ -188,3 +188,47 @@ def test_ssh_key_file_none_config(mock_provisioner):
     result = ssh_key_file(None)
     assert result is None
     mock_provisioner.ensure_key.assert_not_called()
+
+
+# -- _purge_stale_keys --------------------------------------------------------
+
+
+@patch("iris.cluster.providers.gcp.ssh.time.time", return_value=1_700_000_000.0)
+@patch("iris.cluster.providers.gcp.ssh.subprocess.run")
+def test_purge_stale_keys_removes_expired_and_no_expiry(mock_run, mock_time, provisioner):
+    """Expired keys and keys with no expiration (0) are removed; future keys are kept."""
+    now_us = int(1_700_000_000.0 * 1e6)
+    expired_us = now_us - 1_000_000
+    future_us = now_us + 86_400_000_000
+
+    list_output = "\n".join(
+        [
+            f"SHA256:expired {expired_us}",
+            "SHA256:no_expiry",  # no second column → expirationTimeUsec absent
+            "SHA256:no_expiry_zero 0",
+            f"SHA256:future {future_us}",
+        ]
+    )
+    mock_run.return_value = subprocess.CompletedProcess([], 0, stdout=list_output, stderr="")
+
+    provisioner._purge_stale_keys("sa@test.iam.gserviceaccount.com")
+
+    # list call + 3 removes (expired, no_expiry, no_expiry_zero) = 4 calls total
+    assert mock_run.call_count == 4
+    remove_calls = mock_run.call_args_list[1:]
+    removed_keys = {arg for c in remove_calls for arg in c.args[0] if arg.startswith("--key=")}
+    assert removed_keys == {
+        "--key=SHA256:expired",
+        "--key=SHA256:no_expiry",
+        "--key=SHA256:no_expiry_zero",
+    }
+
+
+@patch("iris.cluster.providers.gcp.ssh.subprocess.run")
+def test_purge_stale_keys_list_failure_is_nonfatal(mock_run, provisioner):
+    """If listing keys fails, the purge logs a warning and returns without error."""
+    mock_run.return_value = subprocess.CompletedProcess([], 1, stdout="", stderr="some error")
+
+    provisioner._purge_stale_keys(None)  # should not raise
+
+    assert mock_run.call_count == 1  # only the list call
