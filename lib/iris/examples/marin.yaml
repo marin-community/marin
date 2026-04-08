@@ -59,7 +59,7 @@ tpu_pools:
       16:  { max_slices: 256 }
       32:  { max_slices: 128 }
       64:  { max_slices: 64 }
-      128: { buffer_slices: 1, max_slices: 32 }
+      128: { max_slices: 32 }
       256: { max_slices: 16 }
 
   # v6e — europe-west4-a, us-east1-d, us-east5-b
@@ -79,7 +79,7 @@ tpu_pools:
       16:  { max_slices: 256 }
       32:  { max_slices: 128 }
       64:  { max_slices: 64 }
-      128: { buffer_slices: 1, max_slices: 32 }
+      128: { max_slices: 32 }
       256: { max_slices: 16 }
 
   # v5p — us-central1-a, us-east5-a
@@ -94,7 +94,7 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5
     sizes:
-      8:    { buffer_slices: 8, max_slices: 2048 }
+      8:    { max_slices: 2048 }
       16:   { max_slices: 1024 }
       32:   { max_slices: 512 }
       64:   { max_slices: 256 }
@@ -116,7 +116,7 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: tpu-ubuntu2204-base
     sizes:
-      8:    { buffer_slices: 2, max_slices: 2048 }
+      8:    { max_slices: 2048 }
       16:   { max_slices: 1024 }
       32:   { max_slices: 512 }
       64:   { max_slices: 256 }
