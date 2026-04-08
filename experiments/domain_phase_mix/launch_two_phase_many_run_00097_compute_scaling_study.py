@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
 
 NAME = "pinlin_calvin_xu/data_mixture/ngd3dm2_run00097_compute_scaling"
 SOURCE_RUN_NAME = "run_00097"
+DEFAULT_TPU_REGION = "us-east5"
+DEFAULT_TPU_ZONE = "us-east5-a"
 SEED_SWEEP_START = 10_000
 N_SEED_SWEEP_RUNS = 10
 REGMIX60M_6B_LADDER = "regmix60m_6b"
@@ -173,6 +175,8 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--name-prefix", default=NAME)
     parser.add_argument("--source-run-name", default=SOURCE_RUN_NAME)
     parser.add_argument("--tpu-type", default="v5p-8")
+    parser.add_argument("--tpu-region", default=DEFAULT_TPU_REGION)
+    parser.add_argument("--tpu-zone", default=DEFAULT_TPU_ZONE)
     return parser.parse_known_args()
 
 
@@ -186,7 +190,7 @@ def main() -> None:
     if args.source_run_name != SOURCE_RUN_NAME:
         raise ValueError(f"Only {SOURCE_RUN_NAME!r} is currently supported, got {args.source_run_name!r}")
 
-    resources = ResourceConfig.with_tpu(args.tpu_type, regions=["us-east5"])
+    resources = ResourceConfig.with_tpu(args.tpu_type, regions=[args.tpu_region], zone=args.tpu_zone)
     experiments_by_ladder = {
         REGMIX60M_6B_LADDER: create_two_phase_dolma3_dolmino_top_level_experiment(
             name=args.name_prefix,

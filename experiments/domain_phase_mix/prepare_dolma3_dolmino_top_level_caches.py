@@ -9,10 +9,11 @@ import argparse
 import logging
 import sys
 
-from marin.execution.executor import executor_main
+from marin.execution.executor import ExecutorMainConfig, executor_main
 
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     DOMAIN_NAMES,
+    DEFAULT_RUNTIME_CACHE_REGION,
     build_top_level_domain_steps,
 )
 
@@ -27,6 +28,7 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
         default="all",
         help="Comma-separated top-level domain names to prepare, or 'all'.",
     )
+    parser.add_argument("--runtime-cache-region", default=DEFAULT_RUNTIME_CACHE_REGION)
     return parser.parse_known_args()
 
 
@@ -50,7 +52,7 @@ def main() -> None:
     sys.argv = [sys.argv[0], *remaining]
 
     selected_domains = _selected_domain_names(args.domains)
-    step_by_domain = build_top_level_domain_steps()
+    step_by_domain = build_top_level_domain_steps(runtime_cache_region=args.runtime_cache_region)
     prep_domains = [domain_name for domain_name in selected_domains if domain_name in step_by_domain]
     skipped_domains = [domain_name for domain_name in selected_domains if domain_name not in step_by_domain]
 
@@ -70,8 +72,9 @@ def main() -> None:
         logger.info("  %s (reused)", domain_name)
 
     executor_main(
+        ExecutorMainConfig(),
         steps=steps,
-        description="Prepare Dolma 3 + Dolmino top-level runtime caches",
+        description=f"Prepare Dolma 3 + Dolmino top-level runtime caches ({args.runtime_cache_region})",
     )
 
 

@@ -58,10 +58,12 @@ from experiments.domain_phase_mix.nextgen.model_registry import _propose_top1_ca
 from experiments.domain_phase_mix.nextgen.state_store import write_loop_state
 from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import REMOVED_DOLMA3_CC_TOPICS
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
+    DEFAULT_RUNTIME_CACHE_REGION,
     MERGED_CC_DOMAIN_NAMES,
     MIN_RECOMMENDED_SAMPLED_RUNS,
     MIN_RECOMMENDED_SWARM_RUNS,
     PHASE_BOUNDARIES,
+    PREFERRED_MERGED_RUNTIME_DOMAIN_NAMES,
     build_top_level_domains,
     build_top_level_domain_steps,
     create_two_phase_dolma3_dolmino_top_level_experiment,
@@ -346,12 +348,20 @@ def test_top_level_experiment_uses_hierarchical_runtime_domains():
     assert isinstance(mixture.components["dolmino_stack_edu_fim"], HierarchicalMixtureDatasetComponent)
 
 
-def test_build_top_level_domain_steps_only_materializes_cc_split_domains():
-    steps = build_top_level_domain_steps()
+def test_build_top_level_domain_steps_only_materializes_cc_split_domains_in_east5():
+    steps = build_top_level_domain_steps(runtime_cache_region=DEFAULT_RUNTIME_CACHE_REGION)
     assert set(steps) == set(MERGED_CC_DOMAIN_NAMES)
     assert len(steps) == 26
     assert "dolma3_stack_edu" not in steps
     assert "dolmino_common_crawl_hq" not in steps
+
+
+def test_build_top_level_domain_steps_includes_stackedu_and_stemheavy_for_central1():
+    steps = build_top_level_domain_steps(runtime_cache_region="us-central1")
+    assert set(steps) == set(PREFERRED_MERGED_RUNTIME_DOMAIN_NAMES)
+    assert len(steps) == 28
+    assert "dolma3_stack_edu" in steps
+    assert "dolmino_stem_heavy_crawl" in steps
 
 
 def test_top_level_experiment_uses_linear_80_20_wsd():

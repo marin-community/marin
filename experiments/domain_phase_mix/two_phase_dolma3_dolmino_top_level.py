@@ -63,12 +63,20 @@ EVAL_DATASETS_CACHE_PATH: str | None = None
 INITIAL_BASELINE_RUNS = 3
 MIN_RECOMMENDED_SWARM_RUNS = 6 * len(DOMAIN_NAMES)
 MIN_RECOMMENDED_SAMPLED_RUNS = MIN_RECOMMENDED_SWARM_RUNS - INITIAL_BASELINE_RUNS
+DEFAULT_RUNTIME_CACHE_REGION = "us-east5"
 MERGED_CC_DOMAIN_NAMES = tuple(name for name in DOMAIN_NAMES if name.startswith("dolma3_cc/"))
-EXISTING_MERGED_RUNTIME_CACHE_PATHS = {
-    "dolma3_stack_edu": "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_stack_edu-a7297b",
-    "dolmino_stem_heavy_crawl": (
-        "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolmino_stem_heavy_crawl-e1ec3b"
-    ),
+PREFERRED_MERGED_RUNTIME_DOMAIN_NAMES = (
+    *MERGED_CC_DOMAIN_NAMES,
+    "dolma3_stack_edu",
+    "dolmino_stem_heavy_crawl",
+)
+PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION = {
+    "us-east5": {
+        "dolma3_stack_edu": "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_stack_edu-a7297b",
+        "dolmino_stem_heavy_crawl": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolmino_stem_heavy_crawl-e1ec3b"
+        ),
+    }
 }
 
 SAMPLING_PARAMS = DirichletSamplingParams(
@@ -90,6 +98,23 @@ assert TOP_LEVEL_TOTAL_AVAILABLE_TOKENS == 6_986_431_605_135, TOP_LEVEL_TOTAL_AV
 assert REALIZED_EXPERIMENT_BUDGET == 1_199_833_088, REALIZED_EXPERIMENT_BUDGET
 assert MIN_RECOMMENDED_SWARM_RUNS == 234, MIN_RECOMMENDED_SWARM_RUNS
 assert MIN_RECOMMENDED_SAMPLED_RUNS == 231, MIN_RECOMMENDED_SAMPLED_RUNS
+
+
+def _resolved_runtime_cache_region(
+    *, runtime_cache_region: str | None = None, resources: ResourceConfig | None = None
+) -> str:
+    if runtime_cache_region is not None:
+        return runtime_cache_region
+    if resources is not None:
+        if resources.zone:
+            return resources.zone.rsplit("-", 1)[0]
+        if resources.regions:
+            return resources.regions[0]
+    return DEFAULT_RUNTIME_CACHE_REGION
+
+
+def _prebuilt_merged_runtime_cache_paths(runtime_cache_region: str) -> dict[str, str]:
+    return PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION.get(runtime_cache_region, {})
 
 
 @dataclass(frozen=True)
@@ -115,8 +140,8 @@ def _partition_step_fn(partition_name: str):
 
 
 @cache
-def _existing_merged_runtime_cache_config(domain_name: str) -> ExistingTokenizedCacheConfig:
-    cache_path = EXISTING_MERGED_RUNTIME_CACHE_PATHS[domain_name]
+def _existing_merged_runtime_cache_config(domain_name: str, runtime_cache_region: str) -> ExistingTokenizedCacheConfig:
+    cache_path = _prebuilt_merged_runtime_cache_paths(runtime_cache_region)[domain_name]
     return ExistingTokenizedCacheConfig(
         cache_path=cache_path,
         tokenizer=marin_tokenizer,
@@ -139,19 +164,37 @@ def _merged_top_level_domain_step(domain_name: str):
     )
 
 
-def build_top_level_domains() -> list[Domain]:
+def build_top_level_domains(*, runtime_cache_region: str = DEFAULT_RUNTIME_CACHE_REGION) -> list[Domain]:
     """Build top-level domains with hybrid runtime loading.
 
     The runtime uses:
     - shared merged caches for the 26 Dolma 3 CC high/low domains,
-    - already-finished east5 merged caches for Stack-Edu and Dolmino STEM crawl,
+    - prebuilt merged caches for Stack-Edu and Dolmino STEM crawl when available in the selected region,
+    - otherwise merge steps for those same two domains,
     - direct single-partition caches for singleton domains,
     - hierarchical loading for the remaining multi-partition Dolmino domains.
     """
     domains: list[Domain] = []
+    prebuilt_merged_runtime_cache_paths = _prebuilt_merged_runtime_cache_paths(runtime_cache_region)
     for domain_name in DOMAIN_NAMES:
         partition_counts = top_level_domain_partition_counts(domain_name)
-        if domain_name in MERGED_CC_DOMAIN_NAMES:
+        if domain_name in prebuilt_merged_runtime_cache_paths:
+            domains.append(
+                Domain(
+                    name=domain_name,
+                    components=[
+                        DatasetComponent(
+                            name=domain_name,
+                            step_fn=partial(_existing_merged_runtime_cache_config, domain_name, runtime_cache_region),
+                            weight=TOP_LEVEL_DOMAIN_TOKEN_COUNTS[domain_name],
+                        )
+                    ],
+                    description=f"Top-level domain reusing an existing finished {runtime_cache_region} merged cache.",
+                )
+            )
+            continue
+
+        if domain_name in PREFERRED_MERGED_RUNTIME_DOMAIN_NAMES:
             domains.append(
                 Domain(
                     name=domain_name,
@@ -166,22 +209,6 @@ def build_top_level_domains() -> list[Domain]:
                         "Top-level domain backed by a shared merged cache over "
                         f"{len(TOP_LEVEL_DOMAIN_PARTITIONS[domain_name])} source partition caches."
                     ),
-                )
-            )
-            continue
-
-        if domain_name in EXISTING_MERGED_RUNTIME_CACHE_PATHS:
-            domains.append(
-                Domain(
-                    name=domain_name,
-                    components=[
-                        DatasetComponent(
-                            name=domain_name,
-                            step_fn=partial(_existing_merged_runtime_cache_config, domain_name),
-                            weight=TOP_LEVEL_DOMAIN_TOKEN_COUNTS[domain_name],
-                        )
-                    ],
-                    description="Top-level domain reusing an existing finished east5 merged cache.",
                 )
             )
             continue
@@ -224,9 +251,14 @@ def build_top_level_domains() -> list[Domain]:
     return domains
 
 
-def build_top_level_domain_steps() -> dict[str, object]:
-    """Build the shared prep steps for domains that should be physically merged."""
-    return {domain_name: _merged_top_level_domain_step(domain_name) for domain_name in MERGED_CC_DOMAIN_NAMES}
+def build_top_level_domain_steps(*, runtime_cache_region: str = DEFAULT_RUNTIME_CACHE_REGION) -> dict[str, object]:
+    """Build the shared prep steps for domains that should be physically merged in this region."""
+    prebuilt_merged_runtime_cache_paths = _prebuilt_merged_runtime_cache_paths(runtime_cache_region)
+    return {
+        domain_name: _merged_top_level_domain_step(domain_name)
+        for domain_name in PREFERRED_MERGED_RUNTIME_DOMAIN_NAMES
+        if domain_name not in prebuilt_merged_runtime_cache_paths
+    }
 
 
 def _constant_phase_weights(domain_weights: dict[str, float]) -> dict[str, dict[str, float]]:
@@ -341,6 +373,7 @@ def create_two_phase_dolma3_dolmino_top_level_experiment(
     optimizer_config: MuonHConfig | None = None,
     resources: ResourceConfig | None = None,
     eval_harness_tasks: Sequence[EvalTaskConfig] | None = None,
+    runtime_cache_region: str | None = None,
 ) -> MixtureExperiment:
     """Create the top-level Dolma 3 + Dolmino two-phase nextgen experiment."""
     phase_schedule = PhaseSchedule.from_boundaries(
@@ -354,9 +387,13 @@ def create_two_phase_dolma3_dolmino_top_level_experiment(
         phase_schedule=phase_schedule,
         optimizer_config=optimizer_config,
     )
+    resolved_runtime_cache_region = _resolved_runtime_cache_region(
+        runtime_cache_region=runtime_cache_region,
+        resources=resources,
+    )
     return MixtureExperiment(
         name=name,
-        domains=build_top_level_domains(),
+        domains=build_top_level_domains(runtime_cache_region=resolved_runtime_cache_region),
         phase_schedule=phase_schedule,
         model_config=model_config or regmix_60m_proxy,
         batch_size=batch_size,
