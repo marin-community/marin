@@ -17,14 +17,27 @@ Objects that meet **both** criteria:
 Objects in STANDARD class are never deleted, even if unprotected.  Autoclass promotes
 recently-accessed objects back to STANDARD, so STANDARD is a reliable proxy for "in use."
 
-## Safety net: soft-delete
+## Safety net: STS backup
 
-Instead of copying protected data to backup buckets (the previous STS-based approach),
-we use GCS's native **soft-delete** feature:
+Before deleting anything, we copy the exact delete set to same-region temporary
+backup buckets using Google Cloud Storage Transfer Service (STS):
 
-- Before deleting anything, enable soft-delete with a 3-day retention window.
-- All deleted objects remain recoverable via `gcloud storage restore` for 3 days.
-- After the safety window, disable soft-delete to finalize.
+- The `deletion_manifest.csv` defines the prefixes to delete.
+- STS jobs copy those prefixes to per-region temp buckets (same region, no egress cost).
+- Only after all STS jobs complete does the delete step proceed.
+- Recovery: copy objects back from the temp bucket if needed.
+- After confirming the purge is correct, delete the temp buckets manually.
+
+### Temp backup buckets
+
+| Source | Backup |
+|--------|--------|
+| `marin-eu-west4` | `marin-tmp-backup-eu-west4-purge-tmp-20260326` |
+| `marin-us-central1` | `marin-tmp-backup-us-central1-purge-tmp-20260326` |
+| `marin-us-central2` | `marin-tmp-backup-us-central2-purge-tmp-20260326` |
+| `marin-us-east1` | `marin-tmp-backup-us-east1-purge-tmp-20260326` |
+| `marin-us-east5` | `marin-tmp-backup-us-east5-purge-tmp-20260326` |
+| `marin-us-west4` | `marin-tmp-backup-us-west4-purge-tmp-20260326` |
 
 ## Architecture: DuckDB state store
 
@@ -41,110 +54,93 @@ Objects are stored as sorted, ZSTD-compressed parquet segments under
 - **`split_cache`** — cached sub-prefix listings for adaptive scan resume
 - **`objects`** (VIEW) — every object in every bucket, backed by parquet segments
 
-Protection checks and savings estimates are SQL queries against these tables.
-Wildcard globs from the classified CSV are converted to SQL LIKE patterns at load time
-(e.g. `checkpoints/dclm_1b*` → `checkpoints/dclm_1b%`), eliminating the need for
-GCS listing calls to resolve them.
-
-## Cost accounting
-
-The estimate step queries the object catalog and groups by storage class.
-Monthly savings are computed using per-class GCS list prices (stored in the
-`storage_classes` table) with a 50% CUD discount:
-
-| Class    | US ($/GiB/mo) | EU ($/GiB/mo) | After 50% discount |
-|----------|---------------|---------------|---------------------|
-| STANDARD | 0.020         | 0.023         | 0.010 / 0.0115      |
-| NEARLINE | 0.010         | 0.013         | 0.005 / 0.0065      |
-| COLDLINE | 0.004         | 0.006         | 0.002 / 0.003       |
-| ARCHIVE  | 0.0012        | 0.0025        | 0.0006 / 0.00125    |
-
 ## Workflow steps
 
 ```
-prep.load_protect_rules          Load protect globs + direct prefixes into DB
-prep.scan_objects                Scan bucket objects into DuckDB (parquet-backed)
-prep.estimate_savings            Estimate deletion savings via SQL queries
-cleanup.enable_soft_delete       Enable 3-day soft-delete on each source bucket
-cleanup.delete_cold_objects      Delete non-STANDARD unprotected objects (batch, DB-driven)
-cleanup.wait_for_safety_window   Checkpoint: wait for soft-delete retention to pass
-cleanup.disable_soft_delete      Turn off soft-delete (finalizes the purge) [optional]
+scan         — Scan bucket objects into parquet segments
+summarize    — Materialize per-directory summaries from objects
+compute      — Evaluate delete/protect rules, collapse, write CSV manifest
+backup-prep  — Plan STS backup jobs and write to disk for inspection
+backup-run   — Create STS jobs from the backup plan
+delete       — Delete objects from manifest (requires backup completion)
 ```
 
 ### Running
 
 ```bash
 # See current step status
-uv run scripts/storage/purge.py plan
+uv run scripts/storage/cleanup.py plan
 
 # Run all prep steps (read-only against buckets)
-uv run scripts/storage/purge.py run --to prep.estimate_savings
+uv run scripts/storage/cleanup.py run --to compute
 
 # Scan objects with more workers
-uv run scripts/storage/purge.py prep scan-objects --scan-workers 64
+uv run scripts/storage/cleanup.py scan --workers 64
+
+# Plan backup jobs (writes plan to disk for inspection)
+uv run scripts/storage/cleanup.py backup-prep
+
+# Inspect the plan
+cat scripts/storage/purge/backup/backup_plan.json
+
+# Dry-run to see what STS jobs would be created
+uv run scripts/storage/cleanup.py backup-run --dry-run
+
+# Create the STS jobs
+uv run scripts/storage/cleanup.py backup-run
+
+# Check backup job progress
+uv run scripts/storage/cleanup.py backup-status
 
 # Dry-run the deletion to see what would be removed
-uv run scripts/storage/purge.py cleanup delete-cold-objects --dry-run
+uv run scripts/storage/cleanup.py delete --dry-run
 
-# Execute the full cleanup
-uv run scripts/storage/purge.py run --from cleanup.enable_soft_delete
+# Execute the deletion (requires backup to be complete)
+uv run scripts/storage/cleanup.py delete --workers 64
 
-# Run a single step
-uv run scripts/storage/purge.py run --only cleanup.enable_soft_delete
-
-# Limit to one region
-uv run scripts/storage/purge.py run --region us-central2
+# Run the full workflow
+uv run scripts/storage/cleanup.py run
 ```
 
 ### Step details
 
-**prep.load_protect_rules**
-Reads both `protect_prefixes_classified.csv` and `protect_prefixes_direct.csv`.
-Direct prefixes become `pattern_type='prefix'` rules. Wildcard globs (previously
-requiring GCS listing to resolve) are converted to SQL LIKE patterns
-(`pattern_type='like'`) — no GCS calls needed. Writes `cleanup_plan.csv` as the
-manifest for downstream steps.
-
-**prep.scan_objects**
+**scan**
 Discovers top-level prefixes in each bucket, then fans out workers to list every
 object. Objects are buffered, sorted by `(bucket, name)`, and flushed as
-ZSTD-compressed parquet segments. Timestamps are stored as `TIMESTAMPTZ`.
-Skips already-scanned prefixes (tracked in `scanned_prefixes`) unless `--force`
-is given. Uses adaptive prefix splitting for large flat prefixes.
+ZSTD-compressed parquet segments.
 
-**prep.estimate_savings**
-SQL queries against the `objects` view and `protect_rules` table. Joins with
-`storage_classes` for pricing, uses `NOT EXISTS` to find unprotected cold objects,
-and computes monthly savings with the 50% discount. Writes per-region JSON
-estimates and a summary CSV.
+**summarize**
+Aggregates objects into per-directory rows with per-storage-class columns,
+collapsing small deep directories into their depth-2 ancestors.
 
-**cleanup.enable_soft_delete**
-Sets `--soft-delete-duration=259200s` (3 days) on each source bucket.
-If soft-delete is already enabled with sufficient retention, this is a no-op.
+**compute**
+SQL queries against the `dir_summary` view, `protect_rules`, and `delete_rules`.
+Produces `deletion_manifest.csv` with collapsed directory prefixes marked for
+deletion, plus a SHA-256 sidecar for integrity.
 
-**cleanup.delete_cold_objects**
-Queries the DuckDB catalog for cold unprotected objects per top-level prefix,
-then batch-deletes from GCS with workers for throughput. Writes a
-`deletion_log_{region}.json` with counts and class breakdowns.
+**backup-prep**
+Reads `deletion_manifest.csv` and plans STS jobs to copy each bucket's delete
+prefixes to the corresponding temp backup bucket.  STS jobs are batched at 1000
+prefixes per job (the STS API limit).  Writes the full plan (including per-job
+prefix lists) to `scripts/storage/purge/backup/backup_plan.json` for inspection
+before execution.
 
-**cleanup.wait_for_safety_window**
-Records a settle deadline (default 72 hours from deletion).  Refuses to proceed
-until the deadline passes.  This is a checkpoint, not a sleep.
+**backup-run**
+Reads the plan from `backup_plan.json` and creates the actual STS transfer jobs.
+State is tracked in `scripts/storage/purge/backup/backup_state.json`.
 
-**cleanup.disable_soft_delete** *(optional)*
-Clears soft-delete on each bucket, permanently removing soft-deleted objects.
-Only run after confirming no important data was accidentally deleted.
+**delete**
+Reads `deletion_manifest.csv`, resolves individual object names from DuckDB,
+and batch-deletes from GCS.  Refuses to run unless all STS backup jobs have
+completed successfully.
 
 ## Rollback
 
-During the soft-delete safety window (3 days by default):
+While the temp backup buckets exist:
 
 ```bash
-# Restore a specific object
-gcloud storage restore gs://marin-us-central2/path/to/object
-
-# Restore an entire prefix
-gcloud storage restore gs://marin-us-central2/prefix/** --all-versions
+# Restore a prefix from the backup
+gsutil -m cp -r gs://marin-tmp-backup-us-central2-purge-tmp-20260326/path/prefix/ gs://marin-us-central2/path/prefix/
 ```
 
-After `cleanup.disable_soft_delete` runs, deletions are permanent.
+After you delete the temp buckets, recovery is not possible.

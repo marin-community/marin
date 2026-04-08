@@ -74,11 +74,22 @@ class StorageCatalog:
     def log_dir(self) -> Path:
         return self.root / "logs"
 
+    @cached_property
+    def backup_dir(self) -> Path:
+        return self.root / "backup"
+
     def open_db(self) -> duckdb.DuckDBPyConnection:
         return duckdb.connect(str(self.db_path))
 
     def ensure_dirs(self) -> None:
-        for d in [self.root, self.objects_parquet_dir, self.dir_summary_parquet_dir, self.protect_dir, self.log_dir]:
+        for d in [
+            self.root,
+            self.objects_parquet_dir,
+            self.dir_summary_parquet_dir,
+            self.protect_dir,
+            self.log_dir,
+            self.backup_dir,
+        ]:
             d.mkdir(parents=True, exist_ok=True)
 
 
@@ -108,7 +119,20 @@ BUCKET_LOCATIONS = {
 
 NON_STANDARD_STORAGE_CLASSES = frozenset({"NEARLINE", "COLDLINE", "ARCHIVE"})
 
-SOFT_DELETE_RETENTION_SECONDS = 3 * 24 * 3600  # 3 days
+SOFT_DELETE_RETENTION_SECONDS = 7 * 24 * 3600  # 7 days (GCS minimum)
+
+# Same-region temp buckets for backing up the delete set before purging.
+# Created once via `gcloud storage buckets create`.
+BACKUP_BUCKETS: dict[str, str] = {
+    "marin-eu-west4": "marin-tmp-backup-eu-west4-purge-tmp-20260326",
+    "marin-us-central1": "marin-tmp-backup-us-central1-purge-tmp-20260326",
+    "marin-us-central2": "marin-tmp-backup-us-central2-purge-tmp-20260326",
+    "marin-us-east1": "marin-tmp-backup-us-east1-purge-tmp-20260326",
+    "marin-us-east5": "marin-tmp-backup-us-east5-purge-tmp-20260326",
+    "marin-us-west4": "marin-tmp-backup-us-west4-purge-tmp-20260326",
+}
+
+STS_MAX_PREFIXES_PER_JOB = 1000
 
 # dir_summary collapse thresholds: dirs deeper than this with less than
 # DIR_SUMMARY_MIN_BYTES are rolled up into their depth-2 ancestor.

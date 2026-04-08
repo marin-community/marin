@@ -226,7 +226,7 @@
   },
   {
     "id": 7468,
-    "bucket": "marin-us-central1",
+    "bucket": "*",
     "pattern": "evaluation/%",
     "pattern_type": "like",
     "owners": "Kevin",
@@ -270,7 +270,7 @@
     "sources": "named.csv:49"
   },
   {
-    "id": 7473,
+    "id": 7913,
     "bucket": "*",
     "pattern": "tokenized/nemotron_cooldown_1e20-666089/%",
     "pattern_type": "like",
@@ -738,7 +738,7 @@
     "sources": "consolidated:29 rules"
   },
   {
-    "id": 7525,
+    "id": 7914,
     "bucket": "marin-eu-west4",
     "pattern": "checkpoints/exp1570_hidden128-nl4%",
     "pattern_type": "like",
@@ -4156,5 +4156,167 @@
     "owners": "ahmed",
     "reasons": "cool",
     "sources": null
+  },
+  {
+    "id": 7905,
+    "bucket": "marin-us-central2",
+    "pattern": "grug/moe-v7-1e22-d3200%",
+    "pattern_type": "like",
+    "owners": "Larry",
+    "reasons": "Investigate mid-run dynamics",
+    "sources": null
+  },
+  {
+    "id": 7906,
+    "bucket": "*",
+    "pattern": "checkpoints/isoflop/%",
+    "pattern_type": "like",
+    "owners": "Will",
+    "reasons": "Isoflop stuff",
+    "sources": null
+  },
+  {
+    "id": 7907,
+    "bucket": "marin-us-central2",
+    "pattern": "raw/commoncrawl/baseline_3000-265ff5/%",
+    "pattern_type": "like",
+    "owners": "Michael",
+    "reasons": "3000 WARC files that I am using across several experiments.  Fine to remove in ~1 month when experiments are done.",
+    "sources": null
+  },
+  {
+    "id": 7908,
+    "bucket": "marin-us-central2",
+    "pattern": "metadata/baseline_warc_metadata-d671da/%",
+    "pattern_type": "like",
+    "owners": "Michael",
+    "reasons": "Web filtering experiments (done by May 6th)",
+    "sources": null
+  },
+  {
+    "id": 7909,
+    "bucket": "*",
+    "pattern": "tokenized/baseline_resiliparse-7278c1/",
+    "pattern_type": "like",
+    "owners": "Michael",
+    "reasons": "Data Filtering experiment done by May 6th",
+    "sources": null
+  },
+  {
+    "id": 7910,
+    "bucket": "*",
+    "pattern": "tokenized/baseline_nemotron-c67de9/%",
+    "pattern_type": "like",
+    "owners": "Michael",
+    "reasons": "",
+    "sources": null
+  },
+  {
+    "id": 7911,
+    "bucket": "*",
+    "pattern": "tokenized/baseline_fineweb_edu-7a3bc5/%",
+    "pattern_type": "like",
+    "owners": "Michael",
+    "reasons": "",
+    "sources": null
+  },
+  {
+    "id": 7912,
+    "bucket": "*",
+    "pattern": "tokenized/baseline_dclm-23e9be/%",
+    "pattern_type": "like",
+    "owners": "Michael",
+    "reasons": "",
+    "sources": null
+  },
+  {
+    "id": 7915,
+    "bucket": "*",
+    "pattern": "dmlab_256x256/%",
+    "pattern_type": "like",
+    "owners": "Julian",
+    "reasons": "Higher-resolution variant of protected dmlab dataset",
+    "sources": "manual:storage-purge-audit"
+  },
+  {
+    "id": 7916,
+    "bucket": "*",
+    "pattern": "RealEstate10K/%",
+    "pattern_type": "like",
+    "owners": "Julian",
+    "reasons": "Source data for protected re10k_clips dataset",
+    "sources": "manual:storage-purge-audit"
+  },
+  {
+    "id": 7917,
+    "bucket": "*",
+    "pattern": "ego-dex-3/%",
+    "pattern_type": "like",
+    "owners": "Julian",
+    "reasons": "v3 of protected ego-dex dataset",
+    "sources": "manual:storage-purge-audit"
+  },
+  {
+    "id": 7918,
+    "bucket": "*",
+    "pattern": "holoassist/%",
+    "pattern_type": "like",
+    "owners": "Julian",
+    "reasons": "HoloAssist video dataset",
+    "sources": "manual:storage-purge-audit"
+  },
+  {
+    "id": 7919,
+    "bucket": "*",
+    "pattern": "holoassist_converted/%",
+    "pattern_type": "like",
+    "owners": "Julian",
+    "reasons": "HoloAssist converted video dataset",
+    "sources": "manual:storage-purge-audit"
+  },
+  {
+    "id": 7920,
+    "bucket": "*",
+    "pattern": "holoassist_egodex/%",
+    "pattern_type": "like",
+    "owners": "Julian",
+    "reasons": "HoloAssist EgoDex video dataset",
+    "sources": "manual:storage-purge-audit"
+  },
+  {
+    "id": 7921,
+    "bucket": "*",
+    "pattern": "hot3d/%",
+    "pattern_type": "like",
+    "owners": "Julian",
+    "reasons": "HOT3D video dataset",
+    "sources": "manual:storage-purge-audit"
+  },
+  {
+    "id": 7922,
+    "bucket": "*",
+    "pattern": "hot3d_converted/%",
+    "pattern_type": "like",
+    "owners": "Julian",
+    "reasons": "HOT3D converted video dataset",
+    "sources": "manual:storage-purge-audit"
+  },
+  {
+    "id": 7923,
+    "bucket": "*",
+    "pattern": "hot3d_converted_multi_stream/%",
+    "pattern_type": "like",
+    "owners": "Julian",
+    "reasons": "HOT3D multi-stream converted video dataset",
+    "sources": "manual:storage-purge-audit"
+  },
+  {
+    "id": 7924,
+    "bucket": "*",
+    "pattern": "SpatialVID/%",
+    "pattern_type": "like",
+    "owners": "Julian",
+    "reasons": "SpatialVID video dataset",
+    "sources": "manual:storage-purge-audit"
   }
 ]

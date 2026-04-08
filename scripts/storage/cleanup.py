@@ -2,15 +2,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Consolidated storage purge workflow: scan, summarize, compute, and delete.
+"""Consolidated storage purge workflow: scan, summarize, compute, backup, and delete.
 
 Six steps run in order:
   1. scan         — List bucket objects into parquet segments
   2. summarize    — Materialize per-directory summaries from objects
   3. compute      — Evaluate delete/protect rules, collapse, write CSV manifest
-  4. soft-enable  — Enable 3-day soft-delete on all buckets
-  5. delete       — Delete objects listed in the manifest
-  6. soft-disable — Disable soft-delete (optional, permanent)
+  4. backup-prep  — Plan STS backup jobs and write to disk for inspection
+  5. backup-run   — Create STS jobs from the backup plan
+  6. delete       — Delete objects from manifest (requires backup completion)
 
 Usage:
     uv run scripts/storage/cleanup.py plan
@@ -18,34 +18,40 @@ Usage:
     uv run scripts/storage/cleanup.py scan [--force] [--workers N]
     uv run scripts/storage/cleanup.py summarize [--force]
     uv run scripts/storage/cleanup.py compute [--force]
-    uv run scripts/storage/cleanup.py soft-enable [--dry-run]
+    uv run scripts/storage/cleanup.py backup-prep [--force]
+    uv run scripts/storage/cleanup.py backup-run [--dry-run]
+    uv run scripts/storage/cleanup.py backup-status
     uv run scripts/storage/cleanup.py delete [--dry-run] [--workers N]
-    uv run scripts/storage/cleanup.py soft-disable [--dry-run]
 """
 
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import queue
 import random
 import shutil
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import click
 from google.api_core.exceptions import DeadlineExceeded, NotFound, ServiceUnavailable, TooManyRequests
-from tqdm.auto import tqdm
-
+from rich.console import Console, Group
+from rich.live import Live
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 from scripts.storage.db import (
+    BACKUP_BUCKETS,
     DEFAULT_CATALOG,
     GCS_DISCOUNT,
     REPO_ROOT,
-    SOFT_DELETE_RETENTION_SECONDS,
+    STS_MAX_PREFIXES_PER_JOB,
     Context,
     StorageCatalog,
     _fetchall_dicts,
@@ -56,11 +62,10 @@ from scripts.storage.db import (
     materialize_dir_summary,
     plan_rows,
     print_summary,
+    region_from_bucket,
     timestamp_string,
 )
 from scripts.storage.scan import (
-    bucket_soft_delete_seconds,
-    gcloud_bucket_describe,
     run_subprocess,
     scan_objects,
     storage_client,
@@ -68,7 +73,8 @@ from scripts.storage.scan import (
 
 log = logging.getLogger(__name__)
 
-DELETE_PREFLIGHT_LIST_TIMEOUT = 30
+N_LIST_WORKERS = 8
+N_DELETE_WORKERS = 32
 DELETE_BATCH_TIMEOUT = (10, 30)
 DELETE_BATCH_MAX_ATTEMPTS = 9
 DELETE_BATCH_INITIAL_BACKOFF = 2.0
@@ -106,44 +112,18 @@ def compute_done(catalog: StorageCatalog) -> bool:
     return catalog.deletion_manifest_csv.exists()
 
 
-def soft_enable_done(catalog: StorageCatalog) -> bool:
-    ctx = _lightweight_context()
-    for row in plan_rows():
-        bucket_url = f"gs://{row['bucket']}"
-        metadata = gcloud_bucket_describe(ctx, bucket_url)
-        current = bucket_soft_delete_seconds(metadata)
-        if current < SOFT_DELETE_RETENTION_SECONDS:
-            return False
-    return True
+def backup_prep_done(catalog: StorageCatalog) -> bool:
+    """Check if the backup plan has been written."""
+    return (catalog.backup_dir / "backup_plan.json").exists()
 
 
-def soft_disable_done(catalog: StorageCatalog) -> bool:
-    ctx = _lightweight_context()
-    for row in plan_rows():
-        bucket_url = f"gs://{row['bucket']}"
-        metadata = gcloud_bucket_describe(ctx, bucket_url)
-        current = bucket_soft_delete_seconds(metadata)
-        if current != 0:
-            return False
-    return True
-
-
-def _lightweight_context() -> Context:
-    """Minimal context for read-only gcloud queries in done checks."""
-    catalog = DEFAULT_CATALOG
-    conn = ensure_output_dirs(catalog)
-    return Context(
-        conn=conn,
-        db_lock=threading.Lock(),
-        dry_run=True,
-        force=False,
-        include_optional=False,
-        scan_workers=1,
-        settle_hours=0,
-        log_path=catalog.log_dir / "done_check.log",
-        timestamp=timestamp_string(),
-        project=None,
-    )
+def backup_run_done(catalog: StorageCatalog) -> bool:
+    """Check if all STS backup jobs have completed successfully."""
+    state_path = catalog.backup_dir / "backup_state.json"
+    if not state_path.exists():
+        return False
+    state = json.loads(state_path.read_text())
+    return state.get("status") == "completed"
 
 
 # ===========================================================================
@@ -310,12 +290,37 @@ _STATUS_QUERY = """
         WHERE d2.bucket = ?
     ) p USING (bucket, dir_prefix)
     LEFT JOIN (
-        SELECT DISTINCT ON (d3.bucket, d3.dir_prefix)
-               d3.bucket, d3.dir_prefix, dr.pattern AS matched_rule
-        FROM delete_rules dr
-        JOIN dir_summary d3 ON d3.dir_prefix LIKE dr.pattern
-        WHERE d3.bucket = ?
-          AND dr.storage_class IS NULL
+        SELECT DISTINCT ON (bucket, dir_prefix) bucket, dir_prefix, matched_rule
+        FROM (
+            -- Prefix-only delete rules (storage_class IS NULL)
+            SELECT d3.bucket, d3.dir_prefix, dr.pattern AS matched_rule
+            FROM delete_rules dr
+            JOIN dir_summary d3 ON d3.dir_prefix LIKE dr.pattern
+            WHERE d3.bucket = ?
+              AND dr.storage_class IS NULL
+
+            UNION ALL
+
+            -- Storage-class delete rules (conservative: only dirs with zero STANDARD objects
+            -- where every present non-standard class is covered by a delete rule)
+            SELECT d3.bucket, d3.dir_prefix, 'non-standard' AS matched_rule
+            FROM dir_summary d3
+            WHERE d3.bucket = ?
+              AND d3.standard_count = 0
+              AND (d3.nearline_count + d3.coldline_count + d3.archive_count) > 0
+              AND (d3.nearline_count = 0 OR EXISTS (
+                  SELECT 1 FROM delete_rules dr
+                  WHERE dr.storage_class = 'NEARLINE' AND d3.dir_prefix LIKE dr.pattern
+              ))
+              AND (d3.coldline_count = 0 OR EXISTS (
+                  SELECT 1 FROM delete_rules dr
+                  WHERE dr.storage_class = 'COLDLINE' AND d3.dir_prefix LIKE dr.pattern
+              ))
+              AND (d3.archive_count = 0 OR EXISTS (
+                  SELECT 1 FROM delete_rules dr
+                  WHERE dr.storage_class = 'ARCHIVE' AND d3.dir_prefix LIKE dr.pattern
+              ))
+        )
     ) del USING (bucket, dir_prefix)
     WHERE d.bucket = ?
     ORDER BY d.dir_prefix
@@ -324,7 +329,7 @@ _STATUS_QUERY = """
 
 def _compute_deletion_entries(conn: Any, bucket: str) -> list[DirEntry]:
     """Query dir_summary with delete/keep status and return delete-marked entries."""
-    rows = _fetchall_dicts(conn.execute(_STATUS_QUERY, (bucket, bucket, bucket)))
+    rows = _fetchall_dicts(conn.execute(_STATUS_QUERY, (bucket, bucket, bucket, bucket)))
 
     all_entries = [
         DirEntry(
@@ -482,36 +487,245 @@ def run_compute(ctx: Context) -> None:
     _print_deletion_summary(all_entries)
 
 
-def run_soft_enable(ctx: Context) -> None:
-    for row in plan_rows():
-        bucket_url = f"gs://{row['bucket']}"
-        metadata = gcloud_bucket_describe(ctx, bucket_url)
-        current_seconds = bucket_soft_delete_seconds(metadata)
-        if current_seconds >= SOFT_DELETE_RETENTION_SECONDS and not ctx.force:
-            print_summary(f"  {bucket_url} already has soft-delete >= {SOFT_DELETE_RETENTION_SECONDS}s")
+def _sts_job_name(bucket: str, batch_index: int) -> str:
+    """Stable STS job name for a given bucket and batch."""
+    region = region_from_bucket(bucket)
+    return f"marin-purge-backup-{region}-{batch_index}"
+
+
+def _dedup_prefixes(prefixes: list[str]) -> list[str]:
+    """Remove prefixes that are already covered by a shorter prefix in the list.
+
+    STS rejects overlapping include_prefixes — e.g. if "foo/" is present then
+    "foo/bar/" is redundant and causes INVALID_ARGUMENT.
+    """
+    sorted_prefixes = sorted(prefixes)
+    result: list[str] = []
+    for p in sorted_prefixes:
+        if result and p.startswith(result[-1]):
             continue
-        print_summary(
-            f"  {'would enable' if ctx.dry_run else 'enabling'} "
-            f"soft-delete ({SOFT_DELETE_RETENTION_SECONDS}s) on {bucket_url}"
-        )
-        if not ctx.dry_run:
-            run_subprocess(
-                ctx,
-                [
-                    "gcloud",
-                    "storage",
-                    "buckets",
-                    "update",
-                    bucket_url,
-                    f"--soft-delete-duration={SOFT_DELETE_RETENTION_SECONDS}s",
-                ],
+        result.append(p)
+    return result
+
+
+def _plan_sts_jobs(manifest: dict[str, list[dict[str, str]]]) -> list[dict[str, Any]]:
+    """Plan STS copy jobs for each bucket's delete prefixes, batched by STS_MAX_PREFIXES_PER_JOB.
+
+    Returns a list of job descriptors with prefixes included for inspection.
+    """
+    jobs: list[dict[str, Any]] = []
+
+    for plan_row in plan_rows():
+        bucket_name = plan_row["bucket"]
+        rows = manifest.get(bucket_name, [])
+        if not rows:
+            continue
+
+        backup_bucket = BACKUP_BUCKETS[bucket_name]
+        prefixes = _dedup_prefixes([r["prefix"] for r in rows])
+
+        for batch_idx, start in enumerate(range(0, len(prefixes), STS_MAX_PREFIXES_PER_JOB)):
+            batch = prefixes[start : start + STS_MAX_PREFIXES_PER_JOB]
+            job_name = _sts_job_name(bucket_name, batch_idx)
+
+            jobs.append(
+                {
+                    "bucket": bucket_name,
+                    "job_name": job_name,
+                    "source": f"gs://{bucket_name}",
+                    "destination": f"gs://{backup_bucket}",
+                    "prefix_count": len(batch),
+                    "prefixes": batch,
+                }
             )
-            after = gcloud_bucket_describe(ctx, bucket_url)
-            after_seconds = bucket_soft_delete_seconds(after)
-            if after_seconds < SOFT_DELETE_RETENTION_SECONDS:
-                raise RuntimeError(
-                    f"Soft-delete on {bucket_url} is {after_seconds}s, expected >= {SOFT_DELETE_RETENTION_SECONDS}s"
-                )
+
+    return jobs
+
+
+def _execute_sts_jobs(ctx: Context, jobs: list[dict[str, Any]]) -> None:
+    """Create STS transfer jobs from a pre-computed plan."""
+    for job in jobs:
+        bucket_name = job["bucket"]
+        job_name = job["job_name"]
+        batch = job["prefixes"]
+        batch_idx = int(job_name.rsplit("-", 1)[-1])
+
+        print_summary(
+            f"  creating STS job {job_name}: " f"{len(batch)} prefixes, {job['source']} → {job['destination']}"
+        )
+
+        run_subprocess(
+            ctx,
+            [
+                "gcloud",
+                "transfer",
+                "jobs",
+                "create",
+                job["source"],
+                job["destination"],
+                f"--name={job_name}",
+                f"--description=Purge backup for {bucket_name} batch {batch_idx}",
+                f"--include-prefixes={','.join(batch)}",
+                "--format=json",
+            ],
+        )
+
+
+def _poll_sts_jobs(ctx: Context, jobs: list[dict[str, str]]) -> dict[str, str]:
+    """Check the status of all STS jobs. Returns {job_name: status}."""
+    statuses: dict[str, str] = {}
+    for job in jobs:
+        job_name = job["job_name"]
+        result = run_subprocess(
+            ctx,
+            [
+                "gcloud",
+                "transfer",
+                "jobs",
+                "describe",
+                job_name,
+                "--format=json",
+            ],
+            capture_json=True,
+        )
+        latest = result.get("latestOperationName", "")
+        if not latest:
+            statuses[job_name] = "NOT_STARTED"
+            continue
+        op_result = run_subprocess(
+            ctx,
+            [
+                "gcloud",
+                "transfer",
+                "operations",
+                "describe",
+                latest,
+                "--format=json",
+            ],
+            capture_json=True,
+        )
+        status = op_result.get("metadata", {}).get("status", "UNKNOWN")
+        statuses[job_name] = status
+    return statuses
+
+
+def run_backup_prep(ctx: Context) -> None:
+    """Plan STS jobs and write the plan to disk for inspection before executing."""
+    catalog = DEFAULT_CATALOG
+    plan_path = catalog.backup_dir / "backup_plan.json"
+
+    if plan_path.exists() and not ctx.force:
+        print_summary(f"  backup plan already exists at {plan_path.relative_to(REPO_ROOT)}; use --force to regenerate")
+        return
+
+    manifest = _load_manifest(ctx)
+    jobs = _plan_sts_jobs(manifest)
+
+    # Write per-job prefix files for easy inspection
+    for job in jobs:
+        prefix_list_path = catalog.backup_dir / f"{job['job_name']}_prefixes.txt"
+        prefix_list_path.write_text("\n".join(job["prefixes"]) + "\n")
+
+    plan = {
+        "created_at": timestamp_string(),
+        "job_count": len(jobs),
+        "total_prefixes": sum(j["prefix_count"] for j in jobs),
+        "jobs": jobs,
+    }
+    plan_path.write_text(json.dumps(plan, indent=2))
+    print_summary(f"  wrote backup plan with {len(jobs)} jobs to {plan_path.relative_to(REPO_ROOT)}")
+    for job in jobs:
+        print_summary(
+            f"    {job['job_name']}: {job['prefix_count']} prefixes, " f"{job['source']} → {job['destination']}"
+        )
+    print_summary("  inspect the plan, then run `backup-run` to create STS jobs")
+
+
+def run_backup_run(ctx: Context) -> None:
+    """Read the backup plan and create STS transfer jobs."""
+    catalog = DEFAULT_CATALOG
+    plan_path = catalog.backup_dir / "backup_plan.json"
+    state_path = catalog.backup_dir / "backup_state.json"
+
+    # If already done, skip unless forced
+    if state_path.exists() and not ctx.force:
+        state = json.loads(state_path.read_text())
+        if state.get("status") == "completed":
+            print_summary("  backup already completed; use --force to re-run")
+            return
+        if state.get("jobs") and not ctx.dry_run:
+            print_summary("  STS jobs already created; checking status...")
+            statuses = _poll_sts_jobs(ctx, state["jobs"])
+            _print_backup_status(statuses)
+            if all(s == "SUCCESS" for s in statuses.values()):
+                state["status"] = "completed"
+                state_path.write_text(json.dumps(state, indent=2))
+                print_summary("  all backup jobs completed successfully")
+            return
+
+    if not plan_path.exists():
+        raise RuntimeError(
+            f"Backup plan not found at {plan_path.relative_to(REPO_ROOT)}. " "Run the backup-prep step first."
+        )
+
+    plan = json.loads(plan_path.read_text())
+    jobs = plan["jobs"]
+
+    if ctx.dry_run:
+        print_summary(f"  would create {len(jobs)} STS backup jobs:")
+        for job in jobs:
+            print_summary(
+                f"    {job['job_name']}: {job['prefix_count']} prefixes, " f"{job['source']} → {job['destination']}"
+            )
+        return
+
+    _execute_sts_jobs(ctx, jobs)
+
+    # Strip prefixes from state (they're in the plan and prefix files already)
+    state_jobs = [{k: v for k, v in j.items() if k != "prefixes"} for j in jobs]
+    state = {
+        "status": "in_progress",
+        "created_at": timestamp_string(),
+        "jobs": state_jobs,
+    }
+    state_path.write_text(json.dumps(state, indent=2))
+    print_summary(f"  created {len(jobs)} STS jobs; run `backup-status` to monitor progress")
+
+
+def _print_backup_status(statuses: dict[str, str]) -> None:
+    for job_name, status in sorted(statuses.items()):
+        print_summary(f"  {job_name}: {status}")
+
+    succeeded = sum(1 for s in statuses.values() if s == "SUCCESS")
+    total = len(statuses)
+    print_summary(f"  {succeeded}/{total} jobs completed")
+
+
+def run_backup_status(ctx: Context) -> None:
+    """Poll all STS backup jobs and report status."""
+    catalog = DEFAULT_CATALOG
+    state_path = catalog.backup_dir / "backup_state.json"
+    if not state_path.exists():
+        print_summary("  no backup state found; run the backup step first")
+        return
+
+    state = json.loads(state_path.read_text())
+    if state.get("status") == "completed":
+        print_summary("  all backup jobs already marked completed")
+        return
+
+    jobs = state.get("jobs", [])
+    if not jobs:
+        print_summary("  no STS jobs recorded in state")
+        return
+
+    statuses = _poll_sts_jobs(ctx, jobs)
+    _print_backup_status(statuses)
+
+    if all(s == "SUCCESS" for s in statuses.values()):
+        state["status"] = "completed"
+        state_path.write_text(json.dumps(state, indent=2))
+        print_summary("  all backup jobs completed — backup marked done")
 
 
 def _load_manifest(ctx: Context) -> dict[str, list[dict[str, str]]]:
@@ -543,32 +757,6 @@ def _load_manifest(ctx: Context) -> dict[str, list[dict[str, str]]]:
     return dict(by_bucket)
 
 
-def _iter_prefix(ctx: Context, bucket_name: str, prefix: str):
-    """Yield object names matching prefix, streaming from DB without materializing."""
-    cursor = ctx.conn.cursor()
-    cursor.execute(
-        "SELECT o.name FROM objects o WHERE o.bucket = ? AND o.name LIKE ? || '%'",
-        (bucket_name, prefix),
-    )
-    while (row := cursor.fetchone()) is not None:
-        yield row[0]
-
-
-def _preflight_delete_prefixes(ctx: Context, bucket_name: str, rows: list[dict[str, str]]) -> None:
-    """Issue a cheap live list probe for each manifest prefix before deleting."""
-    client = storage_client(ctx)
-    for row in rows:
-        iterator = client.list_blobs(
-            bucket_name,
-            prefix=row["prefix"],
-            page_size=1,
-            max_results=1,
-            fields="items(name),nextPageToken",
-            timeout=DELETE_PREFLIGHT_LIST_TIMEOUT,
-        )
-        next(iter(iterator), None)
-
-
 def _raise_delete_worker_failure(bucket_name: str, failures: queue.Queue[Exception]) -> None:
     try:
         exc = failures.get_nowait()
@@ -595,11 +783,50 @@ def _queue_put_with_worker_checks(
             continue
 
 
+class _DeleteState:
+    """Shared state for the delete pipeline: tracks recent prefixes/objects and deleted count.
+
+    Duck-typed to the tqdm interface used by _delete_worker (update / set_postfix / .n).
+    """
+
+    RECENT_MAXLEN = 100
+
+    def __init__(self, total_prefixes: int, total_objects: int) -> None:
+        self.total_prefixes = total_prefixes
+        self.total_objects = total_objects
+        self.start_time = time.time()
+        self._lock = threading.Lock()
+        self.recent_prefixes: deque[str] = deque(maxlen=self.RECENT_MAXLEN)
+        self.recent_objects: deque[str] = deque(maxlen=self.RECENT_MAXLEN)
+        self.prefixes_done = 0
+        self.n = 0  # deleted count; named .n for _delete_worker compatibility
+
+    def record_prefix(self, prefix: str) -> None:
+        with self._lock:
+            self.recent_prefixes.append(prefix)
+            self.prefixes_done += 1
+
+    def record_object(self, name: str) -> None:
+        with self._lock:
+            self.recent_objects.append(name)
+
+    def update(self, n: int) -> None:
+        with self._lock:
+            self.n += n
+
+    def set_postfix(self, **_kwargs: object) -> None:
+        pass
+
+    def snapshot(self) -> tuple[list[str], list[str], int, int]:
+        with self._lock:
+            return list(self.recent_prefixes), list(self.recent_objects), self.prefixes_done, self.n
+
+
 def _delete_worker(
     ctx: Context,
     bucket_name: str,
     q: queue.Queue[str | None],
-    progress: tqdm,
+    progress: _DeleteState,
     stop_event: threading.Event,
     failures: queue.Queue[Exception],
     batch_size: int = 100,
@@ -658,6 +885,101 @@ def _delete_worker(
         failures.put(exc)
 
 
+def _listing_worker(
+    ctx: Context,
+    bucket_name: str,
+    prefix_q: queue.Queue[str | None],
+    object_q: queue.Queue[str | None],
+    stop_event: threading.Event,
+    failures: queue.Queue[Exception],
+    state: _DeleteState,
+) -> None:
+    client = storage_client(ctx)
+    try:
+        while True:
+            if stop_event.is_set():
+                return
+            try:
+                prefix = prefix_q.get(timeout=DELETE_WORKER_QUEUE_TIMEOUT)
+            except queue.Empty:
+                continue
+            if prefix is None:
+                return
+            state.record_prefix(prefix)
+            for blob in client.list_blobs(bucket_name, prefix=prefix):
+                if stop_event.is_set():
+                    return
+                state.record_object(blob.name)
+                _queue_put_with_worker_checks(bucket_name, object_q, blob.name, stop_event, failures)
+    except Exception as exc:
+        stop_event.set()
+        failures.put(exc)
+
+
+_CONSOLE = Console(stderr=True)
+
+
+def _render_delete_display(
+    state: _DeleteState,
+    prefix_q_size: int,
+    object_q_size: int,
+) -> Group:
+    prefixes_snap, objects_snap, prefixes_done, deleted = state.snapshot()
+
+    elapsed = time.time() - state.start_time
+    rate = deleted / elapsed if elapsed > 1 else 0
+    remaining = max(0, state.total_objects - deleted)
+    if rate > 0:
+        eta_s = int(remaining / rate)
+        eta_str = f"{eta_s // 60}m {eta_s % 60}s"
+    else:
+        eta_str = "…"
+
+    def make_item_table(items: list[str]) -> Table:
+        t = Table(show_header=False, box=None, padding=(0, 0), expand=True)
+        t.add_column("item", no_wrap=True, overflow="ellipsis")
+        for item in items:
+            t.add_row(item)
+        return t
+
+    grid = Table.grid(expand=True)
+    grid.add_column(ratio=1)
+    grid.add_column(ratio=1)
+    grid.add_row(
+        Panel(make_item_table(prefixes_snap[-20:]), title="Listing Prefixes"),
+        Panel(make_item_table(objects_snap[-20:]), title="Objects Enumerated"),
+    )
+
+    status = Text(
+        f" prefixes {prefixes_done}/{state.total_prefixes}"
+        f"  prefix_q {prefix_q_size}"
+        f"  object_q {object_q_size}"
+        f"  deleted {deleted:,}"
+        f"  {rate:,.0f} obj/s"
+        f"  ETA {eta_str}",
+        style="bold",
+    )
+
+    return Group(grid, status)
+
+
+def _prefix_feeder(
+    bucket_name: str,
+    prefix_q: queue.Queue[str | None],
+    rows: list[dict[str, str]],
+    stop_event: threading.Event,
+    failures: queue.Queue[Exception],
+) -> None:
+    try:
+        for row in rows:
+            _queue_put_with_worker_checks(bucket_name, prefix_q, row["prefix"], stop_event, failures)
+        for _ in range(N_LIST_WORKERS):
+            _queue_put_with_worker_checks(bucket_name, prefix_q, None, stop_event, failures)
+    except Exception as exc:
+        stop_event.set()
+        failures.put(exc)
+
+
 def run_delete(ctx: Context) -> None:
     """Delete objects listed in the pre-computed deletion manifest."""
     manifest = _load_manifest(ctx)
@@ -682,64 +1004,67 @@ def run_delete(ctx: Context) -> None:
             continue
 
         total_objects = sum(int(r["object_count"]) for r in rows)
-        n_workers = max(1, min(ctx.scan_workers, total_objects))
         print_summary(
-            f"  deleting from {bucket_name}: {total_objects:,} objects, " f"{len(rows)} prefixes, {n_workers} workers"
+            f"  deleting from {bucket_name}: {total_objects:,} objects, {len(rows)} prefixes, "
+            f"{N_LIST_WORKERS} list workers, {N_DELETE_WORKERS} delete workers"
         )
-        print_summary(f"  preflight listing {len(rows):,} prefixes in {bucket_name}")
-        _preflight_delete_prefixes(ctx, bucket_name, rows)
 
         # Shuffle prefixes to spread load across bucket keyspace rather than hammering one hotspot.
         shuffled_rows = list(rows)
         random.shuffle(shuffled_rows)
 
-        # Bounded queue provides backpressure: feeder blocks when workers fall behind.
-        q: queue.Queue[str | None] = queue.Queue(maxsize=10_000)
+        prefix_q: queue.Queue[str | None] = queue.Queue(maxsize=256)
+        object_q: queue.Queue[str | None] = queue.Queue(maxsize=10_000)
         stop_event = threading.Event()
         failures: queue.Queue[Exception] = queue.Queue()
 
-        with tqdm(total=total_objects, desc=f"delete {bucket_name}", unit="obj", leave=True) as progress:
-            workers = [
-                threading.Thread(
-                    target=_delete_worker,
-                    args=(ctx, bucket_name, q, progress, stop_event, failures),
-                    daemon=True,
-                )
-                for _ in range(n_workers)
-            ]
-            for w in workers:
-                w.start()
-            try:
-                for row in shuffled_rows:
-                    for name in _iter_prefix(ctx, bucket_name, row["prefix"]):
-                        _queue_put_with_worker_checks(bucket_name, q, name, stop_event, failures)
-                for _ in workers:
-                    _queue_put_with_worker_checks(bucket_name, q, None, stop_event, failures)
-                for w in workers:
-                    w.join()
-                _raise_delete_worker_failure(bucket_name, failures)
-            except Exception:
-                stop_event.set()
-                raise
+        state = _DeleteState(total_prefixes=len(rows), total_objects=total_objects)
+        feeder = threading.Thread(
+            target=_prefix_feeder,
+            args=(bucket_name, prefix_q, shuffled_rows, stop_event, failures),
+            daemon=True,
+        )
+        list_workers = [
+            threading.Thread(
+                target=_listing_worker,
+                args=(ctx, bucket_name, prefix_q, object_q, stop_event, failures, state),
+                daemon=True,
+            )
+            for _ in range(N_LIST_WORKERS)
+        ]
+        delete_workers = [
+            threading.Thread(
+                target=_delete_worker,
+                args=(ctx, bucket_name, object_q, state, stop_event, failures),
+                daemon=True,
+            )
+            for _ in range(N_DELETE_WORKERS)
+        ]
+        for w in [feeder] + list_workers + delete_workers:
+            w.start()
+        try:
+            with Live(console=_CONSOLE, refresh_per_second=1) as live:
+                while any(w.is_alive() for w in [feeder] + list_workers):
+                    time.sleep(1.0)
+                    _raise_delete_worker_failure(bucket_name, failures)
+                    live.update(_render_delete_display(state, prefix_q.qsize(), object_q.qsize()))
+
+                for _ in range(N_DELETE_WORKERS):
+                    _queue_put_with_worker_checks(bucket_name, object_q, None, stop_event, failures)
+
+                while any(w.is_alive() for w in delete_workers):
+                    time.sleep(1.0)
+                    _raise_delete_worker_failure(bucket_name, failures)
+                    live.update(_render_delete_display(state, prefix_q.qsize(), object_q.qsize()))
+
+            for w in [feeder] + list_workers + delete_workers:
+                w.join()
+            _raise_delete_worker_failure(bucket_name, failures)
+        except Exception:
+            stop_event.set()
+            raise
 
         print_summary(f"  {bucket_name}: done")
-
-
-def run_soft_disable(ctx: Context) -> None:
-    for row in plan_rows():
-        bucket_url = f"gs://{row['bucket']}"
-        metadata = gcloud_bucket_describe(ctx, bucket_url)
-        current_seconds = bucket_soft_delete_seconds(metadata)
-        if current_seconds == 0 and not ctx.force:
-            print_summary(f"  {bucket_url} already has soft-delete disabled")
-            continue
-        print_summary(f"  {'would disable' if ctx.dry_run else 'disabling'} soft-delete on {bucket_url}")
-        if not ctx.dry_run:
-            run_subprocess(ctx, ["gcloud", "storage", "buckets", "update", bucket_url, "--clear-soft-delete"])
-            after = gcloud_bucket_describe(ctx, bucket_url)
-            after_seconds = bucket_soft_delete_seconds(after)
-            if after_seconds != 0:
-                raise RuntimeError(f"Soft-delete on {bucket_url} is still {after_seconds}s after clear")
 
 
 # ===========================================================================
@@ -750,16 +1075,9 @@ STEPS: list[Step] = [
     Step("scan", "Scan objects into parquet", run_scan, scan_done),
     Step("summarize", "Materialize dir_summary from objects", run_summarize, summarize_done),
     Step("compute", "Compute deletion manifest CSV", run_compute, compute_done),
-    Step("soft-enable", "Enable 3-day soft-delete on buckets", run_soft_enable, soft_enable_done, mutating=True),
+    Step("backup-prep", "Plan STS backup jobs for inspection", run_backup_prep, backup_prep_done),
+    Step("backup-run", "Create STS jobs from backup plan", run_backup_run, backup_run_done, mutating=True),
     Step("delete", "Delete objects from manifest", run_delete, lambda _: False, mutating=True),
-    Step(
-        "soft-disable",
-        "Disable soft-delete (permanent)",
-        run_soft_disable,
-        soft_disable_done,
-        mutating=True,
-        optional=True,
-    ),
 ]
 
 STEP_INDEX: dict[str, Step] = {s.name: s for s in STEPS}
@@ -833,7 +1151,7 @@ def _run_steps(ctx: Context, steps: list[Step]) -> None:
     context_settings={"help_option_names": ["-h", "--help"]},
     help=(
         "Storage purge workflow: scan, summarize, compute deletion manifest, "
-        "and delete objects with a soft-delete safety net."
+        "backup delete set via STS, and delete objects."
     ),
 )
 def cli() -> None:
@@ -854,14 +1172,10 @@ def plan_cli() -> None:
             tags.append("optional")
         tag_str = f"  [{', '.join(tags)}]" if tags else ""
 
-        # For steps that need gcloud (soft-enable/disable), show "unknown" instead of calling gcloud
-        if step.name in ("soft-enable", "soft-disable"):
-            status = "pending"
-        else:
-            try:
-                status = "done" if step.done(catalog) else "pending"
-            except Exception:
-                status = "error"
+        try:
+            status = "done" if step.done(catalog) else "pending"
+        except Exception:
+            status = "error"
 
         print(f"  {status:7}  {step.name:14} {step.description}{tag_str}")
 
@@ -920,15 +1234,32 @@ def compute_cli(project: str | None) -> None:
     print_summary("completed")
 
 
-@cli.command("soft-enable", help="Enable 3-day soft-delete on all buckets.")
-@click.option("--dry-run", is_flag=True, help="Show what would happen.")
-@click.option("--force", is_flag=True, help="Re-enable even if already set.")
+@cli.command("backup-prep", help="Plan STS backup jobs and write to disk for inspection.")
+@click.option("--force", is_flag=True, help="Regenerate plan even if it already exists.")
 @click.option("--project", help="Override GCP project.")
-def soft_enable_cli(dry_run: bool, force: bool, project: str | None) -> None:
-    ctx = build_context(dry_run=dry_run, force=force, scan_workers=1, project=project)
-    print_summary(f"==> soft-enable: {STEP_INDEX['soft-enable'].description}")
-    run_soft_enable(ctx)
+def backup_prep_cli(force: bool, project: str | None) -> None:
+    ctx = build_context(dry_run=False, force=force, scan_workers=1, project=project)
+    print_summary(f"==> backup-prep: {STEP_INDEX['backup-prep'].description}")
+    run_backup_prep(ctx)
     print_summary("completed")
+
+
+@cli.command("backup-run", help="Create STS jobs from the backup plan.")
+@click.option("--dry-run", is_flag=True, help="Show what would happen.")
+@click.option("--force", is_flag=True, help="Re-create STS jobs even if already started.")
+@click.option("--project", help="Override GCP project.")
+def backup_run_cli(dry_run: bool, force: bool, project: str | None) -> None:
+    ctx = build_context(dry_run=dry_run, force=force, scan_workers=1, project=project)
+    print_summary(f"==> backup-run: {STEP_INDEX['backup-run'].description}")
+    run_backup_run(ctx)
+    print_summary("completed")
+
+
+@cli.command("backup-status", help="Check status of STS backup jobs.")
+@click.option("--project", help="Override GCP project.")
+def backup_status_cli(project: str | None) -> None:
+    ctx = build_context(dry_run=True, force=False, scan_workers=1, project=project)
+    run_backup_status(ctx)
 
 
 @cli.command("delete", help="Delete objects listed in the manifest.")
@@ -939,17 +1270,6 @@ def delete_cli(dry_run: bool, scan_workers: int, project: str | None) -> None:
     ctx = build_context(dry_run=dry_run, force=False, scan_workers=scan_workers, project=project)
     print_summary(f"==> delete: {STEP_INDEX['delete'].description}")
     run_delete(ctx)
-    print_summary("completed")
-
-
-@cli.command("soft-disable", help="Disable soft-delete (permanent).")
-@click.option("--dry-run", is_flag=True, help="Show what would happen.")
-@click.option("--force", is_flag=True, help="Re-disable even if already off.")
-@click.option("--project", help="Override GCP project.")
-def soft_disable_cli(dry_run: bool, force: bool, project: str | None) -> None:
-    ctx = build_context(dry_run=dry_run, force=force, scan_workers=1, project=project)
-    print_summary(f"==> soft-disable: {STEP_INDEX['soft-disable'].description}")
-    run_soft_disable(ctx)
     print_summary("completed")
 
 

@@ -40,5 +40,47 @@
     "storage_class": "ARCHIVE",
     "description": "oldold",
     "created_at": "2026-04-07T15:02:38.575780+00:00"
+  },
+  {
+    "id": 14,
+    "pattern": "checkpoints/DEBUG20260127-%",
+    "storage_class": null,
+    "description": "Debug checkpoints ",
+    "created_at": "2026-04-07T17:46:35.671108+00:00"
+  },
+  {
+    "id": 15,
+    "pattern": "checkpoints/data-grads/%",
+    "storage_class": null,
+    "description": "Dead Project",
+    "created_at": "2026-04-07T17:48:04.869783+00:00"
+  },
+  {
+    "id": 16,
+    "pattern": "evaluate-test-environment-4B-%",
+    "storage_class": null,
+    "description": "",
+    "created_at": "2026-04-07T19:49:42.258300+00:00"
+  },
+  {
+    "id": 17,
+    "pattern": "test_v6%",
+    "storage_class": null,
+    "description": "",
+    "created_at": "2026-04-07T21:37:16.077890+00:00"
+  },
+  {
+    "id": 18,
+    "pattern": "%canary_ferry%",
+    "storage_class": null,
+    "description": "",
+    "created_at": "2026-04-07T21:44:10.889833+00:00"
+  },
+  {
+    "id": 19,
+    "pattern": "%rl_testing%",
+    "storage_class": null,
+    "description": "",
+    "created_at": "2026-04-07T21:44:18.924750+00:00"
   }
 ]
