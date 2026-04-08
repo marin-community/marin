@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Compute Python package dependencies for Ray jobs."""
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from ray.runtime_env import RuntimeEnv
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 # Packages to ignore when computing the runtime environment.
 # These will always be instead sourced from the base environment.
@@ -123,12 +123,12 @@ def build_python_path(submodules_dir: str = "submodules") -> list[str]:
     # Workspace member src directories + experiments directory
     paths = [
         "experiments",
-        "lib/harbor/src",
         "lib/fray/src",
         "lib/haliax/src",
         "lib/iris/src",
         "lib/levanter/src",
         "lib/marin/src",
+        "lib/rigging/src",
         "lib/zephyr/src",
     ]
 

@@ -4,31 +4,43 @@ on:
     branches:
       - main
   pull_request:
-    branches:
-      - main
-    paths:
-      - lib/fray/**
-      - .github/workflows/fray-unit-tests.yaml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  cpu-test:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'lib/fray/**'
+              - 'uv.lock'
+              - '.github/workflows/fray-unit-tests.yaml'
+
+  fray-tests:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    strategy:
-      matrix:
-        python-version: ["3.12"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.12
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -40,10 +52,11 @@ jobs:
           # NOTE: do not use frozen here because it makes ray sad when it sets up venvs with uv
           cd lib/fray && uv run --group=fray-test pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/
 
-  tpu-test:
+  fray-tpu-tests:
+    needs: changes
     runs-on: [tpu-ci]
     timeout-minutes: 10
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: needs.changes.outputs.should_run == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       - name: Checkout code
         uses: actions/checkout@v3

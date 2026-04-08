@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -9,7 +9,7 @@ import pytest
 import requests  # For requests.exceptions.RequestException
 from huggingface_hub.utils import HfHubHTTPError
 from levanter.store import TreeCache
-from transformers import AutoTokenizer
+from levanter.tokenizers import load_tokenizer
 
 from marin.processing.tokenize.download_pretokenized import (
     PretokenizedCacheDownloadConfig,
@@ -28,7 +28,7 @@ def test_download_and_load_cache():
     try:
         # Attempt to load tokenizer first, as it's a quick check for connectivity/access
         # and needed for creating a more realistic exemplar if desired, though not strictly for this test.
-        AutoTokenizer.from_pretrained(TOKENIZER_NAME)
+        load_tokenizer(TOKENIZER_NAME)
     except (HfHubHTTPError, requests.exceptions.RequestException, OSError, ValueError) as e:
         pytest.skip(
             f"Skipping test: Could not load tokenizer '{TOKENIZER_NAME}'. "

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from fray.v1.cluster import ResourceConfig
 from fray.v1.cluster.ray.deps import build_runtime_env_for_packages
 
-import fsspec
+from rigging.filesystem import open_url, url_to_fs
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
@@ -51,11 +51,11 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                 remote_path = f"{remote_dir.rstrip('/')}/{filename}"
                 if not is_remote_path(remote_path):
                     continue
-                fs, fs_path = fsspec.core.url_to_fs(remote_path)
+                fs, fs_path = url_to_fs(remote_path)
                 if not fs.exists(fs_path):
                     continue
                 local_path = os.path.join(local_dir, filename)
-                with fsspec.open(remote_path, "rb") as src:
+                with open_url(remote_path, "rb") as src:
                     data = src.read()
                 with open(local_path, "wb") as dst:
                     dst.write(data)

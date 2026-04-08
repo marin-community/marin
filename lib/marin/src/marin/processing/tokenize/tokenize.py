@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -17,11 +17,9 @@ import time
 from collections.abc import Iterator, Sequence
 
 import draccus
-import fsspec
-import transformers
+from rigging.filesystem import open_url
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig
-from fray.v2.local_backend import LocalClient
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -30,6 +28,7 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
     preprocessor_for_format,
 )
+from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
 from levanter.store.cache import consolidate_shard_caches
 from levanter.store.tree_store import TreeStore
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
@@ -37,6 +36,7 @@ from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +64,12 @@ class TokenizeConfigBase(abc.ABC):
     """Base class for tokenize configs."""
 
     max_workers: int = 4096
-    worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="5g", disk="5g"))
-    writer_batch_size: int = 65536
-    """Larger values mean fewer, bigger writes to the Levanter cache, which reduces per-op
-    overhead. Too large a value increases memory usage and delays progress checkpointing."""
+    cache_copy_max_workers: int = 128
+    worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
+
+    tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
+    """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly.
+    KITOKEN uses the kitoken library."""
 
     num_shards: int | None = None
     """Override the number tokenize shards. When set, files are grouped to produce approximately
@@ -260,7 +262,11 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[Sequence[dict]]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    tokenizer: transformers.PreTrainedTokenizer = zephyr_worker_ctx().get_shared("tokenizer")
+    ctx = zephyr_worker_ctx()
+    name = ctx.get_shared("tokenizer_name")
+    backend = ctx.get_shared("tokenizer_backend")
+    # load_tokenizer is @lru_cache, so this only loads once per worker process.
+    tokenizer: MarinTokenizer = load_tokenizer(name, backend=backend)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     batch_count = 0
@@ -334,10 +340,19 @@ def tokenize(config: TokenizeConfigBase):
     def local_preprocess_paths(paths: list[str]) -> list[list[str]]:
         """Scan file sizes locally and bundle into groups for distributed processing."""
         filescan_start = time.monotonic()
-        local_ctx = ZephyrContext(client=LocalClient(), max_workers=8, name="tokenize-filescan")
+        # Sort for deterministic batching, then chunk into groups of 64.
+        paths = sorted(paths)
+        batched_paths = [paths[i : i + 64] for i in range(0, len(paths), 64)]
+        scan_ctx = ZephyrContext(
+            max_workers=32,
+            resources=ResourceConfig(cpu=1, ram="1g"),
+            name="tokenize-filescan",
+        )
         file_stats = list(
-            local_ctx.execute(
-                Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
+            scan_ctx.execute(
+                Dataset.from_list(batched_paths).flat_map(
+                    lambda batch: [{"filename": p, "size": fsspec_size(p)} for p in batch]
+                ),
                 verbose=False,
             )
         )
@@ -375,18 +390,21 @@ def tokenize(config: TokenizeConfigBase):
             ds = ds.take_per_shard(config.sample_count)
 
         temp_shards = (
-            ds.window(config.writer_batch_size)
-            .map_shard(lambda batches: _tokenize_batches(config=config, batches=batches))
+            # NOTE: https://github.com/marin-community/marin/issues/2829#issuecomment-3963661943
+            # Window set to 64 ^
+            ds.window(64)
+            .map_shard(lambda batches, _: _tokenize_batches(config=config, batches=batches))
             .write_levanter_cache(
                 f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}",
                 metadata={},
-                batch_size=config.writer_batch_size,
                 skip_existing=True,
             )
         )
 
-        # Broadcast the tokenizer to all workers via ZephyrContext
-        ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
+        # Broadcast tokenizer config to workers. We send name + backend rather than
+        # the tokenizer object because not all backends support pickling.
+        ctx.put("tokenizer_name", config.tokenizer)
+        ctx.put("tokenizer_backend", config.tokenizer_backend)
 
         tokenize_start = time.monotonic()
         shard_paths = ctx.execute(temp_shards)
@@ -397,13 +415,18 @@ def tokenize(config: TokenizeConfigBase):
             Dataset.from_list(file_groups[0][0:1])
             .flat_map(load_file)
             .take_per_shard(1)
-            .map_shard(lambda example: _tokenize_batches(config=config, batches=[example])),
+            .map_shard(lambda example, _: _tokenize_batches(config=config, batches=[example])),
             verbose=False,
         )[0]
 
         consolidate_start = time.monotonic()
         logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")
-        ledger = consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
+        ledger = consolidate_shard_caches(
+            shard_cache_paths=shard_paths,
+            output_path=prefix,
+            exemplar=exemplar,
+            copy_max_workers=config.cache_copy_max_workers,
+        )
         consolidate_elapsed = time.monotonic() - consolidate_start
 
         total_elements = ledger.total_num_rows
@@ -411,7 +434,7 @@ def tokenize(config: TokenizeConfigBase):
         total_tokens = store.tree["input_ids"].data_size if "input_ids" in store.tree else 0
 
         stats_path = os.path.join(prefix, ".stats.json")
-        with fsspec.open(stats_path, "w") as f:
+        with open_url(stats_path, "w") as f:
             json.dump({"total_tokens": total_tokens, "total_elements": total_elements}, f)
 
         pipeline_elapsed = time.monotonic() - pipeline_start
@@ -446,5 +469,6 @@ def tokenize(config: TokenizeConfigBase):
 
 @draccus.wrap()
 def main(config: TokenizeConfig):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+    configure_logging(level=logging.INFO)
     tokenize(config)

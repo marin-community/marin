@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -18,7 +18,7 @@ executor_main([download_step])
 
 from dataclasses import dataclass
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.utils import get_directory_friendly_name
 

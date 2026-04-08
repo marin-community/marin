@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
@@ -51,9 +51,8 @@ from levanter.store.cache import CacheOptions, TreeCache
 from levanter.store.jagged_array import JaggedArrayStore
 from levanter.store.tree_store import TreeStore
 from levanter.utils import fsspec_utils
-from levanter.utils.hf_utils import HfTokenizer
+from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.utils.jax_utils import key_iterator
-from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.utils.logging import silence_transformer_nag
 
 
@@ -247,7 +246,7 @@ class LmDatasetSourceConfigBase(ChoiceRegistry):
         raise NotImplementedError
 
     def load_cache(
-        self, split, tokenizer: HfTokenizer, override_cache_dir: str | None = None, enforce_eos=True
+        self, split, tokenizer: MarinTokenizer, override_cache_dir: str | None = None, enforce_eos=True
     ) -> TreeCache[dict]:
         base_cache = override_cache_dir if override_cache_dir is not None else self.cache_dir
         if base_cache is None:
@@ -642,11 +641,11 @@ class LmDataConfig:
             ), "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
 
     @cached_property
-    def the_tokenizer(self) -> HfTokenizer:
+    def the_tokenizer(self) -> MarinTokenizer:
         if self.tokenizer == "passthrough":
             return PassthroughTokenizer(self.vocab_size)
         else:
-            return load_tokenizer(self.tokenizer)
+            return load_marin_tokenizer(self.tokenizer)
 
     def _has_nonzero_weight(self, name: str) -> bool:
         weights = self.train_weights
@@ -690,6 +689,12 @@ class LmDataConfig:
             )
 
         return datasets
+
+    @staticmethod
+    def _position_axis(seq_len: int) -> Axis:
+        if seq_len <= 0:
+            raise ValueError(f"seq_len must be positive, got {seq_len}")
+        return Axis("position", seq_len)
 
     def train_set(
         self,
@@ -790,7 +795,21 @@ class LmDataConfig:
 
         return datasets
 
-    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
+    def train_grug_sets(
+        self,
+        *,
+        seq_len: int,
+        initial_batch_size: int | None = None,
+        key: PRNGKeyArray,
+    ) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+        """Build train datasets that emit array-first [GrugLmExample][]."""
+        return self.train_sets(
+            self._position_axis(seq_len),
+            initial_batch_size=initial_batch_size,
+            key=key,
+        )
+
+    def _validation_datasets_unwrapped(self, Pos: Axis) -> dict[str, AsyncDataset[GrugLmExample]]:
         doc_caches = self.build_caches("validation")
         validation_datasets = self.build_token_datasets(doc_caches, Pos, split="validation")
 
@@ -804,7 +823,16 @@ class LmDataConfig:
                 )
                 validation_datasets[name] = val_ds
 
+        return validation_datasets
+
+    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
+        validation_datasets = self._validation_datasets_unwrapped(Pos)
         return {name: NamedLmDataset(ds, Pos) for name, ds in validation_datasets.items()}
+
+    def validation_grug_sets(self, *, seq_len: int) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+        """Build validation datasets that emit array-first [GrugLmExample][]."""
+        Pos = self._position_axis(seq_len)
+        return self._validation_datasets_unwrapped(Pos)
 
     def build_caches(self, split: str) -> dict[str, TreeCache[dict]]:
         caches: dict[str, TreeCache[dict]] = {}
@@ -871,6 +899,15 @@ class LmDataConfig:
 
     def tagged_eval_sets(self, Pos: Axis) -> list[tuple[AsyncDataset[LmExample], list[str]]]:
         eval_sets = self.validation_sets(Pos)
+        tagged = []
+        for name, ds in eval_sets.items():
+            tags = (self.components[name].tags or []) + [name]
+            tagged.append((ds, tags))
+        return tagged
+
+    def tagged_eval_grug_sets(self, *, seq_len: int) -> list[tuple[AsyncDataset[GrugLmExample], list[str]]]:
+        """Build tagged validation datasets for array-first evaluators."""
+        eval_sets = self.validation_grug_sets(seq_len=seq_len)
         tagged = []
         for name, ds in eval_sets.items():
             tags = (self.components[name].tags or []) + [name]

@@ -23,6 +23,11 @@
 2. Make model/training changes in that variant, not in shared trainer libraries.
 3. Set run knobs in `<variant>/launch.py` (run id, data mix, optimizer, TPU type).
 4. Launch from the variant's `launch.py` entrypoint.
+5. Add or update variant-specific notes in `experiments/grug/variants.md`.
+
+## Variant notes
+
+Variant-specific guidance (including modular-opt notes) lives in `experiments/grug/variants.md`.
 
 ## Quickstart launch
 
@@ -132,11 +137,31 @@ Useful flags:
 - Keep core training/eval metrics aligned with classic Levanter (`train/loss`, `throughput/*`, `eval/*`).
 - Prefer shared helpers only for generic infrastructure; keep variant behavior local to the template.
 
+## Variant contract (enforced by tests)
+
+`tests/test_grug_variant_contracts.py` treats each subdirectory under `experiments/grug/` as a variant and
+enforces these minimum interfaces:
+
+- If `<variant>/model.py` exists, it must define:
+  - `GrugModelConfig` constructable as `GrugModelConfig(vocab_size=...)`
+  - `Transformer` with `next_token_loss(...)`
+  - `debug_mesh_and_token_pspec(num_devices: int)`
+- If `<variant>/train.py` exists, it must define:
+  - `initial_state(model_config, *, optimizer, mp, key)` (all required)
+  - `_make_train_step(...)`
+  - `run_grug(...)`
+- If both `model.py` and `train.py` exist, the variant must lower a one-step train path under abstract mesh via
+  `eqx.filter_eval_shape`.
+- Escape hatch: add `# GRUG NOVERIFY` anywhere in `<variant>/train.py` to exclude that variant from these contract
+  checks.
+
 ## Further guidance
 
 - Grug principles: [`/.agents/projects/grugformer.md`](../../.agents/projects/grugformer.md)
-- Change workflow: [`/docs/recipes/change_grug.md`](../../docs/recipes/change_grug.md)
+- Change workflow: [`.agents/skills/change-grug/`](../../.agents/skills/change-grug/SKILL.md)
+- HBM/OOM tuning guide: [`/docs/references/hbm-optimization.md`](../../docs/references/hbm-optimization.md)
 - Executor mechanics: [`/docs/explanations/executor.md`](../../docs/explanations/executor.md)
 - Executor tutorial: [`/docs/tutorials/executor-101.md`](../../docs/tutorials/executor-101.md)
-- TPU debug workflow: [`/docs/dev-guide/dev_tpu.md`](../../docs/dev-guide/dev_tpu.md)
+- TPU debug workflow: [`.agents/skills/dev-tpu/`](../../.agents/skills/dev-tpu/SKILL.md)
+- Legacy Ray TPU debug workflow: [`.agents/skills/dev-tpu-ray/`](../../.agents/skills/dev-tpu-ray/SKILL.md)
 - Cluster launch details: [`/docs/tutorials/tpu-cluster-setup.md`](../../docs/tutorials/tpu-cluster-setup.md)

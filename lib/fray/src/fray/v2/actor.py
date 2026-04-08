@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Actor protocols for fray v2.
@@ -10,6 +10,7 @@ holds a set of actor handles with lifecycle tied to underlying jobs.
 
 from __future__ import annotations
 
+import threading
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -23,7 +24,12 @@ class ActorHandle(Protocol):
 
 @dataclass(frozen=True)
 class ActorContext:
-    """Context available to actors during execution."""
+    """Context available to actors during execution.
+
+    ``shutdown_event`` is set by the actor when it is ready to exit.
+    Backends create the event and block on it (Iris) or use it to trigger
+    ``exit_actor()`` (Ray).
+    """
 
     handle: ActorHandle
     """Handle to self, can be passed to other actors for callbacks."""
@@ -34,6 +40,22 @@ class ActorContext:
     group_name: str
     """The name of the actor group this actor belongs to."""
 
+    shutdown_event: threading.Event | None = None
+    """Set by the actor when ready to exit; backends wait on it."""
+
+
+class HostedActor:
+    """An actor hosted in the current process. Holds handle + cleanup."""
+
+    def __init__(self, handle: ActorHandle, stop: Any = None):
+        self.handle = handle
+        self._stop = stop
+
+    def shutdown(self) -> None:
+        if self._stop is not None:
+            self._stop()
+            self._stop = None
+
 
 _current_actor_ctx: ContextVar[ActorContext | None] = ContextVar("actor_context", default=None)
 
@@ -42,6 +64,9 @@ def current_actor() -> ActorContext:
     """Get the current actor's context. Must be called from within an actor.
 
     Returns the actor's handle (for passing to other actors), index, and group name.
+    Call from ``__init__`` (where the ContextVar is set) and stash anything
+    you need on ``self`` — child threads in Python <3.12 do NOT inherit
+    ContextVars.
 
     Raises:
         RuntimeError: If called outside of an actor context.
@@ -75,6 +100,18 @@ class ActorMethod(Protocol):
         """Invoke the method remotely. Returns a future."""
         ...
 
+    def submit(self, *args: Any, **kwargs: Any) -> ActorFuture:
+        """Invoke via long-running operation with polling.
+
+        Use for methods that run for minutes/hours where holding an HTTP
+        connection open is fragile. The backend uses a durable polling
+        mechanism (e.g. StartOperation + GetOperation RPCs) so that
+        transient connection drops don't kill the call.
+
+        For local and Ray backends this is identical to remote().
+        """
+        ...
+
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Invoke the method synchronously (blocking)."""
         ...
@@ -102,6 +139,14 @@ class ActorGroup(Protocol):
         return the remaining handles as they become available. For LocalClient
         all handles are ready immediately, so this returns whatever wait_ready
         didn't return on its first call.
+        """
+        ...
+
+    def is_done(self) -> bool:
+        """Return True if the underlying job has permanently terminated.
+
+        When True, no new actors will ever come online — the group is dead.
+        Local backends always return False (in-process actors don't independently fail).
         """
         ...
 

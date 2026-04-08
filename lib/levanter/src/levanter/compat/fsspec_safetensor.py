@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
@@ -11,6 +11,7 @@ from typing import Callable, Dict, List, Optional, Tuple, Iterable
 
 import fsspec
 import humanfriendly
+from rigging.filesystem import filesystem as marin_filesystem
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -215,7 +216,7 @@ async def read_safetensors_fsspec(
         protocol = "file"
 
     if fs is None:
-        fs = fsspec.filesystem(protocol, asynchronous=True, anon=False)
+        fs = marin_filesystem(protocol, asynchronous=True, anon=False)
 
     if isinstance(fs, AsyncFileSystem):
         async_fs = fs

@@ -1,12 +1,13 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Test utilities for iris. Kept in src so cloudpickle can resolve references."""
 
 import os
 import time
+from collections.abc import Callable
 
-from iris.time_utils import Deadline, Duration
+from rigging.timing import Deadline, Duration
 
 
 class SentinelFile:
@@ -46,3 +47,19 @@ class SentinelFile:
             if deadline is not None and deadline.expired():
                 raise TimeoutError(f"SentinelFile {self._path} not signalled within {timeout}")
             time.sleep(poll_interval)
+
+
+def wait_for_condition(
+    condition: Callable[[], bool], timeout: Duration = Duration.from_seconds(10.0), poll_interval: float = 0.01
+) -> None:
+    """Poll condition at regular intervals until it returns True or timeout is reached.
+
+    Raises:
+        TimeoutError: If the condition does not become true within timeout.
+    """
+    deadline = Deadline.from_now(timeout)
+    while not deadline.expired():
+        if condition():
+            return
+        time.sleep(poll_interval)
+    raise TimeoutError(f"Condition did not become true within {timeout}")

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Actor pool for load-balanced and broadcast RPC calls."""
@@ -18,7 +18,7 @@ from iris.actor.resolver import ResolvedEndpoint, ResolveResult, Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
 from iris.rpc.errors import call_with_retry
-from iris.time_utils import ExponentialBackoff
+from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +132,7 @@ class ActorPool(Generic[T]):
             client = ActorServiceClientSync(
                 address=url,
                 timeout_ms=int(self._timeout * 1000),
+                accept_compression=[],
             )
             self._clients[url] = client
             return client

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """RPC error handling utilities with full traceback support."""
@@ -15,7 +15,8 @@ from connectrpc.errors import ConnectError
 from google.protobuf.any_pb2 import Any as AnyProto
 
 from iris.rpc import errors_pb2
-from iris.time_utils import ExponentialBackoff, Timestamp
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Deadline, ExponentialBackoff, Timestamp, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,19 @@ def rpc_error_handler(
         raise connect_error_with_traceback(code, f"Error {operation}: {e}", exc=e) from e
 
 
+def connect_error_sanitized(
+    code: Code,
+    message: str,
+    exc: Exception | None = None,
+) -> ConnectError:
+    """Create a ConnectError WITHOUT traceback details. For production use."""
+    details = errors_pb2.ErrorDetails(message=message)
+    details.timestamp.CopyFrom(timestamp_to_proto(Timestamp.now()))
+    if exc is not None:
+        details.exception_type = f"{type(exc).__module__}.{type(exc).__name__}"
+    return ConnectError(code, message, details=[details])
+
+
 def connect_error_with_traceback(
     code: Code,
     message: str,
@@ -62,7 +76,7 @@ def connect_error_with_traceback(
     details = errors_pb2.ErrorDetails(
         message=message,
     )
-    details.timestamp.CopyFrom(Timestamp.now().to_proto())
+    details.timestamp.CopyFrom(timestamp_to_proto(Timestamp.now()))
 
     if exc is not None:
         details.exception_type = f"{type(exc).__module__}.{type(exc).__name__}"
@@ -99,6 +113,14 @@ def extract_error_details(error: ConnectError):
     return None
 
 
+def format_connect_error(error: ConnectError) -> str:
+    """Format a ConnectError, including server traceback if available."""
+    details = extract_error_details(error)
+    if details and details.traceback:
+        return f"{error}\n\nServer traceback:\n{details.traceback}"
+    return str(error)
+
+
 def is_retryable_error(exc: Exception) -> bool:
     """Check if an RPC error should trigger retry.
 
@@ -121,10 +143,14 @@ def call_with_retry(
     call_fn: Callable[[], T],
     *,
     on_retry: Callable[[Exception], None] | None = None,
-    max_attempts: int = 5,
+    max_attempts: int = 20,
+    max_elapsed: float | None = None,
     backoff: ExponentialBackoff | None = None,
 ) -> T:
     """Execute an RPC call with exponential backoff retry.
+
+    Retries stop when either ``max_attempts`` is exhausted **or**
+    ``max_elapsed`` seconds have passed, whichever comes first.
 
     Args:
         operation: Description of the operation for logging
@@ -132,10 +158,12 @@ def call_with_retry(
         on_retry: Optional callback invoked with the exception on every retryable
             failure, including the final attempt. Useful for clearing cached
             connections so subsequent calls can re-resolve endpoints.
-        max_attempts: Maximum number of attempts (default: 5)
+        max_attempts: Maximum number of attempts (default: 20)
+        max_elapsed: Maximum wall-clock seconds to keep retrying. ``None``
+            means no time limit (only ``max_attempts`` is used).
         backoff: Backoff configuration. A fresh copy is made internally so the
             caller's instance is not mutated. Defaults to
-            ExponentialBackoff(initial=0.1, maximum=5.0, factor=2.0).
+            ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0).
 
     Returns:
         Result from call_fn
@@ -143,48 +171,111 @@ def call_with_retry(
     Raises:
         Exception from call_fn if all retries exhausted or error is not retryable
     """
+    wrapped_on_retry: Callable[[Exception, int], None] | None = None
+    if on_retry is not None:
+
+        def wrapped_on_retry(exc: Exception, _attempt: int) -> None:
+            assert on_retry is not None
+            on_retry(exc)
+
+    return retry_with_backoff(
+        call_fn,
+        retryable=is_retryable_error,
+        max_attempts=max_attempts,
+        max_elapsed=max_elapsed,
+        backoff=backoff,
+        on_retry=wrapped_on_retry,
+        operation=operation,
+    )
+
+
+def poll_with_retries(
+    operation: str,
+    poll_fn: Callable[[], T],
+    *,
+    deadline: Deadline,
+    unavailable_tolerance: float = 3600.0,
+    backoff: ExponentialBackoff | None = None,
+) -> T:
+    """Poll an RPC endpoint, tolerating transient unavailability.
+
+    Calls ``poll_fn`` in a loop.  On retryable errors the function backs off
+    and keeps trying for up to ``unavailable_tolerance`` seconds **or** until
+    ``deadline`` expires — whichever comes first.  When the call succeeds the
+    unavailability timer resets.
+
+    This is designed for monitoring loops (e.g. ``wait_for_job``) where the
+    server-side work continues regardless of client polling failures.
+
+    Args:
+        operation: Human-readable description for log messages.
+        poll_fn: Callable that performs the RPC.  Should raise on failure.
+        deadline: Caller-supplied deadline — polling stops with ``TimeoutError``
+            if the deadline expires, even during unavailability.
+        unavailable_tolerance: Maximum seconds to tolerate continuous
+            controller unavailability before re-raising the RPC error.
+        backoff: Backoff for unavailability retries.  Defaults to 1 s → 60 s.
+
+    Returns:
+        The successful result of ``poll_fn``.
+
+    Raises:
+        TimeoutError: If *deadline* expires while the controller is unavailable.
+        Exception: The last RPC error if unavailability exceeds the tolerance,
+            or any non-retryable error from ``poll_fn``.
+    """
+
     if backoff is None:
-        backoff = ExponentialBackoff(initial=0.1, maximum=5.0, factor=2.0)
+        backoff = ExponentialBackoff(initial=1.0, maximum=60.0, factor=2.0)
     else:
         backoff = backoff.copy()
-    last_exception = None
 
-    for attempt in range(max_attempts):
+    unavailable_since: float | None = None
+
+    while True:
         try:
-            return call_fn()
+            result = poll_fn()
         except Exception as e:
-            last_exception = e
             if not is_retryable_error(e):
-                # Non-retryable error, fail immediately
                 raise
 
-            # Always clear stale state on retryable errors, even on the final
-            # attempt, so the next call from the caller can re-resolve.
-            if on_retry is not None:
-                on_retry(e)
+            now = time.monotonic()
+            if unavailable_since is None:
+                unavailable_since = now
+            elapsed_unavailable = now - unavailable_since
 
-            if attempt + 1 >= max_attempts:
-                # Final attempt failed, raise
-                logger.warning(
-                    "Operation %s failed after %d attempts: %s",
+            if elapsed_unavailable >= unavailable_tolerance:
+                logger.error(
+                    "Controller unavailable for %.0fs, giving up on %s",
+                    elapsed_unavailable,
                     operation,
-                    max_attempts,
-                    e,
                 )
                 raise
 
-            # Log and retry
-            delay = backoff.next_interval()
+            if deadline.expired():
+                raise TimeoutError(
+                    f"{operation}: deadline expired after {elapsed_unavailable:.0f}s of controller unavailability"
+                ) from e
+
             logger.warning(
-                "Operation %s failed (attempt %d/%d), retrying in %.2fs: %s",
+                "Controller unavailable for %s (%.0fs), job is still running server-side: %s",
                 operation,
-                attempt + 1,
-                max_attempts,
-                delay,
+                elapsed_unavailable,
                 e,
             )
-            time.sleep(delay)
+            interval = backoff.next_interval()
+            time.sleep(min(interval, deadline.remaining_seconds()))
+            continue
 
-    # Should not reach here due to raise in loop, but satisfy type checker
-    assert last_exception is not None
-    raise last_exception
+        # Success — reset unavailability tracking.
+        if unavailable_since is not None:
+            elapsed_unavailable = time.monotonic() - unavailable_since
+            logger.info(
+                "Controller back online for %s after %.0fs of unavailability",
+                operation,
+                elapsed_unavailable,
+            )
+            unavailable_since = None
+            backoff.reset()
+
+        return result

@@ -69,6 +69,9 @@ docker:
 
 
 initialization_commands:
+  # https://github.com/marin-community/marin/issues/3066
+  - sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
+  - sudo sysctl -w net.ipv4.tcp_tw_reuse=1
   - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
   - yes | gcloud auth configure-docker europe-west4-docker.pkg.dev
   # always run this because ray doesn't run with sudo
@@ -131,7 +134,7 @@ available_node_types:
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
     max_workers: 1024
-    min_workers: 4
+    min_workers: 2
     node_config:
       acceleratorType: v5litepod-4
       runtimeVersion: v2-alpha-tpuv5-lite
@@ -191,7 +194,7 @@ available_node_types:
 
   tpu_slice_v5e_128:
     max_workers: 1024
-    min_workers: 1
+    min_workers: 0
     node_config:
       acceleratorType: v5litepod-128
       runtimeVersion: v2-alpha-tpuv5-lite

@@ -15,19 +15,26 @@ dependencies = [
     "haliax",
     "levanter",
     "marin",
+    "rigging",
     "zephyr",
     # top level deps. try to keep these small.
     "watchdog",
+    "dupekit >= 0.1.0",
 ]
 
 [tool.uv]
 fork-strategy = "fewest"
+find-links = [
+    "https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-40ac799",
+    "https://github.com/marin-community/kitoken/releases/expanded_assets/kitoken-0.10.2-a3012f4",
+]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
     "python-multipart>=0.0.22",
     "wheel>=0.46.2",
     "datasets>=3.1.0,<4.0.0",
+    "equinox>=0.11.10",  # Override vizier's pin for JAX 0.8 compatibility
 ]
 
 [tool.uv.workspace]
@@ -37,6 +44,7 @@ members = [
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
+    "lib/rigging",
     "lib/zephyr",
 ]
 
@@ -46,12 +54,14 @@ fray = { workspace = true }
 haliax = { workspace = true }
 levanter = { workspace = true }
 marin = { workspace = true }
+rigging = { workspace = true }
 zephyr = { workspace = true }
-# NOTE: dupekit and harbor are optional dependencies. Declaring them as path
-# dependencies (not workspace members) avoids pulling their dev dependency
-# groups into workspace resolution.
-dupekit = { path = "lib/dupekit", editable = true }
-harbor = { path = "lib/harbor", editable = true }
+# NOTE: harbor is a pinned git dependency (not a workspace member).
+# harbor lives in marin-community/harbor as a pinned git dependency.
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
+# ### BEGIN RUST-DEV SOURCES ###
+# ### END RUST-DEV SOURCES ###
+
 
 [tool.black]
 line-length = 121
@@ -95,6 +105,7 @@ project-includes = [
     "lib/haliax/src/**/*.py",
     "lib/fray/src/**/*.py",
     "lib/iris/src/**/*.py",
+    "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
 ]
 
@@ -105,6 +116,7 @@ search-path = [
     "lib/marin/src",
     "lib/levanter/src",
     "lib/haliax/src",
+    "lib/rigging/src",
     "lib/zephyr/src",
     "lib/fray/src",
     "lib/iris/src",
@@ -128,6 +140,7 @@ project-excludes = [
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
     "lib/iris/src/iris/rpc/*_pb2*",  # Generated protobuf files
+    "lib/iris/src/iris/rpc/*_connect.py",  # Generated Connect RPC files
     # Keep key excludes that pyrefly normally adds heuristically.
     "**/node_modules",
     "**/__pycache__",
@@ -205,6 +218,7 @@ log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "tpu_ci: mark tests that require a TPU",
+    "integration: mark tests as integration tests that require cluster infrastructure",
 ]
 testpaths = ["tests", "experiments"]
 

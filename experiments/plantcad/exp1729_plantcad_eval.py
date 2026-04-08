@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 import fsspec
 import haliax as hax
+from rigging.filesystem import open_url
 import haliax.haxtyping as ht
 import jax.numpy as jnp
 import numpy as np
@@ -25,7 +26,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.utilities.json_encoder import CustomJsonEncoder
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 # -----------------------------------------------------------------------------
@@ -494,7 +495,7 @@ def run_plantcad_evaluation(config: DnaEvalConfig) -> dict:
         "metrics": metrics,
     }
 
-    with fsspec.open(results_file, "w") as f:
+    with open_url(results_file, "w") as f:
         json.dump(output_data, f, indent=2, cls=CustomJsonEncoder)
 
     logger.info(f"Results saved to: {results_file}")

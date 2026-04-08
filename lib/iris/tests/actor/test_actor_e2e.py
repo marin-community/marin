@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """End-to-end tests for actor server and client."""
@@ -21,6 +21,9 @@ class Calculator:
     def divide(self, a: int, b: int) -> float:
         return a / b  # May raise ZeroDivisionError
 
+    def increment(self, value: int, *, amount: int = 1) -> int:
+        return value + amount
+
 
 def test_basic_actor_call():
     """Test basic actor method calls work correctly."""
@@ -33,6 +36,20 @@ def test_basic_actor_call():
         client = ActorClient(resolver, "calc")
         assert client.add(2, 3) == 5
         assert client.multiply(4, 5) == 20
+    finally:
+        server.stop()
+
+
+def test_actor_call_with_kwargs():
+    """Test actor method calls preserve keyword arguments."""
+    server = ActorServer(host="127.0.0.1")
+    server.register("calc", Calculator())
+    port = server.serve_background()
+
+    try:
+        resolver = FixedResolver({"calc": f"http://127.0.0.1:{port}"})
+        client = ActorClient(resolver, "calc")
+        assert client.increment(2, amount=3) == 5
     finally:
         server.stop()
 

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -25,6 +25,7 @@ from typing import Any
 import datasets
 import draccus
 import fsspec
+from rigging.filesystem import url_to_fs
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
 from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
@@ -180,7 +181,7 @@ def create_shard_output_directory(output_filename: str) -> str:
     Returns:
         str: The path to the directory containing the shards.
     """
-    _, path = fsspec.core.url_to_fs(output_filename)
+    _, path = url_to_fs(output_filename)
     protocol = fsspec.core.split_protocol(output_filename)[0]
     path_without_suffix = Path(path)
     while path_without_suffix.suffix:
@@ -316,7 +317,7 @@ def process_shard_task(task: ShardTask) -> dict:
     output_filename = _shard_filename(task.output_path, task.shard_idx)
 
     # If output already exists, skip the work to let Zephyr resume cleanly without sentinels.
-    fs, _ = fsspec.core.url_to_fs(output_filename)
+    fs, _ = url_to_fs(output_filename)
     if fs.exists(output_filename):
         logging.info(
             f"Skipping subset={subset_name} split={task.split} shard={task.shard_idx} "

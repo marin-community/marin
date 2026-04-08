@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -8,12 +8,6 @@ Usage:
 - Register your adapter in preference_data_adapters.py
 - Run this script with TransformPreferenceDatasetConfig.
 
-Example:
-uv run zephyr --backend=ray --max-parallelism=100 --memory=8GB \
-    lib/marin/src/marin/transform/conversation/transform_preference_data.py \
-    --input_path gs://bucket/path/to/dataset \
-    --output_path gs://bucket/output/path \
-    --source HuggingFaceH4/ultrafeedback_binarized
 """
 
 import hashlib
@@ -25,6 +19,7 @@ import datasets
 import draccus
 import fsspec
 from datasets import get_dataset_config_info
+from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ZephyrContext, write_jsonl_file
 
 from marin.utils import is_path_like
@@ -87,7 +82,7 @@ def _to_fsspec_url(fs: fsspec.AbstractFileSystem, path: str) -> str:
 
 def _find_split_files(input_path: str, subset: str | None, split: str, filetype: str) -> list[str]:
     """Find split shard files under an fsspec path."""
-    fs, base_path = fsspec.core.url_to_fs(input_path)
+    fs, base_path = url_to_fs(input_path)
     roots = [base_path]
     if subset and subset != "default":
         roots.append(os.path.join(base_path, subset))
@@ -107,7 +102,7 @@ def _find_split_files(input_path: str, subset: str | None, split: str, filetype:
 
 def _infer_splits_from_files(input_path: str, subsets: list[str | None], filetype: str) -> list[str]:
     """Infer split names from filenames in an fsspec path."""
-    fs, base_path = fsspec.core.url_to_fs(input_path)
+    fs, base_path = url_to_fs(input_path)
     roots = [base_path]
     roots.extend(os.path.join(base_path, subset) for subset in subsets if subset)
     candidates = []

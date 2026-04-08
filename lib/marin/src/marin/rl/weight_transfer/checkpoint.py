@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -14,9 +14,9 @@ import os
 import threading
 from collections import deque
 
-import fsspec
 import jax
 import levanter.checkpoint as levanter_checkpoint
+from rigging.filesystem import url_to_fs
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 def _rm_thread(path: str) -> None:
     try:
-        fs, _ = fsspec.core.url_to_fs(path)
+        fs, _ = url_to_fs(path)
         fs.rm(path, recursive=True)
     except Exception as e:
         logger.error(f"Failed to delete old checkpoint at {path}: {e}", exc_info=True)
@@ -69,7 +69,7 @@ class GCSCheckpointServer(WeightTransferServer):
                 old_path = os.path.join(self.config.checkpoint_dir, f"step_{old_weight_id}")
                 if jax.process_index() == 0:  # Only delete from coordinator
                     logger.info(f"Cleaning up old checkpoint at weight_id {old_weight_id} ({old_path})...")
-                    fs, _ = fsspec.core.url_to_fs(old_path)
+                    fs, _ = url_to_fs(old_path)
                     # Dispatch deletion to a separate thread to avoid blocking
                     if fs.exists(old_path):
                         threading.Thread(target=_rm_thread, args=(old_path,), daemon=True).start()
@@ -158,7 +158,7 @@ class GCSCheckpointClient(WeightTransferClient):
     def _find_latest_checkpoint(self) -> tuple[str, int] | None:
         """Find the latest checkpoint in the checkpoint directory."""
         logger.info(f"Search for new checkpoints in {self.config.checkpoint_dir}...")
-        fs, path_in_fs = fsspec.core.url_to_fs(self.config.checkpoint_dir, use_listings_cache=False)
+        fs, path_in_fs = url_to_fs(self.config.checkpoint_dir, use_listings_cache=False)
         if not fs.exists(path_in_fs):
             return None
 

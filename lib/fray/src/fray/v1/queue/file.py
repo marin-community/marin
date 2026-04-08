@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """File-based distributed queue implementation, mostly for testing."""
@@ -13,7 +13,8 @@ from os import PathLike
 from pathlib import Path
 from typing import Any, TypeVar
 
-import fsspec
+from rigging.filesystem import url_to_fs
+
 from fray.v1.queue.base import Lease, Queue
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ class FileQueue(Queue[T]):
         self.path = Path(path)
         self.fs_args = fs_args or {}
 
-        self.fs, self.fs_path = fsspec.core.url_to_fs(path, **self.fs_args)
+        self.fs, self.fs_path = url_to_fs(path, **self.fs_args)
 
         self.pending_dir = self.path / "pending"
         self.processing_dir = self.path / "processing"
@@ -80,7 +81,7 @@ class FileQueue(Queue[T]):
         try:
             files = sorted(self.fs.ls(str(self.pending_dir), detail=False))
             files = [f for f in files if f.rstrip("/") != str(self.pending_dir).rstrip("/")]
-        except Exception:
+        except OSError:
             return None
 
         for file_path in files:
@@ -105,7 +106,7 @@ class FileQueue(Queue[T]):
         """Check processing directory for expired leases and move them back to pending."""
         try:
             files = self.fs.ls(str(self.processing_dir), detail=False)
-        except Exception:
+        except OSError:
             return
 
         now = time.time()

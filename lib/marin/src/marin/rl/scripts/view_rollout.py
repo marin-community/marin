@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """View rollout batch pickle files in a human-readable format.
@@ -16,7 +16,7 @@ import argparse
 import pickle
 from typing import Any
 
-from transformers import AutoTokenizer
+from levanter.tokenizers import load_tokenizer
 
 from marin.rl.types import RolloutBatch
 
@@ -108,7 +108,7 @@ def main():
 
     # Load tokenizer
     print(f"Loading tokenizer: {args.tokenizer}")
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    tokenizer = load_tokenizer(args.tokenizer)
 
     # Load rollout batch
     print(f"Loading rollout batch: {args.pickle_file}")

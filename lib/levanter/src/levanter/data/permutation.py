@@ -1,8 +1,8 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import sys
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Optional, Sequence
 
 import jax.random
@@ -28,90 +28,42 @@ def _fold_in_on_local_cpu(key: PRNGKeyArray, data: int) -> PRNGKeyArray:
 
 
 class PermutationDataset(AsyncDataset[T_co]):
-    """A dataset that wraps another dataset and applies a per-epoch permutation to the indices.
+    """A permutation dataset that wraps another dataset and applies a permutation to the indices."""
 
-    The dataset is logically infinite by default: indices beyond the underlying dataset
-    length wrap into new epochs, each with a distinct deterministic permutation derived
-    via ``jax.random.fold_in(key, epoch)``.  Every window of ``dataset_len`` consecutive
-    indices visits each element exactly once, so after ``k`` epochs each element has
-    been seen exactly ``k`` times.
+    # TODO: add epoch reshuffling
 
-    Args:
-        dataset: The underlying dataset to permute.
-        key: PRNG key for deterministic shuffling.
-        perm_type: Permutation algorithm (default ``"feistel"``).
-        max_epochs: If set, the dataset terminates after this many epochs.
-            ``None`` (default) means infinite.
-    """
-
-    def __init__(
-        self,
-        dataset: AsyncDataset[T_co],
-        key: PRNGKeyArray,
-        perm_type: PermType = "feistel",
-        max_epochs: Optional[int] = None,
-    ):
+    def __init__(self, dataset: AsyncDataset[T_co], key: PRNGKeyArray, perm_type: PermType = "feistel"):
         self.dataset = dataset
         self.key = _key_on_local_cpu(key)
+        self._permutation: Optional[Permutation] = None
         self._perm_type = perm_type
-        self._max_epochs = max_epochs
-        self._cached_len: Optional[int] = None
-
-        @alru_cache(maxsize=4)
-        async def _get_epoch_permutation(epoch: int) -> Permutation:
-            dataset_len = await self._get_dataset_len()
-            epoch_key = jax.random.fold_in(self.key, epoch)
-            return Permutation.make(self._perm_type, dataset_len, epoch_key)
-
-        self._get_epoch_permutation = _get_epoch_permutation
-
-    async def _get_dataset_len(self) -> int:
-        if self._cached_len is None:
-            self._cached_len = await self.dataset.async_len()
-        return self._cached_len
 
     async def async_len(self) -> int:
-        if self._max_epochs is not None:
-            return self._max_epochs * await self._get_dataset_len()
-        return sys.maxsize
+        return await self.dataset.async_len()
 
     def is_finite(self) -> bool:
-        return self._max_epochs is not None
-
-    def metrics_for_global_index(self, global_index: int) -> dict[str, float]:
-        if self._cached_len is None or self._cached_len == 0:
-            return {}
-        epoch = global_index // self._cached_len
-        progress = (global_index % self._cached_len) / self._cached_len
-        return {"data/epoch": float(epoch), "data/epoch_progress": progress}
+        return self.dataset.is_finite()
 
     async def getitem_async(self, index: int) -> T_co:
-        dataset_len = await self._get_dataset_len()
-        epoch = index // dataset_len
-        position = index % dataset_len
-        perm = await self._get_epoch_permutation(epoch)
-        return await self.dataset.getitem_async(int(perm(position)))
+        permutation = await self._get_permutation()
+        return await self.dataset.getitem_async(permutation(index))
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
-        dataset_len = await self._get_dataset_len()
-        mapped = []
-        for i in indices:
-            epoch = i // dataset_len
-            position = i % dataset_len
-            perm = await self._get_epoch_permutation(epoch)
-            mapped.append(int(perm(position)))
-        return await self.dataset.get_batch(mapped)
+        permutation = await self._get_permutation()
+        return await self.dataset.get_batch(
+            [int(permutation(i)) for i in indices]
+        )  # cast to int to be sure it's python int
+
+    async def _get_permutation(self):
+        if self._permutation is None:
+            self._permutation = Permutation.make(self._perm_type, await self.async_len(), self.key)
+        return self._permutation
 
 
 class EraShufflingDataset(AsyncDataset[T_co]):
     r"""
     A dataset that shuffles the data in "eras" of fixed length. Era shuffling is somewhere in between a shuffle buffer
     and a permutation. It's a "local" permutation where pi(i) \in [ (i//L) * L, (i//L + 1) * L ) for some era length L.
-
-    The dataset is logically infinite by default: indices beyond the underlying dataset
-    length wrap into new epochs, each with a fresh set of era permutations derived via
-    ``jax.random.fold_in(key, era)``.  Every window of ``dataset_len`` consecutive
-    indices visits each element exactly once.
 
     The advantages of era shuffling are:
     - It's stateless, so resumes are easy
@@ -123,26 +75,13 @@ class EraShufflingDataset(AsyncDataset[T_co]):
     - It distributes less well than a shuffle buffer does. It's more like a "local" shuffle buffer.
     - You have to wait for an era to fill before you can start shuffling it. With prefetching, this is less of an issue.
 
-    Args:
-        dataset: The underlying dataset to shuffle.
-        era_length: Number of elements per era.
-        key: PRNG key for deterministic shuffling.
-        perm_type: Permutation algorithm (default ``"feistel"``).
-        max_epochs: If set, the dataset terminates after this many epochs.
-            ``None`` (default) means infinite.
 
     # TODO: given the way tokenization works (where it runs way ahead of training), we can probably increase the era
     length # over time. This would be a nice feature to have.
     """
 
     def __init__(
-        self,
-        dataset: AsyncDataset[T_co],
-        era_length: int,
-        *,
-        key: jax.random.PRNGKey,
-        perm_type: PermType = "feistel",
-        max_epochs: Optional[int] = None,
+        self, dataset: AsyncDataset[T_co], era_length: int, *, key: jax.random.PRNGKey, perm_type: PermType = "feistel"
     ):
         self.dataset = dataset
         self.era_length = era_length
@@ -156,53 +95,41 @@ class EraShufflingDataset(AsyncDataset[T_co]):
 
         self.key = key
         self._perm_type = perm_type
-        self._max_epochs = max_epochs
-        self._cached_len: Optional[int] = None
 
         @alru_cache(maxsize=4)  # we're mostly going to be going sequentially
         async def gen_era_permutation(era: int) -> Permutation:
+            # TODO: support epochs
+            if self.dataset.is_finite():
+                # edge case: final era may be shorter than era_length
+                dataset_len = await self.dataset.async_len()
+                remaining = dataset_len - era * self.era_length
+                if remaining <= 0:
+                    raise IndexError(
+                        f"Era {era} is out of bounds for dataset length {dataset_len} with era length {self.era_length}"
+                    )
+                era_length_val = min(self.era_length, remaining)
+            else:
+                era_length_val = self.era_length
+
             mix_key = _fold_in_on_local_cpu(key, era)
-            return Permutation.make(self._perm_type, self.era_length, mix_key)
+            return Permutation.make(self._perm_type, era_length_val, mix_key)
 
         self.gen_era_permutation = gen_era_permutation
 
-    async def _get_dataset_len(self) -> int:
-        if self._cached_len is None:
-            self._cached_len = await self.dataset.async_len()
-        return self._cached_len
-
     async def _get_index(self, idx: int) -> int:
-        """Map a logical index to a dataset index.
-
-        The logical index space is infinite. Era-local shuffling is applied within
-        each era, and the result is mapped back to the original dataset range via
-        modulo so that each epoch-window visits every element exactly once.
-        """
         if idx < 0:
             raise ValueError("Negative indices are not supported")
         era = idx // self.era_length
         permutation = await self.gen_era_permutation(era)
-        shuffled = permutation(idx - era * self.era_length) + era * self.era_length
+        out = permutation(idx - era * self.era_length) + era * self.era_length
 
-        if self.dataset.is_finite():
-            dataset_len = await self._get_dataset_len()
-            return shuffled % dataset_len
-        return shuffled
+        return out
 
     async def async_len(self) -> int:
-        if self._max_epochs is not None:
-            return self._max_epochs * await self._get_dataset_len()
-        return sys.maxsize
+        return await self.dataset.async_len()
 
     def is_finite(self) -> bool:
-        return self._max_epochs is not None
-
-    def metrics_for_global_index(self, global_index: int) -> dict[str, float]:
-        if self._cached_len is None or self._cached_len == 0:
-            return {}
-        epoch = global_index // self._cached_len
-        progress = (global_index % self._cached_len) / self._cached_len
-        return {"data/epoch": float(epoch), "data/epoch_progress": progress}
+        return self.dataset.is_finite()
 
     async def getitem_async(self, index: int) -> T_co:
         return await self.dataset.getitem_async(await self._get_index(index))
@@ -348,6 +275,7 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
             raise RuntimeError("BlockShufflingDataset is not initialized")
         return self._state
 
+    @lru_cache(maxsize=4)
     def _window_layout(self, window_id: int) -> _WindowLayout:
         state = self._state_or_error()
         if window_id < 0 or window_id >= state.num_windows:
@@ -374,6 +302,7 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
             full_blocks=tuple(physical_full_blocks), full_region_size=full_region_size, tail_size=tail_size
         )
 
+    @lru_cache(maxsize=4)
     def _window_full_region_permutation(self, window_id: int) -> Optional[Permutation]:
         layout = self._window_layout(window_id)
         if layout.full_region_size <= 1:
@@ -381,6 +310,7 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
         key = _fold_in_on_local_cpu(self._window_full_key, window_id)
         return Permutation.make(self._perm_type, layout.full_region_size, key)
 
+    @lru_cache(maxsize=4)
     def _window_tail_region_permutation(self, window_id: int) -> Optional[Permutation]:
         layout = self._window_layout(window_id)
         if layout.tail_size <= 1:

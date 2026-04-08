@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
@@ -40,9 +40,14 @@ class SimpleDPOConfig:
     max_grad_norm: float | None = 1
 
     steps_per_eval: int = 1000
-    steps_per_checkpoint: int = 1000
+    steps_per_checkpoint: int | None = None
+    """How often to keep a permanent checkpoint. None (default) keeps only the final
+    checkpoint; rolling temporary checkpoints are still written for resumption."""
     steps_per_hf_export: int = 500
     hf_save_dtype: str | None = None
+    hf_generation_eos_token_ids: list[int] | None = None
+    """EOS token IDs to write to generation_config.json. None means no generation config.
+    For chat models, include the turn-boundary token (e.g. [128001, 128009])."""
 
     seed: int = 0
     initialize_from_hf: bool | None = None

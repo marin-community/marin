@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Ray-based cluster implementation."""
@@ -32,7 +32,7 @@ from fray.v1.cluster.ray.deps import build_python_path, build_runtime_env_for_pa
 from fray.v1.cluster.ray.tpu import run_on_pod_ray
 from fray.v1.job.context import RayContext, fray_default_job_ctx
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 # We can't launch TPU or callable entrypoint jobs directly via Ray, as it
@@ -229,12 +229,16 @@ class RayCluster(Cluster):
         else:
             remote_fn = ray.remote(max_calls=1, runtime_env=runtime_env)(callable_ep.callable)
 
+        # Only propagate env_vars to TPU workers. Other runtime_env keys (pip, py_modules,
+        # etc.) reference local temp files that don't exist on the run_on_pod_ray worker node.
+        tpu_runtime_env = {"env_vars": runtime_env["env_vars"]} if "env_vars" in runtime_env else {}
         object_ref = run_on_pod_ray.remote(
             remote_fn,
             tpu_type=device.variant,
             num_slices=request.resources.replicas,
-            max_retries_preemption=10000,
+            max_retries_preemption=1000,
             max_retries_failure=1,
+            runtime_env=tpu_runtime_env,
         )
 
         job_id = JobId(str(id(object_ref)))
@@ -272,8 +276,14 @@ class RayCluster(Cluster):
                 pip_packages=list(environment.pip_packages),
                 env_vars=env_vars,
             )
-            runtime_env["working_dir"] = environment.workspace
-            runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
+            import re
+
+            from iris.cluster.client.bundle import create_workspace_dir  # lazy: avoid PyPI iris conflict on workers
+
+            runtime_env["working_dir"] = create_workspace_dir(
+                environment.workspace,
+                exclude=re.compile(r"^(tests|docs)(/|$)|\.pack$"),
+            )
             runtime_env["config"] = {"setup_timeout_seconds": 1800}
         else:
             # No runtime package installation: rely on the existing environment.

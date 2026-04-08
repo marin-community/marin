@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
@@ -73,18 +73,6 @@ class AsyncDataset(DatasetBase[T_co]):
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
         raise NotImplementedError
 
-    def metrics_for_global_index(self, global_index: int) -> dict[str, float]:
-        """Return per-step metrics derived from the global data index.
-
-        Override to provide dataset-level metrics (epoch number, data source info, etc.)
-        that will be logged per training step by the DataLoader. The default returns an
-        empty dict.
-
-        This method is called synchronously from the DataLoader's batch-production loop,
-        once per batch, with the first global data index of that batch.
-        """
-        return {}
-
     def as_sync_dataset(self):
         return SyncifiedDataset(self)
 
@@ -109,17 +97,15 @@ class AsyncDataset(DatasetBase[T_co]):
         """
         return self.slice_dataset(end_index=n)
 
-    def shuffle(self, key: PRNGKeyArray, *, perm_type: PermType = "feistel", max_epochs: Optional[int] = None):
+    def shuffle(self, key: PRNGKeyArray, *, perm_type: PermType = "feistel"):
         import levanter.data.permutation as permutation
 
-        return permutation.PermutationDataset(self, key, perm_type=perm_type, max_epochs=max_epochs)
+        return permutation.PermutationDataset(self, key, perm_type=perm_type)
 
-    def era_shuffle(
-        self, era_length: int, key: PRNGKeyArray, *, perm_type: PermType = "feistel", max_epochs: Optional[int] = None
-    ):
+    def era_shuffle(self, era_length: int, key: PRNGKeyArray, *, perm_type: PermType = "feistel"):
         import levanter.data.permutation as permutation
 
-        return permutation.EraShufflingDataset(self, era_length, key=key, perm_type=perm_type, max_epochs=max_epochs)
+        return permutation.EraShufflingDataset(self, era_length, key=key, perm_type=perm_type)
 
     def block_shuffle(
         self,
@@ -264,9 +250,6 @@ class MappedAsyncDataset(AsyncDataset[U], Generic[T, U]):
     def is_finite(self) -> bool:
         return self.dataset.is_finite()
 
-    def metrics_for_global_index(self, global_index: int) -> dict[str, float]:
-        return self.dataset.metrics_for_global_index(global_index)
-
     def _maybe_fold_in_key(self, key, index):
         if key is not None:
             key = jax.random.fold_in(key, index)
@@ -330,9 +313,6 @@ class SlicedAsyncDataset(AsyncDataset[U]):
     def is_finite(self) -> bool:
         return self.end_index is not None or self.dataset.is_finite()
 
-    def metrics_for_global_index(self, global_index: int) -> dict[str, float]:
-        return self.dataset.metrics_for_global_index(global_index + self.start_index)
-
 
 class BatchMappedAsyncDataset(AsyncDataset[U]):
     """
@@ -359,9 +339,6 @@ class BatchMappedAsyncDataset(AsyncDataset[U]):
 
     def is_finite(self) -> bool:
         return self.dataset.is_finite()
-
-    def metrics_for_global_index(self, global_index: int) -> dict[str, float]:
-        return self.dataset.metrics_for_global_index(global_index)
 
     def _maybe_fold_in_key(self, key, indices: Sequence[int]):
         if key is not None:

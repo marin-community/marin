@@ -1,30 +1,36 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """E2ECluster: context manager for running Controller + Worker clusters in tests.
 
-Supports both in-process (LocalController) and Docker (real containers) modes.
+Supports both in-process (LocalCluster) and Docker (real containers) modes.
 Docker mode manually wires up Controller + Workers with DockerRuntime, which is
 needed for tests that exercise container-specific behavior (OOM, JAX env vars).
 """
 
+import re
 import tempfile
 import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
 from iris.client import IrisClient
-from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
-from iris.cluster.controller.local import LocalController
-from iris.cluster.platform.base import find_free_port
+from iris.cluster.controller.controller import Controller, ControllerConfig
+from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
+from iris.cluster.providers.local.cluster import LocalCluster
+from iris.cluster.providers.types import find_free_port
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
-from iris.cluster.worker.bundle_cache import BundleCache
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.env_probe import EnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import cluster_pb2, config_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration
+from iris.rpc import config_pb2, logging_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.logging_connect import LogServiceClientSync
+from iris.time_proto import duration_to_proto
+from rigging.timing import Duration
 
 # Factory type for creating per-worker environment providers.
 # Signature: (worker_id, num_workers) -> EnvironmentProvider
@@ -39,34 +45,34 @@ def unique_name(prefix: str) -> str:
 def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     """Build a fully-configured IrisClusterConfig for E2E tests with num_workers.
 
-    Sets up controller.local, bundle_prefix, scale groups with local vm_type,
+    Sets up controller.local, remote_state_dir, scale groups with local vm_type,
     and fast autoscaler evaluation for tests.
     """
     config = config_pb2.IrisClusterConfig()
 
     config.controller.local.port = 0
-    config.storage.bundle_prefix = ""
+    config.storage.remote_state_dir = ""
     config.platform.local.SetInParent()
 
     sg = config_pb2.ScaleGroupConfig(
         name="local-cpu",
         min_slices=num_workers,
         max_slices=num_workers,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         num_vms=1,
         resources=config_pb2.ScaleGroupResources(
             cpu_millicores=8000,
             memory_bytes=16 * 1024**3,
             disk_bytes=50 * 1024**3,
-            gpu_count=0,
-            tpu_count=0,
+            device_type=config_pb2.ACCELERATOR_TYPE_CPU,
+            device_count=0,
+            capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
         ),
     )
     config.scale_groups["local-cpu"].CopyFrom(sg)
 
-    config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
-    config.defaults.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
-    config.defaults.autoscaler.scale_down_delay.CopyFrom(Duration.from_minutes(5).to_proto())
+    config.defaults.autoscaler.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.5)))
+    config.defaults.autoscaler.scale_up_delay.CopyFrom(duration_to_proto(Duration.from_seconds(1)))
+    config.defaults.autoscaler.scale_down_delay.CopyFrom(duration_to_proto(Duration.from_seconds(1)))
 
     return config
 
@@ -84,7 +90,7 @@ class E2ECluster:
             When None, a fresh temp directory is created per cluster.
         env_provider_factory: Optional factory for creating per-worker
             EnvironmentProviders. Signature: (worker_id, num_workers) -> provider.
-            Use TPUSimEnvironmentProvider for TPU simulation tests.
+            Use FixedEnvironmentProvider for TPU simulation tests.
     """
 
     def __init__(
@@ -98,7 +104,7 @@ class E2ECluster:
         self._use_docker = use_docker
         self._cache_dir = cache_dir
         self._env_provider_factory = env_provider_factory
-        self._controller: LocalController | Controller | None = None
+        self._controller: LocalCluster | Controller | None = None
         self._controller_port: int | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._container_runtime: DockerRuntime | None = None
@@ -106,15 +112,20 @@ class E2ECluster:
         self._worker_ids: list[str] = []
         self._worker_ports: list[int] = []
         self._controller_client: ControllerServiceClientSync | None = None
+        self._log_client: LogServiceClientSync | None = None
         self._rpc_client: IrisClient | None = None
 
     def __enter__(self):
         if not self._use_docker:
             config = _make_e2e_config(self._num_workers)
-            self._controller = LocalController(config)
+            self._controller = LocalCluster(config)
             address = self._controller.start()
             self._controller_port = int(address.rsplit(":", 1)[1])
             self._controller_client = ControllerServiceClientSync(
+                address=address,
+                timeout_ms=30000,
+            )
+            self._log_client = LogServiceClientSync(
                 address=address,
                 timeout_ms=30000,
             )
@@ -137,11 +148,11 @@ class E2ECluster:
         controller_config = ControllerConfig(
             host="127.0.0.1",
             port=self._controller_port,
-            bundle_prefix=f"file://{bundle_dir}",
+            remote_state_dir=f"file://{bundle_dir}",
         )
         self._controller = Controller(
             config=controller_config,
-            worker_stub_factory=RpcWorkerStubFactory(),
+            provider=WorkerProvider(stub_factory=RpcWorkerStubFactory()),
         )
         self._controller.start()
 
@@ -149,9 +160,17 @@ class E2ECluster:
             address=f"http://127.0.0.1:{self._controller_port}",
             timeout_ms=30000,
         )
+        self._log_client = LogServiceClientSync(
+            address=f"http://127.0.0.1:{self._controller_port}",
+            timeout_ms=30000,
+        )
 
-        bundle_provider = BundleCache(cache_path, max_bundles=10)
-        self._container_runtime = DockerRuntime()
+        bundle_store = BundleStore(
+            storage_dir=str(cache_path / "bundles"),
+            controller_address=f"http://127.0.0.1:{self._controller_port}",
+            max_cache_items=10,
+        )
+        self._container_runtime = DockerRuntime(cache_dir=cache_path)
         container_runtime = self._container_runtime
 
         for i in range(self._num_workers):
@@ -165,14 +184,13 @@ class E2ECluster:
                 worker_id=worker_id,
                 poll_interval=Duration.from_seconds(0.1),
                 default_task_image="iris-task:latest",
-                log_prefix=f"file://{(cache_path / 'iris-logs').as_posix()}",
             )
             env_provider = None
             if self._env_provider_factory:
                 env_provider = self._env_provider_factory(i, self._num_workers)
             worker = Worker(
                 worker_config,
-                bundle_provider=bundle_provider,
+                bundle_store=bundle_store,
                 container_runtime=container_runtime,
                 environment_provider=env_provider,
             )
@@ -189,7 +207,7 @@ class E2ECluster:
         """Wait for all workers to register with the controller."""
         start = time.time()
         while time.time() - start < timeout:
-            request = cluster_pb2.Controller.ListWorkersRequest()
+            request = controller_pb2.Controller.ListWorkersRequest()
             assert self._controller_client is not None
             response = self._controller_client.list_workers(request)
             healthy_workers = [w for w in response.workers if w.healthy]
@@ -201,11 +219,13 @@ class E2ECluster:
     def __exit__(self, *args):
         if self._rpc_client:
             self._rpc_client = None
+        if self._log_client:
+            self._log_client.close()
         if self._controller_client:
             self._controller_client.close()
         if not self._use_docker:
             if self._controller:
-                self._controller.stop()
+                self._controller.close()
         else:
             for worker in self._workers:
                 worker.stop()
@@ -254,12 +274,12 @@ class E2ECluster:
 
     def status(self, job_or_id) -> dict:
         job_id = self._to_job_id_str(job_or_id)
-        request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id)
+        request = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id)
         assert self._controller_client is not None
         response = self._controller_client.get_job_status(request)
         return {
             "jobId": response.job.job_id,
-            "state": cluster_pb2.JobState.Name(response.job.state),
+            "state": job_pb2.JobState.Name(response.job.state),
             "exitCode": response.job.exit_code,
             "error": response.job.error,
         }
@@ -268,12 +288,12 @@ class E2ECluster:
         """Get status of a specific task within a job."""
         job_id = self._to_job_id_str(job_or_id)
         task_id = JobName.from_wire(job_id).task(task_index).to_wire()
-        request = cluster_pb2.Controller.GetTaskStatusRequest(task_id=task_id)
+        request = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id)
         assert self._controller_client is not None
         response = self._controller_client.get_task_status(request)
         return {
             "taskId": response.task.task_id,
-            "state": cluster_pb2.TaskState.Name(response.task.state),
+            "state": job_pb2.TaskState.Name(response.task.state),
             "workerId": response.task.worker_id,
             "workerAddress": response.task.worker_address,
             "exitCode": response.task.exit_code,
@@ -300,18 +320,14 @@ class E2ECluster:
         """Fetch container logs for a task."""
         job_id = self._to_job_id_str(job_or_id)
         task_id = JobName.from_wire(job_id).task(task_index).to_wire()
-        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
-        assert self._controller_client is not None
-        response = self._controller_client.get_task_logs(request)
-        lines = []
-        for batch in response.task_logs:
-            for entry in batch.logs:
-                lines.append(f"{entry.source}: {entry.data}")
-        return lines
+        request = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        assert self._log_client is not None
+        response = self._log_client.fetch_logs(request)
+        return [f"{e.source}: {e.data}" for e in response.entries]
 
     def kill(self, job_or_id) -> None:
         job_id = self._to_job_id_str(job_or_id)
-        request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
+        request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id)
         assert self._controller_client is not None
         self._controller_client.terminate_job(request)
 

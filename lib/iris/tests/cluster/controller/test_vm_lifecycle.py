@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,30 +18,37 @@
 """Tests for controller lifecycle functions (start, stop).
 
 Uses fake Platform and StandaloneWorkerHandle implementations to exercise the
-lifecycle orchestration without SSH, Docker, or cloud API calls. The
-wait_healthy function is patched since it does real SSH polling internally.
+lifecycle orchestration without SSH, Docker, or cloud API calls.
+
+FakeWorkerHandle controls health check outcomes via run_command() responses:
+when ``healthy=True``, the curl health check returns success immediately;
+when ``healthy=False``, it returns failure. A short health_check_timeout
+ensures unhealthy tests complete quickly without real polling delays.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
-from unittest.mock import patch
 
 import pytest
 
 from iris.cluster.controller.vm_lifecycle import (
+    _build_controller_vm_config,
     start_controller,
     stop_controller,
 )
-from iris.cluster.platform.base import (
+from iris.cluster.providers.types import (
     CloudWorkerState,
     CommandResult,
     SliceHandle,
     WorkerStatus,
 )
 from iris.rpc import config_pb2
-from iris.time_utils import Duration
+from rigging.timing import Duration
+
+# Short timeout so unhealthy health checks fail fast in tests
+_TEST_HEALTH_CHECK_TIMEOUT = 0.5
 
 # ============================================================================
 # Fakes
@@ -53,6 +60,9 @@ class FakeWorkerHandle:
 
     Tracks calls to terminate, bootstrap, set_labels, set_metadata so tests
     can verify the lifecycle functions interact with workers correctly.
+
+    When ``healthy=False``, run_command returns non-zero exit codes, causing
+    the real ``wait_healthy`` to report the VM as unhealthy.
     """
 
     def __init__(
@@ -60,10 +70,12 @@ class FakeWorkerHandle:
         vm_id: str = "fake-vm-1",
         internal_address: str = "10.0.0.1",
         wait_for_connection_result: bool = True,
+        healthy: bool = True,
     ):
         self._vm_id = vm_id
         self._internal_address = internal_address
         self._wait_for_connection_result = wait_for_connection_result
+        self._healthy = healthy
         self.terminated = False
         self.bootstrap_calls: list[str] = []
         self.labels: dict[str, str] = {}
@@ -81,6 +93,14 @@ class FakeWorkerHandle:
     def external_address(self) -> str | None:
         return None
 
+    @property
+    def bootstrap_log(self) -> str:
+        return ""
+
+    @property
+    def worker_id(self) -> str:
+        return self._vm_id
+
     def status(self) -> WorkerStatus:
         return WorkerStatus(state=CloudWorkerState.RUNNING)
 
@@ -97,7 +117,9 @@ class FakeWorkerHandle:
         timeout: Duration | None = None,
         on_line: Callable[[str], None] | None = None,
     ) -> CommandResult:
-        return CommandResult(returncode=0, stdout="", stderr="")
+        if self._healthy:
+            return CommandResult(returncode=0, stdout="ok", stderr="")
+        return CommandResult(returncode=1, stdout="", stderr="connection refused")
 
     def bootstrap(self, script: str) -> None:
         self.bootstrap_calls.append(script)
@@ -105,7 +127,7 @@ class FakeWorkerHandle:
     def reboot(self) -> None:
         pass
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         self.terminated = True
 
     def set_labels(self, labels: dict[str, str]) -> None:
@@ -144,7 +166,7 @@ class FakePlatform:
     ) -> list[SliceHandle]:
         return []
 
-    def list_all_slices(self, labels: dict[str, str] | None = None) -> list[SliceHandle]:
+    def list_all_slices(self) -> list[SliceHandle]:
         return []
 
     def list_vms(
@@ -178,6 +200,7 @@ def _make_config(
     config = config_pb2.IrisClusterConfig()
     config.controller.manual.host = host
     config.controller.manual.port = port
+    config.controller.image = "ghcr.io/test/iris:latest"
     config.platform.label_prefix = label_prefix
     config.defaults.ssh.user = "root"
     return config
@@ -188,17 +211,12 @@ def config() -> config_pb2.IrisClusterConfig:
     return _make_config()
 
 
-LIFECYCLE_MODULE = "iris.cluster.controller.vm_lifecycle"
-
-
 # ============================================================================
 # start_controller
 # ============================================================================
 
 
-@patch(f"{LIFECYCLE_MODULE}.build_controller_bootstrap_script_from_config", return_value="#!/bin/bash\necho ok")
-@patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
-def test_start_controller_fresh(mock_wait_healthy, mock_bootstrap_script, config):
+def test_start_controller_fresh(config):
     """No existing controller VM -- creates a new one, bootstraps, health checks, labels."""
     new_vm = FakeWorkerHandle(vm_id="ctrl-new", internal_address="10.0.0.5")
     platform = FakePlatform(existing_vms=[], vm_to_create=new_vm)
@@ -213,9 +231,7 @@ def test_start_controller_fresh(mock_wait_healthy, mock_bootstrap_script, config
     assert not new_vm.terminated
 
 
-@patch(f"{LIFECYCLE_MODULE}.build_controller_bootstrap_script_from_config", return_value="#!/bin/bash\necho ok")
-@patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
-def test_start_controller_reuses_healthy_existing(mock_wait_healthy, mock_bootstrap_script, config):
+def test_start_controller_reuses_healthy_existing(config):
     """Existing labeled VM is healthy -- reuses it without creating a new one."""
     existing = FakeWorkerHandle(vm_id="ctrl-existing", internal_address="10.0.0.2")
     platform = FakePlatform(existing_vms=[existing])
@@ -226,22 +242,16 @@ def test_start_controller_reuses_healthy_existing(mock_wait_healthy, mock_bootst
     assert vm is existing
     assert len(platform.created_vms) == 0
     assert not existing.terminated
-    # Should not have bootstrapped the existing healthy VM
     assert len(existing.bootstrap_calls) == 0
 
 
-@patch(f"{LIFECYCLE_MODULE}.build_controller_bootstrap_script_from_config", return_value="#!/bin/bash\necho ok")
-@patch(f"{LIFECYCLE_MODULE}.wait_healthy")
-def test_start_controller_replaces_unhealthy_existing(mock_wait_healthy, mock_bootstrap_script, config):
+def test_start_controller_replaces_unhealthy_existing(config):
     """Existing VM is unhealthy -- terminates it and creates a fresh one."""
-    unhealthy = FakeWorkerHandle(vm_id="ctrl-sick", internal_address="10.0.0.2")
+    unhealthy = FakeWorkerHandle(vm_id="ctrl-sick", internal_address="10.0.0.2", healthy=False)
     replacement = FakeWorkerHandle(vm_id="ctrl-new", internal_address="10.0.0.6")
     platform = FakePlatform(existing_vms=[unhealthy], vm_to_create=replacement)
 
-    # First call checks existing (unhealthy), second call checks new VM (healthy)
-    mock_wait_healthy.side_effect = [False, True]
-
-    address, vm = start_controller(platform, config)
+    address, vm = start_controller(platform, config, health_check_timeout=_TEST_HEALTH_CHECK_TIMEOUT)
 
     assert unhealthy.terminated
     assert vm is replacement
@@ -249,9 +259,7 @@ def test_start_controller_replaces_unhealthy_existing(mock_wait_healthy, mock_bo
     assert len(replacement.bootstrap_calls) == 1
 
 
-@patch(f"{LIFECYCLE_MODULE}.build_controller_bootstrap_script_from_config", return_value="#!/bin/bash\necho ok")
-@patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
-def test_start_controller_connection_timeout_terminates_vm(mock_wait_healthy, mock_bootstrap_script, config):
+def test_start_controller_connection_timeout_terminates_vm(config):
     """VM created but wait_for_connection fails -- terminates the VM and raises."""
     unreachable = FakeWorkerHandle(
         vm_id="ctrl-unreachable",
@@ -271,8 +279,7 @@ def test_start_controller_connection_timeout_terminates_vm(mock_wait_healthy, mo
 # ============================================================================
 
 
-@patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
-def test_stop_controller_found(mock_wait_healthy, config):
+def test_stop_controller_found(config):
     """Finds controller VM and terminates it."""
     existing = FakeWorkerHandle(vm_id="ctrl-to-stop")
     platform = FakePlatform(existing_vms=[existing])
@@ -282,8 +289,7 @@ def test_stop_controller_found(mock_wait_healthy, config):
     assert existing.terminated
 
 
-@patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
-def test_stop_controller_not_found(mock_wait_healthy, config):
+def test_stop_controller_not_found_does_not_raise(config):
     """No controller VM found -- no error raised."""
     platform = FakePlatform(existing_vms=[])
 
@@ -291,9 +297,7 @@ def test_stop_controller_not_found(mock_wait_healthy, config):
     stop_controller(platform, config)
 
 
-@patch(f"{LIFECYCLE_MODULE}.build_controller_bootstrap_script_from_config", return_value="#!/bin/bash\necho ok")
-@patch(f"{LIFECYCLE_MODULE}.wait_healthy", return_value=True)
-def test_start_controller_duplicate_vms_raises(mock_wait_healthy, mock_bootstrap_script, config):
+def test_start_controller_duplicate_vms_raises(config):
     """Multiple controller VMs found -- raises RuntimeError listing duplicates."""
     vm1 = FakeWorkerHandle(vm_id="ctrl-dup-1", internal_address="10.0.0.1")
     vm2 = FakeWorkerHandle(vm_id="ctrl-dup-2", internal_address="10.0.0.2")
@@ -311,3 +315,14 @@ def test_stop_controller_duplicate_vms_raises(config):
 
     with pytest.raises(RuntimeError, match="Multiple controller VMs found"):
         stop_controller(platform, config)
+
+
+def test_gcp_controller_vm_config_defaults_to_100gb_disk():
+    """GCP controller VM defaults to 100GB disk."""
+    config = config_pb2.IrisClusterConfig()
+    config.platform.label_prefix = "test"
+    config.controller.gcp.zone = "us-central1-a"
+
+    vm_config = _build_controller_vm_config(config)
+
+    assert vm_config.gcp.boot_disk_size_gb == 100

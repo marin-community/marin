@@ -1,9 +1,12 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for InferenceContext utilities and chat template handling."""
 
+import sys
 from dataclasses import dataclass
+from types import SimpleNamespace
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -12,7 +15,19 @@ from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
 from transformers import AutoTokenizer
 
-from marin.rl.environments.inference_ctx import LevanterInferenceContext, LevanterInferenceContextConfig
+from marin.rl.environments.inference_ctx import (
+    LevanterInferenceContext,
+    LevanterInferenceContextConfig,
+    MODEL_MAPPINGS,
+    MODEL_TRANSPOSE_KEYS,
+    VLLMSamplingConfig,
+    vLLMInferenceContext,
+    vLLMInferenceContextConfig,
+)
+from marin.rl.environments.inference_ctx.vllm import InferenceMode
+from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
+
+_LLAMA3_MODEL_ID = "NousResearch/Meta-Llama-3-8B-Instruct"
 
 
 @dataclass
@@ -34,16 +49,13 @@ class DummyInferenceServer:
         return Config()
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def llama3_tokenizer():
-    """Llama 3 tokenizer with chat template (uses tiktoken, not sentencepiece)."""
-    return AutoTokenizer.from_pretrained("NousResearch/Meta-Llama-3-8B-Instruct")
-
-
-@pytest.fixture
-def gpt2_tokenizer():
-    """GPT-2 tokenizer without chat template (for fallback testing)."""
-    return AutoTokenizer.from_pretrained("gpt2")
+    """Llama 3 tokenizer — skips the test when HF is unreachable."""
+    try:
+        return AutoTokenizer.from_pretrained(_LLAMA3_MODEL_ID)
+    except Exception:
+        pytest.skip(f"Llama-3 tokenizer not accessible ({_LLAMA3_MODEL_ID})")
 
 
 @pytest.fixture
@@ -235,3 +247,149 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
     # Verify token rewards
     assert len(rollout.token_rewards) == len(expected_response_tokens)
     np.testing.assert_array_equal(rollout.token_rewards, np.full(len(expected_response_tokens), reward))
+
+
+def test_vllm_inference_context_uses_canonical_model_name(monkeypatch):
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_llm_engine",
+        staticmethod(lambda _config: object()),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: SimpleNamespace(get_vocab=lambda: {}),
+    )
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_renderer",
+        staticmethod(lambda model_name, _tokenizer: model_name),
+    )
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f",
+            canonical_model_name="meta-llama/Llama-3.1-8B-Instruct",
+            max_model_len=1024,
+            tensor_parallel_size=4,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(),
+        )
+    )
+
+    assert ctx.model_name == "gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f"
+    assert ctx.canonical_model_name == "meta-llama/Llama-3.1-8B-Instruct"
+    assert ctx.renderer == "meta-llama/Llama-3.1-8B-Instruct"
+
+
+def test_vllm_sync_engine_receives_kv_cache_metrics_flag(monkeypatch):
+    calls = {}
+
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setattr(vLLMInferenceContext, "_patch_tpu_inference_registry", staticmethod(lambda: None))
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.LLM", _FakeLLM)
+
+    config = vLLMInferenceContextConfig(
+        model_name="test-model",
+        max_model_len=1024,
+        tensor_parallel_size=2,
+        gpu_memory_utilization=0.9,
+        sampling_params=VLLMSamplingConfig(),
+        kv_cache_metrics=True,
+    )
+
+    vLLMInferenceContext._get_llm_engine(config)
+
+    assert calls["kv_cache_metrics"] is True
+
+
+def test_vllm_async_engine_receives_kv_cache_metrics_flag(monkeypatch):
+    calls = {}
+
+    class _FakeSyncVLLMWrapper:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setattr(vLLMInferenceContext, "_patch_tpu_inference_registry", staticmethod(lambda: None))
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.SyncVLLMWrapper", _FakeSyncVLLMWrapper)
+
+    config = vLLMInferenceContextConfig(
+        model_name="test-model",
+        max_model_len=1024,
+        tensor_parallel_size=2,
+        gpu_memory_utilization=0.9,
+        sampling_params=VLLMSamplingConfig(),
+        mode=InferenceMode.ASYNC,
+        kv_cache_metrics=True,
+    )
+
+    vLLMInferenceContext._get_llm_engine(config)
+
+    assert calls["kv_cache_metrics"] is True
+
+
+def test_worker_extension_uses_public_sync_weights():
+    calls = {}
+
+    class _FakeWorker:
+        def sync_weights(self, new_state, *, mappings, transpose_keys, reshard_fn):
+            calls["new_state"] = new_state
+            calls["mappings"] = mappings
+            calls["transpose_keys"] = transpose_keys
+            calls["reshard_fn"] = reshard_fn
+
+    serialized_state = {
+        "model.layers.0.input_layernorm.weight": (
+            np.zeros((2,), dtype=np.float32).tobytes(),
+            "float32",
+            (2,),
+        ),
+    }
+
+    WorkerExtension.update_weight(_FakeWorker(), serialized_state, "meta-llama/Llama-3.1-8B-Instruct")
+
+    assert hasattr(calls["new_state"], "flat_state")
+    assert calls["mappings"] == MODEL_MAPPINGS["meta-llama/Llama-3.1-8B-Instruct"]
+    assert calls["transpose_keys"] == MODEL_TRANSPOSE_KEYS["meta-llama/Llama-3.1-8B-Instruct"]
+    assert calls["reshard_fn"] is None
+
+
+def test_patch_tpu_inference_registry_registers_mistral_alias(monkeypatch):
+    registry = {}
+
+    def register_model(name, cls):
+        registry[name] = cls
+
+    tpu_inference_mod = ModuleType("tpu_inference")
+    models_mod = ModuleType("tpu_inference.models")
+    common_mod = ModuleType("tpu_inference.models.common")
+    jax_mod = ModuleType("tpu_inference.models.jax")
+    qwen2_mod = ModuleType("tpu_inference.models.jax.qwen2")
+    llama3_mod = ModuleType("tpu_inference.models.jax.llama3")
+
+    class FakeQwen2ForCausalLM:
+        pass
+
+    class FakeLlamaForCausalLM:
+        pass
+
+    common_mod.model_loader = SimpleNamespace(
+        _MODEL_REGISTRY=registry,
+        register_model=register_model,
+    )
+    qwen2_mod.Qwen2ForCausalLM = FakeQwen2ForCausalLM
+    llama3_mod.LlamaForCausalLM = FakeLlamaForCausalLM
+
+    monkeypatch.setitem(sys.modules, "tpu_inference", tpu_inference_mod)
+    monkeypatch.setitem(sys.modules, "tpu_inference.models", models_mod)
+    monkeypatch.setitem(sys.modules, "tpu_inference.models.common", common_mod)
+    monkeypatch.setitem(sys.modules, "tpu_inference.models.jax", jax_mod)
+    monkeypatch.setitem(sys.modules, "tpu_inference.models.jax.qwen2", qwen2_mod)
+    monkeypatch.setitem(sys.modules, "tpu_inference.models.jax.llama3", llama3_mod)
+
+    vLLMInferenceContext._patch_tpu_inference_registry()
+
+    assert registry["Qwen2ForCausalLM"] is FakeQwen2ForCausalLM
+    assert registry["MistralForCausalLM"] is FakeLlamaForCausalLM

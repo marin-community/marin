@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -9,6 +9,8 @@ as well as methods for tokenization and logprob extraction from an OpenAI ChatCo
 """
 
 import logging
+from typing import Any
+
 import numpy as np
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
@@ -27,6 +29,10 @@ class BaseInferenceContext:
 
     def shutdown(self) -> None:
         raise NotImplementedError
+
+    def get_metrics(self) -> dict[str, Any]:
+        """Return implementation-specific metrics for tracker logging."""
+        return {}
 
     def batch_completions(
         self,
@@ -60,11 +66,12 @@ class BaseInferenceContext:
         if not choice.logprobs or not choice.logprobs.content:
             raise ValueError("Choice missing logprobs. Use logprobs=True in API call.")
 
+        vocab = self.tokenizer.get_vocab()
         tokens = []
         for t in choice.logprobs.content:
-            # Use convert_tokens_to_ids for correct BPE round-trip
-            # The server uses convert_ids_to_tokens which preserves BPE format (e.g., Ġ for spaces)
-            token_id = self.tokenizer.convert_tokens_to_ids(t.token)
+            token_id = vocab.get(t.token)
+            if token_id is None:
+                raise ValueError(f"Token {t.token!r} not found in vocabulary")
             tokens.append(token_id)
 
         if not tokens:

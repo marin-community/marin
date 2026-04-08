@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -16,7 +16,7 @@ from jax.sharding import Mesh
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
-from transformers import PreTrainedTokenizer
+from levanter.tokenizers import MarinTokenizer
 from levanter.models.lm_model import LmHeadModel
 import haliax as hax
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class LevanterInferenceContextConfig:
     inference_server_config: InferenceServerConfig
-    tokenizer: PreTrainedTokenizer
+    tokenizer: MarinTokenizer
     mesh: Mesh
     axis_mapping: dict[str, str]
     stop_tokens: list[int] | None = None
@@ -97,7 +97,6 @@ class LevanterInferenceContext(BaseInferenceContext):
         system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
         """Call OpenAI API in batches with concurrency control."""
-
         if max_tokens is None:
             max_tokens = self.max_tokens
 

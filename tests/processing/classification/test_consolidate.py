@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import gzip
@@ -6,7 +6,8 @@ import json
 import os
 from pathlib import Path
 
-from marin.processing.classification.deduplication.dedup_commons import DedupMode, DedupConfig, deduplicate
+from marin.processing.classification.deduplication.dedup_commons import DedupMode
+from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
 import pytest
 from ddsketch import DDSketch
 from marin.processing.classification.consolidate import (
@@ -129,7 +130,7 @@ def test_consolidate_filters_and_writes_output(tmp_path):
         output_file.exists()
     ), f"Expected consolidated output file to be written. Files in {output_root}: {list(output_root.iterdir())}"
 
-    output_rows = load_parquet(output_file)
+    output_rows = load_parquet(str(output_file))
 
     kept_ids = {row["id"] for row in output_rows}
     assert kept_ids == {"doc-1", "doc-2"}, f"Expected to keep doc-1 and doc-2, but got {kept_ids}"
@@ -147,19 +148,16 @@ def test_dedupe_consolidate_integration(fox_corpus):
     consolidated_dir = os.path.join(fox_corpus["output_dir"], "consolidation")
 
     # Run deduplication to generate attributes using fixture's test data
-    dedupe_config = DedupConfig(
+    result = dedup_exact_paragraph(
         input_paths=fox_corpus["test_dir"],
         output_path=dedupe_output_dir,
-        mode=DedupMode.EXACT_PARAGRAPH,
-        processes=1,
+        max_parallelism=4,
     )
-
-    result = deduplicate(dedupe_config)
     assert result["success"]
     assert result["mode"] == DedupMode.EXACT_PARAGRAPH
 
     # Verify dedupe output exists and has same structure as input
-    dedupe_output_files = list(Path(dedupe_output_dir).glob("data/*.jsonl.gz"))
+    dedupe_output_files = list(Path(dedupe_output_dir).glob("data/*.vortex"))
     assert len(dedupe_output_files) > 0
 
     # Now run consolidate using the dedupe attributes
@@ -172,15 +170,20 @@ def test_dedupe_consolidate_integration(fox_corpus):
             FilterConfig(
                 type=FilterType.REMOVE_SPANS,
                 attribute_path=f"{dedupe_output_dir}/data",
-                name=DedupMode.EXACT_PARAGRAPH,
+                name="dup_spans",
+                attribute_filetype="vortex",
+                keep_if_missing=True,
             )
         ],
     )
 
     consolidate(consolidate_config)
 
-    # Read consolidated output
-    consolidated_by_id = {row["id"]: row for row in load_parquet(consolidated_dir)}
+    # Read consolidated output from all parquet shards
+    consolidated_rows = []
+    for pq_file in sorted(Path(consolidated_dir).glob("*.parquet")):
+        consolidated_rows.extend(load_parquet(str(pq_file)))
+    consolidated_by_id = {row["id"]: row for row in consolidated_rows}
     assert len(consolidated_by_id) > 0
 
     # Verify that duplicate spans have been removed

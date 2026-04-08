@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
@@ -246,10 +246,8 @@ class DataLoaderIterator(Iterator[Ex]):
         if self.mapping is None:
             self.mapping = hax.partitioning.current_thread_local_mapping()
 
-        self.step_metrics: dict[str, float] = {}
-
         buffered_batches = self.dl.max_buffered_batches
-        self._batches: Iterator[tuple[Ex, dict[str, float]]]
+        self._batches: Iterator[Ex]
         if buffered_batches == 0:
             self._batches = AsyncIteratorWrapper(self._produce_batches())
         else:
@@ -257,16 +255,30 @@ class DataLoaderIterator(Iterator[Ex]):
 
     def __next__(self):
         time_start = time.time()
-        batch, self.step_metrics = next(self._batches)
+        batch = next(self._batches)
         time_mid = time.time()
 
         time_end = time.time()
         time_batch = time_end - time_mid
         if (time_end - time_start) > 0.5:
+            qsize = self._batches.qsize() if isinstance(self._batches, BackgroundIterator) else "N/A"
             if time_batch > 0.1:
-                logger.info(f"Prefetch wasn't fast enough: {time_end - time_start:.3f}. {time_batch:.3f} in batchify")
+                logger.warning(
+                    "Data loader stalled %.3fs (%.3fs in batchify). queue_size=%s prefetch_size=%d max_buffered=%s",
+                    time_end - time_start,
+                    time_batch,
+                    qsize,
+                    self.dl.prefetch_size,
+                    self.dl.max_buffered_batches,
+                )
             else:
-                logger.info(f"Prefetch wasn't fast enough: {time_end - time_start:.3f}.")
+                logger.warning(
+                    "Data loader stalled %.3fs. queue_size=%s prefetch_size=%d max_buffered=%s",
+                    time_end - time_start,
+                    qsize,
+                    self.dl.prefetch_size,
+                    self.dl.max_buffered_batches,
+                )
         return batch
 
     def __del__(self):
@@ -313,9 +325,8 @@ class DataLoaderIterator(Iterator[Ex]):
                 batch_of_batches: list[_Batch[Ex]] = await self._do_retrieve_batch_of_batches(batches)
 
                 for batch in batch_of_batches:
-                    metrics = self.dl.data_store.metrics_for_global_index(batch.global_data_offset)
-                    batchified = self._batchify_local_data(batch)
-                    yield batchified, metrics
+                    batch = self._batchify_local_data(batch)
+                    yield batch
 
                 batch_number = next_batch_numbers[-1] + 1
 

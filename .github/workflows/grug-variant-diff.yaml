@@ -2,12 +2,6 @@ name: Grug Variant Diff
 
 on:
   pull_request:
-    branches: [main]
-    paths:
-      - experiments/grug/**
-      - scripts/grug_dir_diff.py
-      - scripts/grug_variant_diff_ci.py
-      - .github/workflows/grug-variant-diff.yaml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -18,7 +12,28 @@ permissions:
   pull-requests: write
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'experiments/grug/**'
+              - 'scripts/grug_dir_diff.py'
+              - 'scripts/grug_variant_diff_ci.py'
+              - '.github/workflows/grug-variant-diff.yaml'
+
   grug-variant-diff:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

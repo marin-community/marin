@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import re
@@ -10,8 +10,10 @@ import numpy as np
 from draccus import ChoiceRegistry
 
 from levanter.data._preprocessor import BatchProcessor
+from levanter.tokenizers import MarinTokenizer
+from levanter.utils.hf_utils import HfTokenizer
+
 from ._batch_tokenizer import BatchTokenizer, DNABatchTokenizer
-from levanter.utils.hf_utils import HfTokenizer, num_cpus_used_by_tokenizer
 
 
 class LmDatasetFormatBase(ChoiceRegistry):
@@ -24,7 +26,7 @@ class LmDatasetFormatBase(ChoiceRegistry):
         return "input_ids"
 
     def build_preprocessor(
-        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
         raise ValueError(f"Unknown format {self}")
 
@@ -37,7 +39,7 @@ class TextLmDatasetFormat(LmDatasetFormatBase):
     text_key: str = "text"  # key for the text field in the jsonl file
 
     def build_preprocessor(
-        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
         return BatchTokenizer(tokenizer, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=self.text_key)
 
@@ -55,7 +57,7 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
     mask_user_turns: bool = True
 
     def build_preprocessor(
-        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
         return ChatProcessor(
             tokenizer,
@@ -87,7 +89,7 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
         return self.input_ids_key
 
     def build_preprocessor(
-        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
         del tokenizer, enforce_eos, enforce_bos
         return PrebuiltCacheProcessor(self.input_ids_key, self.loss_weights_key)
@@ -184,7 +186,7 @@ class ChatProcessor(BatchProcessor[dict, dict]):
 
     def __init__(
         self,
-        tokenizer: HfTokenizer,
+        tokenizer: MarinTokenizer,
         chat_template: str | None = None,
         messages_field: str = "messages",
         system_prompt_field: str | None = "system",
@@ -242,16 +244,13 @@ class ChatProcessor(BatchProcessor[dict, dict]):
         use_per_example_kwargs = any(kwargs for kwargs in chat_kwargs_list)
 
         if not use_per_example_kwargs:
-            tokenized = self.tokenizer.apply_chat_template(
+            tokenized = self.tokenizer.apply_chat_template_with_masks(
                 messages,
-                tokenize=True,
                 chat_template=self.chat_template,
-                return_assistant_tokens_mask=True,
-                return_dict=True,
             )
         else:
-            input_ids_batches: list[Sequence[int]] = []
-            assistant_mask_batches: list[Sequence[int]] = []
+            input_ids_batches: list[list[int]] = []
+            assistant_mask_batches: list[list[int]] = []
 
             for conversation, example_kwargs in zip(messages, chat_kwargs_list):
                 kwargs_dict = dict(example_kwargs) if example_kwargs is not None else {}
@@ -263,15 +262,14 @@ class ChatProcessor(BatchProcessor[dict, dict]):
                 if chat_template_override is None:
                     raise ValueError("Chat template must be provided either in the dataset format or per example.")
 
-                apply_kwargs = {
-                    **kwargs_dict,
-                    "tokenize": True,
-                    "return_assistant_tokens_mask": True,
-                    "return_dict": True,
-                    "chat_template": chat_template_override,
-                }
+                # Remove add_generation_prompt if present; it's not used for mask computation.
+                kwargs_dict.pop("add_generation_prompt", None)
 
-                tokenized_single = self.tokenizer.apply_chat_template([conversation], **apply_kwargs)
+                tokenized_single = self.tokenizer.apply_chat_template_with_masks(
+                    [conversation],
+                    chat_template=chat_template_override,
+                    **kwargs_dict,
+                )
                 input_ids_batches.extend(tokenized_single["input_ids"])
                 assistant_mask_batches.extend(tokenized_single["assistant_masks"])
 
@@ -301,13 +299,13 @@ class ChatProcessor(BatchProcessor[dict, dict]):
 
     @property
     def num_cpus(self) -> int:
-        return num_cpus_used_by_tokenizer(self.tokenizer)
+        return 1
 
     @property
     def metadata(self) -> dict[str, Any]:
         return {
             "tokenizer": self.tokenizer.name_or_path,
-            "vocab_size": len(self.tokenizer),
+            "vocab_size": self.tokenizer.vocab_size,
             "chat_template": self.chat_template,
             "messages_field": self.messages_field,
             "system_prompt_field": self.system_prompt_field,
@@ -316,6 +314,6 @@ class ChatProcessor(BatchProcessor[dict, dict]):
 
 
 def preprocessor_for_format(
-    format: LmDatasetFormatBase, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    format: LmDatasetFormatBase, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
 ) -> BatchProcessor[dict, dict]:
     return format.build_preprocessor(tokenizer, enforce_eos=enforce_eos, enforce_bos=enforce_bos)

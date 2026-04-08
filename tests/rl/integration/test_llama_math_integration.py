@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Integration test for Llama-3.2-1B with math curriculum."""
@@ -17,7 +17,8 @@ from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
-from transformers import AutoConfig, AutoTokenizer
+from levanter.tokenizers import load_tokenizer
+from transformers import AutoConfig
 
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
@@ -40,7 +41,7 @@ MAX_TOKENS = 16
 
 def get_stop_tokens(tokenizer_name: str):
     """Get stop tokens from tokenizer."""
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    tokenizer = load_tokenizer(tokenizer_name)
     return [tokenizer.eos_token_id]
 
 
@@ -133,7 +134,7 @@ def test_llama_math_integration(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=opt_config,
-            rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon=0.2),
+            rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
             replay_buffer=ReplayBufferConfig(
                 capacity=2048,
                 alpha=3.0,

@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
@@ -13,8 +13,8 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 import braceexpand
 import datasets
 import equinox as eqx
-import fsspec
 import haliax as hax
+from rigging.filesystem import url_to_fs
 import jax
 import numpy as np
 from draccus import field
@@ -23,26 +23,24 @@ from jaxtyping import PRNGKeyArray
 from typing_extensions import TypedDict
 
 
-from levanter.compat.hf_checkpoints import load_processor, load_tokenizer
+from levanter.compat.hf_checkpoints import load_processor
 from levanter.data import AsyncDataset
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.dataset import MappedAsyncDataset
 from levanter.data.mixture import MixtureDataset, StopStrategy
 from levanter.data.sharded_datasource import AudioTextUrlDataSource, ShardedDataSource, WrappedHFDataSource
 from levanter.data.text import BatchTokenizer
+from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 
 # intercept the logging nonsense here
 from levanter.models.asr_model import AudioTextExample
 from levanter.store.cache import CacheOptions, TreeCache, build_or_load_cache
-from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.jax_utils import key_iterator
 from levanter.utils.logging import silence_transformer_nag
 
 silence_transformer_nag()  # noqa
 from transformers import (  # noqa
-    BatchEncoding,
     BatchFeature,
-    PreTrainedTokenizerBase,
     ProcessorMixin,
     SequenceFeatureExtractor,
 )
@@ -74,7 +72,7 @@ class BatchAudioProcessor(BatchProcessor[Tuple[np.ndarray, int, str], AudioTextD
     def __init__(
         self,
         processor: ProcessorMixin,
-        tokenizer: HfTokenizer,
+        tokenizer: MarinTokenizer,
         enforce_bos=True,
         enforce_eos=True,
         *,
@@ -213,7 +211,7 @@ class AudioDatasetSourceConfig:
 
         def fsspec_expand_glob(url):
             if "*" in url:
-                fs = fsspec.core.url_to_fs(url)[0]
+                fs = url_to_fs(url)[0]
                 return fs.glob(url)
             else:
                 return [url]
@@ -235,15 +233,16 @@ class AudioTaskConfig(abc.ABC):
         return load_processor(self.processor)
 
     @cached_property
-    def pad_token_id(self) -> int:
+    def pad_token_id(self) -> int | None:
         return self.the_tokenizer.pad_token_id
 
     @cached_property
-    def the_tokenizer(self) -> PreTrainedTokenizerBase:
+    def the_tokenizer(self) -> MarinTokenizer:
         if self.tokenizer is None:
-            return self.the_processor.tokenizer
+            # Processor's tokenizer is an HF tokenizer; wrap via MarinTokenizer
+            return load_marin_tokenizer(self.the_processor.tokenizer.name_or_path)
         else:
-            return load_tokenizer(self.tokenizer)
+            return load_marin_tokenizer(self.tokenizer)
 
     @cached_property
     def the_feature_extractor(self) -> SequenceFeatureExtractor:
@@ -291,7 +290,7 @@ class ProcessedAudioCache(AsyncDataset[AudioTextDict]):
         cache_dir: str,
         source: ShardedDataSource[Tuple[np.ndarray, int, str]],
         processor: ProcessorMixin,
-        tokenizer: PreTrainedTokenizerBase,
+        tokenizer: MarinTokenizer,
         enforce_bos=True,
         enforce_eos=True,
         override_resources=None,

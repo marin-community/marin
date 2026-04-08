@@ -1,8 +1,9 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
 import functools
+import logging
 import warnings
 from typing import List, Mapping, Sequence, Tuple, TypeVar
 
@@ -17,6 +18,8 @@ from levanter.data import AsyncDataset
 from levanter.schedule import BatchSchedule
 from levanter.utils.index import Index
 from levanter.utils.thread_utils import blocking_wait, future_from_value
+
+logger = logging.getLogger(__name__)
 
 
 T = TypeVar("T")
@@ -201,34 +204,6 @@ class MixtureDataset(AsyncDataset[T]):
 
         assert self._is_finite_cache is not None
         return self._is_finite_cache
-
-    def metrics_for_global_index(self, global_index: int) -> dict[str, float]:
-        block_id = global_index // self.block_size
-        stage_idx = self._get_stage_for_block(block_id)
-        _, weights = self.weight_stages[stage_idx]
-        metrics: dict[str, float] = {f"data/mixture/{name}": weight for name, weight in weights.items()}
-        metrics["data/mixture_stage"] = float(stage_idx)
-
-        # Forward source dataset metrics (e.g., epoch/progress from PermutationDatasets).
-        # For each source, compute the approximate number of items consumed up to this
-        # global index and query the source's metrics at that count.
-        for dataset_id, (name, dataset) in enumerate(self.datasets.items()):
-            source_count = self._source_count_at_global_index(dataset_id, global_index)
-            source_metrics = dataset.metrics_for_global_index(source_count)
-            for key, value in source_metrics.items():
-                metrics[f"{key}/{name}"] = value
-
-        return metrics
-
-    def _source_count_at_global_index(self, dataset_id: int, global_index: int) -> int:
-        """Approximate number of items consumed from a source dataset up to a global index."""
-        block_id = global_index // self.block_size
-        stage_idx = self._get_stage_for_block(block_id)
-        base_count = self._count_before_stage(dataset_id, stage_idx)
-        stage_start_block = int(self._stage_start_blocks[stage_idx])
-        blocks_into_stage = block_id - stage_start_block
-        count_per_block = int(self._counts_per_block_per_stage[stage_idx][dataset_id])
-        return base_count + blocks_into_stage * count_per_block
 
     def _get_stage_for_block(self, block_id: int) -> int:
         block_start = block_id * self.block_size
@@ -421,6 +396,105 @@ class MixtureDataset(AsyncDataset[T]):
 
     def _dataset_of_id(self, id):
         return self.datasets[self.dataset_index[id]]
+
+
+class ConcatDataset(AsyncDataset[T]):
+    """Virtually concatenates multiple AsyncDatasets into a single index space.
+
+    ConcatDataset logically concatenates its children so that indices
+    ``[0, len(child_0))`` map to the first child, ``[len(child_0), len(child_0) +
+    len(child_1))`` to the second, and so on.  No data is copied.
+
+    All children must be finite.  To shuffle the concatenated result, wrap with
+    :class:`levanter.data.PermutationDataset`.
+
+    Args:
+        datasets: Named child datasets to concatenate.
+    """
+
+    def __init__(
+        self,
+        datasets: Mapping[str, AsyncDataset[T]],
+    ):
+        if len(datasets) == 0:
+            raise ValueError("ConcatDataset requires at least one dataset")
+
+        for name, ds in datasets.items():
+            if not ds.is_finite():
+                raise ValueError(f"ConcatDataset requires all children to be finite, but '{name}' is not")
+
+        self.datasets = dict(datasets)
+        self._names = list(self.datasets.keys())
+        self._children = list(self.datasets.values())
+
+        self._cumulative_lengths: np.ndarray = np.array([])
+        self._total_length: int | None = None
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def async_len(self) -> int:
+        await self._ensure_initialized()
+        assert self._total_length is not None
+        return self._total_length
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[T]:
+        if not indices:
+            return []
+
+        await self._ensure_initialized()
+
+        # Group by child dataset
+        child_indices: list[list[int]] = [[] for _ in self._children]
+        result_positions: list[list[int]] = [[] for _ in self._children]
+
+        cumulative = self._cumulative_lengths
+        for batch_pos, idx in enumerate(indices):
+            child_id = int(np.searchsorted(cumulative, idx, side="right"))
+            local_offset = idx - (int(cumulative[child_id - 1]) if child_id > 0 else 0)
+            child_indices[child_id].append(local_offset)
+            result_positions[child_id].append(batch_pos)
+
+        # Fetch from each child in parallel
+        batch_futures = []
+        for child_id, idx_list in enumerate(child_indices):
+            if len(idx_list) == 0:
+                batch_futures.append(future_from_value([]))
+            else:
+                batch_futures.append(self._children[child_id].get_batch(idx_list))
+
+        child_batches = await asyncio.gather(*batch_futures)
+
+        # Reassemble
+        result: list[T | None] = [None] * len(indices)
+        for child_id, positions in enumerate(result_positions):
+            for i, pos in enumerate(positions):
+                result[pos] = child_batches[child_id][i]
+
+        return result  # type: ignore
+
+    async def getitem_async(self, index: int) -> T:
+        await self._ensure_initialized()
+
+        cumulative = self._cumulative_lengths
+        child_id = int(np.searchsorted(cumulative, index, side="right"))
+        local_offset = index - (int(cumulative[child_id - 1]) if child_id > 0 else 0)
+        return await self._children[child_id].getitem_async(local_offset)
+
+    async def _ensure_initialized(self):
+        if self._total_length is not None:
+            return
+
+        lengths = await asyncio.gather(*[child.async_len() for child in self._children])
+        cumulative = np.cumsum(lengths)
+        self._cumulative_lengths = cumulative
+        self._total_length = int(cumulative[-1])
+
+        if self._total_length == 0:
+            raise ValueError("ConcatDataset total length is 0 — all children are empty")
+
+    def __repr__(self):
+        return f"ConcatDataset({self._names})"
 
 
 def _compute_block_assignment(base_ids, index, key):

@@ -6,6 +6,9 @@ logs/
 # CPU profiles
 prof/
 
+# Downloaded build tools (zig, etc.)
+.tools/
+
 tests/snapshots/outputs
 tests/snapshots/diffs
 
@@ -228,6 +231,9 @@ scr/*
 
 /scratch
 
+.forge
 .claude
+!.claude/skills
+.agents/tmp/
 .codex
 .entire

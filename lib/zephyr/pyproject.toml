@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "iris",
+    "rigging",
     "fray[ray]",
     "typing-extensions>=4.0",
     "click>=8.0",
@@ -21,11 +22,8 @@ dependencies = [
     "braceexpand>=0.1.0",
     "zstandard>=0.18.0",
     "tqdm-loggable>=0.2",
-    "vortex-data>=0.1.0",
+    "vortex-data>=0.61.0",
 ]
-
-[project.scripts]
-zephyr = "zephyr.cli:main"
 
 [dependency-groups]
 test = [

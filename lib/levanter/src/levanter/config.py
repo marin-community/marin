@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -13,10 +13,10 @@ from functools import wraps
 from typing import List, Optional, Union
 
 import draccus
-import fsspec
 import jmp
 from draccus import parse
 from fsspec import AbstractFileSystem
+from rigging.filesystem import url_to_fs
 
 from levanter.utils.datetime_utils import encode_timedelta, parse_timedelta
 
@@ -141,7 +141,7 @@ def _maybe_get_config_path_and_cmdline_args(args: List[str]):
 
             if urllib.parse.urlparse(config_path).scheme:
                 fs: AbstractFileSystem
-                fs, fs_path = fsspec.core.url_to_fs(config_path)
+                fs, fs_path = url_to_fs(config_path)
                 temp_file = tempfile.NamedTemporaryFile(prefix="config", suffix=".yaml", delete=False)
                 atexit.register(lambda: os.unlink(temp_file.name))
                 fs.get(fs_path, temp_file.name)

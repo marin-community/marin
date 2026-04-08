@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -10,8 +10,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
-import fsspec
 import jax.numpy as jnp
+from rigging.filesystem import url_to_fs
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 
 import levanter
@@ -94,7 +94,7 @@ def main(config: ImportHfConfig):
         )
 
     # use fsspec to make dir
-    fs, _ = fsspec.core.url_to_fs(config.output_path)
+    fs, _ = url_to_fs(config.output_path)
     if not fs.exists(config.output_path):
         fs.makedirs(config.output_path)
         logger.info(f"Created output directory: {config.output_path}")

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Diagnostic bug report generation for failed Iris jobs.
@@ -11,12 +11,18 @@ import logging
 import subprocess
 from dataclasses import dataclass, field
 
+from iris.cluster.log_store import build_log_source
 from iris.cluster.types import JobName
-from iris.rpc import cluster_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Timestamp
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.logging_connect import LogServiceClientSync
+from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
+_FAILED_JOB_STATES = {"failed", "worker_failed", "unschedulable"}
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +54,6 @@ class TaskReport:
     finished_at: str
     duration: str
     pending_reason: str
-    log_directory: str
     attempts: list[AttemptReport]
     recent_logs: list[str]
 
@@ -64,7 +69,15 @@ class WorkerReport:
     tpu_info: str
     memory: str
     zone: str
-    process_log_path: str
+
+
+@dataclass
+class DescendantJobReport:
+    job_id: str
+    state: str
+    exit_code: int
+    error: str
+    finished_at: str
 
 
 @dataclass
@@ -86,9 +99,9 @@ class BugReport:
     task_state_counts: dict[str, int]
     pending_reason: str
     tasks: list[TaskReport]
+    descendant_jobs: list[DescendantJobReport] = field(default_factory=list)
     workers: dict[str, WorkerReport] = field(default_factory=dict)
     entrypoint: str = ""
-    log_prefix: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -101,31 +114,37 @@ def gather_bug_report(
     job_id: JobName,
     *,
     tail: int = 50,
+    token_provider: TokenProvider | None = None,
 ) -> BugReport:
     """Gather all diagnostic data for a job into a BugReport."""
-    client = ControllerServiceClientSync(controller_url, timeout_ms=30000)
+    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
+    client = ControllerServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
+    log_client = LogServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
     try:
-        return _gather(client, job_id, tail=tail)
+        return _gather(client, log_client, job_id, tail=tail)
     finally:
+        log_client.close()
         client.close()
 
 
 def _gather(
     client: ControllerServiceClientSync,
+    log_client: LogServiceClientSync,
     job_id: JobName,
     *,
     tail: int,
 ) -> BugReport:
     # 1. Job status + original request
-    resp = client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire()))
+    resp = client.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire()))
     job = resp.job
     request = resp.request
 
     # 2. List tasks
-    tasks_resp = client.list_tasks(cluster_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()))
+    tasks_resp = client.list_tasks(controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()))
+    descendant_jobs = _list_descendant_jobs(client, job_id)
 
     # 3. List workers, filter to those involved in this job
-    workers_resp = client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+    workers_resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
     involved_worker_ids: set[str] = set()
     for t in tasks_resp.tasks:
         if t.worker_id:
@@ -138,42 +157,45 @@ def _gather(
     task_logs: dict[str, list[str]] = {}
     for task in tasks_resp.tasks:
         try:
-            log_resp = client.get_task_logs(
-                cluster_pb2.Controller.GetTaskLogsRequest(
-                    id=task.task_id,
-                    max_total_lines=tail,
+            # Fetch all attempts for this task, taking only the last `tail` lines.
+            source = build_log_source(JobName.from_wire(task.task_id))
+            log_resp = log_client.fetch_logs(
+                logging_pb2.FetchLogsRequest(
+                    source=source,
+                    max_lines=tail,
+                    tail=True,
                 )
             )
-            lines: list[str] = []
-            for batch in log_resp.task_logs:
-                for entry in batch.logs:
-                    lines.append(entry.data)
+            lines = [entry.data for entry in log_resp.entries]
             task_logs[task.task_id] = lines[-tail:]
         except Exception:
             logger.warning("Failed to fetch logs for task %s", task.task_id, exc_info=True)
             task_logs[task.task_id] = ["(failed to fetch logs)"]
 
-    # 5. Derive log prefix
-    log_prefix = _derive_log_prefix(tasks_resp.tasks)
-
-    # 6. Build entrypoint string
+    # 5. Build entrypoint string
     entrypoint_str = ""
     if request and request.entrypoint and request.entrypoint.run_command:
         entrypoint_str = " ".join(request.entrypoint.run_command.argv)
 
-    # 7. Build task reports
+    # 6. Build task reports
     task_reports = [_build_task_report(t, task_logs.get(t.task_id, [])) for t in tasks_resp.tasks]
 
-    # 8. Build worker reports
+    # 7. Build worker reports
     worker_reports: dict[str, WorkerReport] = {}
     for w in workers_resp.workers:
         if w.worker_id in involved_worker_ids:
-            worker_reports[w.worker_id] = _build_worker_report(w, log_prefix)
+            worker_reports[w.worker_id] = _build_worker_report(w)
 
-    # 9. Assemble — prefer ListTasks count over the JobStatus convenience field
+    # 8. Assemble — prefer ListTasks count over the JobStatus convenience field
     state_name = _job_state_name(job.state)
     error = job.error or ""
-    error_summary = error[:100] if error else state_name
+    failed_descendants = [descendant for descendant in descendant_jobs if descendant.state in _FAILED_JOB_STATES]
+    if error:
+        error_summary = error[:100]
+    elif failed_descendants:
+        error_summary = f"{len(failed_descendants)} descendant job(s) failed"
+    else:
+        error_summary = state_name
     task_count = len(task_reports) or job.task_count
 
     return BugReport(
@@ -194,9 +216,9 @@ def _gather(
         task_state_counts=dict(job.task_state_counts),
         pending_reason=job.pending_reason,
         tasks=task_reports,
+        descendant_jobs=descendant_jobs,
         workers=worker_reports,
         entrypoint=entrypoint_str,
-        log_prefix=log_prefix,
     )
 
 
@@ -205,7 +227,7 @@ def _gather(
 # ---------------------------------------------------------------------------
 
 
-def _build_task_report(task: cluster_pb2.TaskStatus, logs: list[str]) -> TaskReport:
+def _build_task_report(task: job_pb2.TaskStatus, logs: list[str]) -> TaskReport:
     attempts = [
         AttemptReport(
             attempt_id=a.attempt_id,
@@ -230,15 +252,13 @@ def _build_task_report(task: cluster_pb2.TaskStatus, logs: list[str]) -> TaskRep
         finished_at=_format_timestamp(task.finished_at),
         duration=_compute_duration(task.started_at, task.finished_at),
         pending_reason=task.pending_reason,
-        log_directory=task.log_directory,
         attempts=attempts,
         recent_logs=logs,
     )
 
 
 def _build_worker_report(
-    w: cluster_pb2.Controller.WorkerHealthStatus,
-    log_prefix: str | None,
+    w: controller_pb2.Controller.WorkerHealthStatus,
 ) -> WorkerReport:
     meta = w.metadata
     gpu_info = ""
@@ -253,10 +273,6 @@ def _build_worker_report(
     if meta.memory_bytes > 0:
         memory = f"{meta.memory_bytes // (1024**3)} GiB"
 
-    process_log_path = ""
-    if log_prefix:
-        process_log_path = _worker_process_log_path(log_prefix, w.worker_id)
-
     return WorkerReport(
         worker_id=w.worker_id,
         address=w.address,
@@ -267,7 +283,39 @@ def _build_worker_report(
         tpu_info=tpu_info,
         memory=memory,
         zone=meta.gce_zone,
-        process_log_path=process_log_path,
+    )
+
+
+def _list_descendant_jobs(
+    client: ControllerServiceClientSync,
+    job_id: JobName,
+) -> list[DescendantJobReport]:
+    if job_id.is_task:
+        return []
+
+    try:
+        log_resp = client.get_task_logs(
+            controller_pb2.Controller.GetTaskLogsRequest(
+                id=job_id.to_wire(),
+                include_children=True,
+                max_total_lines=1,
+                tail=True,
+            )
+        )
+    except Exception:
+        logger.warning("Failed to fetch descendant job statuses for %s", job_id, exc_info=True)
+        return []
+
+    return [_build_descendant_job_report(job) for job in log_resp.child_job_statuses]
+
+
+def _build_descendant_job_report(job: job_pb2.JobStatus) -> DescendantJobReport:
+    return DescendantJobReport(
+        job_id=job.job_id,
+        state=_job_state_name(job.state),
+        exit_code=job.exit_code,
+        error=job.error,
+        finished_at=_format_timestamp(job.finished_at),
     )
 
 
@@ -276,18 +324,18 @@ def _build_worker_report(
 # ---------------------------------------------------------------------------
 
 
-def _job_state_name(state: cluster_pb2.JobState) -> str:
-    return cluster_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
+def _job_state_name(state: job_pb2.JobState) -> str:
+    return job_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
 
 
-def _task_state_name(state: cluster_pb2.TaskState) -> str:
-    return cluster_pb2.TaskState.Name(state).replace("TASK_STATE_", "").lower()
+def _task_state_name(state: job_pb2.TaskState) -> str:
+    return job_pb2.TaskState.Name(state).replace("TASK_STATE_", "").lower()
 
 
 def _format_timestamp(ts) -> str:
     if not ts or not ts.epoch_ms:
         return "-"
-    return Timestamp.from_proto(ts).as_formatted_date()
+    return timestamp_from_proto(ts).as_formatted_date()
 
 
 def _compute_duration(start, end) -> str:
@@ -318,7 +366,7 @@ def _format_exit_code(code: int) -> str:
     return str(code)
 
 
-def _format_resources(resources: cluster_pb2.ResourceSpecProto | None) -> str:
+def _format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
     if not resources:
         return "-"
     parts: list[str] = []
@@ -336,27 +384,6 @@ def _format_resources(resources: cluster_pb2.ResourceSpecProto | None) -> str:
             gpu_str = f"{gpu.count}x {gpu.variant}" if gpu.variant else f"{gpu.count} gpu"
             parts.append(gpu_str)
     return ", ".join(parts) if parts else "-"
-
-
-def _derive_log_prefix(tasks: list[cluster_pb2.TaskStatus]) -> str | None:
-    """Extract the log storage prefix from task log directories.
-
-    Given log_directory = gs://bucket/ttl=30d/iris-logs/worker-abc/job/name/task/0/0
-    and worker_id = worker-abc:
-    Returns gs://bucket/ttl=30d/iris-logs
-    """
-    for task in tasks:
-        if not task.log_directory or not task.worker_id:
-            continue
-        marker = f"/{task.worker_id}/"
-        idx = task.log_directory.find(marker)
-        if idx >= 0:
-            return task.log_directory[:idx]
-    return None
-
-
-def _worker_process_log_path(log_prefix: str, worker_id: str) -> str:
-    return f"{log_prefix}/process/worker/{worker_id}/logs.jsonl"
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +423,11 @@ def format_bug_report(report: BugReport) -> str:
 
     lines.append(f"| Failures | {report.failure_count} |")
     lines.append(f"| Preemptions | {report.preemption_count} |")
+    if report.descendant_jobs:
+        lines.append(f"| Descendant Jobs | {len(report.descendant_jobs)} |")
+        descendant_failures = [job for job in report.descendant_jobs if job.state in _FAILED_JOB_STATES]
+        if descendant_failures:
+            lines.append(f"| Descendant Failures | {len(descendant_failures)} |")
     lines.append(f"| Resources | {report.resources} |")
     if report.entrypoint:
         lines.append(f"| Entrypoint | `{report.entrypoint}` |")
@@ -419,8 +451,6 @@ def format_bug_report(report: BugReport) -> str:
             lines.append(f"| Error | {_escape_md(task.error)} |")
         if task.pending_reason:
             lines.append(f"| Pending Reason | {_escape_md(task.pending_reason)} |")
-        if task.log_directory:
-            lines.append(f"| Log directory | `{task.log_directory}` |")
         lines.append("")
 
         if task.attempts:
@@ -436,32 +466,6 @@ def format_bug_report(report: BugReport) -> str:
                 )
             lines.append("")
 
-    # Log Paths
-    lines.append("## Log Paths\n")
-    task_log_rows = [t for t in report.tasks if t.log_directory]
-    if task_log_rows:
-        lines.append("### Task Logs\n")
-        lines.append("| Task | Log Directory |")
-        lines.append("|------|--------------|")
-        for t in task_log_rows:
-            lines.append(f"| `{t.task_id}` | `{t.log_directory}` |")
-        lines.append("")
-
-    worker_log_rows = [(wid, w) for wid, w in report.workers.items() if w.process_log_path]
-    if worker_log_rows:
-        lines.append("### Worker Process Logs\n")
-        lines.append("| Worker | Path |")
-        lines.append("|--------|------|")
-        for wid, w in worker_log_rows:
-            lines.append(f"| {wid} | `{w.process_log_path}` |")
-        lines.append("")
-
-    if report.log_prefix:
-        controller_log_path = f"{report.log_prefix}/process/controller/logs.jsonl"
-        lines.append("### Controller Logs\n")
-        lines.append(f"| Controller | `{controller_log_path}` |")
-        lines.append("")
-
     # Recent Logs (for non-succeeded tasks)
     failed_tasks = [t for t in report.tasks if t.state not in ("succeeded", "pending") and t.recent_logs]
     if failed_tasks:
@@ -472,6 +476,16 @@ def format_bug_report(report: BugReport) -> str:
             for log_line in t.recent_logs:
                 lines.append(log_line)
             lines.append("```\n")
+
+    if report.descendant_jobs:
+        lines.append("## Descendant Jobs\n")
+        lines.append("| Job | State | Exit | Error | Finished |")
+        lines.append("|-----|-------|------|-------|----------|")
+        for job in report.descendant_jobs:
+            error_col = _escape_md(job.error) if job.error else "-"
+            exit_col = _format_exit_code(job.exit_code)
+            lines.append(f"| `{job.job_id}` | {job.state} | {exit_col} | {error_col} | {job.finished_at} |")
+        lines.append("")
 
     # Involved Workers
     if report.workers:
@@ -489,18 +503,8 @@ def format_bug_report(report: BugReport) -> str:
     lines.append("```bash")
     lines.append("# Stream full task logs")
     lines.append(f"iris --config cluster.yaml job logs {report.job_id}\n")
-    if report.log_prefix:
-        for t in task_log_rows:
-            lines.append("# Read task log file directly")
-            lines.append(f"gsutil cat {t.log_directory}/logs.jsonl | tail -100\n")
-            break
-        for _wid, w in report.workers.items():
-            if w.process_log_path:
-                lines.append("# Read worker process logs")
-                lines.append(f"gsutil cat {w.process_log_path} | tail -100\n")
-                break
     lines.append("# Check autoscaler status")
-    lines.append("iris --config cluster.yaml rpc controller GetAutoscalerStatus")
+    lines.append("iris --config cluster.yaml rpc controller get-autoscaler-status")
     lines.append("```\n")
 
     return "\n".join(lines)

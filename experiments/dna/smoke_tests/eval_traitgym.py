@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -30,7 +33,7 @@ from levanter.trainer import TrainerConfig
 from experiments.dna.defaults import DNA_RESOURCES_V1, DNA_TOKENIZER_V1, dna_effective_seq_len
 from experiments.qwen3 import qwen3_0_6b_hd128
 from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2, convert_to_levanter_task_config
-from iris.temp_buckets import get_temp_bucket_path
+from rigging.filesystem import marin_temp_bucket
 from marin.execution.executor import ExecutorStep, executor_main
 
 logger = logging.getLogger(__name__)
@@ -73,10 +76,8 @@ def _build_eval_env(config: EvalTraitGymConfig) -> dict[str, str]:
     env.setdefault("TPU_MIN_LOG_LEVEL", "2")
     env.setdefault("TPU_STDERR_LOG_LEVEL", "2")
 
-    temp_cache_path = get_temp_bucket_path(ttl_days=30, prefix="compilation-cache")
-    if temp_cache_path is not None:
-        env["JAX_COMPILATION_CACHE_DIR"] = temp_cache_path
-        logger.info("JAX compilation cache on temp bucket: %s", temp_cache_path)
+    env["JAX_COMPILATION_CACHE_DIR"] = marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
+    logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
 
     return env
 
@@ -156,8 +157,6 @@ def run_eval_traitgym(config: EvalTraitGymConfig):
     logger.info("Evaluation complete.")
 
 
-_ENV_KEYS_TO_FORWARD = ["WANDB_API_KEY", "HUGGING_FACE_HUB_TOKEN"]
-
 eval_step = ExecutorStep(
     name="eval/traitgym_mendelian_v2_train_nopack",
     description="Evaluate DNA checkpoint on TraitGym Mendelian (VEP) using LLR scoring.",
@@ -170,8 +169,6 @@ eval_step = ExecutorStep(
         wandb_api_key=os.environ.get("WANDB_API_KEY"),
         hf_token=os.environ.get("HUGGING_FACE_HUB_TOKEN") or os.environ.get("HF_TOKEN"),
     ),
-    # Also forward via env_vars as a belt-and-suspenders approach.
-    env_vars={k: os.environ[k] for k in _ENV_KEYS_TO_FORWARD if k in os.environ},
     # No TPU resources here — runs on CPU coordinator.
     # TPU resources are requested inside run_eval_traitgym via JobRequest.
 )

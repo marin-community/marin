@@ -1,50 +1,20 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """DOLMINO dataset definitions and tokenization."""
 
 import os.path
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.datakit.download.dolmino import DOLMINO_DATASETS, download_dolmino_step
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-# Raw dataset download step
-downloads = {
-    "dolmino": (
-        ExecutorStep(
-            name="raw/dolmino-mix-1124",
-            fn=download_hf,
-            config=DownloadConfig(
-                hf_dataset_id="allenai/dolmino-mix-1124",
-                revision="bb54cab",
-                gcs_output_path=this_output_path(),
-                wait_for_completion=True,
-            ),
-        )
-        .with_output_path("raw/dolmino-mix-1124-157960")
-        .cd("bb54cab")
-    )
-}
+_dolmino_download = download_dolmino_step().as_executor_step()
+_dolmino_base_dir = _dolmino_download.cd("bb54cab").cd("data")
 
-_dolmino_base_dir = downloads["dolmino"].cd("data")
-
-# The following dataset splits define file patterns for each split.
-DOLMINO_DATASETS = {
-    "dclm": ["**/*.json.zst"],
-    "flan": ["**/*.json.gz"],
-    "math/codesearchnet-owmfilter": ["**/*.jsonl.gz"],
-    "math/dolmino_math_synth": ["**/*.jsonl"],
-    "math/gsm8k": ["**/*.jsonl.zst"],
-    "math/mathcoder2-synthmath": ["**/*.jsonl"],
-    "math/metamath-owmfilter": ["**/*.jsonl.gz"],
-    "math/tinyGSM-MIND": ["**/*.jsonl.gz"],
-    "math/tulu_math": ["**/*.jsonl"],
-    "pes2o": ["**/*.json.gz"],
-    "stackexchange": ["**/*.json.gz"],
-    "wiki": ["**/*.json.gz"],
-}
+# Backward compat — some consumers import this
+downloads = {"dolmino": _dolmino_download.cd("bb54cab")}
 
 # NB: we changed how hashes were computed for this corpus and we'd like to avoid recomputing them
 DOLMINO_LLAMA3_OVERRIDES = {

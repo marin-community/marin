@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -8,9 +8,9 @@ import time
 import urllib.parse
 from typing import Any, ClassVar
 
-import fsspec
 import lz4.frame
 import ray
+from rigging.filesystem import url_to_fs
 
 
 class BaseClassifier:
@@ -56,7 +56,7 @@ class FasttextClassifier(BaseClassifier):
             )
             is_huggingface_path = False
 
-        fs, fs_path = fsspec.core.url_to_fs(self.model_name)
+        fs, fs_path = url_to_fs(self.model_name)
 
         if not fs_path.endswith(".bin"):
             fs_path = os.path.join(fs_path, "model.bin")
@@ -81,7 +81,7 @@ class FasttextClassifier(BaseClassifier):
 
         with FileLock(lock_file):
             if not os.path.exists(success_file):
-                fs.makedirs(f"/tmp/{model_descriptor}", exist_ok=True)
+                os.makedirs(f"/tmp/{model_descriptor}", exist_ok=True)
 
                 if is_remote_or_local_path:
                     fs.get(fs_path, local_filepath)

@@ -87,32 +87,6 @@ pipeline = Dataset.from_list(tasks).map(lambda t: download(*t))
 list(backend.execute(pipeline))
 ```
 
-## CLI Launcher
-
-```bash
-# Run in-process (inherits fray client from environment, defaults to local)
-uv run zephyr script.py --max-parallelism=100 --memory=2GB
-
-# Submit to Ray cluster
-uv run zephyr script.py --cluster=ray --cluster-config=us-central2 --memory=2GB
-
-# Submit to Iris cluster
-uv run zephyr script.py --cluster=iris --cluster-config=lib/iris/examples/eu-west4.yaml --memory=2GB
-
-# Show optimization plan
-uv run zephyr script.py --dry-run
-```
-
-Your script needs a `main()` entry point:
-```python
-from zephyr import flow_backend, Dataset
-
-def main():
-    backend = flow_backend()  # Configured from CLI args
-    pipeline = Dataset.from_files(...).map(...).write_jsonl(...)
-    list(backend.execute(pipeline))
-```
-
 ## Installation
 
 ```bash
@@ -217,7 +191,7 @@ When you call `ctx.execute(dataset)`:
 
 ```python
 # 1. Create plan from dataset operations
-plan = compute_plan(dataset, hints)
+plan = compute_plan(dataset)
 
 # 2. Get or create coordinator + workers
 coordinator = self._get_or_create_coordinator()

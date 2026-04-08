@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -19,6 +19,8 @@ from marin.execution.executor import (
     InputName,
     _get_info_path,
     collect_dependencies_and_version,
+    instantiate_config,
+    mirrored,
     output_path_of,
     this_output_path,
     versioned,
@@ -613,24 +615,68 @@ def test_parent_will_run_if_some_child_is_not_skippable():
         assert os.path.exists(os.path.join(executor.output_paths[parent], "dummy", "done.txt"))
 
 
+def test_mirrored_versioning():
+    """MirroredValue wrapping VersionedValue should version the inner value."""
+
+    @dataclass(frozen=True)
+    class Cfg:
+        input_path: str
+        output_path: str
+
+    deps = collect_dependencies_and_version(
+        Cfg(input_path=mirrored(versioned("some/path"), budget_gb=50), output_path="out")
+    )
+    assert deps.version == {"input_path": "some/path"}
+
+
+def test_mirrored_instantiate_config():
+    """MirroredValue should resolve to mirror:// path."""
+
+    @dataclass(frozen=True)
+    class Cfg:
+        input_path: str
+        output_path: str
+
+    cfg = Cfg(input_path=mirrored(versioned("documents/data"), budget_gb=10), output_path="out")
+    resolved = instantiate_config(cfg, output_path="/out", output_paths={}, prefix="/bucket")
+    assert resolved.input_path == "mirror://documents/data"
+
+
+def test_mirrored_nesting_raises():
+    with pytest.raises(ValueError, match="nest"):
+        mirrored(mirrored("x"))
+
+
+def test_mirrored_changes_version():
+    """Changing the path inside mirrored() should change the version hash."""
+    deps1 = collect_dependencies_and_version(
+        MyConfig(input_path=mirrored(versioned("data/v1")), output_path="out", n=versioned(1), m=1)
+    )
+    deps2 = collect_dependencies_and_version(
+        MyConfig(input_path=mirrored(versioned("data/v2")), output_path="out", n=versioned(1), m=1)
+    )
+    assert deps1.version != deps2.version
+
+
 def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
     """Test taking over a stale lock from a dead worker and then refreshing it."""
-    from marin.execution.executor_step_status import HEARTBEAT_TIMEOUT, Lease
+    from rigging.distributed_lock import HEARTBEAT_TIMEOUT, Lease
 
     # Simulate worker A creating a stale lock (as if it died)
     dead_worker = StatusFile(tmp_path, worker_id="dead-worker")
     dead_worker.try_acquire_lock()
 
-    # Manually backdate the lock to make it stale
-    generation, _ = dead_worker._read_lock_with_generation()
+    # Manually backdate the lock to make it stale via the underlying lease
+    lock = dead_worker._lock
+    generation, _ = lock._read_with_generation()
     stale_lease = Lease(worker_id="dead-worker", timestamp=time.time() - HEARTBEAT_TIMEOUT - 10)
-    dead_worker._write_lock(stale_lease, if_generation_match=generation)
+    lock._write(stale_lease, if_generation_match=generation)
 
     # Worker B comes along and takes over
     live_worker = StatusFile(tmp_path, worker_id="live-worker")
 
     # Verify the lock is stale
-    _, lease = live_worker._read_lock_with_generation()
+    _, lease = live_worker._lock._read_with_generation()
     assert lease is not None
     assert lease.is_stale()
 
@@ -638,13 +684,13 @@ def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
     assert live_worker.try_acquire_lock()
 
     # Verify we now own the lock
-    _, lease_after_takeover = live_worker._read_lock_with_generation()
+    _, lease_after_takeover = live_worker._lock._read_with_generation()
     assert lease_after_takeover.worker_id == "live-worker"
 
     # Now try to refresh
     time.sleep(0.1)
     live_worker.refresh_lock()
 
-    _, lease_after_refresh = live_worker._read_lock_with_generation()
+    _, lease_after_refresh = live_worker._lock._read_with_generation()
     assert lease_after_refresh.worker_id == "live-worker"
     assert lease_after_refresh.timestamp > lease_after_takeover.timestamp

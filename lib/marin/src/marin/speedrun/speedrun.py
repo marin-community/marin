@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -17,8 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 
-import fsspec
-from fray.cluster import ResourceConfig
+from rigging.filesystem import open_url
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
@@ -34,12 +33,7 @@ from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 
-logger = logging.getLogger("ray")
-
-
-def _num_accelerator_chips(resources: ResourceConfig) -> int:
-    """Return the total number of accelerator chips for the provided resources."""
-    return resources.chip_count()
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -103,7 +97,6 @@ class SpeedrunConfig:
         """Print information about speedrun configuration, device FLOPS, model FLOPS, and hardware configuration.
         Mainly to sanity-check runs by calling speedrun_config.print_run_info() before actually running it."""
 
-        num_devices = self.num_devices
         num_chips = self.num_chips
         device_flops = self.device_flops
         total_peak_flops = device_flops * num_chips
@@ -116,7 +109,6 @@ class SpeedrunConfig:
         model_flops = self.compute_model_flops()
 
         logger.info("Hardware and Model FLOPS Information:")
-        logger.info(f"Number of devices: {num_devices}")
         logger.info(f"Number of chips: {num_chips}")
         logger.info(f"Device FLOPs: {device_flops:.2e} FLOP/s")
         logger.info(f"Total peak hardware FLOPs: {total_peak_flops:.2e} FLOP/s")
@@ -176,15 +168,9 @@ This is calculated based on assumed MFU values and can be used as a rough estima
         return device_flops
 
     @property
-    def num_devices(self) -> int:
-        """Get the number of devices."""
-        return self.train_config.resources.chip_count()
-
-    @property
     def num_chips(self) -> int:
         """Get the number of accelerator chips."""
-
-        return _num_accelerator_chips(self.train_config.resources)
+        return self.train_config.resources.chip_count()
 
 
 @dataclass
@@ -256,12 +242,9 @@ def speedrun_results(config: SpeedrunResultsConfig):
     )
 
     training_time = sum(step_times)
-    num_devices = config.speedrun_config.num_devices
     num_chips = config.speedrun_config.num_chips
     training_hardware_flops = training_time * num_chips * config.speedrun_config.device_flops
     logger.info(f"Training time: {training_time:.2f} seconds")
-    # devices
-    logger.info(f"Number of devices: {num_devices}")
     logger.info(f"Number of chips: {num_chips}")
     logger.info(f"Device FLOPs: {config.speedrun_config.device_flops:.2e} FLOPs")
     logger.info(f"Training hardware FLOPs: {training_hardware_flops:.2e} FLOPs")
@@ -277,12 +260,12 @@ def speedrun_results(config: SpeedrunResultsConfig):
     except Exception as exc:
         logger.warning(f"Failed to write flops_per_token to Weights & Biases: {exc}")
 
-    wandb_num_devices = run.summary.get("num_devices", None)
-    if wandb_num_devices is not None:
-        if wandb_num_devices != config.speedrun_config.num_devices:
+    wandb_num_chips = run.summary.get("num_devices", None)
+    if wandb_num_chips is not None:
+        if wandb_num_chips != config.speedrun_config.num_chips:
             logger.warning(
-                f"Number of devices in wandb ({wandb_num_devices}) does not match number of devices in config"
-                f"({config.speedrun_config.num_devices}). Going with config value."
+                f"Number of devices in wandb ({wandb_num_chips}) does not match num_chips in config "
+                f"({config.speedrun_config.num_chips}). Going with config value."
             )
 
     wandb_device_flops = run.summary.get("throughput/theoretical_flops_per_device", None)
@@ -313,7 +296,6 @@ def speedrun_results(config: SpeedrunResultsConfig):
         "model_flops": model_flops,
         "model_flops_per_token": flops_per_token,
         # Training metrics
-        "num_devices": num_devices,
         "num_chips": num_chips,
         "device_flops": config.speedrun_config.device_flops,
         "training_time": training_time,
@@ -331,7 +313,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
     logger.info(f"Speedrun info and results: {run_info}")
 
     output_data = {"runs": [{"run_info": run_info}]}
-    with fsspec.open(config.output_path, "w") as f:
+    with open_url(config.output_path, "w") as f:
         json.dump(output_data, f, indent=2, sort_keys=True)
     logger.info(f"Speedrun info and results written to {config.output_path}")
 

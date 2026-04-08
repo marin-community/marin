@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -18,7 +18,7 @@ from levanter.data.text import (
 )
 from levanter.store.cache import CacheOptions
 
-from marin.download.huggingface.download_hf import (
+from marin.datakit.download.huggingface import (
     DownloadConfig as HfDownloadConfig,
     download_hf as hf_download_logic,
 )

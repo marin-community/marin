@@ -5,13 +5,11 @@ on:
     branches:
       - main
   pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 
 jobs:
-  itest:
+  marin-itest:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     # uv has to resolve + download large binary wheels (jax/torch). 10 minutes wasn't
@@ -21,17 +19,18 @@ jobs:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
 
-    strategy:
-      matrix:
-        python-version: [ "3.12" ]
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.12
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7

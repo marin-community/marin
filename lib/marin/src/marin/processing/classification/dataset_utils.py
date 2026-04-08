@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -21,11 +21,11 @@ import os
 from dataclasses import dataclass
 from typing import TypedDict
 
-import fsspec
 import numpy as np
 import pandas as pd
+from rigging.filesystem import open_url, url_to_fs
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 class Document(TypedDict):
@@ -74,37 +74,35 @@ def make_json_serializable(row: dict) -> dict:
 
 
 def read_dataset_streaming(input_filename: str, columns: list[str] | None = None):
-    """Read in a dataset as a streaming iterator using datasets library
+    """Read in a dataset as a streaming iterator.
+
+    Uses fsspec + json directly instead of HuggingFace datasets to avoid
+    the datasets CompressionFilesystem injecting aiohttp kwargs
+    (requote_redirect_url) into botocore's create_client, which breaks
+    on S3-compatible backends.
 
     Args:
-        input_filename: str
-            The path to the input file. Currently supports .jsonl.gz, .jsonl.zst, and .parquet
+        input_filename: Path to the input file (.jsonl.gz, .jsonl.zst, .jsonl, or .parquet).
 
     Returns:
-        Iterator: An iterator over the dataset rows
+        Iterator over dataset rows as dicts.
     """
-    import datasets
-
-    # Disable caching for streaming
-    datasets.disable_caching()
-    datasets.logging.set_verbosity_warning()
-
-    # Determine file type and load with streaming
     if input_filename.endswith((".jsonl.gz", ".jsonl.zst", ".jsonl")):
-        # Load as JSON lines with streaming
-        dataset = datasets.load_dataset("json", data_files=input_filename, streaming=True, split="train")
+        with open_url(input_filename, "rb", compression="infer") as f:
+            for line in f:
+                row = json.loads(line)
+                if columns:
+                    row = {k: row[k] for k in columns if k in row}
+                yield row
     elif input_filename.endswith(".parquet"):
-        # Load parquet with streaming
-        dataset = datasets.load_dataset("parquet", data_files=input_filename, streaming=True, split="train")
+        import pyarrow.parquet as pq
+
+        with open_url(input_filename, "rb") as f:
+            table = pq.read_table(f, columns=columns)
+        for row in table.to_pylist():
+            yield row
     else:
         raise ValueError(f"Unsupported filetype: {input_filename}")
-
-    # Filter columns if specified
-    if columns:
-        dataset = dataset.select_columns(columns)
-
-    # Yield rows from the streaming dataset
-    yield from dataset
 
 
 def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = False):
@@ -133,19 +131,19 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
 
         # If appending and local temp doesn't exist, hydrate it from remote (if present)
         if append and not os.path.exists(tmp_path):
-            fs, _ = fsspec.core.url_to_fs(output_filename)
+            fs, _ = url_to_fs(output_filename)
             if fs.exists(output_filename):
-                with fsspec.open(output_filename, "rb") as src, open(tmp_path, "wb") as dst:
+                with open_url(output_filename, "rb") as src, open(tmp_path, "wb") as dst:
                     shutil.copyfileobj(src, dst)
 
         # Turn on compression inference to have fsspec auto-compress files according to the suffix
-        with fsspec.open(tmp_path, mode, compression="infer") as f:
+        with open_url(tmp_path, mode, compression="infer") as f:
             for row in rows_iterator:
                 row = make_json_serializable(row)
                 f.write((json.dumps(row) + "\n").encode("utf-8"))
 
         # Upload temp file to destination (overwrite remote with full content)
-        with fsspec.open(output_filename, "wb") as dst, open(tmp_path, "rb") as src:
+        with open_url(output_filename, "wb") as dst, open(tmp_path, "rb") as src:
             shutil.copyfileobj(src, dst)
         return
     if output_filename.endswith(".parquet"):
@@ -158,14 +156,14 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
             df = pd.DataFrame(rows)
             table = pa.Table.from_pandas(df)
 
-            fs, _ = fsspec.core.url_to_fs(output_filename)
+            fs, _ = url_to_fs(output_filename)
             if append and fs.exists(output_filename):
                 # Read existing parquet and append
-                with fsspec.open(output_filename, "rb") as f:
+                with open_url(output_filename, "rb") as f:
                     existing_table = pq.read_table(f)
                 table = pa.concat_tables([existing_table, table])
 
-            with fsspec.open(output_filename, "wb") as f:
+            with open_url(output_filename, "wb") as f:
                 pq.write_table(table, f)
         return
 

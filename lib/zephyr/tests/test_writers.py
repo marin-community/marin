@@ -1,8 +1,9 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for writers module."""
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -10,7 +11,16 @@ import pyarrow.parquet as pq
 import pytest
 import vortex
 
-from zephyr.writers import atomic_rename, unique_temp_path, write_levanter_cache, write_parquet_file, write_vortex_file
+import pyarrow as pa
+
+from zephyr.writers import (
+    atomic_rename,
+    infer_arrow_schema,
+    unique_temp_path,
+    write_levanter_cache,
+    write_parquet_file,
+    write_vortex_file,
+)
 
 
 def test_unique_temp_path_produces_distinct_paths():
@@ -175,3 +185,98 @@ def test_write_levanter_cache_end_to_end():
         assert len(store) == len(records)
         assert store[0]["input_ids"].tolist() == records[0]["input_ids"]
         assert store[len(records) - 1]["input_ids"].tolist() == records[len(records) - 1]["input_ids"]
+
+
+def test_atomic_rename_s3_directory_preserves_layout(tmp_path):
+    """S3 atomic_rename must not add extra nesting for directory outputs.
+
+    When the yielded path is used as a directory (e.g. by write_levanter_cache),
+    fs.put must place contents directly at the destination — not under an extra
+    ``output/`` subdirectory.  fsspec nests when the source has no trailing
+    slash and the destination already exists, so atomic_rename must account for
+    that.
+    """
+    from unittest.mock import patch
+    from fsspec.implementations.local import LocalFileSystem
+
+    dest = tmp_path / "dest"
+    dest.mkdir()  # pre-create so fsspec considers it "existing"
+    local_fs = LocalFileSystem()
+
+    with patch("zephyr.writers.url_to_fs", return_value=(local_fs, str(dest))):
+        with atomic_rename("s3://bucket/dest") as local_path:
+            os.makedirs(local_path)
+            (Path(local_path) / "shard_0.bin").write_bytes(b"data0")
+            (Path(local_path) / "shard_1.bin").write_bytes(b"data1")
+
+    assert (dest / "shard_0.bin").exists(), "shard_0.bin should be directly under dest"
+    assert (dest / "shard_1.bin").exists(), "shard_1.bin should be directly under dest"
+    assert not (dest / "output").exists(), "should not have extra 'output' nesting"
+
+
+def test_atomic_rename_s3_single_file(tmp_path):
+    """S3 atomic_rename works correctly for single-file outputs."""
+    from unittest.mock import patch
+    from fsspec.implementations.local import LocalFileSystem
+
+    dest = tmp_path / "output.jsonl"
+    local_fs = LocalFileSystem()
+
+    with patch("zephyr.writers.url_to_fs", return_value=(local_fs, str(dest))):
+        with atomic_rename("s3://bucket/output.jsonl") as local_path:
+            Path(local_path).write_text("line1\nline2\n")
+
+    assert dest.exists()
+    assert dest.read_text() == "line1\nline2\n"
+
+
+def test_infer_arrow_schema_basic():
+    """Test schema inference with basic Python types."""
+    records = [{"id": 1, "name": "Alice", "score": 95.5, "active": True}]
+    schema = infer_arrow_schema(records)
+    assert schema.field("id").type == pa.int64()
+    assert schema.field("score").type == pa.float64()
+    assert schema.field("active").type == pa.bool_()
+    assert len(schema) == 4
+
+
+def test_infer_arrow_schema_none_in_first_row():
+    """Schema inference resolves None from non-None values in later rows."""
+    records = [
+        {"id": 1, "name": "Alice", "score": None},
+        {"id": 2, "name": "Bob", "score": 95.5},
+    ]
+    schema = infer_arrow_schema(records)
+    assert schema.field("score").type == pa.float64()
+
+
+def test_infer_arrow_schema_all_none():
+    """When all values for a field are None, the type is null."""
+    records = [
+        {"id": 1, "value": None},
+        {"id": 2, "value": None},
+    ]
+    schema = infer_arrow_schema(records)
+    assert schema.field("value").type == pa.null()
+
+
+def test_infer_arrow_schema_nested_dict():
+    """Schema inference handles nested dicts."""
+    records = [{"id": 1, "meta": {"key": "val", "count": 3}}]
+    schema = infer_arrow_schema(records)
+    meta_type = schema.field("meta").type
+    assert isinstance(meta_type, pa.StructType)
+    assert meta_type.get_field_index("key") >= 0
+    assert meta_type.get_field_index("count") >= 0
+
+
+def test_infer_arrow_schema_mixed_types_fails():
+    """Schema inference fails when a column has incompatible types (float then string)."""
+    records = [
+        {"id": 1, "foo": None},
+        {"id": 2, "foo": 1.5},
+        {"id": 3, "foo": 2.5},
+        {"id": 4, "foo": "bar"},
+    ]
+    with pytest.raises(pa.lib.ArrowInvalid):
+        infer_arrow_schema(records)

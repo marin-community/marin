@@ -103,7 +103,7 @@ being tested.
 
 ## Timing and Polling
 
-Avoid bare `time.sleep()` in polling loops. Use `iris.time_utils.Deadline`,
+Avoid bare `time.sleep()` in polling loops. Use `rigging.timing.Deadline`,
 `ExponentialBackoff.wait_until()`, or `wait_for_condition` from test utilities.
 
 A single short sleep to let a background thread start is acceptable when
@@ -118,8 +118,10 @@ types even in startup-polling loops.
   `@pytest.mark.e2e`.
 - Docker-dependent tests must also be marked `@pytest.mark.docker`.
 - E2E tests live in `tests/e2e/`.
-- Shared fakes live in `tests/cluster/platform/fakes.py` or
-  `src/iris/test_util.py`. Do not duplicate fakes across files.
+- Shared fakes live in `src/iris/cluster/providers/gcp/fake.py`
+  (`InMemoryGcpService`), `src/iris/cluster/providers/k8s/fake.py`
+  (`InMemoryK8sService`), or `src/iris/test_util.py`. Do not duplicate
+  fakes across files.
 
 ## Protocols
 
@@ -132,11 +134,24 @@ concrete class for testing.)
 ## E2E Tests
 
 All Iris E2E tests live in `tests/e2e/`. Every test is marked `e2e`.
-Tests use three core fixtures:
+Tests are organized into two files:
 
-- `cluster`: Booted local cluster with `IrisClient` and RPC access
-- `page`: Playwright page pointed at the dashboard (request only when needed)
-- `screenshot`: Capture labeled screenshots to `IRIS_SCREENSHOT_DIR`
+- **`test_smoke.py`**: Realistic scenario walkthroughs using a **module-scoped** cluster
+  shared across all smoke tests. Covers diverse job types, dashboard screenshots,
+  scheduling, endpoints, log levels, multi-region routing, profiling, and GPU metadata.
+- **`test_chaos.py`**: Chaos/failure injection tests using a **function-scoped** cluster
+  (fresh cluster per test). Tests bundle download failures, task timeouts, worker crashes,
+  heartbeat failures, RPC failures, checkpoint/snapshot, and high concurrency.
+
+Core fixtures:
+
+- `cluster`: Function-scoped local cluster with `IrisClient` and RPC access (chaos tests)
+- `smoke_cluster`: Module-scoped local cluster for smoke tests (12 workers)
+- `smoke_page` / `smoke_screenshot`: Module-scoped Playwright page and screenshot capture
+- `page` / `screenshot`: Function-scoped Playwright page and screenshot capture
+
+Cloud mode: smoke tests can connect to existing clusters via `--iris-controller-url`
+or start one via `--iris-config` + `--iris-mode`.
 
 Chaos injection is auto-reset between tests. Call `enable_chaos()` directly.
 Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
@@ -147,6 +162,12 @@ Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
 # All unit tests
 uv run pytest lib/iris/tests/ -m "not e2e" -o "addopts="
 
+# E2E smoke tests (shared cluster, fast)
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts="
+
+# E2E chaos tests (fresh cluster per test, slower)
+uv run pytest lib/iris/tests/e2e/test_chaos.py -m e2e -o "addopts="
+
 # All E2E tests
 uv run pytest lib/iris/tests/e2e/ -m e2e -o "addopts="
 
@@ -156,11 +177,15 @@ uv run pytest lib/iris/tests/e2e/ -m "e2e and not docker" -o "addopts="
 # Docker-only tests
 uv run pytest lib/iris/tests/e2e/ -m docker -o "addopts="
 
-# Dashboard tests with screenshots
-IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_dashboard.py -o "addopts="
+# Dashboard smoke tests with screenshots
+IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_smoke.py -o "addopts="
 
-# When modifying the dashboard
-uv run pytest lib/iris/tests/e2e/test_dashboard.py -x -o "addopts="
+# Cloud mode: connect to running cluster
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http://localhost:8080 -o "addopts="
+
+# Cloud mode: full lifecycle (start cluster, then pass URL to pytest)
+# Step 1: iris --config=examples/smoke-gcp.yaml cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
+# Step 2: uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # K8s runtime tests (requires a running cluster — kind, k3d, minikube, etc.)
 uv run pytest lib/iris/tests/e2e/test_coreweave_live_kubernetes_runtime.py \

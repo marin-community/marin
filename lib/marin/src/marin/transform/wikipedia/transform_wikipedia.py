@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -6,11 +6,6 @@ wikipedia/transform_wikipedia.py
 
 Performs HTML->Text/MD conversion using the specified tools over a wiki dump save in DOLMA format.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=400 --memory=2GB --cluster=us-central2 \
-    lib/marin/src/marin/transform/wikipedia/transform_wikipedia.py \
-    --input_path gs://path/to/input --output_path gs://path/to/output \
-    --revision v1.0 --extract_method readability ...
 """
 
 import logging
@@ -24,7 +19,7 @@ from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass

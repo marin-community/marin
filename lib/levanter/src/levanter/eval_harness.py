@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -56,7 +56,7 @@ from levanter.inference.utils import INVALID
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
 from levanter.utils.background_iterable import BackgroundIterator
-from levanter.utils.hf_utils import HfTokenizer
+from levanter.tokenizers import MarinTokenizer
 from levanter.utils.py_utils import set_global_rng_seeds
 
 try:
@@ -847,7 +847,10 @@ class LevanterHarnessLM(TemplateLM):
             hbm_utilization=0.5,
         )
         engine = InferenceEngine.from_model_with_config(
-            model=self.leader.model, tokenizer=self.tokenizer, config=engine_cfg
+            model=self.leader.model,
+            tokenizer=self.tokenizer,
+            config=engine_cfg,
+            axis_resources=self.compute_axis_resources,
         )
 
         # Build generation requests
@@ -1266,8 +1269,8 @@ def run_lm_eval_harness(
     config: LmEvalHarnessConfig,
     model,
     tokenizer,
-    EvalBatch,
-    axis_resources,
+    EvalBatch: haliax.Axis | int,
+    axis_resources: ResourceMapping,
     mp: jmp.Policy | None,
     profiler_config: ProfilerConfig | None = None,
 ) -> dict | None:
@@ -1278,7 +1281,7 @@ def run_lm_eval_harness(
         config: Configuration for the evaluation harness
         model: The Levanter model to evaluate
         tokenizer: Tokenizer for the model
-        EvalBatch: Batch axis for evaluation
+        EvalBatch: Batch axis for evaluation, or an integer batch size.
         axis_resources: Resource mapping for distributed computation
         mp: Mixed precision policy
         profiler_config: Optional ProfilerConfig for profiling during evaluation
@@ -1305,8 +1308,8 @@ def _actually_run_eval_harness(
     config: LmEvalHarnessConfig,
     model: LmHeadModel,
     tasks_to_run: dict,
-    tokenizer: HfTokenizer,
-    EvalBatch: haliax.Axis,
+    tokenizer: MarinTokenizer,
+    EvalBatch: haliax.Axis | int,
     axis_resources: ResourceMapping,
     mp: jmp.Policy | None,
     profiler_config: ProfilerConfig | None = None,
@@ -1320,6 +1323,9 @@ def _actually_run_eval_harness(
         - "averages": A dictionary with macro and micro averages for all metrics.
 
     """
+    if isinstance(EvalBatch, int):
+        EvalBatch = hax.Axis("batch", EvalBatch)
+
     max_examples = config.max_examples
     max_length = config.max_length
 
@@ -1462,7 +1468,7 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
 
-    with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
+    with config.trainer.use_device_mesh():
         key = jax.random.PRNGKey(0)
 
         vocab_size = len(tokenizer)
@@ -1486,7 +1492,12 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
         else:
             with use_cpu_device():
                 model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                model = load_checkpoint(model, config.checkpoint_path, subpath="model")
+                model = load_checkpoint(
+                    model,
+                    config.checkpoint_path,
+                    subpath="model",
+                    axis_mapping=parameter_axis_mapping,
+                )
             model = hax.shard(model, parameter_axis_mapping)
 
         model = typing.cast(LmHeadModel, inference_mode(model, True))
@@ -1581,14 +1592,20 @@ def log_report_to_tracker(prefix: str, report: dict, tracker: Optional[levanter.
         tracker.log(to_log, step=None)
 
 
-def lm_eval_harness(config: LmEvalHarnessConfig, tokenizer, EvalBatch, axis_resources, mp: jmp.Policy | None):
+def lm_eval_harness(
+    config: LmEvalHarnessConfig,
+    tokenizer,
+    EvalBatch: haliax.Axis | int,
+    axis_resources: ResourceMapping,
+    mp: jmp.Policy | None,
+):
     """
     Create a callback function for running the LM Eval Harness during training.
 
     Args:
         config: Configuration for the evaluation harness
         tokenizer: Tokenizer for the model
-        EvalBatch: Batch axis for evaluation
+        EvalBatch: Batch axis for evaluation, or an integer batch size.
         axis_resources: Resource mapping for distributed computation
         mp: Mixed precision policy
 
@@ -1659,7 +1676,7 @@ def _adjust_config(task_dict, fewshot_random_seed=0):
 
 
 def _iterate_tokenized_requests(
-    requests: list[Instance], tokenizer: HfTokenizer, max_length: int, batch_size: int
+    requests: list[Instance], tokenizer: MarinTokenizer, max_length: int, batch_size: int
 ) -> Iterator[PromptCompletion]:
     """
     Tokenize the requests and yield them as PromptCompletions, for packing into LmExamples.
@@ -1683,8 +1700,8 @@ def _iterate_tokenized_requests(
         combined_batch = [combined_texts[i] for i in batch_indices]
         context_batch = [contexts[i] for i in batch_indices]
         # Tokenize batched inputs
-        combined_encodings = tokenizer(combined_batch, truncation=False, padding=False)
-        context_encodings = tokenizer(context_batch, truncation=False, padding=False)
+        combined_encodings = {"input_ids": tokenizer.encode_batch(combined_batch)}
+        context_encodings = {"input_ids": tokenizer.encode_batch(context_batch)}
 
         for off in range(len(batch_indices)):
             i = batch_indices[off]
@@ -1713,7 +1730,7 @@ def _iterate_tokenized_requests(
 
 def _pack_requests(
     requests: list[Instance],
-    tokenizer: HfTokenizer,
+    tokenizer: MarinTokenizer,
     Pos: hax.Axis,
     max_pack_size: int,
 ) -> list[LmExample]:

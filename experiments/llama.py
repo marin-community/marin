@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -17,6 +17,14 @@ from levanter.data.text import ChatLmDatasetFormat
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 llama3_tokenizer_vocab_size = 128_256
 llama3_instruct_tokenizer = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+
+# Llama 3 chat stop token IDs for generation_config.json.
+# The chat template ends every turn (user, assistant, system) with <|eot_id|> (128009),
+# but the tokenizer's eos_token is <|end_of_text|> (128001), which is the pre-training
+# document boundary. Both must be listed as stop tokens so vLLM stops on either.
+# Determined by running: tokenizer.apply_chat_template([...], tokenize=True)
+# and observing the last token of the assistant turn is 128009.
+LLAMA3_CHAT_STOP_TOKEN_IDS = [128001, 128009]
 
 # Llama3 instruct trainable chat template
 # Slight modification of https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct/blob/main/tokenizer_config.json

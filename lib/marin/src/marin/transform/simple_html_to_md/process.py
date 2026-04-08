@@ -1,14 +1,10 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
 This scripts performs a simple html to md conversion using marin. Given an input directory with some jsonl.gz files
 containing html content, it will convert them to markdown and save them in a new directory.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --memory=1GB --num-cpus=1 --cluster=us-central2 \
-    lib/marin/src/marin/transform/simple_html_to_md/process.py \
-    --input_path gs://... --output_path gs://...
 """
 
 import logging
@@ -17,7 +13,7 @@ from dataclasses import dataclass, field
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
