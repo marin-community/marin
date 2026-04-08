@@ -88,11 +88,13 @@ All optimizer hyperparameters derived from reference point (B0=32, T0=1.4e9):
 
 | Field | Value |
 |-------|-------|
-| GCS checkpoint path | gs://marin-us-central2/grug/moe-v7-1e22-d3200-5a4518/checkpoints |
+| GCS checkpoint path (v1) | gs://marin-us-central2/grug/moe-v7-1e22-d3200-5a4518/checkpoints |
+| GCS checkpoint path (v2) | gs://marin-us-central2/grug/moe-v7-1e22-d3200-v2-50b2f6/checkpoints |
 | WandB run (v1) | https://wandb.ai/marin-community/dial_moe/runs/moe-v7-1e22-d3200 |
 | WandB run (v2) | https://wandb.ai/marin-community/dial_moe/runs/moe-v7-1e22-d3200-v2 |
-| eval/paloma/c4_en/bpb | 0.775 (v1 @ step 69k) |
-| eval/paloma/macro_loss | 2.563 (v1 @ step 69k) |
-| eval/uncheatable_eval/macro_loss | 2.135 (v1 @ step 69k) |
-| throughput/mfu (mean last 100 steps) | 22.7% |
-| throughput/tokens_per_second (mean last 100 steps) | 482,449 |
+| WandB run (v4, cf=4.0) | https://wandb.ai/marin-community/dial_moe/runs/moe-v7-1e22-d3200-v4 |
+| eval/paloma/c4_en/bpb | 0.742 (v4, cf=4.0 @ step 77725) |
+| eval/paloma/macro_loss | 2.432 (v4, cf=4.0 @ step 77725) |
+| eval/uncheatable_eval/macro_loss | 1.968 (v4, cf=4.0 @ step 77725) |
+| throughput/mfu (mean last 100 steps) | 22.0% (v2) |
+| throughput/tokens_per_second (mean last 100 steps) | 467,047 (v2) |
