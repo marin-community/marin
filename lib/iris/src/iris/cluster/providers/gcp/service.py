@@ -11,10 +11,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
+import google.api_core.exceptions
 import google.auth
 import google.auth.credentials
 import google.auth.transport.requests
 import httpx
+from google.cloud import tpu_v2alpha1
 
 from iris.cluster.providers.types import (
     InfraError,
@@ -67,7 +69,6 @@ CAPACITY_TYPE_RESERVED_VALUE = "reserved"
 
 # REST API base URLs
 _TPU_BASE = "https://tpu.googleapis.com/v2"
-_TPU_QR_BASE = "https://tpu.googleapis.com/v2alpha1"
 _COMPUTE_BASE = "https://compute.googleapis.com/compute/v1"
 _LOGGING_BASE = "https://logging.googleapis.com/v2"
 
@@ -382,6 +383,7 @@ class CloudGcpService:
         self._expires_at: float = 0.0
         self._valid_zones: set[str] = set(KNOWN_GCP_ZONES)
         self._valid_accelerator_types: set[str] = set(KNOWN_TPU_TYPES)
+        self._tpu_alpha_client = tpu_v2alpha1.TpuClient()
 
     @property
     def mode(self) -> ServiceMode:
@@ -597,88 +599,101 @@ class CloudGcpService:
         return results
 
     # ========================================================================
-    # Queued resource operations (for reserved TPUs)
+    # Queued resource operations (for reserved TPUs via typed v2alpha1 client)
     # ========================================================================
+
+    def _qr_api_error(self, exc: google.api_core.exceptions.GoogleAPICallError) -> InfraError:
+        """Map google-cloud-tpu exceptions to the GcpService error hierarchy."""
+        if isinstance(exc, google.api_core.exceptions.NotFound):
+            return ResourceNotFoundError(str(exc))
+        if isinstance(exc, google.api_core.exceptions.ResourceExhausted):
+            return QuotaExhaustedError(str(exc))
+        return InfraError(str(exc))
 
     def queued_resource_create(self, request: TpuCreateRequest) -> None:
         validate_tpu_create(request, self._valid_zones, self._valid_accelerator_types)
 
-        node_spec: dict = {
-            "parent": f"projects/{self._project_id}/locations/{request.zone}",
-            "node": {
-                "acceleratorType": request.accelerator_type,
-                "runtimeVersion": request.runtime_version,
-                "labels": request.labels or {},
-                "metadata": request.metadata or {},
-            },
-            "nodeId": request.name,
-        }
+        node = tpu_v2alpha1.Node(
+            accelerator_type=request.accelerator_type,
+            runtime_version=request.runtime_version,
+            labels=request.labels or {},
+            metadata=request.metadata or {},
+            network_config=tpu_v2alpha1.NetworkConfig(
+                enable_external_ips=True,
+                network=request.network or "",
+                subnetwork=request.subnetwork or "",
+            ),
+        )
         if request.service_account:
-            node_spec["node"]["serviceAccount"] = {"email": request.service_account}
-        qr_network_config: dict = {"enableExternalIps": True}
-        if request.network:
-            qr_network_config["network"] = request.network
-        if request.subnetwork:
-            qr_network_config["subnetwork"] = request.subnetwork
-        node_spec["node"]["networkConfig"] = qr_network_config
+            node.service_account = tpu_v2alpha1.ServiceAccount(email=request.service_account)
 
-        body = {
-            "tpu": {"nodeSpec": [node_spec]},
-            "guaranteed": {"reserved": True},
-        }
+        queued_resource = tpu_v2alpha1.QueuedResource(
+            tpu=tpu_v2alpha1.QueuedResource.Tpu(
+                node_spec=[
+                    tpu_v2alpha1.QueuedResource.Tpu.NodeSpec(
+                        parent=f"projects/{self._project_id}/locations/{request.zone}",
+                        node_id=request.name,
+                        node=node,
+                    )
+                ]
+            ),
+            guaranteed=tpu_v2alpha1.QueuedResource.Guaranteed(reserved=True),
+        )
 
+        parent = f"projects/{self._project_id}/locations/{request.zone}"
         logger.info(
             "Creating queued resource: %s (type=%s, zone=%s)",
             request.name,
             request.accelerator_type,
             request.zone,
         )
-        url = f"{_TPU_QR_BASE}/{self._tpu_parent(request.zone)}/queuedResources"
-        resp = self._client.post(
-            url,
-            params={"queuedResourceId": request.name},
-            headers=self._headers(),
-            json=body,
-        )
-        self._classify_response(resp)
+        try:
+            self._tpu_alpha_client.create_queued_resource(
+                parent=parent,
+                queued_resource=queued_resource,
+                queued_resource_id=request.name,
+            )
+        except google.api_core.exceptions.GoogleAPICallError as exc:
+            raise self._qr_api_error(exc) from exc
 
     def queued_resource_describe(self, name: str, zone: str) -> QueuedResourceInfo | None:
+        qr_name = f"projects/{self._project_id}/locations/{zone}/queuedResources/{name}"
         try:
-            url = f"{_TPU_QR_BASE}/{self._tpu_parent(zone)}/queuedResources/{name}"
-            resp = self._client.get(url, headers=self._headers())
-            self._classify_response(resp)
-            data = resp.json()
-        except ResourceNotFoundError:
+            qr = self._tpu_alpha_client.get_queued_resource(name=qr_name)
+        except google.api_core.exceptions.NotFound:
             return None
-        state = data.get("state", {}).get("state", "UNKNOWN")
+        except google.api_core.exceptions.GoogleAPICallError as exc:
+            raise self._qr_api_error(exc) from exc
+        state = qr.state.state.name if qr.state else "UNKNOWN"
         return QueuedResourceInfo(name=name, state=state, zone=zone)
 
     def queued_resource_delete(self, name: str, zone: str) -> None:
         logger.info("Deleting queued resource (force): %s", name)
-        url = f"{_TPU_QR_BASE}/{self._tpu_parent(zone)}/queuedResources/{name}"
-        resp = self._client.delete(url, params={"force": "true"}, headers=self._headers())
-        if resp.status_code != 404:
-            self._classify_response(resp)
+        qr_name = f"projects/{self._project_id}/locations/{zone}/queuedResources/{name}"
+        try:
+            self._tpu_alpha_client.delete_queued_resource(name=qr_name, force=True)
+        except google.api_core.exceptions.NotFound:
+            pass
+        except google.api_core.exceptions.GoogleAPICallError as exc:
+            raise self._qr_api_error(exc) from exc
 
     def queued_resource_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[QueuedResourceInfo]:
         zone_list = zones if zones else ["-"]
         results: list[QueuedResourceInfo] = []
         for zone in zone_list:
+            parent = f"projects/{self._project_id}/locations/{zone}"
             try:
-                items = self._paginate(
-                    f"{_TPU_QR_BASE}/{self._tpu_parent(zone)}/queuedResources",
-                    "queuedResources",
-                )
-            except InfraError:
+                for qr in self._tpu_alpha_client.list_queued_resources(parent=parent):
+                    qr_short_name = qr.name.rsplit("/", 1)[-1]
+                    state = qr.state.state.name if qr.state else "UNKNOWN"
+                    node_specs = list(qr.tpu.node_spec) if qr.tpu else []
+                    item_labels = dict(node_specs[0].node.labels) if node_specs and node_specs[0].node else {}
+                    if labels and not all(item_labels.get(k) == v for k, v in labels.items()):
+                        continue
+                    results.append(QueuedResourceInfo(name=qr_short_name, state=state, zone=zone, labels=item_labels))
+            except google.api_core.exceptions.GoogleAPICallError:
                 logger.warning("Failed to list queued resources in %s", zone, exc_info=True)
                 continue
-            for item in items:
-                qr_name = item.get("name", "").rsplit("/", 1)[-1]
-                state = item.get("state", {}).get("state", "UNKNOWN")
-                item_labels = item.get("tpu", {}).get("nodeSpec", [{}])[0].get("node", {}).get("labels", {})
-                if labels and not all(item_labels.get(k) == v for k, v in labels.items()):
-                    continue
-                results.append(QueuedResourceInfo(name=qr_name, state=state, zone=zone, labels=item_labels))
         return results
 
     # ========================================================================
