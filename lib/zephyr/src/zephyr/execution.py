@@ -1201,14 +1201,20 @@ class ZephyrWorker:
         self._subprocess_counter_file = counters_file
 
         try:
+            # ``-u`` keeps the child's stdout/stderr unbuffered so any traceback
+            # written by ``faulthandler`` (or by Python on a normal exception)
+            # actually reaches the parent's log before the process dies.
             proc = sp.run(
-                [sys.executable, "-m", "zephyr.subprocess_worker", task_file, result_file],
+                [sys.executable, "-u", "-m", "zephyr.subprocess_worker", task_file, result_file],
                 stdout=sys.stdout,
                 stderr=sys.stderr,
             )
 
             if proc.returncode != 0:
-                raise RuntimeError(f"Subprocess for shard {task.shard_idx} exited with code {proc.returncode}")
+                raise RuntimeError(
+                    f"Subprocess for shard {task.shard_idx} exited with code {proc.returncode}; "
+                    f"see worker stderr above for the faulthandler traceback"
+                )
 
             with open(result_file, "rb") as f:
                 result_or_error, child_counters = cloudpickle.load(f)
