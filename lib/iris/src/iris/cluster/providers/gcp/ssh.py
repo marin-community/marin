@@ -59,7 +59,7 @@ class OsLoginKeyProvisioner:
         os.makedirs(os.path.dirname(key_path), exist_ok=True)
         logger.info("Generating SSH keypair at %s", key_path)
         subprocess.run(
-            ["ssh-keygen", "-t", "rsa", "-b", "4096", "-f", key_path, "-N", "", "-q"],
+            ["ssh-keygen", "-t", "ed25519", "-f", key_path, "-N", "", "-q"],
             check=True,
         )
 
