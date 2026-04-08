@@ -38,7 +38,7 @@ CBS_DATA = {
 }
 
 # Chosen CBS points per dim
-CBS_CHOSEN = {"d512": 256, "d768": 384, "d1024": 512, "d1280": 640}
+CBS_CHOSEN = {"d512": 128, "d768": 256, "d1024": 384, "d1280": 512}
 
 
 def main():
