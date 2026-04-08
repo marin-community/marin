@@ -116,7 +116,15 @@ def execute_shard(task_file: str, result_file: str) -> None:
     ``SUBPROCESS_COUNTER_FLUSH_INTERVAL`` seconds so the parent can forward
     live updates via heartbeats.
     """
+    import faulthandler
+
     from rigging.log_setup import configure_logging
+
+    # Dump a Python traceback to stderr if the subprocess hits a fatal signal
+    # (SIGSEGV / SIGABRT / SIGBUS / SIGFPE / SIGILL). Without this, a crash in
+    # a C extension (Arrow, NumPy, ...) is invisible to the parent — it just
+    # sees `proc.returncode` < 0 with no diagnostic.
+    faulthandler.enable()
 
     configure_logging(level=logging.INFO)
 
