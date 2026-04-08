@@ -121,19 +121,6 @@ NON_STANDARD_STORAGE_CLASSES = frozenset({"NEARLINE", "COLDLINE", "ARCHIVE"})
 
 SOFT_DELETE_RETENTION_SECONDS = 7 * 24 * 3600  # 7 days (GCS minimum)
 
-# Same-region temp buckets for backing up the delete set before purging.
-# Created once via `gcloud storage buckets create`.
-BACKUP_BUCKETS: dict[str, str] = {
-    "marin-eu-west4": "marin-tmp-backup-eu-west4-purge-tmp-20260326",
-    "marin-us-central1": "marin-tmp-backup-us-central1-purge-tmp-20260326",
-    "marin-us-central2": "marin-tmp-backup-us-central2-purge-tmp-20260326",
-    "marin-us-east1": "marin-tmp-backup-us-east1-purge-tmp-20260326",
-    "marin-us-east5": "marin-tmp-backup-us-east5-purge-tmp-20260326",
-    "marin-us-west4": "marin-tmp-backup-us-west4-purge-tmp-20260326",
-}
-
-STS_MAX_PREFIXES_PER_JOB = 1000
-
 # dir_summary collapse thresholds: dirs deeper than this with less than
 # DIR_SUMMARY_MIN_BYTES are rolled up into their depth-2 ancestor.
 DIR_SUMMARY_MIN_DEPTH = 2

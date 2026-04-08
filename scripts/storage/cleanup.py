@@ -2,15 +2,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Consolidated storage purge workflow: scan, summarize, compute, backup, and delete.
+"""Consolidated storage purge workflow: scan, summarize, compute, and delete.
 
-Six steps run in order:
-  1. scan         — List bucket objects into parquet segments
-  2. summarize    — Materialize per-directory summaries from objects
-  3. compute      — Evaluate delete/protect rules, collapse, write CSV manifest
-  4. backup-prep  — Plan STS backup jobs and write to disk for inspection
-  5. backup-run   — Create STS jobs from the backup plan
-  6. delete       — Delete objects from manifest (requires backup completion)
+Four steps run in order:
+  1. scan      — List bucket objects into parquet segments
+  2. summarize — Materialize per-directory summaries from objects
+  3. compute   — Evaluate delete/protect rules, collapse, write CSV manifest
+  4. delete    — Delete objects from manifest
 
 Usage:
     uv run scripts/storage/cleanup.py plan
@@ -18,16 +16,12 @@ Usage:
     uv run scripts/storage/cleanup.py scan [--force] [--workers N]
     uv run scripts/storage/cleanup.py summarize [--force]
     uv run scripts/storage/cleanup.py compute [--force]
-    uv run scripts/storage/cleanup.py backup-prep [--force]
-    uv run scripts/storage/cleanup.py backup-run [--dry-run]
-    uv run scripts/storage/cleanup.py backup-status
     uv run scripts/storage/cleanup.py delete [--dry-run] [--workers N]
 """
 
 from __future__ import annotations
 
 import csv
-import json
 import logging
 import queue
 import random
@@ -47,11 +41,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from scripts.storage.db import (
-    BACKUP_BUCKETS,
     DEFAULT_CATALOG,
     GCS_DISCOUNT,
     REPO_ROOT,
-    STS_MAX_PREFIXES_PER_JOB,
     Context,
     StorageCatalog,
     _fetchall_dicts,
@@ -62,11 +54,9 @@ from scripts.storage.db import (
     materialize_dir_summary,
     plan_rows,
     print_summary,
-    region_from_bucket,
     timestamp_string,
 )
 from scripts.storage.scan import (
-    run_subprocess,
     scan_objects,
     storage_client,
 )
@@ -110,20 +100,6 @@ def summarize_done(catalog: StorageCatalog) -> bool:
 
 def compute_done(catalog: StorageCatalog) -> bool:
     return catalog.deletion_manifest_csv.exists()
-
-
-def backup_prep_done(catalog: StorageCatalog) -> bool:
-    """Check if the backup plan has been written."""
-    return (catalog.backup_dir / "backup_plan.json").exists()
-
-
-def backup_run_done(catalog: StorageCatalog) -> bool:
-    """Check if all STS backup jobs have completed successfully."""
-    state_path = catalog.backup_dir / "backup_state.json"
-    if not state_path.exists():
-        return False
-    state = json.loads(state_path.read_text())
-    return state.get("status") == "completed"
 
 
 # ===========================================================================
@@ -487,247 +463,6 @@ def run_compute(ctx: Context) -> None:
     _print_deletion_summary(all_entries)
 
 
-def _sts_job_name(bucket: str, batch_index: int) -> str:
-    """Stable STS job name for a given bucket and batch."""
-    region = region_from_bucket(bucket)
-    return f"marin-purge-backup-{region}-{batch_index}"
-
-
-def _dedup_prefixes(prefixes: list[str]) -> list[str]:
-    """Remove prefixes that are already covered by a shorter prefix in the list.
-
-    STS rejects overlapping include_prefixes — e.g. if "foo/" is present then
-    "foo/bar/" is redundant and causes INVALID_ARGUMENT.
-    """
-    sorted_prefixes = sorted(prefixes)
-    result: list[str] = []
-    for p in sorted_prefixes:
-        if result and p.startswith(result[-1]):
-            continue
-        result.append(p)
-    return result
-
-
-def _plan_sts_jobs(manifest: dict[str, list[dict[str, str]]]) -> list[dict[str, Any]]:
-    """Plan STS copy jobs for each bucket's delete prefixes, batched by STS_MAX_PREFIXES_PER_JOB.
-
-    Returns a list of job descriptors with prefixes included for inspection.
-    """
-    jobs: list[dict[str, Any]] = []
-
-    for plan_row in plan_rows():
-        bucket_name = plan_row["bucket"]
-        rows = manifest.get(bucket_name, [])
-        if not rows:
-            continue
-
-        backup_bucket = BACKUP_BUCKETS[bucket_name]
-        prefixes = _dedup_prefixes([r["prefix"] for r in rows])
-
-        for batch_idx, start in enumerate(range(0, len(prefixes), STS_MAX_PREFIXES_PER_JOB)):
-            batch = prefixes[start : start + STS_MAX_PREFIXES_PER_JOB]
-            job_name = _sts_job_name(bucket_name, batch_idx)
-
-            jobs.append(
-                {
-                    "bucket": bucket_name,
-                    "job_name": job_name,
-                    "source": f"gs://{bucket_name}",
-                    "destination": f"gs://{backup_bucket}",
-                    "prefix_count": len(batch),
-                    "prefixes": batch,
-                }
-            )
-
-    return jobs
-
-
-def _execute_sts_jobs(ctx: Context, jobs: list[dict[str, Any]]) -> None:
-    """Create STS transfer jobs from a pre-computed plan."""
-    for job in jobs:
-        bucket_name = job["bucket"]
-        job_name = job["job_name"]
-        batch = job["prefixes"]
-        batch_idx = int(job_name.rsplit("-", 1)[-1])
-
-        print_summary(
-            f"  creating STS job {job_name}: " f"{len(batch)} prefixes, {job['source']} → {job['destination']}"
-        )
-
-        run_subprocess(
-            ctx,
-            [
-                "gcloud",
-                "transfer",
-                "jobs",
-                "create",
-                job["source"],
-                job["destination"],
-                f"--name={job_name}",
-                f"--description=Purge backup for {bucket_name} batch {batch_idx}",
-                f"--include-prefixes={','.join(batch)}",
-                "--format=json",
-            ],
-        )
-
-
-def _poll_sts_jobs(ctx: Context, jobs: list[dict[str, str]]) -> dict[str, str]:
-    """Check the status of all STS jobs. Returns {job_name: status}."""
-    statuses: dict[str, str] = {}
-    for job in jobs:
-        job_name = job["job_name"]
-        result = run_subprocess(
-            ctx,
-            [
-                "gcloud",
-                "transfer",
-                "jobs",
-                "describe",
-                job_name,
-                "--format=json",
-            ],
-            capture_json=True,
-        )
-        latest = result.get("latestOperationName", "")
-        if not latest:
-            statuses[job_name] = "NOT_STARTED"
-            continue
-        op_result = run_subprocess(
-            ctx,
-            [
-                "gcloud",
-                "transfer",
-                "operations",
-                "describe",
-                latest,
-                "--format=json",
-            ],
-            capture_json=True,
-        )
-        status = op_result.get("metadata", {}).get("status", "UNKNOWN")
-        statuses[job_name] = status
-    return statuses
-
-
-def run_backup_prep(ctx: Context) -> None:
-    """Plan STS jobs and write the plan to disk for inspection before executing."""
-    catalog = DEFAULT_CATALOG
-    plan_path = catalog.backup_dir / "backup_plan.json"
-
-    if plan_path.exists() and not ctx.force:
-        print_summary(f"  backup plan already exists at {plan_path.relative_to(REPO_ROOT)}; use --force to regenerate")
-        return
-
-    manifest = _load_manifest(ctx)
-    jobs = _plan_sts_jobs(manifest)
-
-    # Write per-job prefix files for easy inspection
-    for job in jobs:
-        prefix_list_path = catalog.backup_dir / f"{job['job_name']}_prefixes.txt"
-        prefix_list_path.write_text("\n".join(job["prefixes"]) + "\n")
-
-    plan = {
-        "created_at": timestamp_string(),
-        "job_count": len(jobs),
-        "total_prefixes": sum(j["prefix_count"] for j in jobs),
-        "jobs": jobs,
-    }
-    plan_path.write_text(json.dumps(plan, indent=2))
-    print_summary(f"  wrote backup plan with {len(jobs)} jobs to {plan_path.relative_to(REPO_ROOT)}")
-    for job in jobs:
-        print_summary(
-            f"    {job['job_name']}: {job['prefix_count']} prefixes, " f"{job['source']} → {job['destination']}"
-        )
-    print_summary("  inspect the plan, then run `backup-run` to create STS jobs")
-
-
-def run_backup_run(ctx: Context) -> None:
-    """Read the backup plan and create STS transfer jobs."""
-    catalog = DEFAULT_CATALOG
-    plan_path = catalog.backup_dir / "backup_plan.json"
-    state_path = catalog.backup_dir / "backup_state.json"
-
-    # If already done, skip unless forced
-    if state_path.exists() and not ctx.force:
-        state = json.loads(state_path.read_text())
-        if state.get("status") == "completed":
-            print_summary("  backup already completed; use --force to re-run")
-            return
-        if state.get("jobs") and not ctx.dry_run:
-            print_summary("  STS jobs already created; checking status...")
-            statuses = _poll_sts_jobs(ctx, state["jobs"])
-            _print_backup_status(statuses)
-            if all(s == "SUCCESS" for s in statuses.values()):
-                state["status"] = "completed"
-                state_path.write_text(json.dumps(state, indent=2))
-                print_summary("  all backup jobs completed successfully")
-            return
-
-    if not plan_path.exists():
-        raise RuntimeError(
-            f"Backup plan not found at {plan_path.relative_to(REPO_ROOT)}. " "Run the backup-prep step first."
-        )
-
-    plan = json.loads(plan_path.read_text())
-    jobs = plan["jobs"]
-
-    if ctx.dry_run:
-        print_summary(f"  would create {len(jobs)} STS backup jobs:")
-        for job in jobs:
-            print_summary(
-                f"    {job['job_name']}: {job['prefix_count']} prefixes, " f"{job['source']} → {job['destination']}"
-            )
-        return
-
-    _execute_sts_jobs(ctx, jobs)
-
-    # Strip prefixes from state (they're in the plan and prefix files already)
-    state_jobs = [{k: v for k, v in j.items() if k != "prefixes"} for j in jobs]
-    state = {
-        "status": "in_progress",
-        "created_at": timestamp_string(),
-        "jobs": state_jobs,
-    }
-    state_path.write_text(json.dumps(state, indent=2))
-    print_summary(f"  created {len(jobs)} STS jobs; run `backup-status` to monitor progress")
-
-
-def _print_backup_status(statuses: dict[str, str]) -> None:
-    for job_name, status in sorted(statuses.items()):
-        print_summary(f"  {job_name}: {status}")
-
-    succeeded = sum(1 for s in statuses.values() if s == "SUCCESS")
-    total = len(statuses)
-    print_summary(f"  {succeeded}/{total} jobs completed")
-
-
-def run_backup_status(ctx: Context) -> None:
-    """Poll all STS backup jobs and report status."""
-    catalog = DEFAULT_CATALOG
-    state_path = catalog.backup_dir / "backup_state.json"
-    if not state_path.exists():
-        print_summary("  no backup state found; run the backup step first")
-        return
-
-    state = json.loads(state_path.read_text())
-    if state.get("status") == "completed":
-        print_summary("  all backup jobs already marked completed")
-        return
-
-    jobs = state.get("jobs", [])
-    if not jobs:
-        print_summary("  no STS jobs recorded in state")
-        return
-
-    statuses = _poll_sts_jobs(ctx, jobs)
-    _print_backup_status(statuses)
-
-    if all(s == "SUCCESS" for s in statuses.values()):
-        state["status"] = "completed"
-        state_path.write_text(json.dumps(state, indent=2))
-        print_summary("  all backup jobs completed — backup marked done")
-
-
 def _load_manifest(ctx: Context) -> dict[str, list[dict[str, str]]]:
     """Load the deletion manifest CSV and return full rows grouped by bucket.
 
@@ -1040,11 +775,11 @@ def run_delete(ctx: Context) -> None:
             )
             for _ in range(N_DELETE_WORKERS)
         ]
-        for w in [feeder] + list_workers + delete_workers:
+        for w in [feeder, *list_workers, *delete_workers]:
             w.start()
         try:
             with Live(console=_CONSOLE, refresh_per_second=1) as live:
-                while any(w.is_alive() for w in [feeder] + list_workers):
+                while any(w.is_alive() for w in [feeder, *list_workers]):
                     time.sleep(1.0)
                     _raise_delete_worker_failure(bucket_name, failures)
                     live.update(_render_delete_display(state, prefix_q.qsize(), object_q.qsize()))
@@ -1057,7 +792,7 @@ def run_delete(ctx: Context) -> None:
                     _raise_delete_worker_failure(bucket_name, failures)
                     live.update(_render_delete_display(state, prefix_q.qsize(), object_q.qsize()))
 
-            for w in [feeder] + list_workers + delete_workers:
+            for w in [feeder, *list_workers, *delete_workers]:
                 w.join()
             _raise_delete_worker_failure(bucket_name, failures)
         except Exception:
@@ -1075,8 +810,6 @@ STEPS: list[Step] = [
     Step("scan", "Scan objects into parquet", run_scan, scan_done),
     Step("summarize", "Materialize dir_summary from objects", run_summarize, summarize_done),
     Step("compute", "Compute deletion manifest CSV", run_compute, compute_done),
-    Step("backup-prep", "Plan STS backup jobs for inspection", run_backup_prep, backup_prep_done),
-    Step("backup-run", "Create STS jobs from backup plan", run_backup_run, backup_run_done, mutating=True),
     Step("delete", "Delete objects from manifest", run_delete, lambda _: False, mutating=True),
 ]
 
@@ -1149,10 +882,7 @@ def _run_steps(ctx: Context, steps: list[Step]) -> None:
 
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
-    help=(
-        "Storage purge workflow: scan, summarize, compute deletion manifest, "
-        "backup delete set via STS, and delete objects."
-    ),
+    help="Storage purge workflow: scan, summarize, compute deletion manifest, and delete objects.",
 )
 def cli() -> None:
     pass
@@ -1232,34 +962,6 @@ def compute_cli(project: str | None) -> None:
     print_summary(f"==> compute: {STEP_INDEX['compute'].description}")
     run_compute(ctx)
     print_summary("completed")
-
-
-@cli.command("backup-prep", help="Plan STS backup jobs and write to disk for inspection.")
-@click.option("--force", is_flag=True, help="Regenerate plan even if it already exists.")
-@click.option("--project", help="Override GCP project.")
-def backup_prep_cli(force: bool, project: str | None) -> None:
-    ctx = build_context(dry_run=False, force=force, scan_workers=1, project=project)
-    print_summary(f"==> backup-prep: {STEP_INDEX['backup-prep'].description}")
-    run_backup_prep(ctx)
-    print_summary("completed")
-
-
-@cli.command("backup-run", help="Create STS jobs from the backup plan.")
-@click.option("--dry-run", is_flag=True, help="Show what would happen.")
-@click.option("--force", is_flag=True, help="Re-create STS jobs even if already started.")
-@click.option("--project", help="Override GCP project.")
-def backup_run_cli(dry_run: bool, force: bool, project: str | None) -> None:
-    ctx = build_context(dry_run=dry_run, force=force, scan_workers=1, project=project)
-    print_summary(f"==> backup-run: {STEP_INDEX['backup-run'].description}")
-    run_backup_run(ctx)
-    print_summary("completed")
-
-
-@cli.command("backup-status", help="Check status of STS backup jobs.")
-@click.option("--project", help="Override GCP project.")
-def backup_status_cli(project: str | None) -> None:
-    ctx = build_context(dry_run=True, force=False, scan_workers=1, project=project)
-    run_backup_status(ctx)
 
 
 @cli.command("delete", help="Delete objects listed in the manifest.")
