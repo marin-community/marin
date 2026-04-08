@@ -290,14 +290,16 @@ class CloudK8sService:
     def __post_init__(self) -> None:
         if self.kubeconfig_path:
             self.kubeconfig_path = os.path.expanduser(self.kubeconfig_path)
-            kubernetes.config.load_kube_config(config_file=self.kubeconfig_path)
+            self._api_client = kubernetes.config.new_client_from_config(
+                config_file=self.kubeconfig_path,
+            )
         else:
             try:
                 kubernetes.config.load_incluster_config()
+                self._api_client = kubernetes.client.ApiClient()
             except kubernetes.config.ConfigException:
-                kubernetes.config.load_kube_config()
+                self._api_client = kubernetes.config.new_client_from_config()
 
-        self._api_client = kubernetes.client.ApiClient()
         self._core_v1 = kubernetes.client.CoreV1Api(self._api_client)
         self._apps_v1 = kubernetes.client.AppsV1Api(self._api_client)
         self._policy_v1 = kubernetes.client.PolicyV1Api(self._api_client)
