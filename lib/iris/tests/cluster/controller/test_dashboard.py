@@ -27,6 +27,7 @@ from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import config_pb2, vm_pb2
 from iris.rpc import job_pb2
@@ -1060,7 +1061,7 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
 
     # Seed nodes and a pod.
     k8s.seed_resource(
-        "node",
+        K8sResource.NODES,
         "node-1",
         {
             "kind": "Node",
@@ -1070,7 +1071,7 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
         },
     )
     k8s.seed_resource(
-        "pod",
+        K8sResource.PODS,
         "iris-task-0",
         {
             "kind": "Pod",

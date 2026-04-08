@@ -10,6 +10,7 @@ import pytest
 from iris.cluster.controller.transitions import DirectProviderBatch
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.providers.k8s.fake import InMemoryK8sService
+from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.providers.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
@@ -130,7 +131,7 @@ def populate_pod(
     pod = make_pod(name, phase, exit_code=exit_code, reason=reason)
     pod["kind"] = "Pod"
     pod["metadata"]["labels"] = base_labels
-    k8s.seed_resource("pod", name, pod)
+    k8s.seed_resource(K8sResource.PODS, name, pod)
 
 
 def populate_node(
@@ -147,7 +148,7 @@ def populate_node(
         "spec": {"taints": taints or []},
         "status": {"allocatable": {"cpu": cpu, "memory": memory}},
     }
-    k8s.seed_resource("node", name, node)
+    k8s.seed_resource(K8sResource.NODES, name, node)
 
 
 def populate_running_pod_resource(
@@ -178,7 +179,7 @@ def populate_running_pod_resource(
             ]
         },
     }
-    k8s.seed_resource("pod", name, pod)
+    k8s.seed_resource(K8sResource.PODS, name, pod)
 
 
 def add_eq_constraint(req: job_pb2.RunTaskRequest, key: str, value: str) -> None:

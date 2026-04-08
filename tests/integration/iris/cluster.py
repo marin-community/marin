@@ -16,29 +16,33 @@ from iris.cluster.types import (
     EnvironmentSpec,
     ReservationEntry,
     ResourceSpec,
-    is_job_finished,
 )
 from iris.rpc import logging_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
-from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.logging_connect import LogServiceClientSync
 from rigging.timing import Duration
 
 
 @dataclass
 class IrisIntegrationCluster:
-    """Wraps a cluster connection with convenience methods for integration tests.
+    """Wraps an IrisClient with convenience methods for integration tests.
 
-    Unlike the E2E IrisTestCluster, this is designed for tests that exercise
-    job submission and lifecycle without dashboard/screenshot concerns.
+    All RPCs go through RemoteClusterClient which has built-in retry logic,
+    making tests resilient to transient port-forward drops.
     """
 
     url: str
     client: IrisClient
-    controller_client: ControllerServiceClientSync
-    log_client: LogServiceClientSync
     job_timeout: float = 60.0
+
+    @property
+    def _cluster(self):
+        return self.client._cluster_client
+
+    @property
+    def controller_client(self):
+        """Raw controller stub for RPCs not yet on RemoteClusterClient (profile, exec)."""
+        return self._cluster._client
 
     def submit(
         self,
@@ -75,26 +79,14 @@ class IrisIntegrationCluster:
         )
 
     def status(self, job: Job) -> job_pb2.JobStatus:
-        job_id = job.job_id.to_wire()
-        request = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id)
-        response = self.controller_client.get_job_status(request)
-        return response.job
+        return self.client.status(job.job_id)
 
     def task_status(self, job: Job, task_index: int = 0) -> job_pb2.TaskStatus:
-        task_id = job.job_id.task(task_index).to_wire()
-        request = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id)
-        response = self.controller_client.get_task_status(request)
-        return response.task
+        return self.client.task_status(job.job_id.task(task_index))
 
     def wait(self, job: Job, timeout: float = 60.0, poll_interval: float = 0.5) -> job_pb2.JobStatus:
         """Poll until a job reaches a terminal state."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            status = self.status(job)
-            if is_job_finished(status.state):
-                return status
-            time.sleep(poll_interval)
-        raise TimeoutError(f"Job {job.job_id} did not complete in {timeout}s")
+        return job.wait(timeout=timeout, poll_interval=poll_interval, raise_on_failure=False)
 
     def wait_for_state(
         self,
@@ -141,24 +133,28 @@ class IrisIntegrationCluster:
             self.kill(job)
 
     def kill(self, job: Job) -> None:
-        job_id = job.job_id.to_wire()
-        request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id)
-        self.controller_client.terminate_job(request)
+        self.client.terminate(job.job_id)
 
     def wait_for_workers(self, min_workers: int, timeout: float = 30.0) -> None:
         deadline = time.monotonic() + timeout
         healthy = []
         while time.monotonic() < deadline:
-            request = controller_pb2.Controller.ListWorkersRequest()
-            response = self.controller_client.list_workers(request)
-            healthy = [w for w in response.workers if w.healthy]
+            workers = self._cluster.list_workers()
+            healthy = [w for w in workers if w.healthy]
             if len(healthy) >= min_workers:
                 return
             time.sleep(0.5)
         raise TimeoutError(f"Only {len(healthy)} of {min_workers} workers registered in {timeout}s")
 
+    def list_workers(self) -> list[controller_pb2.Controller.WorkerHealthStatus]:
+        """List workers with retry logic via RemoteClusterClient."""
+        return self._cluster.list_workers()
+
+    def fetch_logs(self, source: str, **kwargs) -> logging_pb2.FetchLogsResponse:
+        """Fetch logs with retry logic via RemoteClusterClient."""
+        return self._cluster.fetch_logs(source, **kwargs)
+
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
         task_id = job.job_id.task(task_index).to_wire()
-        request = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
-        response = self.log_client.fetch_logs(request)
+        response = self._cluster.fetch_logs(re.escape(task_id) + ":.*")
         return [f"{e.source}: {e.data}" for e in response.entries]

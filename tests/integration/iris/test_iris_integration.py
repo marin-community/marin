@@ -126,9 +126,9 @@ def test_log_levels_populated(integration_cluster, verbose_job):
 
     deadline = time.monotonic() + integration_cluster.job_timeout
     entries = []
+    source = re.escape(task_id) + ":.*"
     while time.monotonic() < deadline:
-        request = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
-        response = integration_cluster.log_client.fetch_logs(request)
+        response = integration_cluster.fetch_logs(source)
         entries = list(response.entries)
         if any("info-marker" in e.data for e in entries):
             break
@@ -150,8 +150,7 @@ def test_log_level_filter(integration_cluster, verbose_job):
     """min_level=WARNING excludes INFO."""
     task_id = verbose_job.job_id.task(0).to_wire()
 
-    request = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*", min_level="WARNING")
-    response = integration_cluster.log_client.fetch_logs(request)
+    response = integration_cluster.fetch_logs(re.escape(task_id) + ":.*", min_level="WARNING")
     filtered = list(response.entries)
 
     filtered_data = [e.data for e in filtered]
@@ -168,13 +167,12 @@ def test_log_level_filter(integration_cluster, verbose_job):
 def test_region_constrained_routing(integration_cluster):
     """Job with region constraint lands on correct worker."""
     # Query workers to check for multi-region support
-    request = controller_pb2.Controller.ListWorkersRequest()
-    response = integration_cluster.controller_client.list_workers(request)
+    workers = integration_cluster.list_workers()
 
     from iris.cluster.constraints import WellKnownAttribute
 
     regions = set()
-    for w in response.workers:
+    for w in workers:
         region_attr = w.metadata.attributes.get(WellKnownAttribute.REGION)
         if region_attr and region_attr.HasField("string_value"):
             regions.add(region_attr.string_value)
@@ -195,12 +193,12 @@ def test_region_constrained_routing(integration_cluster):
 
     # Re-fetch workers after job completes in case autoscaling added new nodes
     # to satisfy the region constraint.
-    post_response = integration_cluster.controller_client.list_workers(request)
+    post_workers = integration_cluster.list_workers()
     worker = next(
-        (w for w in post_response.workers if w.worker_id == task.worker_id or w.address == task.worker_id),
+        (w for w in post_workers if w.worker_id == task.worker_id or w.address == task.worker_id),
         None,
     )
-    assert worker is not None, f"Worker {task.worker_id} not found in {[w.worker_id for w in post_response.workers]}"
+    assert worker is not None, f"Worker {task.worker_id} not found in {[w.worker_id for w in post_workers]}"
     region_attr = worker.metadata.attributes.get(WellKnownAttribute.REGION)
     if region_attr and region_attr.HasField("string_value"):
         assert region_attr.string_value == target_region, f"Expected {target_region}, got {region_attr.string_value}"
