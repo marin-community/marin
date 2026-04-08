@@ -327,19 +327,32 @@ class CloudK8sService:
         # Collection path is the item path without the trailing /{name}
         collection_path = item_path.rsplit("/", 1)[0]
 
+        headers_json = {"Content-Type": "application/json", "Accept": "application/json"}
+        headers_patch = {"Content-Type": "application/strategic-merge-patch+json", "Accept": "application/json"}
+        body = json.dumps(manifest)
+
         logger.info("k8s: apply %s/%s", kind, name)
         t0 = time.monotonic()
         try:
-            self._call_api("POST", collection_path, body=manifest)
+            self._api_client.call_api(
+                collection_path,
+                "POST",
+                body=body,
+                header_params=headers_json,
+                response_type="object",
+                _request_timeout=self.timeout,
+            )
         except ApiException as e:
             if e.status == 409:
                 # Already exists — update via strategic merge patch
                 try:
-                    self._call_api(
-                        "PATCH",
+                    self._api_client.call_api(
                         item_path,
-                        body=manifest,
-                        content_type="application/strategic-merge-patch+json",
+                        "PATCH",
+                        body=body,
+                        header_params=headers_patch,
+                        response_type="object",
+                        _request_timeout=self.timeout,
                     )
                 except ApiException as patch_err:
                     raise KubectlError(
