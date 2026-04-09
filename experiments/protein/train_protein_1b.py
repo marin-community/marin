@@ -112,7 +112,7 @@ train_config = SimpleTrainConfig(
 # -- Train --
 
 protein_model_1b = default_train(
-    name="protein-contacts-1b",
+    name="protein-contacts-1b-2.5e-4",
     tokenized=protein_docs_data,
     model_config=protein_llama_1b,
     train_config=train_config,
