@@ -79,3 +79,21 @@ Parent issue: https://github.com/marin-community/marin/issues/4435
 - **Interpretation**: Good diversity at temperature=1.0. Most rollouts are substantially different (median Jaccard ~0.2). Only one pair is near-duplicate (0.59). This is promising for generating diverse pretraining data.
 - **Next action**: Step 5 (100 rollouts from 10 PRs) and Step 6 (1000 rollouts from 10 repos).
 - **Blocker**: CPU inference is slow (~6 min/rollout). Steps 5-6 would take 10+ hours and 100+ hours respectively at this speed. Need TPU acceleration via vLLM-tpu or to reduce rollout count for MVP.
+
+### 2026-04-09 — SZ-005: Steps 5 & 6 submitted to Iris cluster with TPU inference
+- **Change**: Refactored to use `ray_run.py` for cluster submission with Docker vLLM sidecar on TPU. `VLLM_TPU_SKIP_PRECOMPILE=1`.
+- **Command**:
+  ```
+  uv run lib/marin/src/marin/run/ray_run.py \
+    --cluster marin-us-east5 --extra vllm --tpu v6e-8 \
+    --env_vars VLLM_TPU_SKIP_PRECOMPILE 1 \
+    --env_vars MARIN_VLLM_MODE docker \
+    --no_wait \
+    -- python experiments/swe_zero/run_swe_zero_mvp.py --local --model google/gemma-4-E2B-it --step {5,6} \
+       --output_dir gs://marin-us-central2/experiments/swe_zero_mvp
+  ```
+- **Jobs**:
+  - Step 5: `ray-run-kevin-run_swe_zero_mvp-20260409-180301` (PENDING)
+  - Step 6: `ray-run-kevin-run_swe_zero_mvp-20260409-180313` (PENDING)
+- **Output**: `gs://marin-us-central2/experiments/swe_zero_mvp/step{5,6}/`
+- **Next**: Monitor jobs, report results when complete.
