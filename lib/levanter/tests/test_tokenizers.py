@@ -8,9 +8,12 @@ installed are skipped gracefully. The test model is meta-llama/Llama-3.1-8B,
 which requires HF authentication (tests skip if auth is missing).
 """
 
+import os
+import shutil
 from unittest.mock import patch
 
 import pytest
+from huggingface_hub import hf_hub_download
 
 from levanter.tokenizers import (
     MarinTokenizer,
@@ -981,21 +984,24 @@ def test_load_tokenizer_caching():
 
 
 @requires_model
-def test_local_tokenizer_encode_batch():
+def test_local_tokenizer_encode_batch(tmp_path):
     """Ensure encode_batch works with local tokenizer paths (no hub round-trip)."""
-    from huggingface_hub import hf_hub_download
-    import os
-
-    path = hf_hub_download(MODEL_NAME, "tokenizer.json")
-    local_dir = os.path.dirname(path)
+    tokenizer_json = hf_hub_download(MODEL_NAME, "tokenizer.json")
+    local_dir = tmp_path / "tokenizer"
+    local_dir.mkdir()
+    shutil.copy2(tokenizer_json, local_dir / "tokenizer.json")
 
     load_tokenizer.cache_clear()
-    tok = load_tokenizer(local_dir)
+    with patch(
+        "levanter.tokenizers.hf_hub_download",
+        side_effect=AssertionError("Local tokenizer paths should not hit HF Hub"),
+    ):
+        tok = load_tokenizer(os.fspath(local_dir))
 
-    texts = [f"sentence number {i}" for i in range(20)]
-    batch_result = tok.encode_batch(texts)
-    individual = [tok.encode(t) for t in texts]
-    assert batch_result == individual
+        texts = [f"sentence number {i}" for i in range(20)]
+        batch_result = tok.encode_batch(texts)
+        individual = [tok.encode(t) for t in texts]
+        assert batch_result == individual
 
 
 # ---------------------------------------------------------------------------

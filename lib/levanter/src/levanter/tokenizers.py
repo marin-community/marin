@@ -743,6 +743,8 @@ def _post_processor_prepends_bos(name_or_path: str, bos_token: str | None) -> bo
 
     local_json = os.path.join(name_or_path, "tokenizer.json")
     if not os.path.isfile(local_json):
+        if os.path.isdir(name_or_path):
+            return False
         try:
             local_json = hf_hub_download(name_or_path, "tokenizer.json")
         except (EntryNotFoundError, RepositoryNotFoundError):
@@ -776,6 +778,9 @@ def _load_tokenizer_config(name_or_path: str) -> dict:
     if os.path.isfile(local_path):
         with open(local_path) as f:
             return json.load(f)
+
+    if os.path.isdir(name_or_path):
+        return {}
 
     try:
         path = hf_hub_download(name_or_path, "tokenizer_config.json")
@@ -814,6 +819,8 @@ def _load_kitoken_tokenizer(name_or_path: str) -> KitokenMarinTokenizer:
 
     local_json = os.path.join(name_or_path, "tokenizer.json")
     if not os.path.isfile(local_json):
+        if os.path.isdir(name_or_path):
+            raise FileNotFoundError(f"Local tokenizer directory is missing tokenizer.json: {name_or_path}")
         local_json = hf_hub_download(name_or_path, "tokenizer.json")
     tok = kitoken.Kitoken.from_tokenizers_file(local_json)
     config = _load_tokenizer_config(name_or_path)
