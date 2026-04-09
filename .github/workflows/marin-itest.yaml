@@ -6,14 +6,16 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+    inputs:
+      controller_url:
+        description: "Iris controller URL"
+        required: true
 
 
 jobs:
   marin-itest:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    # uv has to resolve + download large binary wheels (jax/torch). 10 minutes wasn't
-    # enough for cache misses on GitHub's runners, so give ourselves more runway.
     timeout-minutes: 25
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -46,16 +48,9 @@ jobs:
       - name: Check df -h
         run: df -h
 
-      - name: Give Ray tmp space
-        run: sudo mkdir -p /mnt/ray && sudo chmod 777 /mnt/ray
-
-      - name: Run the quickstart script
-        shell: bash -l {0}
-        # N.B. You _must not_ use `uv run` here, as that triggers weird behavior from Ray
-        # https://github.com/ray-project/ray/issues/54344
-        run: .venv/bin/python tests/integration_test.py
+      - name: Run the integration test
+        run: uv run tests/integration_test.py --controller-url ${{ inputs.controller_url }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           JAX_TRACEBACK_FILTERING: off
           WANDB_MODE: offline
-          RAY_TMPDIR: /mnt/ray/
