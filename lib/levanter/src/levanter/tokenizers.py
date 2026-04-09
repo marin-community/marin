@@ -24,6 +24,7 @@ import tempfile
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
+import fsspec
 import jinja2
 import jinja2.ext
 from huggingface_hub import hf_hub_download
@@ -535,8 +536,6 @@ def _hf_hub_download_with_mirror(name_or_path: str, filename: str) -> str:
 
     Returns a local file path suitable for open().
     """
-    import fsspec
-
     # 1. HF_HOME cache
     try:
         return hf_hub_download(name_or_path, filename, local_files_only=True)
