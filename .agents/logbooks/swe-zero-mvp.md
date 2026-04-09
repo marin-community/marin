@@ -97,3 +97,13 @@ Parent issue: https://github.com/marin-community/marin/issues/4435
   - Step 6: `ray-run-kevin-run_swe_zero_mvp-20260409-180313` (PENDING)
 - **Output**: `gs://marin-us-central2/experiments/swe_zero_mvp/step{5,6}/`
 - **Next**: Monitor jobs, report results when complete.
+
+### 2026-04-09 — SZ-006: Switched to Gemma 3 4B IT for TPU inference
+- **Blocker**: Gemma 4 E2B-it is multimodal (audio_tower) — vllm-tpu (both pip 0.10.1 and 0.13.0) can't load it:
+  - vllm-tpu Docker images have transformers 4.57 (pre-gemma4)
+  - Even with upgraded transformers, weight loading fails on `model.audio_tower.*` params
+- **Decision**: Use Gemma 3 4B IT instead. Verified serving on v6e-4 with `VLLM_TPU_SKIP_PRECOMPILE=1` (~290s startup).
+- **New jobs**: Resubmitted Steps 5+6 with `google/gemma-3-4b-it` on `marin-us-east5` v6e-4.
+  - Step 5: `ray-run-kevin-run_swe_zero_mvp-20260409-203933`
+  - Step 6: `ray-run-kevin-run_swe_zero_mvp-20260409-203945`
+- **Negative result**: Gemma 4 E2B is not yet usable via vllm-tpu on Iris cluster. Need vllm-tpu Docker image update or custom image with latest transformers + Gemma 4 text-only support.
