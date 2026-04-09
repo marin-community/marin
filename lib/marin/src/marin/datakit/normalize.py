@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -31,6 +32,17 @@ from zephyr import Dataset, ZephyrContext
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 
 logger = logging.getLogger(__name__)
+
+# Default cap on the longest consecutive whitespace run in a document.
+# Runs exceeding this are compacted to this length at normalization time.
+# Pathologically long whitespace runs (e.g. multi-MB runs from broken
+# HTML→text extraction, cf. #4588) can OOM downstream tokenization.
+# 128 matches the longest whitespace run that Llama's tokenizer collapses
+# into a single token, so capping here is lossless for that tokenizer.
+DEFAULT_MAX_WHITESPACE_RUN_CHARS = 128
+
+# Counter name for documents that had whitespace runs compacted.
+COMPACTED_WHITESPACE_COUNTER = "datakit_normalize_compacted_whitespace"
 
 
 class DedupMode(StrEnum):
@@ -183,6 +195,27 @@ def _compute_total_bytes(file_paths: list[str]) -> int:
     return total
 
 
+def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Return a map function that compacts consecutive whitespace runs exceeding the limit.
+
+    Any run of whitespace longer than *max_whitespace_run_chars* is truncated to
+    that length (preserving the original whitespace characters). Affected records
+    are counted via the ``COMPACTED_WHITESPACE_COUNTER`` Zephyr counter, and the
+    ``id`` is recomputed to reflect the new text.
+    """
+    pattern = re.compile(r"\s{" + str(max_whitespace_run_chars + 1) + r",}")
+
+    def compact(record: dict[str, Any]) -> dict[str, Any]:
+        text = record["text"]
+        compacted = pattern.sub(lambda m: m.group(0)[:max_whitespace_run_chars], text)
+        if len(compacted) != len(text):
+            counters.increment(COMPACTED_WHITESPACE_COUNTER)
+            record = {**record, "text": compacted, "id": generate_id(compacted)}
+        return record
+
+    return compact
+
+
 def _build_pipeline(
     files: list[str],
     output_dir: str,
@@ -190,6 +223,7 @@ def _build_pipeline(
     text_field: str,
     id_field: str | None,
     dedup_mode: DedupMode,
+    max_whitespace_run_chars: int,
 ) -> Dataset:
     """Build a single Zephyr pipeline for one subdirectory."""
     normalize_record = _make_normalize_fn(text_field, id_field)
@@ -221,6 +255,7 @@ def _build_pipeline(
         .flat_map(load_file)
         .filter(has_text)
         .map(normalize_record)
+        .map(_make_whitespace_compactor(max_whitespace_run_chars))
         .group_by(
             key=lambda r: int(r["id"], 16) % num_shards,
             reducer=reducers[dedup_mode],
@@ -241,6 +276,7 @@ def normalize_to_parquet(
     text_field: str = "text",
     id_field: str = "id",
     target_partition_bytes: int = 256 * 1024 * 1024,
+    max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
@@ -262,6 +298,12 @@ def normalize_to_parquet(
             silently skipped.
         target_partition_bytes: Target size in bytes per output partition.
             Used to compute the number of output shards per subdirectory.
+        max_whitespace_run_chars: Compact any consecutive whitespace run
+            longer than this many characters down to this length.
+            Pathologically long whitespace runs (e.g. multi-MB runs from
+            broken HTML→text extraction, cf. #4588) can OOM downstream
+            tokenization. Affected records are counted via the
+            ``datakit_normalize_compacted_whitespace`` Zephyr counter.
         worker_resources: Per-worker resource request for the Zephyr pipeline.
             Defaults to 2 CPU / 16GB RAM / 10GB disk, sized for
             ``target_partition_bytes`` of 256MB.  Scale up when increasing
@@ -300,7 +342,15 @@ def normalize_to_parquet(
             num_shards,
         )
 
-        pipeline = _build_pipeline(files, output_dir, num_shards, text_field, id_field, dedup_mode)
+        pipeline = _build_pipeline(
+            files,
+            output_dir,
+            num_shards,
+            text_field,
+            id_field,
+            dedup_mode,
+            max_whitespace_run_chars,
+        )
         ctx = ZephyrContext(
             name=f"normalize-{subdir.replace('/', '-') if subdir else 'all'}",
             resources=resources,
@@ -343,6 +393,7 @@ def normalize_step(
     text_field: str = "text",
     id_field: str = "id",
     target_partition_bytes: int = 256 * 1024 * 1024,
+    max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
     override_output_path: str | None = None,
     input_path: str | None = None,
@@ -378,6 +429,7 @@ def normalize_step(
             text_field=text_field,
             id_field=id_field,
             target_partition_bytes=target_partition_bytes,
+            max_whitespace_run_chars=max_whitespace_run_chars,
             worker_resources=worker_resources,
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
@@ -387,6 +439,7 @@ def normalize_step(
             "text_field": text_field,
             "id_field": id_field,
             "target_partition_bytes": target_partition_bytes,
+            "max_whitespace_run_chars": max_whitespace_run_chars,
             "input_path": resolved_input,
             "file_extensions": file_extensions,
             "dedup_mode": dedup_mode,
