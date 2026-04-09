@@ -10,12 +10,9 @@ backed by in-memory fakes rather than MagicMock.
 
 import threading
 
-
-from iris.cluster.controller.autoscaler import (
-    Autoscaler,
-    ScalingAction,
-)
-from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup
+from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.models import DemandEntry, ScalingAction
+from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
 from iris.cluster.constraints import DeviceType
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
@@ -208,7 +205,6 @@ class TestAutoscalerWaterfallEndToEnd:
         )
 
         from iris.cluster.constraints import PlacementRequirements
-        from iris.cluster.controller.autoscaler import DemandEntry
         from iris.rpc import job_pb2
 
         big_resources = job_pb2.ResourceSpecProto(cpu_millicores=128000, memory_bytes=128 * 1024**3)
@@ -526,7 +522,7 @@ def test_marin_style_lifecycle():
             _mark_all_slices_ready(g)
 
     def routed(group_name):
-        return len(autoscaler._last_routing_decision.routed_entries.get(group_name, []))
+        return len(autoscaler._last_scale_plan.routing_decision.routed_entries.get(group_name, []))
 
     def assert_no_load_on_last():
         assert routed("tpu-16vm") == 0, "tpu-16vm should never receive load"
