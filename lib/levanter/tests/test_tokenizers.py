@@ -714,6 +714,36 @@ def test_multi_chunk_path_preserves_bos(backend_tokenizer, monkeypatch):
 
 
 @requires_model
+def test_normal_text_unchanged_by_splitter(backend_tokenizer):
+    """For text where no homogeneous run exceeds the cap, the splitter must
+    not change tokenization at all. ``encode(text)`` should return exactly
+    what a single direct call to the underlying Rust tokenizer would.
+
+    A regex like ``\\s{1,N}|\\S{1,N}`` splits at every whitespace transition,
+    which severs leading-space-prefix BPE merges (e.g. " world" → 1 token vs
+    " " + "world" → 2 different tokens) and roughly doubles the token count
+    on normal English text. This test guards against that regression.
+    """
+    text = "The quick brown fox jumps over the lazy dog."
+
+    via_split = backend_tokenizer.encode(text, add_special_tokens=False)
+
+    # Bypass our splitter and call the underlying Rust tokenizer directly.
+    inner = backend_tokenizer._tokenizer
+    if hasattr(inner, "encode_batch"):
+        # HF tokenizers backend
+        direct = inner.encode(text, add_special_tokens=False).ids
+    else:
+        # kitoken backend: encode(text, encode_specials=True)
+        direct = inner.encode(text, True)
+
+    assert via_split == direct, (
+        f"splitter changed tokenization on normal text: "
+        f"{len(via_split)} tokens via splitter vs {len(direct)} direct"
+    )
+
+
+@requires_model
 def test_encode_batch_scatters_parts_back_to_originals(backend_tokenizer, monkeypatch):
     """encode_batch must reassemble per-text token sequences correctly when
     some texts are split into multiple parts and others aren't."""
