@@ -240,7 +240,7 @@ class TestScalingGroupVmGroupOwnership:
 
 
 class TestScalingGroupScalingPolicy:
-    """Tests for scaling policy decisions (can_scale_up, can_scale_down)."""
+    """Tests for scaling policy decisions (can_scale_up, rate limiting)."""
 
     def test_can_scale_up_when_below_max(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """can_scale_up() returns True when below max_slices."""
@@ -288,16 +288,6 @@ class TestScalingGroupScalingPolicy:
         assert not group.can_scale_up(timestamp=Timestamp.from_ms(1005000))
         # After cooldown expires
         assert group.can_scale_up(timestamp=Timestamp.from_ms(1015000))
-
-    def test_can_scale_down_always_allowed(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """can_scale_down() always returns True (target_capacity gates actual scale-down)."""
-        discovered = [make_fake_slice_handle("slice-001")]
-        platform = make_mock_platform(slices_to_discover=discovered)
-        group = ScalingGroup(scale_group_config, platform)
-        group.reconcile()
-
-        assert group.slice_count() == 1
-        assert group.can_scale_down()
 
     def test_scale_down_rate_limited_by_token_bucket(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """acquire_scale_down_token() returns False when the token bucket is exhausted."""

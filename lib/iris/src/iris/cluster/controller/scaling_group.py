@@ -218,7 +218,7 @@ class ScalingGroup:
     - Uses a WorkerInfraProvider to create/discover slices
     - Stores SliceHandle references directly for internal tracking
     - Maintains scaling stats (per-slice idle tracking, backoff, cooldowns)
-    - Provides scaling policy helpers (can_scale_up, can_scale_down)
+    - Provides scaling policy helpers (can_scale_up)
     - Owns scale-down logic via per-slice idle timeout tracking
     """
 
@@ -787,9 +787,6 @@ class ScalingGroup:
         if ready <= target_capacity:
             return []
 
-        if not self.can_scale_down():
-            return []
-
         terminated: list[SliceHandle] = []
 
         # Find idle slices and verify they're still idle before termination
@@ -872,15 +869,6 @@ class ScalingGroup:
             count = len(self._slices) + self._pending_scale_ups
         if count >= self._config.max_slices:
             return False
-        return True
-
-    def can_scale_down(self) -> bool:
-        """Check if scale-down is allowed.
-
-        Always allowed — the caller's target_capacity (which incorporates
-        buffer_slices) determines how far down we actually go.
-        Per-operation rate limiting is handled by acquire_scale_down_token().
-        """
         return True
 
     def acquire_scale_up_token(self, timestamp: Timestamp | None = None) -> bool:
