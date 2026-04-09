@@ -140,7 +140,28 @@ message Controller {
     SORT_DIRECTION_DESC = 2;
   }
 
+  enum JobQueryScope {
+    JOB_QUERY_SCOPE_UNSPECIFIED = 0;
+    JOB_QUERY_SCOPE_ALL = 1;
+    JOB_QUERY_SCOPE_ROOTS = 2;
+    JOB_QUERY_SCOPE_CHILDREN = 3;
+  }
+
+  message JobQuery {
+    JobQueryScope scope = 1;
+    string parent_job_id = 2;
+    string name_filter = 3;
+    string state_filter = 4;
+    JobSortField sort_field = 5;
+    SortDirection sort_direction = 6;
+    int32 offset = 7;
+    int32 limit = 8;
+  }
+
   message ListJobsRequest {
+    // Preferred typed query shape. Legacy fields below remain for compatibility.
+    JobQuery query = 9;
+
     // Pagination
     int32 offset = 1;   // Skip first N jobs (default: 0)
     int32 limit = 2;    // Max jobs to return (default: 50, max: 500)

@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
-import { useControllerRpc, controllerRpcCall } from '@/composables/useRpc'
+import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName } from '@/types/status'
 import type { JobState } from '@/types/status'
-import type { JobStatus, ListJobsResponse } from '@/types/rpc'
+import type { JobStatus, JobQuery, ListJobsResponse } from '@/types/rpc'
 import { timestampMs, formatDuration, formatRelativeTime } from '@/utils/formatting'
-import { flattenJobTree, getLeafJobName, jobsWithChildren } from '@/utils/jobTree'
+import { flattenLoadedJobTree, getLeafJobName } from '@/utils/jobTree'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 
@@ -43,6 +43,8 @@ const nameFilter = ref('')
 const localFilter = ref('')
 const stateFilter = ref('')
 const expandedJobs = ref<Set<string>>(loadExpandedJobs())
+const childJobsByParent = ref<Map<string, JobStatus[]>>(new Map())
+const loadingChildJobs = ref<Set<string>>(new Set())
 
 const JOB_STATES: JobState[] = [
   'pending', 'building', 'running', 'succeeded', 'failed', 'killed', 'worker_failed', 'unschedulable',
@@ -54,12 +56,15 @@ const {
   error,
   refresh: fetchJobs,
 } = useControllerRpc<ListJobsResponse>('ListJobs', () => ({
-  offset: page.value * PAGE_SIZE,
-  limit: PAGE_SIZE,
-  sortField: SORT_FIELD_MAP[sortField.value],
-  sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
-  nameFilter: nameFilter.value || undefined,
-  stateFilter: stateFilter.value || undefined,
+  query: {
+    scope: 'JOB_QUERY_SCOPE_ROOTS',
+    offset: page.value * PAGE_SIZE,
+    limit: PAGE_SIZE,
+    sortField: SORT_FIELD_MAP[sortField.value],
+    sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
+    nameFilter: nameFilter.value || undefined,
+    stateFilter: stateFilter.value || undefined,
+  } satisfies JobQuery,
 }))
 
 const jobs = computed(() => listResponse.value?.jobs ?? [])
@@ -85,15 +90,26 @@ function saveExpandedJobs() {
   }
 }
 
+async function refreshExpandedChildren() {
+  const expandedIds = [...expandedJobs.value]
+  for (const parentJobId of expandedIds) {
+    const payload = await controllerRpcCall<ListJobsResponse>('ListJobs', {
+      query: {
+        scope: 'JOB_QUERY_SCOPE_CHILDREN',
+        parentJobId,
+        sortField: SORT_FIELD_MAP[sortField.value],
+        sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
+        stateFilter: stateFilter.value || undefined,
+      } satisfies JobQuery,
+    })
+    const nextChildren = new Map(childJobsByParent.value)
+    nextChildren.set(parentJobId, payload.jobs ?? [])
+    childJobsByParent.value = nextChildren
+  }
+}
+
 async function fetchAll() {
   await fetchJobs()
-  // Prune children whose parent is no longer on this page
-  const currentNames = new Set(jobs.value.map(j => j.name))
-  for (const key of childJobsMap.value.keys()) {
-    if (!currentNames.has(key)) {
-      childJobsMap.value.delete(key)
-    }
-  }
   await refreshExpandedChildren()
 }
 
@@ -101,8 +117,10 @@ onMounted(fetchAll)
 useAutoRefresh(fetchAll, 30_000)
 
 watch([page, sortField, sortDir, nameFilter, stateFilter], () => {
-  childJobsMap.value = new Map()
-  fetchAll()
+  childJobsByParent.value = new Map()
+  expandedJobs.value = new Set()
+  saveExpandedJobs()
+  fetchJobs()
 })
 
 watch(stateFilter, () => {
@@ -111,46 +129,41 @@ watch(stateFilter, () => {
 
 // -- Job tree (lazy-loaded children) --
 
-const childJobsMap = ref<Map<string, JobStatus[]>>(new Map())
+const flattenedJobs = computed(() => flattenLoadedJobTree(jobs.value, childJobsByParent.value, expandedJobs.value))
 
-const allJobs = computed(() => {
-  const extra = [...childJobsMap.value.values()].flat()
-  return [...jobs.value, ...extra]
-})
-
-const flattenedJobs = computed(() => flattenJobTree(allJobs.value, expandedJobs.value))
-
-const expandableJobs = computed(() => jobsWithChildren(allJobs.value))
-
-async function fetchChildJobs(jobName: string, jobId: string) {
-  const resp = await controllerRpcCall<ListJobsResponse>('ListJobs', {
-    parentJobId: jobId,
-  })
-  childJobsMap.value.set(jobName, resp.jobs ?? [])
-}
-
-async function refreshExpandedChildren() {
-  const expanded = expandedJobs.value
-  const all = allJobs.value
-  for (const jobName of expanded) {
-    const job = all.find(j => j.name === jobName)
-    if (job) {
-      await fetchChildJobs(jobName, job.jobId)
-    }
+// -- Interactions --
+async function loadChildJobs(parentJobId: string) {
+  const nextLoading = new Set(loadingChildJobs.value)
+  nextLoading.add(parentJobId)
+  loadingChildJobs.value = nextLoading
+  try {
+    const payload = await controllerRpcCall<ListJobsResponse>('ListJobs', {
+      query: {
+        scope: 'JOB_QUERY_SCOPE_CHILDREN',
+        parentJobId,
+        sortField: SORT_FIELD_MAP[sortField.value],
+        sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
+        stateFilter: stateFilter.value || undefined,
+      } satisfies JobQuery,
+    })
+    const nextChildren = new Map(childJobsByParent.value)
+    nextChildren.set(parentJobId, payload.jobs ?? [])
+    childJobsByParent.value = nextChildren
+  } finally {
+    const doneLoading = new Set(loadingChildJobs.value)
+    doneLoading.delete(parentJobId)
+    loadingChildJobs.value = doneLoading
   }
 }
 
-// -- Interactions --
-
-async function toggleExpanded(jobName: string) {
+function toggleExpanded(job: JobStatus) {
   const next = new Set(expandedJobs.value)
-  if (next.has(jobName)) {
-    next.delete(jobName)
+  if (next.has(job.jobId)) {
+    next.delete(job.jobId)
   } else {
-    next.add(jobName)
-    const job = allJobs.value.find(j => j.name === jobName)
-    if (job && !childJobsMap.value.has(jobName)) {
-      await fetchChildJobs(jobName, job.jobId)
+    next.add(job.jobId)
+    if (!childJobsByParent.value.has(job.jobId)) {
+      void loadChildJobs(job.jobId)
     }
   }
   expandedJobs.value = next
@@ -382,11 +395,11 @@ function sortIndicator(field: SortField): string {
           >
             <span class="inline-flex items-center gap-1">
               <button
-                v-if="expandableJobs.has(node.job.name)"
+                v-if="node.job.hasChildren"
                 class="text-text-muted hover:text-text select-none w-4 text-center text-xs"
-                @click.stop="toggleExpanded(node.job.name)"
+                @click.stop="toggleExpanded(node.job)"
               >
-                {{ expandedJobs.has(node.job.name) ? '▼' : '▶' }}
+                {{ loadingChildJobs.has(node.job.jobId) ? '…' : (expandedJobs.has(node.job.jobId) ? '▼' : '▶') }}
               </button>
               <span v-else class="w-4" />
               <RouterLink

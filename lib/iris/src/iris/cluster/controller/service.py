@@ -516,15 +516,71 @@ def _jobs_paginated(
     return jobs, total
 
 
-def _jobs_with_children(db: ControllerDB, job_ids: list[str]) -> set[str]:
-    """Return the subset of job_ids that have at least one child job."""
+def _jobs_all_filtered(
+    db: ControllerDB,
+    states: tuple[int, ...],
+    *,
+    state_filter_int: int | None = None,
+    name_filter: str = "",
+    sort_field: int = 0,
+    descending: bool = True,
+    offset: int = 0,
+    limit: int = 0,
+) -> tuple[list[JobRow], int]:
+    """Fetch jobs across the full job table."""
+    conditions = []
+    params: list[object] = []
+
+    if state_filter_int is not None:
+        conditions.append("j.state = ?")
+        params.append(state_filter_int)
+    else:
+        state_placeholders = ",".join("?" for _ in states)
+        conditions.append(f"j.state IN ({state_placeholders})")
+        params.extend(states)
+
+    if name_filter:
+        conditions.append("LOWER(j.name) LIKE ?")
+        params.append(f"%{name_filter}%")
+
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
+    direction = "DESC" if descending else "ASC"
+    order_expr = _SORT_FIELD_TO_SQL.get(sort_field, "j.submitted_at_ms")
+    count_sql = f"SELECT COUNT(*) FROM jobs j WHERE {where_clause}"
+    select_sql = f"""
+        SELECT {JOB_ROW_PROJECTION.select_clause()}
+        FROM jobs j
+        WHERE {where_clause}
+        ORDER BY {order_expr} {direction}
+    """
+    select_params = list(params)
+    if limit > 0:
+        select_sql += " LIMIT ? OFFSET ?"
+        select_params.extend([limit, offset])
+
+    with db.read_snapshot() as q:
+        rows = q.execute_sql(select_sql, tuple(select_params)).fetchall()
+        if offset == 0 and limit > 0 and len(rows) < limit:
+            total = len(rows)
+        else:
+            total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
+
+    return JOB_ROW_PROJECTION.decode(rows), total
+
+
+def _parent_ids_with_children(db: ControllerDB, job_ids: list[JobName]) -> set[JobName]:
+    """Return the subset of *job_ids* that currently have direct children."""
     if not job_ids:
         return set()
     placeholders = ",".join("?" for _ in job_ids)
-    sql = f"SELECT DISTINCT parent_job_id FROM jobs WHERE parent_job_id IN ({placeholders})"
+    sql = f"""
+        SELECT DISTINCT j.parent_job_id
+        FROM jobs j
+        WHERE j.parent_job_id IN ({placeholders})
+    """
     with db.read_snapshot() as q:
-        rows = q.fetchall(sql, tuple(job_ids))
-    return {row[0] for row in rows}
+        rows = q.raw(sql, tuple(job_id.to_wire() for job_id in job_ids))
+    return {JobName.from_wire(row.parent_job_id) for row in rows if row.parent_job_id}
 
 
 def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
@@ -1044,6 +1100,7 @@ class ControllerServiceImpl:
         j: JobRow,
         task_summary: TaskJobSummary | None,
         autoscaler_pending_hints: dict[str, PendingHint],
+        *,
         has_children: bool = False,
     ) -> job_pb2.JobStatus:
         """Convert a JobRow + its task summary into a JobStatus proto."""
@@ -1093,14 +1150,15 @@ class ControllerServiceImpl:
         jobs: list[JobRow],
         task_summaries: dict[JobName, TaskJobSummary],
         autoscaler_pending_hints: dict[str, PendingHint],
-        parent_job_ids: set[str],
+        has_children: set[JobName] | None = None,
     ) -> list[job_pb2.JobStatus]:
+        child_parent_ids = has_children or set()
         return [
             self._job_to_proto(
                 j,
                 task_summaries.get(j.job_id),
                 autoscaler_pending_hints,
-                has_children=j.job_id.to_wire() in parent_job_ids,
+                has_children=j.job_id in child_parent_ids,
             )
             for j in jobs
         ]
@@ -1111,11 +1169,16 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> controller_pb2.Controller.ListJobsResponse:
         """List jobs with SQL-level filtering, sorting, and pagination."""
-        name_filter = request.name_filter.lower() if request.name_filter else ""
-        state_filter = request.state_filter.lower() if request.state_filter else ""
+        has_typed_query = request.HasField("query")
+        query = request.query if has_typed_query else None
 
-        sort_field = request.sort_field or controller_pb2.Controller.JOB_SORT_FIELD_DATE
-        sort_dir = request.sort_direction
+        raw_name_filter = query.name_filter if query else request.name_filter
+        raw_state_filter = query.state_filter if query else request.state_filter
+        name_filter = raw_name_filter.lower() if raw_name_filter else ""
+        state_filter = raw_state_filter.lower() if raw_state_filter else ""
+
+        sort_field = (query.sort_field if query else request.sort_field) or controller_pb2.Controller.JOB_SORT_FIELD_DATE
+        sort_dir = query.sort_direction if query else request.sort_direction
         if sort_dir == controller_pb2.Controller.SORT_DIRECTION_UNSPECIFIED:
             sort_dir = (
                 controller_pb2.Controller.SORT_DIRECTION_DESC
@@ -1124,8 +1187,15 @@ class ControllerServiceImpl:
             )
         reverse = sort_dir == controller_pb2.Controller.SORT_DIRECTION_DESC
 
-        offset = max(request.offset, 0)
-        limit = max(request.limit, 0)
+        raw_offset = query.offset if query else request.offset
+        raw_limit = query.limit if query else request.limit
+        offset = max(raw_offset, 0)
+        limit = min(raw_limit, 500) if raw_limit > 0 else 0
+        scope = (
+            query.scope
+            if query and query.scope != controller_pb2.Controller.JOB_QUERY_SCOPE_UNSPECIFIED
+            else controller_pb2.Controller.JOB_QUERY_SCOPE_ALL
+        )
 
         state_filter_int: int | None = None
         if state_filter:
@@ -1136,22 +1206,64 @@ class ControllerServiceImpl:
             if state_filter_int is None:
                 return controller_pb2.Controller.ListJobsResponse(jobs=[], total_count=0, has_more=False)
 
-        jobs, total_count = _jobs_paginated(
-            self._db,
-            USER_JOB_STATES,
-            state_filter_int=state_filter_int,
-            name_filter=name_filter,
-            sort_field=sort_field,
-            descending=reverse,
-            offset=offset,
-            limit=limit,
-            parent_job_id=request.parent_job_id,
-        )
+        legacy_parent_job_id = request.parent_job_id if not has_typed_query else ""
+
+        if scope == controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS:
+            jobs, total_count = _jobs_paginated(
+                self._db,
+                USER_JOB_STATES,
+                state_filter_int=state_filter_int,
+                name_filter=name_filter,
+                sort_field=sort_field,
+                descending=reverse,
+                offset=offset,
+                limit=limit,
+            )
+        elif scope == controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN:
+            parent_job_id = query.parent_job_id if query else ""
+            if not parent_job_id:
+                raise ConnectError(Code.INVALID_ARGUMENT, "query.parent_job_id is required for JOB_QUERY_SCOPE_CHILDREN")
+            jobs, total_count = _jobs_paginated(
+                self._db,
+                USER_JOB_STATES,
+                state_filter_int=state_filter_int,
+                name_filter=name_filter,
+                sort_field=sort_field,
+                descending=reverse,
+                offset=offset,
+                limit=limit,
+                parent_job_id=parent_job_id,
+            )
+        else:
+            if legacy_parent_job_id:
+                jobs, total_count = _jobs_paginated(
+                    self._db,
+                    USER_JOB_STATES,
+                    state_filter_int=state_filter_int,
+                    name_filter=name_filter,
+                    sort_field=sort_field,
+                    descending=reverse,
+                    offset=offset,
+                    limit=limit,
+                    parent_job_id=legacy_parent_job_id,
+                )
+            else:
+                jobs, total_count = _jobs_all_filtered(
+                    self._db,
+                    USER_JOB_STATES,
+                    state_filter_int=state_filter_int,
+                    name_filter=name_filter,
+                    sort_field=sort_field,
+                    descending=reverse,
+                    offset=offset,
+                    limit=limit,
+                )
+
         task_summaries = _task_summaries_for_jobs(self._db, {j.job_id for j in jobs})
-        parent_job_ids = _jobs_with_children(self._db, [j.job_id.to_wire() for j in jobs])
         has_pending = any(j.state == job_pb2.JOB_STATE_PENDING for j in jobs)
         autoscaler_pending_hints = self._get_autoscaler_pending_hints() if has_pending else {}
-        all_jobs = self._jobs_to_protos(jobs, task_summaries, autoscaler_pending_hints, parent_job_ids)
+        has_children = _parent_ids_with_children(self._db, [j.job_id for j in jobs])
+        all_jobs = self._jobs_to_protos(jobs, task_summaries, autoscaler_pending_hints, has_children=has_children)
         has_more = limit > 0 and offset + limit < total_count
         return controller_pb2.Controller.ListJobsResponse(
             jobs=all_jobs,
