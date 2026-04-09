@@ -89,34 +89,6 @@ def first_fit_decreasing(reqs: list[AdditiveReq], vm_capacity: AdditiveReq) -> i
     return len(used)
 
 
-def compute_required_slices(group: ScalingGroup, entries: list[DemandEntry]) -> int:
-    """Compute the number of slices required to serve a group's routed entries."""
-
-    if not entries:
-        return 0
-
-    vm_capacity = _effective_vm_capacity(group)
-    if vm_capacity is None:
-        return len(entries)
-
-    coscheduled_count = 0
-    accel_vm_count = 0
-    noncsc_reqs: list[AdditiveReq] = []
-    for entry in entries:
-        if entry.coschedule_group_id:
-            coscheduled_count += 1
-        elif get_device_type_enum(entry.resources.device) != DeviceType.CPU:
-            accel_vm_count += 1
-        else:
-            noncsc_reqs.append(additive_req(entry))
-
-    required_vms = first_fit_decreasing(noncsc_reqs, vm_capacity) if noncsc_reqs else 0
-    required_vms += accel_vm_count
-
-    required_slices_for_noncsc = math.ceil(required_vms / group.num_vms) if required_vms > 0 else 0
-    return coscheduled_count + required_slices_for_noncsc
-
-
 def _effective_vm_capacity(group: ScalingGroup) -> AdditiveReq | None:
     """Per-VM capacity for bin packing, with 0-means-unlimited semantics."""
 

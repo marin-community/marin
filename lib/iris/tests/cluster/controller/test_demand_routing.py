@@ -1,11 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for demand routing, bin packing, and compute_required_slices.
+"""Tests for demand routing and bin packing.
 
 These tests exercise pure scheduling/routing logic. They call route_demand(),
-compute_required_slices(), and first_fit_decreasing() directly -- no platform
-or provider is needed.
+and first_fit_decreasing() directly -- no platform or provider is needed.
 """
 
 import pytest
@@ -13,7 +12,6 @@ import pytest
 from iris.cluster.controller.autoscaler.models import AdditiveReq, DemandEntry
 from iris.cluster.controller.autoscaler.routing import (
     RoutingBudget,
-    compute_required_slices,
     first_fit_decreasing,
     route_demand,
 )
@@ -87,12 +85,17 @@ class TestFirstFitDecreasing:
 
 
 # ---------------------------------------------------------------------------
-# compute_required_slices
+# group_required_slices via route_demand
 # ---------------------------------------------------------------------------
 
 
-class TestComputeRequiredSlices:
-    """Tests for compute_required_slices with different group configurations."""
+class TestGroupRequiredSlices:
+    """Tests for required-slice accounting through route_demand()."""
+
+    @staticmethod
+    def _required_slices(group: ScalingGroup, entries: list[DemandEntry]) -> int:
+        result = route_demand([group], entries)
+        return result.group_required_slices.get(group.name, 0)
 
     def test_tiny_entries_pack_densely(self):
         """Many small CPU entries pack into a single VM and therefore a single slice."""
@@ -105,7 +108,7 @@ class TestComputeRequiredSlices:
 
         # 16 entries at 1000m CPU, 1024 bytes mem -> all fit in 1 VM (128 cores, 128GiB)
         entries = make_demand_entries(16, device_type=DeviceType.CPU)
-        assert compute_required_slices(group, entries) == 1
+        assert self._required_slices(group, entries) == 1
 
     def test_accelerator_entries_not_packed(self):
         """Accelerator entries get 1 VM each -- they are not bin-packed."""
@@ -117,7 +120,7 @@ class TestComputeRequiredSlices:
         group = ScalingGroup(config, make_mock_platform())
 
         entries = make_demand_entries(4, device_type=DeviceType.TPU, device_variant="v5p-8")
-        assert compute_required_slices(group, entries) == 4
+        assert self._required_slices(group, entries) == 4
 
     def test_full_vm_entries_need_one_slice_each(self):
         """Entries that fill an entire VM each need 1 slice per entry (num_vms=1)."""
@@ -135,7 +138,7 @@ class TestComputeRequiredSlices:
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
         )
-        assert compute_required_slices(group, entries) == 3
+        assert self._required_slices(group, entries) == 3
 
     def test_multi_vm_slice_packs_across_vms(self):
         """With num_vms=4, entries that need 4 VMs fit in 1 slice."""
@@ -154,7 +157,7 @@ class TestComputeRequiredSlices:
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
         )
-        assert compute_required_slices(group, entries) == 1
+        assert self._required_slices(group, entries) == 1
 
     def test_multi_vm_slice_needs_multiple_slices(self):
         """With num_vms=4, 5 full-VM entries need ceil(5/4) = 2 slices."""
@@ -172,7 +175,7 @@ class TestComputeRequiredSlices:
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
         )
-        assert compute_required_slices(group, entries) == 2
+        assert self._required_slices(group, entries) == 2
 
     def test_coscheduled_entries_use_full_slice(self):
         """A coscheduled entry always consumes exactly 1 slice."""
@@ -192,7 +195,7 @@ class TestComputeRequiredSlices:
             coschedule_group_id="job-1",
         )
         assert len(entries) == 1
-        assert compute_required_slices(group, entries) == 1
+        assert self._required_slices(group, entries) == 1
 
     def test_mixed_coscheduled_and_packable(self):
         """Coscheduled entries add 1 slice each; non-coscheduled entries are packed."""
@@ -222,10 +225,10 @@ class TestComputeRequiredSlices:
         )
         entries = coscheduled + non_coscheduled
         # 1 coscheduled slice + 1 packed slice = 2
-        assert compute_required_slices(group, entries) == 2
+        assert self._required_slices(group, entries) == 2
 
-    def test_no_resources_configured_falls_back_to_entry_count(self):
-        """Without per-VM resources, each entry = 1 slice (pre-packing behavior)."""
+    def test_no_resources_configured_does_not_route_unmatched_entries(self):
+        """A group without configured resources does not match TPU demand for routing."""
         config = config_pb2.ScaleGroupConfig(
             name="no-resources",
             max_slices=5,
@@ -235,12 +238,12 @@ class TestComputeRequiredSlices:
         assert group.resources is None
 
         entries = make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8")
-        assert compute_required_slices(group, entries) == 3
+        assert self._required_slices(group, entries) == 0
 
     def test_empty_entries_returns_zero(self):
         config = make_scale_group_config(name="test", max_slices=5, num_vms=1)
         group = ScalingGroup(config, make_mock_platform())
-        assert compute_required_slices(group, []) == 0
+        assert self._required_slices(group, []) == 0
 
 
 # ---------------------------------------------------------------------------
