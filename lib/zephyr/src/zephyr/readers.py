@@ -260,10 +260,10 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
     # so post-hoc filtering works, then project down afterwards.
     read_columns = spec.columns
     need_project = False
-    if spec.columns is not None and pa_filter is not None:
-        pf = pq.ParquetFile(spec.path)
-        all_schema_names = {pf.schema_arrow.field(i).name for i in range(len(pf.schema_arrow))}
-        filter_cols = {name for name in all_schema_names if name in str(pa_filter)} - set(spec.columns)
+    if spec.columns is not None and spec.filter_expr is not None:
+        from zephyr.expr import referenced_columns
+
+        filter_cols = referenced_columns(spec.filter_expr) - set(spec.columns)
         if filter_cols:
             read_columns = list(spec.columns) + sorted(filter_cols)
             need_project = True
