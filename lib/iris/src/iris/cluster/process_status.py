@@ -13,7 +13,7 @@ import resource
 import sys
 import threading
 
-from iris.cluster.runtime.process import _read_proc_cpu_percent
+from iris.cluster.runtime.process import _read_proc_cpu_millicores
 from iris.rpc import job_pb2
 from rigging.timing import Timer
 
@@ -71,7 +71,9 @@ def collect_process_info(timer: Timer) -> job_pb2.ProcessInfo:
     global _prev_cpu_total, _prev_cpu_utime
 
     rss, vms = _memory_bytes()
-    cpu_pct, _prev_cpu_total, _prev_cpu_utime = _read_proc_cpu_percent(os.getpid(), _prev_cpu_total, _prev_cpu_utime)
+    cpu_millicores, _prev_cpu_total, _prev_cpu_utime = _read_proc_cpu_millicores(
+        os.getpid(), _prev_cpu_total, _prev_cpu_utime
+    )
 
     return job_pb2.ProcessInfo(
         hostname=platform.node(),
@@ -80,7 +82,7 @@ def collect_process_info(timer: Timer) -> job_pb2.ProcessInfo:
         uptime_ms=timer.elapsed_ms(),
         memory_rss_bytes=rss,
         memory_vms_bytes=vms,
-        cpu_percent=cpu_pct,
+        cpu_millicores=cpu_millicores,
         thread_count=threading.active_count(),
         open_fd_count=_open_fd_count(),
         memory_total_bytes=_total_memory_bytes(),

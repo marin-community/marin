@@ -302,7 +302,7 @@ def _read_proc_memory_mb(pid: int) -> int | None:
             return None
 
 
-def _read_proc_cpu_percent(
+def _read_proc_cpu_millicores(
     pid: int,
     prev_total: float,
     prev_utime: float,
@@ -515,7 +515,7 @@ class ProcessContainerHandle:
 
         pid = self._container._process.pid
         memory_mb = _read_proc_memory_mb(pid)
-        cpu_millicores, self._prev_cpu_total, self._prev_cpu_utime = _read_proc_cpu_percent(
+        cpu_millicores, self._prev_cpu_total, self._prev_cpu_utime = _read_proc_cpu_millicores(
             pid, self._prev_cpu_total, self._prev_cpu_utime
         )
         return ContainerStats(

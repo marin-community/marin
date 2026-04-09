@@ -629,7 +629,7 @@ class HostMetricsCollector:
                 delta_idle = idle - self._prev_cpu_idle
 
                 if delta_total > 0 and self._prev_cpu_total > 0:
-                    snapshot.cpu_percent = max(0, min(100, 100 - int(delta_idle * 100 / delta_total)))
+                    snapshot.host_cpu_percent = max(0, min(100, 100 - int(delta_idle * 100 / delta_total)))
 
                 self._prev_cpu_total = total
                 self._prev_cpu_idle = idle

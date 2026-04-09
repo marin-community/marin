@@ -41,7 +41,7 @@ const workerLogEntries = computed(() => data.value?.workerLogEntries ?? [])
 const attributes = computed(() => worker.value?.metadata?.attributes ?? {})
 
 // Sparkline data from resource history
-const cpuHistory = computed(() => resourceHistory.value.map((s) => s.cpuPercent ?? 0))
+const cpuHistory = computed(() => resourceHistory.value.map((s) => s.hostCpuPercent ?? 0))
 const memoryHistory = computed(() =>
   resourceHistory.value.map((s) => parseInt(s.memoryUsedBytes ?? '0', 10))
 )
@@ -50,8 +50,8 @@ const runningTaskCount = computed(() => worker.value?.runningJobIds?.length ?? 0
 
 const cpuDisplay = computed(() => {
   const cr = currentResources.value
-  if (!cr?.cpuPercent) return '-'
-  return `${Math.round(cr.cpuPercent)}%`
+  if (!cr?.hostCpuPercent) return '-'
+  return `${Math.round(cr.hostCpuPercent)}%`
 })
 
 const memoryDisplay = computed(() => {

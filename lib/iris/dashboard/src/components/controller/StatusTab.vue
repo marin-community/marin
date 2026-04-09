@@ -4,7 +4,7 @@ import { useControllerRpc, controllerRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { useProfileAction } from '@/composables/useProfileAction'
 import type { GetProcessStatusResponse, ProcessInfo } from '@/types/rpc'
-import { formatBytes, formatUptime } from '@/utils/formatting'
+import { formatBytes, formatCpuMillicores, formatUptime } from '@/utils/formatting'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
@@ -85,8 +85,8 @@ const totalBytes = computed(() => {
         <InfoRow v-if="totalBytes" label="System Memory">
           <span class="font-mono">{{ formatBytes(totalBytes) }}</span>
         </InfoRow>
-        <InfoRow label="CPU %">
-          <span class="font-mono">{{ info.cpuPercent !== undefined ? info.cpuPercent.toFixed(1) + '%' : '-' }}</span>
+        <InfoRow label="Process CPU">
+          <span class="font-mono">{{ info.cpuMillicores !== undefined ? formatCpuMillicores(info.cpuMillicores) : '-' }}</span>
         </InfoRow>
         <InfoRow v-if="info.cpuCount" label="CPU Cores">
           <span class="font-mono">{{ info.cpuCount }}</span>
