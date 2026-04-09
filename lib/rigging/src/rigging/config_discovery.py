@@ -3,94 +3,122 @@
 
 """Path-agnostic config discovery for cluster YAML files.
 
-Allows users to reference cluster configs by short name (e.g. ``"marin-dev"``)
-instead of hardcoded relative paths (e.g. ``"lib/iris/examples/marin-dev.yaml"``).
+Generic YAML config discovery helpers. Callers (e.g. iris) pass the
+directories to search; this module knows nothing about any particular
+marin sub-package.
 """
 
 import functools
-import importlib.resources
 import logging
-from pathlib import Path
+import tomllib
 from collections.abc import Sequence
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 _YAML_SUFFIXES = (".yaml", ".yml")
-_GIT_MARKER = ".git"
-_PYPROJECT_MARKER = "pyproject.toml"
-_USER_CONFIG_DIR = Path("~/.config/marin/clusters").expanduser()
 
 
 @functools.lru_cache(maxsize=128)
 def find_project_root(start: Path | str | None = None) -> Path | None:
-    """Walk up from ``start`` looking for a project root directory.
+    """Find the marin workspace root.
 
-    A directory is considered a project root if it contains ``.git`` or
-    ``pyproject.toml``.
-
-    Args:
-        start: Directory to begin the search. Defaults to the current working
-            directory when ``None``.
+    Walks up from ``start`` (or the current working directory) looking for a
+    ``pyproject.toml`` that declares ``[tool.uv.workspace]``. This uniquely
+    identifies the top-level marin root and avoids matching a workspace
+    member's pyproject (e.g. ``lib/iris/pyproject.toml``).
 
     Returns:
-        The project root ``Path``, or ``None`` if no root marker was found
-        (e.g. running from an installed pip package).
+        The marin root ``Path``, or ``None`` when running outside a marin
+        checkout (e.g. from an installed pip package).
     """
-    current = Path(start).resolve() if start is not None else Path.cwd()
+    current = Path(start).resolve() if start is not None else Path.cwd().resolve()
 
     for directory in (current, *current.parents):
-        if (directory / _GIT_MARKER).exists() or (directory / _PYPROJECT_MARKER).exists():
-            logger.debug("Found project root: %s", directory)
+        pp = directory / "pyproject.toml"
+        if pp.is_file() and _declares_uv_workspace(pp):
+            logger.debug("Found marin workspace root: %s", directory)
             return directory
 
-    logger.debug("No project root found starting from %s", current)
+    logger.debug("No marin workspace root found starting from %s", current)
     return None
 
 
-def _search_dirs(search_paths: Sequence[Path | str] | None) -> list[Path]:
-    """Build the ordered list of directories to search for config files."""
-    dirs: list[Path] = []
-
-    if search_paths:
-        dirs.extend(Path(p) for p in search_paths)
-
-    root = find_project_root()
-    if root is not None:
-        dirs.append(root / "infra")
-        dirs.append(root / "lib" / "iris" / "examples")
-
+def _declares_uv_workspace(pyproject_path: Path) -> bool:
+    """Return True if ``pyproject_path`` declares ``[tool.uv.workspace]``."""
     try:
-        iris_examples = importlib.resources.files("iris").joinpath("examples")
-        # Convert to a Path only if it's a real filesystem path
-        iris_path = Path(str(iris_examples))
-        if iris_path.is_dir():
-            dirs.append(iris_path)
-    except (ImportError, TypeError):
-        pass
-
-    dirs.append(_USER_CONFIG_DIR)
-
-    return dirs
+        with pyproject_path.open("rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    return "workspace" in data.get("tool", {}).get("uv", {})
 
 
-def resolve_cluster_config(name: str, search_paths: Sequence[Path | str] | None = None) -> Path:
-    """Resolve a cluster name or path to an existing YAML config file.
+def _resolve_dirs(dirs: Sequence[Path | str]) -> list[Path]:
+    """Expand ``~`` and resolve relative dirs against the marin project root.
+
+    An empty string resolves to the project root itself. Absolute paths are
+    returned unchanged. Relative paths are joined onto the marin project root
+    when one is found, and fall back to the current working directory otherwise.
+    """
+    root = find_project_root()
+    resolved: list[Path] = []
+    for raw in dirs:
+        p = Path(raw).expanduser()
+        if p.is_absolute():
+            resolved.append(p)
+        elif root is not None:
+            resolved.append(root / p)
+        else:
+            resolved.append(Path.cwd() / p)
+    return resolved
+
+
+def find_configs(
+    dirs: Sequence[Path | str],
+    name: str | None = None,
+) -> dict[str, Path]:
+    """Discover YAML config files across ``dirs``.
+
+    Relative ``dirs`` are resolved against the marin project root (see
+    :func:`find_project_root`); absolute paths are used as-is; ``~`` is
+    expanded. An empty string resolves to the project root itself.
+
+    Args:
+        dirs: Directories to search, in priority order.
+        name: When given, only return entries whose stem equals ``name``.
+
+    Returns:
+        A dict mapping config stem (filename without ``.yaml``/``.yml``) to
+        its resolved ``Path``. When the same stem appears in multiple dirs,
+        the first (highest-priority) match wins.
+    """
+    configs: dict[str, Path] = {}
+    for directory in _resolve_dirs(dirs):
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.iterdir()):
+            if path.suffix not in _YAML_SUFFIXES:
+                continue
+            stem = path.stem
+            if name is not None and stem != name:
+                continue
+            if stem not in configs:
+                configs[stem] = path
+    return configs
+
+
+def resolve_cluster_config(name: str, dirs: Sequence[Path | str]) -> Path:
+    """Resolve a cluster name (or path) to an existing YAML config file.
 
     If ``name`` is already an existing file path, it is returned directly.
-    Otherwise the function searches a prioritized set of directories for a
-    file named ``{name}``, ``{name}.yaml``, or ``{name}.yml``.
-
-    Search order:
-      1. Any explicit ``search_paths`` passed in
-      2. Current working directory
-      3. ``{project_root}/infra/`` (if project root found)
-      4. ``{project_root}/lib/iris/examples/`` (if project root found)
-      5. Installed ``iris`` package ``examples/`` directory (if importable)
-      6. ``~/.config/marin/clusters/``
+    Otherwise ``dirs`` are searched for a file whose stem matches ``name``
+    (with ``.yaml`` or ``.yml`` extensions stripped from ``name`` before
+    comparison).
 
     Args:
         name: Cluster name (e.g. ``"marin-dev"``) or path to an existing file.
-        search_paths: Additional directories to search before the defaults.
+        dirs: Directories to search.
 
     Returns:
         The resolved ``Path`` to the config file.
@@ -99,48 +127,27 @@ def resolve_cluster_config(name: str, search_paths: Sequence[Path | str] | None 
         FileNotFoundError: When no matching config file is found, with a
             message listing all searched locations.
     """
-    # If the name is already an existing file, return it directly.
-    candidate = Path(name)
+    candidate = Path(name).expanduser()
     if candidate.is_file():
         return candidate
 
-    searched: list[str] = []
-    for directory in _search_dirs(search_paths):
-        for suffix in ("", *_YAML_SUFFIXES):
-            path = directory / f"{name}{suffix}"
-            searched.append(str(path))
-            if path.is_file():
-                logger.debug("Resolved cluster config %r -> %s", name, path)
-                return path
+    # Allow callers to pass either "marin-dev" or "marin-dev.yaml".
+    name_path = Path(name)
+    search_stem = name_path.stem if name_path.suffix in _YAML_SUFFIXES else name
 
-    searched_str = "\n  ".join(searched)
-    raise FileNotFoundError(f"No config file found for cluster {name!r}.\nSearched locations:\n  {searched_str}")
+    matches = find_configs(dirs, name=search_stem)
+    if search_stem in matches:
+        logger.debug("Resolved cluster config %r -> %s", name, matches[search_stem])
+        return matches[search_stem]
+
+    searched_str = "\n  ".join(str(d) for d in _resolve_dirs(dirs))
+    raise FileNotFoundError(f"No config file found for cluster {name!r}.\nSearched directories:\n  {searched_str}")
 
 
-def list_cluster_configs(search_paths: Sequence[Path | str] | None = None) -> dict[str, Path]:
-    """Discover all cluster config files across the standard search locations.
+def list_cluster_configs(dirs: Sequence[Path | str]) -> dict[str, Path]:
+    """List all YAML cluster configs across ``dirs``.
 
-    Searches the same directories as :func:`resolve_cluster_config`. When the
-    same config name appears in multiple locations, the first-found (highest
-    priority) path wins.
-
-    Args:
-        search_paths: Additional directories to search before the defaults.
-
-    Returns:
-        A ``dict`` mapping config stem (filename without ``.yaml``/``.yml``
-        extension) to the resolved ``Path``.
+    Thin alias over :func:`find_configs` for callers that want the full
+    name-to-path mapping.
     """
-    configs: dict[str, Path] = {}
-
-    for directory in _search_dirs(search_paths):
-        if not directory.is_dir():
-            continue
-        for path in sorted(directory.iterdir()):
-            if path.suffix not in _YAML_SUFFIXES:
-                continue
-            stem = path.stem
-            if stem not in configs:
-                configs[stem] = path
-
-    return configs
+    return find_configs(dirs)

@@ -12,6 +12,7 @@ import sys
 import click
 
 from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
+from rigging.config_discovery import resolve_cluster_config
 from rigging.log_setup import configure_logging
 from iris.rpc import config_pb2, job_pb2
 from iris.rpc import controller_pb2 as _controller_pb2
@@ -20,6 +21,14 @@ from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
 logger = _logging_module.getLogger(__name__)
+
+# Directories searched (in priority order) to resolve ``--cluster=<name>`` to a
+# YAML config file. Relative paths are resolved against the marin project root
+# by ``rigging.config_discovery``.
+IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = (
+    "lib/iris/examples",
+    "~/.config/marin/clusters",
+)
 
 
 def resolve_cluster_name(
@@ -168,10 +177,8 @@ def iris(
 
     # Resolve cluster name to config file if no explicit config or URL given
     if cluster_name and not config_file and not controller_url:
-        from rigging.config_discovery import resolve_cluster_config
-
         try:
-            resolved = resolve_cluster_config(cluster_name)
+            resolved = resolve_cluster_config(cluster_name, dirs=IRIS_CLUSTER_CONFIG_DIRS)
             logger.info("Resolved cluster %r to config: %s", cluster_name, resolved)
             config_file = str(resolved)
         except FileNotFoundError:
