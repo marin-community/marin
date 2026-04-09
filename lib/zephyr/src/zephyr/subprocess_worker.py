@@ -18,6 +18,8 @@ import logging
 import os
 import sys
 import threading
+import traceback
+from contextlib import suppress
 from typing import Any
 
 import cloudpickle
@@ -196,8 +198,7 @@ def execute_shard(task_file: str, result_file: str) -> None:
 def main() -> None:
     if len(sys.argv) != 3:
         print("Usage: python -m zephyr.subprocess_worker <task_file> <result_file>", file=sys.stderr)
-        sys.exit(1)
-    execute_shard(sys.argv[1], sys.argv[2])
+        os._exit(1)
     # Bypass interpreter shutdown to avoid PyArrow GCS/Azure filesystem
     # background threads racing with module GC, which fires
     # ``std::terminate`` ("terminate called without an active exception")
@@ -206,9 +207,23 @@ def main() -> None:
     # is nothing in this one-shot worker that needs ``atexit`` / ``__del__``
     # to run. PyArrow exposes ``finalize_s3`` but no equivalent for GCS,
     # so ``os._exit`` is the only reliable way to skip the racy teardown.
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(0)
+    #
+    # Run inside try/finally so any escape path from ``execute_shard``
+    # (BaseException, a failure writing the result file, ...) still bypasses
+    # interpreter shutdown — otherwise the abort poisons the returncode and
+    # the parent fails the shard even though the work itself succeeded.
+    exit_code = 0
+    try:
+        execute_shard(sys.argv[1], sys.argv[2])
+    except BaseException:
+        traceback.print_exc()
+        exit_code = 1
+    finally:
+        with suppress(Exception):
+            sys.stdout.flush()
+        with suppress(Exception):
+            sys.stderr.flush()
+        os._exit(exit_code)
 
 
 if __name__ == "__main__":
