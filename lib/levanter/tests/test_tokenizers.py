@@ -641,6 +641,102 @@ def test_add_special_tokens_false_no_bos(backend_tokenizer):
         assert ids[0] != backend_tokenizer.bos_token_id
 
 
+def _longest_homogeneous_run(s: str) -> int:
+    """Return the length of the longest run of consecutive whitespace OR
+    consecutive non-whitespace characters in ``s``."""
+    if not s:
+        return 0
+    longest = 1
+    current = 1
+    is_space = s[0].isspace()
+    for ch in s[1:]:
+        ch_is_space = ch.isspace()
+        if ch_is_space == is_space:
+            current += 1
+            if current > longest:
+                longest = current
+        else:
+            current = 1
+            is_space = ch_is_space
+    return longest
+
+
+@requires_model
+def test_multi_chunk_path_preserves_bos(backend_tokenizer, monkeypatch):
+    """When the safe-split path activates, BOS handling must still match the
+    single-chunk path (BOS prepended exactly once when add_special_tokens=True,
+    absent otherwise) and the decoded text must round-trip.
+
+    Forces the multi-chunk path by feeding text with a long run of whitespace
+    and capping the homogeneous-run limit so the splitter cuts it up.
+    """
+    import levanter.tokenizers as tk
+
+    if backend_tokenizer.bos_token_id is None:
+        pytest.skip("Backend has no BOS token to verify against")
+
+    # Pathological-ish: real text bracketing a 1k-space run. With the default
+    # 25k cap this stays one part; with the patched 100-char cap below it
+    # gets split into ~10 parts.
+    text = "The quick brown fox jumps. " + (" " * 1_000) + "And then the lazy dog naps."
+
+    # Sanity: this text should NOT trigger the split path with default limits.
+    assert len(tk._safe_split_for_tokenizer(text)) == 1
+
+    # Force the multi-chunk path by capping homogeneous runs at 100 chars.
+    monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", 100)
+    parts = tk._safe_split_for_tokenizer(text)
+    assert len(parts) > 1, "Expected multi-chunk path to activate"
+    assert "".join(parts) == text
+    # Each part respects the run cap (the cap is on max consecutive run length
+    # within a part, not on part length itself).
+    for p in parts:
+        assert _longest_homogeneous_run(p) <= 100
+
+    multi_plain = backend_tokenizer.encode(text, add_special_tokens=False)
+    multi_special = backend_tokenizer.encode(text, add_special_tokens=True)
+
+    # BOS handling: present iff add_special_tokens=True, exactly once at the front.
+    assert multi_plain[0] != backend_tokenizer.bos_token_id
+    assert multi_special[0] == backend_tokenizer.bos_token_id
+    assert multi_special.count(backend_tokenizer.bos_token_id) == 1
+    assert backend_tokenizer.bos_token_id not in multi_plain
+
+    # The multi-chunk add_special_tokens=True path must equal the
+    # add_special_tokens=False path with a single BOS prepended.
+    assert multi_special == [backend_tokenizer.bos_token_id] + multi_plain
+
+    # Decoded text must round-trip losslessly even with broken BPE merges.
+    assert backend_tokenizer.decode(multi_plain) == text
+    assert backend_tokenizer.decode(multi_special, skip_special_tokens=True) == text
+
+
+def test_safe_split_caps_runs_and_roundtrips(monkeypatch):
+    """The splitter must cap homogeneous runs within each part and round-trip
+    losslessly on a pathological all-whitespace input."""
+    import levanter.tokenizers as tk
+
+    # 1 MB of spaces with two real words at the ends — the realistic shape of
+    # the FDLP/lps47065 OOM document.
+    text = "hello" + (" " * 1_000_000) + "world"
+
+    parts = tk._safe_split_for_tokenizer(text)
+    assert "".join(parts) == text
+    assert len(parts) > 1
+    for p in parts:
+        run = _longest_homogeneous_run(p)
+        assert run <= tk._MAX_HOMOGENEOUS_RUN_CHARS, f"run {run} exceeds cap {tk._MAX_HOMOGENEOUS_RUN_CHARS}"
+
+    # Also confirm the outer 400k chunking is respected when the input has no
+    # long homogeneous runs (so only the outer cap fires).
+    no_runs = "abcde" * 200_000  # 1M chars, longest run = 1
+    parts2 = tk._safe_split_for_tokenizer(no_runs)
+    assert "".join(parts2) == no_runs
+    assert len(parts2) > 1
+    for p in parts2:
+        assert len(p) <= tk._MAX_ENCODE_CHARS
+
+
 @requires_model
 def test_decode_skip_special_tokens(backend_tokenizer):
     text = "hello"

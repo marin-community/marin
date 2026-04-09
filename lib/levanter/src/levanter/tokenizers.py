@@ -37,6 +37,50 @@ from tokenizers import Tokenizer as HfBaseTokenizer
 logger = logging.getLogger(__name__)
 
 
+# Borrowed from meta-llama/llama3 tokenizer.py: bound the size of any single
+# string passed into the underlying tokenizer to avoid pathological inputs
+# (e.g. multi-MB runs of whitespace from broken HTML→text extraction) blowing
+# up Rust tokenizer working memory. We split on whitespace/non-whitespace
+# transitions and cap each homogeneous run.
+_MAX_ENCODE_CHARS = 400_000
+_MAX_HOMOGENEOUS_RUN_CHARS = 25_000
+
+
+def _split_homogeneous_runs(s: str, max_run: int):
+    """Split ``s`` so each substring has at most ``max_run`` consecutive
+    whitespace OR consecutive non-whitespace characters."""
+    if not s:
+        return
+    current_len = 0
+    current_is_space = s[0].isspace()
+    slice_start = 0
+    for i, ch in enumerate(s):
+        is_space = ch.isspace()
+        if current_is_space ^ is_space:
+            current_len = 1
+            current_is_space = is_space
+        else:
+            current_len += 1
+            if current_len > max_run:
+                yield s[slice_start:i]
+                slice_start = i
+                current_len = 1
+    yield s[slice_start:]
+
+
+def _safe_split_for_tokenizer(text: str) -> list[str]:
+    """Split ``text`` into substrings safe to feed to a Rust BPE tokenizer.
+
+    Each substring is at most ``_MAX_ENCODE_CHARS`` long and contains no run
+    of more than ``_MAX_HOMOGENEOUS_RUN_CHARS`` consecutive whitespace or
+    non-whitespace characters.
+    """
+    parts: list[str] = []
+    for i in range(0, len(text), _MAX_ENCODE_CHARS):
+        parts.extend(_split_homogeneous_runs(text[i : i + _MAX_ENCODE_CHARS], _MAX_HOMOGENEOUS_RUN_CHARS))
+    return parts
+
+
 @runtime_checkable
 class MarinTokenizer(Protocol):
     @property
@@ -270,7 +314,18 @@ class HfMarinTokenizer:
         return self._vocab_size
 
     def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
-        return self._tokenizer.encode(text, add_special_tokens=add_special_tokens).ids
+        parts = _safe_split_for_tokenizer(text)
+        if len(parts) <= 1:
+            return self._tokenizer.encode(text, add_special_tokens=add_special_tokens).ids
+        # Multi-chunk path: only the first chunk gets BOS/EOS-style specials so
+        # the joined ids match a single-call encode for normal-sized inputs.
+        ids: list[int] = []
+        encodings = self._tokenizer.encode_batch(parts, add_special_tokens=False)
+        for enc in encodings:
+            ids.extend(enc.ids)
+        if add_special_tokens and self._bos_id is not None:
+            ids = [self._bos_id] + ids
+        return ids
 
     def decode(self, ids: list[int], *, skip_special_tokens: bool = False) -> str:
         return self._tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
@@ -279,8 +334,7 @@ class HfMarinTokenizer:
         # Copy strings to release references to potentially large source buffers,
         # mitigating memory retention from sliced strings.
         texts = ["".join(s) for s in texts]
-        encodings = self._tokenizer.encode_batch(texts, add_special_tokens=add_special_tokens)
-        return [enc.ids for enc in encodings]
+        return [self.encode(t, add_special_tokens=add_special_tokens) for t in texts]
 
     def get_vocab(self) -> dict[str, int]:
         return self._vocab
@@ -403,7 +457,13 @@ class KitokenMarinTokenizer:
         # encode_specials=True tells kitoken to recognize special token strings
         # (e.g. "<|end_of_text|>") in the input, matching HF's default behavior.
         # This is orthogonal to add_special_tokens which controls BOS/EOS wrapping.
-        ids = self._tokenizer.encode(text, True)
+        parts = _safe_split_for_tokenizer(text)
+        if len(parts) <= 1:
+            ids = self._tokenizer.encode(text, True)
+        else:
+            ids = []
+            for chunk_ids in self._tokenizer.encode_all(parts, True):
+                ids.extend(chunk_ids)
         if add_special_tokens and self._prepend_bos and self._bos_id is not None:
             ids = [self._bos_id] + ids
         return ids
@@ -416,10 +476,7 @@ class KitokenMarinTokenizer:
 
     def encode_batch(self, texts: list[str], *, add_special_tokens: bool = False) -> list[list[int]]:
         texts = ["".join(s) for s in texts]
-        results = self._tokenizer.encode_all(texts, True)
-        if add_special_tokens and self._prepend_bos and self._bos_id is not None:
-            return [[self._bos_id] + ids for ids in results]
-        return results
+        return [self.encode(t, add_special_tokens=add_special_tokens) for t in texts]
 
     def get_vocab(self) -> dict[str, int]:
         return self._vocab
