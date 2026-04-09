@@ -124,24 +124,22 @@ Then push the launch commit (no proposal PR by default).
 Before launch, confirm requester approval in-thread unless they already gave explicit "launch without asking" permission.
 
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py \
-  --no_wait \
-  --cluster us-central1 \
+uv run iris --config lib/iris/examples/marin.yaml job run \
+  --region us-central1 --no-wait \
   -- python experiments/ferries/daily.py
 ```
 
 After launch, capture and post to the issue:
-- Ray job id
-- cluster
+- Iris job id
+- cluster / region
 - launch timestamp
 - W&B link(s) when available
 
 Optional deterministic daily rerun name:
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py \
-  --no_wait \
-  --cluster us-central1 \
-  -e FERRY_DATE="$(date +%Y%m%d-%H%M%S)-daily-ferry" \
+uv run iris --config lib/iris/examples/marin.yaml job run \
+  --region us-central1 --no-wait \
+  -e FERRY_DATE "$(date +%Y%m%d-%H%M%S)-daily-ferry" \
   -- python experiments/ferries/daily.py
 ```
 

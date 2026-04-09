@@ -116,8 +116,7 @@ regenerate the configs before merging. Check in the generated configs to the rep
 
 ### Cluster management tool
 
-For most operations, you can use the cluster management tool at `scripts/ray/cluster.py`. You can find the documentation
-in [scripts/ray/README.md]. Some sample commands:
+For most operations, you can use the cluster management tool at `scripts/ray/cluster.py`. Some sample commands:
 
 ```
 uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml {start-cluster,stop-cluster,restart-cluster}
