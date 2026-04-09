@@ -28,7 +28,6 @@ import fsspec
 import jinja2
 import jinja2.ext
 from huggingface_hub import hf_hub_download
-from huggingface_hub.errors import LocalEntryNotFoundError
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
 from tokenizers import Tokenizer as HfBaseTokenizer
 
@@ -487,13 +486,16 @@ def load_tokenizer(
 ) -> MarinTokenizer:
     """Load a tokenizer by HF model name or local path.
 
-    Cached per (name_or_path, backend). The HF backend uses tokenizers.Tokenizer
-    directly (not the transformers wrapper), avoiding the torch import.
+    Files are staged once via mirror://tokenizers/ (GCS/S3) before falling back
+    to HF Hub. Cached per (name_or_path, backend).
     """
+    local_dir = _stage_tokenizer(name_or_path) if not os.path.isdir(name_or_path) else name_or_path
     if backend == TokenizerBackend.HF:
-        return _load_hf_tokenizer(name_or_path)
+        tok = _load_hf_tokenizer(local_dir)
+        return dataclasses.replace(tok, _name_or_path=name_or_path)
     if backend == TokenizerBackend.KITOKEN:
-        return _load_kitoken_tokenizer(name_or_path)
+        tok = _load_kitoken_tokenizer(local_dir)
+        return dataclasses.replace(tok, _name_or_path=name_or_path)
     raise ValueError(f"Unknown backend: {backend}")
 
 
@@ -519,6 +521,7 @@ def _collect_special_ids(
 
 
 _MIRROR_TOKENIZER_PREFIX = "tokenizers"
+_TOKENIZER_FILES = ["tokenizer.json", "tokenizer_config.json", "chat_template.jinja"]
 
 
 def _hf_name_to_mirror_key(name_or_path: str) -> str:
@@ -526,59 +529,73 @@ def _hf_name_to_mirror_key(name_or_path: str) -> str:
     return name_or_path.replace("/", "--")
 
 
-def _hf_hub_download_with_mirror(name_or_path: str, filename: str) -> str:
-    """Download a tokenizer file, using mirror:// as an intermediate cache.
+@functools.lru_cache(maxsize=32)
+def _stage_tokenizer(name_or_path: str) -> str:
+    """Download all tokenizer files for name_or_path to a local directory.
 
-    Resolution order:
-      1. HF_HOME local cache (hf_hub_download local_files_only=True)
-      2. mirror://tokenizers/{name--}/{filename}  — copies to local on hit
-      3. HF Hub (network) — populates mirror on success (best-effort)
+    Resolution order (one pass for all files, one warning on mirror failure):
+      1. mirror://tokenizers/{name--}/  — GCS/S3 via MirrorFileSystem
+      2. HF Hub (network) — populates mirror on success (best-effort)
 
-    Returns a local file path suitable for open().
+    Returns the local directory path. Subsequent calls for the same tokenizer
+    are free (lru_cache).
     """
-    # 1. HF_HOME cache
-    try:
-        return hf_hub_download(name_or_path, filename, local_files_only=True)
-    except (LocalEntryNotFoundError, EntryNotFoundError):
-        pass
-
-    mirror_path = f"mirror://{_MIRROR_TOKENIZER_PREFIX}/{_hf_name_to_mirror_key(name_or_path)}/{filename}"
     local_dir = os.path.join(tempfile.gettempdir(), "levanter_tokenizers", _hf_name_to_mirror_key(name_or_path))
     os.makedirs(local_dir, exist_ok=True)
-    local_file = os.path.join(local_dir, filename)
 
-    # 2. Mirror (best-effort — permission errors, missing credentials, etc. all fall through)
-    if not os.path.exists(local_file):
-        try:
-            with fsspec.open(mirror_path, "rb") as src, open(local_file, "wb") as dst:
-                dst.write(src.read())
-            logger.info("Loaded tokenizer file from mirror: %s", mirror_path)
-        except Exception as e:
-            logger.warning("Could not load tokenizer file from mirror %s: %s", mirror_path, e)
+    # Already fully staged from a prior process run
+    if os.path.exists(os.path.join(local_dir, "tokenizer.json")):
+        return local_dir
 
-    if os.path.exists(local_file):
-        return local_file
+    mirror_base = f"mirror://{_MIRROR_TOKENIZER_PREFIX}/{_hf_name_to_mirror_key(name_or_path)}"
 
-    # 3. HF Hub (network)
-    local_file = hf_hub_download(name_or_path, filename)
-
-    # Populate mirror (best-effort — don't block tokenizer load on failure)
+    # 1. Mirror — single attempt for all files, single warning on any failure
+    mirror_ok = False
     try:
-        with open(local_file, "rb") as src, fsspec.open(mirror_path, "wb") as dst:
-            dst.write(src.read())
-        logger.info("Populated mirror: %s", mirror_path)
-    except Exception:
-        logger.debug("Could not populate mirror at %s", mirror_path, exc_info=True)
+        for filename in _TOKENIZER_FILES:
+            try:
+                with fsspec.open(f"{mirror_base}/{filename}", "rb") as src:
+                    with open(os.path.join(local_dir, filename), "wb") as dst:
+                        dst.write(src.read())
+            except FileNotFoundError:
+                pass  # optional files (e.g. chat_template.jinja may not exist)
+        mirror_ok = True
+    except Exception as e:
+        logger.warning("Could not load tokenizer from mirror %s: %s", mirror_base, e)
 
-    return local_file
+    if mirror_ok and os.path.exists(os.path.join(local_dir, "tokenizer.json")):
+        logger.info("Staged tokenizer %s from mirror", name_or_path)
+        return local_dir
+
+    # 2. HF Hub (network)
+    import shutil
+
+    for filename in _TOKENIZER_FILES:
+        try:
+            hf_local = hf_hub_download(name_or_path, filename)
+            shutil.copy2(hf_local, os.path.join(local_dir, filename))
+        except (EntryNotFoundError, RepositoryNotFoundError):
+            pass
+
+    # Populate mirror (best-effort)
+    for filename in _TOKENIZER_FILES:
+        local_file = os.path.join(local_dir, filename)
+        if os.path.exists(local_file):
+            try:
+                with open(local_file, "rb") as src, fsspec.open(f"{mirror_base}/{filename}", "wb") as dst:
+                    dst.write(src.read())
+            except Exception:
+                logger.debug("Could not populate mirror for %s/%s", name_or_path, filename, exc_info=True)
+
+    return local_dir
 
 
 def _load_hf_base_tokenizer(name_or_path: str) -> HfBaseTokenizer:
-    """Load an HfBaseTokenizer, handling both local paths and HF hub names."""
+    """Load an HfBaseTokenizer from a local directory (pre-staged by _stage_tokenizer)."""
     local_path = os.path.join(name_or_path, "tokenizer.json")
     if os.path.isfile(local_path):
         return HfBaseTokenizer.from_file(local_path)
-    return HfBaseTokenizer.from_file(_hf_hub_download_with_mirror(name_or_path, "tokenizer.json"))
+    return HfBaseTokenizer.from_pretrained(name_or_path)
 
 
 def _load_chat_template_jinja(name_or_path: str) -> str | None:
@@ -597,7 +614,7 @@ def _load_chat_template_jinja(name_or_path: str) -> str | None:
         return None
 
     try:
-        path = _hf_hub_download_with_mirror(name_or_path, "chat_template.jinja")
+        path = hf_hub_download(name_or_path, "chat_template.jinja")
     except (EntryNotFoundError, RepositoryNotFoundError):
         return None
 
@@ -666,7 +683,7 @@ def _post_processor_prepends_bos(name_or_path: str, bos_token: str | None) -> bo
     local_json = os.path.join(name_or_path, "tokenizer.json")
     if not os.path.isfile(local_json):
         try:
-            local_json = _hf_hub_download_with_mirror(name_or_path, "tokenizer.json")
+            local_json = hf_hub_download(name_or_path, "tokenizer.json")
         except (EntryNotFoundError, RepositoryNotFoundError):
             return False
 
@@ -700,7 +717,7 @@ def _load_tokenizer_config(name_or_path: str) -> dict:
             return json.load(f)
 
     try:
-        path = _hf_hub_download_with_mirror(name_or_path, "tokenizer_config.json")
+        path = hf_hub_download(name_or_path, "tokenizer_config.json")
     except (EntryNotFoundError, RepositoryNotFoundError):
         return {}
 
@@ -736,7 +753,7 @@ def _load_kitoken_tokenizer(name_or_path: str) -> KitokenMarinTokenizer:
 
     local_json = os.path.join(name_or_path, "tokenizer.json")
     if not os.path.isfile(local_json):
-        local_json = _hf_hub_download_with_mirror(name_or_path, "tokenizer.json")
+        local_json = hf_hub_download(name_or_path, "tokenizer.json")
     tok = kitoken.Kitoken.from_tokenizers_file(local_json)
     config = _load_tokenizer_config(name_or_path)
 
