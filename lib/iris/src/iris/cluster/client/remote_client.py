@@ -115,14 +115,15 @@ class RemoteClusterClient:
             preemption_policy=preemption_policy,
             existing_job_policy=existing_job_policy,
         )
-        if self._bundle_id:
-            request.bundle_id = self._bundle_id
-        else:
-            if self._bundle_blob is None and self._workspace is not None:
-                creator = BundleCreator(self._workspace)
-                self._bundle_blob = creator.create_bundle()
-                logger.info(f"Workspace bundle size: {len(self._bundle_blob) / 1024 / 1024:.1f} MB")
-            request.bundle_blob = self._bundle_blob or b""
+        if not env_config.dockerfile:
+            if self._bundle_id:
+                request.bundle_id = self._bundle_id
+            else:
+                if self._bundle_blob is None and self._workspace is not None:
+                    creator = BundleCreator(self._workspace)
+                    self._bundle_blob = creator.create_bundle()
+                    logger.info(f"Workspace bundle size: {len(self._bundle_blob) / 1024 / 1024:.1f} MB")
+                request.bundle_blob = self._bundle_blob or b""
 
         if scheduling_timeout is not None:
             request.scheduling_timeout.CopyFrom(duration_to_proto(scheduling_timeout))

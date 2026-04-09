@@ -530,6 +530,7 @@ class EnvironmentSpec:
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
+    dockerfile: str | None = None
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
         """Convert to wire format with sensible defaults applied."""
@@ -549,6 +550,7 @@ class EnvironmentSpec:
             env_vars=merged_env_vars,
             extras=list(self.extras or []),
             python_version=py_version,
+            dockerfile=self.dockerfile or "",
         )
 
 

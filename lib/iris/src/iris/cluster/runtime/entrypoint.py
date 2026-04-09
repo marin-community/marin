@@ -51,6 +51,14 @@ def build_runtime_entrypoint(
     activating venv). The run_command is the user's original command, kept separate
     so runtimes that don't need setup can skip it cleanly.
     """
+    # Custom Dockerfile: skip all setup commands — the image is self-contained.
+    if env_config.dockerfile:
+        rt = job_pb2.RuntimeEntrypoint()
+        rt.run_command.argv[:] = entrypoint.command
+        for k, v in entrypoint.workdir_files.items():
+            rt.workdir_files[k] = v
+        return rt
+
     uv_sync_flags = _build_uv_sync_flags(list(env_config.extras))
     pip_install_args = _build_pip_install_args(list(env_config.pip_packages))
 

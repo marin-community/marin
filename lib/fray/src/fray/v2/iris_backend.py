@@ -153,10 +153,15 @@ def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | No
         return None
     from iris.cluster.types import EnvironmentSpec
 
+    dockerfile = None
+    if env is not None and env.docker_image:
+        dockerfile = f"FROM {env.docker_image}"
+
     return EnvironmentSpec(
         pip_packages=list(env.pip_packages) if env is not None else [],
         env_vars=env_vars,
         extras=list(env.extras) if env is not None else [],
+        dockerfile=dockerfile,
     )
 
 

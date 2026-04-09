@@ -10,6 +10,7 @@ bundle download -> image build -> container run -> monitor -> cleanup.
 import logging
 import shutil
 import socket
+import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -613,6 +614,11 @@ class TaskAttempt:
         self.started_at = Timestamp.now()
         self._build_phase_start = time.monotonic()
 
+        # Custom Dockerfile: no bundle to stage
+        if self.request.environment.dockerfile:
+            logger.info("Custom Dockerfile set, skipping bundle staging for task %s", self.task_id)
+            return
+
         download_start = time.monotonic()
 
         # Chaos injection for testing failures during download
@@ -645,11 +651,17 @@ class TaskAttempt:
         )
 
     def _resolve_image(self) -> None:
-        """Resolve the task image from cluster config.
+        """Resolve the task image from cluster config or per-job Dockerfile."""
+        dockerfile = self.request.environment.dockerfile
+        if dockerfile:
+            from iris.cluster.runtime.docker import DockerImageBuilder
 
-        No per-job Docker build — the pre-built base image has a pre-warmed
-        uv cache. The remote client wraps the entrypoint with uv sync.
-        """
+            self.image_tag = f"iris-task-{self.task_id.to_safe_token()}:{self.attempt_id}"
+            builder = DockerImageBuilder()
+            builder.build(dockerfile_content=dockerfile, tag=self.image_tag, context=self.workdir)
+            logger.info("Built custom image %s for task %s", self.image_tag, self.task_id)
+            return
+
         if not self._default_task_image:
             raise ValueError("No task image configured. Set defaults.default_task_image in cluster config.")
         self.image_tag = self._resolve_image_fn(self._default_task_image)
@@ -923,6 +935,13 @@ class TaskAttempt:
             self._port_allocator.release(list(self.ports.values()))
         except Exception as e:
             logger.warning("Failed to release ports for task %s: %s", self.task_id, e)
+
+        # Remove custom-built Docker image to prevent disk exhaustion
+        if self.request.environment.dockerfile and self.image_tag:
+            try:
+                subprocess.run(["docker", "rmi", self.image_tag], capture_output=True, check=False)
+            except Exception as e:
+                logger.warning("Failed to remove custom image %s: %s", self.image_tag, e)
 
         # Remove working directory (handle.cleanup() already released backing storage)
         if self.workdir and self.workdir.exists():
