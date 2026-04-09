@@ -588,32 +588,35 @@ def _populate_mirror_file(local_path: str, mirror_url: str) -> None:
         logger.debug("Could not populate mirror at %s", mirror_url, exc_info=True)
 
 
-@functools.lru_cache(maxsize=32)
-def _stage_tokenizer(name_or_path: str) -> str:
-    """Download the full set of tokenizer files to a stable local directory.
+def _try_load_tokenizer_from_dir(local_dir: str) -> bool:
+    """Try to load a tokenizer from a local directory.
 
-    Resolution order:
-      1. mirror://tokenizers/{name--}/ — discovered via ``ls()``, so whatever
-         files were populated by a previous worker (regardless of shape) are
-         copied back. No hardcoded file list.
-      2. HF Hub via ``snapshot_download`` with tokenizer-file allow-patterns —
-         fetches every tokenizer-relevant file the repo ships, then populates
-         the mirror as a side-effect for future workers.
-
-    Returns the local directory path. ``lru_cache`` makes subsequent calls free.
+    Uses ``HfBaseTokenizer.from_file`` as the gate: if it can parse the
+    ``tokenizer.json`` file, the tokenizer is usable. This catches missing
+    files, 0-byte cache-poisoned files, and corrupt data — all of which
+    should fall through to the next source.
     """
-    local_dir = os.path.join(tempfile.gettempdir(), "levanter_tokenizers", _hf_name_to_mirror_key(name_or_path))
-    os.makedirs(local_dir, exist_ok=True)
+    tokenizer_json = os.path.join(local_dir, "tokenizer.json")
+    if not os.path.isfile(tokenizer_json):
+        return False
+    try:
+        HfBaseTokenizer.from_file(tokenizer_json)
+        return True
+    except Exception:
+        return False
 
-    # Cache hit: a prior call already staged this tokenizer on disk.
-    if os.path.exists(os.path.join(local_dir, "tokenizer.json")):
-        return local_dir
 
+def _stage_from_mirror(name_or_path: str, local_dir: str) -> bool:
+    """Copy tokenizer files from mirror:// to *local_dir*.
+
+    Discovers whatever files the mirror holds via ``ls()`` (no hardcoded
+    file list) and fetches them all atomically.  Returns True if any files
+    were copied.
+    """
     mirror_key = _hf_name_to_mirror_key(name_or_path)
     mirror_dir = f"{_MIRROR_TOKENIZER_PREFIX}/{mirror_key}"
     mirror_base = f"mirror://{mirror_dir}"
-
-    # 1. Mirror: discover whatever files are present and fetch them all.
+    copied = False
     try:
         mirror_fs = fsspec.filesystem("mirror")
         if mirror_fs.exists(mirror_dir):
@@ -621,25 +624,35 @@ def _stage_tokenizer(name_or_path: str) -> str:
                 filename = os.path.basename(entry.rstrip("/"))
                 if not filename:
                     continue
-                _fetch_file_atomic(f"{mirror_base}/{filename}", os.path.join(local_dir, filename))
-            if os.path.exists(os.path.join(local_dir, "tokenizer.json")):
+                if _fetch_file_atomic(f"{mirror_base}/{filename}", os.path.join(local_dir, filename)):
+                    copied = True
+            if copied:
                 logger.info(
-                    "Staged tokenizer %s from mirror (%d files)",
+                    "Copied %s tokenizer files from mirror %s",
                     name_or_path,
-                    len(os.listdir(local_dir)),
+                    mirror_base,
                 )
-                return local_dir
     except Exception as e:
         logger.warning("Could not stage tokenizer from mirror %s: %s", mirror_base, e)
+    return copied
 
-    # 2. HF Hub: snapshot_download fetches every tokenizer-relevant file at once.
-    # snapshot_download handles EntryNotFoundError per-pattern internally; if
-    # the repo or network is unreachable it raises RepositoryNotFoundError or
-    # an OSError, which we propagate (matches the pre-mirror behaviour).
+
+def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
+    """Download tokenizer files from HF Hub and populate the mirror.
+
+    Uses ``snapshot_download`` with tokenizer-file allow-patterns to fetch
+    every tokenizer-relevant file the repo ships, then copies them into
+    *local_dir* atomically and pushes to the mirror as a best-effort
+    side-effect for future workers.
+
+    Raises ``RepositoryNotFoundError`` / ``OSError`` if the repo or
+    network is unreachable (matches pre-mirror behaviour).
+    """
     snapshot_dir = snapshot_download(name_or_path, allow_patterns=_TOKENIZER_ALLOW_PATTERNS)
 
-    # Copy everything snapshot_download brought down into our stable local_dir
-    # atomically, then populate the mirror as a best-effort side-effect.
+    mirror_key = _hf_name_to_mirror_key(name_or_path)
+    mirror_base = f"mirror://{_MIRROR_TOKENIZER_PREFIX}/{mirror_key}"
+
     for filename in sorted(os.listdir(snapshot_dir)):
         src_path = os.path.join(snapshot_dir, filename)
         if not os.path.isfile(src_path):
@@ -648,6 +661,35 @@ def _stage_tokenizer(name_or_path: str) -> str:
         _copy_file_atomic(src_path, dest)
         _populate_mirror_file(dest, f"{mirror_base}/{filename}")
 
+
+@functools.lru_cache(maxsize=32)
+def _stage_tokenizer(name_or_path: str) -> str:
+    """Download the full set of tokenizer files to a stable local directory.
+
+    Uses actual tokenizer loading (``HfBaseTokenizer.from_file``) as the
+    success gate — no hardcoded file-list checks.  Resolution order:
+
+      1. Local cache — a prior call already staged this tokenizer on disk.
+      2. mirror://tokenizers/{name--}/ — discovered via ``ls()``, fetches
+         whatever files a previous worker populated (any shape).
+      3. HF Hub via ``snapshot_download`` — fetches every tokenizer-relevant
+         file the repo ships, then populates the mirror for future workers.
+
+    Returns the local directory path. ``lru_cache`` makes subsequent calls free.
+    """
+    local_dir = os.path.join(tempfile.gettempdir(), "levanter_tokenizers", _hf_name_to_mirror_key(name_or_path))
+    os.makedirs(local_dir, exist_ok=True)
+
+    # 1. Local cache hit.
+    if _try_load_tokenizer_from_dir(local_dir):
+        return local_dir
+
+    # 2. Mirror: copy whatever files are present, then try loading.
+    if _stage_from_mirror(name_or_path, local_dir) and _try_load_tokenizer_from_dir(local_dir):
+        return local_dir
+
+    # 3. HF Hub: full download, populate mirror as side-effect.
+    _stage_from_hf(name_or_path, local_dir)
     return local_dir
 
 
