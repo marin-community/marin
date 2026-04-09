@@ -28,7 +28,8 @@ from iris.cluster.constraints import (
     extract_placement_requirements,
     merge_constraints,
 )
-from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
+from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.checkpoint import (
     CheckpointResult,
     backup_databases,

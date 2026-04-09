@@ -14,14 +14,10 @@ import time
 
 import pytest
 
-from iris.cluster.controller.autoscaler import (
-    Autoscaler,
-    DEFAULT_UNRESOLVABLE_TIMEOUT,
-    ScalingAction,
-    ScalingDecision,
-    route_demand,
-)
-from iris.cluster.controller.scaling_group import ScalingGroup
+from iris.cluster.controller.autoscaler import Autoscaler, DEFAULT_UNRESOLVABLE_TIMEOUT
+from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
+from iris.cluster.controller.autoscaler.routing import route_demand
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.providers.types import (
     CloudSliceState,
     QuotaExhaustedError,
@@ -694,7 +690,7 @@ class TestAutoscalerQuotaHandling:
 
     def test_quota_exceeded_sets_group_unavailable(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """QuotaExhaustedError sets group to QUOTA_EXCEEDED state."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("Quota exceeded")
@@ -743,7 +739,7 @@ class TestAutoscalerQuotaHandling:
 
     def test_quota_state_expires_after_timeout(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """QUOTA_EXCEEDED state expires after timeout."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("Quota exceeded")
@@ -764,7 +760,7 @@ class TestAutoscalerQuotaHandling:
 
     def test_generic_error_triggers_backoff_not_quota(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Non-quota errors trigger backoff, not quota exceeded state."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
         platform.create_slice.side_effect = RuntimeError("TPU unavailable")
@@ -887,7 +883,7 @@ class TestScalingGroupRequestingState:
 
     def test_begin_scale_up_sets_requesting_state(self):
         """begin_scale_up() causes availability() to return REQUESTING."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
@@ -901,7 +897,7 @@ class TestScalingGroupRequestingState:
 
     def test_complete_scale_up_clears_requesting_state(self):
         """complete_scale_up() removes REQUESTING state."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
@@ -920,7 +916,7 @@ class TestScalingGroupRequestingState:
 
     def test_cancel_scale_up_clears_requesting_state(self):
         """cancel_scale_up() removes REQUESTING state."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
@@ -1007,7 +1003,7 @@ class TestAutoscalerAsyncScaleUp:
 
     def test_group_marked_requesting_during_scale_up(self):
         """Group shows REQUESTING immediately after execute(), cleared when done."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
@@ -1333,7 +1329,7 @@ class TestMultiSliceScaleUp:
 
     def test_cooldown_group_accepts_demand_but_blocks_scale_up(self):
         """A group in COOLDOWN accepts demand routing but blocks scale-up until cooldown expires."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = make_scale_group_config(name="test-group", max_slices=5, num_vms=1, priority=10)
         platform = make_mock_platform()

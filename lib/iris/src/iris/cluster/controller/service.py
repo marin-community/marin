@@ -80,7 +80,7 @@ from iris.cluster.controller.schema import (
     WorkerRow,
     tasks_with_attempts,
 )
-from iris.cluster.controller.pending_diagnostics import PendingHint, build_job_pending_hints
+from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
 from iris.cluster.controller.query import execute_raw_query
 from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext

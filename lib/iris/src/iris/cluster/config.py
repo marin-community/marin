@@ -1282,7 +1282,7 @@ def create_autoscaler(
     """
     # Local import: controller modules import config.py, creating a circular dependency.
     from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.scaling_group import (
+    from iris.cluster.controller.autoscaler.scaling_group import (
         DEFAULT_SCALE_DOWN_RATE_LIMIT,
         DEFAULT_SCALE_UP_RATE_LIMIT,
         ScalingGroup,

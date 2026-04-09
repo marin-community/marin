@@ -26,7 +26,8 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
+from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     TERMINAL_TASK_STATES,
@@ -48,7 +49,7 @@ from iris.cluster.controller.schema import (
     tasks_with_attempts,
 )
 from iris.cluster.controller.provider import ProviderUnsupportedError
-from iris.cluster.controller.scaling_group import ScalingGroup
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.transitions import (
