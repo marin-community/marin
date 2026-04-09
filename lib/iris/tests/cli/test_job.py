@@ -6,7 +6,7 @@
 import click
 import pytest
 
-from iris.cli.job import build_resources, validate_region_zone
+from iris.cli.job import build_resources, validate_extra_resources, validate_region_zone
 from iris.cluster.constraints import (
     Constraint,
     WellKnownAttribute,
@@ -127,3 +127,36 @@ def test_executor_heuristic_with_region_constraint():
     preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
     assert preemptible is not None
     assert preemptible.value == "false"
+
+
+# ---------------------------------------------------------------------------
+# validate_extra_resources tests
+# ---------------------------------------------------------------------------
+
+
+def test_validate_extra_resources():
+    # Normal CPU-only job passes without the flag.
+    validate_extra_resources(tpu=None, gpu=None, memory="1GB", disk="5GB", enable_extra_resources=False)
+
+    # TPU and GPU blocked without the flag; error names the coordinator pattern.
+    with pytest.raises(click.UsageError, match="--tpu requires --enable-extra-resources"):
+        validate_extra_resources(tpu="v5litepod-16", gpu=None, memory="1GB", disk="5GB", enable_extra_resources=False)
+    with pytest.raises(click.UsageError, match="--gpu requires --enable-extra-resources"):
+        validate_extra_resources(tpu=None, gpu="H100x8", memory="1GB", disk="5GB", enable_extra_resources=False)
+    with pytest.raises(click.UsageError, match="coordinator"):
+        validate_extra_resources(tpu="v5litepod-16", gpu=None, memory="1GB", disk="5GB", enable_extra_resources=False)
+
+    # Memory threshold: >= 4 GB blocked, < 4 GB allowed.
+    with pytest.raises(click.UsageError, match=r"--memory 4GB.*--enable-extra-resources"):
+        validate_extra_resources(tpu=None, gpu=None, memory="4GB", disk="5GB", enable_extra_resources=False)
+    validate_extra_resources(tpu=None, gpu=None, memory="3900MB", disk="5GB", enable_extra_resources=False)
+
+    # Disk threshold: >= 10 GB blocked, < 10 GB allowed.
+    with pytest.raises(click.UsageError, match=r"--disk 10GB.*--enable-extra-resources"):
+        validate_extra_resources(tpu=None, gpu=None, memory="1GB", disk="10GB", enable_extra_resources=False)
+    validate_extra_resources(tpu=None, gpu=None, memory="1GB", disk="9900MB", enable_extra_resources=False)
+
+    # --enable-extra-resources bypasses all checks.
+    validate_extra_resources(tpu="v5litepod-16", gpu=None, memory="1GB", disk="5GB", enable_extra_resources=True)
+    validate_extra_resources(tpu=None, gpu=None, memory="64GB", disk="5GB", enable_extra_resources=True)
+    validate_extra_resources(tpu=None, gpu=None, memory="1GB", disk="100GB", enable_extra_resources=True)
