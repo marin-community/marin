@@ -33,6 +33,14 @@ export function formatBytes(bytes: number): string {
   return (val >= 100 ? Math.round(val) : val.toFixed(1)) + ' ' + units[i]
 }
 
+/** Format CPU millicores as "750m", "1.2c", etc. */
+export function formatCpuMillicores(millicores?: number): string {
+  if (!millicores) return '-'
+  if (millicores < 1000) return `${millicores}m`
+  const cores = millicores / 1000
+  return Number.isInteger(cores) ? `${cores}c` : `${cores.toFixed(1)}c`
+}
+
 /** Format a byte rate as "1.5 MB/s", etc. */
 export function formatRate(bytesPerSec: number): string {
   if (!bytesPerSec) return '0 B/s'

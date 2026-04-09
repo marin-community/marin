@@ -293,32 +293,32 @@ class ProfileTaskResponse(_message.Message):
     def __init__(self, profile_data: _Optional[bytes] = ..., error: _Optional[str] = ...) -> None: ...
 
 class ProcessInfo(_message.Message):
-    __slots__ = ("hostname", "pid", "python_version", "uptime_ms", "memory_rss_bytes", "memory_vms_bytes", "cpu_percent", "thread_count", "open_fd_count", "memory_total_bytes", "cpu_count", "git_hash")
+    __slots__ = ("hostname", "pid", "python_version", "uptime_ms", "memory_rss_bytes", "memory_vms_bytes", "thread_count", "open_fd_count", "memory_total_bytes", "cpu_count", "git_hash", "cpu_millicores")
     HOSTNAME_FIELD_NUMBER: _ClassVar[int]
     PID_FIELD_NUMBER: _ClassVar[int]
     PYTHON_VERSION_FIELD_NUMBER: _ClassVar[int]
     UPTIME_MS_FIELD_NUMBER: _ClassVar[int]
     MEMORY_RSS_BYTES_FIELD_NUMBER: _ClassVar[int]
     MEMORY_VMS_BYTES_FIELD_NUMBER: _ClassVar[int]
-    CPU_PERCENT_FIELD_NUMBER: _ClassVar[int]
     THREAD_COUNT_FIELD_NUMBER: _ClassVar[int]
     OPEN_FD_COUNT_FIELD_NUMBER: _ClassVar[int]
     MEMORY_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
     CPU_COUNT_FIELD_NUMBER: _ClassVar[int]
     GIT_HASH_FIELD_NUMBER: _ClassVar[int]
+    CPU_MILLICORES_FIELD_NUMBER: _ClassVar[int]
     hostname: str
     pid: int
     python_version: str
     uptime_ms: int
     memory_rss_bytes: int
     memory_vms_bytes: int
-    cpu_percent: float
     thread_count: int
     open_fd_count: int
     memory_total_bytes: int
     cpu_count: int
     git_hash: str
-    def __init__(self, hostname: _Optional[str] = ..., pid: _Optional[int] = ..., python_version: _Optional[str] = ..., uptime_ms: _Optional[int] = ..., memory_rss_bytes: _Optional[int] = ..., memory_vms_bytes: _Optional[int] = ..., cpu_percent: _Optional[float] = ..., thread_count: _Optional[int] = ..., open_fd_count: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., cpu_count: _Optional[int] = ..., git_hash: _Optional[str] = ...) -> None: ...
+    cpu_millicores: int
+    def __init__(self, hostname: _Optional[str] = ..., pid: _Optional[int] = ..., python_version: _Optional[str] = ..., uptime_ms: _Optional[int] = ..., memory_rss_bytes: _Optional[int] = ..., memory_vms_bytes: _Optional[int] = ..., thread_count: _Optional[int] = ..., open_fd_count: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., cpu_count: _Optional[int] = ..., git_hash: _Optional[str] = ..., cpu_millicores: _Optional[int] = ...) -> None: ...
 
 class GetProcessStatusRequest(_message.Message):
     __slots__ = ("max_log_lines", "log_substring", "min_log_level", "target")
@@ -404,25 +404,23 @@ class TaskAttempt(_message.Message):
     def __init__(self, attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., is_worker_failure: _Optional[bool] = ...) -> None: ...
 
 class ResourceUsage(_message.Message):
-    __slots__ = ("memory_mb", "disk_mb", "cpu_millicores", "memory_peak_mb", "cpu_percent", "process_count")
+    __slots__ = ("memory_mb", "disk_mb", "cpu_millicores", "memory_peak_mb", "process_count")
     MEMORY_MB_FIELD_NUMBER: _ClassVar[int]
     DISK_MB_FIELD_NUMBER: _ClassVar[int]
     CPU_MILLICORES_FIELD_NUMBER: _ClassVar[int]
     MEMORY_PEAK_MB_FIELD_NUMBER: _ClassVar[int]
-    CPU_PERCENT_FIELD_NUMBER: _ClassVar[int]
     PROCESS_COUNT_FIELD_NUMBER: _ClassVar[int]
     memory_mb: int
     disk_mb: int
     cpu_millicores: int
     memory_peak_mb: int
-    cpu_percent: int
     process_count: int
-    def __init__(self, memory_mb: _Optional[int] = ..., disk_mb: _Optional[int] = ..., cpu_millicores: _Optional[int] = ..., memory_peak_mb: _Optional[int] = ..., cpu_percent: _Optional[int] = ..., process_count: _Optional[int] = ...) -> None: ...
+    def __init__(self, memory_mb: _Optional[int] = ..., disk_mb: _Optional[int] = ..., cpu_millicores: _Optional[int] = ..., memory_peak_mb: _Optional[int] = ..., process_count: _Optional[int] = ...) -> None: ...
 
 class WorkerResourceSnapshot(_message.Message):
-    __slots__ = ("timestamp", "cpu_percent", "memory_used_bytes", "memory_total_bytes", "disk_used_bytes", "disk_total_bytes", "running_task_count", "total_process_count", "net_recv_bps", "net_sent_bps")
+    __slots__ = ("timestamp", "host_cpu_percent", "memory_used_bytes", "memory_total_bytes", "disk_used_bytes", "disk_total_bytes", "running_task_count", "total_process_count", "net_recv_bps", "net_sent_bps")
     TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
-    CPU_PERCENT_FIELD_NUMBER: _ClassVar[int]
+    HOST_CPU_PERCENT_FIELD_NUMBER: _ClassVar[int]
     MEMORY_USED_BYTES_FIELD_NUMBER: _ClassVar[int]
     MEMORY_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
     DISK_USED_BYTES_FIELD_NUMBER: _ClassVar[int]
@@ -432,7 +430,7 @@ class WorkerResourceSnapshot(_message.Message):
     NET_RECV_BPS_FIELD_NUMBER: _ClassVar[int]
     NET_SENT_BPS_FIELD_NUMBER: _ClassVar[int]
     timestamp: _time_pb2.Timestamp
-    cpu_percent: int
+    host_cpu_percent: int
     memory_used_bytes: int
     memory_total_bytes: int
     disk_used_bytes: int
@@ -441,7 +439,7 @@ class WorkerResourceSnapshot(_message.Message):
     total_process_count: int
     net_recv_bps: int
     net_sent_bps: int
-    def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., cpu_percent: _Optional[int] = ..., memory_used_bytes: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., disk_used_bytes: _Optional[int] = ..., disk_total_bytes: _Optional[int] = ..., running_task_count: _Optional[int] = ..., total_process_count: _Optional[int] = ..., net_recv_bps: _Optional[int] = ..., net_sent_bps: _Optional[int] = ...) -> None: ...
+    def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., host_cpu_percent: _Optional[int] = ..., memory_used_bytes: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., disk_used_bytes: _Optional[int] = ..., disk_total_bytes: _Optional[int] = ..., running_task_count: _Optional[int] = ..., total_process_count: _Optional[int] = ..., net_recv_bps: _Optional[int] = ..., net_sent_bps: _Optional[int] = ...) -> None: ...
 
 class BuildMetrics(_message.Message):
     __slots__ = ("build_started", "build_finished", "from_cache", "image_tag")

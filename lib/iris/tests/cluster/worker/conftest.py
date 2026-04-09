@@ -104,7 +104,7 @@ class FakeContainerHandle:
         return FakeLogReader()
 
     def stats(self) -> ContainerStats:
-        return ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True)
+        return ContainerStats(memory_mb=100, cpu_millicores=500, process_count=5, available=True)
 
     def disk_usage_mb(self) -> int:
         return 0

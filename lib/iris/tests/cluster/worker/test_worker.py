@@ -868,7 +868,7 @@ def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
     config = ContainerConfig(
         image="iris-task:latest",
         entrypoint=job_pb2.RuntimeEntrypoint(
-            run_command=job_pb2.RuntimeEntrypoint.RunCommand(argv=["echo", "hello"]),
+            run_command=job_pb2.CommandEntrypoint(argv=["echo", "hello"]),
         ),
         env={},
         mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
@@ -916,7 +916,7 @@ def test_docker_discover_containers(docker_runtime, tmp_path):
     config = ContainerConfig(
         image="iris-task:latest",
         entrypoint=job_pb2.RuntimeEntrypoint(
-            run_command=job_pb2.RuntimeEntrypoint.RunCommand(argv=["sleep", "60"]),
+            run_command=job_pb2.CommandEntrypoint(argv=["sleep", "60"]),
         ),
         env={},
         mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
@@ -956,7 +956,7 @@ def test_docker_adopt_container(docker_runtime, tmp_path):
     config = ContainerConfig(
         image="iris-task:latest",
         entrypoint=job_pb2.RuntimeEntrypoint(
-            run_command=job_pb2.RuntimeEntrypoint.RunCommand(argv=["sleep", "60"]),
+            run_command=job_pb2.CommandEntrypoint(argv=["sleep", "60"]),
         ),
         env={},
         mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
