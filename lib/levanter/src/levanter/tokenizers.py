@@ -547,14 +547,14 @@ def _hf_hub_download_with_mirror(name_or_path: str, filename: str) -> str:
     os.makedirs(local_dir, exist_ok=True)
     local_file = os.path.join(local_dir, filename)
 
-    # 2. Mirror
+    # 2. Mirror (best-effort — permission errors, missing credentials, etc. all fall through)
     if not os.path.exists(local_file):
         try:
             with fsspec.open(mirror_path, "rb") as src, open(local_file, "wb") as dst:
                 dst.write(src.read())
             logger.info("Loaded tokenizer file from mirror: %s", mirror_path)
-        except FileNotFoundError:
-            pass
+        except Exception as e:
+            logger.warning("Could not load tokenizer file from mirror %s: %s", mirror_path, e)
 
     if os.path.exists(local_file):
         return local_file
