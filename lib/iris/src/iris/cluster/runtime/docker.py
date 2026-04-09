@@ -807,6 +807,9 @@ exec {quoted_cmd}
             memory_mb = _parse_memory_size(memory_str)
 
             cpu_str = stats.get("CPUPerc", "0%").rstrip("%")
+            # Docker reports CPUPerc with 100% == one fully utilized CPU core, so
+            # converting to millicores is a straight percent * 10. See
+            # https://docs.docker.com/reference/cli/docker/container/stats/
             cpu_millicores = int(float(cpu_str) * 10) if cpu_str else 0
 
             pids_str = stats.get("PIDs", "0")
