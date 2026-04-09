@@ -711,6 +711,40 @@ def test_multi_chunk_path_preserves_bos(backend_tokenizer, monkeypatch):
     assert backend_tokenizer.decode(multi_special, skip_special_tokens=True) == text
 
 
+@requires_model
+def test_encode_batch_scatters_parts_back_to_originals(backend_tokenizer, monkeypatch):
+    """encode_batch must reassemble per-text token sequences correctly when
+    some texts are split into multiple parts and others aren't."""
+    import levanter.tokenizers as tk
+
+    monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", 100)
+
+    short = "The quick brown fox."
+    pathological = "start" + (" " * 500) + "end"
+    texts = [short, pathological, short, pathological, short]
+
+    # Sanity: with the patched cap, the pathological text gets split.
+    assert len(tk._safe_split_for_tokenizer(pathological)) > 1
+    assert len(tk._safe_split_for_tokenizer(short)) == 1
+
+    batch_ids = backend_tokenizer.encode_batch(texts, add_special_tokens=False)
+    assert len(batch_ids) == len(texts)
+
+    # Each row must equal the per-text encode result (ground truth).
+    for got, original in zip(batch_ids, texts, strict=True):
+        expected = backend_tokenizer.encode(original, add_special_tokens=False)
+        assert got == expected
+        # And every row must round-trip losslessly.
+        assert backend_tokenizer.decode(got) == original
+
+    # add_special_tokens=True must prepend BOS to every row exactly once.
+    if backend_tokenizer.bos_token_id is not None:
+        batch_special = backend_tokenizer.encode_batch(texts, add_special_tokens=True)
+        for row in batch_special:
+            assert row[0] == backend_tokenizer.bos_token_id
+            assert row.count(backend_tokenizer.bos_token_id) == 1
+
+
 def test_safe_split_caps_runs_and_roundtrips(monkeypatch):
     """The splitter must cap homogeneous runs within each part and round-trip
     losslessly on a pathological all-whitespace input."""
