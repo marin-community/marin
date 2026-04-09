@@ -57,3 +57,25 @@ Parent issue: https://github.com/marin-community/marin/issues/4435
 - **Decision**: Use E2B going forward (per issue plan: "If E2B works, use it instead of E4B to speed things up").
 - **Infra note**: Iris controller was timing out (overloaded managing v6e-128 scaling ops). Created TPU VM directly via gcloud. vLLM on TPU requires `tpu_inference` package (not in pip vLLM). For Steps 3-6, need to either use vLLM with tpu_inference Docker image, or use transformers+torch_xla directly.
 - **Next action**: Set up vLLM-tpu serving infra for scaled rollout generation (Step 2).
+
+### 2026-04-09 — SZ-003: Switch to mini-swe-agent v2 format
+- **Change**: Rewrote scaffold to use mini-swe-agent v2 bash-only format instead of custom tool-calling.
+- **Result**: Simulated env handles cat, find, grep, ls, sed, head, heredocs. Step 3 ran successfully.
+
+### 2026-04-09 — SZ-004: Step 4 — 10 rollouts diversity measurement
+- **Hypothesis**: At temperature=1.0, rollouts from the same PR show meaningful diversity.
+- **Command**: `uv run python -c "..." ` (Step 4 script against `core-gatech-group/serpent-tools` PR #21)
+- **Config**: Gemma 4 E2B, temperature=1.0, max_total_tokens=8192, 10 rollouts
+- **Result** (confidence: exploratory):
+  - 10 rollouts in 3866s (~6.4 min/rollout on CPU)
+  - 9/10 finished cleanly, 1 hit token budget (24 steps)
+  - Diversity (MinHash Jaccard):
+    - **Unique (Jaccard < 0.5): 9/10**
+    - Mean pairwise: 0.2102
+    - Median pairwise: 0.2031
+    - Min pairwise: 0.0703
+    - Max pairwise: 0.5859
+    - Std: 0.1247
+- **Interpretation**: Good diversity at temperature=1.0. Most rollouts are substantially different (median Jaccard ~0.2). Only one pair is near-duplicate (0.59). This is promising for generating diverse pretraining data.
+- **Next action**: Step 5 (100 rollouts from 10 PRs) and Step 6 (1000 rollouts from 10 repos).
+- **Blocker**: CPU inference is slow (~6 min/rollout). Steps 5-6 would take 10+ hours and 100+ hours respectively at this speed. Need TPU acceleration via vLLM-tpu or to reduce rollout count for MVP.
