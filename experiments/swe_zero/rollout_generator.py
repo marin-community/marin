@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Multi-turn rollout generator for SWE-ZERO.
+Multi-turn rollout generator using mini-swe-agent v2 format.
 
 Generates execution-free agentic rollouts by orchestrating multi-turn
-tool-calling conversations with a language model (via OpenAI-compatible API,
-e.g. vLLM serving Gemma 4).
+conversations where the model outputs bash commands and receives simulated
+outputs, matching mini-swe-agent v2's THOUGHT + ```mswea_bash_command format.
 """
 
 from __future__ import annotations
@@ -21,10 +21,10 @@ from openai import OpenAI
 from experiments.swe_zero.data_loader import PRRecord
 from experiments.swe_zero.scaffold import (
     SYSTEM_PROMPT,
-    TOOLS,
     RepoSnapshot,
     build_task_message,
-    simulate_tool_response,
+    extract_bash_command,
+    simulate_bash,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,30 +36,25 @@ MAX_TOTAL_TOKENS = 8192
 
 @dataclass
 class RolloutStep:
-    """A single step in a rollout trace."""
+    """A single step in a rollout trace (mini-swe-agent v2 format)."""
 
-    role: str  # "assistant" | "tool"
-    content: str | None = None
-    tool_calls: list[dict] | None = None
-    tool_call_id: str | None = None
-    name: str | None = None
+    role: str  # "system" | "user" | "assistant" | "observation"
+    content: str = ""
+    bash_command: str | None = None
+    extra: dict | None = None
 
     def to_dict(self) -> dict:
-        d: dict = {"role": self.role}
-        if self.content is not None:
-            d["content"] = self.content
-        if self.tool_calls is not None:
-            d["tool_calls"] = self.tool_calls
-        if self.tool_call_id is not None:
-            d["tool_call_id"] = self.tool_call_id
-        if self.name is not None:
-            d["name"] = self.name
+        d: dict = {"role": self.role, "content": self.content}
+        if self.bash_command is not None:
+            d["bash_command"] = self.bash_command
+        if self.extra is not None:
+            d["extra"] = self.extra
         return d
 
 
 @dataclass
 class Rollout:
-    """A complete multi-turn rollout trace."""
+    """A complete multi-turn rollout trace in mini-swe-agent v2 format."""
 
     instance_id: str
     repo: str
@@ -74,27 +69,30 @@ class Rollout:
         return {
             "instance_id": self.instance_id,
             "repo": self.repo,
-            "steps": [s.to_dict() for s in self.steps],
-            "total_prompt_tokens": self.total_prompt_tokens,
-            "total_completion_tokens": self.total_completion_tokens,
-            "finished": self.finished,
-            "error": self.error,
+            "trajectory_format": "mini-swe-agent-1.1",
+            "messages": [s.to_dict() for s in self.steps],
+            "info": {
+                "exit_status": "Submitted" if self.finished else self.error or "incomplete",
+                "model_stats": {
+                    "instance_cost": 0.0,
+                    "prompt_tokens": self.total_prompt_tokens,
+                    "completion_tokens": self.total_completion_tokens,
+                },
+            },
             "duration_sec": self.duration_sec,
         }
 
     def actions_text(self) -> str:
-        """Concatenation of all actions (tool calls) for diversity measurement."""
+        """Concatenation of all bash commands for diversity measurement."""
         parts = []
         for step in self.steps:
-            if step.tool_calls:
-                for tc in step.tool_calls:
-                    fn = tc.get("function", {})
-                    parts.append(f"{fn.get('name', '')}({fn.get('arguments', '')})")
+            if step.bash_command:
+                parts.append(step.bash_command)
         return "\n".join(parts)
 
 
 def _estimate_tokens(messages: list[dict]) -> int:
-    """Rough token count estimate (4 chars ≈ 1 token)."""
+    """Rough token count estimate (4 chars ~ 1 token)."""
     text = json.dumps(messages)
     return len(text) // 4
 
@@ -110,20 +108,22 @@ def generate_rollout(
     """
     Generate a single execution-free rollout for a PR.
 
-    Orchestrates a multi-turn conversation where the model makes tool calls
-    and receives simulated responses, until it calls `finish` or hits limits.
+    Uses mini-swe-agent v2 format: model outputs THOUGHT + bash command,
+    environment returns simulated bash output.
     """
     snapshot = RepoSnapshot.from_pr(pr)
     rollout = Rollout(instance_id=pr.instance_id, repo=pr.repo)
     start_time = time.monotonic()
 
-    messages: list[dict] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": build_task_message(pr)},
-    ]
+    system_msg = {"role": "system", "content": SYSTEM_PROMPT}
+    user_msg = {"role": "user", "content": build_task_message(pr)}
+
+    rollout.steps.append(RolloutStep(role="system", content=SYSTEM_PROMPT))
+    rollout.steps.append(RolloutStep(role="user", content=build_task_message(pr)))
+
+    messages: list[dict] = [system_msg, user_msg]
 
     for turn in range(max_turns):
-        # Check token budget
         if _estimate_tokens(messages) > max_total_tokens:
             logger.info("Token budget exceeded at turn %d for %s", turn, pr.instance_id)
             break
@@ -132,8 +132,6 @@ def generate_rollout(
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
                 temperature=temperature,
                 max_tokens=MAX_TOKENS_PER_TURN,
             )
@@ -143,87 +141,43 @@ def generate_rollout(
             break
 
         choice = response.choices[0]
-        message = choice.message
+        assistant_text = choice.message.content or ""
 
-        # Track token usage
         if response.usage:
             rollout.total_prompt_tokens += response.usage.prompt_tokens
             rollout.total_completion_tokens += response.usage.completion_tokens
 
-        # Record assistant message
-        assistant_step = RolloutStep(role="assistant", content=message.content)
-        if message.tool_calls:
-            assistant_step.tool_calls = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                }
-                for tc in message.tool_calls
-            ]
-        rollout.steps.append(assistant_step)
+        # Extract bash command from response
+        bash_cmd = extract_bash_command(assistant_text)
 
-        # Add assistant message to conversation
-        msg_dict: dict = {"role": "assistant"}
-        if message.content:
-            msg_dict["content"] = message.content
-        if message.tool_calls:
-            msg_dict["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                }
-                for tc in message.tool_calls
-            ]
-        messages.append(msg_dict)
+        rollout.steps.append(RolloutStep(role="assistant", content=assistant_text, bash_command=bash_cmd))
+        messages.append({"role": "assistant", "content": assistant_text})
 
-        # Process tool calls
-        if message.tool_calls:
-            for tc in message.tool_calls:
-                try:
-                    args = json.loads(tc.function.arguments)
-                except json.JSONDecodeError:
-                    args = {}
-
-                tool_response = simulate_tool_response(tc.function.name, args, snapshot)
-
-                tool_step = RolloutStep(
-                    role="tool",
-                    content=tool_response,
-                    tool_call_id=tc.id,
-                    name=tc.function.name,
-                )
-                rollout.steps.append(tool_step)
-
-                messages.append(
-                    {
-                        "role": "tool",
-                        "content": tool_response,
-                        "tool_call_id": tc.id,
-                    }
-                )
-
-                # Check if the agent called finish
-                if tc.function.name == "finish":
-                    rollout.finished = True
-                    break
-
-            if rollout.finished:
-                break
-        else:
-            # No tool calls and no finish — model just responded with text.
-            # This can happen; continue to next turn.
+        if bash_cmd is None:
+            # Model didn't produce a bash block — it may have finished or errored
             if choice.finish_reason == "stop":
-                # Model stopped generating without tool calls — treat as done
                 rollout.finished = True
                 break
+            continue
+
+        # Check for submission
+        if "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in bash_cmd:
+            observation = "Submission successful."
+            rollout.steps.append(RolloutStep(role="user", content=observation))
+            messages.append({"role": "user", "content": observation})
+            rollout.finished = True
+            break
+
+        # Simulate the bash command
+        observation = simulate_bash(bash_cmd, snapshot)
+
+        # Format as mini-swe-agent v2 observation
+        if len(observation) > 10000:
+            observation = observation[:5000] + "\n\n... (output truncated) ...\n\n" + observation[-2000:]
+
+        obs_text = f"OBSERVATION:\n{observation}" if observation else "OBSERVATION:\n(no output)"
+        rollout.steps.append(RolloutStep(role="user", content=obs_text))
+        messages.append({"role": "user", "content": obs_text})
 
     rollout.duration_sec = time.monotonic() - start_time
     return rollout

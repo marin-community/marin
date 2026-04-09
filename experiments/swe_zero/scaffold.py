@@ -2,223 +2,83 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-SWE-ZERO execution-free agent scaffold.
+SWE-ZERO execution-free agent scaffold using mini-swe-agent v2 format.
 
-Defines the tools, system prompt, and multi-turn conversation structure for
-generating execution-free agentic rollouts in the style of SWE-ZERO.
+mini-swe-agent v2 uses bash-only interaction: the model outputs THOUGHT
+reasoning followed by a single bash command in a ```mswea_bash_command block.
+The environment executes the command and returns stdout/stderr.
 
-The agent can:
-  - Read files via str_replace_editor (view command)
-  - Search for files/symbols via find_file / search
-  - Edit files via str_replace_editor (str_replace / create / insert)
-  - Think step-by-step via the think tool
-  - Signal completion via finish
-
-The agent CANNOT execute code — this is the key constraint of SWE-ZERO.
+For SWE-ZERO (execution-free), we simulate bash command outputs from a
+patch-derived repo snapshot instead of actually executing them.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import shlex
 from dataclasses import dataclass, field
-from pathlib import PurePosixPath
 
 from experiments.swe_zero.data_loader import PRRecord
 
 logger = logging.getLogger(__name__)
 
-
 # ---------------------------------------------------------------------------
-# Tool definitions (Gemma 4 function-calling format)
-# ---------------------------------------------------------------------------
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "str_replace_editor",
-            "description": (
-                "A file editor tool for viewing and editing files. "
-                "Commands: view (read file contents), str_replace (replace text), "
-                "create (create new file), insert (insert text at line)."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "enum": ["view", "str_replace", "create", "insert"],
-                        "description": "The editor command to run.",
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute path to the file.",
-                    },
-                    "file_text": {
-                        "type": "string",
-                        "description": "File content (for create command).",
-                    },
-                    "old_str": {
-                        "type": "string",
-                        "description": "Text to replace (for str_replace).",
-                    },
-                    "new_str": {
-                        "type": "string",
-                        "description": "Replacement text (for str_replace/insert).",
-                    },
-                    "insert_line": {
-                        "type": "integer",
-                        "description": "Line number to insert at (for insert).",
-                    },
-                    "view_range": {
-                        "type": "array",
-                        "items": {"type": "integer"},
-                        "description": "Line range [start, end] to view.",
-                    },
-                },
-                "required": ["command", "path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "find_file",
-            "description": "Search for files by name pattern in the repository.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": {
-                        "type": "string",
-                        "description": "File name pattern to search for (glob-style).",
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Directory to search in. Defaults to repo root.",
-                    },
-                },
-                "required": ["pattern"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search",
-            "description": "Search for a text pattern in files.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": {
-                        "type": "string",
-                        "description": "Text/regex pattern to search for.",
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "File or directory to search in.",
-                    },
-                },
-                "required": ["pattern"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "think",
-            "description": "Use this tool for extended reasoning about the problem.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "thought": {
-                        "type": "string",
-                        "description": "Your reasoning about the problem.",
-                    },
-                },
-                "required": ["thought"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "finish",
-            "description": "Signal that you have completed the task.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "Summary of what was done.",
-                    },
-                },
-                "required": ["message"],
-            },
-        },
-    },
-]
-
-
-# ---------------------------------------------------------------------------
-# System prompt
+# System prompt (mini-swe-agent v2 style)
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """\
-You are a highly skilled software engineer tasked with resolving a GitHub issue.
+You are a software engineering agent tasked with resolving a GitHub issue.
+You can interact with a sandboxed environment by executing bash commands.
 
-**IMPORTANT CONSTRAINTS:**
-- The development environment is unavailable. You CANNOT RUN CODE for any purpose.
-- You cannot use: python, pytest, node, npm, cargo, go, make, pip, apt, or any execution commands.
-- You must resolve the issue purely through code reading, reasoning, and editing.
+RESPONSE FORMAT:
+You must ALWAYS respond with EXACTLY ONE bash code block with ONE command.
+Before the bash block, include a THOUGHT section explaining your reasoning.
 
-**Available tools:**
-1. `str_replace_editor` — View, create, and edit files
-2. `find_file` — Search for files by name pattern
-3. `search` — Search for text patterns in files
-4. `think` — Extended reasoning (use freely for complex analysis)
-5. `finish` — Signal task completion
+```mswea_bash_command
+<your bash command here>
+```
 
-**Workflow phases:**
-1. **Reading**: Understand the issue and identify relevant files
-2. **Exploration**: Navigate the codebase to understand the architecture
-3. **Analysis**: Determine the root cause and plan the fix
-4. **Implementation**: Apply code changes using str_replace_editor
-5. **Review**: Verify your changes are correct and complete, then finish
+IMPORTANT:
+- Directory or environment variable changes are not persistent. Every action is executed in a new subshell.
+- When you are done, submit your solution with: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 
-Work methodically. Read relevant files before editing. Make minimal, targeted changes.\
+WORKFLOW:
+1. Analyze the codebase by finding and reading relevant files
+2. Understand the issue and identify the root cause
+3. Edit source code to fix the issue
+4. Verify your changes by reading the modified files
+5. Submit with echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\
 """
 
 
 def build_task_message(pr: PRRecord) -> str:
     """Build the initial user message describing the task from a PR record."""
-    parts = [
-        f"## Issue\n\n{pr.problem_statement}",
-    ]
+    parts = [f"Please solve this issue in the repository {pr.repo}.\n"]
+    parts.append(f"## Issue\n\n{pr.problem_statement}")
     if pr.interface:
         parts.append(f"\n## Relevant Interface\n\n{pr.interface}")
     parts.append(
-        f"\n## Repository\n\n- **Repo**: {pr.repo}\n- **Language**: {pr.language}\n- **Base commit**: {pr.base_commit}"
+        f"\n## Repository Info\n\n"
+        f"- **Language**: {pr.language}\n"
+        f"- **Base commit**: {pr.base_commit}\n"
+        f"- The repository is already cloned at `/repo`."
     )
     return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
-# Simulated environment: produces tool-call responses without execution
+# Repo snapshot from patch diffs
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class RepoSnapshot:
     """
-    A lightweight in-memory snapshot of the repo state at base_commit.
+    Lightweight in-memory snapshot of the repo state at base_commit.
 
-    For the SWE-ZERO approach we don't need the full repo — we only need
-    the files that appear in the gold patch and test patch so that the
-    agent's view/search calls return plausible content.
-
-    In the MVP we populate this from the patch diffs themselves, which is
-    enough for the model to produce meaningful tool-call traces.
+    Populated from the patch diffs — enough for the model to produce
+    meaningful bash-based traces (cat, grep, find, sed).
     """
 
     files: dict[str, str] = field(default_factory=dict)
@@ -226,9 +86,8 @@ class RepoSnapshot:
 
     @classmethod
     def from_pr(cls, pr: PRRecord) -> RepoSnapshot:
-        """Extract file paths and rough content hints from the PR patches."""
+        """Extract file paths and content from the PR patches."""
         snap = cls(repo_name=pr.repo)
-        # Parse files mentioned in the patch
         for patch_text in [pr.patch, pr.test_patch]:
             if not patch_text:
                 continue
@@ -238,118 +97,258 @@ class RepoSnapshot:
                 if line.startswith("diff --git"):
                     if current_file and lines:
                         snap.files[current_file] = "\n".join(lines)
-                    # Extract b/ path
                     match = re.search(r"b/(.+)$", line)
-                    current_file = "/" + match.group(1) if match else None
+                    current_file = "/repo/" + match.group(1) if match else None
                     lines = []
                 elif line.startswith("+++") or line.startswith("---"):
                     continue
                 elif line.startswith("@@"):
                     continue
                 elif current_file is not None:
-                    # Keep context and added lines (strip the diff prefix)
                     if line.startswith(" ") or line.startswith("+"):
                         lines.append(line[1:])
                     elif line.startswith("-"):
-                        # Lines that exist in the base (before the patch)
                         lines.append(line[1:])
             if current_file and lines:
                 snap.files[current_file] = "\n".join(lines)
         return snap
 
 
-def simulate_tool_response(
-    tool_name: str,
-    arguments: dict,
-    snapshot: RepoSnapshot,
-) -> str:
+# ---------------------------------------------------------------------------
+# Bash command parser and simulator
+# ---------------------------------------------------------------------------
+
+
+def extract_bash_command(response: str) -> str | None:
+    """Extract the bash command from a mini-swe-agent v2 response."""
+    # Look for ```mswea_bash_command blocks
+    pattern = r"```mswea_bash_command\s*\n(.*?)```"
+    match = re.search(pattern, response, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    # Fallback: look for ```bash blocks
+    pattern = r"```bash\s*\n(.*?)```"
+    match = re.search(pattern, response, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def simulate_bash(command: str, snapshot: RepoSnapshot) -> str:
     """
-    Produce a simulated tool-call response.
+    Simulate a bash command against the repo snapshot.
 
-    Since SWE-ZERO is execution-free, we simulate file reads from the
-    repo snapshot and acknowledge edits without actual execution.
+    Supports common read-only commands (cat, find, grep, ls, head, tail)
+    and write commands (sed, patch-like echo/tee). Since this is SWE-ZERO
+    (execution-free), we don't actually execute anything.
     """
-    if tool_name == "str_replace_editor":
-        cmd = arguments.get("command", "")
-        path = arguments.get("path", "")
+    command = command.strip()
 
-        if cmd == "view":
-            content = snapshot.files.get(path)
-            if content is None:
-                # Try partial match
-                for fpath, fcontent in snapshot.files.items():
-                    if fpath.endswith(path.lstrip("/")):
-                        content = fcontent
-                        break
-            if content is None:
-                return f"Error: File {path} not found in the repository."
+    # Submit signal
+    if "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in command:
+        return "Submission successful."
 
-            view_range = arguments.get("view_range")
-            if view_range and len(view_range) == 2:
-                lines = content.split("\n")
-                start, end = max(0, view_range[0] - 1), min(len(lines), view_range[1])
-                numbered = [f"{i + view_range[0]}:\t{l}" for i, l in enumerate(lines[start:end])]
-                return "\n".join(numbered)
+    # cat: read file
+    if command.startswith("cat "):
+        path = _extract_first_path(command[4:])
+        content = _resolve_file(path, snapshot)
+        if content is not None:
+            return content
+        return f"cat: {path}: No such file or directory"
 
-            lines = content.split("\n")
-            numbered = [f"{i + 1}:\t{l}" for i, l in enumerate(lines)]
-            return "\n".join(numbered)
+    # head: read first N lines
+    if command.startswith("head "):
+        parts = command.split()
+        n_lines = 10
+        path = ""
+        for i, p in enumerate(parts[1:], 1):
+            if p == "-n" and i + 1 < len(parts):
+                try:
+                    n_lines = int(parts[i + 1])
+                except ValueError:
+                    pass
+            elif p.startswith("-") and p[1:].isdigit():
+                n_lines = int(p[1:])
+            elif not p.startswith("-"):
+                path = p
+        content = _resolve_file(path, snapshot)
+        if content is not None:
+            return "\n".join(content.split("\n")[:n_lines])
+        return f"head: cannot open '{path}' for reading: No such file or directory"
 
-        elif cmd == "str_replace":
-            old_str = arguments.get("old_str", "")
-            new_str = arguments.get("new_str", "")
-            content = snapshot.files.get(path, "")
-            if old_str not in content:
-                return f"Error: old_str not found in {path}. No changes made."
-            snapshot.files[path] = content.replace(old_str, new_str, 1)
-            return f"Successfully replaced text in {path}."
-
-        elif cmd == "create":
-            file_text = arguments.get("file_text", "")
-            snapshot.files[path] = file_text
-            return f"Successfully created {path}."
-
-        elif cmd == "insert":
-            new_str = arguments.get("new_str", "")
-            insert_line = arguments.get("insert_line", 0)
-            content = snapshot.files.get(path, "")
-            lines = content.split("\n")
-            lines.insert(insert_line, new_str)
-            snapshot.files[path] = "\n".join(lines)
-            return f"Successfully inserted text at line {insert_line} in {path}."
-
-        return f"Error: Unknown command '{cmd}'."
-
-    elif tool_name == "find_file":
-        pattern = arguments.get("pattern", "")
-        search_path = arguments.get("path", "/")
+    # find: list files
+    if command.startswith("find "):
+        parts = command.split()
+        search_dir = "/repo"
+        name_pattern = ""
+        for i, p in enumerate(parts[1:], 1):
+            if p == "-name" and i + 1 < len(parts):
+                name_pattern = parts[i + 1].strip("'\"")
+            elif not p.startswith("-") and i == 1:
+                search_dir = p
         matches = []
-        for fpath in snapshot.files:
-            if PurePosixPath(fpath).match(pattern):
-                if fpath.startswith(search_path):
-                    matches.append(fpath)
-        if not matches:
-            return f"No files matching '{pattern}' found."
-        return "Found files:\n" + "\n".join(sorted(matches))
-
-    elif tool_name == "search":
-        pattern = arguments.get("pattern", "")
-        search_path = arguments.get("path", "/")
-        results = []
-        for fpath, content in snapshot.files.items():
-            if not fpath.startswith(search_path):
+        for fpath in sorted(snapshot.files):
+            if not fpath.startswith(search_dir):
                 continue
-            for i, line in enumerate(content.split("\n"), 1):
-                if re.search(pattern, line):
-                    results.append(f"{fpath}:{i}: {line.strip()}")
-        if not results:
-            return f"No matches for '{pattern}'."
-        return "\n".join(results[:50])  # Limit output
+            if name_pattern:
+                fname = fpath.rsplit("/", 1)[-1]
+                if not _glob_match(fname, name_pattern):
+                    continue
+            matches.append(fpath)
+        return "\n".join(matches) if matches else ""
 
-    elif tool_name == "think":
-        return "Your thought has been recorded."
+    # grep: search in files
+    if command.startswith("grep "):
+        return _simulate_grep(command, snapshot)
 
-    elif tool_name == "finish":
-        return "Task marked as complete."
+    # ls: list directory
+    if command.startswith("ls "):
+        path = _extract_first_path(command[3:])
+        if not path:
+            path = "/repo"
+        entries = set()
+        for fpath in snapshot.files:
+            if fpath.startswith(path.rstrip("/") + "/"):
+                remainder = fpath[len(path.rstrip("/")) + 1 :]
+                entry = remainder.split("/")[0]
+                entries.add(entry)
+        return "\n".join(sorted(entries)) if entries else f"ls: cannot access '{path}': No such file or directory"
 
-    return f"Error: Unknown tool '{tool_name}'."
+    # sed: simulate inline edit
+    if command.startswith("sed "):
+        return _simulate_sed(command, snapshot)
+
+    # echo with redirect: write file
+    if ">>" in command or ">" in command:
+        return ""  # Acknowledge write silently
+
+    # wc: word/line count
+    if command.startswith("wc "):
+        path = _extract_first_path(command[3:])
+        content = _resolve_file(path, snapshot)
+        if content is not None:
+            lines = content.split("\n")
+            words = sum(len(l.split()) for l in lines)
+            chars = len(content)
+            return f"  {len(lines)}  {words} {chars} {path}"
+        return f"wc: {path}: No such file or directory"
+
+    # diff, patch, etc.: acknowledge
+    if command.startswith("diff ") or command.startswith("patch "):
+        return ""
+
+    # pwd
+    if command.strip() == "pwd":
+        return "/repo"
+
+    # Anything else: return empty (simulated no-op)
+    return ""
+
+
+def _extract_first_path(args: str) -> str:
+    """Extract the first non-flag argument as a file path."""
+    for part in args.split():
+        if not part.startswith("-"):
+            return part.strip("'\"")
+    return ""
+
+
+def _resolve_file(path: str, snapshot: RepoSnapshot) -> str | None:
+    """Resolve a file path against the snapshot."""
+    if path in snapshot.files:
+        return snapshot.files[path]
+    # Try with /repo prefix
+    if not path.startswith("/repo") and f"/repo/{path.lstrip('/')}" in snapshot.files:
+        return snapshot.files[f"/repo/{path.lstrip('/')}"]
+    # Try partial match
+    for fpath, content in snapshot.files.items():
+        if fpath.endswith("/" + path.lstrip("/")):
+            return content
+    return None
+
+
+def _glob_match(name: str, pattern: str) -> bool:
+    """Simple glob matching for find -name."""
+    regex = pattern.replace(".", r"\.").replace("*", ".*").replace("?", ".")
+    return bool(re.match(f"^{regex}$", name))
+
+
+def _simulate_grep(command: str, snapshot: RepoSnapshot) -> str:
+    """Simulate grep against the snapshot."""
+    parts = shlex.split(command)
+    recursive = False
+    line_numbers = False
+    pattern = ""
+    paths = []
+
+    i = 1
+    while i < len(parts):
+        p = parts[i]
+        if p in ("-r", "-R", "--recursive", "-rn", "-rn"):
+            recursive = True
+            if "n" in p:
+                line_numbers = True
+        elif p in ("-n", "--line-number"):
+            line_numbers = True
+        elif p in ("-l", "--files-with-matches"):
+            pass  # simplified
+        elif p.startswith("-"):
+            pass
+        elif not pattern:
+            pattern = p
+        else:
+            paths.append(p)
+        i += 1
+
+    if not pattern:
+        return ""
+
+    search_files = {}
+    if recursive or not paths:
+        search_files = snapshot.files
+    else:
+        for p in paths:
+            content = _resolve_file(p, snapshot)
+            if content is not None:
+                search_files[p] = content
+
+    results = []
+    try:
+        regex = re.compile(pattern)
+    except re.error:
+        regex = re.compile(re.escape(pattern))
+
+    for fpath, content in sorted(search_files.items()):
+        if paths and not recursive:
+            if not any(fpath.endswith(p.lstrip("/")) for p in paths):
+                continue
+        for lineno, line in enumerate(content.split("\n"), 1):
+            if regex.search(line):
+                if line_numbers:
+                    results.append(f"{fpath}:{lineno}:{line}")
+                else:
+                    results.append(f"{fpath}:{line}")
+    return "\n".join(results[:50])
+
+
+def _simulate_sed(command: str, snapshot: RepoSnapshot) -> str:
+    """Simulate sed -i for inline edits."""
+    # Match: sed -i 's/old/new/g' file
+    match = re.search(r"""sed\s+(?:-i\s*(?:''|"")?\s+)?'s/(.+?)/(.*?)/g?'\s+(\S+)""", command)
+    if not match:
+        match = re.search(r"""sed\s+(?:-i\s*(?:''|"")?\s+)?"s/(.+?)/(.*?)/g?"\s+(\S+)""", command)
+    if match:
+        old_pat, new_str, path = match.group(1), match.group(2), match.group(3)
+        content = _resolve_file(path, snapshot)
+        if content is not None:
+            try:
+                new_content = re.sub(old_pat, new_str, content)
+                # Store back
+                if path in snapshot.files:
+                    snapshot.files[path] = new_content
+                elif f"/repo/{path.lstrip('/')}" in snapshot.files:
+                    snapshot.files[f"/repo/{path.lstrip('/')}"] = new_content
+            except re.error:
+                pass
+        return ""
+    return ""

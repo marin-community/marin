@@ -1,6 +1,6 @@
 # SWE-ZERO MVP: Research Logbook
 
-Experiment issue: (TBD — will be linked after creation)
+Experiment issue: https://github.com/marin-community/marin/issues/4561
 Branch: `kevin/swe-zero-mvp`
 Parent issue: https://github.com/marin-community/marin/issues/4435
 
@@ -37,3 +37,23 @@ Parent issue: https://github.com/marin-community/marin/issues/4435
 - All modules pass lint (ruff) and basic integration tests.
 - **Interpretation**: Code scaffold is ready. Next: allocate dev TPU and run Step 1.
 - **Next action**: Commit, push, create experiment issue, allocate dev TPU.
+
+### 2026-04-09 — SZ-002: Step 1 — Gemma 4 E2B tool calling prototype
+- **Hypothesis**: Gemma 4 E2B (5B) can produce reasonable multi-turn tool calls on a SWE-bench-style task.
+- **Command**: `python3 ~/test_gemma4_tool_calling.py` and `python3 ~/test_gemma4_multiturn.py` on `kevin-swe-zero-v6e4` (v6e-4 TPU VM in us-east1-d)
+- **Config**: `google/gemma-4-E2B-it`, bfloat16, temperature=0.7, top_p=0.9, max_new_tokens=512
+- **Result** (confidence: replicated):
+  - Gemma 4 E2B chat template natively supports tool calling via `<|tool_call>call:name{args}<tool_call|>` format
+  - Single-turn test: Model correctly called `think` tool, planned to view file. 98 tokens in 9.5s.
+  - Multi-turn test (5 turns): Model correctly executed a complete SWE workflow:
+    1. `str_replace_editor(view, /src/calc.py)` — read the file
+    2. `str_replace_editor(str_replace, ...)` — correctly replaced `return None` with `return price`
+    3. `think(...)` — reflected on the fix
+    4. Natural language summary of the fix
+    5. End of conversation
+  - The fix was semantically correct.
+  - Generation speed on CPU: ~10 tok/s (need TPU acceleration via vLLM for scale)
+- **Interpretation**: Gemma 4 E2B works perfectly for SWE-ZERO. E2B is the right choice (smaller = faster).
+- **Decision**: Use E2B going forward (per issue plan: "If E2B works, use it instead of E4B to speed things up").
+- **Infra note**: Iris controller was timing out (overloaded managing v6e-128 scaling ops). Created TPU VM directly via gcloud. vLLM on TPU requires `tpu_inference` package (not in pip vLLM). For Steps 3-6, need to either use vLLM with tpu_inference Docker image, or use transformers+torch_xla directly.
+- **Next action**: Set up vLLM-tpu serving infra for scaled rollout generation (Step 2).
