@@ -218,7 +218,7 @@ validation_configs = {
 }
 
 # --- Step 2: Optimal Training Runs ---
-# Seeds per budget: 1e21 gets 3 seeds (0, 1, 2), others get seed 0 only
+# Seeds per budget: 1e21 and 1e22 get 3 seeds (0, 42, 62746); 1e23 gets seed 0 only
 SEEDS_PER_BUDGET: dict[float, list[int]] = {
     1e21: [0, 42, 62746],
     1e22: [0, 42, 62746],
