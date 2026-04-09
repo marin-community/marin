@@ -917,6 +917,139 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
 
 
+def _task_state_name(state: job_pb2.TaskState) -> str:
+    return job_pb2.TaskState.Name(state).replace("TASK_STATE_", "").lower()
+
+
+def _task_index(task_id: str) -> str:
+    last = task_id.rsplit("/", 1)[-1]
+    return last or task_id
+
+
+def _task_duration_ms(task: job_pb2.TaskStatus) -> int | None:
+    if not task.started_at.epoch_ms:
+        return None
+    end_ms = task.finished_at.epoch_ms or Timestamp.now().epoch_ms()
+    return max(0, end_ms - task.started_at.epoch_ms)
+
+
+def _format_duration_ms(ms: int | None) -> str:
+    if ms is None:
+        return "-"
+    seconds = ms // 1000
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m{seconds:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"
+
+
+def build_job_summary(
+    job_status: job_pb2.JobStatus,
+    tasks: list[job_pb2.TaskStatus],
+) -> dict:
+    """Build a structured job/task summary (CLI + test entry point).
+
+    Returns a dict with job-level fields and a per-task list including
+    peak memory, final state, exit code, and duration. Pure function over
+    protos — no RPC calls — so it can be unit-tested without a cluster.
+    """
+    task_summaries = []
+
+    def _sort_key(t: job_pb2.TaskStatus) -> tuple[int, str]:
+        idx = _task_index(t.task_id)
+        try:
+            return (int(idx), "")
+        except ValueError:
+            return (2**31, idx)
+
+    for t in sorted(tasks, key=_sort_key):
+        usage = t.resource_usage
+        task_summaries.append(
+            {
+                "task_id": t.task_id,
+                "index": _task_index(t.task_id),
+                "state": _task_state_name(t.state),
+                "exit_code": int(t.exit_code) if t.state != job_pb2.TASK_STATE_PENDING else None,
+                "duration_ms": _task_duration_ms(t),
+                "memory_mb": int(usage.memory_mb) if usage.memory_mb else 0,
+                "memory_peak_mb": int(usage.memory_peak_mb) if usage.memory_peak_mb else 0,
+                "cpu_millicores": int(usage.cpu_millicores) if usage.cpu_millicores else 0,
+                "disk_mb": int(usage.disk_mb) if usage.disk_mb else 0,
+                "worker_id": t.worker_id,
+                "error": t.error,
+            }
+        )
+
+    return {
+        "job_id": job_status.job_id,
+        "name": job_status.name,
+        "state": _job_state_name(job_status.state),
+        "exit_code": int(job_status.exit_code),
+        "error": job_status.error,
+        "failure_count": int(job_status.failure_count),
+        "preemption_count": int(job_status.preemption_count),
+        "task_count": int(job_status.task_count),
+        "completed_count": int(job_status.completed_count),
+        "task_state_counts": dict(job_status.task_state_counts),
+        "tasks": task_summaries,
+    }
+
+
+def _render_job_summary_text(summary: dict) -> str:
+    lines = [
+        f"Job: {summary['job_id']}" + (f" ({summary['name']})" if summary["name"] else ""),
+        f"State: {summary['state']}  exit={summary['exit_code']}  "
+        f"failures={summary['failure_count']}  preemptions={summary['preemption_count']}",
+        f"Tasks: {summary['completed_count']}/{summary['task_count']} completed  "
+        + "  ".join(f"{k}={v}" for k, v in sorted(summary["task_state_counts"].items()) if v),
+    ]
+    if summary["error"]:
+        lines.append(f"Error: {summary['error']}")
+    lines.append("")
+
+    rows = []
+    for t in summary["tasks"]:
+        rows.append(
+            [
+                t["index"],
+                t["state"],
+                "-" if t["exit_code"] is None else t["exit_code"],
+                _format_duration_ms(t["duration_ms"]),
+                t["memory_peak_mb"] or "-",
+                t["memory_mb"] or "-",
+                (t["error"] or "")[:50] + ("..." if len(t["error"] or "") > 50 else ""),
+            ]
+        )
+    headers = ["TASK", "STATE", "EXIT", "DURATION", "PEAK MB", "CUR MB", "ERROR"]
+    lines.append(tabulate(rows, headers=headers, tablefmt="plain"))
+    return "\n".join(lines)
+
+
+@job.command("summary")
+@click.argument("job_id")
+@click.option("--json", "json_output", is_flag=True, help="Emit structured JSON instead of a text table.")
+@click.pass_context
+def summary(ctx, job_id: str, json_output: bool) -> None:
+    """Print a per-task summary (peak memory, state, exit, duration) for a job.
+
+    Works for both running and completed jobs. Data is read from the controller's
+    existing ``GetJobStatus`` / ``ListTasks`` RPCs (no checkpoint scraping).
+    """
+    controller_url = require_controller_url(ctx)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
+    job_name = JobName.from_wire(job_id)
+    job_status = client.status(job_name)
+    tasks = client.list_tasks(job_name)
+    result = build_job_summary(job_status, tasks)
+    if json_output:
+        click.echo(json.dumps(result, indent=2, default=str))
+        return
+    click.echo(_render_job_summary_text(result))
+
+
 @job.command("logs")
 @click.argument("job_id")
 @click.option("--since-ms", type=int, default=None, help="Only show logs after this epoch millisecond timestamp.")
