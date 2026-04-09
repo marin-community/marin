@@ -152,7 +152,14 @@ def _run_with_vllm(model_name: str, model_path: str, step: int, output_dir: str)
 
 def _launch_on_cluster(model_name: str, model_path: str, step: int, output_dir: str, tpu_type: str) -> None:
     """Submit as a Fray job to the Iris cluster (same pattern as harbor_evaluator)."""
-    from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+    from fray.v1.cluster import (
+        Entrypoint,
+        EnvironmentConfig,
+        JobRequest,
+        ResourceConfig,
+        TpuConfig,
+        current_cluster,
+    )
     from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, resolve_vllm_mode
 
     mode_str = resolve_vllm_mode(None)
@@ -174,11 +181,10 @@ def _launch_on_cluster(model_name: str, model_path: str, step: int, output_dir: 
         with remove_tpu_lockfile_on_exit():
             _run_with_vllm(model_name, model_path, step, output_dir)
 
-    tpu_chips = int(tpu_type.split("-")[-1])
     job_request = JobRequest(
         name=f"swe-zero-step{step}",
         entrypoint=Entrypoint.from_callable(_run),
-        resources=ResourceConfig(accelerator=f"tpu-{tpu_type}", accelerator_count=tpu_chips),
+        resources=ResourceConfig(device=TpuConfig(variant=tpu_type)),
         environment=EnvironmentConfig.create(
             extras=["vllm"],
             pip_packages=list(pip_packages),
