@@ -29,6 +29,7 @@ from typing import Any, Protocol, runtime_checkable
 import fsspec
 import jinja2
 import jinja2.ext
+from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
 from tokenizers import Tokenizer as HfBaseTokenizer
@@ -675,9 +676,19 @@ def _stage_tokenizer(name_or_path: str) -> str:
       3. HF Hub via ``snapshot_download`` — fetches every tokenizer-relevant
          file the repo ships, then populates the mirror for future workers.
 
+    The local cache directory is keyed by the ``huggingface_hub`` library
+    version so that a library upgrade busts the cache and re-downloads.
+    Once staged, downstream loaders operate purely on local files — no
+    HF Hub network calls (HEAD revalidation, etc.) are made.
+
     Returns the local directory path. ``lru_cache`` makes subsequent calls free.
     """
-    local_dir = os.path.join(tempfile.gettempdir(), "levanter_tokenizers", _hf_name_to_mirror_key(name_or_path))
+    local_dir = os.path.join(
+        tempfile.gettempdir(),
+        "levanter_tokenizers",
+        f"hfhub_{_hf_hub_version}",
+        _hf_name_to_mirror_key(name_or_path),
+    )
     os.makedirs(local_dir, exist_ok=True)
 
     # 1. Local cache hit.
@@ -694,10 +705,17 @@ def _stage_tokenizer(name_or_path: str) -> str:
 
 
 def _load_hf_base_tokenizer(name_or_path: str) -> HfBaseTokenizer:
-    """Load an HfBaseTokenizer from a local directory (pre-staged by _stage_tokenizer)."""
+    """Load an HfBaseTokenizer from a local directory (pre-staged by _stage_tokenizer).
+
+    When *name_or_path* is a directory, only local files are used — no network
+    calls to HF Hub. This avoids the per-file HEAD revalidation requests that
+    ``huggingface_hub`` would otherwise make even for cached files.
+    """
     local_path = os.path.join(name_or_path, "tokenizer.json")
     if os.path.isfile(local_path):
         return HfBaseTokenizer.from_file(local_path)
+    if os.path.isdir(name_or_path):
+        raise FileNotFoundError(f"tokenizer.json not found in staged directory: {name_or_path}")
     return HfBaseTokenizer.from_pretrained(name_or_path)
 
 
