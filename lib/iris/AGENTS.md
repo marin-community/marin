@@ -5,7 +5,7 @@ Distributed job orchestration replacing Ray with simpler primitives. Start with 
 ## Key Docs
 
 - `README.md` — overview + quick start
-- `OPS.md` — operating / troubleshooting a live cluster (also used by skills: `debug-iris-job`, `debug-iris-controller`, `debug-tpu`, `restart-iris-controller`)
+- `OPS.md` — operating / troubleshooting a live cluster (also used by skills: `debug-infra`, `restart-iris-controller`)
 - `TESTING.md` — testing policy, markers, and commands
 - `docs/task-states.md` — task state machine + retry semantics
 - `docs/coreweave.md` — CoreWeave platform + `runtime=kubernetes` behavior

@@ -15,7 +15,7 @@ iris cluster dashboard-proxy        # local proxy to remote controller (no tunne
 ### Controller Restart
 
 `iris cluster controller restart` restarts the controller only (seconds of downtime, workers unaffected).
-`iris cluster restart` tears down **everything** — controller + all workers. All jobs die.
+`iris cluster restart` tears down **everything** — controller + all workers. All jobs die. **Never run the full `iris cluster restart` without explicit user approval.**
 
 Workflow: dry-run locally (`iris cluster controller serve --dry-run`) -> capture baseline (`iris cluster status`) -> restart -> verify.
 
@@ -68,6 +68,8 @@ iris process profile mem                    # memory flamegraph (writes .html)
 iris process profile cpu -t /user/job/0     # profile a running task container
 ```
 
+**Prefer `iris process profile` over SSH** for profiling — it uses the `/system/process` RPC and avoids direct VM access. SSH is a fallback only when the RPC doesn't cover your needs.
+
 ## Scheduler & Autoscaler
 
 ```bash
@@ -87,6 +89,8 @@ The controller exposes its SQLite DB via RPC:
 iris query "SELECT state, count(*) FROM jobs GROUP BY state"
 iris query "SELECT state, count(*) FROM tasks GROUP BY state" -f json
 ```
+
+**Never modify the controller database** without explicit user approval — read-only queries only, even on offline checkpoints.
 
 State codes: 1=PENDING, 2=BUILDING, 3=RUNNING, 4=SUCCEEDED, 5=FAILED, 6=KILLED, 7=WORKER_FAILED, 8=UNSCHEDULABLE, 9=ASSIGNED (tasks only), 10=PREEMPTED (tasks only).
 

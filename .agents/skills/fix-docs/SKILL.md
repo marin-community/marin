@@ -19,11 +19,9 @@ Principles:
         - `**/*/OPS.md` (also spread out throughout the codebase):
             - An extensive field guide for agents on how to gather telemetry information about the systems in the subtree, run commands, debug, ...
         - `.agents/skills/*/SKILL.md`: Prompts for common agentic workflows
-- Avoid rot / drift:
-    - Why: Rot confuses agents
-    - How:
-        - The code is the source of truth for documentation. Unlike humans, agents are great at reading lots of code, esp. if the code is relevant to the task at hand.
-        - Agents maintain the docs to avoid rot / contradictions in the docs
+- Avoid rot:
+    - Why: Rot confuses agents and wastes context
+    - How: When you identify a document that is out of date with the current codebase, either update it (if it's recent and the change is small) or archive it to `.agents/project/YYYYMMDD_filename.md` (if it's for historical reading only). The code is the source of truth — agents are good at reading code when it's relevant to the task at hand.
 - Agent context quality and quantity are paramount:
     - Why: The context window is all the model sees about our world. Model performance is known to degrade once the context window gets too full
     - How: Docs for agents should focus on:
