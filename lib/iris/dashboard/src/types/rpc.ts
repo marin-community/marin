@@ -45,7 +45,6 @@ export interface ResourceUsage {
   diskMb?: string
   cpuMillicores?: number
   memoryPeakMb?: string
-  cpuPercent?: number
   processCount?: number
 }
 
@@ -506,4 +505,3 @@ export interface GetSchedulerStateResponse {
   totalPending: number
   totalRunning: number
 }
-

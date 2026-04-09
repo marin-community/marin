@@ -264,7 +264,7 @@ class TaskAttempt:
         # Resource tracking
         self.current_memory_mb: int = 0
         self.peak_memory_mb: int = 0
-        self.current_cpu_percent: int = 0
+        self.current_cpu_millicores: int = 0
         self.process_count: int = 0
         self.disk_mb: int = 0
 
@@ -500,8 +500,7 @@ class TaskAttempt:
                 memory_mb=self.current_memory_mb,
                 memory_peak_mb=self.peak_memory_mb,
                 disk_mb=self.disk_mb,
-                cpu_millicores=self.current_cpu_percent * 10,
-                cpu_percent=self.current_cpu_percent,
+                cpu_millicores=self.current_cpu_millicores,
                 process_count=self.process_count,
             ),
             build_metrics=job_pb2.BuildMetrics(
@@ -844,7 +843,7 @@ class TaskAttempt:
                 stats = handle.stats()
                 if stats.available:
                     self.current_memory_mb = stats.memory_mb
-                    self.current_cpu_percent = stats.cpu_percent
+                    self.current_cpu_millicores = stats.cpu_millicores
                     self.process_count = stats.process_count
                     if stats.memory_mb > self.peak_memory_mb:
                         self.peak_memory_mb = stats.memory_mb

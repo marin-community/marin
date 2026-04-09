@@ -850,6 +850,29 @@ def test_task_attempt_adopt_factory():
     assert proto.current_attempt_id == container.attempt_id
 
 
+def test_task_attempt_to_proto_uses_cpu_millicores():
+    """TaskStatus.resource_usage carries canonical CPU usage in millicores."""
+    port_allocator = PortAllocator(port_range=(50000, 50100))
+    container = _make_discovered_container()
+    handle = create_mock_container_handle()
+
+    attempt = TaskAttempt.adopt(
+        discovered=container,
+        container_handle=handle,
+        log_pusher=None,
+        port_allocator=port_allocator,
+    )
+    attempt.current_memory_mb = 512
+    attempt.current_cpu_millicores = 1250
+    attempt.process_count = 3
+
+    proto = attempt.to_proto()
+
+    assert proto.resource_usage.memory_mb == 512
+    assert proto.resource_usage.cpu_millicores == 1250
+    assert proto.resource_usage.process_count == 3
+
+
 # ============================================================================
 # Docker-based Adoption Integration Tests
 # ============================================================================
@@ -868,7 +891,7 @@ def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
     config = ContainerConfig(
         image="iris-task:latest",
         entrypoint=job_pb2.RuntimeEntrypoint(
-            run_command=job_pb2.RuntimeEntrypoint.RunCommand(argv=["echo", "hello"]),
+            run_command=job_pb2.CommandEntrypoint(argv=["echo", "hello"]),
         ),
         env={},
         mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
@@ -916,7 +939,7 @@ def test_docker_discover_containers(docker_runtime, tmp_path):
     config = ContainerConfig(
         image="iris-task:latest",
         entrypoint=job_pb2.RuntimeEntrypoint(
-            run_command=job_pb2.RuntimeEntrypoint.RunCommand(argv=["sleep", "60"]),
+            run_command=job_pb2.CommandEntrypoint(argv=["sleep", "60"]),
         ),
         env={},
         mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
@@ -956,7 +979,7 @@ def test_docker_adopt_container(docker_runtime, tmp_path):
     config = ContainerConfig(
         image="iris-task:latest",
         entrypoint=job_pb2.RuntimeEntrypoint(
-            run_command=job_pb2.RuntimeEntrypoint.RunCommand(argv=["sleep", "60"]),
+            run_command=job_pb2.CommandEntrypoint(argv=["sleep", "60"]),
         ),
         env={},
         mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],

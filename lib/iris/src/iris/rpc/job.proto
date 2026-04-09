@@ -250,7 +250,7 @@ message ResourceUsage {
   int64 disk_mb = 2;
   int32 cpu_millicores = 3;
   int64 memory_peak_mb = 4;
-  int32 cpu_percent = 5;
+  reserved 5;                  // Formerly task cpu_percent; use cpu_millicores instead.
   int32 process_count = 6;
 }
 

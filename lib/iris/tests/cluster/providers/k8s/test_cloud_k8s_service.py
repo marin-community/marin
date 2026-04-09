@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for K8sResource enum path construction and kind mapping.
+"""Tests for CloudK8sService helpers and K8sResource enum path construction.
 
 These test the path construction methods on the K8sResource enum, which
 replaced the old _api_path_for_manifest and _api_path_for_resource functions.
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from iris.cluster.providers.k8s.service import CloudK8sService
 from iris.cluster.providers.k8s.types import K8sResource
 
 
@@ -131,3 +132,72 @@ def test_api_base_paths():
     assert K8sResource.DEPLOYMENTS.api_base() == "/apis/apps/v1"
     assert K8sResource.CLUSTER_ROLES.api_base() == "/apis/rbac.authorization.k8s.io/v1"
     assert K8sResource.NODE_POOLS.api_base() == "/apis/compute.coreweave.com/v1alpha1"
+
+
+class _FakeDynamicItem:
+    def __init__(self, payload: dict):
+        self._payload = payload
+
+    def to_dict(self) -> dict:
+        return dict(self._payload)
+
+
+class _FakeDynamicResponse:
+    def __init__(self, payloads: list[dict]):
+        self.items = [_FakeDynamicItem(payload) for payload in payloads]
+
+
+class _FakeDynamicApi:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def get(self, **kwargs):
+        self.calls.append(kwargs)
+        if "name" in kwargs:
+            return _FakeDynamicItem({"metadata": {"name": kwargs["name"]}})
+        return _FakeDynamicResponse([{"metadata": {"name": "pod-1"}}])
+
+
+class _FakeCustomApi:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def get_namespaced_custom_object(self, **kwargs):
+        self.calls.append(kwargs)
+        return {
+            "containers": [
+                {
+                    "usage": {
+                        "cpu": "750m",
+                        "memory": "1Gi",
+                    }
+                }
+            ]
+        }
+
+
+def test_cloud_k8s_service_passes_default_timeout_to_api_calls(monkeypatch: pytest.MonkeyPatch):
+    fake_dynamic = _FakeDynamicApi()
+    fake_custom = _FakeCustomApi()
+    service = object.__new__(CloudK8sService)
+    service.namespace = "test-ns"
+    service.timeout = 60.0
+    service._custom = fake_custom
+    monkeypatch.setattr(service, "_resource_api", lambda _resource: fake_dynamic)
+
+    pod = service.get_json(K8sResource.PODS, "pod-1")
+    pods = service.list_json(K8sResource.PODS, labels={"app": "iris"})
+    top = service.top_pod("pod-1")
+
+    assert pod == {"metadata": {"name": "pod-1"}}
+    assert pods == [{"metadata": {"name": "pod-1"}}]
+    assert top is not None
+    assert top.cpu_millicores == 750
+    assert top.memory_bytes == 1024**3
+
+    assert fake_dynamic.calls[0]["_request_timeout"] == 60.0
+    assert fake_dynamic.calls[0]["namespace"] == "test-ns"
+    assert fake_dynamic.calls[1]["_request_timeout"] == 60.0
+    assert fake_dynamic.calls[1]["label_selector"] == "app=iris"
+    assert fake_custom.calls[0]["_request_timeout"] == 60.0
+    assert fake_custom.calls[0]["namespace"] == "test-ns"

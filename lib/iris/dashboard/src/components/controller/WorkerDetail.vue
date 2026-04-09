@@ -10,7 +10,7 @@ import type {
   WorkerResourceSnapshot,
   LogEntry,
 } from '@/types/rpc'
-import { timestampMs, formatBytes, formatDuration, formatRelativeTime, formatRate, logLevelClass, formatLogTime, formatWorkerDevice } from '@/utils/formatting'
+import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime, formatRate, logLevelClass, formatLogTime, formatWorkerDevice } from '@/utils/formatting'
 
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -299,9 +299,7 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
             </template>
             <template #cell-cpu="{ row }">
               <span class="font-mono text-xs">
-                {{ (row as TaskStatus).resourceUsage?.cpuPercent != null
-                  ? Math.round((row as TaskStatus).resourceUsage!.cpuPercent!) + '%'
-                  : '-' }}
+                {{ formatCpuMillicores((row as TaskStatus).resourceUsage?.cpuMillicores) }}
               </span>
             </template>
             <template #cell-duration="{ row }">
