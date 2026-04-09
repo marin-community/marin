@@ -51,6 +51,7 @@ from zephyr.plan import (
     SourceItem,
     StageType,
     compute_plan,
+    find_completed_write_indices,
 )
 from zephyr.writers import ensure_parent_dir
 
@@ -808,6 +809,23 @@ class ZephyrCoordinator:
                 # Build and submit tasks
                 tasks = _compute_tasks_from_shards(shards, stage, aux_per_shard, stage_name=stage_label)
                 output_stage_name = tasks[0].stage_name if tasks else stage_label
+
+                # Pre-filter tasks whose Write output already exists (skip_existing).
+                completed_indices = find_completed_write_indices(stage.operations, len(shards))
+                pre_results: dict[int, TaskResult] = {}
+                if completed_indices:
+                    pending_tasks = [t for t in tasks if t.shard_idx not in completed_indices]
+                    for shard_idx, output_path in completed_indices.items():
+                        pre_results[shard_idx] = TaskResult(shard=ListShard(refs=[MemChunk(items=[output_path])]))
+                    logger.info(
+                        "[%s] %s: skipping %d/%d already-complete shards",
+                        self._execution_id,
+                        stage_label,
+                        len(completed_indices),
+                        len(tasks),
+                    )
+                    tasks = pending_tasks
+
                 logger.info("[%s] Starting stage %s with %d tasks", self._execution_id, stage_label, len(tasks))
                 self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
 
@@ -816,6 +834,7 @@ class ZephyrCoordinator:
 
                 # Collect and regroup results for next stage
                 result_refs = self._collect_results()
+                result_refs.update(pre_results)
                 stage_is_scatter = any(isinstance(op, Scatter) for op in stage.operations)
                 shards = _regroup_result_refs(
                     result_refs,
@@ -1348,9 +1367,24 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
         config.no_workers_timeout,
     ).result()
 
-    # Create workers (child jobs)
+    # Create workers (child jobs).
+    # Pre-check skip_existing shards so we only allocate workers for pending work.
     num_shards = config.plan.num_shards
-    actual_workers = min(config.max_workers, num_shards) if num_shards > 0 else 0
+    pending_shards = num_shards
+    for stage in config.plan.stages:
+        if stage.stage_type == StageType.RESHARD:
+            continue
+        completed = find_completed_write_indices(stage.operations, num_shards)
+        if completed:
+            pending_shards = num_shards - len(completed)
+            logger.info(
+                "skip_existing: %d/%d shards already complete, %d pending",
+                len(completed),
+                num_shards,
+                pending_shards,
+            )
+            break  # only the first worker stage uses source shard count
+    actual_workers = min(config.max_workers, pending_shards) if pending_shards > 0 else 0
     worker_group = None
 
     if actual_workers > 0:
@@ -1358,7 +1392,13 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
         # process from a previous attempt is still running, its shutdown
         # targets the old name and cannot kill this attempt's workers.
         worker_name = f"zephyr-{config.name}-p{config.pipeline_id}-workers-a{attempt_id}"
-        logger.info("Starting %d workers (max=%d, shards=%d)", actual_workers, config.max_workers, num_shards)
+        logger.info(
+            "Starting %d workers (max=%d, shards=%d, pending=%d)",
+            actual_workers,
+            config.max_workers,
+            num_shards,
+            pending_shards,
+        )
         worker_group = client.create_actor_group(
             ZephyrWorker,
             coordinator,

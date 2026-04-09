@@ -1068,6 +1068,98 @@ def test_skip_existing_all_files_exist(tmp_path, sample_input_files):
         ctx.shutdown()
 
 
+def test_find_completed_write_indices(tmp_path):
+    """find_completed_write_indices detects existing outputs."""
+    from zephyr.plan import Write, find_completed_write_indices
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    def output_pattern(shard_idx, total_shards):
+        return str(output_dir / f"shard-{shard_idx:05d}.jsonl")
+
+    ops = [Write(output_pattern=output_pattern, writer_type="jsonl", skip_existing=True)]
+
+    # No files exist yet
+    assert find_completed_write_indices(ops, 3) == {}
+
+    # Create shard 1
+    (output_dir / "shard-00001.jsonl").write_text('{"a":1}\n')
+    completed = find_completed_write_indices(ops, 3)
+    assert set(completed.keys()) == {1}
+    assert completed[1] == str(output_dir / "shard-00001.jsonl")
+
+    # Create all shards
+    (output_dir / "shard-00000.jsonl").write_text('{"a":0}\n')
+    (output_dir / "shard-00002.jsonl").write_text('{"a":2}\n')
+    completed = find_completed_write_indices(ops, 3)
+    assert set(completed.keys()) == {0, 1, 2}
+
+
+def test_find_completed_write_indices_no_skip(tmp_path):
+    """find_completed_write_indices returns empty when skip_existing=False."""
+    from zephyr.plan import Write, find_completed_write_indices
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "shard-00000.jsonl").write_text('{"a":0}\n')
+
+    def output_pattern(shard_idx, total_shards):
+        return str(output_dir / f"shard-{shard_idx:05d}.jsonl")
+
+    ops = [Write(output_pattern=output_pattern, writer_type="jsonl", skip_existing=False)]
+    assert find_completed_write_indices(ops, 1) == {}
+
+
+def test_skip_existing_reduces_tasks(tmp_path, sample_input_files):
+    """On resume, completed shards are not dispatched as worker tasks."""
+    import logging
+
+    client = LocalClient()
+    ctx = ZephyrContext(client=client, max_workers=2, resources=ResourceConfig(cpu=1, ram="512m"), name="test-reduce")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    ds = (
+        Dataset.from_files(f"{sample_input_files}/*.jsonl")
+        .flat_map(load_file)
+        .map(lambda x: {**x, "processed": True})
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    try:
+        # First run: create all outputs
+        result1 = list(ctx.execute(ds))
+        assert len(result1) == 3
+        contents = {p: Path(p).read_text() for p in result1}
+
+        # Second run: capture log messages to verify tasks were skipped
+        skip_messages = []
+        handler = logging.Handler()
+        handler.emit = lambda record: (
+            skip_messages.append(record.getMessage()) if "already-complete" in record.getMessage() else None
+        )
+        logging.getLogger("zephyr.execution").addHandler(handler)
+
+        ds2 = (
+            Dataset.from_files(f"{sample_input_files}/*.jsonl")
+            .flat_map(load_file)
+            .map(lambda x: {**x, "rerun": True})
+            .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+        )
+        result2 = list(ctx.execute(ds2))
+        assert len(result2) == 3
+        # Files should be untouched
+        for p in result2:
+            assert Path(p).read_text() == contents[p]
+
+        logging.getLogger("zephyr.execution").removeHandler(handler)
+        # Verify skip log was emitted
+        assert any("3/3 already-complete" in m for m in skip_messages), f"Expected skip log, got: {skip_messages}"
+    finally:
+        ctx.shutdown()
+
+
 def test_repr_handles_partials():
     """__repr__ should unwrap functools.partial"""
     assert repr(MapOp(partial(int, base=2))) == "MapOp(fn=int)"

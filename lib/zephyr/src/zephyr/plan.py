@@ -16,6 +16,8 @@ import logging
 import os
 import zlib
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from itertools import groupby, islice
@@ -324,6 +326,45 @@ class PhysicalPlan:
     def num_chunks(self) -> int:
         """Total number of chunks across all shards."""
         return len(self.source_items)
+
+
+def _check_shard_exists(
+    write_op: Write,
+    shard_idx: int,
+    num_shards: int,
+) -> tuple[int, str] | None:
+    """Check whether a single shard's output already exists on disk."""
+    output_path = write_op.output_pattern(shard_idx, num_shards)
+    fs = url_to_fs(output_path)[0]
+    test_path = os.path.join(output_path, ".success") if write_op.writer_type == "levanter_cache" else output_path
+    if fs.exists(test_path):
+        return (shard_idx, output_path)
+    return None
+
+
+def find_completed_write_indices(
+    operations: list[PhysicalOp],
+    num_shards: int,
+) -> dict[int, str]:
+    """Return shard indices whose Write output already exists.
+
+    For stages containing a Write op with skip_existing=True, checks which
+    output files already exist. Returns a mapping from shard_idx to the
+    existing output path. Checks run in parallel for large shard counts.
+    """
+    write_op: Write | None = None
+    for op in operations:
+        if isinstance(op, Write) and op.skip_existing:
+            write_op = op
+            break
+    if write_op is None:
+        return {}
+
+    check_fn = partial(_check_shard_exists, write_op, num_shards=num_shards)
+    with ThreadPoolExecutor(max_workers=min(64, max(num_shards, 1))) as pool:
+        results = pool.map(check_fn, range(num_shards))
+
+    return {shard_idx: path for r in results if r is not None for shard_idx, path in [r]}
 
 
 @dataclass
