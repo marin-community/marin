@@ -80,6 +80,7 @@ def aggregate_results(config: AggregateConfig):
             mask = get_assistant_mask(trace["conversations"])
             # Truncate mask to match logprob length (logprobs are truncated to max_eval_length)
             mask = mask[: len(logprob["losses"])]
+            mask = mask[1:] + [0]
             masked_losses = [l for l, m in zip(logprob["losses"], mask) if m]
             n_masked = len(masked_losses)
             total_masked_loss = sum(masked_losses)
