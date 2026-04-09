@@ -29,7 +29,7 @@ from typing import Any, Protocol, runtime_checkable
 import fsspec
 import jinja2
 import jinja2.ext
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
 from tokenizers import Tokenizer as HfBaseTokenizer
 
@@ -523,7 +523,21 @@ def _collect_special_ids(
 
 
 _MIRROR_TOKENIZER_PREFIX = "tokenizers"
-_TOKENIZER_FILES = ["tokenizer.json", "tokenizer_config.json", "chat_template.jinja"]
+
+# Glob patterns for the full set of files that may belong to a tokenizer.
+# Broad enough to cover sentencepiece, BPE, wordpiece, tiktoken and chat
+# templates; excludes model weights, model config, READMEs, images, etc.
+# Used as ``allow_patterns`` for HF Hub ``snapshot_download``.
+_TOKENIZER_ALLOW_PATTERNS = [
+    "tokenizer*",  # tokenizer.json, tokenizer_config.json, tokenizer.model
+    "chat_template*",  # chat_template.jinja, chat_template.json
+    "special_tokens*",  # special_tokens_map.json
+    "added_tokens*",  # added_tokens.json
+    "vocab*",  # vocab.json, vocab.txt
+    "merges*",  # merges.txt
+    "spiece*",  # spiece.model (T5-style sentencepiece)
+    "*.tiktoken",  # tiktoken format
+]
 
 
 def _hf_name_to_mirror_key(name_or_path: str) -> str:
@@ -553,50 +567,86 @@ def _fetch_file_atomic(src_url: str, dest_path: str) -> bool:
         raise
 
 
+def _copy_file_atomic(src_path: str, dest_path: str) -> None:
+    """Atomically copy a local file via a .tmp sibling."""
+    tmp = dest_path + ".tmp"
+    try:
+        shutil.copy2(src_path, tmp)
+        os.replace(tmp, dest_path)
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+
+
+def _populate_mirror_file(local_path: str, mirror_url: str) -> None:
+    """Best-effort push of a local file to the mirror. Swallows any failure."""
+    try:
+        with open(local_path, "rb") as src, fsspec.open(mirror_url, "wb") as dst:
+            dst.write(src.read())
+    except Exception:
+        logger.debug("Could not populate mirror at %s", mirror_url, exc_info=True)
+
+
 @functools.lru_cache(maxsize=32)
 def _stage_tokenizer(name_or_path: str) -> str:
-    """Download all tokenizer files for name_or_path to a stable local directory.
+    """Download the full set of tokenizer files to a stable local directory.
 
-    Resolution order (single mirror attempt, one warning on failure):
-      1. mirror://tokenizers/{name--}/  — GCS/S3 via MirrorFileSystem
-      2. HF Hub (network) — populates mirror per-file as a side-effect
+    Resolution order:
+      1. mirror://tokenizers/{name--}/ — discovered via ``ls()``, so whatever
+         files were populated by a previous worker (regardless of shape) are
+         copied back. No hardcoded file list.
+      2. HF Hub via ``snapshot_download`` with tokenizer-file allow-patterns —
+         fetches every tokenizer-relevant file the repo ships, then populates
+         the mirror as a side-effect for future workers.
 
-    Returns the local directory path. lru_cache makes subsequent calls free.
+    Returns the local directory path. ``lru_cache`` makes subsequent calls free.
     """
     local_dir = os.path.join(tempfile.gettempdir(), "levanter_tokenizers", _hf_name_to_mirror_key(name_or_path))
     os.makedirs(local_dir, exist_ok=True)
 
+    # Cache hit: a prior call already staged this tokenizer on disk.
     if os.path.exists(os.path.join(local_dir, "tokenizer.json")):
         return local_dir
 
-    mirror_base = f"mirror://{_MIRROR_TOKENIZER_PREFIX}/{_hf_name_to_mirror_key(name_or_path)}"
+    mirror_key = _hf_name_to_mirror_key(name_or_path)
+    mirror_dir = f"{_MIRROR_TOKENIZER_PREFIX}/{mirror_key}"
+    mirror_base = f"mirror://{mirror_dir}"
 
-    # 1. Mirror — one attempt covering all files, one warning if it fails
+    # 1. Mirror: discover whatever files are present and fetch them all.
     try:
-        for filename in _TOKENIZER_FILES:
-            _fetch_file_atomic(f"{mirror_base}/{filename}", os.path.join(local_dir, filename))
+        mirror_fs = fsspec.filesystem("mirror")
+        if mirror_fs.exists(mirror_dir):
+            for entry in mirror_fs.ls(mirror_dir, detail=False):
+                filename = os.path.basename(entry.rstrip("/"))
+                if not filename:
+                    continue
+                _fetch_file_atomic(f"{mirror_base}/{filename}", os.path.join(local_dir, filename))
+            if os.path.exists(os.path.join(local_dir, "tokenizer.json")):
+                logger.info(
+                    "Staged tokenizer %s from mirror (%d files)",
+                    name_or_path,
+                    len(os.listdir(local_dir)),
+                )
+                return local_dir
     except Exception as e:
         logger.warning("Could not stage tokenizer from mirror %s: %s", mirror_base, e)
-    else:
-        if os.path.exists(os.path.join(local_dir, "tokenizer.json")):
-            logger.info("Staged tokenizer %s from mirror", name_or_path)
-            return local_dir
 
-    # 2. HF Hub, populating the mirror per-file as a side-effect
-    for filename in _TOKENIZER_FILES:
-        dest = os.path.join(local_dir, filename)
-        try:
-            hf_local = hf_hub_download(name_or_path, filename)
-            tmp = dest + ".tmp"
-            shutil.copy2(hf_local, tmp)
-            os.replace(tmp, dest)
-        except (EntryNotFoundError, RepositoryNotFoundError):
+    # 2. HF Hub: snapshot_download fetches every tokenizer-relevant file at once.
+    # snapshot_download handles EntryNotFoundError per-pattern internally; if
+    # the repo or network is unreachable it raises RepositoryNotFoundError or
+    # an OSError, which we propagate (matches the pre-mirror behaviour).
+    snapshot_dir = snapshot_download(name_or_path, allow_patterns=_TOKENIZER_ALLOW_PATTERNS)
+
+    # Copy everything snapshot_download brought down into our stable local_dir
+    # atomically, then populate the mirror as a best-effort side-effect.
+    for filename in sorted(os.listdir(snapshot_dir)):
+        src_path = os.path.join(snapshot_dir, filename)
+        if not os.path.isfile(src_path):
             continue
-        try:
-            with open(dest, "rb") as src, fsspec.open(f"{mirror_base}/{filename}", "wb") as dst:
-                dst.write(src.read())
-        except Exception:
-            logger.debug("Could not populate mirror for %s/%s", name_or_path, filename, exc_info=True)
+        dest = os.path.join(local_dir, filename)
+        _copy_file_atomic(src_path, dest)
+        _populate_mirror_file(dest, f"{mirror_base}/{filename}")
 
     return local_dir
 
