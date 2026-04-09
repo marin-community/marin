@@ -457,6 +457,85 @@ def test_shard_streaming_low_memory(tmp_path):
     assert list(shard) == [0, 1, 2, 3, 4, 10, 11, 12, 13, 14, 20, 21, 22, 23, 24]
 
 
+def test_report_error_requeues_until_max_shard_failures(actor_context, tmp_path):
+    """report_error re-queues a task until MAX_SHARD_FAILURES, then aborts."""
+    from unittest.mock import MagicMock
+
+    from zephyr.execution import (
+        MAX_SHARD_FAILURES,
+        ListShard,
+        ShardTask,
+        WorkerState,
+        ZephyrCoordinator,
+    )
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    # Each failure should re-queue until the limit
+    for i in range(MAX_SHARD_FAILURES - 1):
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
+        _task, _attempt, _config = pulled
+        coord.report_error("worker-0", 0, f"error-{i}")
+        assert coord._fatal_error is None, f"Should not abort on failure {i + 1}"
+        assert coord._worker_states["worker-0"] == WorkerState.READY
+
+    # The final failure should set _fatal_error
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    coord.report_error("worker-0", 0, "final-error")
+    assert coord._fatal_error is not None
+    assert "Shard 0" in coord._fatal_error
+    assert "final-error" in coord._fatal_error
+
+
+def test_heartbeat_death_aborts_at_max_shard_failures(actor_context, tmp_path):
+    """When a shard's worker keeps dying (heartbeat timeout), abort after
+    MAX_SHARD_FAILURES re-queues instead of retrying forever."""
+    from unittest.mock import MagicMock
+
+    from zephyr.execution import (
+        MAX_SHARD_FAILURES,
+        ListShard,
+        ShardTask,
+        ZephyrCoordinator,
+    )
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    for _i in range(MAX_SHARD_FAILURES):
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
+        # Simulate worker death via heartbeat timeout
+        coord._last_seen["worker-0"] = 0.0
+        coord.check_heartbeats(timeout=0.0)
+
+    assert coord._fatal_error is not None
+    assert "Shard 0" in coord._fatal_error
+
+
 def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
     """When all registered workers become dead/failed, _wait_for_stage raises
     after the no_workers_timeout instead of waiting forever."""
