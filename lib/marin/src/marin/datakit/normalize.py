@@ -177,6 +177,7 @@ def normalize_to_parquet(
     text_field: str = "text",
     id_field: str = "id",
     target_partition_bytes: int = 256 * 1024 * 1024,
+    worker_resources: ResourceConfig | None = None,
 ) -> None:
     """Normalize raw downloaded data to the datakit standard Parquet format.
 
@@ -195,7 +196,13 @@ def normalize_to_parquet(
             silently skipped.
         target_partition_bytes: Target size in bytes per output partition.
             Used to compute the number of output shards per subdirectory.
+        worker_resources: Per-worker resource request for the Zephyr pipeline.
+            Defaults to 2 CPU / 16GB RAM / 10GB disk, sized for
+            ``target_partition_bytes`` of 256MB.  Scale up when increasing
+            partition size.
     """
+    resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="10g")
+
     file_groups = _discover_file_groups(input_path)
     if not file_groups:
         raise FileNotFoundError(f"No data files found under {input_path}")
@@ -219,7 +226,7 @@ def normalize_to_parquet(
         pipeline = _build_pipeline(files, output_dir, num_shards, text_field, id_field)
         ctx = ZephyrContext(
             name=f"normalize-{subdir.replace('/', '-') if subdir else 'all'}",
-            resources=ResourceConfig(cpu=2, ram="16g", disk="10g"),
+            resources=resources,
         )
         ctx.execute(pipeline)
 
@@ -239,6 +246,7 @@ def normalize_step(
     text_field: str = "text",
     id_field: str = "id",
     target_partition_bytes: int = 256 * 1024 * 1024,
+    worker_resources: ResourceConfig | None = None,
     override_output_path: str | None = None,
     input_path: str | None = None,
 ) -> StepSpec:
@@ -250,6 +258,8 @@ def normalize_step(
         text_field: Name of the field containing primary text content.
         id_field: Name of the field containing the source ID.
         target_partition_bytes: Target size per output partition.
+        worker_resources: Per-worker resource request for the Zephyr pipeline.
+            See :func:`normalize_to_parquet` for the default.
         override_output_path: Override the computed output path.
         input_path: Override the input path. Defaults to ``download.output_path``.
             Useful when normalizing a subdirectory of the download output.
@@ -264,6 +274,7 @@ def normalize_step(
             text_field=text_field,
             id_field=id_field,
             target_partition_bytes=target_partition_bytes,
+            worker_resources=worker_resources,
         ),
         deps=[download],
         hash_attrs={
