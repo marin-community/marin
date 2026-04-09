@@ -50,6 +50,19 @@ def test_entrypoint_proto_roundtrip_preserves_bytes():
     assert fn(*args, **kwargs) == 3
 
 
+def test_entrypoint_proto_roundtrip_preserves_workdir_file_refs():
+    """workdir_file_refs survive to_proto -> from_proto."""
+    refs = {"_callable.pkl": "abc123", "model.bin": "def456"}
+    ep = Entrypoint(command=["python", "run.py"], workdir_files={"small.txt": b"hi"}, workdir_file_refs=refs)
+
+    proto = ep.to_proto()
+    ep2 = Entrypoint.from_proto(proto)
+
+    assert ep2.workdir_file_refs == refs
+    assert ep2.workdir_files == {"small.txt": b"hi"}
+    assert ep2.command == ["python", "run.py"]
+
+
 def test_entrypoint_command():
     ep = Entrypoint.from_command("echo", "hello")
     assert not ep.workdir_files

@@ -106,6 +106,8 @@ def build_runtime_entrypoint(
     rt.run_command.argv[:] = entrypoint.command
     for k, v in entrypoint.workdir_files.items():
         rt.workdir_files[k] = v
+    for k, v in entrypoint.workdir_file_refs.items():
+        rt.workdir_file_refs[k] = v
     return rt
 
 

@@ -981,7 +981,7 @@ class ControllerServiceImpl:
             if len(data) > WORKDIR_FILE_OFFLOAD_THRESHOLD
         }
         if large_files:
-            new_request = cluster_pb2.Controller.LaunchJobRequest()
+            new_request = controller_pb2.Controller.LaunchJobRequest()
             new_request.CopyFrom(request)
             for name, data in large_files.items():
                 blob_id = self._bundle_store.write_blob(data)

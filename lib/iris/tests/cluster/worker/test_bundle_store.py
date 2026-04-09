@@ -98,7 +98,6 @@ def test_lru_eviction_by_item_count(store):
     assert store.get_zip(bundles[2][0]) == bundles[2][1]
 
 
-
 def test_get_or_fetch_fetches_blob_on_demand(monkeypatch, store):
     """get_or_fetch should fetch from controller on cache miss using the provided URL path."""
     data = b"large pickle data"
