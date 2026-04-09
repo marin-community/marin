@@ -231,7 +231,8 @@ def test_render_job_summary_text_shows_peak_memory():
     job = _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_FAILED, task_count=1, completed_count=1)
     tasks = [_task(0, _job_pb2.TASK_STATE_FAILED, peak_mb=9999, cur_mb=0, exit_code=137, duration_ms=1000, error="OOM")]
     text = _render_job_summary_text(build_job_summary(job, tasks))
-    assert "PEAK MB" in text
-    assert "9999" in text
+    assert "PEAK MEM" in text
+    # 9999 MB is formatted as "10 GB" by humanfriendly
+    assert "10 GB" in text
     assert "137" in text
     assert "OOM" in text

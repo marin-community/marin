@@ -48,6 +48,16 @@ def accelerator_type_name(accel_type: int) -> str:
         return f"UNKNOWN({accel_type})"
 
 
+def job_state_friendly(state: int) -> str:
+    """Human-friendly lowercase name for a JobState proto value."""
+    return job_state_name(state).removeprefix("JOB_STATE_").lower()
+
+
+def task_state_friendly(state: int) -> str:
+    """Human-friendly lowercase name for a TaskState proto value."""
+    return task_state_name(state).removeprefix("TASK_STATE_").lower()
+
+
 def accelerator_type_friendly(accel_type: int) -> str:
     """Return human-friendly accelerator type name.
 

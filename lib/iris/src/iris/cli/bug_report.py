@@ -17,6 +17,7 @@ from iris.rpc import logging_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.logging_connect import LogServiceClientSync
 from iris.rpc.proto_utils import job_state_friendly, task_state_friendly

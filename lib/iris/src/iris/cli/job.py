@@ -45,7 +45,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
-from iris.rpc.proto_utils import job_state_friendly
+from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
 from iris.time_proto import timestamp_from_proto
 from rigging.timing import Duration, Timestamp
 
@@ -931,10 +931,6 @@ _TERMINAL_TASK_STATES: frozenset[int] = frozenset(
 )
 
 
-def _task_state_name(state: job_pb2.TaskState) -> str:
-    return job_pb2.TaskState.Name(state).replace("TASK_STATE_", "").lower()
-
-
 def _task_index(task_id: str) -> str:
     last = task_id.rsplit("/", 1)[-1]
     return last or task_id
@@ -950,14 +946,13 @@ def _task_duration_ms(task: job_pb2.TaskStatus) -> int | None:
 def _format_duration_ms(ms: int | None) -> str:
     if ms is None:
         return "-"
-    seconds = ms // 1000
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes, seconds = divmod(seconds, 60)
-    if minutes < 60:
-        return f"{minutes}m{seconds:02d}s"
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours}h{minutes:02d}m"
+    return humanfriendly.format_timespan(ms / 1000)
+
+
+def _format_memory_mb(mb: int) -> str:
+    if not mb:
+        return "-"
+    return humanfriendly.format_size(mb * 1_000_000)
 
 
 def build_job_summary(
@@ -985,7 +980,7 @@ def build_job_summary(
             {
                 "task_id": t.task_id,
                 "index": _task_index(t.task_id),
-                "state": _task_state_name(t.state),
+                "state": task_state_friendly(t.state),
                 # Only surface exit_code once the task is terminal. Proto scalar
                 # defaults mean a RUNNING/ASSIGNED/BUILDING task would otherwise
                 # report exit=0 and look like a clean success.
@@ -1003,7 +998,7 @@ def build_job_summary(
     return {
         "job_id": job_status.job_id,
         "name": job_status.name,
-        "state": _job_state_name(job_status.state),
+        "state": job_state_friendly(job_status.state),
         "exit_code": int(job_status.exit_code),
         "error": job_status.error,
         "failure_count": int(job_status.failure_count),
@@ -1035,12 +1030,12 @@ def _render_job_summary_text(summary: dict) -> str:
                 t["state"],
                 "-" if t["exit_code"] is None else t["exit_code"],
                 _format_duration_ms(t["duration_ms"]),
-                t["memory_peak_mb"] or "-",
-                t["memory_mb"] or "-",
+                _format_memory_mb(t["memory_peak_mb"]),
+                _format_memory_mb(t["memory_mb"]),
                 (t["error"] or "")[:50] + ("..." if len(t["error"] or "") > 50 else ""),
             ]
         )
-    headers = ["TASK", "STATE", "EXIT", "DURATION", "PEAK MB", "CUR MB", "ERROR"]
+    headers = ["TASK", "STATE", "EXIT", "DURATION", "PEAK MEM", "CUR MEM", "ERROR"]
     lines.append(tabulate(rows, headers=headers, tablefmt="plain"))
     return "\n".join(lines)
 
