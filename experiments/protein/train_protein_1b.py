@@ -91,7 +91,7 @@ train_config = SimpleTrainConfig(
     resources=RESOURCES,
     train_batch_size=versioned(128),
     num_train_steps=versioned(50_000),
-    learning_rate=2e-4,
+    learning_rate=2.5e-4,
     weight_decay=0.01,
     warmup=0.1,
     train_seq_len=8192,
@@ -103,7 +103,7 @@ train_config = SimpleTrainConfig(
 # -- Train --
 
 protein_model_1b = default_train(
-    name="protein-contacts-1b",
+    name="protein-contacts-1b-2.5e-4",
     tokenized=protein_tokenized,
     model_config=versioned(protein_llama_1b),
     train_config=train_config,
