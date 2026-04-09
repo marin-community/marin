@@ -95,7 +95,7 @@ from iris.rpc import logging_pb2, vm_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from iris.rpc import worker_pb2
-from iris.rpc.proto_utils import job_state_name, task_state_name
+from iris.rpc.proto_utils import job_state_friendly, job_state_name, task_state_name
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp, Timer
 
@@ -1130,7 +1130,7 @@ class ControllerServiceImpl:
         state_filter_int: int | None = None
         if state_filter:
             for st in USER_JOB_STATES:
-                if job_pb2.JobState.Name(st).replace("JOB_STATE_", "").lower() == state_filter:
+                if job_state_friendly(st) == state_filter:
                     state_filter_int = st
                     break
             if state_filter_int is None:
