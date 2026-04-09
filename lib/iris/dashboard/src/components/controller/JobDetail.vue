@@ -39,7 +39,7 @@ const copiedName = ref(false)
 const taskSearch = ref('')
 const stateFilter = ref('')
 
-type SortColumn = 'task' | 'state' | 'mem' | 'cpu' | 'duration'
+type SortColumn = 'task' | 'state' | 'mem' | 'peakMem' | 'cpu' | 'duration'
 type SortDir = 'asc' | 'desc'
 
 const sortColumn = ref<SortColumn | null>(null)
@@ -172,6 +172,12 @@ function taskDuration(t: TaskStatus): string {
 function formatMemMb(usage: ResourceUsage | undefined): string {
   if (!usage?.memoryMb) return '-'
   const mb = parseInt(usage.memoryMb, 10)
+  return `${mb} MB`
+}
+
+function formatPeakMemMb(usage: ResourceUsage | undefined): string {
+  if (!usage?.memoryPeakMb) return '-'
+  const mb = parseInt(usage.memoryPeakMb, 10)
   return `${mb} MB`
 }
 
@@ -416,6 +422,9 @@ const filteredTasks = computed(() => {
         break
       case 'mem':
         cmp = (parseInt(a.resourceUsage?.memoryMb ?? '0') || 0) - (parseInt(b.resourceUsage?.memoryMb ?? '0') || 0)
+        break
+      case 'peakMem':
+        cmp = (parseInt(a.resourceUsage?.memoryPeakMb ?? '0') || 0) - (parseInt(b.resourceUsage?.memoryPeakMb ?? '0') || 0)
         break
       case 'cpu':
         cmp = (a.resourceUsage?.cpuMillicores ?? 0) - (b.resourceUsage?.cpuMillicores ?? 0)
@@ -727,6 +736,9 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('mem')">
                 Mem <span v-if="sortColumn === 'mem'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('peakMem')">
+                Peak Mem <span v-if="sortColumn === 'peakMem'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('cpu')">
                 CPU <span v-if="sortColumn === 'cpu'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
@@ -771,6 +783,9 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               </td>
               <td class="px-3 py-2 text-[13px] font-mono">
                 {{ formatMemMb(task.resourceUsage) }}
+              </td>
+              <td class="px-3 py-2 text-[13px] font-mono">
+                {{ formatPeakMemMb(task.resourceUsage) }}
               </td>
               <td class="px-3 py-2 text-[13px] font-mono">
                 {{ formatCpu(task.resourceUsage) }}

@@ -28,6 +28,8 @@ iris job run -- python train.py         # submit + stream logs
 iris job list --state running           # filter by state
 iris job logs /user/job-name -f         # follow logs
 iris job stop /user/job-name            # kill job + children
+iris job summary /user/job-name         # per-task state, exit, duration, peak memory
+iris job summary /user/job-name --json  # same, machine-readable
 iris job bug-report /user/job-name      # structured diagnostic dump
 ```
 
@@ -151,6 +153,7 @@ iris key list / iris key revoke       # manage API keys
 | Workers not joining (GCP) | `iris cluster vm status` for slice lifecycle. SSH to VM, check bootstrap logs. |
 | Autoscaler not scaling | `iris rpc controller get-autoscaler-status` — check `backoff_until_ms`, `consecutive_failures`. |
 | Task retrying | `iris job bug-report /user/job` — full attempt history with per-attempt errors. |
+| Task failed with exit 137 / suspected OOM | `iris job summary /user/job` — per-task peak memory + exit code. If most shards peak near the container memory limit, raise `--memory` on resubmit. |
 | Dashboard unreachable | Verify tunnel is alive. `curl -sf http://localhost:10000/health`. |
 
 ## Known Bugs
