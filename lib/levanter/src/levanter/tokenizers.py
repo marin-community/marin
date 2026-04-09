@@ -46,26 +46,10 @@ _MAX_ENCODE_CHARS = 400_000
 _MAX_HOMOGENEOUS_RUN_CHARS = 25_000
 
 
-def _split_homogeneous_runs(s: str, max_run: int) -> Iterator[str]:
-    """Split ``s`` so each substring has at most ``max_run`` consecutive
-    whitespace OR consecutive non-whitespace characters."""
-    if not s:
-        return
-    current_len = 0
-    current_is_space = s[0].isspace()
-    slice_start = 0
-    for i, ch in enumerate(s):
-        is_space = ch.isspace()
-        if current_is_space ^ is_space:
-            current_len = 1
-            current_is_space = is_space
-        else:
-            current_len += 1
-            if current_len > max_run:
-                yield s[slice_start:i]
-                slice_start = i
-                current_len = 1
-    yield s[slice_start:]
+# \s matches any whitespace, \S matches any non-whitespace.
+# {1, N} matches a run of at least 1 and at most N chars.
+# The | (alternation) ensures we split at whitespace/non-whitespace transitions.
+_SAFE_CHUNK_RE = re.compile(rf"\s{{1,{_MAX_HOMOGENEOUS_RUN_CHARS}}}|\S{{1,{_MAX_HOMOGENEOUS_RUN_CHARS}}}")
 
 
 def _safe_split_for_tokenizer(text: str) -> list[str]:
@@ -77,7 +61,7 @@ def _safe_split_for_tokenizer(text: str) -> list[str]:
     """
     parts: list[str] = []
     for i in range(0, len(text), _MAX_ENCODE_CHARS):
-        parts.extend(_split_homogeneous_runs(text[i : i + _MAX_ENCODE_CHARS], _MAX_HOMOGENEOUS_RUN_CHARS))
+        parts.extend(_SAFE_CHUNK_RE.findall(text[i : i + _MAX_ENCODE_CHARS]))
     return parts
 
 
