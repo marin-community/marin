@@ -11,7 +11,7 @@ import numpy as np
 import optax
 from chex import assert_trees_all_close
 from haliax.quantization import DefaultDotGeneralOp, DotGeneralOp
-from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
+from test_utils import skip_if_hf_model_not_accessible, skip_if_module_missing, skip_if_no_torch, use_test_mesh
 from transformers import AutoModelForCausalLM
 
 from levanter.callbacks import StepInfo
@@ -28,6 +28,7 @@ from levanter.lora import (
     save_peft_pretrained,
 )
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
+from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.trainer_state import TrainerState
 from levanter.utils.tree_utils import inference_mode
 
@@ -132,6 +133,7 @@ def test_merge_lora():
     merged = merge_lora_modules(loraized)
 
     assert isinstance(merged, hnn.Stacked)
+    assert merged.stacked.second.weight.axes == module.stacked.second.weight.axes
 
     def replace_dot_general(x):
         if isinstance(x, DefaultDotGeneralOp):
@@ -241,6 +243,59 @@ def test_lora_merged_load_in_hf():
 
         assert np.allclose(lev_lora_out, hf_lora_out, atol=1e-4)
         assert not np.allclose(lev_lora_out, hf_out, atol=1e-4)
+
+
+@skip_if_no_torch
+@skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
+def test_lora_merged_load_in_hf_llama():
+    import torch
+
+    config = LlamaConfig(
+        max_seq_len=32,
+        hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        gradient_checkpointing=False,
+        scan_layers=False,
+    )
+    converter: HFCheckpointConverter = config.hf_checkpoint_converter()
+    vocab = hax.Axis("vocab", 128)
+
+    model = LlamaLMHeadModel.init(vocab, config=config, key=jax.random.PRNGKey(0))
+    model = inference_mode(model, True)
+    lora_config = LoraConfig(
+        r=8,
+        alpha=8,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    )
+
+    input_ids = hax.random.randint(jax.random.PRNGKey(1), config.max_Pos.resize(16), 0, vocab.size)
+    torch_input = torch.tensor(np.array(input_ids.array), dtype=torch.long).reshape((1, -1))
+    attn_mask = AttentionMask.causal()
+
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
+        loraized = loraize(model, lora_config, key=jax.random.PRNGKey(2))
+        merged = merge_lora_modules(loraized)
+
+        lev_lora_out = np.array(loraized(input_ids, attn_mask=attn_mask).array)
+        lev_merged_out = np.array(merged(input_ids, attn_mask=attn_mask).array)
+        np.testing.assert_allclose(lev_lora_out, lev_merged_out, rtol=1e-4, atol=1e-4)
+
+        save_merged_hf_model(
+            loraized,
+            converter,
+            f"{tmpdir}/loraized",
+            save_reference_code=False,
+            save_tokenizer=False,
+        )
+
+        hf_lora_model = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/loraized").cpu()
+        hf_lora_model.eval()
+        hf_lora_out = hf_lora_model(torch_input).logits[0].detach().numpy()
+
+        np.testing.assert_allclose(lev_lora_out, hf_lora_out, rtol=1e-4, atol=1e-4)
 
 
 def test_lora_works_with_checkpointer():

@@ -2982,3 +2982,42 @@ Interpretation:
 - the next best family is `lr=8.75e-6`
 - the previously-highlighted `10x` family (`lr=5e-6`) is not best on this metric; it sits in the middle pack and mainly won before on the "tinker recommended" heuristic rather than pure eval-accuracy ranking
 - caveat: the archived LoRA sweep only has seeds `0` and `2`, so these family means are 2-seed means rather than 3-seed means
+
+## 2026-04-08 LoRA HF Export Fix Backported From vLLM Investigation
+
+Read the separate vLLM/export investigation logbook at:
+
+- [`/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/.agents/logbook/lora_vllm_inference.md`](/Users/ahmed/code/marin/.claude/worktrees/gentle-twirling-avalanche/.agents/logbook/lora_vllm_inference.md)
+
+Key finding from that thread:
+
+- historical merged LoRA HF exports could write LoRA-targeted weights with the wrong axis order during [`LoraLinear.merge()`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/lora.py)
+- this broke plain HF/vLLM loading for merged exports even though training itself was not implicated
+- Bloom/vLLM inference also depended on `tokenizer_config.json` embedding `chat_template`, not only shipping `chat_template.jinja`
+
+Backported fixes on this branch:
+
+- fixed [`LoraLinear.merge()`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/lora.py) to rearrange the LoRA delta onto the wrapped linear's weight axes before addition
+- taught [`HFCheckpointConverter.save_pretrained()`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/compat/hf_checkpoints.py) to save tokenizers through a shared helper that embeds `chat_template` into `tokenizer_config.json`
+- wired [`save_peft_pretrained()`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/lora.py) through the same tokenizer-save helper so adapter exports do not rely on `chat_template.jinja` alone
+- updated [`HfMarinTokenizer.as_hf_tokenizer()`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/tokenizers.py) and [`KitokenMarinTokenizer.as_hf_tokenizer()`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/src/levanter/tokenizers.py) to carry over the in-memory chat template onto the HF tokenizer object
+
+Added regression coverage:
+
+- [`lib/levanter/tests/test_lora.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/tests/test_lora.py)
+  - assert merged LoRA non-square weights preserve the wrapped axis order
+  - add a Llama-style merged-HF load regression that would catch the old transpose bug
+- [`lib/levanter/tests/test_hf_export.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/lib/levanter/tests/test_hf_export.py)
+  - assert saved tokenizer metadata includes an embedded `chat_template`
+
+Validation:
+
+- `uv run --directory lib/levanter --group test python -m pytest tests/test_hf_export.py tests/test_lora.py -q`
+  - `20 passed, 3 skipped`
+- `./infra/pre-commit.py --fix lib/levanter/src/levanter/lora.py lib/levanter/src/levanter/compat/hf_checkpoints.py lib/levanter/src/levanter/tokenizers.py lib/levanter/tests/test_lora.py lib/levanter/tests/test_hf_export.py`
+  - passed
+
+Important caveat:
+
+- this patch fixes future merged LoRA HF exports on this branch
+- existing merged LoRA `hf/step-*` artifacts produced before the axis-order fix should still be treated as potentially tainted until they are re-exported or repaired

@@ -68,7 +68,13 @@ from haliax.state_dict import (
 )
 
 from levanter.callbacks import StepInfo
-from levanter.compat.hf_checkpoints import GenerationConfigDict, HFCheckpointConverter, RepoRef, upload_to_hub
+from levanter.compat.hf_checkpoints import (
+    GenerationConfigDict,
+    HFCheckpointConverter,
+    RepoRef,
+    _save_tokenizer_pretrained,
+    upload_to_hub,
+)
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.jax_utils import join_key, key_iterator, leaf_key_paths
 from levanter.utils.logging import silence_transformer_nag
@@ -205,7 +211,8 @@ class LoraLinear(ModuleWithStateDictSerialization):
             return self.lora(x) + self.wrapped(x)
 
     def merge(self):
-        weight = self.lora.merge() + self.wrapped.weight
+        delta = self.lora.merge().rearrange(self.wrapped.weight.axes)
+        weight = self.wrapped.weight + delta
         return dataclasses.replace(self.wrapped, weight=weight)
 
     @staticmethod
@@ -399,9 +406,7 @@ def save_peft_pretrained(
             json.dump(hf_config, f)
 
         if tokenizer is not None:
-            if isinstance(tokenizer, MarinTokenizer):
-                tokenizer = tokenizer.as_hf_tokenizer()
-            tokenizer.save_pretrained(local_path)
+            _save_tokenizer_pretrained(tokenizer, local_path)
 
         if upload_to is True:
             upload_to = RepoRef.from_string(base_model_name_or_path)

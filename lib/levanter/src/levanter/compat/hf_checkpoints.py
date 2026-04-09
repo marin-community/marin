@@ -174,6 +174,45 @@ def build_generation_config(
     return gen_config
 
 
+def _coerce_to_hf_tokenizer(tokenizer: PreTrainedTokenizerBase | MarinTokenizer) -> PreTrainedTokenizerBase:
+    if isinstance(tokenizer, MarinTokenizer):
+        tokenizer = tokenizer.as_hf_tokenizer()
+    return tokenizer
+
+
+def _embed_chat_template_in_tokenizer_config(
+    tokenizer: PreTrainedTokenizerBase,
+    local_path: str,
+) -> None:
+    chat_template = getattr(tokenizer, "chat_template", None)
+    if chat_template is None:
+        return
+
+    config_path = os.path.join(local_path, "tokenizer_config.json")
+    if not os.path.exists(config_path):
+        logger.warning("Tokenizer config missing at %s; cannot embed chat_template", config_path)
+        return
+
+    with open(config_path) as f:
+        tokenizer_config = json.load(f)
+
+    if tokenizer_config.get("chat_template") == chat_template:
+        return
+
+    tokenizer_config["chat_template"] = chat_template
+    with open(config_path, "w") as f:
+        json.dump(tokenizer_config, f)
+
+
+def _save_tokenizer_pretrained(
+    tokenizer: PreTrainedTokenizerBase | MarinTokenizer,
+    local_path: str,
+) -> None:
+    hf_tokenizer = _coerce_to_hf_tokenizer(tokenizer)
+    hf_tokenizer.save_pretrained(local_path)
+    _embed_chat_template_in_tokenizer_config(hf_tokenizer, local_path)
+
+
 @dataclass(frozen=True)
 class RepoRef:
     """Represents a reference to a model (or similar) in a remote repository or local file system, and
@@ -1097,10 +1136,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             if save_tokenizer:
                 logger.info("Saving tokenizer")
-                tokenizer = self.tokenizer
-                if isinstance(tokenizer, MarinTokenizer):
-                    tokenizer = tokenizer.as_hf_tokenizer()
-                tokenizer.save_pretrained(local_path)
+                _save_tokenizer_pretrained(self.tokenizer, local_path)
 
             if save_feature_extractor and self.feature_extractor is not None:
                 logger.info("Saving feature extractor")

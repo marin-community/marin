@@ -3,11 +3,17 @@
 
 """Tests for generation config validation and normalization."""
 
+import json
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
-from levanter.compat.hf_checkpoints import build_generation_config, save_hf_checkpoint_callback
+from levanter.compat.hf_checkpoints import (
+    _save_tokenizer_pretrained,
+    build_generation_config,
+    save_hf_checkpoint_callback,
+)
 
 
 class _FakeTokenizer:
@@ -129,3 +135,21 @@ def test_save_hf_checkpoint_callback_passes_generation_config():
     assert saved_model is model
     assert saved_path == "/tmp/export/step-1"
     assert saved_kwargs["generation_config"] == generation_config
+
+
+class _FakeChatTemplateTokenizer:
+    def __init__(self, chat_template: str):
+        self.chat_template = chat_template
+
+    def save_pretrained(self, path: str) -> None:
+        with open(f"{path}/tokenizer_config.json", "w") as f:
+            json.dump({"tokenizer_class": "FakeTokenizer"}, f)
+
+
+def test_save_tokenizer_pretrained_embeds_chat_template(tmp_path):
+    tokenizer = _FakeChatTemplateTokenizer("{{ bos_token }}{{ messages[0]['content'] }}")
+
+    _save_tokenizer_pretrained(cast(Any, tokenizer), str(tmp_path))
+
+    tokenizer_config = json.loads((tmp_path / "tokenizer_config.json").read_text())
+    assert tokenizer_config["chat_template"] == tokenizer.chat_template
