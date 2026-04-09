@@ -51,7 +51,7 @@ from .conftest import (
     discover_capabilities,
     wait_for_dashboard_ready,
 )
-from .helpers import TestJobs
+from .helpers import TestJobs, _tree_parent_job
 
 logger = logging.getLogger(__name__)
 
@@ -330,6 +330,32 @@ def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
     smoke_screenshot(
         "job-detail", "Job detail page for succeeded job with state badge, task table, and job-level log viewer"
     )
+
+
+def test_dashboard_job_expand_nested(smoke_cluster, smoke_page, smoke_screenshot):
+    """Expanding a child job on the job detail page reveals its grandchildren."""
+    root = smoke_cluster.submit(_tree_parent_job, "smoke-tree-root")
+    smoke_cluster.wait(root, timeout=smoke_cluster.job_timeout)
+
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{root.job_id.to_wire()}")
+    wait_for_dashboard_ready(smoke_page)
+
+    # Child job should appear in the "Direct only" child jobs list.
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('tree-child')",
+        timeout=10000,
+    )
+    smoke_screenshot("job-expand-nested-before", "Job detail page showing tree-child as a direct child with ▶ button")
+
+    # Click the expand button on tree-child to reveal tree-grandchild.
+    child_row = smoke_page.locator("tr", has_text="tree-child").first
+    child_row.get_by_role("button").filter(has_text="▶").click()
+
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('tree-grandchild')",
+        timeout=10000,
+    )
+    smoke_screenshot("job-expand-nested-after", "Job detail page with tree-child expanded showing tree-grandchild")
 
 
 def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):

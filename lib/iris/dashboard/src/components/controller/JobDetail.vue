@@ -196,13 +196,6 @@ function taskIndex(taskId: string): string {
 
 // -- Child job helpers --
 
-const visibleChildJobs = computed(() => {
-  if (childJobsView.value === 'all') return descendantJobs.value
-  const parentName = job.value?.name
-  if (!parentName) return []
-  return descendantJobs.value.filter(child => getParentJobName(child.name) === parentName)
-})
-
 function childJobDurationMs(j: JobStatus): number {
   const started = timestampMs(j.startedAt)
   if (!started) return 0
@@ -231,8 +224,18 @@ const childJobComparator = computed<((a: JobStatus, b: JobStatus) => number) | u
   }
 })
 
-const flattenedChildJobs = computed(() => flattenJobTree(visibleChildJobs.value, expandedChildJobs.value, childJobComparator.value))
-const expandableChildJobs = computed(() => jobsWithChildren(visibleChildJobs.value))
+// In 'all' mode every node is auto-expanded so every descendant is visible.
+// In 'direct' mode the user expands interactively. Either way, pass the full
+// descendant set so jobsWithChildren can find parent-child pairs and render ▶.
+const flattenedChildJobs = computed(() => {
+  const effectiveExpanded = childJobsView.value === 'all'
+    ? new Set(descendantJobs.value.map(j => j.name))
+    : expandedChildJobs.value
+  return flattenJobTree(descendantJobs.value, effectiveExpanded, childJobComparator.value)
+})
+const expandableChildJobs = computed(() =>
+  childJobsView.value === 'all' ? new Set<string>() : jobsWithChildren(descendantJobs.value),
+)
 
 function toggleExpandedChildJob(jobName: string) {
   const next = new Set(expandedChildJobs.value)
