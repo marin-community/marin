@@ -126,7 +126,7 @@ def _make_cluster_config(
     )
     # Add the controller's scale group so start_controller can validate it
     sg = config.scale_groups[controller_scale_group]
-    sg.min_slices = 0
+    sg.buffer_slices = 0
     sg.max_slices = 10
     sg.slice_template.CopyFrom(
         config_pb2.SliceConfig(
@@ -621,7 +621,7 @@ def test_ensure_nodepools_scales_multihost_groups_by_num_vms():
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
     sg = cluster_config.scale_groups["h100-16x"]
-    sg.min_slices = 0
+    sg.buffer_slices = 0
     sg.max_slices = 1
     sg.slice_template.CopyFrom(
         config_pb2.SliceConfig(
@@ -645,7 +645,7 @@ def test_ensure_nodepools_keeps_one_multihost_slice_warm():
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
     sg = cluster_config.scale_groups["h100-16x"]
-    sg.min_slices = 0
+    sg.buffer_slices = 0
     sg.max_slices = 1
     sg.slice_template.CopyFrom(
         config_pb2.SliceConfig(

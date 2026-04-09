@@ -562,7 +562,7 @@ from rigging.timing import now_ms
 def test_quota_exceeded_retry():
     config = config_pb2.ScaleGroupConfig(
         name="test", accelerator_variant="v4-8",
-        min_slices=0, max_slices=3,
+        buffer_slices=0, max_slices=3,
     )
     platform = FakePlatform(FakePlatformConfig(config=config,
                             failure_mode=FailureMode.QUOTA_EXCEEDED))
@@ -582,7 +582,7 @@ def test_quota_exceeded_retry():
 def test_vm_init_stuck():
     config = config_pb2.ScaleGroupConfig(
         name="stuck", accelerator_variant="v4-8",
-        min_slices=0, max_slices=3,
+        buffer_slices=0, max_slices=3,
     )
     platform = FakePlatform(FakePlatformConfig(config=config, init_delay_ms=999_999_999))
     slice_handle = platform.create_slice(config.slice_template, "stuck")
@@ -595,7 +595,7 @@ def test_vm_init_stuck():
 def test_vm_preempted():
     config = config_pb2.ScaleGroupConfig(
         name="preempt", accelerator_variant="v4-8",
-        min_slices=0, max_slices=3,
+        buffer_slices=0, max_slices=3,
     )
     platform = FakePlatform(FakePlatformConfig(config=config))
     slice_handle = platform.create_slice(config.slice_template, "preempt")

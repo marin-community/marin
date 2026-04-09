@@ -323,7 +323,7 @@ def make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
 
     sg = config_pb2.ScaleGroupConfig(
         name="local-cpu",
-        min_slices=1,
+        buffer_slices=1,
         max_slices=max_workers,
         num_vms=1,
         resources=config_pb2.ScaleGroupResources(

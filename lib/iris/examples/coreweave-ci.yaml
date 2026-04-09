@@ -58,7 +58,7 @@ scale_groups:
       attributes:
         region: US-WEST-04A
         pool: cpu-erapids
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 1
     priority: 50
     slice_template:
@@ -81,7 +81,7 @@ scale_groups:
       attributes:
         region: US-WEST-04A
         pool: h100-8x
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 1
     priority: 100
     slice_template:

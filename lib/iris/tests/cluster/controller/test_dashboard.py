@@ -506,7 +506,7 @@ def mock_autoscaler():
                 name="test-group",
                 config=config_pb2.ScaleGroupConfig(
                     name="test-group",
-                    min_slices=1,
+                    buffer_slices=1,
                     max_slices=5,
                     resources=config_pb2.ScaleGroupResources(
                         device_type=config_pb2.ACCELERATOR_TYPE_TPU,

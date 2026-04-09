@@ -56,7 +56,7 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
 
     sg = config_pb2.ScaleGroupConfig(
         name="local-cpu",
-        min_slices=num_workers,
+        buffer_slices=num_workers,
         max_slices=num_workers,
         num_vms=1,
         resources=config_pb2.ScaleGroupResources(

@@ -167,7 +167,7 @@ cooldown per group, demand routing competition, worker registration races).
 Abandoned in favor of the taint-based approach.
 
 **Virtual scale group per reservation**: Dynamic `ScalingGroup` with
-`min_slices`. Too much machinery, hard isolation wastes capacity.
+`buffer_slices`. Too much machinery, hard isolation wastes capacity.
 
 **Standalone reservation object**: Independent CRUD lifecycle. Overkill —
 orphaned reservations, complex cleanup. Can extract later if needed.

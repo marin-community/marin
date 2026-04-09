@@ -439,7 +439,7 @@ scale_groups:
         region: US-WEST-04A
         pool: h100-16x
         backend.coreweave.cloud/superpod: same-slice
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 1
     priority: 50
     slice_template:

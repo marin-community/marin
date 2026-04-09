@@ -54,7 +54,7 @@ def cluster_config_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
                 },
                 "scale_groups": {
                     "local-cpu": {
-                        "min_slices": 1,
+                        "buffer_slices": 1,
                         "max_slices": 1,
                         "num_vms": 1,
                         "resources": {
