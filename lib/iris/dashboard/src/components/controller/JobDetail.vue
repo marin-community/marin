@@ -226,47 +226,52 @@ const childJobComparator = computed<((a: JobStatus, b: JobStatus) => number) | u
   }
 })
 
-// In 'all' mode every node is auto-expanded so every descendant is visible.
-// In 'direct' mode the user expands interactively. Either way, pass the full
-// descendant set so jobsWithChildren can find parent-child pairs and render ▶.
 const flattenedChildJobs = computed(() => {
-  const effectiveExpanded = childJobsView.value === 'all'
-    ? new Set(descendantJobs.value.map(j => j.name))
-    : expandedChildJobs.value
-  return flattenJobTree(descendantJobs.value, effectiveExpanded, childJobComparator.value)
-})
-const expandableChildJobs = computed(() =>
-  childJobsView.value === 'all' ? new Set<string>() : jobsWithChildren(descendantJobs.value),
-)
+  const result: Array<{ job: JobStatus; depth: number }> = []
 
-async function loadChildJobs(parentJobId: string) {
-  if (loadingChildJobs.value.has(parentJobId)) return
-  const nextLoading = new Set(loadingChildJobs.value)
-  nextLoading.add(parentJobId)
-  loadingChildJobs.value = nextLoading
-  try {
-    const children = await fetchChildJobs(parentJobId)
-    const nextChildren = new Map(childJobsByParent.value)
-    nextChildren.set(parentJobId, children)
-    childJobsByParent.value = nextChildren
-  } finally {
-    const doneLoading = new Set(loadingChildJobs.value)
-    doneLoading.delete(parentJobId)
-    loadingChildJobs.value = doneLoading
+  function walk(parentJobId: string, depth: number) {
+    const children = childJobsByParent.value.get(parentJobId) ?? []
+    const sorted = childJobComparator.value ? [...children].sort(childJobComparator.value) : children
+    for (const child of sorted) {
+      result.push({ job: child, depth })
+      if (expandedChildJobs.value.has(child.jobId)) {
+        walk(child.jobId, depth + 1)
+      }
+    }
   }
-}
 
-function toggleExpandedChildJob(jobStatus: JobStatus) {
+  walk(props.jobId, 0)
+  return result
+})
+
+async function toggleExpandedChildJob(jobStatus: JobStatus) {
   const next = new Set(expandedChildJobs.value)
   if (next.has(jobStatus.jobId)) {
     next.delete(jobStatus.jobId)
-  } else {
-    next.add(jobStatus.jobId)
-    if (!childJobsByParent.value.has(jobStatus.jobId)) {
-      void loadChildJobs(jobStatus.jobId)
-    }
+    expandedChildJobs.value = next
+    return
   }
+
+  next.add(jobStatus.jobId)
   expandedChildJobs.value = next
+
+  if (childJobsByParent.value.has(jobStatus.jobId)) {
+    return
+  }
+
+  const nextLoading = new Set(loadingChildJobs.value)
+  nextLoading.add(jobStatus.jobId)
+  loadingChildJobs.value = nextLoading
+  try {
+    const children = await fetchChildJobs(jobStatus.jobId)
+    const nextChildren = new Map(childJobsByParent.value)
+    nextChildren.set(jobStatus.jobId, children)
+    childJobsByParent.value = nextChildren
+  } finally {
+    const doneLoading = new Set(loadingChildJobs.value)
+    doneLoading.delete(jobStatus.jobId)
+    loadingChildJobs.value = doneLoading
+  }
 }
 
 const SEGMENT_COLORS: Record<string, string> = {

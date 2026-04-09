@@ -323,7 +323,6 @@ def test_dashboard_job_expand_nested(smoke_cluster, smoke_page, smoke_screenshot
     )
     smoke_screenshot("job-expand-nested-before", "Job detail page showing tree-child as a direct child with ▶ button")
 
-    # Click the expand button on tree-child to reveal tree-grandchild.
     child_row = smoke_page.locator("tr", has_text="tree-child").first
     child_row.get_by_role("button").filter(has_text="▶").click()
 

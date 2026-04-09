@@ -138,9 +138,13 @@ async function loadChildJobs(parentJobId: string) {
   }
 }
 
+async function refreshExpandedChildren() {
+  await Promise.all([...expandedJobs.value].map(loadChildJobs))
+}
+
 async function fetchAll() {
   await fetchJobs()
-  await Promise.all([...expandedJobs.value].map(loadChildJobs))
+  await refreshExpandedChildren()
 }
 
 onMounted(fetchAll)
