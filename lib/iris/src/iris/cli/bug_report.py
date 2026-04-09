@@ -19,6 +19,7 @@ from iris.rpc import controller_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.logging_connect import LogServiceClientSync
+from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -187,7 +188,7 @@ def _gather(
             worker_reports[w.worker_id] = _build_worker_report(w)
 
     # 8. Assemble — prefer ListTasks count over the JobStatus convenience field
-    state_name = _job_state_name(job.state)
+    state_name = job_state_friendly(job.state)
     error = job.error or ""
     failed_descendants = [descendant for descendant in descendant_jobs if descendant.state in _FAILED_JOB_STATES]
     if error:
@@ -232,7 +233,7 @@ def _build_task_report(task: job_pb2.TaskStatus, logs: list[str]) -> TaskReport:
         AttemptReport(
             attempt_id=a.attempt_id,
             worker_id=a.worker_id,
-            state=_task_state_name(a.state),
+            state=task_state_friendly(a.state),
             exit_code=a.exit_code,
             error=a.error,
             is_worker_failure=a.is_worker_failure,
@@ -243,7 +244,7 @@ def _build_task_report(task: job_pb2.TaskStatus, logs: list[str]) -> TaskReport:
     ]
     return TaskReport(
         task_id=task.task_id,
-        state=_task_state_name(task.state),
+        state=task_state_friendly(task.state),
         worker_id=task.worker_id,
         worker_address=task.worker_address,
         exit_code=task.exit_code,
@@ -312,7 +313,7 @@ def _list_descendant_jobs(
 def _build_descendant_job_report(job: job_pb2.JobStatus) -> DescendantJobReport:
     return DescendantJobReport(
         job_id=job.job_id,
-        state=_job_state_name(job.state),
+        state=job_state_friendly(job.state),
         exit_code=job.exit_code,
         error=job.error,
         finished_at=_format_timestamp(job.finished_at),
@@ -322,14 +323,6 @@ def _build_descendant_job_report(job: job_pb2.JobStatus) -> DescendantJobReport:
 # ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
-
-
-def _job_state_name(state: job_pb2.JobState) -> str:
-    return job_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
-
-
-def _task_state_name(state: job_pb2.TaskState) -> str:
-    return job_pb2.TaskState.Name(state).replace("TASK_STATE_", "").lower()
 
 
 def _format_timestamp(ts) -> str:

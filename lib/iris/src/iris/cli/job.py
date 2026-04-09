@@ -45,6 +45,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
+from iris.rpc.proto_utils import job_state_friendly
 from iris.time_proto import timestamp_from_proto
 from rigging.timing import Duration, Timestamp
 
@@ -60,10 +61,6 @@ _STATE_MAP: dict[str, job_pb2.JobState] = {
     "worker_failed": job_pb2.JOB_STATE_WORKER_FAILED,
     "unschedulable": job_pb2.JOB_STATE_UNSCHEDULABLE,
 }
-
-
-def _job_state_name(state: job_pb2.JobState) -> str:
-    return job_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
 
 
 def _format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
@@ -897,7 +894,7 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
 
     for j in jobs:
         job_id = j.job_id
-        state_name = _job_state_name(j.state)
+        state_name = job_state_friendly(j.state)
         submitted = timestamp_from_proto(j.submitted_at).as_formatted_date() if j.submitted_at.epoch_ms else "-"
         resources = _format_resources(j.resources) if j.HasField("resources") else "-"
 
