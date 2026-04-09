@@ -13,12 +13,12 @@ import shutil
 from unittest.mock import patch
 
 import pytest
-from huggingface_hub import hf_hub_download
 
 from levanter.tokenizers import (
     MarinTokenizer,
     TokenizerBackend,
     _load_tokenizer_config,
+    _stage_tokenizer,
     load_tokenizer,
 )
 
@@ -986,10 +986,13 @@ def test_load_tokenizer_caching():
 @requires_model
 def test_local_tokenizer_encode_batch(tmp_path):
     """Ensure encode_batch works with local tokenizer paths (no hub round-trip)."""
-    tokenizer_json = hf_hub_download(MODEL_NAME, "tokenizer.json")
+    staged_dir = _stage_tokenizer(MODEL_NAME)
     local_dir = tmp_path / "tokenizer"
     local_dir.mkdir()
-    shutil.copy2(tokenizer_json, local_dir / "tokenizer.json")
+    for fname in os.listdir(staged_dir):
+        src = os.path.join(staged_dir, fname)
+        if os.path.isfile(src):
+            shutil.copy2(src, local_dir / fname)
 
     load_tokenizer.cache_clear()
     with patch(
