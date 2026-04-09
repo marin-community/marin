@@ -6,7 +6,7 @@
 import click
 import pytest
 
-from iris.cli.job import build_resources, validate_region_zone
+from iris.cli.job import build_resources, validate_extra_resources, validate_region_zone
 from iris.cluster.constraints import (
     Constraint,
     WellKnownAttribute,
@@ -127,3 +127,62 @@ def test_executor_heuristic_with_region_constraint():
     preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
     assert preemptible is not None
     assert preemptible.value == "false"
+
+
+# ---------------------------------------------------------------------------
+# validate_extra_resources tests
+# ---------------------------------------------------------------------------
+
+
+def test_extra_resources_normal_job_passes():
+    # Default CPU-only job with small resources should always pass.
+    validate_extra_resources(tpu=None, gpu=None, memory="1GB", disk="5GB", enable_extra_resources=False)
+
+
+def test_extra_resources_tpu_without_flag_raises():
+    with pytest.raises(click.UsageError, match="--tpu requires --enable-extra-resources"):
+        validate_extra_resources(tpu="v5litepod-16", gpu=None, memory="1GB", disk="5GB", enable_extra_resources=False)
+
+
+def test_extra_resources_gpu_without_flag_raises():
+    with pytest.raises(click.UsageError, match="--gpu requires --enable-extra-resources"):
+        validate_extra_resources(tpu=None, gpu="H100x8", memory="1GB", disk="5GB", enable_extra_resources=False)
+
+
+def test_extra_resources_large_memory_without_flag_raises():
+    with pytest.raises(click.UsageError, match=r"--memory 4GB.*--enable-extra-resources"):
+        validate_extra_resources(tpu=None, gpu=None, memory="4GB", disk="5GB", enable_extra_resources=False)
+
+
+def test_extra_resources_memory_just_below_threshold_passes():
+    # 3.9 GB is below 4 GB threshold.
+    validate_extra_resources(tpu=None, gpu=None, memory="3900MB", disk="5GB", enable_extra_resources=False)
+
+
+def test_extra_resources_large_disk_without_flag_raises():
+    with pytest.raises(click.UsageError, match=r"--disk 10GB.*--enable-extra-resources"):
+        validate_extra_resources(tpu=None, gpu=None, memory="1GB", disk="10GB", enable_extra_resources=False)
+
+
+def test_extra_resources_disk_just_below_threshold_passes():
+    # 9.9 GB is below 10 GB threshold.
+    validate_extra_resources(tpu=None, gpu=None, memory="1GB", disk="9900MB", enable_extra_resources=False)
+
+
+def test_extra_resources_flag_bypasses_tpu_check():
+    # With --enable-extra-resources, TPU is allowed.
+    validate_extra_resources(tpu="v5litepod-16", gpu=None, memory="1GB", disk="5GB", enable_extra_resources=True)
+
+
+def test_extra_resources_flag_bypasses_large_memory():
+    validate_extra_resources(tpu=None, gpu=None, memory="64GB", disk="5GB", enable_extra_resources=True)
+
+
+def test_extra_resources_flag_bypasses_large_disk():
+    validate_extra_resources(tpu=None, gpu=None, memory="1GB", disk="100GB", enable_extra_resources=True)
+
+
+def test_extra_resources_hint_mentions_coordinator():
+    # Error message should explain the entrypoint/coordinator concept.
+    with pytest.raises(click.UsageError, match="coordinator"):
+        validate_extra_resources(tpu="v5litepod-16", gpu=None, memory="1GB", disk="5GB", enable_extra_resources=False)
