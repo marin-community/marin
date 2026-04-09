@@ -47,13 +47,7 @@ port-forwarding on `localhost`, but you still need the token.
 
 This is the easiest flow:
 
-1. Install the default token locally (or re-run `make dev_setup`):
-    ```bash
-    make get_ray_auth_token
-    ```
-    If this fails because the Secret Manager secret doesn’t exist yet, someone needs to create it once (see
-    `infra/README.md`).
-2. Authenticate to the cluster dashboard:
+1. Authenticate to the cluster dashboard (this will fetch and cache the token automatically):
     ```bash
     # Starts SSH port-forwarding, copies the token to clipboard, and opens the dashboard.
     uv run scripts/ray/cluster.py --cluster us-central2 auth

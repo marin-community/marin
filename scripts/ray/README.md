@@ -195,12 +195,6 @@ If you want to override the Secret Manager secret:
 uv run scripts/ray/cluster.py --cluster us-central2 auth --secret RAY_AUTH_TOKEN
 ```
 
-You can also install the token locally with:
-
-```bash
-make get_ray_auth_token
-```
-
 #### Ray token auth environment
 
 Most tooling will “just work” if you have a token file at `~/.ray/auth_token` (or set `RAY_AUTH_TOKEN_PATH`).
