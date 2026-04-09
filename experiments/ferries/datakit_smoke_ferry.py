@@ -12,7 +12,7 @@ import os
 from rigging.log_setup import configure_logging
 
 from marin.datakit.canonical.fineweb_edu import download as fineweb_edu_download
-from marin.datakit.canonical.fineweb_edu import normalize as fineweb_edu_normalize
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import (
@@ -31,20 +31,21 @@ def build_steps(run_id: str) -> list[StepSpec]:
     # Reuse the canonical download step. Its output path is shared across runs
     # (raw/fineweb-edu-<rev> under MARIN_PREFIX); only the per-run derived
     # outputs land under datakit-smoke/<run_id>/.
-    download = fineweb_edu_download()
+    downloaded = fineweb_edu_download()
 
-    normalize = fineweb_edu_normalize(
-        download,
-        subset="sample/10BT",
+    normalized = normalize_step(
+        name="datakit-smoke/normalize",
+        download=downloaded,
+        input_path=f"{downloaded.output_path}/sample/10BT",
         override_output_path=f"{base}/normalize",
     )
 
-    dedup = StepSpec(
+    deduped = StepSpec(
         name="datakit-smoke/dedup_fuzzy_document",
-        deps=[normalize],
+        deps=[normalized],
         hash_attrs={"mode": "fuzzy_document"},
         fn=lambda output_path: dedup_fuzzy_document(
-            input_paths=normalize.output_path,
+            input_paths=normalized.output_path,
             output_path=output_path,
             max_parallelism=1024,
         ),
@@ -53,18 +54,18 @@ def build_steps(run_id: str) -> list[StepSpec]:
 
     consolidated = StepSpec(
         name="datakit-smoke/consolidate",
-        deps=[normalize, dedup],
+        deps=[normalized, deduped],
         fn=lambda output_path: consolidate(
             ConsolidateConfig(
-                input_path=normalize.output_path,
+                input_path=normalized.output_path,
                 output_path=output_path,
                 filetype="parquet",
                 filters=[
                     FilterConfig(
                         type=FilterType.REMOVE_DOC,
-                        attribute_path=f"{dedup.output_path}/data",
+                        attribute_path=f"{deduped.output_path}/data",
                         name="dup_doc",
-                        attribute_filetype="vortex",
+                        attribute_filetype="parquet",
                         keep_if_missing=True,
                     ),
                 ],
@@ -83,13 +84,12 @@ def build_steps(run_id: str) -> list[StepSpec]:
                 validation_paths=[],
                 cache_path=output_path,
                 tokenizer="gpt2",
-                allow_test_in_train=True,
             )
         ),
         override_output_path=f"{base}/tokens",
     )
 
-    return [download, normalize, dedup, consolidated, tokenized]
+    return [downloaded, normalized, deduped, consolidated, tokenized]
 
 
 def main() -> None:
