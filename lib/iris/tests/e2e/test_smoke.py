@@ -68,7 +68,7 @@ def _add_cpu_group(config: config_pb2.IrisClusterConfig, num_workers: int = 4) -
     sg = config.scale_groups["local-cpu"]
     sg.name = "local-cpu"
     sg.num_vms = 1
-    sg.min_slices = num_workers
+    sg.buffer_slices = num_workers
     sg.max_slices = num_workers
     sg.resources.cpu_millicores = 8000
     sg.resources.memory_bytes = 16 * 1024**3
@@ -83,7 +83,7 @@ def _add_coscheduling_group_4vm(config: config_pb2.IrisClusterConfig) -> None:
     sg = config.scale_groups["tpu_cosched_4"]
     sg.name = "tpu_cosched_4"
     sg.num_vms = 4
-    sg.min_slices = 1
+    sg.buffer_slices = 1
     sg.max_slices = 1
     sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024**3
@@ -104,7 +104,7 @@ def _add_multi_region_groups(config: config_pb2.IrisClusterConfig) -> None:
         sg = config.scale_groups[name]
         sg.name = name
         sg.num_vms = 1
-        sg.min_slices = 1
+        sg.buffer_slices = 1
         sg.max_slices = 2
         sg.resources.cpu_millicores = 8000
         sg.resources.memory_bytes = 16 * 1024**3
@@ -923,7 +923,7 @@ def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
     sg = config.scale_groups["placeholder"]
     sg.name = "placeholder"
     sg.num_vms = 1
-    sg.min_slices = 0
+    sg.buffer_slices = 0
     sg.max_slices = 0
     sg.resources.cpu_millicores = 1000
     sg.resources.memory_bytes = 1 * 1024**3

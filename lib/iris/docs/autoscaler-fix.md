@@ -221,8 +221,9 @@ The following diagram is intentionally verbose. It is meant to document *exactly
 │ Step 3: evaluate scaling (per group)                                                 │
 │   - counts = group.slice_state_counts()                                              │
 │   - capacity_slices = READY + (BOOTING + INITIALIZING + REQUESTING)                  │
-│   - if below min_slices: scale up (if can_scale_up)                                  │
-│   - else if total_required_slices > capacity_slices and total < max_slices: scale up │
+│   - target = min(required_slices + buffer_slices, max_slices)                          │
+│   - slices_needed = max(demand_gap, buffer_gap)                                        │
+│   - if slices_needed > 0 and total < max_slices: scale up (if can_scale_up)            │
 │   - can_scale_up gates on quota/backoff/cooldown/max_slices                          │
 │                                                                                      │
 │ Step 4: execute scale-ups                                                            │
@@ -314,9 +315,9 @@ scale-down of newly ready slices. However, this is handled correctly because:
    routing. Workers run tasks regardless of what the routing layer does.
 2. Scale-down safety is maintained by `scale_down_if_idle()`, which checks that
    workers have no running tasks before terminating a slice.
-3. The `target_capacity` in `refresh()` uses `max(demand, min_slices)`. When
-   demand=0, target becomes min_slices. If min_slices=0, scale-down can occur
-   but only for truly idle slices.
+3. The `target_capacity` in `refresh()` uses `min(demand + buffer_slices, max_slices)`.
+   When demand=0, target becomes buffer_slices. If buffer_slices=0, scale-down can
+   occur but only for truly idle slices.
 
 For groups at max_slices with active workers, the idle check prevents premature
 termination. The change in demand tracking is acceptable because the routing
@@ -583,19 +584,16 @@ def _evaluate_group(self, group, required_slices, ts):
     total = sum(counts.values())
     capacity_slices = ready + pending
 
-    if total < group.min_slices:
-        if not group.can_scale_up(ts):
-            return None
-        return ScalingDecision(
-            scale_group=group.name,
-            action=ScalingAction.SCALE_UP,
-            reason=f"below min_slices ({total} < {group.min_slices})",
-        )
+    target = min(required_slices + group.buffer_slices, group.max_slices)
+    demand_gap = max(0, required_slices - pending)
+    buffer_gap = max(0, target - total)
+    slices_needed = max(demand_gap, buffer_gap)
 
-    if required_slices > capacity_slices and total < group.max_slices:
+    if slices_needed > 0 and total < group.max_slices:
         if not group.can_scale_up(ts):
-            return None
-        return ScalingDecision(
+            return []
+        slices_to_add = min(slices_needed, group.max_slices - total)
+        return [ScalingDecision(
             scale_group=group.name,
             action=ScalingAction.SCALE_UP,
             reason=f"required_slices={required_slices} > capacity_slices={capacity_slices}",
@@ -625,7 +623,7 @@ pending). If `current_demand` is updated to “required VMs”, convert it to sl
 for group in self._groups.values():
     required_vms = group.current_demand
     required_slices = (required_vms + group.num_vms - 1) // group.num_vms if required_vms > 0 else 0
-    target_capacity = max(required_slices, group.min_slices)
+    target_capacity = min(group.current_demand + group.buffer_slices, group.max_slices)
     scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity, timestamp)
 ```
 
@@ -763,8 +761,8 @@ it's safe because `scale_down_if_idle` checks worker activity. This is correct:
 the idle check in `_verify_slice_idle` requires at least one known worker to be
 non-idle, and `update_slice_activity` keeps `last_active` current for busy
 slices. However, there's a subtle gap: **between the time demand drops to 0 and
-the next `run_once` cycle, `target_capacity` will be `max(0, min_slices)`**.  If
-`min_slices=0`, the autoscaler will attempt to scale down on every cycle,
+the next `run_once` cycle, `target_capacity` will be `min(0 + buffer_slices, max_slices)`**.  If
+`buffer_slices=0`, the autoscaler will attempt to scale down on every cycle,
 relying solely on the idle check. This is fine for slices with active workers,
 but could cause premature termination of slices that just became ready and
 haven't received tasks yet (their `last_active` was set at mark_ready, so
@@ -815,7 +813,7 @@ group at max_slices with active workers, confirming no scale-down occurs.
 ### Summary
 
 The plan is solid and well-structured. The main risk is the AT_MAX_SLICES
-rejection causing unexpected scale-down for groups with `min_slices=0` and
+rejection causing unexpected scale-down for groups with `buffer_slices=0` and
 recently-ready-but-not-yet-assigned slices. The `idle_threshold` default of 5
 minutes provides adequate protection, but this should be explicitly tested.
 The `make_pending` branch removal and `update_demand` unit change are minor

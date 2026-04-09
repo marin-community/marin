@@ -506,7 +506,7 @@ def mock_autoscaler():
                 name="test-group",
                 config=config_pb2.ScaleGroupConfig(
                     name="test-group",
-                    min_slices=1,
+                    buffer_slices=1,
                     max_slices=5,
                     resources=config_pb2.ScaleGroupResources(
                         device_type=config_pb2.ACCELERATOR_TYPE_TPU,
@@ -764,16 +764,16 @@ def test_get_worker_status_includes_running_tasks_and_resource_history(client, s
     task_id = job_id.task(0)
     state.queue_assignments([Assignment(task_id=task_id, worker_id=wid)])
 
-    first = job_pb2.WorkerResourceSnapshot(cpu_percent=25, running_task_count=1)
-    second = job_pb2.WorkerResourceSnapshot(cpu_percent=50, running_task_count=1)
+    first = job_pb2.WorkerResourceSnapshot(host_cpu_percent=25, running_task_count=1)
+    second = job_pb2.WorkerResourceSnapshot(host_cpu_percent=50, running_task_count=1)
     state.apply_task_updates(HeartbeatApplyRequest(worker_id=wid, worker_resource_snapshot=first, updates=[]))
     state.apply_task_updates(HeartbeatApplyRequest(worker_id=wid, worker_resource_snapshot=second, updates=[]))
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
     running_job_ids = resp.get("worker", {}).get("runningJobIds", [])
     assert task_id.to_wire() in running_job_ids
-    assert [entry.get("cpuPercent") for entry in resp.get("resourceHistory", [])] == [25, 50]
-    assert resp.get("currentResources", {}).get("cpuPercent") == 50
+    assert [entry.get("hostCpuPercent") for entry in resp.get("resourceHistory", [])] == [25, 50]
+    assert resp.get("currentResources", {}).get("hostCpuPercent") == 50
 
 
 def test_get_worker_status_unknown_id_returns_error(client):

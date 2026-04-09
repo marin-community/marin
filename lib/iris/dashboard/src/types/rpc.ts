@@ -45,7 +45,6 @@ export interface ResourceUsage {
   diskMb?: string
   cpuMillicores?: number
   memoryPeakMb?: string
-  cpuPercent?: number
   processCount?: number
 }
 
@@ -191,7 +190,7 @@ export interface ListWorkersResponse {
 
 export interface WorkerResourceSnapshot {
   timestamp?: ProtoTimestamp
-  cpuPercent?: number
+  hostCpuPercent?: number
   memoryUsedBytes?: string
   memoryTotalBytes?: string
   diskUsedBytes?: string
@@ -404,7 +403,7 @@ export interface ProcessInfo {
   uptimeMs?: string
   memoryRssBytes?: string
   memoryVmsBytes?: string
-  cpuPercent?: number
+  cpuMillicores?: number
   threadCount?: number
   openFdCount?: number
   memoryTotalBytes?: string
@@ -506,4 +505,3 @@ export interface GetSchedulerStateResponse {
   totalPending: number
   totalRunning: number
 }
-

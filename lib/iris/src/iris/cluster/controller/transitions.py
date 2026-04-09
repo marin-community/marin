@@ -791,16 +791,6 @@ def _batch_worker_health(
             "INSERT INTO worker_resource_history(worker_id, snapshot_proto, timestamp_ms) " "VALUES (?, ?, ?)",
             history_params,
         )
-        for wid, _, _ in history_params:
-            cutoff = cur.execute(
-                "SELECT id FROM worker_resource_history " "WHERE worker_id = ? ORDER BY id DESC LIMIT 1 OFFSET ?",
-                (wid, WORKER_RESOURCE_HISTORY_RETENTION),
-            ).fetchone()
-            if cutoff:
-                cur.execute(
-                    "DELETE FROM worker_resource_history WHERE worker_id = ? AND id <= ?",
-                    (wid, cutoff["id"]),
-                )
     return existing
 
 
@@ -2470,6 +2460,36 @@ class ControllerTransitions:
                 total_deleted += cur.rowcount
         if total_deleted > 0:
             logger.info("Pruned %d worker_task_history rows", total_deleted)
+        return total_deleted
+
+    def prune_worker_resource_history(self) -> int:
+        """Trim worker_resource_history to WORKER_RESOURCE_HISTORY_RETENTION rows per worker.
+
+        Runs on the background prune thread every ~10 minutes. Keeping this out
+        of the heartbeat hot path avoids issuing hundreds of per-worker
+        SELECT+DELETE pairs inside the apply_heartbeats_batch write transaction.
+        """
+        with self._db.transaction() as cur:
+            rows = cur.execute(
+                "SELECT worker_id, COUNT(*) as cnt FROM worker_resource_history GROUP BY worker_id HAVING cnt > ?",
+                (WORKER_RESOURCE_HISTORY_RETENTION,),
+            ).fetchall()
+            total_deleted = 0
+            for row in rows:
+                wid = row["worker_id"]
+                cur.execute(
+                    "DELETE FROM worker_resource_history "
+                    "WHERE worker_id = ? "
+                    "AND id NOT IN ("
+                    "  SELECT id FROM worker_resource_history "
+                    "  WHERE worker_id = ? "
+                    "  ORDER BY id DESC LIMIT ?"
+                    ")",
+                    (wid, wid, WORKER_RESOURCE_HISTORY_RETENTION),
+                )
+                total_deleted += cur.rowcount
+        if total_deleted > 0:
+            logger.info("Pruned %d worker_resource_history rows", total_deleted)
         return total_deleted
 
     def prune_old_data(

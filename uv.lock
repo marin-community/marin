@@ -3599,7 +3599,6 @@ dependencies = [
     { name = "grpcio" },
     { name = "httpx" },
     { name = "humanfriendly" },
-    { name = "kubernetes" },
     { name = "pydantic" },
     { name = "pyjwt" },
     { name = "pyyaml" },
@@ -3615,6 +3614,7 @@ dependencies = [
 [package.optional-dependencies]
 controller = [
     { name = "duckdb" },
+    { name = "kubernetes" },
     { name = "pyarrow" },
 ]
 
@@ -3623,6 +3623,7 @@ dev = [
     { name = "duckdb" },
     { name = "ipykernel" },
     { name = "jupyter" },
+    { name = "kubernetes" },
     { name = "nbconvert" },
     { name = "nbformat" },
     { name = "pillow" },
@@ -3655,7 +3656,7 @@ requires-dist = [
     { name = "grpcio", specifier = ">=1.76.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "humanfriendly", specifier = ">=10.0" },
-    { name = "kubernetes", specifier = ">=31.0.0" },
+    { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0" },
     { name = "pyarrow", marker = "extra == 'controller'", specifier = ">=19.0.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyjwt", specifier = ">=2.8.0" },
@@ -3668,13 +3669,14 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
     { name = "zstandard", specifier = ">=0.22.0" },
 ]
-provides-extras = ["controller"]
+provides-extras = ["controller", "worker"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "duckdb", specifier = ">=1.0.0" },
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "jupyter", specifier = ">=1.1.1" },
+    { name = "kubernetes", specifier = ">=31.0.0" },
     { name = "nbconvert", specifier = ">=7.16.6" },
     { name = "nbformat", specifier = ">=5.10.4" },
     { name = "pillow", specifier = ">=10.0.0" },

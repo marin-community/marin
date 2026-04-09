@@ -198,7 +198,9 @@ message ScaleGroupConfig {
   reserved 2;  // was: vm_type (removed, use slice_template.WhichOneof)
 
   // Scaling policy
-  int32 min_slices = 3 [features.field_presence = EXPLICIT];
+  // Extra slices to keep warm beyond current demand.
+  // Target = min(demand + buffer_slices, max_slices).
+  int32 buffer_slices = 3 [features.field_presence = EXPLICIT];
   int32 max_slices = 4 [features.field_presence = EXPLICIT];
 
   reserved 9;   // was: accelerator_type (moved to ScaleGroupResources.device_type)

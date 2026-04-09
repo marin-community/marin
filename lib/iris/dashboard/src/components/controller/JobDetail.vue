@@ -9,7 +9,7 @@ import type {
   GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
   ResourceUsage,
 } from '@/types/rpc'
-import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatDeviceConfig } from '@/utils/formatting'
+import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig } from '@/utils/formatting'
 import { flattenJobTree, getLeafJobName, getParentJobName, jobsWithChildren } from '@/utils/jobTree'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -184,8 +184,7 @@ function formatMemMb(usage: ResourceUsage | undefined): string {
 }
 
 function formatCpu(usage: ResourceUsage | undefined): string {
-  if (!usage || usage.cpuPercent === undefined || usage.cpuPercent === 0) return '-'
-  return `${usage.cpuPercent.toFixed(0)}%`
+  return formatCpuMillicores(usage?.cpuMillicores)
 }
 
 function taskIndex(taskId: string): string {
@@ -399,7 +398,7 @@ const filteredTasks = computed(() => {
         cmp = (parseInt(a.resourceUsage?.memoryMb ?? '0') || 0) - (parseInt(b.resourceUsage?.memoryMb ?? '0') || 0)
         break
       case 'cpu':
-        cmp = (a.resourceUsage?.cpuPercent ?? 0) - (b.resourceUsage?.cpuPercent ?? 0)
+        cmp = (a.resourceUsage?.cpuMillicores ?? 0) - (b.resourceUsage?.cpuMillicores ?? 0)
         break
       case 'duration':
         cmp = taskDurationMs(a) - taskDurationMs(b)

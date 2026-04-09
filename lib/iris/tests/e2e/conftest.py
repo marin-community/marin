@@ -330,7 +330,7 @@ def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
     sg = config.scale_groups["tpu_cosched_2"]
     sg.name = "tpu_cosched_2"
     sg.num_vms = 2
-    sg.min_slices = 1
+    sg.buffer_slices = 1
     sg.max_slices = 2
     sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024 * 1024 * 1024
@@ -367,7 +367,7 @@ def _make_multi_worker_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     sg = config.scale_groups["local-cpu"]
     sg.name = "local-cpu"
     sg.num_vms = 1
-    sg.min_slices = num_workers
+    sg.buffer_slices = num_workers
     sg.max_slices = num_workers
     sg.resources.cpu_millicores = 8000
     sg.resources.memory_bytes = 16 * 1024**3

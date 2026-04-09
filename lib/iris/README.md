@@ -8,20 +8,20 @@ Distributed job orchestration replacing Ray with simpler primitives.
 
 ```bash
 # Start controller VM (runs autoscaler internally)
-uv run iris --config=examples/marin.yaml cluster start
+uv run iris --cluster=marin cluster start
 
 # Start a local cluster for testing (mimics the config without GCP)
 # Dashboard is available at the printed URL; press Ctrl+C to stop.
-uv run iris --config=examples/marin.yaml cluster start --local
+uv run iris --cluster=marin cluster start --local
 
 # Check cluster status
-uv run iris --config=examples/marin.yaml cluster status
+uv run iris --cluster=marin cluster status
 
 # Validate cluster with test jobs (establishes SSH tunnel automatically)
-uv run iris --config=examples/marin.yaml cluster debug validate
+uv run iris --cluster=marin cluster debug validate
 
 # Stop cluster (controller + all worker slices, terminated in parallel; 60s timeout)
-uv run iris --config=examples/marin.yaml cluster stop
+uv run iris --cluster=marin cluster stop
 ```
 
 ### Submit a Job
@@ -233,17 +233,17 @@ The controller will **fail at startup** if `storage.remote_state_dir` is not con
 
 ## CLI Reference
 
-**Note:** The `--config` option is a global option on the top-level `iris` command group. It must be placed after `iris` but before the subcommand (e.g., `iris --config cluster.yaml cluster start` or `iris --config cluster.yaml job run ...`).
+**Note:** The `--cluster` option resolves a cluster name to a config file (e.g., `--cluster=marin` finds `lib/iris/examples/marin.yaml`) and works from any directory. It is a global option that must appear after `iris` but before the subcommand (e.g., `iris --cluster=marin cluster start`).
 
 ### Cluster Commands
 
 ```bash
 # Start/stop/restart controller VM
-iris --config=cluster.yaml cluster start
-iris --config=cluster.yaml cluster start --local   # Local cluster for testing
-iris --config=cluster.yaml cluster stop
-iris --config=cluster.yaml cluster restart
-iris --config=cluster.yaml cluster status
+iris --cluster=marin cluster start
+iris --cluster=marin cluster start --local   # Local cluster for testing
+iris --cluster=marin cluster stop
+iris --cluster=marin cluster restart
+iris --cluster=marin cluster status
 ```
 
 ### Controller Subcommands
@@ -310,7 +310,7 @@ dashboard rendering, log levels, profiling, and constraint routing.
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts=" -v
 
 # Cloud mode: start cluster via CLI, then run tests against it
-# iris --config=examples/smoke-gcp.yaml cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
+# iris --cluster=smoke-gcp cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # Cloud mode: connect to existing cluster
@@ -367,7 +367,7 @@ scale_groups:
       device_variant: v5litepod-4
       device_count: 4
       preemptible: true
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 10
     slice_template:
       gcp:
@@ -382,7 +382,7 @@ scale_groups:
       disk: 100GB
       device_type: cpu
       preemptible: false
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 2
     slice_template:
       manual:

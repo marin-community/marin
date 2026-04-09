@@ -18,7 +18,6 @@ dependencies = [
     "s3fs>=2024.0.0",
     "grpcio>=1.76.0",
     "httpx>=0.28.1",
-    "kubernetes>=31.0.0",
     "humanfriendly>=10.0",
     "pydantic>=2.12.5",
     "PyJWT>=2.8.0",
@@ -34,7 +33,9 @@ dependencies = [
 controller = [
     "duckdb>=1.0.0",
     "pyarrow>=19.0.0",
+    "kubernetes>=31.0.0",
 ]
+worker = []
 
 [project.scripts]
 iris = "iris.cli:iris"
@@ -50,6 +51,7 @@ examples = [
 dev = [
     "duckdb>=1.0.0",
     "pyarrow>=19.0.0",
+    "kubernetes>=31.0.0",
     "ipykernel>=7.1.0",
     "jupyter>=1.1.1",
     "nbconvert>=7.16.6",

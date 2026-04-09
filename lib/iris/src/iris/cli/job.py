@@ -335,6 +335,68 @@ def build_resources(
     return spec
 
 
+# Thresholds above which the entrypoint job is considered "extra-resource-heavy"
+# and requires --enable-extra-resources to proceed.
+_LARGE_MEMORY_THRESHOLD_BYTES: int = humanfriendly.parse_size("4GB")
+_LARGE_DISK_THRESHOLD_BYTES: int = humanfriendly.parse_size("10GB")
+
+_ACCELERATOR_HINT = (
+    "The top-level entrypoint (coordinator) job only needs CPU to schedule and "
+    "dispatch work; accelerators are attached to worker tasks spawned by the job. "
+    "If you truly need an accelerator on this entrypoint, pass --enable-extra-resources."
+)
+_LARGE_RESOURCE_HINT = (
+    "The top-level entrypoint (coordinator) job typically needs only modest CPU/RAM/disk "
+    "to schedule and dispatch work. "
+    "If this large resource request is intentional, pass --enable-extra-resources."
+)
+
+
+def validate_extra_resources(
+    tpu: str | None,
+    gpu: str | None,
+    memory: str,
+    disk: str,
+    enable_extra_resources: bool,
+) -> None:
+    """Raise UsageError if heavy resources are requested without --enable-extra-resources.
+
+    Guards against common mistakes where users attach accelerators or request
+    large RAM/disk on the entrypoint (coordinator) job instead of on worker tasks.
+
+    Args:
+        tpu: TPU type string, or None.
+        gpu: GPU spec string, or None.
+        memory: Memory size string (e.g. "8GB").
+        disk: Disk size string (e.g. "64GB").
+        enable_extra_resources: True if the user explicitly opted in.
+    """
+    if enable_extra_resources:
+        return
+
+    if tpu:
+        raise click.UsageError(f"--tpu requires --enable-extra-resources.\n{_ACCELERATOR_HINT}")
+
+    if gpu:
+        raise click.UsageError(f"--gpu requires --enable-extra-resources.\n{_ACCELERATOR_HINT}")
+
+    try:
+        memory_bytes = humanfriendly.parse_size(memory)
+    except humanfriendly.InvalidSize:
+        memory_bytes = 0  # let build_resources surface the parse error
+
+    if memory_bytes >= _LARGE_MEMORY_THRESHOLD_BYTES:
+        raise click.UsageError(f"--memory {memory} (>= 4 GB) requires --enable-extra-resources.\n{_LARGE_RESOURCE_HINT}")
+
+    try:
+        disk_bytes = humanfriendly.parse_size(disk)
+    except humanfriendly.InvalidSize:
+        disk_bytes = 0  # let build_resources surface the parse error
+
+    if disk_bytes >= _LARGE_DISK_THRESHOLD_BYTES:
+        raise click.UsageError(f"--disk {disk} (>= 10 GB) requires --enable-extra-resources.\n{_LARGE_RESOURCE_HINT}")
+
+
 def parse_reservation_spec(spec: str) -> list[ReservationEntry]:
     """Parse a reservation spec like '4:H100x8' or 'v5litepod-16'.
 
@@ -637,8 +699,22 @@ Examples:
     type=(str, str),
     help="Set environment variables for the job (KEY VALUE). Can be repeated.",
 )
-@click.option("--tpu", type=str, help="TPU type to request (e.g., v5litepod-16)")
-@click.option("--gpu", type=str, help="GPU spec: VARIANTxCOUNT (e.g., H100x8), COUNT (e.g., 8), or VARIANT (e.g., H100)")
+@click.option("--tpu", type=str, help="TPU type to request (e.g., v5litepod-16). Requires --enable-extra-resources.")
+@click.option(
+    "--gpu",
+    type=str,
+    help="GPU spec: VARIANTxCOUNT (e.g., H100x8), COUNT (e.g., 8), or VARIANT (e.g., H100). Needs --enable-extra-resources.",  # noqa: E501
+)
+@click.option(
+    "--enable-extra-resources",
+    is_flag=True,
+    default=False,
+    help=(
+        "Allow accelerators (--tpu/--gpu) and large resource requests (>= 4 GB RAM or >= 10 GB disk) "
+        "on the entrypoint job. Not needed for typical coordinator jobs — accelerators should be "
+        "requested by worker tasks spawned by the job."
+    ),
+)
 @click.option("--cpu", type=float, default=0.5, show_default=True, help="Number of CPUs to request")
 @click.option("--memory", type=str, default="1GB", show_default=True, help="Memory size to request (e.g., 8GB, 512MB)")
 @click.option(
@@ -679,6 +755,7 @@ def run(
     cpu: float,
     memory: str,
     disk: str,
+    enable_extra_resources: bool,
     no_wait: bool,
     job_name: str | None,
     user: str | None,
@@ -694,6 +771,7 @@ def run(
 ):
     """Submit jobs to Iris clusters."""
     controller_url = require_controller_url(ctx)
+    validate_extra_resources(tpu, gpu, memory, disk, enable_extra_resources)
     validate_region_zone(region or None, zone, ctx.obj.get("config"))
 
     command = list(cmd)

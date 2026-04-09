@@ -302,15 +302,15 @@ def _read_proc_memory_mb(pid: int) -> int | None:
             return None
 
 
-def _read_proc_cpu_percent(
+def _read_proc_cpu_millicores(
     pid: int,
     prev_total: float,
     prev_utime: float,
 ) -> tuple[int, float, float]:
-    """Compute delta CPU usage percentage between calls.
+    """Compute delta CPU usage in millicores between calls.
 
     On Linux reads /proc/{pid}/stat and /proc/stat. On other platforms returns 0.
-    Returns (cpu_percent, new_total, new_utime).
+    Returns (cpu_millicores, new_total, new_utime).
     """
     if sys.platform != "linux":
         return (0, prev_total, prev_utime)
@@ -327,8 +327,9 @@ def _read_proc_cpu_percent(
         delta_utime = utime - prev_utime
         if delta_total <= 0 or prev_total == 0:
             return (0, total, utime)
-        pct = int((delta_utime / delta_total) * 100)
-        return (pct, total, utime)
+        cpu_count = os.cpu_count() or 1
+        millicores = int((delta_utime / delta_total) * cpu_count * 1000)
+        return (millicores, total, utime)
     except (FileNotFoundError, ProcessLookupError, IndexError, ValueError):
         return (0, prev_total, prev_utime)
 
@@ -510,16 +511,16 @@ class ProcessContainerHandle:
     def stats(self) -> ContainerStats:
         """Get resource usage statistics from the underlying subprocess."""
         if not self._container or not self._container._process or self._container._process.poll() is not None:
-            return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+            return ContainerStats(memory_mb=0, cpu_millicores=0, process_count=0, available=False)
 
         pid = self._container._process.pid
         memory_mb = _read_proc_memory_mb(pid)
-        cpu_pct, self._prev_cpu_total, self._prev_cpu_utime = _read_proc_cpu_percent(
+        cpu_millicores, self._prev_cpu_total, self._prev_cpu_utime = _read_proc_cpu_millicores(
             pid, self._prev_cpu_total, self._prev_cpu_utime
         )
         return ContainerStats(
             memory_mb=memory_mb or 0,
-            cpu_percent=cpu_pct,
+            cpu_millicores=cpu_millicores,
             process_count=1,
             available=memory_mb is not None,
         )

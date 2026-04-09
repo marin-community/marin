@@ -21,7 +21,7 @@ from iris.cluster.controller.scheduler import (
 )
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.types import JobName, WorkerId
-from iris.cluster.controller.pending_diagnostics import PendingHint, build_job_pending_hints
+from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
 from iris.rpc import config_pb2, vm_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2

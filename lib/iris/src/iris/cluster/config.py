@@ -617,7 +617,7 @@ def _expand_tpu_pools(data: dict) -> None:
     """Expand ``tpu_pools`` into per-(size, zone) scale groups.
 
     Each pool defines shared properties for a TPU family. The ``sizes`` map
-    lists per-size overrides (min_slices, max_slices, priority). For each
+    lists per-size overrides (buffer_slices, max_slices, priority). For each
     pool x size x zone the function emits a fully-specified scale group with
     topology-derived fields (device_variant, num_vms, device_count) and
     autoscaler allocation metadata (quota_pool, allocation_tier, priority).
@@ -702,7 +702,7 @@ def _expand_tpu_pools(data: dict) -> None:
                     "quota_pool": f"{pool_name}/{zone}",
                     "allocation_tier": tier_index + 1,
                     "resources": resources,
-                    "min_slices": size_overrides.get("min_slices", 0),
+                    "buffer_slices": size_overrides.get("buffer_slices", 0),
                     "max_slices": size_overrides["max_slices"],
                     "slice_template": st,
                     "worker": {
@@ -738,7 +738,7 @@ def _expand_multi_zone_groups(data: dict) -> None:
     - name suffixed with -{zone} (e.g. tpu_v5e_16-europe-west4-b)
     - slice_template.gcp.zone set to the zone
     - worker.attributes.zone and worker.attributes.region set automatically
-    - min_slices defaulted to 0 if not explicitly set
+    - buffer_slices defaulted to 0 if not explicitly set
 
     Also merges all expanded zones into platform.gcp.zones.
 
@@ -832,8 +832,8 @@ def _expand_multi_zone_groups(data: dict) -> None:
             attrs[WellKnownAttribute.ZONE] = zone
             attrs[WellKnownAttribute.REGION] = region
 
-            if "min_slices" not in expanded_sg:
-                expanded_sg["min_slices"] = 0
+            if "buffer_slices" not in expanded_sg:
+                expanded_sg["buffer_slices"] = 0
 
             expanded[expanded_name] = expanded_sg
             all_expanded_zones.add(zone)
@@ -1282,7 +1282,7 @@ def create_autoscaler(
     """
     # Local import: controller modules import config.py, creating a circular dependency.
     from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.scaling_group import (
+    from iris.cluster.controller.autoscaler.scaling_group import (
         DEFAULT_SCALE_DOWN_RATE_LIMIT,
         DEFAULT_SCALE_UP_RATE_LIMIT,
         ScalingGroup,
@@ -1313,13 +1313,13 @@ def create_autoscaler(
         slice_template = group_config.slice_template
         cw_instance = slice_template.coreweave.instance_type if slice_template.HasField("coreweave") else ""
         logger.info(
-            "Scale group %s: device=%s:%s device_count=%d num_vms=%d min=%d max=%d instance=%s worker_attrs=%s",
+            "Scale group %s: device=%s:%s device_count=%d num_vms=%d buffer=%d max=%d instance=%s worker_attrs=%s",
             name,
             resources.device_type,
             resources.device_variant,
             resources.device_count,
             group_config.num_vms,
-            group_config.min_slices,
+            group_config.buffer_slices,
             group_config.max_slices,
             cw_instance or "n/a",
             worker_attrs or "none",

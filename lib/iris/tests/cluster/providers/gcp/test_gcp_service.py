@@ -13,10 +13,12 @@ These tests cover:
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
-from iris.cluster.providers.gcp.service import TpuCreateRequest, VmCreateRequest
+from iris.cluster.providers.gcp.service import CloudGcpService, TpuCreateRequest, VmCreateRequest
 from iris.rpc import config_pb2
 from iris.cluster.providers.types import InfraError, QuotaExhaustedError, ResourceNotFoundError
 from iris.cluster.service_mode import ServiceMode
@@ -333,3 +335,70 @@ def test_vm_update_labels_nonexistent_raises(svc: InMemoryGcpService) -> None:
 def test_vm_set_metadata_nonexistent_raises(svc: InMemoryGcpService) -> None:
     with pytest.raises(InfraError, match="not found"):
         svc.vm_set_metadata("no-vm", "us-central2-b", {"k": "v"})
+
+
+# ========================================================================
+# Zone extraction from full resource names (wildcard listing)
+# When zones=[] the GCP API is called with locations/- and the real zone
+# must be parsed from the returned full resource name, not left as "-".
+# ========================================================================
+
+
+def test_queued_resource_list_extracts_zone_from_wildcard() -> None:
+    """queued_resource_list must parse the real zone from the full resource name."""
+    svc = CloudGcpService(project_id="test-project")
+
+    fake_qr = MagicMock()
+    fake_qr.name = "projects/test-project/locations/us-central2-b/queuedResources/my-reserved-tpu"
+    fake_qr.state.state.name = "PROVISIONING"
+    fake_qr.tpu.node_spec = []
+
+    mock_client = MagicMock()
+    mock_client.list_queued_resources.return_value = [fake_qr]
+    svc._tpu_alpha_client_cached = mock_client
+
+    results = svc.queued_resource_list(zones=[])
+
+    assert len(results) == 1
+    assert results[0].name == "my-reserved-tpu"
+    assert results[0].zone == "us-central2-b"
+
+
+def test_queued_resource_list_preserves_explicit_zone() -> None:
+    """queued_resource_list must not override zone when one is explicitly provided."""
+    svc = CloudGcpService(project_id="test-project")
+
+    fake_qr = MagicMock()
+    fake_qr.name = "projects/test-project/locations/us-central2-b/queuedResources/my-reserved-tpu"
+    fake_qr.state.state.name = "PROVISIONING"
+    fake_qr.tpu.node_spec = []
+
+    mock_client = MagicMock()
+    mock_client.list_queued_resources.return_value = [fake_qr]
+    svc._tpu_alpha_client_cached = mock_client
+
+    results = svc.queued_resource_list(zones=["us-central2-b"])
+
+    assert len(results) == 1
+    assert results[0].zone == "us-central2-b"
+
+
+def test_tpu_list_extracts_zone_from_wildcard() -> None:
+    """tpu_list must parse the real zone from the full resource name."""
+    svc = CloudGcpService(project_id="test-project")
+
+    fake_tpu = {
+        "name": "projects/test-project/locations/us-central2-b/nodes/my-tpu",
+        "state": "READY",
+        "acceleratorType": "v4-8",
+        "runtimeVersion": "tpu-ubuntu2204-base",
+        "labels": {},
+        "networkEndpoints": [],
+    }
+
+    with patch.object(svc, "_paginate", return_value=[fake_tpu]):
+        results = svc.tpu_list(zones=[])
+
+    assert len(results) == 1
+    assert results[0].name == "my-tpu"
+    assert results[0].zone == "us-central2-b"

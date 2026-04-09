@@ -16,13 +16,20 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
 
-import kubernetes
-import kubernetes.client
-import kubernetes.config
-import kubernetes.stream
-from kubernetes.client.exceptions import ApiException
-from kubernetes.dynamic import DynamicClient
-from kubernetes.dynamic.exceptions import NotFoundError
+try:
+    import kubernetes
+    import kubernetes.client
+    import kubernetes.config
+    import kubernetes.stream
+    from kubernetes.client.exceptions import ApiException
+    from kubernetes.dynamic import DynamicClient
+    from kubernetes.dynamic.exceptions import NotFoundError
+except ImportError:
+    kubernetes = None  # type: ignore[assignment]
+    ApiException = Exception  # type: ignore[assignment,misc]
+    NotFoundError = Exception  # type: ignore[assignment,misc]
+    DynamicClient = None  # type: ignore[assignment,misc]
+
 
 from iris.cluster.providers.k8s.types import (
     ExecResult,
@@ -170,6 +177,8 @@ class CloudK8sService:
     _kubectl_prefix: list[str] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if kubernetes is None:
+            raise ImportError("Install iris[controller] to use CloudK8sService")
         if self.kubeconfig_path:
             self.kubeconfig_path = os.path.expanduser(self.kubeconfig_path)
             self._api_client = kubernetes.config.new_client_from_config(
@@ -182,6 +191,7 @@ class CloudK8sService:
             except kubernetes.config.ConfigException:
                 self._api_client = kubernetes.config.new_client_from_config()
 
+        assert DynamicClient is not None
         self._dyn = DynamicClient(self._api_client)
         self._core_v1 = kubernetes.client.CoreV1Api(self._api_client)
         self._custom = kubernetes.client.CustomObjectsApi(self._api_client)
@@ -202,6 +212,10 @@ class CloudK8sService:
         if resource.is_namespaced:
             return {"namespace": self.namespace}
         return {}
+
+    def _request_timeout_kwargs(self, timeout: float | None = None) -> dict:
+        """Return the default client request timeout kwargs for K8s API calls."""
+        return {"_request_timeout": timeout if timeout is not None else self.timeout}
 
     # -- apply ---------------------------------------------------------------
 
@@ -229,6 +243,7 @@ class CloudK8sService:
                         name=name,
                         field_manager="iris",
                         force_conflicts=True,
+                        **self._request_timeout_kwargs(),
                         **({"namespace": ns} if ns else {}),
                     )
             except ApiException as e:
@@ -238,11 +253,12 @@ class CloudK8sService:
         """Apply a Pod manifest. Pods are mostly immutable, so delete-then-create."""
         api = self._resource_api(res)
         ns_kw = {"namespace": ns} if ns else {}
+        timeout_kw = self._request_timeout_kwargs()
         try:
-            api.delete(name=name, **ns_kw)
+            api.delete(name=name, **timeout_kw, **ns_kw)
         except (NotFoundError, ApiException):
             pass
-        api.create(body=manifest, **ns_kw)
+        api.create(body=manifest, **timeout_kw, **ns_kw)
 
     # -- get -----------------------------------------------------------------
 
@@ -251,7 +267,11 @@ class CloudK8sService:
         logger.info("k8s: GET %s/%s", resource.plural, name)
         with slow_log(logger, f"get {resource.plural}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
-                result = self._resource_api(resource).get(name=name, **self._ns_kwargs(resource))
+                result = self._resource_api(resource).get(
+                    name=name,
+                    **self._request_timeout_kwargs(),
+                    **self._ns_kwargs(resource),
+                )
                 return result.to_dict()
             except NotFoundError:
                 return None
@@ -274,6 +294,7 @@ class CloudK8sService:
             kwargs["label_selector"] = _label_selector(labels)
         if field_selector:
             kwargs["field_selector"] = field_selector
+        kwargs.update(self._request_timeout_kwargs())
         with slow_log(logger, f"list {resource.plural}", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
                 result = self._resource_api(resource).get(**kwargs)
@@ -287,6 +308,7 @@ class CloudK8sService:
         """Delete a Kubernetes resource, ignoring NotFound errors."""
         logger.info("k8s: DELETE %s/%s force=%s wait=%s", resource.plural, name, force, wait)
         kwargs = self._ns_kwargs(resource)
+        kwargs.update(self._request_timeout_kwargs())
         body: dict = {}
         if force:
             body["gracePeriodSeconds"] = 0
@@ -319,6 +341,7 @@ class CloudK8sService:
         kwargs["label_selector"] = selector
         if not wait:
             kwargs["propagation_policy"] = "Background"
+        kwargs.update(self._request_timeout_kwargs())
         with slow_log(logger, f"delete_by_labels {resource.plural} -l {selector}", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
                 api = self._resource_api(resource)
@@ -352,6 +375,7 @@ class CloudK8sService:
                     body=patch_body,
                     name=name,
                     content_type="application/strategic-merge-patch+json",
+                    **self._request_timeout_kwargs(),
                     **self._ns_kwargs(resource),
                 )
             except ApiException as e:
@@ -380,6 +404,7 @@ class CloudK8sService:
                     body=patch_body,
                     name=name,
                     content_type="application/strategic-merge-patch+json",
+                    **self._request_timeout_kwargs(),
                     **self._ns_kwargs(resource),
                 )
             except ApiException as e:
@@ -575,6 +600,7 @@ class CloudK8sService:
                     namespace=self.namespace,
                     plural="pods",
                     name=pod_name,
+                    **self._request_timeout_kwargs(),
                 )
             except ApiException as e:
                 if e.status == 404:

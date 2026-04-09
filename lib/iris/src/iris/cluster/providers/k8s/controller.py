@@ -42,7 +42,7 @@ _KUBECTL_TIMEOUT = 1800.0
 
 _S3_SECRET_NAME = "iris-s3-credentials"
 _CONTROLLER_CPU_REQUEST = "4"
-_CONTROLLER_MEMORY_REQUEST = "4Gi"
+_CONTROLLER_MEMORY_REQUEST = "16Gi"
 
 
 # S3-compatible endpoints that require virtual-hosted-style addressing where the
@@ -544,7 +544,7 @@ class K8sControllerProvider:
             pool_name = self._nodepool_name(name)
             expected_names.add(pool_name)
             num_vms = max(1, sg.slice_template.num_vms)
-            min_nodes = sg.min_slices * num_vms
+            min_nodes = sg.buffer_slices * num_vms
             max_nodes = sg.max_slices * num_vms
             futures.append(
                 self._executor.submit(

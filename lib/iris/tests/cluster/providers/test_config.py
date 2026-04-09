@@ -58,7 +58,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 8
       capacity_type: preemptible
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 10
     slice_template:
       gcp:
@@ -169,7 +169,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 8
       capacity_type: preemptible
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 10
     slice_template:
       gcp:
@@ -185,7 +185,7 @@ scale_groups:
       device_variant: v5litepod-16
       device_count: 8
       capacity_type: preemptible
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 4
     slice_template:
       gcp:
@@ -300,7 +300,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 8
       capacity_type: preemptible
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 10
     slice_template:
       gcp:
@@ -342,7 +342,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 8
       capacity_type: preemptible
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 2
     slice_template:
       gcp:
@@ -438,7 +438,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 8
       capacity_type: preemptible
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 2
     slice_template:
       gcp:
@@ -628,7 +628,7 @@ scale_groups:
       device_variant: v5litepod-8
       device_count: 8
       capacity_type: preemptible
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 10
     slice_template:
       gcp:
@@ -682,7 +682,7 @@ scale_groups:
       device_type: cpu
       device_count: 0
       capacity_type: on-demand
-    min_slices: 2
+    buffer_slices: 2
     max_slices: 5
     priority: 50
     slice_template:
@@ -699,7 +699,7 @@ scale_groups:
       device_variant: v5litepod-16
       device_count: 8
       capacity_type: preemptible
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 3
     priority: 100
     slice_template:
@@ -716,14 +716,14 @@ scale_groups:
         # Verify other fields preserved
         cpu_group = local_config.scale_groups["cpu_group"]
         assert cpu_group.resources.device_type == config_pb2.ACCELERATOR_TYPE_CPU
-        assert cpu_group.min_slices == 2
+        assert cpu_group.buffer_slices == 2
         assert cpu_group.max_slices == 5
         assert cpu_group.priority == 50
 
         tpu_group = local_config.scale_groups["tpu_group"]
         assert tpu_group.resources.device_type == config_pb2.ACCELERATOR_TYPE_TPU
         assert tpu_group.resources.device_variant == "v5litepod-16"
-        assert tpu_group.min_slices == 1
+        assert tpu_group.buffer_slices == 1
         assert tpu_group.max_slices == 3
         assert tpu_group.priority == 100
 
@@ -1105,14 +1105,14 @@ scale_groups:
         assert eu.slice_template.gcp.zone == "europe-west4-b"
         assert eu.worker.attributes[WellKnownAttribute.ZONE] == "europe-west4-b"
         assert eu.worker.attributes[WellKnownAttribute.REGION] == "europe-west4"
-        assert eu.min_slices == 0
+        assert eu.buffer_slices == 0
 
         us = config.scale_groups["tpu_v5e_16-us-west4-a"]
         assert us.slice_template.gcp.zone == "us-west4-a"
         assert us.worker.attributes[WellKnownAttribute.ZONE] == "us-west4-a"
         assert us.worker.attributes[WellKnownAttribute.REGION] == "us-west4"
 
-    def test_min_slices_preserved_when_explicit(self, tmp_path: Path):
+    def test_buffer_slices_preserved_when_explicit(self, tmp_path: Path):
         config_content = """\
 platform:
   gcp:
@@ -1126,7 +1126,7 @@ scale_groups:
   tpu_group:
     zones: [us-west4-a]
     num_vms: 1
-    min_slices: 2
+    buffer_slices: 2
     resources:
       cpu: 8
       ram: 16GB
@@ -1142,7 +1142,7 @@ scale_groups:
         p = tmp_path / "config.yaml"
         p.write_text(config_content)
         config = load_config(p)
-        assert config.scale_groups["tpu_group-us-west4-a"].min_slices == 2
+        assert config.scale_groups["tpu_group-us-west4-a"].buffer_slices == 2
 
     def test_groups_without_zones_unchanged(self, tmp_path: Path):
         config_content = """\
@@ -1166,7 +1166,7 @@ scale_groups:
       device_variant: v5litepod-4
       device_count: 1
       capacity_type: preemptible
-    min_slices: 1
+    buffer_slices: 1
     slice_template:
       gcp:
         zone: us-west4-a
@@ -1176,7 +1176,7 @@ scale_groups:
         p.write_text(config_content)
         config = load_config(p)
         assert "static_group" in config.scale_groups
-        assert config.scale_groups["static_group"].min_slices == 1
+        assert config.scale_groups["static_group"].buffer_slices == 1
 
     def test_zones_auto_populated_in_platform(self, tmp_path: Path):
         config_content = """\
@@ -1496,7 +1496,7 @@ v5e-preempt:
         service_account: test@test.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
-      4:  { min_slices: 3, max_slices: 1024 }
+      4:  { buffer_slices: 3, max_slices: 1024 }
       16: { max_slices: 256 }"""
         p = tmp_path / "config.yaml"
         p.write_text(self._BASE.format(pool_yaml=pool_yaml))
@@ -1514,7 +1514,7 @@ v5e-preempt:
         assert g4eu.priority == 10  # base_priority + 0*10
         assert g4eu.quota_pool == "v5e-preempt/europe-west4-b"
         assert g4eu.allocation_tier == 1
-        assert g4eu.min_slices == 3
+        assert g4eu.buffer_slices == 3
         assert g4eu.max_slices == 1024
         assert g4eu.slice_template.gcp.zone == "europe-west4-b"
         assert g4eu.worker.attributes["zone"] == "europe-west4-b"
@@ -1528,7 +1528,7 @@ v5e-preempt:
         assert g16us.num_vms == 4
         assert g16us.priority == 20  # base_priority + 1*10
         assert g16us.allocation_tier == 2
-        assert g16us.min_slices == 0  # default
+        assert g16us.buffer_slices == 0  # default
         assert g16us.max_slices == 256
 
     def test_priority_override_per_size(self, tmp_path: Path):
@@ -1705,7 +1705,7 @@ tpu_pools:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
-      128: { min_slices: 1, max_slices: 4 }
+      128: { buffer_slices: 1, max_slices: 4 }
 """
         p = tmp_path / "config.yaml"
         p.write_text(config_content)
@@ -1837,7 +1837,7 @@ def _config_with_coreweave_gpu_sg(topology_attrs: dict[str, str] | None = None) 
     sg.resources.device_variant = "H100"
     sg.resources.device_count = 8
     sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
-    sg.min_slices = 0
+    sg.buffer_slices = 0
     sg.max_slices = 1
     sg.slice_template.num_vms = 2
     sg.slice_template.coreweave.region = "US-WEST-04A"
@@ -1886,7 +1886,7 @@ def test_smoke_gcp_config_boots_locally():
 
     with connect_cluster(config) as url:
         client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        # The smoke config has min_slices=1 for v5e-smoke/16 across 2 zones,
+        # The smoke config has buffer_slices=1 for v5e-smoke/16 across 2 zones,
         # each with num_vms=4 → 8 workers total.  We only need one healthy
         # worker to confirm the config boots.
 

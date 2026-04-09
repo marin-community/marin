@@ -3,7 +3,7 @@
 # Architecture: KubernetesProvider dispatches task pods directly to the k8s API.
 # No worker daemons are needed. CoreWeave NodePool autoscaling provisions nodes
 # on demand; when pods are deleted, NodePools scale to zero automatically.
-# CPU nodes are kept always-on (min_slices=2) for monitoring software.
+# CPU nodes are kept always-on (buffer_slices=2) for monitoring software.
 #
 # Workflow:
 #
@@ -85,7 +85,7 @@ scale_groups:
       attributes:
         region: US-WEST-04A
         pool: cpu-erapids
-    min_slices: 1
+    buffer_slices: 1
     max_slices: 4
     priority: 50
     slice_template:
@@ -108,7 +108,7 @@ scale_groups:
       attributes:
         region: US-WEST-04A
         pool: h100-8x
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 8
     priority: 100
     slice_template:

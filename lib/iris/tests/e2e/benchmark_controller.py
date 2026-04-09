@@ -127,7 +127,7 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
         sg = config.scale_groups[sg_name]
         sg.name = sg_name
         sg.num_vms = num_vms
-        sg.min_slices = count
+        sg.buffer_slices = count
         sg.max_slices = count
         sg.resources.cpu_millicores = int(float(cpu) * 1000)
         sg.resources.memory_bytes = _parse_size(memory)
@@ -368,7 +368,7 @@ def _make_single_worker_config() -> config_pb2.IrisClusterConfig:
     sg = config.scale_groups["local-cpu"]
     sg.name = "local-cpu"
     sg.num_vms = 1
-    sg.min_slices = 1
+    sg.buffer_slices = 1
     sg.max_slices = 1
     sg.resources.cpu_millicores = 128 * 1000
     sg.resources.memory_bytes = 256 * 1024**3
