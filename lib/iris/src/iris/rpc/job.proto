@@ -323,7 +323,7 @@ message JobStatus {
   // Diagnostic message for pending/failed jobs (e.g., "No workers match constraint: gpu=true")
   string pending_reason = 31;
 
-  // True if this job has child jobs (for lazy-loading in the dashboard).
+  // Whether this job currently has direct child jobs.
   bool has_children = 32;
 }
 

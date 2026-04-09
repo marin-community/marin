@@ -22,12 +22,22 @@ def job_state_name(state: int) -> str:
         return f"UNKNOWN({state})"
 
 
+def job_state_friendly(state: int) -> str:
+    """Return human-friendly lowercase name like 'running'."""
+    return job_state_name(state).removeprefix("JOB_STATE_").lower()
+
+
 def task_state_name(state: int) -> str:
     """Return enum name like 'TASK_STATE_RUNNING'."""
     try:
         return job_pb2.TaskState.Name(state)
     except ValueError:
         return f"UNKNOWN({state})"
+
+
+def task_state_friendly(state: int) -> str:
+    """Return human-friendly lowercase name like 'running'."""
+    return task_state_name(state).removeprefix("TASK_STATE_").lower()
 
 
 def accelerator_type_name(accel_type: int) -> str:

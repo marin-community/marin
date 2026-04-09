@@ -15,7 +15,6 @@ import time
 from dataclasses import dataclass, field
 
 import huggingface_hub
-from huggingface_hub import HfFileSystem
 from rigging.filesystem import open_url, url_to_fs
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
@@ -72,6 +71,10 @@ class DownloadConfig:
 
     read_chunk_size_mib: int = 8
     """Chunk size for each streaming read from HF."""
+
+    source_url_override: str | None = None
+    """Optional fsspec URL to read from instead of HuggingFace. Bypasses HF-specific
+    listing and revision handling; mainly intended for hermetic tests."""
 
 
 def _strip_hf_protocol(path: str) -> str:
@@ -158,7 +161,6 @@ def stream_file_to_fsspec(
         expected_size: Expected file size in bytes for validation. If provided,
             the download will fail if the downloaded size doesn't match.
     """
-    hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
     target_fs, _ = url_to_fs(gcs_output_path)
     chunk_size = max(1, int(read_chunk_size_mib)) * 1024 * 1024
     max_retries = 20
@@ -178,7 +180,7 @@ def stream_file_to_fsspec(
                 socket.setdefaulttimeout(read_timeout_seconds)
                 try:
                     with (
-                        hf_fs.open(file_path, "rb", block_size=chunk_size) as src_file,
+                        open_url(file_path, "rb", block_size=chunk_size) as src_file,
                         open_url(temp_path, "wb") as dest_file,
                     ):
                         start_time = time.monotonic()
@@ -267,21 +269,27 @@ def download_hf(cfg: DownloadConfig) -> None:
         logger.exception(f"Output path validation failed: {e}")
         raise e
 
-    # Initialize Hugging Face filesystem
-    logger.info("Identifying files to download from HuggingFace...")
-    hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
-    hf_source_path = _resolve_hf_source_path(cfg)
-    _assert_bucket_support_available(hf_source_path)
+    # Resolve source URL and filesystem. For production this is an hf:// URL backed
+    # by HfFileSystem; tests can set source_url_override to a local/fsspec path.
+    logger.info("Identifying files to download...")
+    if cfg.source_url_override is not None:
+        source_url = cfg.source_url_override
+        source_fs, source_root = url_to_fs(source_url)
+        list_kwargs: dict = {}
+    else:
+        hf_source_path = _resolve_hf_source_path(cfg)
+        _assert_bucket_support_available(hf_source_path)
+        source_url = f"hf://{hf_source_path}"
+        source_fs, source_root = url_to_fs(source_url)
+        list_kwargs = {"revision": cfg.revision}
 
     if not cfg.hf_urls_glob:
-        # We get all the files using find
-        files = hf_fs.find(hf_source_path, revision=cfg.revision)
+        files = source_fs.find(source_root, **list_kwargs)
     else:
-        # Get list of files directly from HfFileSystem matching the pattern
         files = []
-        for hf_url_glob in cfg.hf_urls_glob:
-            pattern = os.path.join(hf_source_path, hf_url_glob)
-            files += hf_fs.glob(pattern, revision=cfg.revision)
+        for url_glob in cfg.hf_urls_glob:
+            pattern = os.path.join(source_root, url_glob)
+            files += source_fs.glob(pattern, **list_kwargs)
 
     if not files:
         raise ValueError(f"No files found for dataset `{cfg.hf_dataset_id}. Used glob patterns: {cfg.hf_urls_glob}")
@@ -291,7 +299,7 @@ def download_hf(cfg: DownloadConfig) -> None:
     file_sizes: dict[str, int | None] = {}
     for file in files:
         try:
-            info = hf_fs.info(file, revision=cfg.revision)
+            info = source_fs.info(file, **list_kwargs)
             file_sizes[file] = info.get("size") or None
         except Exception as e:
             logger.warning(f"Could not get size for {file}: {e}")
@@ -301,15 +309,18 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     for file in files:
         try:
-            relative_file_path = _relative_path_in_source(file, hf_source_path)
+            relative_file_path = _relative_path_in_source(file, source_root)
             if relative_file_path.startswith(".."):
                 raise ValueError(f"Computed path escapes source root: source={hf_source_path}, file={file}")
             fsspec_file_path = os.path.join(output_path, relative_file_path)
             expected_size = file_sizes.get(file)
+            # Fully-qualify the source URL so subprocess workers can open it via fsspec
+            # without having to reconstruct HfFileSystem / revision state.
+            worker_source_url = file if cfg.source_url_override is not None else f"hf://{file}"
             download_tasks.append(
                 (
                     output_path,
-                    file,
+                    worker_source_url,
                     fsspec_file_path,
                     expected_size,
                     cfg.read_timeout_seconds,

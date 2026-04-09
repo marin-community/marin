@@ -140,19 +140,45 @@ message Controller {
     SORT_DIRECTION_DESC = 2;
   }
 
-  message ListJobsRequest {
-    // Pagination
-    int32 offset = 1;   // Skip first N jobs (default: 0)
-    int32 limit = 2;    // Max jobs to return (default: 50, max: 500)
+  enum JobQueryScope {
+    JOB_QUERY_SCOPE_UNSPECIFIED = 0;
+    JOB_QUERY_SCOPE_ALL = 1;
+    JOB_QUERY_SCOPE_ROOTS = 2;
+    JOB_QUERY_SCOPE_CHILDREN = 3;
+  }
 
-    // Sorting (default: date descending)
+  message JobQuery {
+    // Ancestry scope. Defaults to JOB_QUERY_SCOPE_ALL (flat list, all depths).
+    JobQueryScope scope = 1;
+    // Required when scope == JOB_QUERY_SCOPE_CHILDREN; ignored otherwise.
+    string parent_job_id = 2;
+    // Substring match against job name (case-insensitive).
+    string name_filter = 3;
+    // Exact state name (e.g. "running"). Empty means all user-visible states.
+    string state_filter = 4;
+    JobSortField sort_field = 5;
+    SortDirection sort_direction = 6;
+    int32 offset = 7;
+    int32 limit = 8;  // Max jobs to return (default: 50, max: 500).
+  }
+
+  message ListJobsRequest {
+    // Preferred typed query shape. When set, legacy fields are ignored.
+    JobQuery query = 9;
+
+    // DEPRECATED: legacy flat query fields kept for rolling compatibility
+    // with older clients (e.g. iris.cluster.client.remote_client, CLI).
+    // The server normalizes these into `query` once at ingestion; do not
+    // read them elsewhere. Remove together with the normalization shim
+    // tracked in https://github.com/marin-community/marin/issues/4573
+    // (~2 weeks after the JobQuery rollout).
+    int32 offset = 1;
+    int32 limit = 2;
     JobSortField sort_field = 3;
     SortDirection sort_direction = 4;
-
-    // Filtering
-    string name_filter = 5;  // Filter by job name (substring match)
-    string state_filter = 6; // Filter by state (exact match, e.g., "running")
-    string parent_job_id = 7; // Filter to children of this job ID
+    string name_filter = 5;
+    string state_filter = 6;
+    string parent_job_id = 7;
   }
 
   message ListJobsResponse {

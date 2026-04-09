@@ -609,7 +609,12 @@ class ZephyrCoordinator:
                 return None
 
             if not self._task_queue:
-                if self._is_last_stage and not self._in_flight:
+                if self._is_last_stage:
+                    # No more work to hand out — exit immediately.  If an
+                    # in-flight worker crashes and its shard is requeued, Iris
+                    # restarts the worker which re-registers and picks it up.
+                    # _check_worker_group() detects permanent worker-job death
+                    # as a failsafe so we never deadlock.
                     self._worker_states[worker_id] = WorkerState.DEAD
                     return "SHUTDOWN"
                 return None

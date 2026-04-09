@@ -763,7 +763,7 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     result = coord.pull_task("worker-A")
     assert result is None
 
-    # Last stage: empty queue returns SHUTDOWN
+    # Last stage: single task, worker completes it, queue empty -> SHUTDOWN
     task2 = ShardTask(
         shard_idx=0,
         total_shards=1,
@@ -781,9 +781,24 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     result = coord.pull_task("worker-A")
     assert result == "SHUTDOWN"
 
+    # Last stage with in-flight tasks: idle workers still get SHUTDOWN
+    tasks_2 = [
+        ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test-last2")
+        for i in range(2)
+    ]
+    coord.start_stage("stage-2", tasks_2, is_last_stage=True)
+    coord.pull_task("worker-A")  # task 0 in-flight
+    # Queue has one task left; worker-B takes it
+    coord.pull_task("worker-B")  # task 1 in-flight
+    # Queue empty, tasks in-flight -> SHUTDOWN (workers exit immediately)
+    result = coord.pull_task("worker-C")
+    assert result == "SHUTDOWN"
 
-def test_last_shard_requeued_after_worker_crash(actor_context, tmp_path):
-    """Surviving workers pick up requeued shards after a crash on the last stage. #4200."""
+
+def test_last_stage_deadlock_detected_when_worker_job_dies(actor_context, tmp_path):
+    """Coordinator aborts if the worker job dies while last-stage work is outstanding."""
+    from unittest.mock import MagicMock
+
     from zephyr.execution import ListShard, ShardTask, TaskResult, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
@@ -795,29 +810,40 @@ def test_last_shard_requeued_after_worker_crash(actor_context, tmp_path):
     ]
     coord.start_stage("last-stage", tasks, is_last_stage=True)
 
+    # Set up a mock worker group so _check_worker_group can query it.
+    mock_group = MagicMock()
+    mock_group.is_done.return_value = False
+    coord.set_worker_group(mock_group)
+
+    # Two workers pull both tasks.
     coord.heartbeat("worker-A")
     coord.heartbeat("worker-B")
     pulled_a = coord.pull_task("worker-A")
-    coord.pull_task("worker-B")  # put shard 1 in-flight
+    coord.pull_task("worker-B")
 
-    # Worker A finishes
+    # Worker A finishes → gets SHUTDOWN (queue empty, last stage).
     _task_a, attempt_a, _ = pulled_a
     coord.report_result(
         "worker-A", _task_a.shard_idx, attempt_a, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
     )
-
-    # Worker B crashes. Freshen worker-A, expire worker-B.
-    coord.heartbeat("worker-A")
-    coord.check_heartbeats(timeout=0)
-
-    # Worker A picks up the requeued shard and completes the pipeline.
-    pulled = coord.pull_task("worker-A")
-    assert pulled not in (None, "SHUTDOWN")
-    _task, attempt, _ = pulled
-    coord.report_result(
-        "worker-A", _task.shard_idx, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
-    )
     assert coord.pull_task("worker-A") == "SHUTDOWN"
+
+    # Worker B crashes → heartbeat timeout → shard 1 requeued.
+    coord._last_seen["worker-B"] = coord._last_seen["worker-B"] - 200
+    coord.check_heartbeats(timeout=10)
+    assert len(coord._task_queue) == 1
+
+    # Worker job is still running — no abort yet.
+    coord._check_worker_group()
+    assert coord._fatal_error is None
+
+    # Worker job dies permanently (Iris exhausted retries).
+    mock_group.is_done.return_value = True
+    coord._check_worker_group()
+
+    # Coordinator should detect the deadlock and abort.
+    assert coord._fatal_error is not None
+    assert "terminated permanently" in coord._fatal_error
 
 
 def test_coordinator_loop_crash_aborts_pipeline(actor_context, tmp_path):
