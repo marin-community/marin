@@ -207,6 +207,7 @@ jobs:
           chmod 777 /tmp/uv-cache
 
           # Run Levanter tests with specific JAX version
+          # TPU collection imports call jax.devices(), so keep pytest single-process here.
           docker run --rm \
             --device /dev/vfio:/dev/vfio \
             --shm-size=100g \
@@ -239,7 +240,7 @@ jobs:
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
               timeout --kill-after=5 --signal=TERM 890 \
               uv run --package levanter --frozen --group test --with 'jax[tpu]==$JAX_VERSION' \
-              pytest lib/levanter/tests \
+              pytest -n 0 lib/levanter/tests \
               -m 'not entry and not ray and not slow and not torch' \
               --ignore=lib/levanter/tests/test_audio.py \
               --ignore=lib/levanter/tests/test_new_cache.py \

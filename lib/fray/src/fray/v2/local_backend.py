@@ -291,6 +291,10 @@ class LocalActorMethod:
         thread.start()
         return future
 
+    def submit(self, *args: Any, **kwargs: Any) -> ActorFuture:
+        """Long-running operation path. Same as remote() for local backend."""
+        return self.remote(*args, **kwargs)
+
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Call method synchronously."""
         return self._method(*args, **kwargs)

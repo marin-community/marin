@@ -19,11 +19,13 @@ import logging
 import os
 import pickle
 import re
+import sys
 from datetime import datetime, timezone
 import threading
 import time
 import uuid
 from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
@@ -452,6 +454,8 @@ class ZephyrCoordinator:
         last_log_time = 0.0
 
         while not self._shutdown_event.is_set():
+            if sys.is_finalizing():
+                return
             try:
                 self.check_heartbeats()
                 self._check_worker_group()
@@ -461,6 +465,8 @@ class ZephyrCoordinator:
                     self._log_status()
                     last_log_time = now
             except Exception:
+                if sys.is_finalizing():
+                    return
                 logger.exception("Coordinator loop crashed, aborting pipeline")
                 self.abort("Coordinator loop crashed unexpectedly")
                 return
@@ -821,10 +827,17 @@ class ZephyrCoordinator:
                     scatter_manifest_dir=f"{self._chunk_prefix}/{self._execution_id}/{output_stage_name}",
                 )
 
-            # Flatten final results
+            # Flatten final results — each shard may involve I/O (unpickling from
+            # remote storage), so parallelize across shards with a thread pool.
+            def _materialize_shard(shard):
+                return list(shard)
+
+            with ThreadPoolExecutor(max_workers=min(32, len(shards))) as flatten_pool:
+                materialized = flatten_pool.map(_materialize_shard, shards)
+
             flat_result = []
-            for shard in shards:
-                flat_result.extend(shard)
+            for items in materialized:
+                flat_result.extend(items)
 
             # Signal workers to shut down now that all stages are complete.
             self.shutdown()
@@ -1338,7 +1351,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
         coordinator.set_worker_group.remote(worker_group).result()
 
     try:
-        results = coordinator.run_pipeline.remote(config.plan, config.execution_id).result()
+        results = coordinator.run_pipeline.submit(config.plan, config.execution_id).result()
 
         ensure_parent_dir(result_path)
         with open_url(result_path, "wb") as f:
@@ -1559,7 +1572,7 @@ class ZephyrContext:
                 backoff.reset()
                 logger.info("Coordinator job submitted: %s (job_id=%s)", job_name, self._coordinator_job.job_id)
 
-                self._coordinator_job.wait(raise_on_failure=True)
+                self._coordinator_job.wait(timeout=None, raise_on_failure=True)
 
                 # Read results written by the coordinator job.
                 # This must succeed — the job completed successfully.

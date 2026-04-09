@@ -127,7 +127,7 @@ class FakeWorkerHandle:
     def reboot(self) -> None:
         pass
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         self.terminated = True
 
     def set_labels(self, labels: dict[str, str]) -> None:

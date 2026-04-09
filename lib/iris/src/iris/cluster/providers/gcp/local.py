@@ -162,7 +162,7 @@ class LocalSliceHandle:
         ]
         return SliceStatus(state=CloudSliceState.READY, worker_count=len(self._vm_ids), workers=workers)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         if self._terminated:
             return
         self._terminated = True

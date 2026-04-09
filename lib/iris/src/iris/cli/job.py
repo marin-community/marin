@@ -43,30 +43,30 @@ from iris.cluster.types import (
     gpu_device,
     tpu_device,
 )
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
 from iris.time_proto import timestamp_from_proto
 from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
-_STATE_MAP: dict[str, cluster_pb2.JobState] = {
-    "pending": cluster_pb2.JOB_STATE_PENDING,
-    "building": cluster_pb2.JOB_STATE_BUILDING,
-    "running": cluster_pb2.JOB_STATE_RUNNING,
-    "succeeded": cluster_pb2.JOB_STATE_SUCCEEDED,
-    "failed": cluster_pb2.JOB_STATE_FAILED,
-    "killed": cluster_pb2.JOB_STATE_KILLED,
-    "worker_failed": cluster_pb2.JOB_STATE_WORKER_FAILED,
-    "unschedulable": cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+_STATE_MAP: dict[str, job_pb2.JobState] = {
+    "pending": job_pb2.JOB_STATE_PENDING,
+    "building": job_pb2.JOB_STATE_BUILDING,
+    "running": job_pb2.JOB_STATE_RUNNING,
+    "succeeded": job_pb2.JOB_STATE_SUCCEEDED,
+    "failed": job_pb2.JOB_STATE_FAILED,
+    "killed": job_pb2.JOB_STATE_KILLED,
+    "worker_failed": job_pb2.JOB_STATE_WORKER_FAILED,
+    "unschedulable": job_pb2.JOB_STATE_UNSCHEDULABLE,
 }
 
 
-def _job_state_name(state: cluster_pb2.JobState) -> str:
-    return cluster_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
+def _job_state_name(state: job_pb2.JobState) -> str:
+    return job_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
 
 
-def _format_resources(resources: cluster_pb2.ResourceSpecProto | None) -> str:
+def _format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
     """Format job resources as a compact human-readable string."""
     if not resources:
         return "-"
@@ -583,7 +583,7 @@ def _submit_and_wait_job(
         try:
             status = job.wait(stream_logs=True, timeout=float("inf"))
             logger.info(f"Job completed with state: {status.state}")
-            return 0 if status.state == cluster_pb2.JOB_STATE_SUCCEEDED else 1
+            return 0 if status.state == job_pb2.JOB_STATE_SUCCEEDED else 1
         except JobFailedError as e:
             logger.error(f"Job failed: {e}")
             return 1
@@ -790,7 +790,7 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
     controller_url = require_controller_url(ctx)
     client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
 
-    states: list[cluster_pb2.JobState] | None = None
+    states: list[job_pb2.JobState] | None = None
     if state is not None:
         state_lower = state.lower()
         if state_lower not in _STATE_MAP:
@@ -853,6 +853,13 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
 )
 @click.option("--follow", "-f", is_flag=True, help="Stream logs continuously.")
 @click.option(
+    "--max-lines",
+    type=int,
+    default=0,
+    help="Maximum number of log lines to return (0 = server default, currently 1000).",
+)
+@click.option("--tail", is_flag=True, help="Return the most recent lines instead of the earliest.")
+@click.option(
     "--level",
     type=click.Choice(["debug", "info", "warning", "error", "critical"], case_sensitive=False),
     default=None,
@@ -865,6 +872,8 @@ def logs(
     since_ms: int | None,
     since_seconds: int | None,
     follow: bool,
+    max_lines: int,
+    tail: bool,
     level: str | None,
 ) -> None:
     """Stream task logs for a job using batch log fetching."""
@@ -888,6 +897,7 @@ def logs(
             stream_logs=True,
             timeout=float("inf"),
             raise_on_failure=False,
+            since_ms=start_since_ms,
             min_level=min_level,
         )
         return
@@ -895,6 +905,8 @@ def logs(
     entries = client.fetch_task_logs(
         job_name,
         start=Timestamp.from_ms(start_since_ms) if start_since_ms > 0 else None,
+        max_lines=max_lines,
+        tail=tail,
         min_level=min_level,
     )
     for entry in entries:

@@ -64,7 +64,9 @@ class SimpleDPOConfig:
 
     steps_per_eval: int | None = None
     """None auto-schedules validation five times: before training, three interior points, and at the end."""
-    steps_per_checkpoint: int = 1000
+    steps_per_checkpoint: int | None = None
+    """How often to keep a permanent checkpoint. None (default) keeps only the final
+    checkpoint; rolling temporary checkpoints are still written for resumption."""
     steps_per_hf_export: int = 500
     hf_save_dtype: str | None = None
     hf_generation_eos_token_ids: list[int] | None = None
@@ -88,3 +90,5 @@ class SimpleDPOConfig:
             raise ValueError(f"num_epochs must be positive, got {self.num_epochs}")
         if self.steps_per_eval is not None and self.steps_per_eval <= 0:
             raise ValueError(f"steps_per_eval must be positive, got {self.steps_per_eval}")
+        if self.steps_per_checkpoint is not None and self.steps_per_checkpoint <= 0:
+            raise ValueError(f"steps_per_checkpoint must be positive, got {self.steps_per_checkpoint}")

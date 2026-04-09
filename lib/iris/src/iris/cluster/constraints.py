@@ -24,7 +24,8 @@ from dataclasses import dataclass
 from enum import Enum, IntEnum, StrEnum
 from typing import Any, ClassVar
 
-from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc import config_pb2
+from iris.rpc import job_pb2
 
 
 class WellKnownAttribute(StrEnum):
@@ -44,7 +45,7 @@ class WellKnownAttribute(StrEnum):
 
 
 # ---------------------------------------------------------------------------
-# Step 1 types: core constraint primitives (depend only on cluster_pb2)
+# Step 1 types: core constraint primitives (depend only on job_pb2)
 # ---------------------------------------------------------------------------
 
 
@@ -56,7 +57,7 @@ class DeviceType(Enum):
     TPU = "tpu"
 
 
-def get_device_type_enum(device: cluster_pb2.DeviceConfig) -> DeviceType:
+def get_device_type_enum(device: job_pb2.DeviceConfig) -> DeviceType:
     """Extract device type as enum from DeviceConfig."""
     if device.HasField("gpu"):
         return DeviceType.GPU
@@ -65,7 +66,7 @@ def get_device_type_enum(device: cluster_pb2.DeviceConfig) -> DeviceType:
     return DeviceType.CPU
 
 
-def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
+def get_device_type(device: job_pb2.DeviceConfig) -> str:
     """Extract device type from DeviceConfig."""
     if device.HasField("cpu"):
         return "cpu"
@@ -76,7 +77,7 @@ def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
     return "cpu"
 
 
-def get_device_variant(device: cluster_pb2.DeviceConfig) -> str | None:
+def get_device_variant(device: job_pb2.DeviceConfig) -> str | None:
     """Extract device variant (e.g., GPU model) from DeviceConfig."""
     if device.HasField("gpu"):
         return device.gpu.variant if device.gpu.variant else None
@@ -95,9 +96,9 @@ class AttributeValue:
 
     value: str | int | float
 
-    def to_proto(self) -> cluster_pb2.AttributeValue:
+    def to_proto(self) -> job_pb2.AttributeValue:
         """Convert to protobuf representation."""
-        proto = cluster_pb2.AttributeValue()
+        proto = job_pb2.AttributeValue()
         if isinstance(self.value, str):
             proto.string_value = self.value
         elif isinstance(self.value, int):
@@ -107,7 +108,7 @@ class AttributeValue:
         return proto
 
     @staticmethod
-    def from_proto(proto: cluster_pb2.AttributeValue) -> AttributeValue:
+    def from_proto(proto: job_pb2.AttributeValue) -> AttributeValue:
         """Convert from protobuf representation."""
         if proto.HasField("string_value"):
             return AttributeValue(proto.string_value)
@@ -144,18 +145,18 @@ class ConstraintOp(IntEnum):
     LE = 7
     IN = 8
 
-    def to_proto(self) -> cluster_pb2.ConstraintOp:
+    def to_proto(self) -> job_pb2.ConstraintOp:
         """Convert to protobuf ConstraintOp enum value."""
         mapping = {
-            ConstraintOp.EQ: cluster_pb2.CONSTRAINT_OP_EQ,
-            ConstraintOp.NE: cluster_pb2.CONSTRAINT_OP_NE,
-            ConstraintOp.EXISTS: cluster_pb2.CONSTRAINT_OP_EXISTS,
-            ConstraintOp.NOT_EXISTS: cluster_pb2.CONSTRAINT_OP_NOT_EXISTS,
-            ConstraintOp.GT: cluster_pb2.CONSTRAINT_OP_GT,
-            ConstraintOp.GE: cluster_pb2.CONSTRAINT_OP_GE,
-            ConstraintOp.LT: cluster_pb2.CONSTRAINT_OP_LT,
-            ConstraintOp.LE: cluster_pb2.CONSTRAINT_OP_LE,
-            ConstraintOp.IN: cluster_pb2.CONSTRAINT_OP_IN,
+            ConstraintOp.EQ: job_pb2.CONSTRAINT_OP_EQ,
+            ConstraintOp.NE: job_pb2.CONSTRAINT_OP_NE,
+            ConstraintOp.EXISTS: job_pb2.CONSTRAINT_OP_EXISTS,
+            ConstraintOp.NOT_EXISTS: job_pb2.CONSTRAINT_OP_NOT_EXISTS,
+            ConstraintOp.GT: job_pb2.CONSTRAINT_OP_GT,
+            ConstraintOp.GE: job_pb2.CONSTRAINT_OP_GE,
+            ConstraintOp.LT: job_pb2.CONSTRAINT_OP_LT,
+            ConstraintOp.LE: job_pb2.CONSTRAINT_OP_LE,
+            ConstraintOp.IN: job_pb2.CONSTRAINT_OP_IN,
         }
         return mapping[self]
 
@@ -184,15 +185,15 @@ class Constraint:
     op: ConstraintOp
     value: str | int | float | None = None
     values: tuple[str | int | float, ...] | None = None
-    mode: int = cluster_pb2.CONSTRAINT_MODE_REQUIRED
+    mode: int = job_pb2.CONSTRAINT_MODE_REQUIRED
 
     @property
     def is_soft(self) -> bool:
-        return self.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED
+        return self.mode == job_pb2.CONSTRAINT_MODE_PREFERRED
 
-    def to_proto(self) -> cluster_pb2.Constraint:
+    def to_proto(self) -> job_pb2.Constraint:
         """Convert to protobuf representation."""
-        proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto(), mode=self.mode)
+        proto = job_pb2.Constraint(key=self.key, op=self.op.to_proto(), mode=self.mode)
         if self.value is not None:
             proto.value.CopyFrom(AttributeValue(self.value).to_proto())
         if self.values is not None:
@@ -201,7 +202,7 @@ class Constraint:
         return proto
 
     @staticmethod
-    def from_proto(proto: cluster_pb2.Constraint) -> Constraint:
+    def from_proto(proto: job_pb2.Constraint) -> Constraint:
         """Convert from protobuf representation."""
         op = ConstraintOp(proto.op)
         value: str | int | float | None = None
@@ -235,7 +236,7 @@ def preemptible_constraint(preemptible: bool = True, soft: bool | None = None) -
     if soft is None:
         # preemptible=True is a preference (soft), preemptible=False is a requirement (hard)
         soft = preemptible
-    mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED if soft else cluster_pb2.CONSTRAINT_MODE_REQUIRED
+    mode = job_pb2.CONSTRAINT_MODE_PREFERRED if soft else job_pb2.CONSTRAINT_MODE_REQUIRED
     return Constraint(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value=str(preemptible).lower(), mode=mode)
 
 
@@ -410,7 +411,7 @@ def _extract_device_type(constraints: list[Constraint]) -> DeviceType | None:
         raise ValueError(f"unknown device type: {raw}") from e
 
 
-def extract_placement_requirements(constraints: Sequence[cluster_pb2.Constraint]) -> PlacementRequirements:
+def extract_placement_requirements(constraints: Sequence[job_pb2.Constraint]) -> PlacementRequirements:
     """Extract canonical placement requirements from protobuf constraints.
 
     Parses proto constraints once, groups by key, then extracts each field
@@ -499,35 +500,35 @@ class ConstraintDescriptor:
 # --- Extract functions ---
 
 
-def _extract_string(constraint: cluster_pb2.Constraint) -> str:
+def _extract_string(constraint: job_pb2.Constraint) -> str:
     return constraint.value.string_value.strip()
 
 
-def _extract_string_lower(constraint: cluster_pb2.Constraint) -> str:
+def _extract_string_lower(constraint: job_pb2.Constraint) -> str:
     return constraint.value.string_value.strip().lower()
 
 
-def _extract_bool_string(constraint: cluster_pb2.Constraint) -> str:
+def _extract_bool_string(constraint: job_pb2.Constraint) -> str:
     return constraint.value.string_value.strip().lower()
 
 
-def _extract_int(constraint: cluster_pb2.Constraint) -> int:
+def _extract_int(constraint: job_pb2.Constraint) -> int:
     return constraint.value.int_value
 
 
-_EQ_IN = frozenset({cluster_pb2.CONSTRAINT_OP_EQ, cluster_pb2.CONSTRAINT_OP_IN})
-_EQ_ONLY = frozenset({cluster_pb2.CONSTRAINT_OP_EQ})
+_EQ_IN = frozenset({job_pb2.CONSTRAINT_OP_EQ, job_pb2.CONSTRAINT_OP_IN})
+_EQ_ONLY = frozenset({job_pb2.CONSTRAINT_OP_EQ})
 _ALL_OPS = frozenset(
     {
-        cluster_pb2.CONSTRAINT_OP_EQ,
-        cluster_pb2.CONSTRAINT_OP_NE,
-        cluster_pb2.CONSTRAINT_OP_EXISTS,
-        cluster_pb2.CONSTRAINT_OP_NOT_EXISTS,
-        cluster_pb2.CONSTRAINT_OP_GT,
-        cluster_pb2.CONSTRAINT_OP_GE,
-        cluster_pb2.CONSTRAINT_OP_LT,
-        cluster_pb2.CONSTRAINT_OP_LE,
-        cluster_pb2.CONSTRAINT_OP_IN,
+        job_pb2.CONSTRAINT_OP_EQ,
+        job_pb2.CONSTRAINT_OP_NE,
+        job_pb2.CONSTRAINT_OP_EXISTS,
+        job_pb2.CONSTRAINT_OP_NOT_EXISTS,
+        job_pb2.CONSTRAINT_OP_GT,
+        job_pb2.CONSTRAINT_OP_GE,
+        job_pb2.CONSTRAINT_OP_LT,
+        job_pb2.CONSTRAINT_OP_LE,
+        job_pb2.CONSTRAINT_OP_IN,
     }
 )
 
@@ -679,7 +680,7 @@ INHERITED_CONSTRAINT_KEYS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 
-def constraints_from_resources(resources: cluster_pb2.ResourceSpecProto) -> list[Constraint]:
+def constraints_from_resources(resources: job_pb2.ResourceSpecProto) -> list[Constraint]:
     """Auto-generate device constraints from a job's resource spec.
 
     Produces Constraint objects for device-type and device-variant when the
@@ -731,7 +732,7 @@ _EXECUTOR_MAX_REPLICAS = 1
 
 
 def looks_like_executor(
-    resources: cluster_pb2.ResourceSpecProto,
+    resources: job_pb2.ResourceSpecProto,
     replicas: int,
 ) -> bool:
     """Return True when a job's resource shape matches the executor heuristic.
@@ -751,7 +752,7 @@ def looks_like_executor(
 
 
 def infer_preemptible_constraint(
-    resources: cluster_pb2.ResourceSpecProto,
+    resources: job_pb2.ResourceSpecProto,
     replicas: int,
     existing_constraints: Sequence[Constraint],
 ) -> Constraint | None:
@@ -817,7 +818,7 @@ def _compare_ordered(
 
 def evaluate_constraint(
     attr: AttributeValue | None,
-    constraint: cluster_pb2.Constraint,
+    constraint: job_pb2.Constraint,
 ) -> bool:
     """Evaluate a single constraint against an entity's attribute.
 
@@ -833,9 +834,9 @@ def evaluate_constraint(
     op = constraint.op
 
     # EXISTS/NOT_EXISTS don't need a value comparison
-    if op == cluster_pb2.CONSTRAINT_OP_EXISTS:
+    if op == job_pb2.CONSTRAINT_OP_EXISTS:
         return attr is not None
-    if op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS:
+    if op == job_pb2.CONSTRAINT_OP_NOT_EXISTS:
         return attr is None
 
     # All other operators require the attribute to exist
@@ -845,26 +846,26 @@ def evaluate_constraint(
     target = AttributeValue.from_proto(constraint.value)
 
     match op:
-        case cluster_pb2.CONSTRAINT_OP_EQ:
+        case job_pb2.CONSTRAINT_OP_EQ:
             return attr.value == target.value
-        case cluster_pb2.CONSTRAINT_OP_NE:
+        case job_pb2.CONSTRAINT_OP_NE:
             return attr.value != target.value
-        case cluster_pb2.CONSTRAINT_OP_GT:
+        case job_pb2.CONSTRAINT_OP_GT:
             return _compare_ordered(attr.value, target.value, "gt")
-        case cluster_pb2.CONSTRAINT_OP_GE:
+        case job_pb2.CONSTRAINT_OP_GE:
             return _compare_ordered(attr.value, target.value, "ge")
-        case cluster_pb2.CONSTRAINT_OP_LT:
+        case job_pb2.CONSTRAINT_OP_LT:
             return _compare_ordered(attr.value, target.value, "lt")
-        case cluster_pb2.CONSTRAINT_OP_LE:
+        case job_pb2.CONSTRAINT_OP_LE:
             return _compare_ordered(attr.value, target.value, "le")
-        case cluster_pb2.CONSTRAINT_OP_IN:
+        case job_pb2.CONSTRAINT_OP_IN:
             target_values = {AttributeValue.from_proto(v).value for v in constraint.values}
             return attr.value in target_values
         case _:
             return False
 
 
-def is_cpu_device_type_constraint(c: cluster_pb2.Constraint) -> bool:
+def is_cpu_device_type_constraint(c: job_pb2.Constraint) -> bool:
     """True if this constraint is device-type=cpu.
 
     CPU jobs match any scaling group, so this constraint is stripped
@@ -872,12 +873,12 @@ def is_cpu_device_type_constraint(c: cluster_pb2.Constraint) -> bool:
     """
     return (
         c.key == WellKnownAttribute.DEVICE_TYPE
-        and c.op == cluster_pb2.CONSTRAINT_OP_EQ
+        and c.op == job_pb2.CONSTRAINT_OP_EQ
         and c.value.string_value.strip().lower() == "cpu"
     )
 
 
-def routing_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> list[cluster_pb2.Constraint]:
+def routing_constraints(constraints: Sequence[job_pb2.Constraint]) -> list[job_pb2.Constraint]:
     """Filter to routing-only constraints, stripping CPU device-type.
 
     Non-routing constraints (tpu-name, tpu-worker-id, etc.) and unknown
@@ -896,16 +897,16 @@ def routing_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> list[c
 
 
 def split_hard_soft(
-    constraints: Sequence[cluster_pb2.Constraint],
-) -> tuple[list[cluster_pb2.Constraint], list[cluster_pb2.Constraint]]:
+    constraints: Sequence[job_pb2.Constraint],
+) -> tuple[list[job_pb2.Constraint], list[job_pb2.Constraint]]:
     """Split proto constraints into (hard, soft) lists based on mode.
 
     Hard constraints filter candidates; soft constraints only influence ranking.
     """
-    hard: list[cluster_pb2.Constraint] = []
-    soft: list[cluster_pb2.Constraint] = []
+    hard: list[job_pb2.Constraint] = []
+    soft: list[job_pb2.Constraint] = []
     for c in constraints:
-        if c.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED:
+        if c.mode == job_pb2.CONSTRAINT_MODE_PREFERRED:
             soft.append(c)
         else:
             hard.append(c)
@@ -914,7 +915,7 @@ def split_hard_soft(
 
 def soft_constraint_score(
     entity_attrs: dict[str, AttributeValue],
-    soft_constraints: Sequence[cluster_pb2.Constraint],
+    soft_constraints: Sequence[job_pb2.Constraint],
 ) -> int:
     """Count how many soft constraints an entity satisfies.
 
@@ -965,7 +966,7 @@ class ConstraintIndex:
             _entity_attributes=dict(entities),
         )
 
-    def matching_entities(self, constraints: Sequence[cluster_pb2.Constraint]) -> set[str]:
+    def matching_entities(self, constraints: Sequence[job_pb2.Constraint]) -> set[str]:
         """Get entity IDs matching ALL constraints."""
         if not constraints:
             return set(self._all_ids)
@@ -980,16 +981,16 @@ class ConstraintIndex:
                 return set()
         return result or set()
 
-    def _evaluate_constraint_set(self, constraint: cluster_pb2.Constraint) -> set[str]:
+    def _evaluate_constraint_set(self, constraint: job_pb2.Constraint) -> set[str]:
         """Evaluate a single constraint, returning matching entity IDs."""
         key = constraint.key
         op = constraint.op
 
-        if op == cluster_pb2.CONSTRAINT_OP_EQ and key in self._discrete_lists:
+        if op == job_pb2.CONSTRAINT_OP_EQ and key in self._discrete_lists:
             target = AttributeValue.from_proto(constraint.value).value
             return self._discrete_lists[key].get(target, set())
 
-        if op == cluster_pb2.CONSTRAINT_OP_EXISTS:
+        if op == job_pb2.CONSTRAINT_OP_EXISTS:
             if key in self._discrete_lists:
                 result: set[str] = set()
                 for entities in self._discrete_lists[key].values():
@@ -997,7 +998,7 @@ class ConstraintIndex:
                 return result
             return set()
 
-        if op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS:
+        if op == job_pb2.CONSTRAINT_OP_NOT_EXISTS:
             if key in self._discrete_lists:
                 has_attr: set[str] = set()
                 for entities in self._discrete_lists[key].values():
@@ -1005,7 +1006,7 @@ class ConstraintIndex:
                 return set(self._all_ids) - has_attr
             return set(self._all_ids)
 
-        if op == cluster_pb2.CONSTRAINT_OP_IN and key in self._discrete_lists:
+        if op == job_pb2.CONSTRAINT_OP_IN and key in self._discrete_lists:
             in_result: set[str] = set()
             for av in constraint.values:
                 target_val = AttributeValue.from_proto(av).value
@@ -1080,7 +1081,7 @@ def check_resource_fit(
     return None
 
 
-def resource_capacity_from_spec(spec: cluster_pb2.ResourceSpecProto) -> ResourceCapacity:
+def resource_capacity_from_spec(spec: job_pb2.ResourceSpecProto) -> ResourceCapacity:
     """Extract ResourceCapacity from a job's ResourceSpecProto."""
     from iris.cluster.types import get_gpu_count, get_tpu_count
 
@@ -1103,5 +1104,6 @@ def worker_attributes_from_resources(resources: config_pb2.ScaleGroupResources) 
     attrs[WellKnownAttribute.DEVICE_TYPE] = accelerator_type_to_string(resources.device_type)
     if resources.device_variant:
         attrs[WellKnownAttribute.DEVICE_VARIANT] = resources.device_variant.lower()
-    attrs[WellKnownAttribute.PREEMPTIBLE] = str(resources.preemptible).lower()
+    is_preemptible = resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+    attrs[WellKnownAttribute.PREEMPTIBLE] = str(is_preemptible).lower()
     return attrs

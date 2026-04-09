@@ -16,25 +16,25 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
-from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v2 import JobHandle
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.trainer import TrainerConfig
 from marin.rl.curriculum import CurriculumConfig
-from marin.rl.environments.inference_ctx import LevanterInferenceContextConfig, vLLMInferenceContextConfig
+from marin.rl.environments.inference_ctx import (
+    LevanterInferenceContextConfig,
+    vLLMInferenceContextConfig,
+)
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
-from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig, RolloutTrackerConfig
-from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
+from marin.rl.rollout_worker import RolloutWorkerConfig, RolloutTrackerConfig
+from marin.rl.train_worker import TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
-from marin.training.training import _add_run_env_variables
 from marin.utilities.json_encoder import CustomJsonEncoder
-from marin.utils import remove_tpu_lockfile_on_exit
-from transformers import AutoTokenizer, PreTrainedTokenizer
-from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -55,14 +55,23 @@ class RunConfig:
     num_train_slices: int = 1
     """Number of TPU slices for training worker"""
 
+    train_ram: str | None = None
+    """Optional host-RAM request override for training workers (e.g. ``"300g"``)."""
+
+    inference_ram: str | None = None
+    """Optional host-RAM request override for rollout/inference workers."""
+
+    regions: list[str] | None = None
+    """Concrete region(s) to use for all RL worker jobs."""
+
+    zone: str | None = None
+    """Concrete zone to use for all RL worker jobs."""
+
     max_retries_failure: int = 3
-    """Maximum retries on worker failure"""
+    """Maximum retries on worker failure (task code crashes, OOM, etc.)"""
 
     max_retries_preemption: int = 100
-    """Maximum retries on preemption"""
-
-    env_vars: dict[str, str] = field(default_factory=dict)
-    """Custom environment variables for workers"""
+    """Maximum retries on preemption (spot TPU lost, worker node died)"""
 
 
 @dataclass
@@ -82,9 +91,9 @@ class TrainParams:
     )
 
 
-def make_tokenizer(tokenizer: str | PreTrainedTokenizer) -> PreTrainedTokenizer:
+def make_tokenizer(tokenizer: str | MarinTokenizer) -> MarinTokenizer:
     if isinstance(tokenizer, str):
-        return AutoTokenizer.from_pretrained(tokenizer)
+        return load_tokenizer(tokenizer)
     return tokenizer
 
 
@@ -96,7 +105,7 @@ class RLJobConfig:
     trainer: TrainerConfig
     train_params: TrainParams
     curriculum: CurriculumConfig
-    tokenizer: str | PreTrainedTokenizer
+    tokenizer: str | MarinTokenizer
 
     inference_type: Literal["levanter", "vllm"]
 
@@ -104,7 +113,7 @@ class RLJobConfig:
 
     vocab_size: int | None = None
     """Vocab size for model construction. Should match the checkpoint's vocab dimension.
-    If None, falls back to len(tokenizer)."""
+    If None, falls back to tokenizer.vocab_size."""
 
     # Model & initialization (with defaults)
     initial_checkpoint: str | None = None
@@ -120,7 +129,7 @@ class RLJobConfig:
 
     # Deployment configuration
     run_config: RunConfig | None = None
-    """Configuration for TPU pod deployment. If None, uses simple Ray actors."""
+    """Configuration for TPU pod deployment."""
 
     # Inference server (auto-configured by default)
     inference_config: InferenceServerConfig | vLLMInferenceContextConfig | None = None
@@ -134,6 +143,13 @@ class RLJobConfig:
 
     # Logging
     run_id: str = field(default_factory=lambda: f"rl-{uuid.uuid4().hex[:8]}")
+    instance_id: str | None = None
+    """Volatile instance identifier, unique per coordinator invocation.
+
+    Used for Iris child job names and hosted actor names so retries after
+    preemption do not collide with dead children from previous attempts.
+    When ``None``, defaults to :pyattr:`run_id` (legacy single-name behaviour).
+    """
     log_freq: int = 10
 
     rollout_tracker: RolloutTrackerConfig | None = None
@@ -141,6 +157,11 @@ class RLJobConfig:
 
     pip_dependency_groups: list[str] = field(default_factory=list)
     """Extra pip dependency groups to include for all workers."""
+
+    @property
+    def resolved_instance_id(self) -> str:
+        """Return the volatile instance id, falling back to run_id."""
+        return self.instance_id if self.instance_id is not None else self.run_id
 
     def with_on_policy_training(self) -> "RLJobConfig":
         """Configure for on-policy training.
@@ -184,77 +205,22 @@ class RLJob:
     def __init__(self, config: RLJobConfig):
         self.config = config
 
-    # Helper, as Ray doesn't accept method instances
     @staticmethod
     def make_step_fn():
         return lambda config: RLJob(config).run(config.run_id)
 
-    def run(self, name: str):
-        """Run with TPU pod deployment."""
-        run_config = self.config.run_config
-        train_worker_config, rollout_worker_config = self.to_worker_configs()
+    def run(self, name: str) -> JobHandle:
+        """Submit the RL job via the v2 orchestration layer.
 
-        # Setup environment
-        env = {"EQX_ON_ERROR": "nan"}
-        env = _add_run_env_variables(env)
+        Submits a single coordinator job that creates all shared actors
+        and child jobs (trainer + rollout workers). The coordinator runs
+        inside the cluster with proper job hierarchy.
+        """
+        from marin.rl.orchestration import submit_rl_job
 
-        # Create resource configs
-        inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type
-        train_resources = ResourceConfig.with_tpu(run_config.train_tpu_type)
-        rollout_resources = ResourceConfig.with_tpu(inference_tpu_type)
-
-        def train_worker_task():
-            with remove_tpu_lockfile_on_exit():
-
-                configure_logging(level=logging.INFO)
-                worker = TrainWorker(config=train_worker_config)
-                worker.train()
-
-        def make_inference_task(worker_idx: int):
-            def inference_worker_task():
-                with remove_tpu_lockfile_on_exit():
-
-                    configure_logging(level=logging.INFO)
-                    # use deterministic seed based on worker index
-
-                    config = dataclasses.replace(
-                        rollout_worker_config,
-                        seed=rollout_worker_config.seed + worker_idx,
-                        run_id=f"{rollout_worker_config.run_id}-rollout-{worker_idx}",
-                        worker_index=worker_idx,
-                    )
-
-                    worker = RolloutWorker(config=config)
-                    worker.run()
-
-            return inference_worker_task
-
-        cluster = current_cluster()
-        jobs = []
-        jobs.append(
-            cluster.launch(
-                JobRequest(
-                    name=f"rl-train-{name}-train",
-                    resources=train_resources,
-                    entrypoint=Entrypoint.from_callable(train_worker_task),
-                    environment=EnvironmentConfig.create(env_vars=env, extras=self.config.pip_dependency_groups),
-                )
-            )
-        )
-
-        for i in range(run_config.num_rollout_workers):
-            jobs.append(
-                cluster.launch(
-                    JobRequest(
-                        name=f"rl-train-{name}-rollout-{i}",
-                        resources=rollout_resources,
-                        entrypoint=Entrypoint.from_callable(make_inference_task(i)),
-                        environment=EnvironmentConfig.create(env_vars=env, extras=self.config.pip_dependency_groups),
-                    )
-                )
-            )
-
-        return cluster.wait(jobs, raise_on_failure=True)
+        handle = submit_rl_job(self.config)
+        handle.wait(raise_on_failure=True)
+        return handle
 
     def to_worker_configs(self) -> tuple[TrainWorkerConfig, RolloutWorkerConfig]:
         """Export worker configurations for inspection/testing.

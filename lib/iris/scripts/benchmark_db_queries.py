@@ -44,11 +44,12 @@ from iris.cluster.controller.db import (
     TERMINAL_JOB_STATES,
     ControllerDB,
     EndpointQuery,
-    JobDetail,
-    decode_rows,
     healthy_active_workers_with_attributes,
     running_tasks_by_worker,
     tasks_for_job_with_attempts,
+)
+from iris.cluster.controller.schema import (
+    JOB_DETAIL_PROJECTION,
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
@@ -76,7 +77,8 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
 )
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 
 _results: list[tuple[str, float, float, int]] = []
 
@@ -180,7 +182,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     with db.read_snapshot() as snap:
         running_jobs = snap.fetchall(
             "SELECT job_id FROM jobs WHERE state = ? LIMIT 50",
-            (cluster_pb2.JOB_STATE_RUNNING,),
+            (job_pb2.JOB_STATE_RUNNING,),
         )
     pending_count = 0
     for job_row in running_jobs:
@@ -189,7 +191,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
             "UPDATE tasks SET state = ?, current_worker_id = NULL, current_worker_address = NULL "
             "WHERE job_id = ? AND state = ? AND rowid IN "
             "(SELECT rowid FROM tasks WHERE job_id = ? AND state = ? LIMIT 3)",
-            (cluster_pb2.TASK_STATE_PENDING, jid, cluster_pb2.TASK_STATE_RUNNING, jid, cluster_pb2.TASK_STATE_RUNNING),
+            (job_pb2.TASK_STATE_PENDING, jid, job_pb2.TASK_STATE_RUNNING, jid, job_pb2.TASK_STATE_RUNNING),
         )
         pending_count += db.fetchone("SELECT changes() as c")["c"]
     if pending_count:
@@ -224,9 +226,9 @@ def benchmark_scheduling(db: ControllerDB) -> None:
         print("  _find_reservation_ancestor                        (skipped, no pending jobs)")
 
     reservable_states = (
-        cluster_pb2.JOB_STATE_PENDING,
-        cluster_pb2.JOB_STATE_BUILDING,
-        cluster_pb2.JOB_STATE_RUNNING,
+        job_pb2.JOB_STATE_PENDING,
+        job_pb2.JOB_STATE_BUILDING,
+        job_pb2.JOB_STATE_RUNNING,
     )
     bench(
         "_jobs_with_reservations",
@@ -369,8 +371,7 @@ def benchmark_dashboard(db: ControllerDB) -> None:
     def _bench_jobs_in_states(db):
         placeholders = ",".join("?" for _ in USER_JOB_STATES)
         with db.read_snapshot() as q:
-            return decode_rows(
-                JobDetail,
+            return JOB_DETAIL_PROJECTION.decode(
                 q.fetchall(
                     f"SELECT * FROM jobs WHERE state IN ({placeholders}) AND depth = 1",
                     (*USER_JOB_STATES,),
@@ -397,7 +398,7 @@ def benchmark_dashboard(db: ControllerDB) -> None:
     bench(
         "_jobs_paginated (sort failures)",
         lambda: _jobs_paginated(
-            db, USER_JOB_STATES, sort_field=cluster_pb2.Controller.JOB_SORT_FIELD_FAILURES, limit=50
+            db, USER_JOB_STATES, sort_field=controller_pb2.Controller.JOB_SORT_FIELD_FAILURES, limit=50
         ),
     )
 
@@ -540,11 +541,11 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
     if not running_tasks_per_worker:
         return
 
-    resource_usage_proto = cluster_pb2.ResourceUsage()
+    resource_usage_proto = job_pb2.ResourceUsage()
     resource_usage_proto.cpu_millicores = 1000
     resource_usage_proto.memory_mb = 1024
 
-    snapshot_proto = cluster_pb2.WorkerResourceSnapshot()
+    snapshot_proto = job_pb2.WorkerResourceSnapshot()
 
     heartbeat_requests: list[HeartbeatApplyRequest] = []
     for wid, task_list in running_tasks_per_worker.items():
@@ -554,7 +555,7 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
                 TaskUpdate(
                     task_id=JobName.from_wire(task_id),
                     attempt_id=attempt_id,
-                    new_state=cluster_pb2.TASK_STATE_RUNNING,
+                    new_state=job_pb2.TASK_STATE_RUNNING,
                     resource_usage=resource_usage_proto,
                 )
             )

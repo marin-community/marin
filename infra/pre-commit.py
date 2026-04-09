@@ -655,6 +655,7 @@ PRECOMMIT_CONFIGS = [
             "lib/haliax/src/**/*.py",
             "lib/fray/src/**/*.py",
             "lib/iris/src/**/*.py",
+            "lib/rigging/src/**/*.py",
             "lib/zephyr/src/**/*.py",
         ],
         checks=[

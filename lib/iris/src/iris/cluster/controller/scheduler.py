@@ -37,7 +37,7 @@ from iris.cluster.types import (
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -62,14 +62,19 @@ class WorkerSnapshot(Protocol):
     """What the scheduler needs from a worker to build a capacity snapshot.
 
     This protocol decouples the scheduler from a concrete worker row type. Any object
-    exposing these fields can be used.
+    exposing these fields can be used.  Fields mirror the DB column names so that
+    projection row classes satisfy this protocol without computed properties.
     """
 
     worker_id: WorkerId
-    available_cpu_millicores: int
-    available_memory: int
-    available_gpus: int
-    available_tpus: int
+    total_cpu_millicores: int
+    committed_cpu_millicores: int
+    total_memory_bytes: int
+    committed_mem: int
+    total_gpu_count: int
+    committed_gpu: int
+    total_tpu_count: int
+    committed_tpu: int
     attributes: dict[str, AttributeValue]
     healthy: bool
 
@@ -124,8 +129,8 @@ class JobRequirements:
     Protos are readonly -- shared by reference, no copy needed.
     """
 
-    resources: cluster_pb2.ResourceSpecProto
-    constraints: list[cluster_pb2.Constraint]
+    resources: job_pb2.ResourceSpecProto
+    constraints: list[job_pb2.Constraint]
     is_coscheduled: bool
     coscheduling_group_by: str | None
 
@@ -168,10 +173,10 @@ class WorkerCapacity:
         """
         return WorkerCapacity(
             worker_id=worker.worker_id,
-            available_cpu_millicores=worker.available_cpu_millicores,
-            available_memory=worker.available_memory,
-            available_gpus=worker.available_gpus,
-            available_tpus=worker.available_tpus,
+            available_cpu_millicores=worker.total_cpu_millicores - worker.committed_cpu_millicores,
+            available_memory=worker.total_memory_bytes - worker.committed_mem,
+            available_gpus=worker.total_gpu_count - worker.committed_gpu,
+            available_tpus=worker.total_tpu_count - worker.committed_tpu,
             attributes=dict(worker.attributes),
             building_task_count=building_count,
             max_building_tasks=max_building_tasks,
@@ -224,7 +229,7 @@ class WorkerCapacity:
         return self._reason_to_rejection(reason, res, gpu_count, tpu_count)
 
     def _reason_to_rejection(
-        self, reason: str, res: cluster_pb2.ResourceSpecProto, gpu_count: int, tpu_count: int
+        self, reason: str, res: job_pb2.ResourceSpecProto, gpu_count: int, tpu_count: int
     ) -> RejectionReason:
         """Map a check_resource_fit reason string to a RejectionReason."""
         if reason.startswith("cpu:"):
@@ -255,7 +260,7 @@ class WorkerCapacity:
         # Increment building count since new tasks start in BUILDING state
         self.building_task_count += 1
 
-    def matches_constraints(self, constraints: Sequence[cluster_pb2.Constraint]) -> bool:
+    def matches_constraints(self, constraints: Sequence[job_pb2.Constraint]) -> bool:
         """Check if this worker matches all given constraints."""
         for constraint in constraints:
             attr = self.attributes.get(constraint.key)
@@ -358,7 +363,7 @@ class SchedulingContext:
             max_assignments_per_worker=max_assignments_per_worker,
         )
 
-    def matching_workers(self, constraints: Sequence[cluster_pb2.Constraint]) -> set[WorkerId]:
+    def matching_workers(self, constraints: Sequence[job_pb2.Constraint]) -> set[WorkerId]:
         """Get workers matching ALL constraints.
 
         Uses posting lists for fast EQ/EXISTS/NOT_EXISTS lookups.
@@ -416,7 +421,7 @@ class SchedulingResult:
 
 def _rank_by_soft_score(
     candidate_ids: set[WorkerId],
-    soft_constraints: list[cluster_pb2.Constraint],
+    soft_constraints: list[job_pb2.Constraint],
     context: SchedulingContext,
 ) -> list[WorkerId]:
     """Sort candidate workers by soft-constraint satisfaction (descending).

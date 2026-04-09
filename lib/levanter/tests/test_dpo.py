@@ -14,8 +14,6 @@ import jax.random as jrandom
 import jmp
 import numpy as np
 import pytest
-from transformers import AutoTokenizer
-
 import haliax as hax
 from haliax import Axis
 from haliax.partitioning import ResourceAxis, set_mesh
@@ -67,6 +65,7 @@ from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig
 from levanter.optim.model_averaging import ModelAveraging
 from levanter.store.cache import SerialCacheWriter
+from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.trainer_state import TrainerState, saveable_training_mask, trainables_only
 from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.tree_utils import inference_mode
@@ -78,15 +77,15 @@ MODEL_NAME = "stanford-crfm/marin-tokenizer"
 @pytest.fixture(scope="module")
 def tokenizer_path() -> Path:
     try:
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-        return Path(tokenizer.name_or_path)
+        tok = load_marin_tokenizer(MODEL_NAME)
+        return Path(tok.name_or_path)
     except Exception as exc:  # noqa: BLE001
         pytest.skip(f"Could not load tokenizer {MODEL_NAME}: {exc}", allow_module_level=True)
         raise NotImplementedError("unreachable")
 
 
-def _load_tokenizer(tokenizer_path: Path):
-    return AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
+def _load_tokenizer(tokenizer_path: Path) -> MarinTokenizer:
+    return load_marin_tokenizer(str(tokenizer_path))
 
 
 def _tiny_gpt2_config() -> Gpt2Config:

@@ -3,6 +3,7 @@
 
 # NOTE: Do not explicitly import wandb/other trackers here, as this will cause the tests to trivially pass.
 import dataclasses
+import re
 import warnings
 from typing import Tuple
 
@@ -151,3 +152,28 @@ def test_wandb_config_reapplies_tags_when_init_drops_them(monkeypatch):
 
     assert tracker.run is fake_run
     assert fake_run.tags == ("dpo", "lora-dpo")
+
+
+def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):
+    monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
+
+    from levanter.tracker.wandb import WandbTracker, _truncate_wandb_artifact_name
+
+    class FakeRun:
+        def __init__(self):
+            self.logged = []
+
+        def log_artifact(self, artifact_path, *, name=None, type=None):
+            self.logged.append((artifact_path, name, type))
+
+    run = FakeRun()
+    tracker = WandbTracker(run)
+
+    tracker.log_artifact("/tmp/some/deep/path/profile", type="jax_profile")
+    assert run.logged == [("/tmp/some/deep/path/profile", "profile", "jax_profile")]
+
+    long_name = "run-" + "x" * 200
+    truncated = _truncate_wandb_artifact_name(long_name)
+    assert truncated is not None
+    assert len(truncated) <= 128
+    assert re.fullmatch(r".+-[0-9a-f]{7}", truncated)

@@ -26,8 +26,8 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
 )
 from levanter.store import SerialCacheWriter, TreeCache
+from levanter.tokenizers import load_tokenizer
 from tqdm_loggable.auto import tqdm
-from transformers import AutoTokenizer
 
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
@@ -66,7 +66,7 @@ def _do_slice_cache(
     This only works for datasets with input ids right now. Luckily this is all the datasets we care about atm.
     """
     key = PRNGKey(cfg.seed)
-    tokenizer = AutoTokenizer.from_pretrained(cfg.tokenizer)
+    tokenizer = load_tokenizer(cfg.tokenizer)
     split = "train"
     train_set = cfg.input_config.load_cache(split, tokenizer)
 

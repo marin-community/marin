@@ -28,7 +28,8 @@ from levanter.callbacks import StepInfo
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.models.lm_model import LmExample, LmHeadModel
-from levanter.utils.hf_utils import HfTokenizer, byte_length_of_token
+from levanter.tokenizers import MarinTokenizer
+from levanter.utils.hf_utils import byte_length_of_token
 from levanter.utils.jax_utils import axis_resource_is_explicit
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.stat_utils import RunningMean
@@ -198,7 +199,7 @@ def _default_lm_eval_loss_fn(
 def cb_tagged_lm_evaluate(
     EvalBatch: hax.Axis,
     tagged_eval_sets: Sequence[tuple[AsyncDataset[LmEvalExample], Sequence[str]]],
-    tokenizer: Optional[HfTokenizer] = None,
+    tokenizer: Optional[MarinTokenizer] = None,
     device_mesh: Optional[Mesh] = None,
     axis_mapping: ResourceMapping | None = None,
     max_examples_per_dataset: Optional[int] = None,
@@ -391,7 +392,7 @@ class TaggedEvaluator(Generic[Ex, M]):
         EvalBatch: hax.Axis | int,
         tagged_eval_sets: Sequence[tuple[AsyncDataset[Ex], Sequence[str]]],
         loss_fn: Callable[[M, Ex], LossFnOutput],
-        tokenizer: Optional[HfTokenizer] = None,
+        tokenizer: Optional[MarinTokenizer] = None,
         device_mesh=None,
         axis_mapping=None,
         max_examples_per_dataset=None,
@@ -546,7 +547,7 @@ class TaggedEvaluator(Generic[Ex, M]):
                 hierarchy[parent].append(index)
         return hierarchy
 
-    def _calculate_bytes_per_token_type(self, tokenizer: HfTokenizer) -> Optional[Int[Array, "vocab"]]:
+    def _calculate_bytes_per_token_type(self, tokenizer: MarinTokenizer) -> Optional[Int[Array, "vocab"]]:
         if tokenizer is None:
             return None
         else:

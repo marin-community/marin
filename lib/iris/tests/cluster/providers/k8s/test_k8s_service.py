@@ -12,12 +12,12 @@ from __future__ import annotations
 import pytest
 
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
-from iris.cluster.providers.k8s.types import KubectlError
+from iris.cluster.providers.k8s.types import K8sResource, KubectlError
 
 
 def _get_pod_phase(svc: InMemoryK8sService, name: str) -> str:
     """Get a pod's phase, asserting it exists."""
-    result = svc.get_json("pod", name)
+    result = svc.get_json(K8sResource.PODS, name)
     assert result is not None, f"Pod {name!r} not found"
     return result["status"]["phase"]
 
@@ -101,6 +101,13 @@ def test_unknown_resource_type(svc: InMemoryK8sService):
         svc.apply_json(manifest)
 
 
+def test_unknown_manifest_kind(svc: InMemoryK8sService):
+    """apply_json rejects manifests whose kind is not in _KIND_TO_PLURAL."""
+    manifest = {"apiVersion": "v1", "kind": "FancyWidget", "metadata": {"name": "w1"}}
+    with pytest.raises(KubectlError, match=r"Unknown manifest kind.*FancyWidget"):
+        svc.apply_json(manifest)
+
+
 def test_deployment_node_pool_validation(svc: InMemoryK8sService):
     """Node pool validation works for nested pod specs (Deployments, Jobs)."""
     manifest = _deployment_manifest("d1", node_pool="nonexistent-pool")
@@ -112,7 +119,7 @@ def test_no_node_pool_constraint_skips_validation(svc: InMemoryK8sService):
     """Manifests without node pool selectors pass even with available_node_pools set."""
     manifest = _pod_manifest("p1")
     svc.apply_json(manifest)
-    assert svc.get_json("pod", "p1") is not None
+    assert svc.get_json(K8sResource.PODS, "p1") is not None
 
 
 def test_no_available_pools_skips_pool_validation():
@@ -120,7 +127,7 @@ def test_no_available_pools_skips_pool_validation():
     svc = InMemoryK8sService(available_node_pools=None)
     manifest = _pod_manifest("p1", node_pool="any-pool")
     svc.apply_json(manifest)
-    assert svc.get_json("pod", "p1") is not None
+    assert svc.get_json(K8sResource.PODS, "p1") is not None
 
 
 # ========================================================================
@@ -135,25 +142,25 @@ def test_inject_failure_apply(svc: InMemoryK8sService):
 
     # One-shot: next call succeeds
     svc.apply_json(_pod_manifest("p1"))
-    assert svc.get_json("pod", "p1") is not None
+    assert svc.get_json(K8sResource.PODS, "p1") is not None
 
 
 def test_inject_failure_get(svc: InMemoryK8sService):
     svc.inject_failure("get_json", KubectlError("timeout"))
     with pytest.raises(KubectlError, match="timeout"):
-        svc.get_json("pod", "p1")
+        svc.get_json(K8sResource.PODS, "p1")
 
 
 def test_inject_failure_list(svc: InMemoryK8sService):
     svc.inject_failure("list_json", KubectlError("api error"))
     with pytest.raises(KubectlError, match="api error"):
-        svc.list_json("pod")
+        svc.list_json(K8sResource.PODS)
 
 
 def test_inject_failure_delete(svc: InMemoryK8sService):
     svc.inject_failure("delete", KubectlError("forbidden"))
     with pytest.raises(KubectlError, match="forbidden"):
-        svc.delete("pod", "p1")
+        svc.delete(K8sResource.PODS, "p1")
 
 
 # ========================================================================
@@ -166,14 +173,14 @@ def test_list_json_label_filter(svc: InMemoryK8sService):
     svc.apply_json(_pod_manifest("p2", labels={"app": "web", "env": "staging"}))
     svc.apply_json(_pod_manifest("p3", labels={"app": "worker"}))
 
-    results = svc.list_json("pod", labels={"app": "web"})
+    results = svc.list_json(K8sResource.PODS, labels={"app": "web"})
     assert len(results) == 2
 
-    results = svc.list_json("pod", labels={"app": "web", "env": "prod"})
+    results = svc.list_json(K8sResource.PODS, labels={"app": "web", "env": "prod"})
     assert len(results) == 1
     assert results[0]["metadata"]["name"] == "p1"
 
-    results = svc.list_json("pod", labels={"app": "nonexistent"})
+    results = svc.list_json(K8sResource.PODS, labels={"app": "nonexistent"})
     assert len(results) == 0
 
 
@@ -184,13 +191,13 @@ def test_list_json_label_filter(svc: InMemoryK8sService):
 
 def test_apply_delete_then_get_returns_none(svc: InMemoryK8sService):
     svc.apply_json(_pod_manifest("myapp"))
-    svc.delete("pod", "myapp")
-    assert svc.get_json("pod", "myapp") is None
+    svc.delete(K8sResource.PODS, "myapp")
+    assert svc.get_json(K8sResource.PODS, "myapp") is None
 
 
 def test_delete_nonexistent_is_idempotent(svc: InMemoryK8sService):
     """Deleting a nonexistent resource does not raise."""
-    svc.delete("pod", "nope")
+    svc.delete(K8sResource.PODS, "nope")
 
 
 def test_apply_overwrites(svc: InMemoryK8sService):
@@ -198,7 +205,7 @@ def test_apply_overwrites(svc: InMemoryK8sService):
     m2 = _pod_manifest("p1", labels={"version": "v2"})
     svc.apply_json(m1)
     svc.apply_json(m2)
-    result = svc.get_json("pod", "p1")
+    result = svc.get_json(K8sResource.PODS, "p1")
     assert result is not None
     assert result["metadata"].get("labels", {}).get("version") == "v2"
 
@@ -233,11 +240,14 @@ def test_events_field_selector(svc: InMemoryK8sService):
 def test_stream_logs_incremental(svc: InMemoryK8sService):
     svc.set_logs("p1", "hello world")
     result = svc.stream_logs("p1")
-    assert result.byte_offset > 0
 
-    result2 = svc.stream_logs("p1", byte_offset=result.byte_offset)
-    assert result2.byte_offset == result.byte_offset
-    assert result2.lines == []
+    # No new content → empty
+    assert svc.stream_logs("p1", since_time=result.last_timestamp).lines == []
+
+    # Appended content → only the delta
+    svc.set_logs("p1", "hello world\nnew line")
+    result2 = svc.stream_logs("p1", since_time=result.last_timestamp)
+    assert [l.data for l in result2.lines] == ["new line"]
 
 
 # ========================================================================
@@ -279,7 +289,7 @@ def test_pod_scheduled_on_matching_node(sched_svc: InMemoryK8sService):
         resources={"requests": {"nvidia.com/gpu": "2"}},
     )
     sched_svc.apply_json(pod)
-    result = sched_svc.get_json("pod", "gpu-pod")
+    result = sched_svc.get_json(K8sResource.PODS, "gpu-pod")
     assert result is not None
     assert result["status"]["phase"] == "Running"
     assert result["spec"]["nodeName"] == "gpu-pool-0"
@@ -293,7 +303,7 @@ def test_pod_pending_no_matching_node(sched_svc: InMemoryK8sService):
         resources={"requests": {"nvidia.com/gpu": "1"}},
     )
     sched_svc.apply_json(pod)
-    result = sched_svc.get_json("pod", "gpu-pod")
+    result = sched_svc.get_json(K8sResource.PODS, "gpu-pod")
     assert result is not None
     assert result["status"]["phase"] == "Pending"
 
@@ -309,7 +319,7 @@ def test_pod_pending_insufficient_gpu(sched_svc: InMemoryK8sService):
         resources={"requests": {"nvidia.com/gpu": "8"}},
     )
     sched_svc.apply_json(pod)
-    result = sched_svc.get_json("pod", "big-pod")
+    result = sched_svc.get_json(K8sResource.PODS, "big-pod")
     assert result is not None
     assert result["status"]["phase"] == "Pending"
 
@@ -390,7 +400,7 @@ def test_delete_pod_releases_resources(sched_svc: InMemoryK8sService):
     sched_svc.apply_json(pod2)
     assert _get_pod_phase(sched_svc, "pod2") == "Pending"
 
-    sched_svc.delete("pod", "pod1")
+    sched_svc.delete(K8sResource.PODS, "pod1")
 
     pod3 = _pod_manifest(
         "pod3",
@@ -420,7 +430,7 @@ def test_list_nodes_returns_node_dicts(sched_svc: InMemoryK8sService):
         "my-pool",
         resources=FakeNodeResources(gpu_count=8, cpu_millicores=16000),
     )
-    nodes = sched_svc.list_json("nodes", cluster_scoped=True)
+    nodes = sched_svc.list_json(K8sResource.NODES)
     assert len(nodes) == 1
     node = nodes[0]
     assert node["metadata"]["name"] == "my-pool-0"

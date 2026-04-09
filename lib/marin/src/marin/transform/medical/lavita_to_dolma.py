@@ -6,13 +6,6 @@
 Note: It may not be a good idea to use lavita's allprocessed subset since it is contaminated
 with MMLU. We need to run it through a decontamination pipeline.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
-    lib/marin/src/marin/transform/medical/lavita_to_dolma.py \
-    --input_path gs://marin-us-central2/raw/medical/lavita-medical-qa-datasets/ \
-    --output_path gs://marin-data/processed/medical/lavita-v1.0/ \
-    --subset pubmed-qa \
-    --split train
 """
 
 import hashlib

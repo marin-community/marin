@@ -17,6 +17,7 @@ import pytest
 
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.service import TpuCreateRequest, VmCreateRequest
+from iris.rpc import config_pb2
 from iris.cluster.providers.types import InfraError, QuotaExhaustedError, ResourceNotFoundError
 from iris.cluster.service_mode import ServiceMode
 
@@ -32,12 +33,14 @@ def _tpu_request(
     accelerator_type: str = "v4-8",
     runtime_version: str = "tpu-ubuntu2204-base",
     labels: dict[str, str] | None = None,
+    capacity_type: int = config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
 ) -> TpuCreateRequest:
     return TpuCreateRequest(
         name=name,
         zone=zone,
         accelerator_type=accelerator_type,
         runtime_version=runtime_version,
+        capacity_type=capacity_type,
         labels=labels or {},
     )
 
@@ -199,6 +202,19 @@ def test_vm_quota_freed_after_delete(svc: InMemoryGcpService) -> None:
     svc.vm_delete("vm-a", "us-central2-b")
     info = svc.vm_create(_vm_request(name="vm-b"))
     assert info.name == "vm-b"
+
+
+def test_service_account_is_preserved_on_created_resources(svc: InMemoryGcpService) -> None:
+    tpu_request = _tpu_request(name="tpu-sa", labels={"env": "test"})
+    tpu_request.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
+    tpu_info = svc.tpu_create(tpu_request)
+
+    vm_request = _vm_request(name="vm-sa", labels={"env": "test"})
+    vm_request.service_account = "iris-controller@test-project.iam.gserviceaccount.com"
+    vm_info = svc.vm_create(vm_request)
+
+    assert tpu_info.service_account == "iris-worker@test-project.iam.gserviceaccount.com"
+    assert vm_info.service_account == "iris-controller@test-project.iam.gserviceaccount.com"
 
 
 # ========================================================================

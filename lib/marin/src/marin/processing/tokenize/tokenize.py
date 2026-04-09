@@ -17,11 +17,9 @@ import time
 from collections.abc import Iterator, Sequence
 
 import draccus
-import transformers
 from rigging.filesystem import open_url
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig
-from fray.v2.local_backend import LocalClient
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -30,6 +28,7 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
     preprocessor_for_format,
 )
+from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
 from levanter.store.cache import consolidate_shard_caches
 from levanter.store.tree_store import TreeStore
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
@@ -65,7 +64,12 @@ class TokenizeConfigBase(abc.ABC):
     """Base class for tokenize configs."""
 
     max_workers: int = 4096
+    cache_copy_max_workers: int = 128
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
+
+    tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
+    """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly.
+    KITOKEN uses the kitoken library."""
 
     num_shards: int | None = None
     """Override the number tokenize shards. When set, files are grouped to produce approximately
@@ -258,7 +262,11 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[Sequence[dict]]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    tokenizer: transformers.PreTrainedTokenizer = zephyr_worker_ctx().get_shared("tokenizer")
+    ctx = zephyr_worker_ctx()
+    name = ctx.get_shared("tokenizer_name")
+    backend = ctx.get_shared("tokenizer_backend")
+    # load_tokenizer is @lru_cache, so this only loads once per worker process.
+    tokenizer: MarinTokenizer = load_tokenizer(name, backend=backend)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     batch_count = 0
@@ -332,10 +340,19 @@ def tokenize(config: TokenizeConfigBase):
     def local_preprocess_paths(paths: list[str]) -> list[list[str]]:
         """Scan file sizes locally and bundle into groups for distributed processing."""
         filescan_start = time.monotonic()
-        local_ctx = ZephyrContext(client=LocalClient(), max_workers=8, name="tokenize-filescan")
+        # Sort for deterministic batching, then chunk into groups of 64.
+        paths = sorted(paths)
+        batched_paths = [paths[i : i + 64] for i in range(0, len(paths), 64)]
+        scan_ctx = ZephyrContext(
+            max_workers=32,
+            resources=ResourceConfig(cpu=1, ram="1g"),
+            name="tokenize-filescan",
+        )
         file_stats = list(
-            local_ctx.execute(
-                Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
+            scan_ctx.execute(
+                Dataset.from_list(batched_paths).flat_map(
+                    lambda batch: [{"filename": p, "size": fsspec_size(p)} for p in batch]
+                ),
                 verbose=False,
             )
         )
@@ -384,8 +401,10 @@ def tokenize(config: TokenizeConfigBase):
             )
         )
 
-        # Broadcast the tokenizer to all workers via ZephyrContext
-        ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
+        # Broadcast tokenizer config to workers. We send name + backend rather than
+        # the tokenizer object because not all backends support pickling.
+        ctx.put("tokenizer_name", config.tokenizer)
+        ctx.put("tokenizer_backend", config.tokenizer_backend)
 
         tokenize_start = time.monotonic()
         shard_paths = ctx.execute(temp_shards)
@@ -402,7 +421,12 @@ def tokenize(config: TokenizeConfigBase):
 
         consolidate_start = time.monotonic()
         logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")
-        ledger = consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
+        ledger = consolidate_shard_caches(
+            shard_cache_paths=shard_paths,
+            output_path=prefix,
+            exemplar=exemplar,
+            copy_max_workers=config.cache_copy_max_workers,
+        )
         consolidate_elapsed = time.monotonic() - consolidate_start
 
         total_elements = ledger.total_num_rows

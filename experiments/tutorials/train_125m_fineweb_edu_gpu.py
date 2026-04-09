@@ -16,7 +16,7 @@ from marin.execution.executor import executor_main
 from experiments.defaults import default_train
 from experiments.llama import llama_150m
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10M
+from experiments.prebuilt_caches import fineweb_edu_subcache_10M
 
 llama_150m_train_config = SimpleTrainConfig(
     resources=ResourceConfig.with_gpu("H100", count=1),

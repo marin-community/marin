@@ -130,7 +130,7 @@ def test_gpu_worker_attributes_from_config():
         accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
         accelerator_variant="H100",
         gpu_count_override=8,
-        preemptible=True,
+        capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
     )
 
     # Device config for capacity accounting
@@ -159,7 +159,7 @@ def test_tpu_worker_attributes_from_config():
         hardware=hardware,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
         accelerator_variant="v5litepod-16",
-        preemptible=True,
+        capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
     )
 
     attrs = metadata.attributes
@@ -189,7 +189,7 @@ def test_cpu_worker_attributes_from_config():
     metadata = build_worker_metadata(
         hardware=hardware,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
-        preemptible=False,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
 
     attrs = metadata.attributes
@@ -239,7 +239,7 @@ def test_preemptible_not_from_gcp_metadata():
         accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
         accelerator_variant="H100",
         gpu_count_override=8,
-        preemptible=False,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
 
     assert metadata.attributes[WellKnownAttribute.PREEMPTIBLE].string_value == "false"

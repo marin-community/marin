@@ -141,7 +141,7 @@ def test_consolidate_shard_caches_end_to_end():
             shard_paths.append(shard_path)
 
         dest_path = os.path.join(tmpdir, "merged")
-        ledger = consolidate_shard_caches(shard_paths, dest_path, EXEMPLAR_FLAT)
+        ledger = consolidate_shard_caches(shard_paths, dest_path, EXEMPLAR_FLAT, copy_max_workers=1)
 
         assert ledger.total_num_rows == NUM_SHARDS * ROWS_PER_SHARD
         assert ledger.is_finished

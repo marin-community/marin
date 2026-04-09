@@ -7,7 +7,7 @@ from typing import Protocol
 
 from iris.cluster.controller.transitions import DispatchBatch, HeartbeatApplyRequest
 from iris.cluster.types import WorkerId
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import job_pb2
 
 
 class ProviderError(Exception):
@@ -26,10 +26,8 @@ class TaskProvider(Protocol):
     HeartbeatApplyRequest batches which the controller applies via
     ControllerTransitions.apply_heartbeat().
 
-    Log fetching for live tasks is provider-specific. Completed task logs are
-    always available from the controller's local LogStore (written via
-    HeartbeatApplyRequest log_entries), so the protocol only covers live
-    log streaming.
+    Logs are pushed directly to the LogService by workers/tasks, not carried
+    via heartbeats or fetched from the provider.
     """
 
     def sync(
@@ -47,40 +45,13 @@ class TaskProvider(Protocol):
         """
         ...
 
-    def fetch_live_logs(
-        self,
-        worker_id: WorkerId,
-        address: str | None,
-        task_id: str,
-        attempt_id: int,
-        cursor: int,
-        max_lines: int,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        """Fetch live logs for a running task from the execution backend.
-
-        Returns (entries, next_cursor). Raises ProviderError on backend failure.
-        """
-        ...
-
-    def fetch_process_logs(
-        self,
-        worker_id: WorkerId,
-        address: str | None,
-        request: cluster_pb2.FetchLogsRequest,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        """Fetch execution-unit process logs (daemon logs).
-
-        Returns (entries, next_cursor). Raises ProviderUnsupportedError if not applicable.
-        """
-        ...
-
     def get_process_status(
         self,
         worker_id: WorkerId,
         address: str | None,
-        request: cluster_pb2.GetProcessStatusRequest,
-    ) -> cluster_pb2.GetProcessStatusResponse:
-        """Fetch full process status (pid, memory, CPU, logs) from an execution unit.
+        request: job_pb2.GetProcessStatusRequest,
+    ) -> job_pb2.GetProcessStatusResponse:
+        """Fetch full process status (pid, memory, CPU) from an execution unit.
 
         Returns GetProcessStatusResponse. Raises ProviderUnsupportedError if not applicable.
         """
@@ -93,9 +64,9 @@ class TaskProvider(Protocol):
     def profile_task(
         self,
         address: str,
-        request: cluster_pb2.ProfileTaskRequest,
+        request: job_pb2.ProfileTaskRequest,
         timeout_ms: int,
-    ) -> cluster_pb2.ProfileTaskResponse:
+    ) -> job_pb2.ProfileTaskResponse:
         """Profile a task via RPC. Raises ProviderUnsupportedError if not applicable."""
         ...
 

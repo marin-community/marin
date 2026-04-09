@@ -66,9 +66,7 @@ nav:
       - Prepare a Storage Bucket: tutorials/storage-bucket.md
       - Setting up a TPU Cluster: tutorials/tpu-cluster-setup.md
       - Executor 101: tutorials/executor-101.md
-      - Data Browser: tutorials/data-browser.md
       - Training an LM: tutorials/train-an-lm.md
-      - Submitting a Speedrun: tutorials/submitting-speedrun.md
   - Explanations:
       - The Language Modeling Pipeline: explanations/lm-pipeline.md
       - Evaluation: explanations/evaluation.md
@@ -84,7 +82,6 @@ nav:
       - Markdownified Datasets: reports/markdownified-datasets.md
   - Developer Guide:
       - Contributing: dev-guide/contributing.md
-      - Deployment: dev-guide/deployment.md
       - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
       - Internal Guidelines: dev-guide/guidelines-internal.md
       - Forking Policy: dev-guide/forking-policy.md

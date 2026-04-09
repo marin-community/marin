@@ -117,11 +117,6 @@ def main():
     list(backend.execute(pipeline))
 ```
 
-Run with:
-```bash
-uv run zephyr --backend=ray --max-parallelism=200 --memory=2GB script.py
-```
-
 ### Documentation
 
 - **Quick start**: See `lib/zephyr/README.md`

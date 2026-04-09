@@ -13,8 +13,11 @@ import click
 
 from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
 from rigging.log_setup import configure_logging
-from iris.rpc import config_pb2
-from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
+from iris.rpc import config_pb2, job_pb2
+from iris.rpc import controller_pb2 as _controller_pb2
+from iris.rpc.auth import AuthTokenInjector, GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
+from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
 logger = _logging_module.getLogger(__name__)
 
@@ -68,6 +71,16 @@ def _configure_client_s3(config) -> None:
     from iris.cluster.providers.k8s.controller import configure_client_s3
 
     configure_client_s3(config)
+
+
+def rpc_client(
+    address: str,
+    token_provider: TokenProvider | None = None,
+    timeout_ms: int = 30_000,
+) -> ControllerServiceClientSync:
+    """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``."""
+    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
+    return ControllerServiceClientSync(address, timeout_ms=timeout_ms, interceptors=interceptors)
 
 
 def require_controller_url(ctx: click.Context) -> str:
@@ -197,19 +210,14 @@ def login(ctx):
     controller_url = require_controller_url(ctx)
     config = ctx.obj.get("config")
 
-    from iris.rpc import cluster_pb2
-    from iris.rpc.cluster_connect import ControllerServiceClientSync
-
     if config and config.HasField("auth"):
         provider = config.auth.WhichOneof("provider")
     else:
-        client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
-        try:
-            auth_info = client.get_auth_info(cluster_pb2.GetAuthInfoRequest())
-        except Exception as e:
-            raise click.ClickException(f"Failed to discover auth method: {e}") from e
-        finally:
-            client.close()
+        with rpc_client(controller_url) as client:
+            try:
+                auth_info = client.get_auth_info(job_pb2.GetAuthInfoRequest())
+            except Exception as e:
+                raise click.ClickException(f"Failed to discover auth method: {e}") from e
         provider = auth_info.provider or None
         if not provider:
             raise click.ClickException("Controller has no authentication configured")
@@ -231,13 +239,11 @@ def login(ctx):
         raise click.ClickException(f"Unsupported auth provider: {provider}")
 
     # All providers converge: exchange identity_token for JWT via Login RPC
-    client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
-    try:
-        response = client.login(cluster_pb2.LoginRequest(identity_token=identity_token))
-    except Exception as e:
-        raise click.ClickException(f"Login failed: {e}") from e
-    finally:
-        client.close()
+    with rpc_client(controller_url) as client:
+        try:
+            response = client.login(job_pb2.LoginRequest(identity_token=identity_token))
+        except Exception as e:
+            raise click.ClickException(f"Login failed: {e}") from e
 
     cluster_name = ctx.obj.get("cluster_name", "default")
     store_token(cluster_name, controller_url, response.token)
@@ -246,15 +252,6 @@ def login(ctx):
     # Token in URL is visible in browser history/logs — acceptable for internal clusters
     click.echo(f"Dashboard: {controller_url}/auth/session_bootstrap?token={response.token}")
     click.echo(f"Token stored for cluster '{cluster_name}'")
-
-
-def _make_authenticated_client(controller_url: str, token_provider: TokenProvider | None):
-    """Create a ControllerServiceClientSync with auth interceptor if available."""
-    from iris.rpc.auth import AuthTokenInjector
-    from iris.rpc.cluster_connect import ControllerServiceClientSync
-
-    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
-    return ControllerServiceClientSync(address=controller_url, timeout_ms=30000, interceptors=interceptors)
 
 
 @iris.group()
@@ -274,13 +271,8 @@ def key_create(ctx, name: str, user_id: str, ttl_ms: int):
     controller_url = require_controller_url(ctx)
     token_provider = ctx.obj.get("token_provider")
 
-    from iris.rpc import cluster_pb2
-
-    client = _make_authenticated_client(controller_url, token_provider)
-    try:
-        response = client.create_api_key(cluster_pb2.CreateApiKeyRequest(user_id=user_id, name=name, ttl_ms=ttl_ms))
-    finally:
-        client.close()
+    with rpc_client(controller_url, token_provider) as client:
+        response = client.create_api_key(job_pb2.CreateApiKeyRequest(user_id=user_id, name=name, ttl_ms=ttl_ms))
 
     click.echo(f"Key ID:  {response.key_id}")
     click.echo(f"Token:   {response.token}")
@@ -296,13 +288,8 @@ def key_list(ctx, user_id: str):
     controller_url = require_controller_url(ctx)
     token_provider = ctx.obj.get("token_provider")
 
-    from iris.rpc import cluster_pb2
-
-    client = _make_authenticated_client(controller_url, token_provider)
-    try:
-        response = client.list_api_keys(cluster_pb2.ListApiKeysRequest(user_id=user_id))
-    finally:
-        client.close()
+    with rpc_client(controller_url, token_provider) as client:
+        response = client.list_api_keys(job_pb2.ListApiKeysRequest(user_id=user_id))
 
     if not response.keys:
         click.echo("No API keys found.")
@@ -321,15 +308,92 @@ def key_revoke(ctx, key_id: str):
     controller_url = require_controller_url(ctx)
     token_provider = ctx.obj.get("token_provider")
 
-    from iris.rpc import cluster_pb2
-
-    client = _make_authenticated_client(controller_url, token_provider)
-    try:
-        client.revoke_api_key(cluster_pb2.RevokeApiKeyRequest(key_id=key_id))
-    finally:
-        client.close()
+    with rpc_client(controller_url, token_provider) as client:
+        client.revoke_api_key(job_pb2.RevokeApiKeyRequest(key_id=key_id))
 
     click.echo(f"Revoked key: {key_id}")
+
+
+# ---------------------------------------------------------------------------
+# User budget management
+# ---------------------------------------------------------------------------
+
+
+@iris.group()
+@click.pass_context
+def user(ctx):
+    """User management commands."""
+    pass
+
+
+@user.group()
+@click.pass_context
+def budget(ctx):
+    """Manage user budgets."""
+    pass
+
+
+@budget.command("set")
+@click.argument("user_id")
+@click.option("--limit", "budget_limit", required=True, type=int, help="Budget limit (0 = unlimited)")
+@click.option(
+    "--max-band",
+    required=True,
+    type=click.Choice(PRIORITY_BAND_NAMES),
+    help="Highest priority band this user can submit to",
+)
+@click.pass_context
+def budget_set(ctx, user_id: str, budget_limit: int, max_band: str):
+    """Set budget limit and max band for a user."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    with rpc_client(controller_url, token_provider) as client:
+        client.set_user_budget(
+            _controller_pb2.Controller.SetUserBudgetRequest(
+                user_id=user_id,
+                budget_limit=budget_limit,
+                max_band=priority_band_value(max_band),
+            )
+        )
+
+    click.echo(f"Budget set for {user_id}: limit={budget_limit}, max_band={max_band}")
+
+
+@budget.command("get")
+@click.argument("user_id")
+@click.pass_context
+def budget_get(ctx, user_id: str):
+    """Get budget config and current spend for a user."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    with rpc_client(controller_url, token_provider) as client:
+        resp = client.get_user_budget(_controller_pb2.Controller.GetUserBudgetRequest(user_id=user_id))
+
+    click.echo(f"User:      {resp.user_id}")
+    click.echo(f"Limit:     {resp.budget_limit}")
+    click.echo(f"Spent:     {resp.budget_spent}")
+    click.echo(f"Max band:  {priority_band_name(resp.max_band)}")
+
+
+@budget.command("list")
+@click.pass_context
+def budget_list(ctx):
+    """List all user budgets with current spend."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    with rpc_client(controller_url, token_provider) as client:
+        resp = client.list_user_budgets(_controller_pb2.Controller.ListUserBudgetsRequest())
+
+    if not resp.users:
+        click.echo("No user budgets found.")
+        return
+
+    click.echo(f"{'USER':<30s} {'LIMIT':>10s} {'SPENT':>10s} {'MAX BAND':<15s}")
+    for u in resp.users:
+        click.echo(f"{u.user_id:<30s} {u.budget_limit:>10d} {u.budget_spent:>10d} {priority_band_name(u.max_band):<15s}")
 
 
 # Register subcommand groups — imported at module level to ensure they are

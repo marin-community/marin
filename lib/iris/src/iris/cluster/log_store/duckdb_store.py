@@ -15,7 +15,7 @@ Lifecycle of a log entry:
           concatenates the new rows, and writes a replacement file. This
           keeps the file count low (no thousands of tiny files).
        b. If the newest segment is already large (>= ``SEGMENT_TARGET_BYTES``),
-          a new Parquet file is created.
+          a new Parquet file is created (named by the new buffer's min_seq).
        c. The sealed RAM buffer is removed (readers no longer need it).
        d. The new/updated file is copied to GCS (best-effort).
        e. GC drops oldest local segments past count/byte limits.
@@ -123,20 +123,37 @@ def _fsspec_copy(src: str, dst: str) -> None:
         f_dst.write(f_src.read())
 
 
-def _recover_max_seq(log_dir: Path) -> int:
-    """Parse the max sequence number from existing Parquet segment filenames.
+def _read_seq_bounds(path: Path) -> tuple[int, int]:
+    """Read min/max seq from Parquet row-group statistics."""
+    try:
+        meta = pq.read_metadata(path)
+        schema = meta.schema.to_arrow_schema()
+        seq_idx = schema.get_field_index("seq")
+        min_seq = 0
+        max_seq = 0
+        for i in range(meta.num_row_groups):
+            col = meta.row_group(i).column(seq_idx)
+            if col.statistics is not None and col.statistics.has_min_max:
+                if not min_seq or col.statistics.min < min_seq:
+                    min_seq = col.statistics.min
+                if col.statistics.max > max_seq:
+                    max_seq = col.statistics.max
+        return min_seq, max_seq
+    except Exception:
+        return 0, 0
 
-    Filenames are ``logs_{min_seq:019d}_{max_seq:019d}.parquet``.
+
+def _recover_max_seq(log_dir: Path) -> int:
+    """Recover the max sequence number by reading Parquet row-group statistics.
+
+    Filenames are ``logs_{min_seq:019d}.parquet``.
     Returns max_seq + 1 so the counter can resume, or 1 if no files exist.
     """
     max_seen = -1
-    for p in log_dir.glob("logs_*_*.parquet"):
-        parts = p.stem.split("_")
-        if len(parts) >= 3:
-            try:
-                max_seen = max(max_seen, int(parts[2]))
-            except ValueError:
-                continue
+    for p in log_dir.glob("logs_*.parquet"):
+        _, max_seq = _read_seq_bounds(p)
+        if max_seq > max_seen:
+            max_seen = max_seq
     return max_seen + 1 if max_seen >= 0 else 1
 
 
@@ -419,10 +436,8 @@ class DuckDBLogStore:
         self._segments_rwlock = _RWLock()
 
         # Discover pre-existing Parquet files from a previous run.
-        for p in sorted(self._log_dir.glob("logs_*_*.parquet")):
-            parts = p.stem.split("_")
-            min_seq = int(parts[1]) if len(parts) >= 3 else 0
-            max_seq = int(parts[2]) if len(parts) >= 3 else 0
+        for p in sorted(self._log_dir.glob("logs_*.parquet")):
+            min_seq, max_seq = _read_seq_bounds(p)
             min_key, max_key = _read_key_bounds(p)
             self._local_segments.append(
                 _LocalSegment(
@@ -632,55 +647,48 @@ class DuckDBLogStore:
                 combined = combined.sort_by([("key", "ascending"), ("seq", "ascending")])
                 combined_min_seq = latest.min_seq
                 combined_max_seq = new_max_seq
-                filename = f"logs_{combined_min_seq:019d}_{combined_max_seq:019d}.parquet"
+                # Reuse the same filename (keyed only on min_seq) so the GCS
+                # upload overwrites the old object in place — no deletion needed.
+                filename = f"logs_{combined_min_seq:019d}.parquet"
                 filepath = self._log_dir / filename
 
-                # Write to a temp file first, then rename for atomicity.
+                # Write combined data to a temp file. Then hold the write lock
+                # across both the rename and the segment-list update so that no
+                # reader can snapshot a state where the file has the combined
+                # content AND the sealed buffer is still in RAM tables (which
+                # would cause double-counting).
                 tmp_path = filepath.with_suffix(".parquet.tmp")
                 pq.write_table(
                     combined, tmp_path, compression="zstd", row_group_size=_ROW_GROUP_SIZE, write_page_index=True
                 )
-                tmp_path.rename(filepath)
-
                 key_col = combined.column("key")
                 seg = _LocalSegment(
                     path=str(filepath),
-                    size_bytes=filepath.stat().st_size,
+                    size_bytes=tmp_path.stat().st_size,
                     min_seq=combined_min_seq,
                     max_seq=combined_max_seq,
                     min_key=key_col[0].as_py(),
                     max_key=key_col[-1].as_py(),
                 )
 
-                with self._lock:
-                    # Replace the old segment with the consolidated one.
-                    try:
-                        # Find and remove the old segment from the deque.
+                self._segments_rwlock.write_acquire()
+                try:
+                    tmp_path.rename(filepath)
+                    with self._lock:
                         for i, s in enumerate(self._local_segments):
                             if s.path == latest.path:
                                 del self._local_segments[i]
                                 break
-                    except (ValueError, IndexError):
-                        pass
-                    self._local_segments.append(seg)
-                    try:
-                        self._sealed.remove(sealed)
-                    except ValueError:
-                        pass
-                    sealed.flushed = True
+                        self._local_segments.append(seg)
+                        try:
+                            self._sealed.remove(sealed)
+                        except ValueError:
+                            pass
+                        sealed.flushed = True
+                finally:
+                    self._segments_rwlock.write_release()
 
-                # Delete the old segment file (now replaced). Hold the write lock
-                # so concurrent reads that snapshotted the old path finish first.
-                if str(filepath) != latest.path:
-                    self._segments_rwlock.write_acquire()
-                    try:
-                        Path(latest.path).unlink(missing_ok=True)
-                    except Exception:
-                        logger.warning("Failed to delete old segment %s", latest.path, exc_info=True)
-                    finally:
-                        self._segments_rwlock.write_release()
-
-                # GCS offload for the consolidated file.
+                # GCS upload overwrites the same object (same filename).
                 self._offload_to_gcs(filename, filepath)
                 self._gc_local_segments()
                 return
@@ -690,7 +698,7 @@ class DuckDBLogStore:
                 # Fall through to write as a new standalone segment.
 
         # Write as a new standalone segment.
-        filename = f"logs_{new_min_seq:019d}_{new_max_seq:019d}.parquet"
+        filename = f"logs_{new_min_seq:019d}.parquet"
         filepath = self._log_dir / filename
 
         try:
@@ -725,16 +733,6 @@ class DuckDBLogStore:
         self._offload_to_gcs(filename, filepath)
         self._gc_local_segments()
 
-    def _offload_to_gcs(self, filename: str, filepath: Path) -> None:
-        """Copy a Parquet file to GCS (best-effort)."""
-        if not self._remote_log_dir:
-            return
-        remote_path = f"{self._remote_log_dir.rstrip('/')}/{filename}"
-        try:
-            _fsspec_copy(str(filepath), remote_path)
-        except Exception:
-            logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
-
     def _gc_local_segments(self) -> None:
         """Drop oldest local Parquet segments if count or size exceeds limits.
 
@@ -756,7 +754,7 @@ class DuckDBLogStore:
         if not to_delete:
             return
 
-        # Hold the write lock while deleting files so concurrent reads
+        # Hold the write lock while deleting local files so concurrent reads
         # (which hold the read lock) finish before we unlink anything.
         self._segments_rwlock.write_acquire()
         try:
@@ -767,6 +765,16 @@ class DuckDBLogStore:
                     logger.warning("Failed to delete old segment %s", path, exc_info=True)
         finally:
             self._segments_rwlock.write_release()
+
+    def _offload_to_gcs(self, filename: str, filepath: Path) -> None:
+        """Copy a Parquet file to GCS (best-effort)."""
+        if not self._remote_log_dir:
+            return
+        remote_path = f"{self._remote_log_dir.rstrip('/')}/{filename}"
+        try:
+            _fsspec_copy(str(filepath), remote_path)
+        except Exception:
+            logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
 
     # ------------------------------------------------------------------
     # Internal: read

@@ -102,7 +102,7 @@ class StubSliceHandle:
             workers=list(self._workers),
         )
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         pass
 
 

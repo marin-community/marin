@@ -10,7 +10,7 @@ from typing import Any, ClassVar, Protocol
 
 import jax
 import numpy as np
-from transformers import PreTrainedTokenizer
+from levanter.tokenizers import MarinTokenizer
 
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import RolloutGroup
@@ -206,7 +206,7 @@ class SequentialDigitsTask:
 
         return examples
 
-    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer: PreTrainedTokenizer) -> float:
+    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer: MarinTokenizer) -> float:
         """Compute reward based on sequential digit quality.
 
         Reward structure:
@@ -323,7 +323,12 @@ class MockEnv(MarinEnv):
                 reward = self.task.compute_reward(true_answer, choice.message.content, tokenizer=inference_ctx.tokenizer)
 
                 rollout = inference_ctx.create_rollout_from_choice(
-                    prompt, choice, env_name=f"mock_env:{self.task_type}", env_example_id=hash(prompt), reward=reward
+                    prompt,
+                    choice,
+                    env_name=f"mock_env:{self.task_type}",
+                    env_example_id=hash(prompt),
+                    reward=reward,
+                    temperature=temperature,
                 )
 
                 group.append(rollout)

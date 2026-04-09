@@ -17,7 +17,11 @@ import pytest
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.db import ControllerDB, TaskDetail, WorkerDetail, decode_one, decode_rows
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import (
+    TASK_DETAIL_PROJECTION,
+    WORKER_DETAIL_PROJECTION,
+)
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -25,11 +29,13 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.log_store import LogStore
+from iris.log_server.server import LogServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
+from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from rigging.timing import Timestamp
 
 # ---------------------------------------------------------------------------
@@ -37,16 +43,16 @@ from rigging.timing import Timestamp
 # ---------------------------------------------------------------------------
 
 
-def eq_constraint(key: str, value: str) -> cluster_pb2.Constraint:
+def eq_constraint(key: str, value: str) -> job_pb2.Constraint:
     """Build an EQ constraint proto for the given key and string value."""
-    c = cluster_pb2.Constraint(key=key, op=cluster_pb2.CONSTRAINT_OP_EQ)
+    c = job_pb2.Constraint(key=key, op=job_pb2.CONSTRAINT_OP_EQ)
     c.value.string_value = value
     return c
 
 
-def in_constraint(key: str, values: list[str]) -> cluster_pb2.Constraint:
+def in_constraint(key: str, values: list[str]) -> job_pb2.Constraint:
     """Build an IN constraint proto for the given key and string values."""
-    c = cluster_pb2.Constraint(key=key, op=cluster_pb2.CONSTRAINT_OP_IN)
+    c = job_pb2.Constraint(key=key, op=job_pb2.CONSTRAINT_OP_IN)
     for v in values:
         av = c.values.add()
         av.string_value = v
@@ -59,16 +65,16 @@ def in_constraint(key: str, values: list[str]) -> cluster_pb2.Constraint:
 
 
 @pytest.fixture
-def cpu_resource_spec() -> cluster_pb2.ResourceSpecProto:
+def cpu_resource_spec() -> job_pb2.ResourceSpecProto:
     """Standard CPU resource spec for scheduling tests."""
-    return cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=4 * 1024**3)
+    return job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=4 * 1024**3)
 
 
 @pytest.fixture
-def gpu_resource_spec() -> cluster_pb2.ResourceSpecProto:
+def gpu_resource_spec() -> job_pb2.ResourceSpecProto:
     """GPU resource spec with device type constraint."""
-    spec = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=4 * 1024**3)
-    spec.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="h100", count=1))
+    spec = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=4 * 1024**3)
+    spec.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="h100", count=1))
     return spec
 
 
@@ -86,28 +92,28 @@ def make_worker_attrs(
     tpu_name: str | None = None,
     tpu_worker_id: int | None = None,
     **extras: str,
-) -> dict[str, cluster_pb2.AttributeValue]:
+) -> dict[str, job_pb2.AttributeValue]:
     """Build a worker attributes dict for scheduling tests.
 
     Returns a dict suitable for setting on WorkerMetadata.attributes.
     """
-    attrs: dict[str, cluster_pb2.AttributeValue] = {
-        WellKnownAttribute.DEVICE_TYPE: cluster_pb2.AttributeValue(string_value=device_type),
+    attrs: dict[str, job_pb2.AttributeValue] = {
+        WellKnownAttribute.DEVICE_TYPE: job_pb2.AttributeValue(string_value=device_type),
     }
     if region:
-        attrs[WellKnownAttribute.REGION] = cluster_pb2.AttributeValue(string_value=region)
+        attrs[WellKnownAttribute.REGION] = job_pb2.AttributeValue(string_value=region)
     if device_variant:
-        attrs[WellKnownAttribute.DEVICE_VARIANT] = cluster_pb2.AttributeValue(string_value=device_variant)
+        attrs[WellKnownAttribute.DEVICE_VARIANT] = job_pb2.AttributeValue(string_value=device_variant)
     if preemptible is not None:
-        attrs[WellKnownAttribute.PREEMPTIBLE] = cluster_pb2.AttributeValue(string_value=preemptible)
+        attrs[WellKnownAttribute.PREEMPTIBLE] = job_pb2.AttributeValue(string_value=preemptible)
     if zone is not None:
-        attrs[WellKnownAttribute.ZONE] = cluster_pb2.AttributeValue(string_value=zone)
+        attrs[WellKnownAttribute.ZONE] = job_pb2.AttributeValue(string_value=zone)
     if tpu_name is not None:
-        attrs[WellKnownAttribute.TPU_NAME] = cluster_pb2.AttributeValue(string_value=tpu_name)
+        attrs[WellKnownAttribute.TPU_NAME] = job_pb2.AttributeValue(string_value=tpu_name)
     if tpu_worker_id is not None:
-        attrs[WellKnownAttribute.TPU_WORKER_ID] = cluster_pb2.AttributeValue(int_value=tpu_worker_id)
+        attrs[WellKnownAttribute.TPU_WORKER_ID] = job_pb2.AttributeValue(int_value=tpu_worker_id)
     for key, val in extras.items():
-        attrs[key] = cluster_pb2.AttributeValue(string_value=val)
+        attrs[key] = job_pb2.AttributeValue(string_value=val)
     return attrs
 
 
@@ -156,17 +162,17 @@ class ServiceTestHarness:
         user: str = "test-user",
         replicas: int = 1,
         max_retries_failure: int = 0,
-        resources: cluster_pb2.ResourceSpecProto | None = None,
+        resources: job_pb2.ResourceSpecProto | None = None,
     ) -> JobName:
         """Submit a job via the RPC layer. Returns job_id."""
         from tests.cluster.controller.conftest import make_test_entrypoint
 
         job_id = JobName.root(user, name)
-        request = cluster_pb2.Controller.LaunchJobRequest(
+        request = controller_pb2.Controller.LaunchJobRequest(
             name=job_id.to_wire(),
             entrypoint=make_test_entrypoint(),
-            resources=resources or cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-            environment=cluster_pb2.EnvironmentConfig(),
+            resources=resources or job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            environment=job_pb2.EnvironmentConfig(),
             replicas=replicas,
             max_retries_failure=max_retries_failure,
         )
@@ -187,15 +193,15 @@ class ServiceTestHarness:
     def drive_job_to_completion(
         self,
         job_id: JobName,
-        state: int = cluster_pb2.TASK_STATE_SUCCEEDED,
+        state: int = job_pb2.TASK_STATE_SUCCEEDED,
     ) -> None:
         """Drive all tasks in a job to the given terminal state."""
         for task in self._query_tasks(job_id):
             self.drive_task_state(task.task_id, state)
 
-    def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
+    def get_job_status(self, job_id: JobName) -> job_pb2.JobStatus:
         """Query job status via the RPC layer."""
-        req = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
+        req = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
         return self.service.get_job_status(req, None).job
 
     # ── K8s-specific ────────────────────────────────────────────
@@ -239,7 +245,7 @@ class ServiceTestHarness:
         """Register a fake GCP worker with scheduling attributes."""
         assert self.provider_type == "gcp", "register_gcp_worker requires GCP harness"
         wid = WorkerId(worker_id)
-        metadata = cluster_pb2.WorkerMetadata(
+        metadata = job_pb2.WorkerMetadata(
             hostname=worker_id,
             ip_address="127.0.0.1",
             cpu_count=8,
@@ -256,12 +262,11 @@ class ServiceTestHarness:
 
     def _query_tasks(self, job_id: JobName):
         with self.db.snapshot() as q:
-            return decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (job_id.to_wire(),)))
+            return TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (job_id.to_wire(),)))
 
     def _query_task(self, task_id: JobName):
         with self.db.snapshot() as q:
-            return decode_one(
-                TaskDetail,
+            return TASK_DETAIL_PROJECTION.decode_one(
                 q.fetchall("SELECT * FROM tasks WHERE task_id = ? LIMIT 1", (task_id.to_wire(),)),
             )
 
@@ -276,17 +281,17 @@ class ServiceTestHarness:
         if pod_name is None:
             raise ValueError(f"No pod found for task {task_id}")
 
-        if new_state == cluster_pb2.TASK_STATE_RUNNING:
+        if new_state == job_pb2.TASK_STATE_RUNNING:
             self.k8s.transition_pod(pod_name, "Running")
-        elif new_state == cluster_pb2.TASK_STATE_SUCCEEDED:
+        elif new_state == job_pb2.TASK_STATE_SUCCEEDED:
             self.k8s.transition_pod(pod_name, "Running")
             self.sync_k8s()
             self.k8s.transition_pod(pod_name, "Succeeded")
-        elif new_state == cluster_pb2.TASK_STATE_FAILED:
+        elif new_state == job_pb2.TASK_STATE_FAILED:
             self.k8s.transition_pod(pod_name, "Running")
             self.sync_k8s()
             self.k8s.transition_pod(pod_name, "Failed", exit_code=1, reason="Error")
-        elif new_state == cluster_pb2.TASK_STATE_WORKER_FAILED:
+        elif new_state == job_pb2.TASK_STATE_WORKER_FAILED:
             self.k8s.transition_pod(pod_name, "Running")
             self.sync_k8s()
             self.k8s.transition_pod(pod_name, "Failed", exit_code=137, reason="OOMKilled")
@@ -303,7 +308,7 @@ class ServiceTestHarness:
         expected_hash = hashlib.sha256(task_id.to_wire().encode()).hexdigest()[:16]
         best_name: str | None = None
         best_attempt = -1
-        for pod in self.k8s.list_json("pod"):
+        for pod in self.k8s.list_json(K8sResource.PODS):
             labels = pod.get("metadata", {}).get("labels", {})
             if labels.get("iris.task_hash") == expected_hash:
                 attempt = int(labels.get("iris.attempt_id", "0"))
@@ -316,7 +321,7 @@ class ServiceTestHarness:
         """Read current worker_id and attempt_id from the task_attempts table.
 
         SELECT * FROM tasks doesn't join with task_attempts, so
-        TaskDetail.worker_id is always None when read via _query_task. We read
+        TaskDetailRow.current_worker_id may be None when read via _query_task. We read
         the attempt row directly instead.
         """
         with self.db.snapshot() as q:
@@ -335,9 +340,9 @@ class ServiceTestHarness:
             raise ValueError(f"Task {task_id} not found")
 
         # If still PENDING, assign to an available worker.
-        if task.state == cluster_pb2.TASK_STATE_PENDING:
+        if task.state == job_pb2.TASK_STATE_PENDING:
             with self.db.snapshot() as q:
-                workers = decode_rows(WorkerDetail, q.fetchall("SELECT * FROM workers"))
+                workers = WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers"))
             if not workers:
                 raise ValueError("No GCP workers registered -- call register_gcp_worker first")
             self.state.queue_assignments([Assignment(task_id=task_id, worker_id=WorkerId(workers[0].worker_id))])
@@ -350,11 +355,11 @@ class ServiceTestHarness:
         if (
             new_state
             in (
-                cluster_pb2.TASK_STATE_SUCCEEDED,
-                cluster_pb2.TASK_STATE_FAILED,
-                cluster_pb2.TASK_STATE_WORKER_FAILED,
+                job_pb2.TASK_STATE_SUCCEEDED,
+                job_pb2.TASK_STATE_FAILED,
+                job_pb2.TASK_STATE_WORKER_FAILED,
             )
-            and task.state != cluster_pb2.TASK_STATE_RUNNING
+            and task.state != job_pb2.TASK_STATE_RUNNING
         ):
             self.state.apply_task_updates(
                 HeartbeatApplyRequest(
@@ -364,7 +369,7 @@ class ServiceTestHarness:
                         TaskUpdate(
                             task_id=task_id,
                             attempt_id=attempt_id,
-                            new_state=cluster_pb2.TASK_STATE_RUNNING,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
                         )
                     ],
                 )
@@ -392,8 +397,7 @@ class ServiceTestHarness:
 
 def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "k8s_db")
-    log_store = LogStore(log_dir=tmp_path / "k8s_logs")
-    state = ControllerTransitions(db=db, log_store=log_store)
+    state = ControllerTransitions(db=db)
 
     k8s = InMemoryK8sService()
     k8s.add_node_pool(
@@ -418,7 +422,7 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
         db,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "k8s_bundles")),
-        log_store=log_store,
+        log_service=LogServiceImpl(),
     )
 
     return ServiceTestHarness(
@@ -433,8 +437,7 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
 
 def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "gcp_db")
-    log_store = LogStore(log_dir=tmp_path / "gcp_logs")
-    state = ControllerTransitions(db=db, log_store=log_store)
+    state = ControllerTransitions(db=db)
 
     ctrl = _HarnessController()
     ctrl.has_direct_provider = False
@@ -444,7 +447,7 @@ def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
         db,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "gcp_bundles")),
-        log_store=log_store,
+        log_service=LogServiceImpl(),
     )
 
     return ServiceTestHarness(

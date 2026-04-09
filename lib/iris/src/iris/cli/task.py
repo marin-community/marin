@@ -12,8 +12,8 @@ import sys
 
 import click
 
-from iris.cli.main import require_controller_url
-from iris.rpc import cluster_pb2
+from iris.cli.main import require_controller_url, rpc_client
+from iris.rpc import controller_pb2
 from iris.rpc.auth import TokenProvider
 
 logger = logging.getLogger(__name__)
@@ -50,35 +50,21 @@ def task_exec(ctx, task_id: str, command: tuple[str, ...], timeout_seconds: int)
     controller_url = require_controller_url(ctx)
     token_provider: TokenProvider | None = ctx.obj.get("token_provider")
 
-    from iris.rpc.cluster_connect import ControllerServiceClientSync
-    from iris.rpc.auth import AuthTokenInjector
-
-    interceptors = []
-    if token_provider:
-        interceptors.append(AuthTokenInjector(token_provider))
-
-    client = ControllerServiceClientSync(
-        address=controller_url,
-        interceptors=interceptors,
-    )
-
-    try:
-        request = cluster_pb2.Controller.ExecInContainerRequest(
+    with rpc_client(controller_url, token_provider) as client:
+        request = controller_pb2.Controller.ExecInContainerRequest(
             task_id=task_id,
             command=list(command),
             timeout_seconds=timeout_seconds,
         )
         response = client.exec_in_container(request)
 
-        if response.error:
-            click.echo(f"Error: {response.error}", err=True)
-            sys.exit(1)
+    if response.error:
+        click.echo(f"Error: {response.error}", err=True)
+        sys.exit(1)
 
-        if response.stdout:
-            click.echo(response.stdout, nl=False)
-        if response.stderr:
-            click.echo(response.stderr, nl=False, err=True)
+    if response.stdout:
+        click.echo(response.stdout, nl=False)
+    if response.stderr:
+        click.echo(response.stderr, nl=False, err=True)
 
-        sys.exit(response.exit_code)
-    finally:
-        client.close()
+    sys.exit(response.exit_code)
