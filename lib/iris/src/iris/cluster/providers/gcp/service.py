@@ -696,7 +696,17 @@ class CloudGcpService:
                     item_labels = dict(node_specs[0].node.labels) if node_specs and node_specs[0].node else {}
                     if labels and not all(item_labels.get(k) == v for k, v in labels.items()):
                         continue
-                    results.append(QueuedResourceInfo(name=qr_short_name, state=state, zone=zone, labels=item_labels))
+                    # When listing with a wildcard zone ("-"), extract the actual zone
+                    # from the full resource name so handles don't get zone="-".
+                    actual_zone = zone
+                    if zone == "-":
+                        parts = qr.name.split("/")
+                        loc_idx = next((i for i, p in enumerate(parts) if p == "locations"), -1)
+                        if loc_idx >= 0 and loc_idx + 1 < len(parts):
+                            actual_zone = parts[loc_idx + 1]
+                    results.append(
+                        QueuedResourceInfo(name=qr_short_name, state=state, zone=actual_zone, labels=item_labels)
+                    )
             except google.api_core.exceptions.GoogleAPICallError:
                 logger.warning("Failed to list queued resources in %s", zone, exc_info=True)
                 continue

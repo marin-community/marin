@@ -33,12 +33,8 @@ from iris.cluster.controller.db import (
     ControllerDB,
     _decode_attribute_rows,
     job_is_finished,
-    task_can_be_scheduled,
-    task_is_finished,
-    worker_available_cpu_millicores,
-    worker_available_gpus,
-    worker_available_memory,
-    worker_available_tpus,
+    task_row_can_be_scheduled,
+    task_row_is_finished,
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
@@ -75,29 +71,8 @@ from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 from tests.cluster.providers.conftest import make_mock_platform
 
-# ---------------------------------------------------------------------------
-# Convenience wrappers around standalone functions for test readability.
-# These accept a row object and unpack the fields needed by the standalone fn.
-# ---------------------------------------------------------------------------
-
-
-def check_task_can_be_scheduled(t: TaskDetailRow) -> bool:
-    """Whether a task row is eligible for scheduling."""
-    return task_can_be_scheduled(
-        t.state,
-        t.current_attempt_id,
-        t.failure_count,
-        t.max_retries_failure,
-        t.preemption_count,
-        t.max_retries_preemption,
-    )
-
-
-def check_task_is_finished(t: TaskDetailRow) -> bool:
-    """Whether a task row has reached a terminal state with no remaining retries."""
-    return task_is_finished(
-        t.state, t.failure_count, t.max_retries_failure, t.preemption_count, t.max_retries_preemption
-    )
+check_task_can_be_scheduled = task_row_can_be_scheduled
+check_task_is_finished = task_row_is_finished
 
 
 def check_job_is_finished(j: JobDetailRow) -> bool:
@@ -504,10 +479,10 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> li
         _replace(
             w,
             attributes=attrs_by_worker.get(w.worker_id, {}),
-            available_cpu_millicores=worker_available_cpu_millicores(w.total_cpu_millicores, w.committed_cpu_millicores),
-            available_memory=worker_available_memory(w.total_memory_bytes, w.committed_mem),
-            available_gpus=worker_available_gpus(w.total_gpu_count, w.committed_gpu),
-            available_tpus=worker_available_tpus(w.total_tpu_count, w.committed_tpu),
+            available_cpu_millicores=w.total_cpu_millicores - w.committed_cpu_millicores,
+            available_memory=w.total_memory_bytes - w.committed_mem,
+            available_gpus=w.total_gpu_count - w.committed_gpu,
+            available_tpus=w.total_tpu_count - w.committed_tpu,
         )
         for w in workers
     ]

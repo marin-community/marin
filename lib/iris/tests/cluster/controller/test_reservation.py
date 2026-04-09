@@ -27,7 +27,7 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
 
-from iris.cluster.controller.db import job_is_finished, task_can_be_scheduled
+from iris.cluster.controller.db import job_is_finished, task_row_can_be_scheduled
 from iris.cluster.controller.schema import WorkerRow
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
@@ -1441,14 +1441,7 @@ def test_holder_task_worker_death_no_failure_record(state):
         ), f"cycle {cycle}: attempt list leaked ({len(holder_task.attempts)} entries)"
         # active_worker_id should be None when PENDING
         assert holder_task.state == job_pb2.TASK_STATE_PENDING, "no active worker after death"
-        assert task_can_be_scheduled(
-            holder_task.state,
-            holder_task.current_attempt_id,
-            holder_task.failure_count,
-            holder_task.max_retries_failure,
-            holder_task.preemption_count,
-            holder_task.max_retries_preemption,
-        ), "holder task must be schedulable again"
+        assert task_row_can_be_scheduled(holder_task), "holder task must be schedulable again"
 
 
 def test_holder_task_removed_from_worker_when_parent_succeeds(state):
