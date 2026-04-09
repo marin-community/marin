@@ -19,6 +19,7 @@ import logging
 import os
 import pickle
 import re
+import signal
 import sys
 from datetime import datetime, timezone
 import threading
@@ -299,7 +300,7 @@ class ZephyrWorkerError(RuntimeError):
 # that would fail identically on every attempt. Infrastructure errors (OSError,
 # RuntimeError from dead actors, Ray actor errors) are NOT listed here so they
 # remain retryable.
-_NON_RETRYABLE_ERRORS = (ZephyrWorkerError, ValueError, TypeError, KeyError, AttributeError)
+_NON_RETRYABLE_ERRORS = (ZephyrWorkerError, ValueError, TypeError, KeyError, AttributeError, MemoryError)
 
 
 # ---------------------------------------------------------------------------
@@ -1211,6 +1212,18 @@ class ZephyrWorker:
             )
 
             if proc.returncode != 0:
+                # Linux OOM-killer sends SIGKILL → returncode == -9. There's no
+                # in-process way to catch it (the kernel kills the child before
+                # any handler runs), so we infer OOM from the signal here and
+                # raise a typed MemoryError instead of a generic RuntimeError so
+                # callers / retries can distinguish memory pressure from other
+                # crashes.
+                if proc.returncode == -signal.SIGKILL:
+                    raise MemoryError(
+                        f"Subprocess for shard {task.shard_idx} was killed by SIGKILL "
+                        f"(returncode {proc.returncode}); most likely OOM-killed by the kernel. "
+                        f"See worker stderr above."
+                    )
                 raise RuntimeError(
                     f"Subprocess for shard {task.shard_idx} exited with code {proc.returncode}; "
                     f"see worker stderr above for the faulthandler traceback"
