@@ -130,7 +130,7 @@ def dedup_fuzzy_document(
     shard_results = list(
         ctx.execute(
             Dataset.from_list(cc_files)
-            .load_vortex()
+            .load_parquet()
             .map(
                 lambda r: {
                     "id": r["record_id"],
