@@ -89,6 +89,20 @@ def test_build_pyspy_cmd_includes_subprocesses_flag_by_default():
     assert "--subprocesses" in cmd
 
 
+def test_build_pyspy_cmd_includes_nonblocking_when_set():
+    cfg = job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH, rate_hz=100)
+    spec = resolve_cpu_spec(cfg, duration_seconds=5, pid="1", nonblocking=True)
+    cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path="/tmp/out.svg")
+    assert "--nonblocking" in cmd
+
+
+def test_build_pyspy_cmd_omits_nonblocking_by_default():
+    cfg = job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH, rate_hz=100)
+    spec = resolve_cpu_spec(cfg, duration_seconds=5, pid="1")
+    cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path="/tmp/out.svg")
+    assert "--nonblocking" not in cmd
+
+
 # ---------------------------------------------------------------------------
 # build_memray_attach_cmd: --aggregate flag depends on leaks
 # ---------------------------------------------------------------------------

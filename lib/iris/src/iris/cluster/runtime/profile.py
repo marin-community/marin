@@ -52,6 +52,7 @@ class CpuProfileSpec:
     duration_seconds: int
     pid: str
     native: bool = True
+    nonblocking: bool = False
 
 
 @dataclass(frozen=True)
@@ -73,7 +74,13 @@ class MemoryProfileSpec:
         return self.reporter in ("flamegraph", "stats")
 
 
-def resolve_cpu_spec(cpu_config: job_pb2.CpuProfile, duration_seconds: int, pid: str) -> CpuProfileSpec:
+def resolve_cpu_spec(
+    cpu_config: job_pb2.CpuProfile,
+    duration_seconds: int,
+    pid: str,
+    *,
+    nonblocking: bool = False,
+) -> CpuProfileSpec:
     py_spy_format, ext = CPU_FORMAT_MAP.get(cpu_config.format, ("flamegraph", "svg"))
     rate_hz = cpu_config.rate_hz if cpu_config.rate_hz > 0 else 20
     native = cpu_config.native if cpu_config.HasField("native") else True
@@ -84,6 +91,7 @@ def resolve_cpu_spec(cpu_config: job_pb2.CpuProfile, duration_seconds: int, pid:
         duration_seconds=duration_seconds,
         pid=pid,
         native=native,
+        nonblocking=nonblocking,
     )
 
 
@@ -114,6 +122,7 @@ def build_pyspy_cmd(spec: CpuProfileSpec, py_spy_bin: str, output_path: str) -> 
         output_path,
         "--subprocesses",
         *(["--native"] if spec.native else []),
+        *(["--nonblocking"] if spec.nonblocking else []),
     ]
 
 
@@ -164,7 +173,9 @@ def profile_local_process(duration_seconds: int, profile_type: job_pb2.ProfileTy
         return run_pyspy_dump(pid, include_locals=profile_type.threads.locals)
     elif profile_type.HasField("cpu"):
         _check_tool("py-spy")
-        return _run_pyspy_record(pid, duration_seconds, profile_type.cpu)
+        # Use --nonblocking to avoid ptrace-pausing our own threads during
+        # sampling, which would make the controller/worker unresponsive.
+        return _run_pyspy_record(pid, duration_seconds, profile_type.cpu, nonblocking=True)
     elif profile_type.HasField("memory"):
         _check_tool("memray")
         return _run_memray_profile(pid, duration_seconds, profile_type.memory)
@@ -181,9 +192,11 @@ def run_pyspy_dump(pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool
     return result.stdout.encode("utf-8")
 
 
-def _run_pyspy_record(pid: str, duration_seconds: int, cpu_config: job_pb2.CpuProfile) -> bytes:
+def _run_pyspy_record(
+    pid: str, duration_seconds: int, cpu_config: job_pb2.CpuProfile, *, nonblocking: bool = False
+) -> bytes:
     """Run py-spy record against a local process and return the output."""
-    spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=pid)
+    spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=pid, nonblocking=nonblocking)
     output_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
