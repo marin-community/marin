@@ -1,5 +1,5 @@
 # Iris local configuration with static token authentication
-# Usage: iris --config lib/iris/examples/local-auth-static.yaml cluster start --local
+# Usage: iris --cluster=local-auth-static cluster start --local
 # Test token: "dev-token-123" (username: "developer")
 
 platform:

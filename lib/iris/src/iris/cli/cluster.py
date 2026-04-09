@@ -20,13 +20,14 @@ from iris.cli.build import (
     find_marin_root,
     get_git_sha,
 )
-from iris.cli.main import require_controller_url, rpc_client
+from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
 from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
 from iris.rpc import vm_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
+from rigging.config_discovery import list_cluster_configs
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 # =============================================================================
@@ -208,6 +209,18 @@ def cluster(ctx):
 # =============================================================================
 # Cluster lifecycle commands
 # =============================================================================
+
+
+@cluster.command("list")
+def cluster_list():
+    """List available cluster configurations."""
+    configs = list_cluster_configs(dirs=IRIS_CLUSTER_CONFIG_DIRS)
+    if not configs:
+        click.echo("No cluster configurations found.")
+        return
+    click.echo("Available clusters:")
+    for name, path in sorted(configs.items()):
+        click.echo(f"  {name:30s} {path}")
 
 
 @cluster.command("start")
