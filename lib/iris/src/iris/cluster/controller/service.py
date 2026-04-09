@@ -429,44 +429,73 @@ _SORT_FIELD_TO_SQL: dict[int, str] = {
 }
 
 
-def _jobs_paginated(
-    db: ControllerDB,
-    states: tuple[int, ...],
-    *,
-    state_filter_int: int | None = None,
-    name_filter: str = "",
-    sort_field: int = 0,
-    descending: bool = True,
-    offset: int = 0,
-    limit: int = 50,
-    parent_job_id: str = "",
-) -> tuple[list[JobRow], int]:
-    """Fetch a page of jobs with SQL-level filtering, sorting, and pagination.
+MAX_LIST_JOBS_LIMIT = 500
 
-    When parent_job_id is set, returns direct children of that job instead of
-    top-level jobs.
+
+def _resolve_state_filter(state_filter: str) -> tuple[int, ...] | None:
+    """Resolve a ``JobQuery.state_filter`` string into concrete state ids.
+
+    Returns ``USER_JOB_STATES`` when no filter is set, a single-element tuple
+    when it matches a known user-visible state, or ``None`` when the filter
+    does not match any known state (caller should return an empty page).
     """
-    if parent_job_id:
-        conditions = ["j.parent_job_id = ?"]
-        params: list[object] = [parent_job_id]
-    else:
-        conditions = ["j.depth = 1"]
-        params = []
+    if not state_filter:
+        return USER_JOB_STATES
+    normalized = state_filter.lower()
+    for st in USER_JOB_STATES:
+        if job_state_friendly(st) == normalized:
+            return (st,)
+    return None
 
-    if state_filter_int is not None:
-        conditions.append("j.state = ?")
-        params.append(state_filter_int)
-    else:
-        state_placeholders = ",".join("?" for _ in states)
-        conditions.append(f"j.state IN ({state_placeholders})")
-        params.extend(states)
 
-    if name_filter:
+def _query_jobs(
+    db: ControllerDB,
+    query: controller_pb2.Controller.JobQuery,
+    state_ids: tuple[int, ...],
+) -> tuple[list[JobRow], int]:
+    """Execute a ``JobQuery`` and return ``(rows, total_count)``.
+
+    ``state_ids`` is the pre-resolved state filter (always non-empty); the
+    caller owns "unknown state -> empty page" handling so that a bad filter
+    never reaches SQL.
+    """
+    assert state_ids, "_query_jobs requires at least one state id"
+
+    conditions: list[str] = []
+    params: list[object] = []
+
+    scope = query.scope or controller_pb2.Controller.JOB_QUERY_SCOPE_ALL
+    if scope == controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS:
+        conditions.append("j.depth = 1")
+    elif scope == controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN:
+        if not query.parent_job_id:
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                "query.parent_job_id is required for JOB_QUERY_SCOPE_CHILDREN",
+            )
+        conditions.append("j.parent_job_id = ?")
+        params.append(query.parent_job_id)
+    # JOB_QUERY_SCOPE_ALL: no ancestry constraint.
+
+    state_placeholders = ",".join("?" for _ in state_ids)
+    conditions.append(f"j.state IN ({state_placeholders})")
+    params.extend(state_ids)
+
+    if query.name_filter:
         conditions.append("LOWER(j.name) LIKE ?")
-        params.append(f"%{name_filter}%")
+        params.append(f"%{query.name_filter.lower()}%")
 
     where_clause = " AND ".join(conditions)
-    direction = "DESC" if descending else "ASC"
+
+    sort_field = query.sort_field or controller_pb2.Controller.JOB_SORT_FIELD_DATE
+    sort_direction = query.sort_direction
+    if sort_direction == controller_pb2.Controller.SORT_DIRECTION_UNSPECIFIED:
+        sort_direction = (
+            controller_pb2.Controller.SORT_DIRECTION_DESC
+            if sort_field == controller_pb2.Controller.JOB_SORT_FIELD_DATE
+            else controller_pb2.Controller.SORT_DIRECTION_ASC
+        )
+    direction = "DESC" if sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC else "ASC"
     order_expr = _SORT_FIELD_TO_SQL.get(sort_field, "j.submitted_at_ms")
 
     count_sql = f"SELECT COUNT(*) FROM jobs j WHERE {where_clause}"
@@ -497,6 +526,8 @@ def _jobs_paginated(
             ORDER BY {order_expr} {direction}
         """
 
+    offset = max(query.offset, 0)
+    limit = max(query.limit, 0)
     select_params = list(params)
     if limit > 0:
         select_sql += " LIMIT ? OFFSET ?"
@@ -505,67 +536,51 @@ def _jobs_paginated(
     with db.read_snapshot() as q:
         rows = q.execute_sql(select_sql, tuple(select_params)).fetchall()
         # Skip the COUNT query when we can infer the total from the result set:
-        # if this is the first page and we got fewer rows than the limit,
-        # we know we have all the results.
-        if offset == 0 and limit > 0 and len(rows) < limit:
-            total = len(rows)
-        else:
-            total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
-
-    jobs = JOB_ROW_PROJECTION.decode(rows)
-    return jobs, total
-
-
-def _jobs_all_filtered(
-    db: ControllerDB,
-    states: tuple[int, ...],
-    *,
-    state_filter_int: int | None = None,
-    name_filter: str = "",
-    sort_field: int = 0,
-    descending: bool = True,
-    offset: int = 0,
-    limit: int = 0,
-) -> tuple[list[JobRow], int]:
-    """Fetch jobs across the full job table."""
-    conditions = []
-    params: list[object] = []
-
-    if state_filter_int is not None:
-        conditions.append("j.state = ?")
-        params.append(state_filter_int)
-    else:
-        state_placeholders = ",".join("?" for _ in states)
-        conditions.append(f"j.state IN ({state_placeholders})")
-        params.extend(states)
-
-    if name_filter:
-        conditions.append("LOWER(j.name) LIKE ?")
-        params.append(f"%{name_filter}%")
-
-    where_clause = " AND ".join(conditions) if conditions else "1=1"
-    direction = "DESC" if descending else "ASC"
-    order_expr = _SORT_FIELD_TO_SQL.get(sort_field, "j.submitted_at_ms")
-    count_sql = f"SELECT COUNT(*) FROM jobs j WHERE {where_clause}"
-    select_sql = f"""
-        SELECT {JOB_ROW_PROJECTION.select_clause()}
-        FROM jobs j
-        WHERE {where_clause}
-        ORDER BY {order_expr} {direction}
-    """
-    select_params = list(params)
-    if limit > 0:
-        select_sql += " LIMIT ? OFFSET ?"
-        select_params.extend([limit, offset])
-
-    with db.read_snapshot() as q:
-        rows = q.execute_sql(select_sql, tuple(select_params)).fetchall()
+        # first page + short result means we already have everything.
         if offset == 0 and limit > 0 and len(rows) < limit:
             total = len(rows)
         else:
             total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
 
     return JOB_ROW_PROJECTION.decode(rows), total
+
+
+def _query_from_list_jobs_request(
+    request: controller_pb2.Controller.ListJobsRequest,
+) -> controller_pb2.Controller.JobQuery:
+    """Normalize a ``ListJobsRequest`` into a single ``JobQuery``.
+
+    If ``request.query`` is set, it is used verbatim. Otherwise the legacy
+    flat fields on ``ListJobsRequest`` are mapped into an equivalent
+    ``JobQuery`` so the rest of the server only ever sees one shape.
+
+    The legacy-field path exists only to keep older clients working during
+    the JobQuery rollout; delete it together with the legacy fields when
+    https://github.com/marin-community/marin/issues/4573 is resolved.
+    """
+    if request.HasField("query"):
+        query = controller_pb2.Controller.JobQuery()
+        query.CopyFrom(request.query)
+    else:
+        query = controller_pb2.Controller.JobQuery(
+            scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ALL,
+            parent_job_id=request.parent_job_id,
+            name_filter=request.name_filter,
+            state_filter=request.state_filter,
+            sort_field=request.sort_field,
+            sort_direction=request.sort_direction,
+            offset=request.offset,
+            limit=request.limit,
+        )
+
+    # Clamp paging: 0 means "unbounded" (used by the Python client); otherwise cap at MAX.
+    if query.limit > MAX_LIST_JOBS_LIMIT:
+        query.limit = MAX_LIST_JOBS_LIMIT
+    if query.limit < 0:
+        query.limit = 0
+    if query.offset < 0:
+        query.offset = 0
+    return query
 
 
 def _parent_ids_with_children(db: ControllerDB, job_ids: list[JobName]) -> set[JobName]:
@@ -1169,102 +1184,20 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> controller_pb2.Controller.ListJobsResponse:
         """List jobs with SQL-level filtering, sorting, and pagination."""
-        has_typed_query = request.HasField("query")
-        query = request.query if has_typed_query else None
+        query = _query_from_list_jobs_request(request)
 
-        raw_name_filter = query.name_filter if query else request.name_filter
-        raw_state_filter = query.state_filter if query else request.state_filter
-        name_filter = raw_name_filter.lower() if raw_name_filter else ""
-        state_filter = raw_state_filter.lower() if raw_state_filter else ""
+        state_ids = _resolve_state_filter(query.state_filter)
+        if state_ids is None:
+            return controller_pb2.Controller.ListJobsResponse(jobs=[], total_count=0, has_more=False)
 
-        sort_field = (query.sort_field if query else request.sort_field) or controller_pb2.Controller.JOB_SORT_FIELD_DATE
-        sort_dir = query.sort_direction if query else request.sort_direction
-        if sort_dir == controller_pb2.Controller.SORT_DIRECTION_UNSPECIFIED:
-            sort_dir = (
-                controller_pb2.Controller.SORT_DIRECTION_DESC
-                if sort_field == controller_pb2.Controller.JOB_SORT_FIELD_DATE
-                else controller_pb2.Controller.SORT_DIRECTION_ASC
-            )
-        reverse = sort_dir == controller_pb2.Controller.SORT_DIRECTION_DESC
-
-        raw_offset = query.offset if query else request.offset
-        raw_limit = query.limit if query else request.limit
-        offset = max(raw_offset, 0)
-        limit = min(raw_limit, 500) if raw_limit > 0 else 0
-        scope = (
-            query.scope
-            if query and query.scope != controller_pb2.Controller.JOB_QUERY_SCOPE_UNSPECIFIED
-            else controller_pb2.Controller.JOB_QUERY_SCOPE_ALL
-        )
-
-        state_filter_int: int | None = None
-        if state_filter:
-            for st in USER_JOB_STATES:
-                if job_state_friendly(st) == state_filter:
-                    state_filter_int = st
-                    break
-            if state_filter_int is None:
-                return controller_pb2.Controller.ListJobsResponse(jobs=[], total_count=0, has_more=False)
-
-        legacy_parent_job_id = request.parent_job_id if not has_typed_query else ""
-
-        if scope == controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS:
-            jobs, total_count = _jobs_paginated(
-                self._db,
-                USER_JOB_STATES,
-                state_filter_int=state_filter_int,
-                name_filter=name_filter,
-                sort_field=sort_field,
-                descending=reverse,
-                offset=offset,
-                limit=limit,
-            )
-        elif scope == controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN:
-            parent_job_id = query.parent_job_id if query else ""
-            if not parent_job_id:
-                raise ConnectError(Code.INVALID_ARGUMENT, "query.parent_job_id is required for JOB_QUERY_SCOPE_CHILDREN")
-            jobs, total_count = _jobs_paginated(
-                self._db,
-                USER_JOB_STATES,
-                state_filter_int=state_filter_int,
-                name_filter=name_filter,
-                sort_field=sort_field,
-                descending=reverse,
-                offset=offset,
-                limit=limit,
-                parent_job_id=parent_job_id,
-            )
-        else:
-            if legacy_parent_job_id:
-                jobs, total_count = _jobs_paginated(
-                    self._db,
-                    USER_JOB_STATES,
-                    state_filter_int=state_filter_int,
-                    name_filter=name_filter,
-                    sort_field=sort_field,
-                    descending=reverse,
-                    offset=offset,
-                    limit=limit,
-                    parent_job_id=legacy_parent_job_id,
-                )
-            else:
-                jobs, total_count = _jobs_all_filtered(
-                    self._db,
-                    USER_JOB_STATES,
-                    state_filter_int=state_filter_int,
-                    name_filter=name_filter,
-                    sort_field=sort_field,
-                    descending=reverse,
-                    offset=offset,
-                    limit=limit,
-                )
+        jobs, total_count = _query_jobs(self._db, query, state_ids)
 
         task_summaries = _task_summaries_for_jobs(self._db, {j.job_id for j in jobs})
         has_pending = any(j.state == job_pb2.JOB_STATE_PENDING for j in jobs)
         autoscaler_pending_hints = self._get_autoscaler_pending_hints() if has_pending else {}
         has_children = _parent_ids_with_children(self._db, [j.job_id for j in jobs])
         all_jobs = self._jobs_to_protos(jobs, task_summaries, autoscaler_pending_hints, has_children=has_children)
-        has_more = limit > 0 and offset + limit < total_count
+        has_more = query.limit > 0 and query.offset + query.limit < total_count
         return controller_pb2.Controller.ListJobsResponse(
             jobs=all_jobs,
             total_count=total_count,

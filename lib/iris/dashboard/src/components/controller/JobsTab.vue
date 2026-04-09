@@ -90,49 +90,8 @@ function saveExpandedJobs() {
   }
 }
 
-async function refreshExpandedChildren() {
-  const expandedIds = [...expandedJobs.value]
-  for (const parentJobId of expandedIds) {
-    const payload = await controllerRpcCall<ListJobsResponse>('ListJobs', {
-      query: {
-        scope: 'JOB_QUERY_SCOPE_CHILDREN',
-        parentJobId,
-        sortField: SORT_FIELD_MAP[sortField.value],
-        sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
-        stateFilter: stateFilter.value || undefined,
-      } satisfies JobQuery,
-    })
-    const nextChildren = new Map(childJobsByParent.value)
-    nextChildren.set(parentJobId, payload.jobs ?? [])
-    childJobsByParent.value = nextChildren
-  }
-}
-
-async function fetchAll() {
-  await fetchJobs()
-  await refreshExpandedChildren()
-}
-
-onMounted(fetchAll)
-useAutoRefresh(fetchAll, 30_000)
-
-watch([page, sortField, sortDir, nameFilter, stateFilter], () => {
-  childJobsByParent.value = new Map()
-  expandedJobs.value = new Set()
-  saveExpandedJobs()
-  fetchJobs()
-})
-
-watch(stateFilter, () => {
-  page.value = 0
-})
-
-// -- Job tree (lazy-loaded children) --
-
-const flattenedJobs = computed(() => flattenLoadedJobTree(jobs.value, childJobsByParent.value, expandedJobs.value))
-
-// -- Interactions --
 async function loadChildJobs(parentJobId: string) {
+  if (loadingChildJobs.value.has(parentJobId)) return
   const nextLoading = new Set(loadingChildJobs.value)
   nextLoading.add(parentJobId)
   loadingChildJobs.value = nextLoading
@@ -156,6 +115,30 @@ async function loadChildJobs(parentJobId: string) {
   }
 }
 
+async function fetchAll() {
+  await fetchJobs()
+  await Promise.all([...expandedJobs.value].map(loadChildJobs))
+}
+
+onMounted(fetchAll)
+useAutoRefresh(fetchAll, 30_000)
+
+watch([page, sortField, sortDir, nameFilter, stateFilter], () => {
+  childJobsByParent.value = new Map()
+  expandedJobs.value = new Set()
+  saveExpandedJobs()
+  fetchJobs()
+})
+
+watch(stateFilter, () => {
+  page.value = 0
+})
+
+// -- Job tree (lazy-loaded children) --
+
+const flattenedJobs = computed(() => flattenLoadedJobTree(jobs.value, childJobsByParent.value, expandedJobs.value))
+
+// -- Interactions --
 function toggleExpanded(job: JobStatus) {
   const next = new Set(expandedJobs.value)
   if (next.has(job.jobId)) {
