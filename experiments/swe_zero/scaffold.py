@@ -148,6 +148,28 @@ def simulate_bash(command: str, snapshot: RepoSnapshot) -> str:
     if "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in command:
         return "Submission successful."
 
+    # cat with heredoc: write file (cat <<EOF > file or cat << 'EOF' > file)
+    if "<<" in command and (">" in command or "cat" in command):
+        # Extract target file from redirect
+        redirect_match = re.search(r">\s*(\S+)", command)
+        if redirect_match:
+            path = redirect_match.group(1)
+            # Extract content between heredoc markers
+            heredoc_match = re.search(r"<<\s*'?(\w+)'?\s*\n?(.*)", command, re.DOTALL)
+            if heredoc_match:
+                marker = heredoc_match.group(1)
+                rest = heredoc_match.group(2)
+                # Find the end marker
+                end_idx = rest.find(f"\n{marker}")
+                if end_idx >= 0:
+                    file_content = rest[:end_idx]
+                else:
+                    file_content = rest
+                full_path = path if path.startswith("/") else f"/repo/{path}"
+                snapshot.files[full_path] = file_content
+                return ""
+        return ""
+
     # cat: read file
     if command.startswith("cat "):
         path = _extract_first_path(command[4:])
@@ -218,9 +240,13 @@ def simulate_bash(command: str, snapshot: RepoSnapshot) -> str:
     if command.startswith("sed "):
         return _simulate_sed(command, snapshot)
 
-    # echo with redirect: write file
-    if ">>" in command or ">" in command:
+    # echo/printf with redirect: write file
+    if ">>" in command or (">" in command and not command.startswith("grep")):
         return ""  # Acknowledge write silently
+
+    # tee: write to file
+    if "tee " in command:
+        return ""
 
     # wc: word/line count
     if command.startswith("wc "):
