@@ -122,6 +122,17 @@ export interface JobStatus {
   hasChildren?: boolean
 }
 
+export interface JobQuery {
+  scope?: string
+  parentJobId?: string
+  nameFilter?: string
+  stateFilter?: string
+  sortField?: string
+  sortDirection?: string
+  offset?: number
+  limit?: number
+}
+
 // -- Controller RPC Responses --
 
 export interface ListJobsResponse {

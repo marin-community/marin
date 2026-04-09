@@ -5,12 +5,12 @@ import { controllerRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName } from '@/types/status'
 import type {
-  JobStatus, TaskStatus, LaunchJobRequest,
+  JobStatus, TaskStatus, LaunchJobRequest, JobQuery,
   GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
   ResourceUsage,
 } from '@/types/rpc'
-import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig } from '@/utils/formatting'
-import { flattenJobTree, getLeafJobName, getParentJobName, jobsWithChildren } from '@/utils/jobTree'
+import { timestampMs, formatTimestamp, formatDuration, formatBytes, formatCpuMillicores, formatDeviceConfig } from '@/utils/formatting'
+import { getLeafJobName } from '@/utils/jobTree'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
@@ -29,8 +29,9 @@ const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed
 const job = ref<JobStatus | null>(null)
 const jobRequest = ref<LaunchJobRequest | null>(null)
 const tasks = ref<TaskStatus[]>([])
-const descendantJobs = ref<JobStatus[]>([])
+const childJobsByParent = ref<Map<string, JobStatus[]>>(new Map())
 const expandedChildJobs = ref<Set<string>>(new Set())
+const loadingChildJobs = ref<Set<string>>(new Set())
 const loading = ref(true)
 const error = ref<string | null>(null)
 const profilingTaskId = ref<string | null>(null)
@@ -40,11 +41,9 @@ const stateFilter = ref('')
 
 type SortColumn = 'task' | 'state' | 'mem' | 'cpu' | 'duration'
 type SortDir = 'asc' | 'desc'
-type ChildJobsView = 'direct' | 'all'
 
 const sortColumn = ref<SortColumn | null>(null)
 const sortDir = ref<SortDir>('asc')
-const childJobsView = ref<ChildJobsView>('direct')
 
 type ChildSortColumn = 'name' | 'state' | 'duration'
 const childSortColumn = ref<ChildSortColumn | null>(null)
@@ -82,6 +81,16 @@ async function copyJobName() {
 
 let fetchGeneration = 0
 
+async function fetchChildJobs(parentJobId: string): Promise<JobStatus[]> {
+  const response = await controllerRpcCall<ListJobsResponse>('ListJobs', {
+    query: {
+      scope: 'JOB_QUERY_SCOPE_CHILDREN',
+      parentJobId,
+    } satisfies JobQuery,
+  })
+  return response.jobs ?? []
+}
+
 async function fetchData() {
   const gen = ++fetchGeneration
   error.value = null
@@ -99,29 +108,12 @@ async function fetchData() {
     jobRequest.value = jobResp.request ?? null
     tasks.value = tasksResp.tasks ?? []
 
-    // Fetch all descendants by walking the job tree level by level via parentJobId
-    const jobId = jobResp.job.jobId
-    if (jobId) {
-      const result: JobStatus[] = []
-      const queue = [jobId]
-      while (queue.length > 0) {
-        const parentId = queue.shift()!
-        const resp = await controllerRpcCall<ListJobsResponse>('ListJobs', {
-          parentJobId: parentId,
-        })
-        if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
-        const children = resp.jobs ?? []
-        result.push(...children)
-        for (const child of children) {
-          if (child.hasChildren) {
-            queue.push(child.jobId)
-          }
-        }
-      }
-      descendantJobs.value = result
-    } else {
-      descendantJobs.value = []
-    }
+    const parentIds = [props.jobId, ...expandedChildJobs.value]
+    const childEntries = await Promise.all(
+      parentIds.map(async parentJobId => [parentJobId, await fetchChildJobs(parentJobId)] as const),
+    )
+    if (gen !== fetchGeneration) return
+    childJobsByParent.value = new Map(childEntries)
   } catch (e) {
     if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
     error.value = e instanceof Error ? e.message : String(e)
@@ -153,9 +145,9 @@ watch(() => props.jobId, () => {
   job.value = null
   jobRequest.value = null
   tasks.value = []
-  descendantJobs.value = []
+  childJobsByParent.value = new Map()
   expandedChildJobs.value = new Set()
-  childJobsView.value = 'direct'
+  loadingChildJobs.value = new Set()
   error.value = null
   fetchData()
   startRefresh()
@@ -196,13 +188,6 @@ function taskIndex(taskId: string): string {
 
 // -- Child job helpers --
 
-const visibleChildJobs = computed(() => {
-  if (childJobsView.value === 'all') return descendantJobs.value
-  const parentName = job.value?.name
-  if (!parentName) return []
-  return descendantJobs.value.filter(child => getParentJobName(child.name) === parentName)
-})
-
 function childJobDurationMs(j: JobStatus): number {
   const started = timestampMs(j.startedAt)
   if (!started) return 0
@@ -231,15 +216,50 @@ const childJobComparator = computed<((a: JobStatus, b: JobStatus) => number) | u
   }
 })
 
-const flattenedChildJobs = computed(() => flattenJobTree(visibleChildJobs.value, expandedChildJobs.value, childJobComparator.value))
-const expandableChildJobs = computed(() => jobsWithChildren(visibleChildJobs.value))
+const flattenedChildJobs = computed(() => {
+  const result: Array<{ job: JobStatus; depth: number }> = []
 
-function toggleExpandedChildJob(jobName: string) {
+  function walk(parentJobId: string, depth: number) {
+    const children = childJobsByParent.value.get(parentJobId) ?? []
+    const sorted = childJobComparator.value ? [...children].sort(childJobComparator.value) : children
+    for (const child of sorted) {
+      result.push({ job: child, depth })
+      if (expandedChildJobs.value.has(child.jobId)) {
+        walk(child.jobId, depth + 1)
+      }
+    }
+  }
+
+  walk(props.jobId, 0)
+  return result
+})
+
+async function loadChildJobs(parentJobId: string) {
+  if (loadingChildJobs.value.has(parentJobId)) return
+  const nextLoading = new Set(loadingChildJobs.value)
+  nextLoading.add(parentJobId)
+  loadingChildJobs.value = nextLoading
+  try {
+    const children = await fetchChildJobs(parentJobId)
+    const nextChildren = new Map(childJobsByParent.value)
+    nextChildren.set(parentJobId, children)
+    childJobsByParent.value = nextChildren
+  } finally {
+    const doneLoading = new Set(loadingChildJobs.value)
+    doneLoading.delete(parentJobId)
+    loadingChildJobs.value = doneLoading
+  }
+}
+
+function toggleExpandedChildJob(jobStatus: JobStatus) {
   const next = new Set(expandedChildJobs.value)
-  if (next.has(jobName)) {
-    next.delete(jobName)
+  if (next.has(jobStatus.jobId)) {
+    next.delete(jobStatus.jobId)
   } else {
-    next.add(jobName)
+    next.add(jobStatus.jobId)
+    if (!childJobsByParent.value.has(jobStatus.jobId)) {
+      void loadChildJobs(jobStatus.jobId)
+    }
   }
   expandedChildJobs.value = next
 }
@@ -579,26 +599,6 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary">
             Child Jobs
           </h3>
-          <div class="inline-flex rounded-md border border-surface-border bg-surface p-0.5">
-            <button
-              class="px-2.5 py-1 text-xs rounded transition-colors"
-              :class="childJobsView === 'direct'
-                ? 'bg-accent text-white'
-                : 'text-text-secondary hover:bg-surface-raised hover:text-text'"
-              @click="childJobsView = 'direct'"
-            >
-              Direct only
-            </button>
-            <button
-              class="px-2.5 py-1 text-xs rounded transition-colors"
-              :class="childJobsView === 'all'
-                ? 'bg-accent text-white'
-                : 'text-text-secondary hover:bg-surface-raised hover:text-text'"
-              @click="childJobsView = 'all'"
-            >
-              All descendants
-            </button>
-          </div>
         </div>
         <table class="w-full border-collapse">
           <thead>
@@ -628,11 +628,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               >
                 <span class="inline-flex items-center gap-1">
                   <button
-                    v-if="expandableChildJobs.has(node.job.name)"
+                    v-if="node.job.hasChildren"
                     class="text-text-muted hover:text-text select-none w-4 text-center text-xs"
-                    @click.stop="toggleExpandedChildJob(node.job.name)"
+                    @click.stop="toggleExpandedChildJob(node.job)"
                   >
-                    {{ expandedChildJobs.has(node.job.name) ? '▼' : '▶' }}
+                    {{ loadingChildJobs.has(node.job.jobId) ? '…' : (expandedChildJobs.has(node.job.jobId) ? '▼' : '▶') }}
                   </button>
                   <span v-else class="w-4" />
                   <RouterLink
