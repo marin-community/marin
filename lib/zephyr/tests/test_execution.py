@@ -659,7 +659,7 @@ def test_pipeline_id_increments(local_client, tmp_path):
 
 
 def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp_path):
-    """On the last stage, pull_task returns SHUTDOWN as soon as the queue is empty."""
+    """When the last stage's tasks are all in-flight or done, pull_task returns SHUTDOWN."""
     from zephyr.execution import ListShard, ShardTask, TaskResult, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
@@ -684,69 +684,96 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     result = coord.pull_task("worker-A")
     assert result is None
 
-    # Last stage with 2 tasks: worker finishes one, queue empty -> SHUTDOWN
-    # even though the other task is still in-flight.
-    tasks = [
-        ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test-last")
-        for i in range(2)
-    ]
-    coord.start_stage("stage-1", tasks, is_last_stage=True)
-    coord.pull_task("worker-A")  # shard 0
-    pulled_b = coord.pull_task("worker-B")  # shard 1 — still in-flight
-    assert pulled_b is not None
+    # Last stage: single task, worker completes it, queue empty -> SHUTDOWN
+    task2 = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test-last",
+    )
+    coord.start_stage("stage-1", [task2], is_last_stage=True)
+    pulled = coord.pull_task("worker-A")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    _task, attempt, _config = pulled
+    coord.report_result("worker-A", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
-    _task_b, attempt_b, _ = pulled_b
-    coord.report_result("worker-B", 1, attempt_b, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
-
-    # Queue empty on last stage -> SHUTDOWN, even with worker-A still in-flight
-    result = coord.pull_task("worker-B")
+    # Queue empty on last stage, nothing in-flight -> SHUTDOWN
+    result = coord.pull_task("worker-A")
     assert result == "SHUTDOWN"
 
 
+def test_last_stage_idle_pool_caps_excess_workers(actor_context, tmp_path):
+    """Excess idle workers beyond MIN_IDLE_WORKERS get SHUTDOWN on the last stage."""
+    import zephyr.execution as zexec
+    from zephyr.execution import ListShard, ShardTask, ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    # Use 2 tasks with MIN_IDLE_WORKERS=1 (patched) so a third idle worker exits.
+    orig = zexec.MIN_IDLE_WORKERS
+    try:
+        zexec.MIN_IDLE_WORKERS = 1
+        tasks = [
+            ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test")
+            for i in range(2)
+        ]
+        coord.start_stage("last-stage", tasks, is_last_stage=True)
+
+        # Two workers pull the two tasks (now in-flight).
+        coord.pull_task("worker-A")
+        coord.pull_task("worker-B")
+
+        # First idle worker stays alive (pool of 1).
+        result1 = coord.pull_task("worker-C")
+        assert result1 is None
+
+        # Second idle worker exceeds the pool -> SHUTDOWN.
+        result2 = coord.pull_task("worker-D")
+        assert result2 == "SHUTDOWN"
+    finally:
+        zexec.MIN_IDLE_WORKERS = orig
+
+
 def test_last_shard_requeued_after_worker_crash(actor_context, tmp_path):
-    """In-flight workers pick up requeued shards after a crash on the last stage. #4200."""
+    """Surviving idle workers pick up requeued shards after a crash on the last stage. #4200."""
     from zephyr.execution import ListShard, ShardTask, TaskResult, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
 
     tasks = [
-        ShardTask(shard_idx=i, total_shards=3, shard=ListShard(refs=[]), operations=[], stage_name="test")
-        for i in range(3)
+        ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test")
+        for i in range(2)
     ]
     coord.start_stage("last-stage", tasks, is_last_stage=True)
 
     coord.heartbeat("worker-A")
     coord.heartbeat("worker-B")
-    coord.heartbeat("worker-C")
     pulled_a = coord.pull_task("worker-A")
     coord.pull_task("worker-B")  # shard 1 in-flight
-    pulled_c = coord.pull_task("worker-C")
 
-    # Worker A finishes — queue empty on last stage -> SHUTDOWN (exits promptly)
+    # Worker A finishes — stays alive as idle (pool covers crash recovery).
     _task_a, attempt_a, _ = pulled_a
     coord.report_result(
         "worker-A", _task_a.shard_idx, attempt_a, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
     )
-    assert coord.pull_task("worker-A") == "SHUTDOWN"
+    result = coord.pull_task("worker-A")
+    assert result is None  # idle, within MIN_IDLE_WORKERS pool
 
-    # Worker B crashes. Backdate B's heartbeat to simulate crash; use a
-    # generous timeout so C (still in-flight) stays alive.
+    # Worker B crashes. Expire B's heartbeat so shard 1 is requeued.
     coord._last_seen["worker-B"] = coord._last_seen["worker-B"] - 200
     coord.check_heartbeats(timeout=10)
 
-    # Worker C finishes its own task, then picks up the requeued shard from B.
-    _task_c, attempt_c, _ = pulled_c
-    coord.report_result(
-        "worker-C", _task_c.shard_idx, attempt_c, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
-    )
-    pulled = coord.pull_task("worker-C")
+    # Worker A picks up the requeued shard and completes the pipeline.
+    pulled = coord.pull_task("worker-A")
     assert pulled not in (None, "SHUTDOWN")
     _task, attempt, _ = pulled
     coord.report_result(
-        "worker-C", _task.shard_idx, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+        "worker-A", _task.shard_idx, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
     )
-    assert coord.pull_task("worker-C") == "SHUTDOWN"
+    assert coord.pull_task("worker-A") == "SHUTDOWN"
 
 
 def test_coordinator_loop_crash_aborts_pipeline(actor_context, tmp_path):

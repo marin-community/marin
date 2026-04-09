@@ -301,6 +301,14 @@ class ZephyrWorkerError(RuntimeError):
 # remain retryable.
 _NON_RETRYABLE_ERRORS = (ZephyrWorkerError, ValueError, TypeError, KeyError, AttributeError)
 
+# Minimum number of idle workers to keep alive on the last stage while tasks
+# are still in-flight.  This reserves capacity so that if an in-flight worker
+# crashes and its shard is requeued, there are idle workers ready to pick it
+# up immediately.  Workers beyond this pool are sent SHUTDOWN as soon as the
+# task queue is empty, avoiding the degenerate case where hundreds of workers
+# idle-poll until the last in-flight task completes.
+MIN_IDLE_WORKERS = 10
+
 
 # ---------------------------------------------------------------------------
 # WorkerContext protocol — the public interface exposed to user task code
@@ -555,8 +563,16 @@ class ZephyrCoordinator:
 
             if not self._task_queue:
                 if self._is_last_stage:
-                    self._worker_states[worker_id] = WorkerState.DEAD
-                    return "SHUTDOWN"
+                    if not self._in_flight:
+                        # Nothing in-flight and queue empty — stage is done.
+                        self._worker_states[worker_id] = WorkerState.DEAD
+                        return "SHUTDOWN"
+                    # Keep a small pool of idle workers alive for crash recovery;
+                    # shut down the rest to avoid hundreds of workers idle-polling.
+                    idle_count = sum(1 for s in self._worker_states.values() if s == WorkerState.READY)
+                    if idle_count > MIN_IDLE_WORKERS:
+                        self._worker_states[worker_id] = WorkerState.DEAD
+                        return "SHUTDOWN"
                 return None
 
             task = self._task_queue.popleft()
