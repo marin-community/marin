@@ -79,6 +79,7 @@ def aggregate_results(config: AggregateConfig):
         rows = []
         for logprob, trace in zip(logprob_records, trace_records, strict=True):
             mask = get_tool_call_mask(logprob["token_ids"])
+            mask = mask[1:] + [0]
             masked_losses = [l for l, m in zip(logprob["losses"], mask) if m]
             n_masked = len(masked_losses)
             total_masked_loss = sum(masked_losses)
