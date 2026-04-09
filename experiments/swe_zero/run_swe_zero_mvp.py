@@ -150,54 +150,28 @@ def _run_with_vllm(model_name: str, model_path: str, step: int, output_dir: str)
         _run_steps(env.server_url, model_name, step, output_dir)
 
 
-def _launch_on_cluster(model_name: str, model_path: str, step: int, output_dir: str, tpu_type: str) -> None:
-    """Submit as a Fray job to the Iris cluster (same pattern as harbor_evaluator)."""
-    from fray.v1.cluster import (
-        Entrypoint,
-        EnvironmentConfig,
-        JobRequest,
-        ResourceConfig,
-        TpuConfig,
-        current_cluster,
+def _print_ray_run_command(model_name: str, step: int, output_dir: str, tpu_type: str) -> None:
+    """Print the ray_run.py command to submit this job to the Iris cluster."""
+    cmd = (
+        f"uv run lib/marin/src/marin/run/ray_run.py \\\n"
+        f"  --extra vllm \\\n"
+        f"  --env_vars VLLM_TPU_SKIP_PRECOMPILE 1 \\\n"
+        f"  --env_vars VLLM_ALLOW_LONG_MAX_MODEL_LEN 1 \\\n"
+        f"  --env_vars VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION 1 \\\n"
+        f"  --env_vars MARIN_VLLM_MODE docker \\\n"
+        f"  --env_vars HF_TOKEN $HF_TOKEN \\\n"
+        f"  --tpu_type {tpu_type} \\\n"
+        f"  -- python experiments/swe_zero/run_swe_zero_mvp.py \\\n"
+        f"    --local \\\n"
+        f"    --model {model_name} \\\n"
+        f"    --step {step} \\\n"
+        f"    --output_dir {output_dir}"
     )
-    from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, resolve_vllm_mode
-
-    mode_str = resolve_vllm_mode(None)
-    pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
-
-    env_vars = {
-        "VLLM_TPU_SKIP_PRECOMPILE": "1",
-        "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
-        "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION": "1",
-    }
-    for key in ("HF_TOKEN", "WANDB_API_KEY", "MARIN_VLLM_MODE", "MARIN_PREFIX"):
-        value = os.environ.get(key)
-        if value:
-            env_vars[key] = value
-
-    def _run() -> None:
-        from marin.utils import remove_tpu_lockfile_on_exit
-
-        with remove_tpu_lockfile_on_exit():
-            _run_with_vllm(model_name, model_path, step, output_dir)
-
-    job_request = JobRequest(
-        name=f"swe-zero-step{step}",
-        entrypoint=Entrypoint.from_callable(_run),
-        resources=ResourceConfig(device=TpuConfig(variant=tpu_type)),
-        environment=EnvironmentConfig.create(
-            extras=["vllm"],
-            pip_packages=list(pip_packages),
-            env_vars=env_vars,
-        ),
-        max_retries_failure=0,
-        max_retries_preemption=10,
-    )
-
-    cluster = current_cluster()
-    logger.info("Submitting swe-zero-step%d to cluster (%s)", step, tpu_type)
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
+    print(f"\n{'=' * 60}")
+    print("Submit to Iris cluster with:")
+    print(f"{'=' * 60}")
+    print(cmd)
+    print(f"{'=' * 60}\n")
 
 
 def main():
@@ -218,11 +192,11 @@ def main():
         # Direct mode: server already running
         _run_steps(args.api_base, args.model, args.step, args.output_dir)
     elif args.local:
-        # Local mode: start VllmEnvironment in this process
+        # Local/on-worker mode: start VllmEnvironment in this process
         _run_with_vllm(args.model, model_path, args.step, args.output_dir)
     else:
-        # Cluster mode: submit as Fray job
-        _launch_on_cluster(args.model, model_path, args.step, args.output_dir, args.tpu_type)
+        # Print the ray_run.py command for cluster submission
+        _print_ray_run_command(args.model, args.step, args.output_dir, args.tpu_type)
 
 
 if __name__ == "__main__":
