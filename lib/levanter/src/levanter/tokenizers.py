@@ -541,11 +541,6 @@ _TOKENIZER_ALLOW_PATTERNS = [
 ]
 
 
-def _hf_name_to_mirror_key(name_or_path: str) -> str:
-    """Convert 'org/model' to 'org--model' for use as a mirror path component."""
-    return name_or_path.replace("/", "--")
-
-
 def _fetch_file_atomic(src_url: str, dest_path: str) -> bool:
     """Atomically fetch src_url to dest_path via a .tmp sibling.
 
@@ -614,8 +609,7 @@ def _stage_from_mirror(name_or_path: str, local_dir: str) -> bool:
     file list) and fetches them all atomically.  Returns True if any files
     were copied.
     """
-    mirror_key = _hf_name_to_mirror_key(name_or_path)
-    mirror_dir = f"{_MIRROR_TOKENIZER_PREFIX}/{mirror_key}"
+    mirror_dir = f"{_MIRROR_TOKENIZER_PREFIX}/{name_or_path}/hf-hub-{_hf_hub_version}"
     mirror_base = f"mirror://{mirror_dir}"
     copied = False
     try:
@@ -651,8 +645,7 @@ def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
     """
     snapshot_dir = snapshot_download(name_or_path, allow_patterns=_TOKENIZER_ALLOW_PATTERNS)
 
-    mirror_key = _hf_name_to_mirror_key(name_or_path)
-    mirror_base = f"mirror://{_MIRROR_TOKENIZER_PREFIX}/{mirror_key}"
+    mirror_base = f"mirror://{_MIRROR_TOKENIZER_PREFIX}/{name_or_path}/hf-hub-{_hf_hub_version}"
 
     for filename in sorted(os.listdir(snapshot_dir)):
         src_path = os.path.join(snapshot_dir, filename)
@@ -671,7 +664,7 @@ def _stage_tokenizer(name_or_path: str) -> str:
     success gate — no hardcoded file-list checks.  Resolution order:
 
       1. Local cache — a prior call already staged this tokenizer on disk.
-      2. mirror://tokenizers/{name--}/ — discovered via ``ls()``, fetches
+      2. mirror://tokenizers/{org}/{model}/hf-hub-{ver}/ — discovered via ``ls()``, fetches
          whatever files a previous worker populated (any shape).
       3. HF Hub via ``snapshot_download`` — fetches every tokenizer-relevant
          file the repo ships, then populates the mirror for future workers.
@@ -686,8 +679,8 @@ def _stage_tokenizer(name_or_path: str) -> str:
     local_dir = os.path.join(
         tempfile.gettempdir(),
         "levanter_tokenizers",
-        f"hfhub_{_hf_hub_version}",
-        _hf_name_to_mirror_key(name_or_path),
+        name_or_path,
+        f"hf-hub-{_hf_hub_version}",
     )
     os.makedirs(local_dir, exist_ok=True)
 
@@ -704,19 +697,16 @@ def _stage_tokenizer(name_or_path: str) -> str:
     return local_dir
 
 
-def _load_hf_base_tokenizer(name_or_path: str) -> HfBaseTokenizer:
-    """Load an HfBaseTokenizer from a local directory (pre-staged by _stage_tokenizer).
+def _load_hf_base_tokenizer(local_dir: str) -> HfBaseTokenizer:
+    """Load HfBaseTokenizer from a pre-staged local directory using from_file.
 
-    When *name_or_path* is a directory, only local files are used — no network
-    calls to HF Hub. This avoids the per-file HEAD revalidation requests that
-    ``huggingface_hub`` would otherwise make even for cached files.
+    ``tokenizers.Tokenizer.from_pretrained`` only accepts Hub identifiers and
+    has no ``local_files_only`` mode, so we locate tokenizer.json directly.
     """
-    local_path = os.path.join(name_or_path, "tokenizer.json")
-    if os.path.isfile(local_path):
-        return HfBaseTokenizer.from_file(local_path)
-    if os.path.isdir(name_or_path):
-        raise FileNotFoundError(f"tokenizer.json not found in staged directory: {name_or_path}")
-    return HfBaseTokenizer.from_pretrained(name_or_path)
+    tokenizer_json = os.path.join(local_dir, "tokenizer.json")
+    if not os.path.isfile(tokenizer_json):
+        raise FileNotFoundError(f"tokenizer.json not found in staged directory: {local_dir}")
+    return HfBaseTokenizer.from_file(tokenizer_json)
 
 
 def _load_chat_template_jinja(name_or_path: str) -> str | None:
