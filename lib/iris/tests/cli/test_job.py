@@ -213,6 +213,20 @@ def test_build_job_summary_includes_peak_memory_and_sorts_numerically():
     assert oom["duration_ms"] == 5_000
 
 
+def test_build_job_summary_hides_exit_code_for_non_terminal_tasks():
+    # Proto scalar default for exit_code is 0 — a RUNNING/BUILDING task must
+    # not be reported as a clean exit=0 in the summary.
+    job = _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_RUNNING, task_count=3, completed_count=0)
+    running = _task(0, _job_pb2.TASK_STATE_RUNNING, peak_mb=100, cur_mb=80, exit_code=0, duration_ms=1000)
+    building = _job_pb2.TaskStatus(task_id="/u/j/1", state=_job_pb2.TASK_STATE_BUILDING, exit_code=0)
+    done = _task(2, _job_pb2.TASK_STATE_SUCCEEDED, peak_mb=100, cur_mb=0, exit_code=0, duration_ms=1000)
+    summary = build_job_summary(job, [running, building, done])
+    by_idx = {t["index"]: t for t in summary["tasks"]}
+    assert by_idx["0"]["exit_code"] is None
+    assert by_idx["1"]["exit_code"] is None
+    assert by_idx["2"]["exit_code"] == 0
+
+
 def test_render_job_summary_text_shows_peak_memory():
     job = _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_FAILED, task_count=1, completed_count=1)
     tasks = [_task(0, _job_pb2.TASK_STATE_FAILED, peak_mb=9999, cur_mb=0, exit_code=137, duration_ms=1000, error="OOM")]

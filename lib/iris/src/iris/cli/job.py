@@ -917,6 +917,20 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
 
 
+# Mirrors iris.cluster.controller.db.TERMINAL_TASK_STATES. Duplicated here to
+# avoid a CLI → controller.db import dependency just for the constant.
+_TERMINAL_TASK_STATES: frozenset[int] = frozenset(
+    {
+        job_pb2.TASK_STATE_SUCCEEDED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_KILLED,
+        job_pb2.TASK_STATE_UNSCHEDULABLE,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_PREEMPTED,
+    }
+)
+
+
 def _task_state_name(state: job_pb2.TaskState) -> str:
     return job_pb2.TaskState.Name(state).replace("TASK_STATE_", "").lower()
 
@@ -972,7 +986,10 @@ def build_job_summary(
                 "task_id": t.task_id,
                 "index": _task_index(t.task_id),
                 "state": _task_state_name(t.state),
-                "exit_code": int(t.exit_code) if t.state != job_pb2.TASK_STATE_PENDING else None,
+                # Only surface exit_code once the task is terminal. Proto scalar
+                # defaults mean a RUNNING/ASSIGNED/BUILDING task would otherwise
+                # report exit=0 and look like a clean success.
+                "exit_code": int(t.exit_code) if t.state in _TERMINAL_TASK_STATES else None,
                 "duration_ms": _task_duration_ms(t),
                 "memory_mb": int(usage.memory_mb) if usage.memory_mb else 0,
                 "memory_peak_mb": int(usage.memory_peak_mb) if usage.memory_peak_mb else 0,
