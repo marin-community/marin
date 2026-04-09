@@ -42,7 +42,7 @@ _KUBECTL_TIMEOUT = 1800.0
 
 _S3_SECRET_NAME = "iris-s3-credentials"
 _CONTROLLER_CPU_REQUEST = "4"
-_CONTROLLER_MEMORY_REQUEST = "4Gi"
+_CONTROLLER_MEMORY_REQUEST = "16Gi"
 
 
 # S3-compatible endpoints that require virtual-hosted-style addressing where the
