@@ -18,6 +18,7 @@ import logging
 import os
 import sys
 import threading
+import traceback
 from contextlib import suppress
 from typing import Any
 
@@ -215,8 +216,6 @@ def main() -> None:
     try:
         execute_shard(sys.argv[1], sys.argv[2])
     except BaseException:
-        import traceback
-
         traceback.print_exc()
         exit_code = 1
     finally:
