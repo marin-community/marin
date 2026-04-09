@@ -157,6 +157,7 @@ class TestJobs:
         return "done"
 
 
+
 # Cloud task pods run `uv sync` per pod and need ~4GB; local workers share
 # a pre-built venv and would be fine with 1GB. Since these helpers execute
 # inside a worker with no access to the test fixture's is_cloud flag, we

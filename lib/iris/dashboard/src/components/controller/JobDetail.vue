@@ -226,23 +226,18 @@ const childJobComparator = computed<((a: JobStatus, b: JobStatus) => number) | u
   }
 })
 
+// In 'all' mode every node is auto-expanded so every descendant is visible.
+// In 'direct' mode the user expands interactively. Either way, pass the full
+// descendant set so jobsWithChildren can find parent-child pairs and render ▶.
 const flattenedChildJobs = computed(() => {
-  const result: Array<{ job: JobStatus; depth: number }> = []
-
-  function walk(parentJobId: string, depth: number) {
-    const children = childJobsByParent.value.get(parentJobId) ?? []
-    const sorted = childJobComparator.value ? [...children].sort(childJobComparator.value) : children
-    for (const child of sorted) {
-      result.push({ job: child, depth })
-      if (expandedChildJobs.value.has(child.jobId)) {
-        walk(child.jobId, depth + 1)
-      }
-    }
-  }
-
-  walk(props.jobId, 0)
-  return result
+  const effectiveExpanded = childJobsView.value === 'all'
+    ? new Set(descendantJobs.value.map(j => j.name))
+    : expandedChildJobs.value
+  return flattenJobTree(descendantJobs.value, effectiveExpanded, childJobComparator.value)
 })
+const expandableChildJobs = computed(() =>
+  childJobsView.value === 'all' ? new Set<string>() : jobsWithChildren(descendantJobs.value),
+)
 
 async function loadChildJobs(parentJobId: string) {
   if (loadingChildJobs.value.has(parentJobId)) return
