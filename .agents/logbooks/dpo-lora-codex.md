@@ -3021,3 +3021,53 @@ Important caveat:
 
 - this patch fixes future merged LoRA HF exports on this branch
 - existing merged LoRA `hf/step-*` artifacts produced before the axis-order fix should still be treated as potentially tainted until they are re-exported or repaired
+
+## 2026-04-08 LoRA DPO 5-Step Smoke-Run Attempt
+
+User asked for a real LoRA DPO smoke run to make sure the recent export fixes did not break training or HF export:
+
+- `5` training steps
+- `v5p-8`
+- `us-central1`
+- starting from `marin-community/marin-8b-instruct`
+
+I added a dedicated one-off wrapper:
+
+- [`experiments/tune_lora/smoke_5step_hf_export.py`](/Users/ahmed/code/marin/.claude/worktrees/spicy-hugging-cat/experiments/tune_lora/smoke_5step_hf_export.py)
+
+What the wrapper does:
+
+- reuses the canonical `tune_lora` Bloom SpecEval v2 LoRA-DPO path
+- pins `num_train_steps=5`
+- pins `steps_per_eval=5`
+- pins `steps_per_checkpoint=5`
+- pins `steps_per_hf_export=5`
+- keeps `model_name_or_path="marin-community/marin-8b-instruct"`
+- keeps the LoRA adapter/reference setup from the canonical executor path
+
+Launch attempts:
+
+1. Initial Iris job with the inherited LoRA resource request (`ram="400g"`):
+   - job: `/ahmed/lora-dpo-smoke-export-v5p8-5step`
+   - parent executor job started
+   - child `/train_dpo` remained pending
+   - pending reason was scheduler admission on the host RAM request:
+     - `Insufficient memory (need 400.0GB, available <~2GB>)`
+     - later also `Unsatisfied autoscaler demand ... quota-pool tier monotonicity`
+
+2. Reduced the smoke wrapper only to `ram="256g"` and relaunched:
+   - attempted fixed-name relaunches, then a fresh-name relaunch, then an auto-generated-name relaunch
+   - none of those follow-on launches actually created a new job object in Iris before the client RPC timed out
+
+Infra signal observed while diagnosing:
+
+- other Iris jobs on the cluster are currently failing with bundle-fetch timeouts from the controller, e.g.:
+  - `RuntimeError: Failed to fetch <bundle_id>: timed out`
+- that strongly suggests the current blocker is Iris/controller bundle distribution health, not a LoRA-DPO code regression in this branch
+
+Status at end of this session:
+
+- the smoke wrapper is ready and lint-clean
+- the first `400g` attempt was intentionally terminated after confirming the scheduler bottleneck
+- the `256g` relaunches have not yet produced a runnable job object because of controller-side submission/bundle issues
+- as a result, I do **not** yet have a completed LoRA-DPO smoke run proving end-to-end HF export on-cluster
