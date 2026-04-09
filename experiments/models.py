@@ -16,7 +16,7 @@ executor_main([download_step])
 ```
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
@@ -27,13 +27,16 @@ from marin.utils import get_directory_friendly_name
 class ModelConfig:
     hf_repo_id: str
     hf_revision: str
+    zephyr_max_parallelism: int = 8
+    hf_urls_glob: list[str] = field(default_factory=list)
+    output_name_suffix: str = ""
 
 
 MODEL_OUTPUT_SUBDIR = "models"
 
 
 def download_model_step(model_config: ModelConfig) -> ExecutorStep:
-    model_name = get_directory_friendly_name(model_config.hf_repo_id)
+    model_name = f"{get_directory_friendly_name(model_config.hf_repo_id)}{model_config.output_name_suffix}"
     model_revision = get_directory_friendly_name(model_config.hf_revision)
     download_step = ExecutorStep(
         name=f"{MODEL_OUTPUT_SUBDIR}/{model_name}--{model_revision}",
@@ -41,9 +44,11 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
         config=DownloadConfig(
             hf_dataset_id=model_config.hf_repo_id,
             revision=versioned(model_config.hf_revision),
+            hf_urls_glob=model_config.hf_urls_glob,
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
             hf_repo_type_prefix="",
+            zephyr_max_parallelism=model_config.zephyr_max_parallelism,
         ),
         # must override because it because if we don't then it will end in a hash
         # if it ends in a hash, then we cannot determine the local path
@@ -93,6 +98,71 @@ llama_3_3_70b_instruct = download_model_step(
     ModelConfig(
         hf_repo_id="meta-llama/Llama-3.3-70B-Instruct",
         hf_revision="6f6073b",
+    )
+)
+
+mixtral_8x7b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="mistralai/Mixtral-8x7B-Instruct-v0.1",
+        hf_revision="eba9230",
+        zephyr_max_parallelism=2,
+    )
+)
+
+gpt_oss_20b_vllm = download_model_step(
+    ModelConfig(
+        hf_repo_id="unsloth/gpt-oss-20b-BF16",
+        hf_revision="cc89b3e7fd423253264883a80a4fa5abc619649f",
+        zephyr_max_parallelism=4,
+        hf_urls_glob=[
+            "chat_template.jinja",
+            "config.json",
+            "generation_config.json",
+            "model-*.safetensors",
+            "model.safetensors.index.json",
+            "special_tokens_map.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+        ],
+        output_name_suffix="-vllm",
+    )
+)
+
+gpt_oss_20b_heretic_vllm = download_model_step(
+    ModelConfig(
+        hf_repo_id="p-e-w/gpt-oss-20b-heretic",
+        hf_revision="40a07b3c6d681a949db1ace3185050b5a0893093",
+        zephyr_max_parallelism=4,
+        hf_urls_glob=[
+            "chat_template.jinja",
+            "config.json",
+            "generation_config.json",
+            "model-*.safetensors",
+            "model.safetensors.index.json",
+            "special_tokens_map.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+        ],
+        output_name_suffix="-vllm",
+    )
+)
+
+gpt_oss_120b_vllm = download_model_step(
+    ModelConfig(
+        hf_repo_id="unsloth/gpt-oss-120b-BF16",
+        hf_revision="e7523373bc44b42296b43202e265a1eebf2ee16f",
+        zephyr_max_parallelism=4,
+        hf_urls_glob=[
+            "chat_template.jinja",
+            "config.json",
+            "generation_config.json",
+            "model-*.safetensors",
+            "model.safetensors.index.json",
+            "special_tokens_map.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+        ],
+        output_name_suffix="-vllm",
     )
 )
 
