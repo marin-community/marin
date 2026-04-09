@@ -14,12 +14,14 @@ Usage:
     ids = tok.encode("hello world")
 """
 
+import contextlib
 import dataclasses
 import functools
 import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
@@ -529,63 +531,72 @@ def _hf_name_to_mirror_key(name_or_path: str) -> str:
     return name_or_path.replace("/", "--")
 
 
+def _fetch_file_atomic(src_url: str, dest_path: str) -> bool:
+    """Atomically fetch src_url to dest_path via a .tmp sibling.
+
+    Returns False if the source does not exist; re-raises all other errors.
+    Prevents partial writes from poisoning the local cache on any failure.
+    """
+    tmp = dest_path + ".tmp"
+    try:
+        with fsspec.open(src_url, "rb") as src:
+            data = src.read()
+        with open(tmp, "wb") as dst:
+            dst.write(data)
+        os.replace(tmp, dest_path)
+        return True
+    except FileNotFoundError:
+        return False
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+
+
 @functools.lru_cache(maxsize=32)
 def _stage_tokenizer(name_or_path: str) -> str:
-    """Download all tokenizer files for name_or_path to a local directory.
+    """Download all tokenizer files for name_or_path to a stable local directory.
 
-    Resolution order (one pass for all files, one warning on mirror failure):
+    Resolution order (single mirror attempt, one warning on failure):
       1. mirror://tokenizers/{name--}/  — GCS/S3 via MirrorFileSystem
-      2. HF Hub (network) — populates mirror on success (best-effort)
+      2. HF Hub (network) — populates mirror per-file as a side-effect
 
-    Returns the local directory path. Subsequent calls for the same tokenizer
-    are free (lru_cache).
+    Returns the local directory path. lru_cache makes subsequent calls free.
     """
     local_dir = os.path.join(tempfile.gettempdir(), "levanter_tokenizers", _hf_name_to_mirror_key(name_or_path))
     os.makedirs(local_dir, exist_ok=True)
 
-    # Already fully staged from a prior process run
     if os.path.exists(os.path.join(local_dir, "tokenizer.json")):
         return local_dir
 
     mirror_base = f"mirror://{_MIRROR_TOKENIZER_PREFIX}/{_hf_name_to_mirror_key(name_or_path)}"
 
-    # 1. Mirror — single attempt for all files, single warning on any failure
-    mirror_ok = False
+    # 1. Mirror — one attempt covering all files, one warning if it fails
     try:
         for filename in _TOKENIZER_FILES:
-            try:
-                with fsspec.open(f"{mirror_base}/{filename}", "rb") as src:
-                    with open(os.path.join(local_dir, filename), "wb") as dst:
-                        dst.write(src.read())
-            except FileNotFoundError:
-                pass  # optional files (e.g. chat_template.jinja may not exist)
-        mirror_ok = True
+            _fetch_file_atomic(f"{mirror_base}/{filename}", os.path.join(local_dir, filename))
     except Exception as e:
-        logger.warning("Could not load tokenizer from mirror %s: %s", mirror_base, e)
+        logger.warning("Could not stage tokenizer from mirror %s: %s", mirror_base, e)
+    else:
+        if os.path.exists(os.path.join(local_dir, "tokenizer.json")):
+            logger.info("Staged tokenizer %s from mirror", name_or_path)
+            return local_dir
 
-    if mirror_ok and os.path.exists(os.path.join(local_dir, "tokenizer.json")):
-        logger.info("Staged tokenizer %s from mirror", name_or_path)
-        return local_dir
-
-    # 2. HF Hub (network)
-    import shutil
-
+    # 2. HF Hub, populating the mirror per-file as a side-effect
     for filename in _TOKENIZER_FILES:
+        dest = os.path.join(local_dir, filename)
         try:
             hf_local = hf_hub_download(name_or_path, filename)
-            shutil.copy2(hf_local, os.path.join(local_dir, filename))
+            tmp = dest + ".tmp"
+            shutil.copy2(hf_local, tmp)
+            os.replace(tmp, dest)
         except (EntryNotFoundError, RepositoryNotFoundError):
-            pass
-
-    # Populate mirror (best-effort)
-    for filename in _TOKENIZER_FILES:
-        local_file = os.path.join(local_dir, filename)
-        if os.path.exists(local_file):
-            try:
-                with open(local_file, "rb") as src, fsspec.open(f"{mirror_base}/{filename}", "wb") as dst:
-                    dst.write(src.read())
-            except Exception:
-                logger.debug("Could not populate mirror for %s/%s", name_or_path, filename, exc_info=True)
+            continue
+        try:
+            with open(dest, "rb") as src, fsspec.open(f"{mirror_base}/{filename}", "wb") as dst:
+                dst.write(src.read())
+        except Exception:
+            logger.debug("Could not populate mirror for %s/%s", name_or_path, filename, exc_info=True)
 
     return local_dir
 
