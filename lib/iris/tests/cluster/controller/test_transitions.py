@@ -1963,15 +1963,17 @@ def test_requeued_task_maintains_priority_position(state):
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
-    # Submit a deep job and a shallow job
+    # Submit a deep job (under an explicit parent tree) and a shallow job
+    submit_job(state, "tree", make_job_request("tree"), timestamp_ms=500)
     submit_job(state, "/test-user/tree/deep", make_job_request("deep"), timestamp_ms=1000)
     submit_job(state, "shallow", make_job_request("shallow"), timestamp_ms=2000)
 
     # Initially: deep job comes first
     pending = _schedulable_tasks(state)
-    assert len(pending) == 2
+    assert len(pending) == 3
     assert pending[0].job_id == JobName.from_string("/test-user/tree/deep")
-    assert pending[1].job_id == JobName.root("test-user", "shallow")
+    assert pending[1].job_id == JobName.root("test-user", "tree")
+    assert pending[2].job_id == JobName.root("test-user", "shallow")
 
     # Dispatch and fail the deep job's task (with retries enabled)
     deep_req = make_job_request("deep")

@@ -1108,18 +1108,17 @@ class ControllerTransitions:
                 cur.execute("UPDATE meta SET value = ? WHERE key = 'last_submission_ms'", (effective_submission_ms,))
 
             parent_job_id = job_id.parent.to_wire() if job_id.parent is not None else None
-            if parent_job_id is not None:
-                parent_exists = cur.execute("SELECT 1 FROM jobs WHERE job_id = ?", (parent_job_id,)).fetchone()
-                if parent_exists is None:
-                    parent_job_id = None
             root_submitted_ms = effective_submission_ms
             if parent_job_id is not None:
                 parent = cur.execute(
                     "SELECT root_submitted_at_ms FROM jobs WHERE job_id = ?",
                     (parent_job_id,),
                 ).fetchone()
-                if parent is not None:
-                    root_submitted_ms = int(parent["root_submitted_at_ms"])
+                # `launch_job` is responsible for rejecting submissions with a
+                # missing parent; if we reach here the parent row must exist.
+                if parent is None:
+                    raise ValueError(f"Cannot submit job {job_id}: parent {parent_job_id} is absent from the database")
+                root_submitted_ms = int(parent["root_submitted_at_ms"])
 
             deadline_epoch_ms: int | None = None
             if request.HasField("scheduling_timeout") and request.scheduling_timeout.milliseconds > 0:
