@@ -1592,7 +1592,12 @@ class K8sTaskProvider:
             return []
 
         try:
-            events = self.kubectl.list_json(K8sResource.EVENTS)
+            # Filter server-side to pod warning events only; fetching all namespace
+            # events is expensive and causes OOM on busy clusters.
+            events = self.kubectl.list_json(
+                K8sResource.EVENTS,
+                field_selector="involvedObject.kind=Pod,type=Warning",
+            )
         except Exception as e:
             logger.warning("Failed to fetch scheduling events: %s", e)
             return []
