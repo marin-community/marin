@@ -534,7 +534,6 @@ def test_heartbeat_death_aborts_at_max_shard_failures(actor_context, tmp_path):
 
     assert coord._fatal_error is not None
     assert "Shard 0" in coord._fatal_error
-    assert "keep dying" in coord._fatal_error
 
 
 def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):

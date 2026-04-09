@@ -519,45 +519,65 @@ class ZephyrCoordinator:
         if retried:
             logger.warning("[%s] Shards retried (shard: attempts): %s", self._execution_id, retried)
 
-    def _maybe_requeue_worker_task(self, worker_id: str) -> None:
-        """If the worker has a task in-flight, re-queue it unless the shard has
-        exceeded MAX_SHARD_FAILURES, in which case abort the pipeline."""
-        task_and_attempt = self._in_flight.pop(worker_id, None)
-        if task_and_attempt is not None:
-            task, _old_attempt = task_and_attempt
-            self._task_attempts[task.shard_idx] += 1
-            attempts = self._task_attempts[task.shard_idx]
+    def _record_shard_failure(self, worker_id: str, error_info: str | None = None) -> bool:
+        """Record a failure for the worker's in-flight shard. Must be called with lock held.
 
-            if attempts >= MAX_SHARD_FAILURES:
-                errors = self._shard_errors.get(task.shard_idx, [])
-                error_ctx = f"\nPrior error:\n{errors[-1]}" if errors else ""
-                logger.error(
-                    "Shard %d has failed %d times (max %d), aborting. "
-                    "Workers assigned to this shard keep dying (possible OOM or deterministic crash).",
-                    task.shard_idx,
-                    attempts,
-                    MAX_SHARD_FAILURES,
-                )
-                self._fatal_error = (
-                    f"Shard {task.shard_idx} failed {attempts} times (max {MAX_SHARD_FAILURES}). "
-                    f"Workers assigned to this shard keep dying (possible OOM or deterministic crash)."
-                    f"{error_ctx}"
-                )
-            else:
-                logger.info(
-                    "Worker %s had an in-flight task (shard %d), re-queuing (attempt %d/%d)",
-                    worker_id,
-                    task.shard_idx,
-                    attempts,
-                    MAX_SHARD_FAILURES,
-                )
-                self._task_queue.append(task)
-                self._retries += 1
+        Pops the task from _in_flight, zeros the worker's counter snapshot,
+        records the error, increments the attempt counter, and either re-queues
+        the task or sets _fatal_error when MAX_SHARD_FAILURES is reached.
+
+        Returns True if the shard was aborted (fatal), False otherwise
+        (including when there was no in-flight task).
+        """
+        task_and_attempt = self._in_flight.pop(worker_id, None)
+
         # Zero counters but keep the generation watermark so late heartbeats
         # from the old task are rejected.
         existing = self._worker_counters.get(worker_id)
         if existing is not None:
             self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
+
+        if task_and_attempt is None:
+            return False
+
+        task, _ = task_and_attempt
+        shard_idx = task.shard_idx
+
+        if error_info is not None:
+            self._shard_errors.setdefault(shard_idx, []).append(error_info)
+
+        self._task_attempts[shard_idx] += 1
+        attempts = self._task_attempts[shard_idx]
+
+        if attempts >= MAX_SHARD_FAILURES:
+            errors = self._shard_errors.get(shard_idx, [])
+            error_detail = f"\nLast error:\n{errors[-1]}" if errors else ""
+            logger.error(
+                "Shard %d has failed %d times (max %d), aborting pipeline.",
+                shard_idx,
+                attempts,
+                MAX_SHARD_FAILURES,
+            )
+            self._fatal_error = (
+                f"Shard {shard_idx} failed {attempts} times " f"(max {MAX_SHARD_FAILURES}).{error_detail}"
+            )
+            return True
+
+        logger.warning(
+            "Shard %d failed on worker %s (attempt %d/%d), re-queuing.",
+            shard_idx,
+            worker_id,
+            attempts,
+            MAX_SHARD_FAILURES,
+        )
+        self._task_queue.append(task)
+        self._retries += 1
+        return False
+
+    def _maybe_requeue_worker_task(self, worker_id: str) -> None:
+        """If the worker has a task in-flight, re-queue it unless the shard has
+        exceeded MAX_SHARD_FAILURES, in which case abort the pipeline."""
+        self._record_shard_failure(worker_id)
 
     def _check_worker_heartbeats(self, timeout: float = 120.0) -> None:
         """Internal heartbeat check (called with lock held)."""
@@ -653,41 +673,8 @@ class ZephyrCoordinator:
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
             self._assert_in_flight_consistent(worker_id, shard_idx)
-            task_and_attempt = self._in_flight.pop(worker_id, None)
-            # Zero counters but keep the generation watermark so late
-            # heartbeats from this task are rejected.
-            existing = self._worker_counters.get(worker_id)
-            if existing is not None:
-                self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
-
-            self._shard_errors.setdefault(shard_idx, []).append(error_info)
-
-            if task_and_attempt is not None:
-                task, _ = task_and_attempt
-                self._task_attempts[task.shard_idx] += 1
-                attempts = self._task_attempts[shard_idx]
-
-                logger.warning(
-                    "Shard %d task error (attempt %d/%d) on worker %s",
-                    shard_idx,
-                    attempts,
-                    MAX_SHARD_FAILURES,
-                    worker_id,
-                )
-
-                if attempts >= MAX_SHARD_FAILURES:
-                    self._fatal_error = (
-                        f"Shard {shard_idx} failed {attempts} times "
-                        f"(max {MAX_SHARD_FAILURES}). Last error:\n{error_info}"
-                    )
-                    self._worker_states[worker_id] = WorkerState.DEAD
-                else:
-                    self._task_queue.append(task)
-                    self._retries += 1
-                    self._worker_states[worker_id] = WorkerState.READY
-            else:
-                # Task already re-queued by heartbeat timeout; worker is alive.
-                self._worker_states[worker_id] = WorkerState.READY
+            aborted = self._record_shard_failure(worker_id, error_info)
+            self._worker_states[worker_id] = WorkerState.DEAD if aborted else WorkerState.READY
 
     def heartbeat(self, worker_id: str, counter_snapshot: CounterSnapshot | None = None) -> None:
         self._last_seen[worker_id] = time.monotonic()
