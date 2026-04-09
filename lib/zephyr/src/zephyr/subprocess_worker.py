@@ -198,6 +198,17 @@ def main() -> None:
         print("Usage: python -m zephyr.subprocess_worker <task_file> <result_file>", file=sys.stderr)
         sys.exit(1)
     execute_shard(sys.argv[1], sys.argv[2])
+    # Bypass interpreter shutdown to avoid PyArrow GCS/Azure filesystem
+    # background threads racing with module GC, which fires
+    # ``std::terminate`` ("terminate called without an active exception")
+    # → SIGABRT and poisons the parent's returncode check. The result file
+    # is already on disk and the counter flusher has been joined, so there
+    # is nothing in this one-shot worker that needs ``atexit`` / ``__del__``
+    # to run. PyArrow exposes ``finalize_s3`` but no equivalent for GCS,
+    # so ``os._exit`` is the only reliable way to skip the racy teardown.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
 
 
 if __name__ == "__main__":
