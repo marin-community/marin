@@ -31,6 +31,96 @@ def test_filter(zephyr_ctx):
     assert sorted(results) == [4, 5]
 
 
+def test_subprocess_propagates_user_counters(zephyr_ctx):
+    """User counters incremented inside the shard subprocess flow back to the coordinator.
+
+    Each task runs in a fresh Python subprocess, so ``counters.increment`` writes
+    into a ``_SubprocessWorkerContext`` that lives only in the child. This test
+    verifies the result file ships those increments back to the parent worker,
+    which then forwards them to the coordinator via ``report_result``. Without
+    that round-trip, the coordinator's ``get_counters`` would silently report 0.
+
+    Uses a direct logging handler attachment (rather than ``caplog``) so the
+    test works whether or not pytest's logging plugin is enabled.
+    """
+    import logging
+
+    from zephyr import counters
+
+    def increment_per_item(x: int) -> int:
+        counters.increment("docs", 1)
+        counters.increment("doubled_sum", x * 2)
+        return x
+
+    captured: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record.getMessage())
+
+    handler = _Capture(level=logging.INFO)
+    target_logger = logging.getLogger("zephyr.execution")
+    prior_level = target_logger.level
+    target_logger.addHandler(handler)
+    target_logger.setLevel(logging.INFO)
+    try:
+        ds = Dataset.from_list([1, 2, 3, 4, 5]).map(increment_per_item)
+        results = list(zephyr_ctx.execute(ds))
+    finally:
+        target_logger.removeHandler(handler)
+        target_logger.setLevel(prior_level)
+
+    assert sorted(results) == [1, 2, 3, 4, 5]
+
+    # Coordinator logs the aggregated counters on shutdown. Look for the most
+    # recent "Final counters:" line and check the dict it printed.
+    final_lines = [m for m in captured if "Final counters:" in m]
+    assert final_lines, "coordinator did not log Final counters — counter plumbing is broken"
+    last = final_lines[-1]
+    assert "'docs': 5" in last, f"expected 'docs': 5 in {last!r}"
+    assert "'doubled_sum': 30" in last, f"expected 'doubled_sum': 30 in {last!r}"
+
+
+def test_subprocess_exception_includes_subprocess_traceback(zephyr_ctx):
+    """Exceptions raised inside the shard subprocess surface with the original frame info.
+
+    Cloudpickling an exception drops ``__traceback__`` so a naive re-raise in
+    the parent shows only the parent's stack at the re-raise site, not where
+    the exception actually happened in the user lambda. The subprocess
+    attaches the formatted traceback as a ``__notes__`` entry, which Python
+    prints inline when the exception finally propagates. Verify both the
+    original exception type AND a snippet from the user-code frame survive
+    the round-trip.
+    """
+    from zephyr.execution import ZephyrWorkerError
+
+    def buggy_index_lookup(x: int) -> int:
+        # Force a non-trivial subprocess-side exception with a recognizable
+        # source line. The parent should surface the function name and the
+        # offending statement, not just the bare `IndexError`.
+        empty: tuple = ()
+        return empty[x]
+
+    ds = Dataset.from_list([0]).map(buggy_index_lookup)
+
+    with pytest.raises(ZephyrWorkerError) as exc_info:
+        list(zephyr_ctx.execute(ds))
+
+    rendered = str(exc_info.value) + "".join(getattr(exc_info.value, "__notes__", []))
+    # The wrapping ZephyrWorkerError should chain through the parent's
+    # report_error path. Either the chained cause or the notes payload
+    # must contain the user-frame breadcrumb.
+    chained = rendered
+    cur: BaseException | None = exc_info.value
+    while cur is not None:
+        chained += str(cur) + "".join(getattr(cur, "__notes__", []))
+        cur = cur.__cause__ or cur.__context__
+
+    assert (
+        "buggy_index_lookup" in chained or "tuple index out of range" in chained
+    ), f"subprocess traceback was not preserved through report_error; got: {chained!r}"
+
+
 def test_shared_data(integration_client, tmp_path):
     """Workers can access shared data via zephyr_worker_ctx().
 
