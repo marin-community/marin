@@ -102,7 +102,7 @@ fi
 
 echo "==> Building and deploying ${SERVICE} to Cloud Run..."
 
-gcloud run deploy "${SERVICE}" \
+gcloud beta run deploy "${SERVICE}" \
   --project="${PROJECT}" \
   --region="${REGION}" \
   --source=. \
