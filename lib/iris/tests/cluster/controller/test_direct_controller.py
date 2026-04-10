@@ -74,6 +74,27 @@ def test_drain_pending_creates_attempt_rows(state):
     assert attempt.worker_id is None
 
 
+def test_drain_propagates_task_image(state):
+    """task_image set on the LaunchJobRequest is copied into RunTaskRequest."""
+    [task_id] = submit_direct_job(state, "drain-task-image", task_image="custom/swetrace:dev")
+
+    batch = state.drain_for_direct_provider()
+
+    assert len(batch.tasks_to_run) == 1
+    assert batch.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch.tasks_to_run[0].task_image == "custom/swetrace:dev"
+
+
+def test_drain_default_task_image_is_empty(state):
+    """When the LaunchJobRequest omits task_image, the dispatched RunTaskRequest is empty."""
+    submit_direct_job(state, "drain-default-image")
+
+    batch = state.drain_for_direct_provider()
+
+    assert len(batch.tasks_to_run) == 1
+    assert batch.tasks_to_run[0].task_image == ""
+
+
 def test_drain_skips_already_assigned(state):
     """Already ASSIGNED tasks appear in running_tasks, not tasks_to_run."""
     [task_id] = submit_direct_job(state, "drain-skip")

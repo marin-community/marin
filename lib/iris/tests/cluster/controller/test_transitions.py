@@ -3252,6 +3252,20 @@ def test_drain_dispatch_all_drains_dispatch_queue(state):
     assert len(rows_after) == 0
 
 
+def test_dispatch_propagates_task_image(state):
+    """task_image set on the LaunchJobRequest is copied into the dispatched RunTaskRequest."""
+    wid = register_worker(state, "w1", "host:8080", make_worker_metadata())
+
+    req = make_job_request("img-job", task_image="custom/swetrace:dev")
+    tasks = submit_job(state, "img-job", req)
+    state.queue_assignments([Assignment(task_id=tasks[0].task_id, worker_id=wid)])
+
+    batches = state.drain_dispatch_all()
+    assert len(batches) == 1
+    assert len(batches[0].tasks_to_run) == 1
+    assert batches[0].tasks_to_run[0].task_image == "custom/swetrace:dev"
+
+
 def test_prune_old_data_short_circuits_when_nothing_prunable(state):
     """prune_old_data skips the write lock when a read_snapshot shows nothing to prune."""
     wid = register_worker(state, "w1", "host:8080", make_worker_metadata())

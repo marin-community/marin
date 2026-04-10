@@ -578,6 +578,12 @@ message RunTaskRequest {
   repeated string ports = 8;
   int32 attempt_id = 9;
   repeated Constraint constraints = 10; // Original job constraints for child-job inheritance metadata
+
+  // Per-task task container image. When empty, the worker uses its
+  // cluster-configured default_task_image. Used for jobs that need a
+  // custom runtime (e.g. an image with runsc/skopeo for sandboxing
+  // untrusted child workloads).
+  string task_image = 11;
 }
 
 // Lean task status reported by the worker during heartbeat.
