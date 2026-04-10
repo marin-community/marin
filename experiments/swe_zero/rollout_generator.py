@@ -30,8 +30,15 @@ from experiments.swe_zero.scaffold import (
 logger = logging.getLogger(__name__)
 
 MAX_TURNS = 30
-MAX_TOKENS_PER_TURN = 4096
+MAX_OUTPUT_TOKENS = 1024
+"""Hard cap on completion tokens per turn. Kept well below max_total_tokens
+so the input + output fit in the model's context window even after many turns
+have grown the conversation."""
 MAX_TOTAL_TOKENS = 8192
+RESERVE_TOKENS = 256
+"""Headroom subtracted from max_total_tokens when computing the per-turn
+``max_tokens`` ceiling. Avoids 400 errors when input is close to the model's
+context length."""
 
 
 @dataclass
@@ -124,16 +131,29 @@ def generate_rollout(
     messages: list[dict] = [system_msg, user_msg]
 
     for turn in range(max_turns):
-        if _estimate_tokens(messages) > max_total_tokens:
-            logger.info("Token budget exceeded at turn %d for %s", turn, pr.instance_id)
+        # Compute a per-turn max_tokens ceiling that fits in the remaining
+        # context window. The ~4 chars per token estimate is conservative
+        # enough that we don't hit vLLM's "max_tokens too large" 400 error
+        # for the prompt sizes we generate.
+        input_tokens_estimate = _estimate_tokens(messages)
+        budget_remaining = max_total_tokens - input_tokens_estimate - RESERVE_TOKENS
+        if budget_remaining <= 64:
+            logger.info(
+                "Token budget exhausted at turn %d for %s (input~%d, total=%d)",
+                turn,
+                pr.instance_id,
+                input_tokens_estimate,
+                max_total_tokens,
+            )
             break
+        max_tokens_this_turn = min(MAX_OUTPUT_TOKENS, budget_remaining)
 
         try:
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
                 temperature=temperature,
-                max_tokens=MAX_TOKENS_PER_TURN,
+                max_tokens=max_tokens_this_turn,
             )
         except Exception as e:
             rollout.error = f"API error at turn {turn}: {e}"
