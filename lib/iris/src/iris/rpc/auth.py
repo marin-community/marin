@@ -423,7 +423,14 @@ class IapOidcTokenProvider:
                 "Could not fetch IAP OIDC token: gcloud CLI not found. " "Install gcloud or run on a GCE/Cloud Run VM."
             ) from exc
         except subprocess.CalledProcessError as exc:
-            raise RuntimeError(f"Could not fetch IAP OIDC token via gcloud: {exc.stderr.strip()}") from exc
+            raise RuntimeError(
+                f"Could not fetch IAP OIDC token via gcloud: {exc.stderr.strip()}\n"
+                "User credentials cannot mint OIDC tokens with a custom audience. "
+                "Configure service account impersonation:\n"
+                "  gcloud config set auth/impersonate_service_account <SA_EMAIL>\n"
+                "where <SA_EMAIL> has roles/iap.httpsResourceAccessor on the IAP "
+                "resource and you have roles/iam.serviceAccountTokenCreator on it."
+            ) from exc
         return result.stdout.strip()
 
     def get_token(self) -> str | None:
