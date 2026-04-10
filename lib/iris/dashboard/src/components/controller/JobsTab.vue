@@ -264,7 +264,7 @@ const SORTABLE_COLS: SortableCol[] = [
   { field: 'name', label: 'Name' },
   { field: 'state', label: 'State' },
   { field: 'date', label: 'Date' },
-  { field: 'failures', label: 'Failures' },
+  { field: 'failures', label: 'Failed Attempts' },
   { field: 'preemptions', label: 'Preemptions' },
 ]
 
@@ -424,6 +424,7 @@ function sortIndicator(field: SortField): string {
               v-if="(node.job.failureCount ?? 0) > 0"
               class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
                      text-status-danger bg-status-danger-bg border border-status-danger-border"
+              :title="node.job.failureCount + ' failed task attempt' + ((node.job.failureCount ?? 0) !== 1 ? 's' : '') + ' (including retries)'"
             >
               {{ node.job.failureCount }}
             </span>
