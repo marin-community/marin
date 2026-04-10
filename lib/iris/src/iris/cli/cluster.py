@@ -761,70 +761,151 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
 
 
 @controller.command("worker-restart")
-@click.option("--worker-id", default=None, help="Specific worker to restart (default: all)")
-@click.option("--timeout", type=int, default=120, help="Max seconds to wait per worker restart")
+@click.option("--worker-id", multiple=True, help="Worker(s) to restart (repeatable; default: all)")
+@click.option("--timeout", type=int, default=120, help="Max seconds to wait per worker to become healthy")
+@click.option("--max-batch", type=int, default=64, help="Maximum workers to restart concurrently")
+@click.option(
+    "--observation-window",
+    type=int,
+    default=60,
+    help="Seconds to observe restarted workers for failures before advancing",
+)
 @click.pass_context
-def worker_restart(ctx, worker_id: str | None, timeout: int):
-    """Rolling restart of workers without disrupting running tasks.
+def worker_restart(
+    ctx,
+    worker_id: tuple[str, ...],
+    timeout: int,
+    max_batch: int,
+    observation_window: int,
+):
+    """Rolling restart of workers with adaptive batch sizing.
 
-    Restarts workers one at a time, waiting for each to re-register before
-    proceeding. Running Docker containers are preserved and adopted by the
-    new worker process.
+    Restarts workers in progressively larger batches (1, 2, 4, ... up to
+    --max-batch). After each batch, waits for workers to become healthy, then
+    observes them for --observation-window seconds to catch post-restart
+    failures. Aborts immediately if any worker fails to come back healthy or
+    develops failures during observation.
+
+    Running Docker containers are preserved and adopted by the new worker
+    process, so tasks are not disrupted.
     """
     controller_url = require_controller_url(ctx)
 
     with rpc_client(controller_url) as client:
-        # Get current workers
         workers_resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
-        workers = workers_resp.workers
+        all_workers = workers_resp.workers
 
         if worker_id:
-            workers = [w for w in workers if w.worker_id == worker_id]
-            if not workers:
-                click.echo(f"Worker {worker_id} not found", err=True)
+            requested = set(worker_id)
+            workers = [w for w in all_workers if w.worker_id in requested]
+            missing = requested - {w.worker_id for w in workers}
+            if missing:
+                click.echo(f"Workers not found: {', '.join(sorted(missing))}", err=True)
                 raise SystemExit(1)
+        else:
+            workers = list(all_workers)
 
         if not workers:
             click.echo("No workers to restart")
             return
 
-        click.echo(f"Restarting {len(workers)} worker(s) (timeout={timeout}s per worker)")
+        worker_ids = [w.worker_id for w in workers]
+        total = len(worker_ids)
+        click.echo(
+            f"Restarting {total} worker(s) "
+            f"(timeout={timeout}s, observation={observation_window}s, max_batch={max_batch})"
+        )
 
         succeeded = 0
-        failed = 0
+        batch_size = 1
+        offset = 0
 
-        for worker in workers:
-            wid = worker.worker_id
-            click.echo(f"\nRestarting worker {wid}...")
+        while offset < total:
+            batch = worker_ids[offset : offset + batch_size]
+            click.echo(f"\n--- Batch of {len(batch)} (workers {offset + 1}-{offset + len(batch)} of {total}) ---")
 
-            resp = client.restart_worker(
-                controller_pb2.Controller.RestartWorkerRequest(worker_id=wid),
-                timeout_ms=timeout * 1000,
-            )
+            # Issue restart RPCs for the batch
+            for wid in batch:
+                click.echo(f"  Restarting {wid}...")
+                resp = client.restart_worker(
+                    controller_pb2.Controller.RestartWorkerRequest(worker_id=wid),
+                    timeout_ms=timeout * 1000,
+                )
+                if not resp.accepted:
+                    click.echo(f"  ABORT: restart rejected for {wid}: {resp.error}", err=True)
+                    _print_summary(succeeded, total - succeeded, offset)
+                    raise SystemExit(1)
 
-            if not resp.accepted:
-                click.echo(f"  Failed: {resp.error}", err=True)
-                failed += 1
-                continue
+            # Wait for all workers in the batch to become healthy
+            click.echo(f"  Waiting for {len(batch)} worker(s) to become healthy...")
+            unhealthy = _wait_for_workers_healthy(client, set(batch), timeout)
+            if unhealthy:
+                click.echo(
+                    f"  ABORT: workers did not become healthy within {timeout}s: " f"{', '.join(sorted(unhealthy))}",
+                    err=True,
+                )
+                _print_summary(succeeded, total - succeeded, offset)
+                raise SystemExit(1)
 
-            # Poll until the worker re-registers as healthy
-            def _worker_healthy(target_id: str = wid) -> bool:
-                try:
-                    resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
-                    return any(w.worker_id == target_id and w.healthy for w in resp.workers)
-                except Exception:
-                    return False
+            click.echo(f"  All {len(batch)} worker(s) healthy. Observing for {observation_window}s...")
+            time.sleep(observation_window)
 
-            reregistered = ExponentialBackoff(initial=5.0, maximum=5.0, jitter=0.0).wait_until(
-                _worker_healthy,
-                timeout=Duration.from_seconds(timeout),
-            )
+            # Re-check health after observation window
+            failed_workers = _check_worker_health(client, set(batch))
+            if failed_workers:
+                click.echo(
+                    f"  ABORT: workers developed failures during observation: "
+                    f"{', '.join(f'{wid} ({msg})' for wid, msg in sorted(failed_workers))}",
+                    err=True,
+                )
+                _print_summary(succeeded, total - succeeded, offset)
+                raise SystemExit(1)
 
-            if reregistered:
-                click.echo(f"  Worker {wid} restarted successfully")
-                succeeded += 1
-            else:
-                click.echo(f"  Worker {wid} did not re-register within {timeout}s", err=True)
-                failed += 1
+            succeeded += len(batch)
+            offset += len(batch)
+            click.echo(f"  Batch OK ({succeeded}/{total} complete)")
 
-    click.echo(f"\nDone: {succeeded} succeeded, {failed} failed")
+            # Double batch size for next round, capped at max_batch
+            batch_size = min(batch_size * 2, max_batch)
+
+    click.echo(f"\nDone: {succeeded}/{total} workers restarted successfully")
+
+
+def _wait_for_workers_healthy(client, worker_ids: set[str], timeout: int) -> set[str]:
+    """Poll until all workers in the set are healthy. Returns IDs that failed to become healthy."""
+    remaining = set(worker_ids)
+    backoff = ExponentialBackoff(initial=5.0, maximum=5.0, jitter=0.0)
+
+    def _all_healthy() -> bool:
+        try:
+            resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
+            for w in resp.workers:
+                if w.worker_id in remaining and w.healthy:
+                    remaining.discard(w.worker_id)
+        except Exception:
+            pass
+        return len(remaining) == 0
+
+    backoff.wait_until(_all_healthy, timeout=Duration.from_seconds(timeout))
+    return remaining
+
+
+def _check_worker_health(client, worker_ids: set[str]) -> list[tuple[str, str]]:
+    """Check that all workers are still healthy. Returns list of (worker_id, problem) for failures."""
+    failures: list[tuple[str, str]] = []
+    try:
+        resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
+        by_id = {w.worker_id: w for w in resp.workers}
+        for wid in worker_ids:
+            w = by_id.get(wid)
+            if w is None:
+                failures.append((wid, "disappeared"))
+            elif not w.healthy:
+                failures.append((wid, w.status_message or f"{w.consecutive_failures} consecutive failures"))
+    except Exception as e:
+        failures.append(("(rpc)", str(e)))
+    return failures
+
+
+def _print_summary(succeeded: int, remaining: int, offset: int):
+    click.echo(f"\nSummary: {succeeded} succeeded, {remaining} remaining (aborted at worker {offset + 1})")
