@@ -57,6 +57,11 @@ from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
+# Maximum number of times a single shard can fail before aborting the pipeline.
+# Covers both explicit task errors (report_error) and implicit worker deaths
+# (heartbeat timeout / OOM).
+MAX_SHARD_FAILURES = 3
+
 
 @dataclass(frozen=True)
 class PickleDiskChunk:
@@ -106,7 +111,6 @@ class PickleDiskChunk:
 from zephyr.shuffle import (  # noqa: E402
     ListShard,
     MemChunk,
-    ScatterParquetIterator,  # noqa: F401 — re-exported for external callers
     ScatterShard,  # noqa: F401 — re-exported for plan.py and external callers
     _build_scatter_shard_from_manifest,  # noqa: F401 — re-exported for plan.py
     _make_envelope,
@@ -367,6 +371,7 @@ class ZephyrCoordinator:
         self._in_flight: dict[str, tuple[ShardTask, int]] = {}
         self._task_attempts: dict[int, int] = {}
         self._fatal_error: str | None = None
+        self._shard_errors: dict[int, list[str]] = {}
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
         self._no_workers_timeout: float = 60.0
@@ -496,6 +501,7 @@ class ZephyrCoordinator:
     def _log_status(self) -> None:
         with self._lock:
             states = list(self._worker_states.values())
+            retried = {idx: att for idx, att in self._task_attempts.items() if att > 0}
         alive = sum(1 for s in states if s in {WorkerState.READY, WorkerState.BUSY})
         dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
         logger.info(
@@ -510,21 +516,68 @@ class ZephyrCoordinator:
             len(self._worker_handles),
             dead,
         )
+        if retried:
+            logger.warning("[%s] Shards retried (shard: attempts): %s", self._execution_id, retried)
 
-    def _maybe_requeue_worker_task(self, worker_id: str) -> None:
-        """If the worker has a task in-flight, re-queue it and mark the worker as failed."""
+    def _record_shard_failure(self, worker_id: str, error_info: str | None = None) -> bool:
+        """Record a failure for the worker's in-flight shard. Must be called with lock held.
+
+        Pops the task from _in_flight, zeros the worker's counter snapshot,
+        records the error, increments the attempt counter, and either re-queues
+        the task or sets _fatal_error when MAX_SHARD_FAILURES is reached.
+
+        Returns True if the shard was aborted (fatal), False otherwise
+        (including when there was no in-flight task).
+        """
         task_and_attempt = self._in_flight.pop(worker_id, None)
-        if task_and_attempt is not None:
-            logger.info("Worker %s had an in-flight task, re-queuing", worker_id)
-            task, _old_attempt = task_and_attempt
-            self._task_attempts[task.shard_idx] += 1
-            self._task_queue.append(task)
-            self._retries += 1
+
         # Zero counters but keep the generation watermark so late heartbeats
         # from the old task are rejected.
         existing = self._worker_counters.get(worker_id)
         if existing is not None:
             self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
+
+        if task_and_attempt is None:
+            return False
+
+        task, _ = task_and_attempt
+        shard_idx = task.shard_idx
+
+        if error_info is not None:
+            self._shard_errors.setdefault(shard_idx, []).append(error_info)
+
+        self._task_attempts[shard_idx] += 1
+        attempts = self._task_attempts[shard_idx]
+
+        if attempts >= MAX_SHARD_FAILURES:
+            errors = self._shard_errors.get(shard_idx, [])
+            error_detail = f"\nLast error:\n{errors[-1]}" if errors else ""
+            logger.error(
+                "Shard %d has failed %d times (max %d), aborting pipeline.",
+                shard_idx,
+                attempts,
+                MAX_SHARD_FAILURES,
+            )
+            self._fatal_error = (
+                f"Shard {shard_idx} failed {attempts} times " f"(max {MAX_SHARD_FAILURES}).{error_detail}"
+            )
+            return True
+
+        logger.warning(
+            "Shard %d failed on worker %s (attempt %d/%d), re-queuing.",
+            shard_idx,
+            worker_id,
+            attempts,
+            MAX_SHARD_FAILURES,
+        )
+        self._task_queue.append(task)
+        self._retries += 1
+        return False
+
+    def _maybe_requeue_worker_task(self, worker_id: str) -> None:
+        """If the worker has a task in-flight, re-queue it unless the shard has
+        exceeded MAX_SHARD_FAILURES, in which case abort the pipeline."""
+        self._record_shard_failure(worker_id)
 
     def _check_worker_heartbeats(self, timeout: float = 120.0) -> None:
         """Internal heartbeat check (called with lock held)."""
@@ -555,7 +608,12 @@ class ZephyrCoordinator:
                 return None
 
             if not self._task_queue:
-                if self._is_last_stage and not self._in_flight:
+                if self._is_last_stage:
+                    # No more work to hand out — exit immediately.  If an
+                    # in-flight worker crashes and its shard is requeued, Iris
+                    # restarts the worker which re-registers and picks it up.
+                    # _check_worker_group() detects permanent worker-job death
+                    # as a failsafe so we never deadlock.
                     self._worker_states[worker_id] = WorkerState.DEAD
                     return "SHUTDOWN"
                 return None
@@ -616,18 +674,12 @@ class ZephyrCoordinator:
             self._worker_counters[worker_id] = CounterSnapshot.empty(counter_snapshot.generation)
 
     def report_error(self, worker_id: str, shard_idx: int, error_info: str) -> None:
-        """Worker reports a task failure. All errors are fatal."""
+        """Worker reports a task failure. Re-queues up to MAX_SHARD_FAILURES."""
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
             self._assert_in_flight_consistent(worker_id, shard_idx)
-            self._in_flight.pop(worker_id, None)
-            # Zero counters but keep the generation watermark so late
-            # heartbeats from this task are rejected.
-            existing = self._worker_counters.get(worker_id)
-            if existing is not None:
-                self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
-            self._fatal_error = error_info
-            self._worker_states[worker_id] = WorkerState.DEAD
+            aborted = self._record_shard_failure(worker_id, error_info)
+            self._worker_states[worker_id] = WorkerState.DEAD if aborted else WorkerState.READY
 
     def heartbeat(self, worker_id: str, counter_snapshot: CounterSnapshot | None = None) -> None:
         self._last_seen[worker_id] = time.monotonic()
@@ -705,6 +757,7 @@ class ZephyrCoordinator:
             self._retries = 0
             self._in_flight = {}
             self._task_attempts = {task.shard_idx: 0 for task in tasks}
+            self._shard_errors = {}
             self._fatal_error = None
             self._is_last_stage = is_last_stage
             # Only reset in-flight worker snapshots; completed snapshots
@@ -921,14 +974,6 @@ class ZephyrCoordinator:
             self._chunk_prefix = prefix
             self._execution_id = execution_id
 
-    def get_chunk_config(self) -> dict:
-        """Return chunk storage configuration for workers."""
-        with self._lock:
-            return {
-                "prefix": self._chunk_prefix,
-                "execution_id": self._execution_id,
-            }
-
     def start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
         """Load a new stage's tasks into the queue (legacy compat)."""
         self._start_stage(stage_name, tasks, is_last_stage=is_last_stage)
@@ -937,14 +982,6 @@ class ZephyrCoordinator:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
         with self._lock:
             self._check_worker_heartbeats(timeout)
-
-    def collect_results(self) -> dict[int, TaskResult]:
-        """Return results for the completed stage (legacy compat)."""
-        return self._collect_results()
-
-    def signal_done(self) -> None:
-        """Signal workers that no more stages will be submitted (legacy compat)."""
-        self._shutdown_event.set()
 
 
 # ---------------------------------------------------------------------------

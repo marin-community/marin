@@ -28,6 +28,7 @@ from iris.client.client import Job, JobFailedError
 from iris.cluster.constraints import (
     Constraint,
     WellKnownAttribute,
+    device_variant_constraint,
     infer_preemptible_constraint,
     region_constraint,
     zone_constraint,
@@ -45,6 +46,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
+from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
 from iris.time_proto import timestamp_from_proto
 from rigging.timing import Duration, Timestamp
 
@@ -60,10 +62,6 @@ _STATE_MAP: dict[str, job_pb2.JobState] = {
     "worker_failed": job_pb2.JOB_STATE_WORKER_FAILED,
     "unschedulable": job_pb2.JOB_STATE_UNSCHEDULABLE,
 }
-
-
-def _job_state_name(state: job_pb2.JobState) -> str:
-    return job_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
 
 
 def _format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
@@ -323,16 +321,60 @@ def build_resources(
     memory: str = "1GB",
     disk: str = "5GB",
 ) -> ResourceSpec:
-    """Build ResourceSpec from CLI arguments."""
+    """Build ResourceSpec from CLI arguments.
+
+    When ``tpu`` contains multiple comma-separated variants, the first one is
+    used as the canonical device (its chip count drives resource accounting),
+    and the alternatives are surfaced separately via ``build_tpu_alternatives``
+    so the caller can attach a ``device_variant_constraint`` accepting any of
+    them. All variants must have the same ``vm_count``.
+    """
     spec = ResourceSpec(cpu=cpu, memory=memory, disk=disk)
 
     if tpu:
-        spec.device = tpu_device(tpu)
+        primary, _ = _parse_tpu_alternatives(tpu)
+        spec.device = tpu_device(primary)
     elif gpu:
         variant, count = parse_gpu_spec(gpu)
         spec.device = gpu_device(variant, count)
 
     return spec
+
+
+def _parse_tpu_alternatives(tpu_arg: str) -> tuple[str, list[str]]:
+    """Split a ``--tpu`` value into (primary, alternatives).
+
+    The CLI accepts a comma-separated list (e.g. ``v6e-4,v5litepod-4``) so a
+    single job can be schedulable on any of the listed variants. The first
+    variant is canonical; the rest are alternatives. All listed variants must
+    share the same ``vm_count`` so multinode coscheduling stays consistent.
+    """
+    variants = [v.strip() for v in tpu_arg.split(",") if v.strip()]
+    if not variants:
+        raise click.BadParameter("--tpu must specify at least one TPU variant")
+    if len(variants) == 1:
+        return variants[0], []
+
+    primary = variants[0]
+    alternatives = variants[1:]
+    primary_topo = get_tpu_topology(primary)
+    for alt in alternatives:
+        alt_topo = get_tpu_topology(alt)
+        if alt_topo.vm_count != primary_topo.vm_count:
+            raise click.BadParameter(
+                f"TPU alternative {alt!r} has vm_count={alt_topo.vm_count} "
+                f"but primary {primary!r} has vm_count={primary_topo.vm_count}. "
+                f"All TPU alternatives must share the same vm_count."
+            )
+    return primary, alternatives
+
+
+def build_tpu_alternatives(tpu_arg: str | None) -> list[str]:
+    """Return the list of all TPU variants requested via ``--tpu``."""
+    if not tpu_arg:
+        return []
+    primary, alternatives = _parse_tpu_alternatives(tpu_arg)
+    return [primary, *alternatives]
 
 
 # Thresholds above which the entrypoint job is considered "extra-resource-heavy"
@@ -528,13 +570,18 @@ def run_iris_job(
     job_name = job_name or generate_job_name(command)
     extras = extras or []
 
-    replicas, coscheduling = resolve_multinode_defaults(tpu, gpu, replicas)
+    tpu_variants = build_tpu_alternatives(tpu)
+    primary_tpu = tpu_variants[0] if tpu_variants else None
+
+    replicas, coscheduling = resolve_multinode_defaults(primary_tpu, gpu, replicas)
 
     constraints: list[Constraint] = []
     if regions:
         constraints.append(region_constraint(list(regions)))
     if zone:
         constraints.append(zone_constraint(zone))
+    if len(tpu_variants) > 1:
+        constraints.append(device_variant_constraint(tpu_variants))
 
     # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
     # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
@@ -555,7 +602,10 @@ def run_iris_job(
     logger.info(f"Command: {' '.join(command)}")
     logger.info(f"Resources: cpu={resources.cpu:g}, memory={resources.memory}, disk={resources.disk}")
     if resources.device and resources.device.HasField("tpu"):
-        logger.info(f"TPU: {resources.device.tpu.variant}")
+        if len(tpu_variants) > 1:
+            logger.info(f"TPU: {resources.device.tpu.variant} (alternatives: {', '.join(tpu_variants[1:])})")
+        else:
+            logger.info(f"TPU: {resources.device.tpu.variant}")
     if resources.device and resources.device.HasField("gpu"):
         gpu_dev = resources.device.gpu
         logger.info(f"GPU: {gpu_dev.count}x {gpu_dev.variant or 'any'}")
@@ -699,7 +749,16 @@ Examples:
     type=(str, str),
     help="Set environment variables for the job (KEY VALUE). Can be repeated.",
 )
-@click.option("--tpu", type=str, help="TPU type to request (e.g., v5litepod-16). Requires --enable-extra-resources.")
+@click.option(
+    "--tpu",
+    type=str,
+    help=(
+        "TPU type to request (e.g., v5litepod-16). Pass a comma-separated list "
+        "(e.g., v6e-4,v5litepod-4) to allow scheduling on any of the listed "
+        "variants — useful when capacity is contested. All variants must share "
+        "the same vm_count. Requires --enable-extra-resources."
+    ),
+)
 @click.option(
     "--gpu",
     type=str,
@@ -786,7 +845,7 @@ def run(
         if not arg.startswith("-"):
             break
         raise click.UsageError(
-            f"Unknown option {arg!r}. " f"Iris options must come before '--'. Did you mean a different flag?"
+            f"Unknown option {arg!r}. Iris options must come before '--'. Did you mean a different flag?"
         )
 
     env_vars_dict = load_env_vars(env_vars)
@@ -897,7 +956,7 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
 
     for j in jobs:
         job_id = j.job_id
-        state_name = _job_state_name(j.state)
+        state_name = job_state_friendly(j.state)
         submitted = timestamp_from_proto(j.submitted_at).as_formatted_date() if j.submitted_at.epoch_ms else "-"
         resources = _format_resources(j.resources) if j.HasField("resources") else "-"
 
@@ -918,6 +977,151 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
         rows = [row[:4] for row in rows]
 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
+
+
+# Mirrors iris.cluster.controller.db.TERMINAL_TASK_STATES. Duplicated here to
+# avoid a CLI → controller.db import dependency just for the constant.
+_TERMINAL_TASK_STATES: frozenset[int] = frozenset(
+    {
+        job_pb2.TASK_STATE_SUCCEEDED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_KILLED,
+        job_pb2.TASK_STATE_UNSCHEDULABLE,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_PREEMPTED,
+    }
+)
+
+
+def _task_index(task_id: str) -> str:
+    last = task_id.rsplit("/", 1)[-1]
+    return last or task_id
+
+
+def _task_duration_ms(task: job_pb2.TaskStatus) -> int | None:
+    if not task.started_at.epoch_ms:
+        return None
+    end_ms = task.finished_at.epoch_ms or Timestamp.now().epoch_ms()
+    return max(0, end_ms - task.started_at.epoch_ms)
+
+
+def _format_duration_ms(ms: int | None) -> str:
+    if ms is None:
+        return "-"
+    return humanfriendly.format_timespan(ms / 1000)
+
+
+def _format_memory_mb(mb: int) -> str:
+    if not mb:
+        return "-"
+    return humanfriendly.format_size(mb * 1_000_000)
+
+
+def build_job_summary(
+    job_status: job_pb2.JobStatus,
+    tasks: list[job_pb2.TaskStatus],
+) -> dict:
+    """Build a structured job/task summary (CLI + test entry point).
+
+    Returns a dict with job-level fields and a per-task list including
+    peak memory, final state, exit code, and duration. Pure function over
+    protos — no RPC calls — so it can be unit-tested without a cluster.
+    """
+    task_summaries = []
+
+    def _sort_key(t: job_pb2.TaskStatus) -> tuple[int, str]:
+        idx = _task_index(t.task_id)
+        try:
+            return (int(idx), "")
+        except ValueError:
+            return (2**31, idx)
+
+    for t in sorted(tasks, key=_sort_key):
+        usage = t.resource_usage
+        task_summaries.append(
+            {
+                "task_id": t.task_id,
+                "index": _task_index(t.task_id),
+                "state": task_state_friendly(t.state),
+                # Only surface exit_code once the task is terminal. Proto scalar
+                # defaults mean a RUNNING/ASSIGNED/BUILDING task would otherwise
+                # report exit=0 and look like a clean success.
+                "exit_code": int(t.exit_code) if t.state in _TERMINAL_TASK_STATES else None,
+                "duration_ms": _task_duration_ms(t),
+                "memory_mb": int(usage.memory_mb) if usage.memory_mb else 0,
+                "memory_peak_mb": int(usage.memory_peak_mb) if usage.memory_peak_mb else 0,
+                "cpu_millicores": int(usage.cpu_millicores) if usage.cpu_millicores else 0,
+                "disk_mb": int(usage.disk_mb) if usage.disk_mb else 0,
+                "worker_id": t.worker_id,
+                "error": t.error,
+            }
+        )
+
+    return {
+        "job_id": job_status.job_id,
+        "name": job_status.name,
+        "state": job_state_friendly(job_status.state),
+        "exit_code": int(job_status.exit_code),
+        "error": job_status.error,
+        "failure_count": int(job_status.failure_count),
+        "preemption_count": int(job_status.preemption_count),
+        "task_count": int(job_status.task_count),
+        "completed_count": int(job_status.completed_count),
+        "task_state_counts": dict(job_status.task_state_counts),
+        "tasks": task_summaries,
+    }
+
+
+def _render_job_summary_text(summary: dict) -> str:
+    lines = [
+        f"Job: {summary['job_id']}" + (f" ({summary['name']})" if summary["name"] else ""),
+        f"State: {summary['state']}  exit={summary['exit_code']}  "
+        f"failures={summary['failure_count']}  preemptions={summary['preemption_count']}",
+        f"Tasks: {summary['completed_count']}/{summary['task_count']} completed  "
+        + "  ".join(f"{k}={v}" for k, v in sorted(summary["task_state_counts"].items()) if v),
+    ]
+    if summary["error"]:
+        lines.append(f"Error: {summary['error']}")
+    lines.append("")
+
+    rows = []
+    for t in summary["tasks"]:
+        rows.append(
+            [
+                t["index"],
+                t["state"],
+                "-" if t["exit_code"] is None else t["exit_code"],
+                _format_duration_ms(t["duration_ms"]),
+                _format_memory_mb(t["memory_peak_mb"]),
+                _format_memory_mb(t["memory_mb"]),
+                (t["error"] or "")[:50] + ("..." if len(t["error"] or "") > 50 else ""),
+            ]
+        )
+    headers = ["TASK", "STATE", "EXIT", "DURATION", "PEAK MEM", "CUR MEM", "ERROR"]
+    lines.append(tabulate(rows, headers=headers, tablefmt="plain"))
+    return "\n".join(lines)
+
+
+@job.command("summary")
+@click.argument("job_id")
+@click.option("--json", "json_output", is_flag=True, help="Emit structured JSON instead of a text table.")
+@click.pass_context
+def summary(ctx, job_id: str, json_output: bool) -> None:
+    """Print a per-task summary (peak memory, state, exit, duration) for a job.
+
+    Works for both running and completed jobs. Data is read from the controller's
+    existing ``GetJobStatus`` / ``ListTasks`` RPCs (no checkpoint scraping).
+    """
+    controller_url = require_controller_url(ctx)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
+    job_name = JobName.from_wire(job_id)
+    job_status = client.status(job_name)
+    tasks = client.list_tasks(job_name)
+    result = build_job_summary(job_status, tasks)
+    if json_output:
+        click.echo(json.dumps(result, indent=2, default=str))
+        return
+    click.echo(_render_job_summary_text(result))
 
 
 @job.command("logs")

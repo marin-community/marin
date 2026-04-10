@@ -5,6 +5,8 @@
 !lib/iris/pyproject.toml
 !lib/iris/hatch_build.py
 !lib/iris/src/
+!lib/iris/examples/
+!lib/iris/config/
 !lib/iris/dashboard/dist/
 
 !lib/rigging/

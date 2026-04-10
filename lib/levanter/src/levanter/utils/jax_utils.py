@@ -164,8 +164,6 @@ def multihost_broadcast_sync(obj: X, is_source: Optional[bool] = None, timeout: 
         raise RuntimeError("multihost_broadcast_sync requires jax distributed client to be initialized")
 
     if is_source:
-        # serialized = pickle.dumps(obj, 0)  # 0 is pickle protocol. jax only accepts utf-8, and 0 gives us ascii
-        # client.key_value_set(key, serialized.decode("ascii"))
         serialized = json.dumps(obj)
         client.key_value_set(key, serialized)
 
@@ -290,7 +288,6 @@ def leaf_key_paths(
                     )
             out = jax.tree_util.tree_unflatten(treedef, out_leaves)
 
-    # assert len(jax.tree.leaves(out, is_leaf=is_leaf)) == len(jax.tree.leaves(pytree, is_leaf=is_leaf)), (out, pytree)
     return out
 
 
@@ -497,7 +494,6 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
             return arr
 
     x = jax.tree.map(pre_jit, x)
-    # q = eqx.filter_jit(jax.tree.map).lower(in_jit, x, out_axis_specs, is_leaf=is_named_array).as_text()
     out = eqx.filter_jit(jax.tree.map)(in_jit, x, out_axis_specs, is_leaf=is_named_array)
 
     return out

@@ -439,7 +439,7 @@ def _submit_training_job(
         entrypoint=Entrypoint.from_callable(main_fn, args=[train_config]),
         resources=resources,
         environment=create_environment(env_vars=env, extras=extras),
-        max_retries_failure=10,
+        max_retries_failure=0,
     )
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)
