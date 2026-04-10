@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "5854d1e9fcee",
+  "strategy": "manual-commit",
+  "branch": "kevin/harbor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/iris/src/iris/cluster/client/job_info.py",
+    "lib/iris/src/iris/rpc/cluster.proto",
+    "lib/iris/src/iris/rpc/cluster_pb2.py",
+    "lib/iris/src/iris/rpc/cluster_pb2.pyi"
+  ],
+  "sessions": [
+    {
+      "metadata": "/58/54d1e9fcee/0/metadata.json",
+      "transcript": "/58/54d1e9fcee/0/full.jsonl",
+      "context": "/58/54d1e9fcee/0/context.md",
+      "content_hash": "/58/54d1e9fcee/0/content_hash.txt",
+      "prompt": "/58/54d1e9fcee/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1105,
+    "cache_creation_tokens": 9152406,
+    "cache_read_tokens": 270021316,
+    "output_tokens": 279381,
+    "api_call_count": 797
+  }
+}
