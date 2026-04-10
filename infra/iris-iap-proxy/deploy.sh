@@ -59,7 +59,7 @@ gcloud compute backend-services create iris-iap-proxy-backend \
   --project=hai-gcp-models \
   --global \
   --load-balancing-scheme=EXTERNAL_MANAGED \
-  --protocol=HTTPS
+  --protocol=HTTP
 
 gcloud compute backend-services add-backend iris-iap-proxy-backend \
   --project=hai-gcp-models \
