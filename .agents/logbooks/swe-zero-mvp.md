@@ -143,3 +143,33 @@ Parent issue: https://github.com/marin-community/marin/issues/4435
 - **Also fixed**: `MAX_TOKENS_PER_TURN=4096` was causing HTTP 400 mid-rollout with the 8K-context model. Replaced with dynamic per-turn cap: `min(MAX_OUTPUT_TOKENS=1024, max_total_tokens - input_estimate - RESERVE_TOKENS)`.
 - **Trajectory quality**: Real grounded `find`/`grep`/`cat` against the actual repo at base_commit. Agent can discover that a file does not exist, pivot to a different lookup, and explore the real directory tree. See SZ-009 issue comment for before/after example.
 - **Resubmitted Step 5**: `/kevin/swe-zero-step5-worktree` running on v6e-1, ~10–20s/rollout, lazy clone is ~0.3s for serpent-tools.
+
+### 2026-04-10 — SZ-011: QA pass on Step 5 trajectories and tasks
+- **Trajectory shape** (100 rollouts, 1332 bash commands, 1332 observations):
+  - Submitted (clean exit): 18, Incomplete (token cap): 74, Errored: 8 (HTTP 400 from old max_tokens bug)
+  - Useful (non-empty, non-blocked) observations: **977/1332 = 73.3%**
+  - Empty observations: 264 (19.8%) — mostly find/grep with no matches, plus 95 `#`-only commands and 25 `cd`s (wasted turns)
+  - Blocked: 91 (6.8%) — 89 "running code", 2 "network access"
+- **Bash command first-words top 10**: grep (372), cat (230), sed (229), find (224), # (95), ls (61), echo (35), cd (25), python (22 — blocked), head (15)
+- **PR data quality** (cross-checked against fresh clones at base_commit):
+  - **0/10 test_patches apply cleanly via `git apply`**. Our worktree.py silently falls back to `patch -p1` which works some of the time.
+  - **6/10 PRs reference files that don't exist at base_commit** in their problem_statement / interface
+  - **2/10 PRs leak the gold patch path** (the issue text mentions `materials.py`/`containers.py`, but at base_commit those files don't exist — they're CREATED by the gold patch)
+  - **1/10 PR** (serpent-tools-227) has a literal GitHub blob URL fragment leaked into the interface text
+- **Trajectories are real and grounded** despite these data quality issues. The agent recovers from "no such file" gracefully via find/grep exploration.
+- See SZ-011 issue comment (#4561) for full table and trajectory examples.
+
+### 2026-04-10 — SZ-012: Async concurrent rollouts + vLLM tuning knobs
+- **Async refactor** (`run_rollouts_concurrently`): switched from sequential `for i in range(N)` to `asyncio.gather` with bounded `Semaphore(concurrency)`. AsyncOpenAI for the API call, `asyncio.to_thread` for the blocking subprocess work (worktree materialize / safe_exec / cleanup). Default concurrency=16.
+- **vLLM tuning CLI knobs** added to `run_swe_zero_mvp.py`:
+  - `--concurrency 16` — number of rollouts in flight client-side
+  - `--max-num-seqs 32` — vLLM's server-side batch ceiling, passed via `extra_args`
+  - `--max-model-len 8192` — per-sequence context window
+  - `--enforce-eager` — added unconditionally to vLLM extra_args. Skips torch.compile / CUDA graphs. On TPU the savings are smaller than on GPU because XLA still compiles, but startup is still faster.
+- **Benchmark script** `benchmark_concurrency.py`: starts vLLM once, runs warmup + 10-rollout batches at concurrencies [1,4,8,16,32] back-to-back, reports rollouts/s and tokens/s per config. Output to `gs://marin-us-central2/experiments/swe_zero_mvp/benchmark/concurrency_sweep.json`.
+- **Empirical sweep blocked** by TPU capacity at the time of writing — Iris cluster has 159 workers ahead in the queue. Code is in place, will run when capacity frees up.
+- **Theory-based recommended config for v6e-1 + Qwen3-1.7B + seq_len=8192**:
+  - `--concurrency 16, --max-num-seqs 32` — fits in HBM (KV cache: ~28 layers × 8 KV heads × 128 head_dim × 2 × 2 bytes/token × 8192 × 32 ≈ 28 GB), leaves headroom.
+  - Higher concurrency (32+) likely causes KV cache thrashing on v6e-1 and yields diminishing returns since the model is small and forward passes are fast.
+  - On a larger TPU (v6e-4 / v6e-8) we could push concurrency=32 or 64 and get better throughput.
+- **Bug found during benchmarking attempts**: when Iris's multi-TPU alternatives placed the bench job on a v5p-8 worker, vLLM startup hung indefinitely (>18 min with no log output). Bench placed on v6e family (1/4/8) is currently blocked by capacity. Suspect v5p needs different vLLM settings or hits a slow XLA compile path.
