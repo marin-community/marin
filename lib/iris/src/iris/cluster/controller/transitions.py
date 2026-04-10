@@ -296,6 +296,49 @@ def _has_reservation_flag(request: controller_pb2.Controller.LaunchJobRequest) -
     return 1 if request.HasField("reservation") and request.reservation.entries else 0
 
 
+def _device_to_json(device: job_pb2.DeviceConfig) -> str:
+    """Serialize a DeviceConfig proto to JSON."""
+    if device.HasField("gpu"):
+        return json.dumps({"gpu": {"variant": device.gpu.variant, "count": device.gpu.count}})
+    elif device.HasField("tpu"):
+        return json.dumps(
+            {"tpu": {"variant": device.tpu.variant, "topology": device.tpu.topology, "count": device.tpu.count}}
+        )
+    return "{}"
+
+
+def _constraint_to_dict(c: job_pb2.Constraint) -> dict:
+    """Serialize a single Constraint proto to a JSON-friendly dict."""
+    d: dict = {"key": c.key, "op": int(c.op)}
+    if c.HasField("value"):
+        v = c.value
+        if v.HasField("string_value"):
+            d["value"] = {"string_value": v.string_value}
+        elif v.HasField("int_value"):
+            d["value"] = {"int_value": v.int_value}
+        elif v.HasField("float_value"):
+            d["value"] = {"float_value": v.float_value}
+    if c.values:
+        vals = []
+        for v in c.values:
+            if v.HasField("string_value"):
+                vals.append({"string_value": v.string_value})
+            elif v.HasField("int_value"):
+                vals.append({"int_value": v.int_value})
+            elif v.HasField("float_value"):
+                vals.append({"float_value": v.float_value})
+        d["values"] = vals
+    if c.mode:
+        d["mode"] = int(c.mode)
+    return d
+
+
+def _constraints_to_json(constraints: Iterable[job_pb2.Constraint]) -> str | None:
+    """Serialize a list of Constraint protos to JSON. Returns None if empty."""
+    constraint_list = [_constraint_to_dict(c) for c in constraints]
+    return json.dumps(constraint_list) if constraint_list else None
+
+
 def delete_task_endpoints(cur: TransactionCursor, task_id: str) -> None:
     """Remove all registered endpoints for a task."""
     cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id,))
@@ -770,29 +813,56 @@ def _batch_worker_health(
     ).fetchall()
     existing = {str(r["worker_id"]) for r in rows}
 
-    health_params = []
+    health_params_no_snap = []
+    health_params_with_snap = []
     history_params = []
     for req in requests:
         wid = str(req.worker_id)
         if wid not in existing:
             continue
-        snapshot_payload = (
-            req.worker_resource_snapshot.SerializeToString() if req.worker_resource_snapshot is not None else None
-        )
-        health_params.append((now_ms, snapshot_payload, wid))
-        if snapshot_payload is not None:
-            history_params.append((wid, snapshot_payload, now_ms))
+        snap = req.worker_resource_snapshot
+        if snap is not None:
+            snap_fields = (
+                snap.host_cpu_percent or None,
+                snap.memory_used_bytes or None,
+                snap.memory_total_bytes or None,
+                snap.disk_used_bytes or None,
+                snap.disk_total_bytes or None,
+                snap.running_task_count or None,
+                snap.total_process_count or None,
+                snap.net_recv_bps or None,
+                snap.net_sent_bps or None,
+            )
+            health_params_with_snap.append((now_ms, *snap_fields, wid))
+            history_params.append((wid, *snap_fields, now_ms))
+        else:
+            health_params_no_snap.append((now_ms, wid))
 
-    if health_params:
+    if health_params_no_snap:
         cur.executemany(
             "UPDATE workers SET healthy = 1, active = 1, consecutive_failures = 0, "
-            "last_heartbeat_ms = ?, resource_snapshot_proto = COALESCE(?, resource_snapshot_proto) "
-            "WHERE worker_id = ?",
-            health_params,
+            "last_heartbeat_ms = ? WHERE worker_id = ?",
+            health_params_no_snap,
+        )
+    if health_params_with_snap:
+        cur.executemany(
+            "UPDATE workers SET healthy = 1, active = 1, consecutive_failures = 0, "
+            "last_heartbeat_ms = ?, "
+            "snapshot_host_cpu_percent = ?, snapshot_memory_used_bytes = ?, "
+            "snapshot_memory_total_bytes = ?, snapshot_disk_used_bytes = ?, "
+            "snapshot_disk_total_bytes = ?, snapshot_running_task_count = ?, "
+            "snapshot_total_process_count = ?, snapshot_net_recv_bps = ?, "
+            "snapshot_net_sent_bps = ? WHERE worker_id = ?",
+            health_params_with_snap,
         )
     if history_params:
         cur.executemany(
-            "INSERT INTO worker_resource_history(worker_id, snapshot_proto, timestamp_ms) " "VALUES (?, ?, ?)",
+            "INSERT INTO worker_resource_history("
+            "worker_id, snapshot_host_cpu_percent, snapshot_memory_used_bytes, "
+            "snapshot_memory_total_bytes, snapshot_disk_used_bytes, snapshot_disk_total_bytes, "
+            "snapshot_running_task_count, snapshot_total_process_count, "
+            "snapshot_net_recv_bps, snapshot_net_sent_bps, timestamp_ms"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             history_params,
         )
     return existing
@@ -1039,11 +1109,13 @@ class ControllerTransitions:
             finished_ms = None if validation_error is None else effective_submission_ms
             has_reservation = _has_reservation_flag(request)
 
-            # Denormalized scheduling fields for JobRow queries.
-            resources_blob = request.resources.SerializeToString() if request.HasField("resources") else None
-            constraint_list = job_pb2.ConstraintList()
-            constraint_list.constraints.extend(request.constraints)
-            constraints_blob = constraint_list.SerializeToString() if request.constraints else None
+            # Scheduling fields extracted from request proto.
+            res = request.resources if request.HasField("resources") else None
+            res_cpu = int(res.cpu_millicores) if res else 0
+            res_mem = int(res.memory_bytes) if res else 0
+            res_disk = int(res.disk_bytes) if res else 0
+            res_device = _device_to_json(res.device) if res else None
+            constraints_json = _constraints_to_json(request.constraints)
             has_cosched = 1 if request.HasField("coscheduling") else 0
             cosched_group = request.coscheduling.group_by if has_cosched else ""
             sched_timeout: int | None = (
@@ -1057,9 +1129,11 @@ class ControllerTransitions:
                 "job_id, user_id, parent_job_id, root_job_id, depth, request_proto, state, submitted_at_ms, "
                 "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
                 "error, exit_code, num_tasks, is_reservation_holder, has_reservation, name, "
-                "resources_proto, constraints_proto, has_coscheduling, coscheduling_group_by, "
+                "res_cpu_millicores, res_memory_bytes, res_disk_bytes, res_device_json, "
+                "constraints_json, has_coscheduling, coscheduling_group_by, "
                 "scheduling_timeout_ms, max_task_failures"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0, ?, ?, "
+                "?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job_id.to_wire(),
                     job_id.user,
@@ -1076,8 +1150,11 @@ class ControllerTransitions:
                     replicas,
                     has_reservation,
                     request.name,
-                    resources_blob,
-                    constraints_blob,
+                    res_cpu,
+                    res_mem,
+                    res_disk,
+                    res_device,
+                    constraints_json,
                     has_cosched,
                     cosched_group,
                     sched_timeout,
@@ -1094,9 +1171,9 @@ class ControllerTransitions:
                         "INSERT INTO tasks("
                         "task_id, job_id, task_index, state, error, exit_code, submitted_at_ms, started_at_ms, "
                         "finished_at_ms, max_retries_failure, max_retries_preemption, failure_count, preemption_count, "
-                        "resource_usage_proto, current_attempt_id, priority_neg_depth, priority_root_submitted_ms, "
+                        "current_attempt_id, priority_neg_depth, priority_root_submitted_ms, "
                         "priority_insertion, priority_band"
-                        ") VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, ?, 0, 0, NULL, -1, ?, ?, ?, ?)",
+                        ") VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, ?, 0, 0, -1, ?, ?, ?, ?)",
                         (
                             task_id,
                             job_id.to_wire(),
@@ -1128,23 +1205,23 @@ class ControllerTransitions:
                     )
                     for constraint in merged:
                         holder_request.constraints.append(constraint.to_proto())
-                    holder_resources_blob = (
-                        holder_request.resources.SerializeToString() if holder_request.HasField("resources") else None
-                    )
-                    holder_constraint_list = job_pb2.ConstraintList()
-                    holder_constraint_list.constraints.extend(holder_request.constraints)
-                    holder_constraints_blob = (
-                        holder_constraint_list.SerializeToString() if holder_request.constraints else None
-                    )
+                    holder_res = holder_request.resources if holder_request.HasField("resources") else None
+                    holder_res_cpu = int(holder_res.cpu_millicores) if holder_res else 0
+                    holder_res_mem = int(holder_res.memory_bytes) if holder_res else 0
+                    holder_res_disk = int(holder_res.disk_bytes) if holder_res else 0
+                    holder_res_device = _device_to_json(holder_res.device) if holder_res else None
+                    holder_constraints_json = _constraints_to_json(holder_request.constraints)
                     cur.execute(
                         "INSERT INTO jobs("
                         "job_id, user_id, parent_job_id, root_job_id, depth, request_proto, state, submitted_at_ms, "
                         "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
                         "error, exit_code, num_tasks, is_reservation_holder, name, "
-                        "resources_proto, constraints_proto, has_coscheduling, coscheduling_group_by, "
+                        "res_cpu_millicores, res_memory_bytes, res_disk_bytes, res_device_json, "
+                        "constraints_json, has_coscheduling, coscheduling_group_by, "
                         "scheduling_timeout_ms, max_task_failures"
                         ") VALUES ("
-                        "?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, 1, ?, ?, ?, 0, '', NULL, 0"
+                        "?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, 1, ?, "
+                        "?, ?, ?, ?, ?, 0, '', NULL, 0"
                         ")",
                         (
                             holder_id.to_wire(),
@@ -1158,8 +1235,11 @@ class ControllerTransitions:
                             root_submitted_ms,
                             len(request.reservation.entries),
                             holder_request.name,
-                            holder_resources_blob,
-                            holder_constraints_blob,
+                            holder_res_cpu,
+                            holder_res_mem,
+                            holder_res_disk,
+                            holder_res_device,
+                            holder_constraints_json,
                         ),
                     )
                     holder_base = self._db.next_sequence("task_priority_insertion", cur=cur)
@@ -1170,9 +1250,9 @@ class ControllerTransitions:
                             "task_id, job_id, task_index, state, error, exit_code, submitted_at_ms, started_at_ms, "
                             "finished_at_ms, max_retries_failure, max_retries_preemption, "
                             "failure_count, preemption_count, "
-                            "resource_usage_proto, current_attempt_id, priority_neg_depth, priority_root_submitted_ms, "
+                            "current_attempt_id, priority_neg_depth, priority_root_submitted_ms, "
                             "priority_insertion, priority_band"
-                            ") VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, ?, 0, 0, NULL, -1, ?, ?, ?, ?)",
+                            ") VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, ?, 0, 0, -1, ?, ?, ?, ?)",
                             (
                                 holder_id.task(idx).to_wire(),
                                 holder_id.to_wire(),
@@ -1304,24 +1384,39 @@ class ControllerTransitions:
             device_type = ""
             device_variant = ""
         with self._db.transaction() as cur:
+            md_device_json = _device_to_json(metadata.device)
             cur.execute(
                 "INSERT INTO workers("
-                "worker_id, address, metadata_proto, healthy, active, consecutive_failures, last_heartbeat_ms, "
-                "committed_cpu_millicores, committed_mem_bytes, committed_gpu, committed_tpu, resource_snapshot_proto, "
+                "worker_id, address, healthy, active, consecutive_failures, last_heartbeat_ms, "
+                "committed_cpu_millicores, committed_mem_bytes, committed_gpu, committed_tpu, "
                 "total_cpu_millicores, total_memory_bytes, total_gpu_count, total_tpu_count, "
-                "device_type, device_variant, slice_id, scale_group"
-                ") VALUES (?, ?, ?, 1, 1, 0, ?, 0, 0, 0, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "device_type, device_variant, slice_id, scale_group, "
+                "md_hostname, md_ip_address, md_cpu_count, md_memory_bytes, md_disk_bytes, "
+                "md_tpu_name, md_tpu_worker_hostnames, md_tpu_worker_id, md_tpu_chips_per_host_bounds, "
+                "md_gpu_count, md_gpu_name, md_gpu_memory_mb, "
+                "md_gce_instance_name, md_gce_zone, md_git_hash, md_device_json"
+                ") VALUES (?, ?, 1, 1, 0, ?, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(worker_id) DO UPDATE SET "
-                "address=excluded.address, metadata_proto=excluded.metadata_proto, healthy=1, active=1, "
+                "address=excluded.address, healthy=1, active=1, "
                 "consecutive_failures=0, last_heartbeat_ms=excluded.last_heartbeat_ms, "
                 "total_cpu_millicores=excluded.total_cpu_millicores, total_memory_bytes=excluded.total_memory_bytes, "
                 "total_gpu_count=excluded.total_gpu_count, total_tpu_count=excluded.total_tpu_count, "
                 "device_type=excluded.device_type, device_variant=excluded.device_variant, "
-                "slice_id=excluded.slice_id, scale_group=excluded.scale_group",
+                "slice_id=excluded.slice_id, scale_group=excluded.scale_group, "
+                "md_hostname=excluded.md_hostname, md_ip_address=excluded.md_ip_address, "
+                "md_cpu_count=excluded.md_cpu_count, md_memory_bytes=excluded.md_memory_bytes, "
+                "md_disk_bytes=excluded.md_disk_bytes, md_tpu_name=excluded.md_tpu_name, "
+                "md_tpu_worker_hostnames=excluded.md_tpu_worker_hostnames, "
+                "md_tpu_worker_id=excluded.md_tpu_worker_id, "
+                "md_tpu_chips_per_host_bounds=excluded.md_tpu_chips_per_host_bounds, "
+                "md_gpu_count=excluded.md_gpu_count, md_gpu_name=excluded.md_gpu_name, "
+                "md_gpu_memory_mb=excluded.md_gpu_memory_mb, "
+                "md_gce_instance_name=excluded.md_gce_instance_name, md_gce_zone=excluded.md_gce_zone, "
+                "md_git_hash=excluded.md_git_hash, md_device_json=excluded.md_device_json",
                 (
                     str(worker_id),
                     address,
-                    metadata.SerializeToString(),
                     now_ms,
                     metadata.cpu_count * 1000,
                     metadata.memory_bytes,
@@ -1331,6 +1426,22 @@ class ControllerTransitions:
                     device_variant,
                     slice_id,
                     scale_group,
+                    metadata.hostname,
+                    metadata.ip_address,
+                    metadata.cpu_count,
+                    metadata.memory_bytes,
+                    metadata.disk_bytes,
+                    metadata.tpu_name,
+                    metadata.tpu_worker_hostnames,
+                    metadata.tpu_worker_id,
+                    metadata.tpu_chips_per_host_bounds,
+                    metadata.gpu_count,
+                    metadata.gpu_name,
+                    metadata.gpu_memory_mb,
+                    metadata.gce_instance_name,
+                    metadata.gce_zone,
+                    metadata.git_hash,
+                    md_device_json,
                 ),
             )
             cur.execute("DELETE FROM worker_attributes WHERE worker_id = ?", (str(worker_id),))
@@ -1531,11 +1642,19 @@ class ControllerTransitions:
             if attempt_row is None:
                 continue
             worker_id = attempt_row["worker_id"]
-            usage_payload = update.resource_usage.SerializeToString() if update.resource_usage is not None else None
-            if usage_payload is not None:
+            if update.resource_usage is not None:
                 cur.execute(
-                    "UPDATE tasks SET resource_usage_proto = ? WHERE task_id = ?",
-                    (usage_payload, update.task_id.to_wire()),
+                    "UPDATE tasks SET resource_usage_memory_mb = ?, resource_usage_disk_mb = ?, "
+                    "resource_usage_cpu_millicores = ?, resource_usage_memory_peak_mb = ?, "
+                    "resource_usage_process_count = ? WHERE task_id = ?",
+                    (
+                        update.resource_usage.memory_mb or None,
+                        update.resource_usage.disk_mb or None,
+                        update.resource_usage.cpu_millicores or None,
+                        update.resource_usage.memory_peak_mb or None,
+                        update.resource_usage.process_count or None,
+                        update.task_id.to_wire(),
+                    ),
                 )
                 ru = update.resource_usage
                 cur.execute(
@@ -1744,7 +1863,7 @@ class ControllerTransitions:
             task_row_map = _bulk_fetch_tasks(cur, all_task_ids)
 
             # ── Classify and split ────────────────────────────────────────
-            resource_usage_params: list[tuple[bytes, str]] = []
+            resource_usage_params: list[tuple[int | None, int | None, int | None, int | None, int | None, str]] = []
             task_history_params: list[tuple[str, int, int, int, int, int, int]] = []
             # (request_index, transition_request) pairs so results stay aligned.
             transition_entries: list[tuple[int, HeartbeatApplyRequest]] = []
@@ -1774,17 +1893,25 @@ class ControllerTransitions:
                         if update.attempt_id != int(task_row["current_attempt_id"]):
                             continue
                         if update.resource_usage is not None:
-                            payload = update.resource_usage.SerializeToString()
-                            resource_usage_params.append((payload, task_id_wire))
-                            ru = update.resource_usage
+                            u = update.resource_usage
+                            resource_usage_params.append(
+                                (
+                                    u.memory_mb or None,
+                                    u.disk_mb or None,
+                                    u.cpu_millicores or None,
+                                    u.memory_peak_mb or None,
+                                    u.process_count or None,
+                                    task_id_wire,
+                                )
+                            )
                             task_history_params.append(
                                 (
                                     task_id_wire,
                                     update.attempt_id,
-                                    ru.cpu_millicores,
-                                    ru.memory_mb,
-                                    ru.disk_mb,
-                                    ru.memory_peak_mb,
+                                    u.cpu_millicores,
+                                    u.memory_mb,
+                                    u.disk_mb,
+                                    u.memory_peak_mb,
                                     now_ms,
                                 )
                             )
@@ -1804,7 +1931,9 @@ class ControllerTransitions:
             # ── Pass 2a: batch resource_usage writes ──────────────────────
             if resource_usage_params:
                 cur.executemany(
-                    "UPDATE tasks SET resource_usage_proto = ? WHERE task_id = ?",
+                    "UPDATE tasks SET resource_usage_memory_mb = ?, resource_usage_disk_mb = ?, "
+                    "resource_usage_cpu_millicores = ?, resource_usage_memory_peak_mb = ?, "
+                    "resource_usage_process_count = ? WHERE task_id = ?",
                     resource_usage_params,
                 )
             if task_history_params:
@@ -2276,14 +2405,11 @@ class ControllerTransitions:
         """Drain buffered dispatches and snapshot worker running tasks."""
         with self._db.transaction() as cur:
             worker_row = cur.execute(
-                "SELECT worker_id, address, metadata_proto FROM workers "
-                "WHERE worker_id = ? AND active = 1 AND healthy = 1",
+                "SELECT worker_id, address FROM workers " "WHERE worker_id = ? AND active = 1 AND healthy = 1",
                 (str(worker_id),),
             ).fetchone()
             if worker_row is None:
                 return None
-            metadata = job_pb2.WorkerMetadata()
-            metadata.ParseFromString(worker_row["metadata_proto"])
             dispatch_rows = cur.execute(
                 "SELECT id, kind, payload_proto, task_id FROM dispatch_queue WHERE worker_id = ? ORDER BY id ASC",
                 (str(worker_id),),
@@ -2340,9 +2466,7 @@ class ControllerTransitions:
         """
         # -- Phase 1: read-only queries (no write lock) --
         with self._db.read_snapshot() as snap:
-            worker_rows = snap.fetchall(
-                "SELECT worker_id, address, metadata_proto FROM workers WHERE active = 1 AND healthy = 1"
-            )
+            worker_rows = snap.fetchall("SELECT worker_id, address FROM workers WHERE active = 1 AND healthy = 1")
             if not worker_rows:
                 return []
 
@@ -3094,11 +3218,19 @@ class ControllerTransitions:
                 if attempt_row is None:
                     continue
 
-                usage_payload = update.resource_usage.SerializeToString() if update.resource_usage is not None else None
-                if usage_payload is not None:
+                if update.resource_usage is not None:
                     cur.execute(
-                        "UPDATE tasks SET resource_usage_proto = ? WHERE task_id = ?",
-                        (usage_payload, update.task_id.to_wire()),
+                        "UPDATE tasks SET resource_usage_memory_mb = ?, resource_usage_disk_mb = ?, "
+                        "resource_usage_cpu_millicores = ?, resource_usage_memory_peak_mb = ?, "
+                        "resource_usage_process_count = ? WHERE task_id = ?",
+                        (
+                            update.resource_usage.memory_mb or None,
+                            update.resource_usage.disk_mb or None,
+                            update.resource_usage.cpu_millicores or None,
+                            update.resource_usage.memory_peak_mb or None,
+                            update.resource_usage.process_count or None,
+                            update.task_id.to_wire(),
+                        ),
                     )
                     ru = update.resource_usage
                     cur.execute(

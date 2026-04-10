@@ -9,15 +9,28 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
+import json
+
 from iris.cluster.controller.db import ACTIVE_TASK_STATES, QuerySnapshot
-from iris.cluster.controller.schema import proto_cache, proto_decoder
+from iris.cluster.controller.schema import proto_decoder
 from iris.cluster.types import JobName
-from iris.cluster.types import get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
 
 T = TypeVar("T")
 
 _RESOURCE_SPEC_DECODER = proto_decoder(job_pb2.ResourceSpecProto)
+
+
+def _accel_from_device_json(device_json: str | None) -> int:
+    """Count GPU + TPU accelerators from a device JSON column."""
+    if not device_json:
+        return 0
+    data = json.loads(device_json)
+    if "gpu" in data:
+        return data["gpu"].get("count", 0)
+    if "tpu" in data:
+        return data["tpu"].get("count", 0)
+    return 0
 
 
 @dataclass(frozen=True)
@@ -57,14 +70,14 @@ def compute_user_spend(snapshot: QuerySnapshot) -> dict[str, int]:
 
     Joins tasks (in ASSIGNED/BUILDING/RUNNING states) with jobs to get user_id
     and the resource spec proto.  Uses GROUP BY to count tasks per job and
-    decodes the compact ``resources_proto`` (not the full ``request_proto``)
-    once per job via ProtoCache.
+    Reads native resource columns (not proto BLOBs) and computes spend per user.
 
     Returns ``{user_id: total_resource_value}`` for users with active tasks.
     """
     placeholders = ",".join("?" for _ in _ACTIVE_TASK_STATES)
     rows = snapshot.raw(
-        f"SELECT j.job_id, j.resources_proto, COUNT(*) as task_count "
+        f"SELECT j.job_id, j.res_cpu_millicores, j.res_memory_bytes, j.res_device_json, "
+        f"COUNT(*) as task_count "
         f"FROM tasks t JOIN jobs j ON t.job_id = j.job_id "
         f"WHERE t.state IN ({placeholders}) "
         f"GROUP BY j.job_id",
@@ -75,11 +88,10 @@ def compute_user_spend(snapshot: QuerySnapshot) -> dict[str, int]:
     spend: dict[str, int] = defaultdict(int)
     for row in rows:
         user_id = row.job_id.user
-        if row.resources_proto is None:
-            continue
-        res = proto_cache.get_or_decode(row.resources_proto, _RESOURCE_SPEC_DECODER)
-        accel = get_gpu_count(res.device) + get_tpu_count(res.device)
-        value = resource_value(res.cpu_millicores, res.memory_bytes, accel)
+        cpu = int(row.res_cpu_millicores or 0)
+        mem = int(row.res_memory_bytes or 0)
+        accel = _accel_from_device_json(row.res_device_json)
+        value = resource_value(cpu, mem, accel)
         spend[user_id] += value * int(row.task_count)
     return dict(spend)
 

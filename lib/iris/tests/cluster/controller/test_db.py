@@ -102,8 +102,11 @@ def test_worker_scheduling_columns_exist_after_migrations(db: ControllerDB) -> N
 
 def test_job_scheduling_columns_exist_after_migrations(db: ControllerDB) -> None:
     columns = {row[1] for row in db._conn.execute("PRAGMA table_info(jobs)").fetchall()}
-    assert "resources_proto" in columns
-    assert "constraints_proto" in columns
+    assert "res_cpu_millicores" in columns
+    assert "res_memory_bytes" in columns
+    assert "res_disk_bytes" in columns
+    assert "res_device_json" in columns
+    assert "constraints_json" in columns
     assert "has_coscheduling" in columns
     assert "coscheduling_group_by" in columns
     assert "scheduling_timeout_ms" in columns

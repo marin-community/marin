@@ -902,7 +902,7 @@ def _worker_row_select() -> str:
 def healthy_active_workers_with_attributes(db: ControllerDB) -> list:
     """Fetch all healthy, active workers with their attributes populated.
 
-    Returns WorkerRow (scalar-only) so the scheduling loop never decodes metadata_proto.
+    Returns WorkerRow (scalar-only) so the scheduling loop avoids loading metadata columns.
     Uses the in-memory attribute cache to avoid a per-cycle SQL join.
     """
     from iris.cluster.controller.schema import WORKER_ROW_PROJECTION

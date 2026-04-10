@@ -22,6 +22,9 @@ def migrate(conn: sqlite3.Connection) -> None:
         if not _has_column(conn, "jobs", column):
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {ddl}")
 
+    if not _has_column(conn, "jobs", "resources_proto"):
+        return  # Column already removed by later migration; backfill not needed.
+
     from iris.rpc import job_pb2
     from iris.rpc import controller_pb2
 

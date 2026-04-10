@@ -613,29 +613,13 @@ JOBS = Table(
         Column(
             "has_reservation", "INTEGER", "NOT NULL DEFAULT 0", python_type=bool, decoder=_decode_bool_int, default=False
         ),
-        # Migration 0017
-        Column(
-            "resources_proto",
-            "BLOB",
-            "",
-            python_name="resources",
-            python_type=job_pb2.ResourceSpecProto | None,
-            decoder=_nullable(proto_decoder(job_pb2.ResourceSpecProto)),
-            default=None,
-            expensive=True,
-            cached=True,
-        ),
-        Column(
-            "constraints_proto",
-            "BLOB",
-            "",
-            python_name="constraints",
-            python_type=list,
-            decoder=_constraint_list_decoder,
-            default_factory=list,
-            expensive=True,
-            cached=True,
-        ),
+        # Migration 0027 (was resources_proto BLOB in 0017)
+        Column("res_cpu_millicores", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("res_memory_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("res_disk_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("res_device_json", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
+        # Migration 0027 (was constraints_proto BLOB in 0017)
+        Column("constraints_json", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
         Column(
             "has_coscheduling",
             "INTEGER",
@@ -710,13 +694,39 @@ TASKS = Table(
         Column("failure_count", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column("preemption_count", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column(
-            "resource_usage_proto",
-            "BLOB",
+            "resource_usage_memory_mb",
+            "INTEGER",
             "",
-            python_name="resource_usage",
-            python_type=job_pb2.ResourceUsage | None,
-            decoder=_nullable(proto_decoder(job_pb2.ResourceUsage)),
-            expensive=True,
+            python_type=int | None,
+            decoder=_nullable(int),
+        ),
+        Column(
+            "resource_usage_disk_mb",
+            "INTEGER",
+            "",
+            python_type=int | None,
+            decoder=_nullable(int),
+        ),
+        Column(
+            "resource_usage_cpu_millicores",
+            "INTEGER",
+            "",
+            python_type=int | None,
+            decoder=_nullable(int),
+        ),
+        Column(
+            "resource_usage_memory_peak_mb",
+            "INTEGER",
+            "",
+            python_type=int | None,
+            decoder=_nullable(int),
+        ),
+        Column(
+            "resource_usage_process_count",
+            "INTEGER",
+            "",
+            python_type=int | None,
+            decoder=_nullable(int),
         ),
         Column("current_attempt_id", "INTEGER", "NOT NULL DEFAULT -1", python_type=int, decoder=int),
         Column("priority_neg_depth", "INTEGER", "NOT NULL", python_type=int, decoder=int),
@@ -836,15 +846,22 @@ WORKERS = Table(
     columns=(
         Column("worker_id", "TEXT", "PRIMARY KEY", python_type=WorkerId, decoder=decode_worker_id),
         Column("address", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column(
-            "metadata_proto",
-            "BLOB",
-            "NOT NULL",
-            python_name="metadata",
-            python_type=job_pb2.WorkerMetadata,
-            decoder=proto_decoder(job_pb2.WorkerMetadata),
-            expensive=True,
-        ),
+        Column("md_hostname", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("md_ip_address", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("md_cpu_count", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("md_memory_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("md_disk_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("md_tpu_name", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("md_tpu_worker_hostnames", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("md_tpu_worker_id", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("md_tpu_chips_per_host_bounds", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("md_gpu_count", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("md_gpu_name", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("md_gpu_memory_mb", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("md_gce_instance_name", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("md_gce_zone", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("md_git_hash", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("md_device_json", "TEXT", "NOT NULL DEFAULT '{}'", python_type=str, decoder=str, default="{}"),
         Column("healthy", "INTEGER", "NOT NULL CHECK (healthy IN (0, 1))", python_type=bool, decoder=_decode_bool_int),
         Column(
             "active",
@@ -874,15 +891,15 @@ WORKERS = Table(
         ),
         Column("committed_gpu", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column("committed_tpu", "INTEGER", "NOT NULL", python_type=int, decoder=int),
-        Column(
-            "resource_snapshot_proto",
-            "BLOB",
-            "",
-            python_name="resource_snapshot",
-            python_type=object,
-            decoder=_identity,
-            expensive=True,
-        ),
+        Column("snapshot_host_cpu_percent", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_memory_used_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_memory_total_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_disk_used_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_disk_total_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_running_task_count", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_total_process_count", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_net_recv_bps", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_net_sent_bps", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
         # Migration 0016
         Column("total_cpu_millicores", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("total_memory_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
@@ -966,7 +983,15 @@ WORKER_RESOURCE_HISTORY = Table(
             python_type=WorkerId,
             decoder=decode_worker_id,
         ),
-        Column("snapshot_proto", "BLOB", "NOT NULL", expensive=True),
+        Column("snapshot_host_cpu_percent", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_memory_used_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_memory_total_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_disk_used_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_disk_total_bytes", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_running_task_count", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_total_process_count", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_net_recv_bps", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
+        Column("snapshot_net_sent_bps", "INTEGER", "", python_type=int | None, decoder=_nullable(int)),
         Column("timestamp_ms", "INTEGER", "NOT NULL", python_type=Timestamp, decoder=decode_timestamp_ms),
     ),
     indexes=(
@@ -1368,7 +1393,7 @@ PROFILES_TABLES: tuple[Table, ...] = (TASK_PROFILES,)
 
 @dataclass(frozen=True, slots=True)
 class JobRow:
-    """Lightweight job row for listings — excludes expensive blobs like constraints_proto."""
+    """Lightweight job row for listings."""
 
     job_id: JobName
     state: int
@@ -1384,7 +1409,10 @@ class JobRow:
     has_reservation: bool
     name: str
     depth: int
-    resources: job_pb2.ResourceSpecProto | None
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
     has_coscheduling: bool
     coscheduling_group_by: str
     scheduling_timeout_ms: int | None
@@ -1393,7 +1421,7 @@ class JobRow:
 
 @dataclass(frozen=True, slots=True)
 class JobSchedulingRow:
-    """Full job row for scheduling — adds constraints_proto over JobRow."""
+    """Full job row for scheduling — adds constraints_json over JobRow."""
 
     job_id: JobName
     state: int
@@ -1409,8 +1437,11 @@ class JobSchedulingRow:
     has_reservation: bool
     name: str
     depth: int
-    resources: job_pb2.ResourceSpecProto | None
-    constraints: list[job_pb2.Constraint]
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
+    constraints_json: str | None
     has_coscheduling: bool
     coscheduling_group_by: str
     scheduling_timeout_ms: int | None
@@ -1435,8 +1466,11 @@ class JobDetailRow:
     has_reservation: bool
     name: str
     depth: int
-    resources: job_pb2.ResourceSpecProto | None
-    constraints: list[job_pb2.Constraint]
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
+    constraints_json: str | None
     has_coscheduling: bool
     coscheduling_group_by: str
     scheduling_timeout_ms: int | None
@@ -1478,7 +1512,11 @@ class TaskDetailRow:
     exit_code: int | None
     started_at: Timestamp | None
     finished_at: Timestamp | None
-    resource_usage: job_pb2.ResourceUsage | None
+    resource_usage_memory_mb: int | None
+    resource_usage_disk_mb: int | None
+    resource_usage_cpu_millicores: int | None
+    resource_usage_memory_peak_mb: int | None
+    resource_usage_process_count: int | None
     current_worker_id: WorkerId | None
     current_worker_address: str | None
     container_id: str | None = None
@@ -1514,7 +1552,7 @@ class WorkerRow:
 
 @dataclass(frozen=True, slots=True)
 class WorkerDetailRow:
-    """Full worker detail — superset of WorkerRow, adds metadata_proto blob."""
+    """Full worker detail — superset of WorkerRow, adds metadata scalar columns."""
 
     worker_id: WorkerId
     address: str
@@ -1532,7 +1570,22 @@ class WorkerDetailRow:
     total_tpu_count: int
     device_type: str
     device_variant: str
-    metadata: job_pb2.WorkerMetadata
+    md_hostname: str
+    md_ip_address: str
+    md_cpu_count: int
+    md_memory_bytes: int
+    md_disk_bytes: int
+    md_tpu_name: str
+    md_tpu_worker_hostnames: str
+    md_tpu_worker_id: str
+    md_tpu_chips_per_host_bounds: str
+    md_gpu_count: int
+    md_gpu_name: str
+    md_gpu_memory_mb: int
+    md_gce_instance_name: str
+    md_gce_zone: str
+    md_git_hash: str
+    md_device_json: str
     attributes: dict = dataclasses.field(default_factory=dict)
     available_cpu_millicores: int = 0
     available_memory: int = 0
@@ -1622,7 +1675,10 @@ JOB_ROW_PROJECTION = JOBS.projection(
     "has_reservation",
     "name",
     "depth",
-    "resources_proto",
+    "res_cpu_millicores",
+    "res_memory_bytes",
+    "res_disk_bytes",
+    "res_device_json",
     "has_coscheduling",
     "coscheduling_group_by",
     "scheduling_timeout_ms",
@@ -1630,7 +1686,7 @@ JOB_ROW_PROJECTION = JOBS.projection(
     row_cls=JobRow,
 )
 
-# Full job row for scheduling (includes constraints_proto).
+# Full job row for scheduling (includes constraints).
 JOB_SCHEDULING_PROJECTION = JOBS.projection(
     "job_id",
     "state",
@@ -1646,8 +1702,11 @@ JOB_SCHEDULING_PROJECTION = JOBS.projection(
     "has_reservation",
     "name",
     "depth",
-    "resources_proto",
-    "constraints_proto",
+    "res_cpu_millicores",
+    "res_memory_bytes",
+    "res_disk_bytes",
+    "res_device_json",
+    "constraints_json",
     "has_coscheduling",
     "coscheduling_group_by",
     "scheduling_timeout_ms",
@@ -1718,8 +1777,11 @@ JOB_DETAIL_PROJECTION = JOBS.projection(
     "has_reservation",
     "name",
     "depth",
-    "resources_proto",
-    "constraints_proto",
+    "res_cpu_millicores",
+    "res_memory_bytes",
+    "res_disk_bytes",
+    "res_device_json",
+    "constraints_json",
     "has_coscheduling",
     "coscheduling_group_by",
     "scheduling_timeout_ms",
@@ -1744,7 +1806,11 @@ TASK_DETAIL_PROJECTION = TASKS.projection(
     "exit_code",
     "started_at_ms",
     "finished_at_ms",
-    "resource_usage_proto",
+    "resource_usage_memory_mb",
+    "resource_usage_disk_mb",
+    "resource_usage_cpu_millicores",
+    "resource_usage_memory_peak_mb",
+    "resource_usage_process_count",
     "current_worker_id",
     "current_worker_address",
     "container_id",
@@ -1752,7 +1818,7 @@ TASK_DETAIL_PROJECTION = TASKS.projection(
     row_cls=TaskDetailRow,
 )
 
-# Full worker detail — superset of WorkerRow, adds metadata_proto blob.
+# Full worker detail — superset of WorkerRow, adds metadata scalar columns.
 WORKER_DETAIL_PROJECTION = WORKERS.projection(
     "worker_id",
     "address",
@@ -1770,7 +1836,22 @@ WORKER_DETAIL_PROJECTION = WORKERS.projection(
     "total_tpu_count",
     "device_type",
     "device_variant",
-    "metadata_proto",
+    "md_hostname",
+    "md_ip_address",
+    "md_cpu_count",
+    "md_memory_bytes",
+    "md_disk_bytes",
+    "md_tpu_name",
+    "md_tpu_worker_hostnames",
+    "md_tpu_worker_id",
+    "md_tpu_chips_per_host_bounds",
+    "md_gpu_count",
+    "md_gpu_name",
+    "md_gpu_memory_mb",
+    "md_gce_instance_name",
+    "md_gce_zone",
+    "md_git_hash",
+    "md_device_json",
     extra_fields=(
         ExtraField("attributes", dict, default_factory=dict),
         ExtraField("available_cpu_millicores", int, default=0),

@@ -13,6 +13,7 @@ import logging
 import re
 import secrets
 import uuid
+import dataclasses
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -214,8 +215,16 @@ def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> job_pb2.Task
         proto.started_at.CopyFrom(timestamp_to_proto(current_attempt.started_at))
     if current_attempt and current_attempt.finished_at:
         proto.finished_at.CopyFrom(timestamp_to_proto(current_attempt.finished_at))
-    if task.resource_usage:
-        proto.resource_usage.CopyFrom(task.resource_usage)
+    if task.resource_usage_memory_mb is not None or task.resource_usage_cpu_millicores is not None:
+        proto.resource_usage.CopyFrom(
+            job_pb2.ResourceUsage(
+                memory_mb=task.resource_usage_memory_mb or 0,
+                disk_mb=task.resource_usage_disk_mb or 0,
+                cpu_millicores=task.resource_usage_cpu_millicores or 0,
+                memory_peak_mb=task.resource_usage_memory_peak_mb or 0,
+                process_count=task.resource_usage_process_count or 0,
+            )
+        )
     if task.container_id:
         proto.container_id = task.container_id
     # For pending tasks with prior terminal attempts, surface retry context.
@@ -332,6 +341,94 @@ def _worker_address(db: ControllerDB, worker_id: WorkerId) -> str | None:
         return str(row[0]) if row else None
 
 
+def _snapshot_row_to_proto(row: Any) -> job_pb2.WorkerResourceSnapshot:
+    """Reconstruct a WorkerResourceSnapshot proto from scalar columns."""
+    snap = job_pb2.WorkerResourceSnapshot()
+    if row.snapshot_host_cpu_percent is not None:
+        snap.host_cpu_percent = row.snapshot_host_cpu_percent
+    if row.snapshot_memory_used_bytes is not None:
+        snap.memory_used_bytes = row.snapshot_memory_used_bytes
+    if row.snapshot_memory_total_bytes is not None:
+        snap.memory_total_bytes = row.snapshot_memory_total_bytes
+    if row.snapshot_disk_used_bytes is not None:
+        snap.disk_used_bytes = row.snapshot_disk_used_bytes
+    if row.snapshot_disk_total_bytes is not None:
+        snap.disk_total_bytes = row.snapshot_disk_total_bytes
+    if row.snapshot_running_task_count is not None:
+        snap.running_task_count = row.snapshot_running_task_count
+    if row.snapshot_total_process_count is not None:
+        snap.total_process_count = row.snapshot_total_process_count
+    if row.snapshot_net_recv_bps is not None:
+        snap.net_recv_bps = row.snapshot_net_recv_bps
+    if row.snapshot_net_sent_bps is not None:
+        snap.net_sent_bps = row.snapshot_net_sent_bps
+    # timestamp_ms is present when reading from worker_resource_history.
+    ts = getattr(row, "timestamp_ms", None)
+    if ts is not None:
+        snap.timestamp.epoch_ms = ts
+    return snap
+
+
+def _resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
+    """Reconstruct a ResourceSpecProto from native job columns."""
+    res = job_pb2.ResourceSpecProto(
+        cpu_millicores=job.res_cpu_millicores,
+        memory_bytes=job.res_memory_bytes,
+        disk_bytes=job.res_disk_bytes,
+    )
+    if job.res_device_json:
+        res.device.CopyFrom(_device_config_from_json(job.res_device_json))
+    return res
+
+
+def _device_config_from_json(device_json: str) -> job_pb2.DeviceConfig:
+    """Reconstruct a DeviceConfig proto from JSON."""
+    device = job_pb2.DeviceConfig()
+    data = json.loads(device_json)
+    if "gpu" in data:
+        device.gpu.variant = data["gpu"].get("variant", "")
+        device.gpu.count = data["gpu"].get("count", 0)
+    elif "tpu" in data:
+        device.tpu.variant = data["tpu"].get("variant", "")
+        device.tpu.topology = data["tpu"].get("topology", "")
+        device.tpu.count = data["tpu"].get("count", 0)
+    return device
+
+
+def _worker_metadata_to_proto(worker: WorkerDetailRow) -> job_pb2.WorkerMetadata:
+    """Reconstruct a WorkerMetadata proto from scalar columns."""
+    md = job_pb2.WorkerMetadata(
+        hostname=worker.md_hostname,
+        ip_address=worker.md_ip_address,
+        cpu_count=worker.md_cpu_count,
+        memory_bytes=worker.md_memory_bytes,
+        disk_bytes=worker.md_disk_bytes,
+        tpu_name=worker.md_tpu_name,
+        tpu_worker_hostnames=worker.md_tpu_worker_hostnames,
+        tpu_worker_id=worker.md_tpu_worker_id,
+        tpu_chips_per_host_bounds=worker.md_tpu_chips_per_host_bounds,
+        gpu_count=worker.md_gpu_count,
+        gpu_name=worker.md_gpu_name,
+        gpu_memory_mb=worker.md_gpu_memory_mb,
+        gce_instance_name=worker.md_gce_instance_name,
+        gce_zone=worker.md_gce_zone,
+        git_hash=worker.md_git_hash,
+    )
+    if worker.md_device_json and worker.md_device_json != "{}":
+        md.device.CopyFrom(_device_config_from_json(worker.md_device_json))
+    # Populate attributes from the worker_attributes table data stored on the row.
+    for key, value in worker.attributes.items():
+        av = job_pb2.AttributeValue()
+        if isinstance(value, str):
+            av.string_value = value
+        elif isinstance(value, int):
+            av.int_value = value
+        elif isinstance(value, float):
+            av.float_value = value
+        md.attributes[key].CopyFrom(av)
+    return md
+
+
 @dataclass(frozen=True)
 class _WorkerDetail:
     worker: WorkerDetailRow
@@ -356,12 +453,16 @@ def _read_worker_detail(
             decoders={"task_id": JobName.from_wire},
         )
         resource_rows = q.raw(
-            "SELECT wrh.snapshot_proto FROM worker_resource_history wrh "
+            "SELECT wrh.snapshot_host_cpu_percent, wrh.snapshot_memory_used_bytes, "
+            "wrh.snapshot_memory_total_bytes, wrh.snapshot_disk_used_bytes, "
+            "wrh.snapshot_disk_total_bytes, wrh.snapshot_running_task_count, "
+            "wrh.snapshot_total_process_count, wrh.snapshot_net_recv_bps, "
+            "wrh.snapshot_net_sent_bps, wrh.timestamp_ms "
+            "FROM worker_resource_history wrh "
             "WHERE wrh.worker_id = ? ORDER BY wrh.id DESC LIMIT ?",
             (str(worker_id), max(resource_history_limit, 0)),
-            decoders={"snapshot_proto": lambda b: job_pb2.WorkerResourceSnapshot.FromString(b)},
         )
-    resource_history = tuple(reversed([r.snapshot_proto for r in resource_rows]))
+    resource_history = tuple(reversed([_snapshot_row_to_proto(r) for r in resource_rows]))
     return _WorkerDetail(
         worker=worker,
         running_tasks=frozenset(r.task_id for r in running_rows),
@@ -638,7 +739,29 @@ def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = No
 
 def _worker_roster(db: ControllerDB) -> list[WorkerDetailRow]:
     with db.read_snapshot() as q:
-        return WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers w"))
+        workers = WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers w"))
+        # Populate attributes from worker_attributes table.
+        if workers:
+            worker_ids = tuple(str(w.worker_id) for w in workers)
+            placeholders = ",".join("?" for _ in worker_ids)
+            attr_rows = q.fetchall(
+                f"SELECT worker_id, key, value_type, str_value, int_value, float_value "
+                f"FROM worker_attributes WHERE worker_id IN ({placeholders})",
+                worker_ids,
+            )
+            attrs_by_worker: dict[str, dict[str, str | int | float]] = {}
+            for row in attr_rows:
+                wid = str(row["worker_id"])
+                attrs = attrs_by_worker.setdefault(wid, {})
+                vtype = str(row["value_type"])
+                if vtype == "str":
+                    attrs[str(row["key"])] = str(row["str_value"])
+                elif vtype == "int":
+                    attrs[str(row["key"])] = int(row["int_value"])
+                elif vtype == "float":
+                    attrs[str(row["key"])] = float(row["float_value"])
+            workers = [dataclasses.replace(w, attributes=attrs_by_worker.get(str(w.worker_id), {})) for w in workers]
+        return workers
 
 
 def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -> list[EndpointRow]:
@@ -1167,7 +1290,7 @@ class ControllerServiceImpl:
                 scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
                 pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
-        resources = j.resources or job_pb2.ResourceSpecProto()
+        resources = _resource_spec_from_job_row(j)
 
         proto_job = job_pb2.JobStatus(
             job_id=j.job_id.to_wire(),
@@ -1372,7 +1495,7 @@ class ControllerServiceImpl:
                     last_heartbeat=timestamp_to_proto(worker.last_heartbeat),
                     running_job_ids=[task_id.to_wire() for task_id in running_by_worker.get(worker.worker_id, [])],
                     address=worker.address,
-                    metadata=worker.metadata,
+                    metadata=_worker_metadata_to_proto(worker),
                     status_message=worker_status_message(worker),
                 )
             )
@@ -1800,7 +1923,7 @@ class ControllerServiceImpl:
             last_heartbeat=timestamp_to_proto(worker.last_heartbeat),
             running_job_ids=[tid.to_wire() for tid in detail.running_tasks],
             address=worker.address,
-            metadata=worker.metadata,
+            metadata=_worker_metadata_to_proto(worker),
             status_message=worker_status_message(worker),
         )
 
