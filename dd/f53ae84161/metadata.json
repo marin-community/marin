@@ -3,7 +3,7 @@
   "checkpoint_id": "ddf53ae84161",
   "strategy": "manual-commit",
   "branch": "kevin/harbor",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "lib/iris/src/iris/cluster/client/job_info.py"
   ],
@@ -28,13 +28,20 @@
       "context": "/dd/f53ae84161/2/context.md",
       "content_hash": "/dd/f53ae84161/2/content_hash.txt",
       "prompt": "/dd/f53ae84161/2/prompt.txt"
+    },
+    {
+      "metadata": "/dd/f53ae84161/3/metadata.json",
+      "transcript": "/dd/f53ae84161/3/full.jsonl",
+      "context": "/dd/f53ae84161/3/context.md",
+      "content_hash": "/dd/f53ae84161/3/content_hash.txt",
+      "prompt": "/dd/f53ae84161/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 1119,
-    "cache_creation_tokens": 9193273,
-    "cache_read_tokens": 270151708,
-    "output_tokens": 280252,
-    "api_call_count": 805
+    "input_tokens": 3058,
+    "cache_creation_tokens": 36665313,
+    "cache_read_tokens": 992950251,
+    "output_tokens": 746115,
+    "api_call_count": 2251
   }
 }
