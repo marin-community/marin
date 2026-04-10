@@ -161,8 +161,21 @@ def _run_steps(api_base: str, model: str, step: int, output_dir: str, concurrenc
     _save_diversity(report, step_dir)
 
 
-def _run_with_vllm(model_name: str, model_path: str, step: int, output_dir: str, concurrency: int) -> None:
-    """Start a VllmEnvironment and run rollout generation against it."""
+def _run_with_vllm(
+    model_name: str,
+    model_path: str,
+    step: int,
+    output_dir: str,
+    concurrency: int,
+    max_num_seqs: int,
+    max_model_len: int,
+) -> None:
+    """Start a VllmEnvironment and run rollout generation against it.
+
+    ``max_num_seqs`` caps how many sequences vLLM keeps in flight at once.
+    For a 1.7B model on v6e-1 with seq_len=8192, ~16-32 fits comfortably in
+    HBM; bumping it past the client's concurrency setting is wasted work.
+    """
     from marin.evaluation.evaluators.evaluator import ModelConfig
     from marin.inference.vllm_server import VllmEnvironment
     from marin.utils import remove_tpu_lockfile_on_exit
@@ -174,10 +187,21 @@ def _run_with_vllm(model_name: str, model_path: str, step: int, output_dir: str,
     model_config = ModelConfig(
         name=model_name,
         path=model_path,
-        engine_kwargs={"max_model_len": 8192},
+        engine_kwargs={"max_model_len": max_model_len},
     )
 
-    with remove_tpu_lockfile_on_exit(), VllmEnvironment(model_config) as env:
+    extra_args = [
+        "--max-num-seqs",
+        str(max_num_seqs),
+    ]
+    logger.info(
+        "vLLM config: max_model_len=%d, max_num_seqs=%d, client_concurrency=%d",
+        max_model_len,
+        max_num_seqs,
+        concurrency,
+    )
+
+    with remove_tpu_lockfile_on_exit(), VllmEnvironment(model_config, extra_args=extra_args) as env:
         logger.info("vLLM server ready at %s", env.server_url)
         _run_steps(env.server_url, model_name, step, output_dir, concurrency)
 
@@ -222,6 +246,18 @@ def main():
         default=16,
         help="Number of rollouts in flight at once for steps 4/5/6 (vLLM batches them)",
     )
+    parser.add_argument(
+        "--max-num-seqs",
+        type=int,
+        default=32,
+        help="vLLM max_num_seqs (server-side batch ceiling). Should be >= --concurrency.",
+    )
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=8192,
+        help="vLLM max_model_len (per-sequence context window in tokens).",
+    )
     args = parser.parse_args()
 
     model_path = args.model_path or args.model
@@ -231,7 +267,15 @@ def main():
         _run_steps(args.api_base, args.model, args.step, args.output_dir, args.concurrency)
     elif args.local:
         # Local/on-worker mode: start VllmEnvironment in this process
-        _run_with_vllm(args.model, model_path, args.step, args.output_dir, args.concurrency)
+        _run_with_vllm(
+            args.model,
+            model_path,
+            args.step,
+            args.output_dir,
+            args.concurrency,
+            args.max_num_seqs,
+            args.max_model_len,
+        )
     else:
         # Print the ray_run.py command for cluster submission
         _print_ray_run_command(args.model, args.step, args.output_dir, args.tpu_type)
