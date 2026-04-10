@@ -6,6 +6,8 @@
 import os
 
 import pytest
+
+from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 
@@ -38,7 +40,11 @@ def test_train_worker(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
+            rl_loss=RLOOLoss(
+                kl=KLConfig(mode=KLMode.NONE, beta=0.0),
+                clip_epsilon_low=0.2,
+                clip_epsilon_high=0.2,
+            ),
         ),
         curriculum=create_test_curriculum_config(),
         tokenizer=DummyTokenizer(),
