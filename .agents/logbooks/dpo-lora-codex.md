@@ -3071,3 +3071,80 @@ Status at end of this session:
 - the first `400g` attempt was intentionally terminated after confirming the scheduler bottleneck
 - the `256g` relaunches have not yet produced a runnable job object because of controller-side submission/bundle issues
 - as a result, I do **not** yet have a completed LoRA-DPO smoke run proving end-to-end HF export on-cluster
+
+## 2026-04-09 LoRA DPO 5-Step Smoke-Run Success
+
+Retried submission after pulling current `main` Iris CLI behavior forward:
+
+- top-level coordinator launched CPU-only with `--extra marin:tpu`
+- child `train_dpo` step requested the actual `v5p-8` worker
+- successful job:
+  - `/ahmed/lora-dpo-smoke-export-v5p8-5step-r2`
+- W&B run:
+  - `lora_smoke_export_marin_8b_instruct_v5p8_5step-e97bb1`
+  - https://wandb.ai/marin-community/dpo/runs/lora_smoke_export_marin_8b_instruct_v5p8_5step-e97bb1
+
+Final Iris result:
+
+- parent `/ahmed/lora-dpo-smoke-export-v5p8-5step-r2`: `succeeded`
+- child `/ahmed/lora-dpo-smoke-export-v5p8-5step-r2/train_dpo`: `succeeded`
+- child runtime: `57m 39s`
+- task runtime: `56m 21s`
+- failures: `0`
+- preemptions: `0`
+
+What this run proved:
+
+- canonical Marin executor `tune_lora` path can still launch LoRA-DPO on Iris after the recent export fixes
+- `v5p-8` training survived startup, reference-cache rebuild, compile, train steps, repeated eval suites, checkpoint save, and merged HF export
+- no `RESOURCE_EXHAUSTED`, HBM, `FAILED_PRECONDITION`, or node-failure signal appeared during the successful run
+
+Observed training/export milestones:
+
+- loaded base model from `marin-community/marin-8b-instruct`
+- rebuilt the LoRA reference-eval cache after metadata mismatch on the old cache identity schema
+- completed all `5` train steps
+- saved checkpoints to:
+  - `gs://marin-us-central1/checkpoints/dpo/tune_lora/lora_smoke_export_marin_8b_instruct_v5p8_5step-e97bb1/checkpoints/step-1`
+  - `gs://marin-us-central1/checkpoints/dpo/tune_lora/lora_smoke_export_marin_8b_instruct_v5p8_5step-e97bb1/checkpoints/step-4`
+- pruned the temporary `step-1` checkpoint after the final save
+- completed merged HF export to:
+  - `gs://marin-us-central1/checkpoints/dpo/tune_lora/lora_smoke_export_marin_8b_instruct_v5p8_5step-e97bb1/hf/step-4`
+- HF export completed all `7` safetensor shards and logged:
+  - `Finished saving HF-compatible checkpoint`
+
+Conclusion:
+
+- this branch now has a successful on-cluster LoRA-DPO smoke run from the upstreamed path, and the merged HF export path completed end-to-end
+
+## 2026-04-10 Downstream vLLM Verification of LoRA Smoke Export
+
+Follow-up validation from Codex on the exported merged HF checkpoint:
+
+- tested checkpoint:
+  - `gs://marin-us-central1/checkpoints/dpo/tune_lora/lora_smoke_export_marin_8b_instruct_v5p8_5step-e97bb1/hf/step-4`
+- downstream inference output:
+  - `gs://marin-us-central1/eval/marin_dpo_lora_smoke_export_step4_bloom_speceval_r2/inference-6f1fa3`
+
+What the downstream test established:
+
+- vLLM loaded the merged HF export successfully
+- inference completed and produced coherent English outputs
+- the old weight-load failure did not reproduce:
+  - no `assert param_data.shape == loaded_weight.shape`
+- this confirms the recent merged-LoRA HF export fix is working for this checkpoint in an actual serving path, not just during Levanter export
+
+Observed caveats from the downstream run:
+
+- early launch attempts had infra issues unrelated to model export correctness:
+  - one TPU type had no `us-central1` overlap
+  - later child-task worker loss forced retries
+- model quality itself is weak because this is only a `step-4` smoke checkpoint
+  - export/serving correctness is now the important signal here, not benchmark quality
+
+Net conclusion:
+
+- LoRA-DPO smoke run succeeded on Iris
+- merged HF export completed
+- downstream vLLM inference loaded that export and generated real English text
+- this closes the loop on the export fix for the smoke-run checkpoint
