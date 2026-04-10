@@ -62,6 +62,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
             input_paths=normalized.output_path,
             output_path=output_path,
             max_parallelism=1024,
+            cc_max_iterations=3,
             worker_resources=ResourceConfig(cpu=5, ram="16g", disk="30g"),
         ),
         override_output_path=f"{base}/dedup",

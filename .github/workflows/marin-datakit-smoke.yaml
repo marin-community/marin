@@ -119,7 +119,7 @@ jobs:
           SMOKE_RUN_ID: ${{ env.SMOKE_RUN_ID }}
           # MARIN_PREFIX intentionally unset — validate script defaults via marin_temp_bucket,
           # matching the ferry entrypoint default.
-        run: .venv/bin/python scripts/datakit/validate_smoke_outputs.py
+        run: .venv/bin/python scripts/datakit/validate_ferry_outputs.py
 
       - name: Capture failure diagnostics
         if: failure()
