@@ -1439,6 +1439,7 @@ class ControllerTransitions:
                         ports=list(job.request.ports),
                         attempt_id=attempt_id,
                         constraints=list(job.request.constraints),
+                        task_image=job.request.task_image,
                     )
                     enqueue_run_dispatch(cur, str(assignment.worker_id), run_request.SerializeToString(), now_ms)
                     has_real_dispatch = True
@@ -2938,6 +2939,7 @@ class ControllerTransitions:
                     ports=list(job_req.ports),
                     attempt_id=attempt_id,
                     constraints=list(job_req.constraints),
+                    task_image=job_req.task_image,
                 )
                 # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
                 if job_req.timeout.milliseconds > 0:

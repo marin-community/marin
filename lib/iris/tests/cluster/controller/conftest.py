@@ -181,7 +181,11 @@ def make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:
     return entrypoint
 
 
-def make_direct_job_request(name: str = "test-job", replicas: int = 1) -> controller_pb2.Controller.LaunchJobRequest:
+def make_direct_job_request(
+    name: str = "test-job",
+    replicas: int = 1,
+    task_image: str = "",
+) -> controller_pb2.Controller.LaunchJobRequest:
     job_name = JobName.root("test-user", name)
     return controller_pb2.Controller.LaunchJobRequest(
         name=job_name.to_wire(),
@@ -189,12 +193,18 @@ def make_direct_job_request(name: str = "test-job", replicas: int = 1) -> contro
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
         replicas=replicas,
+        task_image=task_image,
     )
 
 
-def submit_direct_job(state: ControllerTransitions, name: str, replicas: int = 1) -> list[JobName]:
+def submit_direct_job(
+    state: ControllerTransitions,
+    name: str,
+    replicas: int = 1,
+    task_image: str = "",
+) -> list[JobName]:
     jid = JobName.root("test-user", name)
-    req = make_direct_job_request(name, replicas)
+    req = make_direct_job_request(name, replicas, task_image=task_image)
     state.submit_job(jid, req, Timestamp.now())
     with state._db.snapshot() as q:
         tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
@@ -389,6 +399,7 @@ def make_job_request(
     max_retries_preemption: int = 0,
     scheduling_timeout_seconds: int = 0,
     priority_band: int = 0,
+    task_image: str = "",
 ) -> controller_pb2.Controller.LaunchJobRequest:
     job_name = JobName.from_string(name) if name.startswith("/") else JobName.root("test-user", name)
     request = controller_pb2.Controller.LaunchJobRequest(
@@ -400,6 +411,7 @@ def make_job_request(
         max_retries_preemption=max_retries_preemption,
         replicas=replicas,
         priority_band=priority_band,
+        task_image=task_image,
     )
     if scheduling_timeout_seconds > 0:
         request.scheduling_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(scheduling_timeout_seconds)))
