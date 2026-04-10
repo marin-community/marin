@@ -38,6 +38,7 @@ from levanter.tokenizers import load_tokenizer
 
 from fray import current_client
 from marin.rl.curriculum import Curriculum
+from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLOOLoss
@@ -319,7 +320,11 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
             max_samples=1,
             max_rollout_step_delay=0,
         ),
-        loss=RLOOLoss(kl_coef=0.0, clip_epsilon=5.0),
+        loss=RLOOLoss(
+            kl=KLConfig(mode=KLMode.NONE, beta=0.0),
+            clip_epsilon_low=5.0,
+            clip_epsilon_high=5.0,
+        ),
         initial_checkpoint=None,
     )
 

@@ -22,6 +22,7 @@ from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
+from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
     RLExperimentConfig,
@@ -57,7 +58,7 @@ LLAMA_3_1_8B_INSTRUCT = ModelConfig(
 
 def _default_rl_loss() -> RLOOLoss:
     return RLOOLoss(
-        kl_coef=0.0,
+        kl=KLConfig(mode=KLMode.NONE, beta=0.0),
         clip_epsilon_low=0.2,
         clip_epsilon_high=0.28,
         synchronous=True,
