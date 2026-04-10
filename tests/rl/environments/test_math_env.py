@@ -54,11 +54,13 @@ class DummyInferenceContext(LevanterInferenceContext):
         temperature,
         n,
         max_tokens=None,
+        top_k=None,
         stop=None,
         system_prompt=None,
-        top_k=None,
+        tools=None,
     ):
         """Return mock completions for each prompt."""
+        del temperature, n, max_tokens, top_k, stop, system_prompt, tools
         return [create_mock_chat_completion(self.tokenizer) for prompt in prompts]
 
 

@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
+from marin.rl.environments.inference_ctx.render import AssistantTurnParseResult, ToolSpec
 from marin.rl.types import Rollout
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
@@ -42,8 +43,13 @@ class BaseInferenceContext:
         top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
+        tools: list[ToolSpec] | None = None,
     ) -> list[ChatCompletion]:
         """Batch completions from the inference server."""
+        raise NotImplementedError
+
+    def assistant_turn_from_choice(self, choice: Choice) -> AssistantTurnParseResult:
+        """Parse a model choice into a structured assistant turn."""
         raise NotImplementedError
 
     def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
