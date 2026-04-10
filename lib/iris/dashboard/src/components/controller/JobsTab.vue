@@ -42,23 +42,29 @@ const EXPANDED_JOBS_KEY = 'iris.controller.expandedJobs'
 
 // -- State (hydrated from URL query params) --
 
-function parseSort(v: unknown): SortField {
+/** Safely extract a single string from a Vue Router query value (string | string[] | null). */
+function queryStr(v: string | string[] | null | undefined): string {
+  if (Array.isArray(v)) return v[0] ?? ''
+  return v ?? ''
+}
+
+function parseSort(v: string): SortField {
   return SORT_FIELDS.includes(v as SortField) ? (v as SortField) : 'date'
 }
-function parseDir(v: unknown): SortDir {
+function parseDir(v: string): SortDir {
   return SORT_DIRS.includes(v as SortDir) ? (v as SortDir) : 'desc'
 }
-function parsePage(v: unknown): number {
+function parsePage(v: string): number {
   const n = Number(v)
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0
 }
 
-const page = ref(parsePage(route.query.page))
-const sortField = ref<SortField>(parseSort(route.query.sort))
-const sortDir = ref<SortDir>(parseDir(route.query.dir))
-const nameFilter = ref((route.query.name as string) ?? '')
-const localFilter = ref((route.query.name as string) ?? '')
-const stateFilter = ref((route.query.state as string) ?? '')
+const page = ref(parsePage(queryStr(route.query.page)))
+const sortField = ref<SortField>(parseSort(queryStr(route.query.sort)))
+const sortDir = ref<SortDir>(parseDir(queryStr(route.query.dir)))
+const nameFilter = ref(queryStr(route.query.name))
+const localFilter = ref(queryStr(route.query.name))
+const stateFilter = ref(queryStr(route.query.state))
 const expandedJobs = ref<Set<string>>(loadExpandedJobs())
 const childJobsByParent = ref<Map<string, JobStatus[]>>(new Map())
 const loadingChildJobs = ref<Set<string>>(new Set())
