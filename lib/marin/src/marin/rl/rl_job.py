@@ -17,11 +17,11 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from fray.v2 import JobHandle
-from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.trainer import TrainerConfig
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments.inference_ctx import (
@@ -36,7 +36,6 @@ from marin.rl.rollout_worker import RolloutWorkerConfig, RolloutTrackerConfig
 from marin.rl.train_worker import TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.utilities.json_encoder import CustomJsonEncoder
-from transformers import PreTrainedTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +92,7 @@ class TrainParams:
     )
 
 
-def make_tokenizer(tokenizer: str | PreTrainedTokenizer) -> PreTrainedTokenizer:
+def make_tokenizer(tokenizer: str | MarinTokenizer) -> MarinTokenizer:
     if isinstance(tokenizer, str):
         return load_tokenizer(tokenizer)
     return tokenizer
@@ -107,7 +106,7 @@ class RLJobConfig:
     trainer: TrainerConfig
     train_params: TrainParams
     curriculum: CurriculumConfig
-    tokenizer: str | PreTrainedTokenizer
+    tokenizer: str | MarinTokenizer
 
     inference_type: Literal["levanter", "vllm"]
 
@@ -115,7 +114,7 @@ class RLJobConfig:
 
     vocab_size: int | None = None
     """Vocab size for model construction. Should match the checkpoint's vocab dimension.
-    If None, falls back to len(tokenizer)."""
+    If None, falls back to tokenizer.vocab_size."""
 
     # Model & initialization (with defaults)
     initial_checkpoint: str | None = None

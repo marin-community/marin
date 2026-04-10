@@ -5,6 +5,7 @@ import dataclasses
 from types import SimpleNamespace
 
 import pytest
+from levanter.checkpoint import CheckpointDebugConfig
 from levanter.models.llama import LlamaConfig
 from marin.execution.artifact import PathMetadata
 from marin.execution.executor import ExecutorStep, output_path_of
@@ -47,6 +48,11 @@ def _noop(_config: _EmptyConfig) -> None:
     return None
 
 
+@pytest.fixture(autouse=True)
+def _default_launcher_region(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+
+
 def _test_config(
     *,
     train_tpu_type: str,
@@ -55,9 +61,7 @@ def _test_config(
     inference_ram: str | None = None,
     zone: str | None = None,
     delete_previous_temporary_checkpoint_after_save: bool = True,
-    debug_checkpointer: bool = False,
-    debug_checkpointer_log_interval: float = 60.0,
-    debug_checkpointer_dump_stacks_after: float | None = 60.0,
+    checkpoint_debug: CheckpointDebugConfig | None = None,
 ) -> RLExperimentConfig:
     return RLExperimentConfig(
         model_config=ModelConfig(
@@ -83,9 +87,7 @@ def _test_config(
         inference_ram=inference_ram,
         zone=zone,
         delete_previous_temporary_checkpoint_after_save=delete_previous_temporary_checkpoint_after_save,
-        debug_checkpointer=debug_checkpointer,
-        debug_checkpointer_log_interval=debug_checkpointer_log_interval,
-        debug_checkpointer_dump_stacks_after=debug_checkpointer_dump_stacks_after,
+        checkpoint_debug=checkpoint_debug or CheckpointDebugConfig(),
     )
 
 
@@ -253,9 +255,11 @@ def test_build_rl_job_config_propagates_checkpoint_controls_and_instance_id(monk
             inference_tpu_type="v5p-8",
             zone="us-central1-b",
             delete_previous_temporary_checkpoint_after_save=False,
-            debug_checkpointer=True,
-            debug_checkpointer_log_interval=15.0,
-            debug_checkpointer_dump_stacks_after=45.0,
+            checkpoint_debug=CheckpointDebugConfig(
+                enabled=True,
+                log_interval=15.0,
+                dump_stacks_after=45.0,
+            ),
         ),
         curriculum=_test_curriculum(),
         model_path="gs://marin-us-central1/models/test-model",
@@ -268,9 +272,9 @@ def test_build_rl_job_config_propagates_checkpoint_controls_and_instance_id(monk
     assert job_config.curriculum.actor_name == "curriculum-rl-test-instance"
     assert job_config.weight_transfer.coordinator_name == "wt-coord-rl-test-instance"
     assert not job_config.trainer.checkpointer.delete_previous_temporary_checkpoint_after_save
-    assert job_config.trainer.checkpointer.debug_checkpointer
-    assert job_config.trainer.checkpointer.debug_checkpointer_log_interval == 15.0
-    assert job_config.trainer.checkpointer.debug_checkpointer_dump_stacks_after == 45.0
+    assert job_config.trainer.checkpointer.debug.enabled
+    assert job_config.trainer.checkpointer.debug.log_interval == 15.0
+    assert job_config.trainer.checkpointer.debug.dump_stacks_after == 45.0
 
 
 def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):

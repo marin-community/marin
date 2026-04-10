@@ -29,6 +29,7 @@ export type TaskState =
   | 'worker_failed'
   | 'unschedulable'
   | 'assigned'
+  | 'preempted'
 
 // The DB stores state as an integer column. This maps integer values to
 // normalized state names so the dashboard works with both proto enum strings
@@ -44,6 +45,7 @@ const STATE_INT_MAP: Record<number, string> = {
   7: 'worker_failed',
   8: 'unschedulable',
   9: 'assigned',
+  10: 'preempted',
 }
 
 /**
@@ -74,6 +76,7 @@ const STATE_DISPLAY_NAMES: Record<string, string> = {
   worker_failed: 'Worker Failed',
   unschedulable: 'Unschedulable',
   assigned: 'Assigned',
+  preempted: 'Preempted',
   unknown: 'Unknown',
 }
 
@@ -110,6 +113,12 @@ const STATUS_COLORS: Record<string, StatusColorClasses> = {
     bg: 'bg-status-danger-bg',
     border: 'border-status-danger-border',
     dot: 'bg-status-danger',
+  },
+  preempted: {
+    text: 'text-status-warning',
+    bg: 'bg-status-warning-bg',
+    border: 'border-status-warning-border',
+    dot: 'bg-status-warning',
   },
   pending: {
     text: 'text-status-warning',

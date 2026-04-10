@@ -24,7 +24,7 @@ import cloudpickle
 import humanfriendly
 
 from iris.cluster.constraints import Constraint
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,14 +281,14 @@ class TaskAttempt:
         return f"TaskAttempt({self.to_wire()!r})"
 
 
-def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
+def get_gpu_count(device: job_pb2.DeviceConfig) -> int:
     """Extract GPU count from DeviceConfig."""
     if device.HasField("gpu"):
         return device.gpu.count or 1
     return 0
 
 
-def get_tpu_count(device: cluster_pb2.DeviceConfig) -> int:
+def get_tpu_count(device: job_pb2.DeviceConfig) -> int:
     """Extract TPU count from DeviceConfig."""
     if device.HasField("tpu"):
         return device.tpu.count or 0
@@ -329,9 +329,9 @@ class CoschedulingConfig:
 
     group_by: str
 
-    def to_proto(self) -> cluster_pb2.CoschedulingConfig:
+    def to_proto(self) -> job_pb2.CoschedulingConfig:
         """Convert to protobuf representation."""
-        return cluster_pb2.CoschedulingConfig(group_by=self.group_by)
+        return job_pb2.CoschedulingConfig(group_by=self.group_by)
 
 
 @dataclass(frozen=True)
@@ -349,16 +349,16 @@ class ReservationEntry:
     resources: "ResourceSpec"
     constraints: list[Constraint] | None = None
 
-    def to_proto(self) -> cluster_pb2.ReservationEntry:
+    def to_proto(self) -> job_pb2.ReservationEntry:
         """Convert to protobuf representation."""
         constraints_proto = [c.to_proto() for c in self.constraints or []]
-        return cluster_pb2.ReservationEntry(
+        return job_pb2.ReservationEntry(
             resources=self.resources.to_proto(),
             constraints=constraints_proto,
         )
 
 
-def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConfig:
+def tpu_device(variant: str, count: int | None = None) -> job_pb2.DeviceConfig:
     """Create a DeviceConfig for a TPU device.
 
     Args:
@@ -382,15 +382,15 @@ def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConf
             chip_count = topo.chips_per_vm
         except ValueError:
             chip_count = 0
-    return cluster_pb2.DeviceConfig(
-        tpu=cluster_pb2.TpuDevice(
+    return job_pb2.DeviceConfig(
+        tpu=job_pb2.TpuDevice(
             variant=variant,
             count=chip_count,
         )
     )
 
 
-def gpu_device(variant: str, count: int = 1) -> cluster_pb2.DeviceConfig:
+def gpu_device(variant: str, count: int = 1) -> job_pb2.DeviceConfig:
     """Create a DeviceConfig for a GPU device.
 
     Args:
@@ -400,8 +400,8 @@ def gpu_device(variant: str, count: int = 1) -> cluster_pb2.DeviceConfig:
     Returns:
         DeviceConfig with the gpu field set.
     """
-    return cluster_pb2.DeviceConfig(
-        gpu=cluster_pb2.GpuDevice(
+    return job_pb2.DeviceConfig(
+        gpu=job_pb2.GpuDevice(
             variant=variant,
             count=count,
         )
@@ -449,19 +449,19 @@ class ResourceSpec:
     cpu: float = 0.0
     memory: str | int = 0  # "8g" or bytes
     disk: str | int = 0
-    device: cluster_pb2.DeviceConfig | None = None
+    device: job_pb2.DeviceConfig | None = None
 
     # Accelerator tasks need enough CPU to avoid bottlenecking on data loading.
     MIN_ACCELERATOR_CPU_MILLICORES = 32_000
 
-    def to_proto(self) -> cluster_pb2.ResourceSpecProto:
+    def to_proto(self) -> job_pb2.ResourceSpecProto:
         """Convert to wire format."""
         memory_bytes = self.memory if isinstance(self.memory, int) else parse_memory_string(self.memory)
         disk_bytes = self.disk if isinstance(self.disk, int) else parse_memory_string(self.disk)
         cpu_mc = int(self.cpu * 1000)
         if self.device is not None and cpu_mc < self.MIN_ACCELERATOR_CPU_MILLICORES:
             cpu_mc = self.MIN_ACCELERATOR_CPU_MILLICORES
-        spec = cluster_pb2.ResourceSpecProto(
+        spec = job_pb2.ResourceSpecProto(
             cpu_millicores=cpu_mc,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
@@ -531,7 +531,7 @@ class EnvironmentSpec:
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
 
-    def to_proto(self) -> cluster_pb2.EnvironmentConfig:
+    def to_proto(self) -> job_pb2.EnvironmentConfig:
         """Convert to wire format with sensible defaults applied."""
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
@@ -544,7 +544,7 @@ class EnvironmentSpec:
 
         py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 
-        return cluster_pb2.EnvironmentConfig(
+        return job_pb2.EnvironmentConfig(
             pip_packages=list(self.pip_packages or []),
             env_vars=merged_env_vars,
             extras=list(self.extras or []),
@@ -588,11 +588,11 @@ class Namespace(str):
 
 def is_job_finished(state: int) -> bool:
     return state in (
-        cluster_pb2.JOB_STATE_SUCCEEDED,
-        cluster_pb2.JOB_STATE_FAILED,
-        cluster_pb2.JOB_STATE_KILLED,
-        cluster_pb2.JOB_STATE_WORKER_FAILED,
-        cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+        job_pb2.JOB_STATE_SUCCEEDED,
+        job_pb2.JOB_STATE_FAILED,
+        job_pb2.JOB_STATE_KILLED,
+        job_pb2.JOB_STATE_WORKER_FAILED,
+        job_pb2.JOB_STATE_UNSCHEDULABLE,
     )
 
 
@@ -605,18 +605,19 @@ def is_task_finished(state: int) -> bool:
     # Avoid circular import - define inline since this is a stable set
     terminal_states = frozenset(
         {
-            cluster_pb2.TASK_STATE_SUCCEEDED,
-            cluster_pb2.TASK_STATE_FAILED,
-            cluster_pb2.TASK_STATE_KILLED,
-            cluster_pb2.TASK_STATE_WORKER_FAILED,
-            cluster_pb2.TASK_STATE_UNSCHEDULABLE,
+            job_pb2.TASK_STATE_SUCCEEDED,
+            job_pb2.TASK_STATE_FAILED,
+            job_pb2.TASK_STATE_KILLED,
+            job_pb2.TASK_STATE_WORKER_FAILED,
+            job_pb2.TASK_STATE_PREEMPTED,
+            job_pb2.TASK_STATE_UNSCHEDULABLE,
         }
     )
     return state in terminal_states
 
 
-JobState = cluster_pb2.JobState
-TaskState = cluster_pb2.TaskState
+JobState = job_pb2.JobState
+TaskState = job_pb2.TaskState
 
 
 @dataclass(frozen=True)
@@ -677,6 +678,28 @@ TPU_TOPOLOGIES: list[TpuTopologyInfo] = [
 ]
 
 
+TPU_FAMILY_VARIANT_PREFIX: dict[str, str] = {
+    "v4": "v4",
+    "v5e": "v5litepod",
+    "v5p": "v5p",
+    "v6e": "v6e",
+}
+
+
+def tpu_variant_name(family: str, size: int) -> str:
+    """Build the device_variant string for a TPU family and chip-count size.
+
+    >>> tpu_variant_name("v5e", 16)
+    'v5litepod-16'
+    >>> tpu_variant_name("v6e", 32)
+    'v6e-32'
+    """
+    prefix = TPU_FAMILY_VARIANT_PREFIX.get(family)
+    if prefix is None:
+        raise ValueError(f"Unknown TPU family '{family}'. Known families: {sorted(TPU_FAMILY_VARIANT_PREFIX)}")
+    return f"{prefix}-{size}"
+
+
 def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     """Get TPU topology by type name."""
     for config in TPU_TOPOLOGIES:
@@ -685,7 +708,7 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
-def adjust_tpu_replicas(device: "cluster_pb2.DeviceConfig | None", replicas: int) -> int:
+def adjust_tpu_replicas(device: "job_pb2.DeviceConfig | None", replicas: int) -> int:
     """Adjust replicas for multi-host TPU topologies.
 
     Multi-host TPU topologies (e.g. v6e-32 with vm_count=8) require one task
@@ -793,20 +816,20 @@ class Entrypoint:
             raise ValueError("Command must have at least one argument")
         return cls(command=list(argv), workdir_files={})
 
-    def to_proto(self) -> cluster_pb2.RuntimeEntrypoint:
+    def to_proto(self) -> job_pb2.RuntimeEntrypoint:
         """Convert to protobuf representation.
 
         Produces a RuntimeEntrypoint with no setup_commands (those are added
         by build_runtime_entrypoint when submitting to the cluster).
         """
-        proto = cluster_pb2.RuntimeEntrypoint()
+        proto = job_pb2.RuntimeEntrypoint()
         proto.run_command.argv[:] = self.command
         for name, data in self.workdir_files.items():
             proto.workdir_files[name] = data
         return proto
 
     @classmethod
-    def from_proto(cls, proto: cluster_pb2.RuntimeEntrypoint) -> "Entrypoint":
+    def from_proto(cls, proto: job_pb2.RuntimeEntrypoint) -> "Entrypoint":
         """Create from protobuf representation."""
         command = list(proto.run_command.argv)
         workdir_files = dict(proto.workdir_files) if proto.workdir_files else None

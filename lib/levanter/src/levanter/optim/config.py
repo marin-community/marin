@@ -78,6 +78,50 @@ class InvLrSchedule(LrSchedule):
         return _inv_decay_schedule(ctx.learning_rate, ctx.min_lr, ctx.decay_steps)
 
 
+@LrSchedule.register_subclass("polynomial")
+@dataclass(frozen=True)
+class PolynomialLrSchedule(LrSchedule):
+    """Polynomial decay: lr * (1 - t/T)^power, reaching min_lr at step T.
+
+    Wraps optax.polynomial_schedule. Power=1 gives linear decay, power=2 gives
+    quadratic decay (drops LR more aggressively early), power=0.5 gives sqrt decay
+    (holds LR higher early, drops sharply at end).
+    """
+
+    power: float = 2.0
+
+    def build(self, ctx: LrScheduleContext):
+        return optax.polynomial_schedule(
+            init_value=ctx.learning_rate,
+            end_value=ctx.min_lr,
+            power=self.power,
+            transition_steps=ctx.decay_steps,
+        )
+
+
+@LrSchedule.register_subclass("inv_sqrt_decay")
+@dataclass(frozen=True)
+class InvSqrtDecayLrSchedule(LrSchedule):
+    """Inverse sqrt decay: lr / sqrt(1 + c * t).
+
+    Unlike InvSqrtLrSchedule (which uses a fixed timescale relative to warmup),
+    this schedule decays from peak LR using a configurable constant `c` that
+    controls how fast the LR drops. The LR never reaches zero.
+    """
+
+    decay_constant: float = 28.6
+
+    def build(self, ctx: LrScheduleContext):
+        c = self.decay_constant
+        lr = ctx.learning_rate
+        min_lr = ctx.min_lr
+
+        def schedule(count):
+            return jnp.maximum(min_lr, lr / jnp.sqrt(1.0 + c * count / ctx.decay_steps))
+
+        return schedule
+
+
 @LrSchedule.register_subclass("power")
 @dataclass(frozen=True)
 class PowerLrSchedule(LrSchedule):

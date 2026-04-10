@@ -15,7 +15,6 @@ from marin.rl.environments.mock_env import (
     OppositesTask,
     compute_soft_reward,
 )
-from marin.rl.environments.inference_ctx import InferenceRequestKind
 from marin.rl.types import Rollout, RolloutGroup
 
 
@@ -91,18 +90,12 @@ def create_test_inference_context():
         def batch_completions(
             self,
             prompts,
-            request_kind,
             temperature,
             n,
             max_tokens=None,
             stop=None,
             system_prompt=None,
         ):
-            assert request_kind in {
-                InferenceRequestKind.TRAIN,
-                InferenceRequestKind.EVAL,
-                InferenceRequestKind.MICRO_EVAL,
-            }
             completions = []
             for prompt in prompts:
                 responses = [f"mock_response_{i}" for i in range(n)]

@@ -3,14 +3,15 @@
 
 """Tests for KubernetesProvider integration with controller and transitions."""
 
-from iris.cluster.controller.db import TaskDetail, decode_rows
+from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.controller.transitions import (
     DirectProviderBatch,
     DirectProviderSyncResult,
     TaskUpdate,
 )
 from iris.cluster.types import JobName
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 
 from .conftest import (
@@ -56,7 +57,7 @@ def test_drain_pending_creates_attempt_rows(state):
     [task_id] = submit_direct_job(state, "drain-pending")
 
     task_before = query_task(state, task_id)
-    assert task_before.state == cluster_pb2.TASK_STATE_PENDING
+    assert task_before.state == job_pb2.TASK_STATE_PENDING
 
     batch = state.drain_for_direct_provider()
 
@@ -65,7 +66,7 @@ def test_drain_pending_creates_attempt_rows(state):
     assert batch.tasks_to_run[0].attempt_id == 0
 
     task_after = query_task(state, task_id)
-    assert task_after.state == cluster_pb2.TASK_STATE_ASSIGNED
+    assert task_after.state == job_pb2.TASK_STATE_ASSIGNED
     assert task_after.current_attempt_id == 0
 
     attempt = query_attempt(state, task_id, 0)
@@ -115,12 +116,12 @@ def test_apply_running(state):
 
     result = state.apply_direct_provider_updates(
         [
-            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=cluster_pb2.TASK_STATE_RUNNING),
+            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
         ]
     )
 
     task = query_task(state, task_id)
-    assert task.state == cluster_pb2.TASK_STATE_RUNNING
+    assert task.state == job_pb2.TASK_STATE_RUNNING
     assert not result.tasks_to_kill
 
 
@@ -133,19 +134,19 @@ def test_apply_succeeded(state):
     # First move to RUNNING.
     state.apply_direct_provider_updates(
         [
-            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=cluster_pb2.TASK_STATE_RUNNING),
+            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
         ]
     )
 
     # Then to SUCCEEDED.
     state.apply_direct_provider_updates(
         [
-            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=cluster_pb2.TASK_STATE_SUCCEEDED),
+            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_SUCCEEDED),
         ]
     )
 
     task = query_task(state, task_id)
-    assert task.state == cluster_pb2.TASK_STATE_SUCCEEDED
+    assert task.state == job_pb2.TASK_STATE_SUCCEEDED
     assert task.exit_code == 0
 
 
@@ -156,7 +157,7 @@ def test_apply_failed_with_retry(state):
     req.max_retries_failure = 2
     state.submit_job(jid, req, Timestamp.now())
     with state._db.snapshot() as q:
-        tasks = decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
+        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
     task_id = tasks[0].task_id
 
     batch = state.drain_for_direct_provider()
@@ -164,18 +165,18 @@ def test_apply_failed_with_retry(state):
 
     state.apply_direct_provider_updates(
         [
-            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=cluster_pb2.TASK_STATE_RUNNING),
+            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
         ]
     )
     state.apply_direct_provider_updates(
         [
-            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=cluster_pb2.TASK_STATE_FAILED, error="boom"),
+            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
         ]
     )
 
     task = query_task(state, task_id)
     # Should be back to PENDING because failure_count(1) <= max_retries_failure(2).
-    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.state == job_pb2.TASK_STATE_PENDING
     assert task.failure_count == 1
 
 
@@ -186,7 +187,7 @@ def test_apply_failed_no_retry(state):
     req.max_retries_failure = 0
     state.submit_job(jid, req, Timestamp.now())
     with state._db.snapshot() as q:
-        tasks = decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
+        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
     task_id = tasks[0].task_id
 
     batch = state.drain_for_direct_provider()
@@ -194,17 +195,17 @@ def test_apply_failed_no_retry(state):
 
     state.apply_direct_provider_updates(
         [
-            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=cluster_pb2.TASK_STATE_RUNNING),
+            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
         ]
     )
     state.apply_direct_provider_updates(
         [
-            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=cluster_pb2.TASK_STATE_FAILED, error="fatal"),
+            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_FAILED, error="fatal"),
         ]
     )
 
     task = query_task(state, task_id)
-    assert task.state == cluster_pb2.TASK_STATE_FAILED
+    assert task.state == job_pb2.TASK_STATE_FAILED
     assert task.failure_count == 1
 
 
@@ -219,14 +220,14 @@ def test_apply_failed_directly_from_assigned(state):
             TaskUpdate(
                 task_id=task_id,
                 attempt_id=attempt_id,
-                new_state=cluster_pb2.TASK_STATE_FAILED,
+                new_state=job_pb2.TASK_STATE_FAILED,
                 error="kubectl apply failed: RequestEntityTooLarge",
             ),
         ]
     )
 
     task = query_task(state, task_id)
-    assert task.state == cluster_pb2.TASK_STATE_FAILED
+    assert task.state == job_pb2.TASK_STATE_FAILED
     assert task.error == "kubectl apply failed: RequestEntityTooLarge"
 
 
@@ -237,7 +238,7 @@ def test_apply_worker_failed_from_running_retries(state):
     req.max_retries_preemption = 5
     state.submit_job(jid, req, Timestamp.now())
     with state._db.snapshot() as q:
-        tasks = decode_rows(TaskDetail, q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
+        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
     task_id = tasks[0].task_id
 
     batch = state.drain_for_direct_provider()
@@ -245,17 +246,17 @@ def test_apply_worker_failed_from_running_retries(state):
 
     state.apply_direct_provider_updates(
         [
-            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=cluster_pb2.TASK_STATE_RUNNING),
+            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
         ]
     )
     state.apply_direct_provider_updates(
         [
-            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=cluster_pb2.TASK_STATE_WORKER_FAILED),
+            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_WORKER_FAILED),
         ]
     )
 
     task = query_task(state, task_id)
-    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.state == job_pb2.TASK_STATE_PENDING
     assert task.preemption_count == 1
 
 
@@ -268,12 +269,12 @@ def test_apply_worker_failed_from_assigned(state):
     # Task is ASSIGNED after drain (not yet RUNNING).
     state.apply_direct_provider_updates(
         [
-            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=cluster_pb2.TASK_STATE_WORKER_FAILED),
+            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_WORKER_FAILED),
         ]
     )
 
     task = query_task(state, task_id)
-    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.state == job_pb2.TASK_STATE_PENDING
     assert task.preemption_count == 0
 
 
@@ -318,13 +319,13 @@ def test_apply_ignores_stale_attempt(state):
     # Apply with wrong attempt_id.
     result = state.apply_direct_provider_updates(
         [
-            TaskUpdate(task_id=task_id, attempt_id=attempt_id + 99, new_state=cluster_pb2.TASK_STATE_RUNNING),
+            TaskUpdate(task_id=task_id, attempt_id=attempt_id + 99, new_state=job_pb2.TASK_STATE_RUNNING),
         ]
     )
 
     task = query_task(state, task_id)
     # Should still be ASSIGNED (the update was skipped).
-    assert task.state == cluster_pb2.TASK_STATE_ASSIGNED
+    assert task.state == job_pb2.TASK_STATE_ASSIGNED
     assert not result.tasks_to_kill
 
 
@@ -337,22 +338,22 @@ def test_apply_ignores_finished_task(state):
     # Move to SUCCEEDED.
     state.apply_direct_provider_updates(
         [
-            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=cluster_pb2.TASK_STATE_RUNNING),
+            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
         ]
     )
     state.apply_direct_provider_updates(
         [
-            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=cluster_pb2.TASK_STATE_SUCCEEDED),
+            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_SUCCEEDED),
         ]
     )
 
     # Try to move to FAILED after already succeeded.
     result = state.apply_direct_provider_updates(
         [
-            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=cluster_pb2.TASK_STATE_FAILED),
+            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_FAILED),
         ]
     )
 
     task = query_task(state, task_id)
-    assert task.state == cluster_pb2.TASK_STATE_SUCCEEDED
+    assert task.state == job_pb2.TASK_STATE_SUCCEEDED
     assert not result.tasks_to_kill

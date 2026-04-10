@@ -6,10 +6,6 @@ ar5iv/transform_ar5iv.py
 
 Performs HTML->Text/MD conversion using the specified tools over a ar5iv dump save in DOLMA format.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=200 --memory=2GB --cluster=us-central2 \
-    lib/marin/src/marin/transform/ar5iv/transform_ar5iv.py \
-    --input_path gs://path/to/input --output_path gs://path/to/output ...
 """
 
 import logging

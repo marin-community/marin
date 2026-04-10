@@ -23,11 +23,11 @@ def migrate(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE workers ADD COLUMN {column} {ddl}")
 
     from iris.cluster.types import get_gpu_count, get_tpu_count
-    from iris.rpc import cluster_pb2
+    from iris.rpc import job_pb2
 
     rows = conn.execute("SELECT worker_id, metadata_proto FROM workers WHERE metadata_proto IS NOT NULL").fetchall()
     for worker_id, metadata_blob in rows:
-        metadata = cluster_pb2.WorkerMetadata()
+        metadata = job_pb2.WorkerMetadata()
         metadata.ParseFromString(metadata_blob)
         if metadata.device.HasField("gpu"):
             device_type = "gpu"

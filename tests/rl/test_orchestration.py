@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from fray.v2.types import JobStatus
 from marin.rl.orchestration import _HostedRuntime, _run_rl_coordinator, _train_worker_entry
 from marin.rl.rl_job import RunConfig
 from marin.rl.rollout_worker import RolloutTrackerConfig
@@ -23,17 +24,44 @@ class _FakeHostedActor:
 
 
 class _FakeJobHandle:
-    def __init__(self, job_id: str):
+    def __init__(
+        self,
+        job_id: str,
+        *,
+        current_status: JobStatus = JobStatus.RUNNING,
+        wait_status: JobStatus = JobStatus.SUCCEEDED,
+    ):
         self.job_id = job_id
+        self._status = current_status
+        self._wait_status = wait_status
+        self.terminate_calls = 0
+
+    def wait(self, timeout=None, *, raise_on_failure=True):
+        del timeout, raise_on_failure
+        self._status = self._wait_status
+        return self._wait_status
+
+    def status(self):
+        return self._status
+
+    def terminate(self):
+        self.terminate_calls += 1
+        self._status = JobStatus.STOPPED
 
 
 class _FakeClient:
     def __init__(self):
         self.submissions = []
+        self.handles = []
 
     def submit(self, request):
         self.submissions.append(request)
-        return _FakeJobHandle(request.name)
+        if request.name.endswith("-train"):
+            handle = _FakeJobHandle(request.name, current_status=JobStatus.RUNNING, wait_status=JobStatus.SUCCEEDED)
+        else:
+            handle = _FakeJobHandle(request.name, current_status=JobStatus.RUNNING, wait_status=JobStatus.RUNNING)
+        self.handles.append(handle)
+        return handle
 
 
 class _FakeActorMethod:
@@ -72,7 +100,7 @@ class _FakeWorkerConfig:
     weight_transfer: object = dataclasses.field(default_factory=lambda: SimpleNamespace(debug_weight_transfer=False))
     trainer: object = dataclasses.field(
         default_factory=lambda: SimpleNamespace(
-            checkpointer=SimpleNamespace(debug_checkpointer=False),
+            checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=False)),
         )
     )
 
@@ -113,6 +141,43 @@ def test_run_rl_coordinator_shuts_down_hosted_actors_when_child_job_fails(monkey
 
     assert len(client.submissions) == 2
     assert shutdown_calls == ["weight-transfer", "run-state", "curriculum"]
+
+
+def test_run_rl_coordinator_stops_rollouts_after_trainer_success(monkeypatch):
+    client = _FakeClient()
+    hosted_runtime = _HostedRuntime(runtime=SimpleNamespace(), hosted_actors=[])
+    wait_all_calls: list[list[str]] = []
+    config = SimpleNamespace(
+        run_id="rl-test",
+        resolved_instance_id="rl-test",
+        pip_dependency_groups=["math"],
+        run_config=RunConfig(
+            train_tpu_type="v5p-8",
+            inference_tpu_type="v5p-8",
+            num_rollout_workers=2,
+            regions=["us-central1"],
+        ),
+    )
+
+    monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
+    monkeypatch.setattr("marin.rl.orchestration.RLJob", _FakeRLJob)
+    monkeypatch.setattr(
+        "marin.rl.orchestration._create_runtime_handles",
+        lambda _client, _config: hosted_runtime,
+    )
+    monkeypatch.setattr(
+        "marin.rl.orchestration.wait_all",
+        lambda jobs, raise_on_failure: wait_all_calls.append([job.job_id for job in jobs]),
+    )
+
+    _run_rl_coordinator(config)
+
+    assert len(client.handles) == 3
+    train_handle, rollout0_handle, rollout1_handle = client.handles
+    assert train_handle.status() == JobStatus.SUCCEEDED
+    assert rollout0_handle.terminate_calls == 1
+    assert rollout1_handle.terminate_calls == 1
+    assert wait_all_calls == [[rollout0_handle.job_id, rollout1_handle.job_id]]
 
 
 def test_run_rl_coordinator_uses_run_config_ram_overrides(monkeypatch):
@@ -195,7 +260,7 @@ def test_run_rl_coordinator_enables_unbuffered_logs_for_debug_checkpointer(monke
 
     class _DebugRLJob(_FakeRLJob):
         def to_worker_configs(self):
-            trainer = SimpleNamespace(checkpointer=SimpleNamespace(debug_checkpointer=True))
+            trainer = SimpleNamespace(checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=True)))
             return _FakeWorkerConfig(seed=7, run_id="train", trainer=trainer), _FakeWorkerConfig(
                 seed=11, run_id="rollout"
             )
@@ -245,7 +310,7 @@ def test_run_rl_coordinator_enables_transfer_debug_env_vars(monkeypatch):
 
     class _DebugRLJob(_FakeRLJob):
         def to_worker_configs(self):
-            trainer = SimpleNamespace(checkpointer=SimpleNamespace(debug_checkpointer=False))
+            trainer = SimpleNamespace(checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=False)))
             weight_transfer = SimpleNamespace(debug_weight_transfer=True)
             return _FakeWorkerConfig(
                 seed=7,

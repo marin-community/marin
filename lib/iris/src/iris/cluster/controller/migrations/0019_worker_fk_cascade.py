@@ -44,3 +44,25 @@ def migrate(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_task_attempts_worker_task " "ON task_attempts(worker_id, task_id, attempt_id)"
     )
+
+    # Recreate the trigger from 0001_init (dropped when the table was rebuilt)
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_task_attempt_active_worker
+        BEFORE INSERT ON task_attempts
+        FOR EACH ROW
+        WHEN NEW.worker_id IS NOT NULL
+        BEGIN
+          SELECT
+            CASE
+              WHEN NOT EXISTS(
+                SELECT 1 FROM workers w
+                WHERE w.worker_id = NEW.worker_id
+                  AND w.active = 1
+                  AND w.healthy = 1
+              )
+              THEN RAISE(ABORT, 'task attempt worker must be active and healthy')
+            END;
+        END;
+        """
+    )

@@ -17,7 +17,8 @@ import time
 
 import jwt
 
-from iris.cluster.controller.db import ApiKey, ControllerDB, decode_one, decode_rows
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import API_KEY_PROJECTION, ApiKeyRow
 from iris.rpc import config_pb2
 from iris.rpc.auth import (
     GcpAccessTokenVerifier,
@@ -57,11 +58,11 @@ def create_api_key(
     )
 
 
-def lookup_api_key_by_hash(db: ControllerDB, key_hash: str) -> ApiKey | None:
+def lookup_api_key_by_hash(db: ControllerDB, key_hash: str) -> ApiKeyRow | None:
     """Find an API key by its SHA-256 hash."""
     with db.snapshot() as q:
-        return decode_one(
-            ApiKey, q.fetchall(f"SELECT * FROM {db.api_keys_table} WHERE key_hash = ? LIMIT 1", (key_hash,))
+        return API_KEY_PROJECTION.decode_one(
+            q.fetchall(f"SELECT * FROM {db.api_keys_table} WHERE key_hash = ? LIMIT 1", (key_hash,))
         )
 
 
@@ -83,12 +84,14 @@ def revoke_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> bool:
         return cur._cursor.rowcount > 0
 
 
-def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list[ApiKey]:
+def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list[ApiKeyRow]:
     """List API keys, optionally filtered by user."""
     with db.snapshot() as q:
         if user_id:
-            return decode_rows(ApiKey, q.fetchall(f"SELECT * FROM {db.api_keys_table} WHERE user_id = ?", (user_id,)))
-        return decode_rows(ApiKey, q.fetchall(f"SELECT * FROM {db.api_keys_table}"))
+            return API_KEY_PROJECTION.decode(
+                q.fetchall(f"SELECT * FROM {db.api_keys_table} WHERE user_id = ?", (user_id,))
+            )
+        return API_KEY_PROJECTION.decode(q.fetchall(f"SELECT * FROM {db.api_keys_table}"))
 
 
 def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -> list[str]:

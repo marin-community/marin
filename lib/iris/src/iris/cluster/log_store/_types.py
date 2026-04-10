@@ -7,11 +7,19 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import logging_pb2
 
-PROCESS_LOG_KEY = "/system/process"
+CONTROLLER_LOG_KEY = "/system/controller"
+_WORKER_LOG_PREFIX = "/system/worker/"
+
+
+def worker_log_key(worker_id: str) -> str:
+    """Build the log store key for a worker's process logs."""
+    return f"{_WORKER_LOG_PREFIX}{worker_id}"
+
 
 # Characters that indicate a regex pattern (vs. a literal key).
 REGEX_META_RE = re.compile(r"[.*+?\[\](){}^$|\\]")
@@ -41,6 +49,18 @@ def build_log_source(target: JobName, attempt_id: int = -1) -> str:
             return f"{wire}:{attempt_id}"
         return f"{wire}:.*"
     return f"{wire}/.*"
+
+
+class LogStoreProtocol(Protocol):
+    """Minimal interface for log storage used by background collectors."""
+
+    def append_batch(self, items: list[tuple[str, list]]) -> None: ...
+
+
+class LogPusherProtocol(Protocol):
+    """Minimal interface for pushing log entries to the LogService."""
+
+    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None: ...
 
 
 @dataclass

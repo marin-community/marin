@@ -16,8 +16,10 @@ from dataclasses import dataclass
 
 import pytest
 
+from iris.cluster.providers.gcp.controller import GcpControllerProvider
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.handles import GcpVmSliceHandle, _build_gce_resource_name
+from iris.cluster.providers.remote_exec import DirectSshRemoteExec, GceRemoteExec, GcloudRemoteExec
 from iris.cluster.providers.gcp.workers import (
     GcpWorkerProvider,
     _run_vm_slice_bootstrap,
@@ -195,6 +197,86 @@ def test_tunnel_returns_address_directly():
         assert tunneled == addr
 
 
+def test_gcp_tunnel_prefers_ssh_impersonation_config():
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    ssh_config = config_pb2.SshConfig(
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
+        key_file="/tmp/iris-oslogin",
+        impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
+    )
+    worker_provider = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+    controller = GcpControllerProvider(
+        worker_provider=worker_provider,
+        controller_service_account="iris-worker@test-project.iam.gserviceaccount.com",
+    )
+
+    list_result = unittest.mock.Mock(returncode=0, stdout="iris-controller-iris us-central2-b\n", stderr="")
+    ssh_proc = unittest.mock.Mock()
+    ssh_proc.poll.return_value = None
+    ssh_proc.terminate.return_value = None
+    ssh_proc.wait.return_value = 0
+
+    with (
+        unittest.mock.patch("iris.cluster.providers.gcp.controller._check_gcloud_ssh_key"),
+        unittest.mock.patch("iris.cluster.providers.gcp.controller.find_free_port", return_value=10042),
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.resolve_current_os_login_user",
+            return_value="svc-user",
+        ) as resolve_user,
+        unittest.mock.patch("iris.cluster.providers.gcp.controller.wait_for_port"),
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.subprocess.run", return_value=list_result
+        ) as run_mock,
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.subprocess.Popen", return_value=ssh_proc
+        ) as popen_mock,
+    ):
+        with controller.tunnel("unused") as tunneled:
+            assert tunneled == "http://127.0.0.1:10042"
+
+    resolve_user.assert_called_with(impersonate_service_account=ssh_config.impersonate_service_account)
+    list_cmd = run_mock.call_args.args[0]
+    ssh_cmd = popen_mock.call_args.args[0]
+    assert f"--impersonate-service-account={ssh_config.impersonate_service_account}" in list_cmd
+    assert f"--impersonate-service-account={ssh_config.impersonate_service_account}" in ssh_cmd
+
+
+def test_gce_remote_exec_builds_optional_flags_inline():
+    remote_exec = GceRemoteExec(
+        project_id="test-project",
+        zone="us-central1-a",
+        vm_name="vm-1",
+        ssh_key_file="/tmp/test-key",
+        impersonate_service_account="svc@test-project.iam.gserviceaccount.com",
+    )
+
+    cmd = remote_exec._build_cmd("echo ok")
+
+    assert cmd[:4] == ["gcloud", "compute", "ssh", "vm-1"]
+    assert "--ssh-key-file=/tmp/test-key" in cmd
+    assert "--impersonate-service-account=svc@test-project.iam.gserviceaccount.com" in cmd
+    assert cmd[-2:] == ["--command", "echo ok"]
+
+
+def test_gcloud_remote_exec_builds_optional_flags_inline():
+    remote_exec = GcloudRemoteExec(
+        project_id="test-project",
+        _zone="us-west4-a",
+        vm_id="slice-1",
+        worker_index=0,
+        ssh_key_file="/tmp/test-key",
+        impersonate_service_account="svc@test-project.iam.gserviceaccount.com",
+    )
+
+    cmd = remote_exec._build_cmd("echo ok")
+
+    assert cmd[:6] == ["gcloud", "compute", "tpus", "tpu-vm", "ssh", "slice-1"]
+    assert "--ssh-key-file=/tmp/test-key" in cmd
+    assert "--impersonate-service-account=svc@test-project.iam.gserviceaccount.com" in cmd
+    assert cmd[-2:] == ["--command", "echo ok"]
+
+
 # =============================================================================
 # Section 2: GCP-Specific Tests
 #
@@ -245,18 +327,18 @@ def test_gcp_validate_vm_slice_config_requires_machine_type():
         _validate_slice_config(cfg)
 
 
-def test_gcp_validate_vm_slice_config_rejects_preemptible():
-    """VM slice mode rejects preemptible instances."""
+def test_gcp_validate_vm_slice_config_rejects_non_on_demand():
+    """VM slice mode rejects non-on-demand capacity types."""
     cfg = config_pb2.SliceConfig(
         name_prefix="test",
         num_vms=1,
-        preemptible=True,
+        capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
     cfg.gcp.machine_type = "n2-standard-4"
 
-    with pytest.raises(ValueError, match="does not support preemptible"):
+    with pytest.raises(ValueError, match="only supports capacity_type on-demand"):
         _validate_slice_config(cfg)
 
 
@@ -284,6 +366,7 @@ def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -326,6 +409,7 @@ def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():
         name_prefix="smoke-cpu_vm_e2_standard_4_ondemand-europe-west4-b",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -341,6 +425,88 @@ def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():
     assert status.workers[0]._remote_exec.ssh_user == "iris"
     listed = platform.list_all_slices()
     assert handle.slice_id in {s.slice_id for s in listed}
+
+
+def test_gcp_vm_slice_os_login_sets_metadata_and_uses_gcloud_default_user():
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    ssh_config = config_pb2.SshConfig(
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
+        key_file="/tmp/iris-oslogin",
+    )
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-cpu-vm",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+    cfg.labels[Labels("iris").iris_managed] = "true"
+    cfg.labels[Labels("iris").iris_scale_group] = "cpu-vm"
+
+    handle = platform.create_slice(cfg)
+    status = handle.describe()
+    vm = next(iter(gcp_service._vms.values()))
+    assert vm.metadata["enable-oslogin"] == "TRUE"
+    assert vm.metadata["block-project-ssh-keys"] == "TRUE"
+    assert status.workers[0]._remote_exec.ssh_user is None
+    assert status.workers[0]._remote_exec.ssh_key_file == "/tmp/iris-oslogin"
+
+
+def test_gcp_vm_slice_os_login_uses_service_account_impersonation():
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    ssh_config = config_pb2.SshConfig(
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
+        key_file="/tmp/iris-oslogin",
+    )
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-cpu-vm",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+    cfg.gcp.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
+
+    handle = platform.create_slice(cfg)
+    status = handle.describe()
+    assert status.workers[0]._remote_exec.impersonate_service_account is None
+
+
+def test_gcp_vm_slice_os_login_prefers_explicit_ssh_impersonation_account():
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    ssh_config = config_pb2.SshConfig(
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
+        key_file="/tmp/iris-oslogin",
+        impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
+    )
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-cpu-vm",
+        num_vms=1,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+    cfg.gcp.machine_type = "n2-standard-4"
+    cfg.gcp.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
+
+    handle = platform.create_slice(cfg)
+    status = handle.describe()
+
+    assert status.workers[0]._remote_exec.impersonate_service_account == ssh_config.impersonate_service_account
 
 
 def test_gcp_empty_accelerator_variant_rejected():
@@ -437,6 +603,7 @@ def test_gcp_list_slices_skips_inactive_vm_instances():
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -464,6 +631,7 @@ def test_gcp_list_slices_preserves_vm_slice_discovery():
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -639,6 +807,126 @@ def test_gcp_tpu_slice_passes_startup_script_metadata():
     assert "startup-script" in metadata
     assert "[iris-init]" in metadata["startup-script"]
     assert "test-image:latest" in metadata["startup-script"]
+
+
+def test_gcp_tpu_slice_os_login_sets_metadata_and_uses_direct_ssh():
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
+    ssh_config = config_pb2.SshConfig(
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
+        os_login_user="ci-user",
+        key_file="/tmp/iris-oslogin",
+    )
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-tpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5litepod-8",
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
+
+    handle = platform.create_slice(cfg)
+    status = handle.describe()
+    tpu = next(iter(gcp_service._tpus.values()))
+    assert tpu.metadata["enable-oslogin"] == "TRUE"
+    assert tpu.metadata["block-project-ssh-keys"] == "TRUE"
+    assert isinstance(status.workers[0]._remote_exec, DirectSshRemoteExec)
+    assert status.workers[0]._remote_exec.user == "ci-user"
+    assert status.workers[0]._remote_exec.key_file == "/tmp/iris-oslogin"
+    assert status.workers[0].external_address is None
+    assert status.workers[0]._remote_exec.host == status.workers[0].internal_address
+
+
+def test_gcp_tpu_slice_os_login_resolves_user_from_service_account():
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
+    ssh_config = config_pb2.SshConfig(
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
+        key_file="/tmp/iris-oslogin",
+    )
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-tpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5litepod-8",
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
+    cfg.gcp.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
+
+    with unittest.mock.patch(
+        "iris.cluster.providers.gcp.handles.resolve_current_os_login_user",
+        return_value="svc-user",
+    ) as resolve_user:
+        handle = platform.create_slice(cfg)
+        status = handle.describe()
+
+    resolve_user.assert_called_with(impersonate_service_account=None)
+    assert status.workers[0]._remote_exec.user == "svc-user"
+
+
+def test_gcp_tpu_slice_os_login_prefers_explicit_ssh_impersonation_account():
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
+    ssh_config = config_pb2.SshConfig(
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
+        key_file="/tmp/iris-oslogin",
+        impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
+    )
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-tpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5litepod-8",
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
+    cfg.gcp.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
+
+    with unittest.mock.patch(
+        "iris.cluster.providers.gcp.handles.resolve_current_os_login_user",
+        return_value="svc-user",
+    ) as resolve_user:
+        handle = platform.create_slice(cfg)
+        status = handle.describe()
+
+    resolve_user.assert_called_with(impersonate_service_account=ssh_config.impersonate_service_account)
+    assert status.workers[0]._remote_exec.user == "svc-user"
+
+
+def test_gcp_tpu_slice_os_login_prefers_external_ip_for_direct_ssh():
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
+    ssh_config = config_pb2.SshConfig(
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
+        os_login_user="svc-user",
+        key_file="/tmp/iris-oslogin",
+    )
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-tpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5litepod-8",
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
+
+    handle = platform.create_slice(cfg)
+    tpu = next(iter(gcp_service._tpus.values()))
+    tpu.state = "READY"
+    tpu.external_network_endpoints = ["34.1.2.3"]
+
+    status = handle.describe()
+
+    assert status.workers[0].internal_address == "10.0.0.0"
+    assert status.workers[0].external_address == "34.1.2.3"
+    assert isinstance(status.workers[0]._remote_exec, DirectSshRemoteExec)
+    assert status.workers[0]._remote_exec.host == "34.1.2.3"
 
 
 # =============================================================================

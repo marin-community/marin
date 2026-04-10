@@ -7,8 +7,8 @@ import os
 
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.types import Namespace
-from iris.rpc import cluster_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 
 
 def _rewrite_address_for_host(address: str) -> str:
@@ -79,7 +79,7 @@ class ClusterResolver:
         """
         prefixed_name = f"{self._namespace_prefix()}/{name}"
 
-        request = cluster_pb2.Controller.ListEndpointsRequest(
+        request = controller_pb2.Controller.ListEndpointsRequest(
             prefix=prefixed_name,
             exact=True,
         )

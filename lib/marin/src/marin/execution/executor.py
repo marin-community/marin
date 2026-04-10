@@ -85,6 +85,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import time
 import urllib.parse
 from collections.abc import Callable, Sequence
@@ -96,17 +97,13 @@ from urllib.parse import urlparse
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray.v2.client import current_client
-from fray.v2.iris_backend import FrayIrisClient
 from fray.v2.types import TpuConfig
-from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import WellKnownAttribute
 from rigging.filesystem import collect_gcs_paths
 from rigging.filesystem import get_bucket_location, open_url
 from rigging.filesystem import marin_prefix
 from rigging.filesystem import region_from_prefix
 from rigging.filesystem import split_gcs_path
-from iris.rpc import config_pb2
 
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_runner import StepRunner, worker_id
@@ -307,6 +304,10 @@ def _allowed_regions_for_step(
 
 
 def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
+    from fray.v2.client import current_client
+    from fray.v2.iris_backend import FrayIrisClient
+    from iris.rpc import config_pb2
+
     try:
         client = current_client()
     except Exception:
@@ -538,6 +539,9 @@ def _component_tpu_pins(
 
 
 def _iris_backend_is_active() -> bool:
+    from fray.v2.client import current_client
+    from fray.v2.iris_backend import FrayIrisClient
+
     try:
         client = current_client()
     except Exception:
@@ -546,6 +550,8 @@ def _iris_backend_is_active() -> bool:
 
 
 def _iris_worker_region_pin() -> str | None:
+    from iris.cluster.client.job_info import get_job_info
+
     job_info = get_job_info()
     if job_info is None:
         return None
@@ -1572,8 +1578,17 @@ def get_git_commit() -> str | None:
 
 
 def get_caller_path() -> str:
-    """Return the path of the file that called this function."""
-    return inspect.stack()[-1].filename
+    """Return the path of the file that called this function.
+
+    Walks the stack from the outermost frame inward, returning the first
+    frame that corresponds to a real file (skips ``<frozen runpy>`` and
+    similar synthetic frames produced by ``python -m`` invocation).
+    """
+    for frame_info in reversed(inspect.stack()):
+        if not frame_info.filename.startswith("<"):
+            return frame_info.filename
+    # All frames are synthetic (shouldn't happen in practice) — fall back to argv.
+    return sys.argv[0]
 
 
 def get_user() -> str | None:

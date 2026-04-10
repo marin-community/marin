@@ -112,6 +112,9 @@ class _LocalWorkerHandle:
     def reboot(self) -> None:
         logger.info("Reboot requested for local VM %s (no-op)", self._vm_id)
 
+    def restart_worker(self, bootstrap_script: str) -> None:
+        logger.info("Worker restart requested for local VM %s (no-op)", self._vm_id)
+
 
 @dataclass
 class LocalSliceHandle:
@@ -159,7 +162,7 @@ class LocalSliceHandle:
         ]
         return SliceStatus(state=CloudSliceState.READY, worker_count=len(self._vm_ids), workers=workers)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         if self._terminated:
             return
         self._terminated = True

@@ -353,7 +353,7 @@ class DistributedConfig:
         from iris.cluster.client.job_info import get_job_info
         from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
 
-        if not self._is_distributed() and get_job_info() is not None:
+        if get_job_info() is not None:
             logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
             initialize_iris_jax()
             return

@@ -16,6 +16,7 @@ from fray.v2 import (
     Entrypoint,
     JobHandle,
     JobRequest,
+    JobStatus,
     ResourceConfig,
     create_environment,
     current_client,
@@ -29,7 +30,7 @@ from marin.rl.run_state import RLRunState
 from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
 from marin.rl.weight_transfer import WeightTransferMode
 from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
-from marin.training.training import _add_run_env_variables
+from marin.training.run_environment import add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 from rigging.log_setup import configure_logging
 
@@ -86,7 +87,7 @@ def submit_rl_job(config: RLJobConfig) -> JobHandle:
     client = current_client()
 
     env = {"EQX_ON_ERROR": "nan"}
-    env = _add_run_env_variables(env)
+    env = add_run_env_variables(env)
     coordinator_extras = _coordinator_extras(config)
 
     # Use extras so uv source rules in lib/marin/pyproject.toml apply.
@@ -132,9 +133,9 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         rollout_extras = _rollout_worker_extras(config)
 
         env = {"EQX_ON_ERROR": "nan"}
-        if train_config.trainer.checkpointer.debug_checkpointer or train_config.weight_transfer.debug_weight_transfer:
+        if train_config.trainer.checkpointer.debug.enabled or train_config.weight_transfer.debug_weight_transfer:
             env["PYTHONUNBUFFERED"] = "1"
-        if train_config.trainer.checkpointer.debug_checkpointer:
+        if train_config.trainer.checkpointer.debug.enabled:
             env["JAX_TRACEBACK_FILTERING"] = "off"
             env["JAX_LOGGING_LEVEL"] = "INFO"
             env["JAX_DEBUG_LOG_MODULES"] = JAX_CHECKPOINT_DEBUG_MODULES
@@ -145,7 +146,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         if train_config.weight_transfer.debug_weight_transfer:
             env["JAX_TRACEBACK_FILTERING"] = "off"
             env["TF_CPP_MIN_LOG_LEVEL"] = "0"
-        env = _add_run_env_variables(env)
+        env = add_run_env_variables(env)
         train_worker_env = create_environment(
             env_vars=env,
             extras=train_extras,
@@ -186,22 +187,17 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
             **rollout_resource_kwargs,
         )
 
-        # Submit child jobs
-        jobs: list[JobHandle] = []
-
-        # Training worker
-        jobs.append(
-            client.submit(
-                JobRequest(
-                    name=f"rl-{config.resolved_instance_id}-train",
-                    entrypoint=Entrypoint.from_callable(_train_worker_entry, args=(train_config, runtime)),
-                    resources=train_resources,
-                    environment=train_worker_env,
-                    max_retries_failure=run_config.max_retries_failure,
-                    max_retries_preemption=run_config.max_retries_preemption,
-                )
+        train_job = client.submit(
+            JobRequest(
+                name=f"rl-{config.resolved_instance_id}-train",
+                entrypoint=Entrypoint.from_callable(_train_worker_entry, args=(train_config, runtime)),
+                resources=train_resources,
+                environment=train_worker_env,
+                max_retries_failure=run_config.max_retries_failure,
+                max_retries_preemption=run_config.max_retries_preemption,
             )
         )
+        rollout_jobs: list[JobHandle] = []
 
         # Rollout workers
         for i in range(run_config.num_rollout_workers):
@@ -216,7 +212,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
                 worker_index=i,
                 tracker_config=tracker_config,
             )
-            jobs.append(
+            rollout_jobs.append(
                 client.submit(
                     JobRequest(
                         name=f"rl-{config.resolved_instance_id}-rollout-{i}",
@@ -231,15 +227,29 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
 
         logger.info(
             "Submitted %d child jobs (1 trainer + %d rollout workers)",
-            len(jobs),
+            1 + len(rollout_jobs),
             run_config.num_rollout_workers,
         )
 
-        wait_all(jobs, raise_on_failure=True)
+        train_status = train_job.wait(raise_on_failure=True)
+        if train_status != JobStatus.SUCCEEDED:
+            raise RuntimeError(f"Trainer finished with unexpected status {train_status}")
+
+        _terminate_rollout_jobs(rollout_jobs)
+        wait_all(rollout_jobs, raise_on_failure=False)
         logger.info("RL coordinator finished for run %s", config.run_id)
     finally:
         if hosted_runtime is not None:
             _shutdown_hosted_actors(hosted_runtime.hosted_actors)
+
+
+def _terminate_rollout_jobs(rollout_jobs: list[JobHandle]) -> None:
+    for rollout_job in rollout_jobs:
+        status = rollout_job.status()
+        if JobStatus.finished(status):
+            continue
+        logger.info("Stopping rollout job %s after trainer completion", rollout_job.job_id)
+        rollout_job.terminate()
 
 
 def _shutdown_hosted_actors(hosted_actors: list[HostedActor]) -> None:

@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import importlib
 import logging
 import os
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from collections.abc import Callable
 from typing import TypeVar
 
 import draccus
-import levanter.infra.cli_helpers
 from fray.v2 import (
     CpuConfig,
     Entrypoint,
@@ -20,13 +21,10 @@ from fray.v2 import (
     create_environment,
     current_client,
 )
-from levanter.main import train_dpo
-from levanter.main import train_lm
-from levanter.main.train_dpo import TrainDpoConfig
-from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
 from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
+from marin.training.run_environment import add_run_env_variables
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +33,7 @@ logger = logging.getLogger(__name__)
 class TrainLmOnPodConfig:
     """Configuration for language model training on a pod."""
 
-    train_config: train_lm.TrainLmConfig
+    train_config: object
     resources: ResourceConfig
     output_path: str | None = None
     """Base output directory to be used for training, mainly for use with executor framework."""
@@ -60,7 +58,7 @@ class TrainLmOnPodConfig:
 class TrainDpoOnPodConfig:
     """Configuration for DPO training on a pod."""
 
-    train_config: TrainDpoConfig
+    train_config: object
     resources: ResourceConfig
     output_path: str | None = None
     """Base output directory to be used for training, mainly for use with executor framework."""
@@ -81,11 +79,15 @@ class TrainDpoOnPodConfig:
     """
 
 
-TrainConfigT = TypeVar("TrainConfigT", TrainLmConfig, TrainDpoConfig)
+TrainConfigT = TypeVar("TrainConfigT")
 TrainOnPodConfigT = TypeVar("TrainOnPodConfigT", TrainLmOnPodConfig, TrainDpoOnPodConfig)
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
+
+
+def _cli_helpers_module():
+    return importlib.import_module("levanter.infra.cli_helpers")
 
 
 def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodConfigT:
@@ -172,7 +174,7 @@ def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
         logger.info(f"Imputing run ID from out path: {run_id}")
 
     if not run_id:
-        run_id = levanter.infra.cli_helpers.default_run_id()
+        run_id = _cli_helpers_module().default_run_id()
         logger.warning(f"Run ID not set. Using default: {run_id}")
 
     append_id_to_checkpoints = not config.impute_run_id_from_output_path
@@ -218,9 +220,86 @@ def _disable_xla_autotune_subcache(env: dict) -> None:
     logger.info("XLA sub-caches disabled (compilation cache is remote: %s)", cache_dir)
 
 
-def run_levanter_train_lm(config: TrainLmOnPodConfig):
+def _prepare_training_run(
+    config: TrainOnPodConfigT,
+) -> tuple[TrainOnPodConfigT, object, dict[str, str], list[str]]:
+    """Shared setup for LM and DPO training: env vars, run ID, config adjustments.
+
+    Returns the updated pod config, the ready-to-use train config, the
+    environment dict, and the Fray extras list.
     """
-    Run the Levanter training main function on a Ray cluster.
+    default_launch_config = _cli_helpers_module().load_config()
+
+    if config.output_path is not None:
+        logger.info(f"Using output path: {config.output_path}")
+        config = _update_config_to_use_out_path(config)
+
+    env = _add_default_env_variables(
+        config.env_vars or {},
+        default_launch_config.env_for_accel(config.resources.device.variant),
+    )
+    if isinstance(config.resources.device, TpuConfig):
+        _check_for_wandb_key(env)
+
+    env = add_run_env_variables(env)
+
+    if "JAX_COMPILATION_CACHE_DIR" not in env:
+        env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
+            marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
+        )
+        logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
+    _disable_xla_autotune_subcache(env)
+
+    config = _enforce_run_id(config)
+    logger.info(f"Using run ID: {config.train_config.trainer.id}")
+
+    train_config = config.train_config
+    train_config = _suppress_ray_config(train_config)
+    train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
+
+    # disable accelerator requirement when running without GPU/TPU resources
+    if config.resources.device.kind == "cpu":
+        trainer = replace(train_config.trainer, require_accelerator=False)
+        train_config = replace(train_config, trainer=trainer)
+
+    if not isinstance(config.resources.device, CpuConfig):
+        _doublecheck_paths(config)
+
+    extras: list[str] = []
+    if isinstance(config.resources.device, TpuConfig):
+        extras.append("tpu")
+    elif isinstance(config.resources.device, GpuConfig):
+        extras.append("gpu")
+
+    return config, train_config, env, extras
+
+
+def _submit_training_job(
+    *,
+    job_name: str,
+    main_fn: Callable,
+    train_config: TrainConfigT,
+    resources: ResourceConfig,
+    env: dict[str, str],
+    extras: list[str],
+) -> None:
+    """Submit a Levanter training job to Fray and block until completion."""
+    client = current_client()
+    # Using a constant job name allows restarts to adopt the existing job handle
+    # instead of raising a duplicate name error (adopt_existing=True is the default).
+    job_request = JobRequest(
+        name=job_name,
+        entrypoint=Entrypoint.from_callable(main_fn, args=[train_config]),
+        resources=resources,
+        environment=create_environment(env_vars=env, extras=extras),
+        max_retries_failure=0,
+    )
+    job = client.submit(job_request)
+    job.wait(raise_on_failure=True)
+
+
+def run_levanter_train_lm(config: TrainLmOnPodConfig):
+    """Run the Levanter LM training main function on a Ray cluster.
 
     This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
     It should also be run with a Ray cluster already running.
@@ -235,135 +314,44 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     - It disables the auto-ray-start and auto-worker-start options since we're already in a Ray cluster.
     - It checks that configured GCS paths are in the same region as the VM (except train/validation source URLs).
     """
-    default_launch_config = levanter.infra.cli_helpers.load_config()
+    config, train_config, env, extras = _prepare_training_run(config)
 
-    if config.output_path is not None:
-        logger.info(f"Using output path: {config.output_path}")
-        config = _update_config_to_use_out_path(config)
-
-    env = _add_default_env_variables(
-        config.env_vars or {},
-        default_launch_config.env_for_accel(config.resources.device.variant),
-    )
-    # if we're on tpu, ensure we have wandb
-    if isinstance(config.resources.device, TpuConfig):
-        _check_for_wandb_key(env)
-
-    env = _add_run_env_variables(env)
-
-    if "JAX_COMPILATION_CACHE_DIR" not in env:
-        env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
-            marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
-        )
-        logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
-    _disable_xla_autotune_subcache(env)
-
-    config = _enforce_run_id(config)
-    logger.info(f"Using run ID: {config.train_config.trainer.id}")
-
-    model_config = config.train_config.model
+    model_config = train_config.model
     logger.info(
         "Model config: type=%s seq_len=%d hidden=%d batch=%s device=%s",
         type(model_config).__name__,
         model_config.max_seq_len,
         model_config.Embed.size,
-        config.train_config.trainer.train_batch_size,
+        train_config.trainer.train_batch_size,
         config.resources.device,
     )
 
-    train_config = config.train_config
-    train_config = _suppress_ray_config(train_config)
-    train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
-
-    # disable accelerator requirement when running without GPU/TPU resources
-    if config.resources.device.kind == "cpu":
-        trainer = replace(train_config.trainer, require_accelerator=False)
-        train_config = replace(train_config, trainer=trainer)
-
-    if not isinstance(config.resources.device, CpuConfig):
-        _doublecheck_paths(config)
-
-    client = current_client()
-
-    extras = []
-    if isinstance(config.resources.device, TpuConfig):
-        extras.append("tpu")
-    elif isinstance(config.resources.device, GpuConfig):
-        extras.append("gpu")
-
-    # Note: Using a constant job name allows restarts to adopt the existing job handle
-    # instead of raising a duplicate name error (adopt_existing=True is the default).
-    job_request = JobRequest(
-        name="train_lm",
-        entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),
+    _submit_training_job(
+        job_name="train_lm",
+        main_fn=importlib.import_module("levanter.main.train_lm").main,
+        train_config=train_config,
         resources=config.resources,
-        environment=create_environment(env_vars=env, extras=extras),
-        max_retries_failure=10,
+        env=env,
+        extras=extras,
     )
-    job = client.submit(job_request)
-    job.wait(raise_on_failure=True)
 
 
 def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
-    """
-    Run the Levanter DPO training main function on a Ray cluster.
+    """Run the Levanter DPO training main function on a Ray cluster.
 
     This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
     It should also be run with a Ray cluster already running.
     """
-    default_launch_config = levanter.infra.cli_helpers.load_config()
+    config, train_config, env, extras = _prepare_training_run(config)
 
-    if config.output_path is not None:
-        logger.info(f"Using output path: {config.output_path}")
-        config = _update_config_to_use_out_path(config)
-
-    env = _add_default_env_variables(
-        config.env_vars or {},
-        default_launch_config.env_for_accel(config.resources.device.variant),
-    )
-    if isinstance(config.resources.device, TpuConfig):
-        _check_for_wandb_key(env)
-
-    env = _add_run_env_variables(env)
-
-    if "JAX_COMPILATION_CACHE_DIR" not in env:
-        env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
-            marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
-        )
-        logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
-    _disable_xla_autotune_subcache(env)
-
-    config = _enforce_run_id(config)
-    logger.info(f"Using run ID: {config.train_config.trainer.id}")
-
-    train_config = config.train_config
-    train_config = _suppress_ray_config(train_config)
-    train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
-
-    if config.resources.device.kind == "cpu":
-        trainer = replace(train_config.trainer, require_accelerator=False)
-        train_config = replace(train_config, trainer=trainer)
-
-    if not isinstance(config.resources.device, CpuConfig):
-        _doublecheck_paths(config)
-
-    client = current_client()
-
-    extras = []
-    if isinstance(config.resources.device, TpuConfig):
-        extras.append("tpu")
-    elif isinstance(config.resources.device, GpuConfig):
-        extras.append("gpu")
-
-    job_request = JobRequest(
-        name="train_dpo",
-        entrypoint=Entrypoint.from_callable(train_dpo.main, args=[train_config]),
+    _submit_training_job(
+        job_name="train_dpo",
+        main_fn=importlib.import_module("levanter.main.train_dpo").main,
+        train_config=train_config,
         resources=config.resources,
-        environment=create_environment(env_vars=env, extras=extras),
-        max_retries_failure=10,
+        env=env,
+        extras=extras,
     )
-    job = client.submit(job_request)
-    job.wait(raise_on_failure=True)
 
 
 def _doublecheck_paths(config: TrainOnPodConfigT):
@@ -389,53 +377,6 @@ def _add_default_env_variables(env: dict, default_env: dict | None):
 
     # Ray gets mad if the values aren't all strings, but e.g. ints
     env = {str(k): str(v) for k, v in env.items()}
-    return env
-
-
-def _add_run_env_variables(env: dict):
-    """
-    Add a few environment variables from `os.environ` into `env` that we need for logging as well as for internal evals.
-    Specifically:
-    - GIT_COMMIT
-    - HF_DATASETS_TRUST_REMOTE_CODE
-    - HF_ALLOW_CODE_EVAL (for code evaluation tasks like HumanEval)
-    """
-    env = deepcopy(env)
-
-    git_commit = env.get("GIT_COMMIT") or os.environ.get("GIT_COMMIT")
-
-    if not git_commit:
-        try:
-            git_commit = levanter.infra.cli_helpers.get_git_commit()
-        except:  # noqa
-            pass
-
-    if git_commit:
-        env["GIT_COMMIT"] = git_commit
-    else:
-        logger.warning("Failed to find or infer git commit for logging.")
-
-    # required for internal evals to run some tasks
-    if "HF_DATASETS_TRUST_REMOTE_CODE" not in env:
-        env["HF_DATASETS_TRUST_REMOTE_CODE"] = "1"
-
-    # required for code evaluation tasks like HumanEval
-    if "HF_ALLOW_CODE_EVAL" not in env:
-        env["HF_ALLOW_CODE_EVAL"] = "1"
-
-    if "TOKENIZERS_PARALLELISM" not in env:
-        env["TOKENIZERS_PARALLELISM"] = "false"
-
-    if "TPU_MIN_LOG_LEVEL" not in env:
-        env["TPU_MIN_LOG_LEVEL"] = "2"
-    if "TPU_STDERR_LOG_LEVEL" not in env:
-        env["TPU_STDERR_LOG_LEVEL"] = "2"
-
-    # Allow the caller (or iris -e) to override the compilation cache dir.
-    if "JAX_COMPILATION_CACHE_DIR" not in env:
-        if val := os.environ.get("JAX_COMPILATION_CACHE_DIR"):
-            env["JAX_COMPILATION_CACHE_DIR"] = val
-
     return env
 
 

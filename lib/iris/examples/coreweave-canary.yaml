@@ -54,12 +54,12 @@ scale_groups:
       ram: 256GB
       disk: 1TB
       device_type: cpu
-      preemptible: false
+      capacity_type: on-demand
     worker:
       attributes:
         region: US-WEST-04A
         pool: cpu-erapids
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 1
     priority: 50
     slice_template:
@@ -77,12 +77,12 @@ scale_groups:
       device_type: gpu
       device_variant: H100
       device_count: 8
-      preemptible: false
+      capacity_type: on-demand
     worker:
       attributes:
         region: US-WEST-04A
         pool: h100-8x
-    min_slices: 0
+    buffer_slices: 0
     max_slices: 1
     priority: 100
     slice_template:

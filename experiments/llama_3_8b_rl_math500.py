@@ -17,6 +17,7 @@ import logging
 import os
 
 from experiments.models import llama_3_1_8b_instruct
+from levanter.checkpoint import CheckpointDebugConfig
 from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
@@ -99,6 +100,12 @@ def build_math500_curriculum(run_id: str, config: RLExperimentConfig, eval_frequ
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Stable logical run name for checkpoint/W&B resume across relaunches. "
+        "If omitted, a fresh timestamped name is generated.",
+    )
     parser.add_argument(
         "--experiment-name-suffix",
         default=DEFAULT_EXPERIMENT_NAME_SUFFIX,
@@ -224,9 +231,11 @@ def build_experiment_config(args: argparse.Namespace) -> RLExperimentConfig:
         num_train_steps=args.num_train_steps,
         checkpointer_save_interval=args.checkpointer_save_interval,
         delete_previous_temporary_checkpoint_after_save=args.delete_previous_temporary_checkpoint_after_save,
-        debug_checkpointer=args.debug_checkpointer,
-        debug_checkpointer_log_interval=args.debug_checkpointer_log_interval,
-        debug_checkpointer_dump_stacks_after=args.debug_checkpointer_dump_stacks_after,
+        checkpoint_debug=CheckpointDebugConfig(
+            enabled=args.debug_checkpointer,
+            log_interval=args.debug_checkpointer_log_interval,
+            dump_stacks_after=args.debug_checkpointer_dump_stacks_after,
+        ),
         train_batch_size=1024,
         per_device_parallelism=16,
         learning_rate=2e-6,
@@ -248,7 +257,10 @@ def build_experiment_config(args: argparse.Namespace) -> RLExperimentConfig:
     )
 
 
-def build_run_name(config: RLExperimentConfig) -> str:
+def build_run_name(config: RLExperimentConfig, explicit_run_name: str | None) -> str:
+    if explicit_run_name is not None:
+        return explicit_run_name
+
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     model_base_name = config.model_config.name.split("/")[-1].lower().replace("-instruct", "i")
     return f"{model_base_name}-{config.experiment_name_suffix}-{datestamp}"
@@ -263,7 +275,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
     experiment_config = build_experiment_config(args)
-    run_name = build_run_name(experiment_config)
+    run_name = build_run_name(experiment_config, args.run_name)
     curriculum = build_math500_curriculum(run_name, experiment_config, args.eval_frequency)
     step = make_rl_step(
         name=run_name,

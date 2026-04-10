@@ -15,7 +15,7 @@ Before you begin, ensure you have the following installed:
 - On macOS, install additional build tools for SentencePiece: ```brew install cmake pkg-config coreutils```
 
 In addition, you might find it useful to have the following accounts:
-- [GitHub](https://github.com) for submitting pull requests or speedruns
+- [GitHub](https://github.com) for submitting pull requests
 - [Weights & Biases](https://wandb.ai) for experiment tracking
 - [Hugging Face](https://huggingface.co) for accessing gated models/tokenizers (such as [Meta's Llama 3.1 8B model](https://huggingface.co/meta-llama/Llama-3.1-8B))
 
@@ -165,4 +165,4 @@ language models.
 
 1. Follow our [First Experiment](first-experiment.md) tutorial to run a training experiment.
 2. Read our [Language Modeling Pipeline](../explanations/lm-pipeline.md) to understand Marin's approach to language models.
-3. Submit a [speedrun](submitting-speedrun.md) to the Marin speedrun leaderboard.
+3. Read the [Executor 101](executor-101.md) tutorial to learn how Marin's execution model works.

@@ -9,7 +9,6 @@ and writes the rollout data to files for training workers to consume.
 """
 
 import dataclasses
-import concurrent.futures
 import faulthandler
 import logging
 import os
@@ -34,7 +33,7 @@ from levanter.inference.openai import InferenceServer
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
-from transformers import PreTrainedTokenizer
+from levanter.tokenizers import MarinTokenizer
 from typing import Literal
 
 from levanter.utils.mesh import MeshConfig
@@ -45,12 +44,9 @@ from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
 from marin.rl.environments.inference_ctx import (
     AsyncvLLMInferenceContext,
+    BaseInferenceContext,
     LevanterInferenceContext,
     LevanterInferenceContextConfig,
-    BaseInferenceContext,
-    InferenceRequestKind,
-    PackedvLLMInferenceContext,
-    PackedvLLMInferenceContextConfig,
     vLLMInferenceContext,
     vLLMInferenceContextConfig,
 )
@@ -200,6 +196,9 @@ class RolloutTracker:
         )
 
     def log(self, metrics: Mapping[str, Any], *, step: int | None = None):
+        if step is None:
+            self._run.log(metrics)
+            return
         self._run.log(metrics, step=step)
 
     def finish(self):
@@ -213,14 +212,14 @@ class RolloutWorkerConfig:
     curriculum_config: CurriculumConfig
     rollout_storage: RolloutStorageConfig
     weight_transfer: WeightTransferConfig
-    tokenizer: PreTrainedTokenizer
+    tokenizer: MarinTokenizer
     run_id: str
     trainer: TrainerConfig
     model: LmConfig
     inference_type: Literal["levanter", "vllm"]
     """Type of inference to use."""
 
-    inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig | PackedvLLMInferenceContextConfig
+    inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig
     """Configuration for inference context."""
 
     tracker_config: RolloutTrackerConfig | None = None
@@ -238,7 +237,7 @@ class RolloutWorkerConfig:
 
     vocab_size: int | None = None
     """Vocab size for model construction. Should match the checkpoint's vocab dimension.
-    If None, falls back to len(tokenizer)."""
+    If None, falls back to tokenizer.vocab_size."""
 
     system_prompt: str | None = None
     """System prompt to use for inference."""
@@ -266,30 +265,6 @@ class RolloutBatchStats:
     pass_at_one: float | None = None
     pass_at_k: float | None = None
     avg_at_k: float | None = None
-
-
-@dataclass(frozen=True)
-class ScheduledEvalJob:
-    """One evaluation job queued from the main rollout loop."""
-
-    eval_type: Literal["eval", "micro_eval"]
-    rng: Any
-    step: int
-    weight_step: int
-    lesson_id: str | None = None
-
-
-@dataclass(frozen=True)
-class CompletedLessonEval:
-    """Completed lesson evaluation waiting to be consumed on the main thread."""
-
-    lesson_id: str
-    eval_type: Literal["eval", "micro_eval"]
-    step: int
-    weight_step: int
-    batch: RolloutBatch
-    stats: RolloutBatchStats
-    metrics: dict[str, Any]
 
 
 def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
@@ -350,10 +325,8 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
 
 def create_inference_context(
     inference_type: str,
-    inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig | PackedvLLMInferenceContextConfig,
+    inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig,
     inflight_weight_updates: bool,
-    weight_transfer_config: WeightTransferConfig,
-    coordinator_handle: object | None,
 ) -> BaseInferenceContext:
     """Create an inference context based on the configuration.
 
@@ -375,13 +348,6 @@ def create_inference_context(
         )
         return LevanterInferenceContext(
             inference_config=inference_config,
-        )
-    elif inference_type == "vllm" and isinstance(inference_config, PackedvLLMInferenceContextConfig):
-        return PackedvLLMInferenceContext(
-            inference_config=inference_config,
-            inflight_weight_updates=inflight_weight_updates,
-            weight_transfer_config=weight_transfer_config,
-            coordinator_handle=coordinator_handle,
         )
     elif inference_type == "vllm" and not inflight_weight_updates:
         return vLLMInferenceContext(
@@ -433,24 +399,6 @@ def _should_run_micro_eval(
     return rollout_step % micro_eval_frequency == 0
 
 
-def _request_kind_for_eval_type(eval_type: Literal["eval", "micro_eval"]) -> InferenceRequestKind:
-    if eval_type == "eval":
-        return InferenceRequestKind.EVAL
-    return InferenceRequestKind.MICRO_EVAL
-
-
-def _eval_job_priority(job: ScheduledEvalJob) -> tuple[int, int]:
-    return (1 if job.eval_type == "eval" else 0, job.step)
-
-
-def _coalesce_eval_job(existing: ScheduledEvalJob | None, new_job: ScheduledEvalJob) -> ScheduledEvalJob:
-    if existing is None:
-        return new_job
-    if _eval_job_priority(new_job) >= _eval_job_priority(existing):
-        return new_job
-    return existing
-
-
 class RolloutWorker:
     """Asynchronous inference & rollout worker for RL training.
 
@@ -462,9 +410,9 @@ class RolloutWorker:
     _inference_thread: threading.Thread
     _inference_server: InferenceServer
     _policy_model: Any
-    _transfer_client: WeightTransferClient | None
+    _transfer_client: WeightTransferClient
     _rollout_writer: RolloutWriter
-    _tokenizer: PreTrainedTokenizer
+    _tokenizer: MarinTokenizer
     _environments: dict[str, MarinEnv]
     tracker: Any  # levanter.Tracker or RolloutTracker
 
@@ -499,10 +447,6 @@ class RolloutWorker:
         self._current_train_step: int = -1
         self._last_transfer_counters = RolloutTransferCounterSnapshot()
         self._last_eval_train_step: int | None = None
-        self._eval_lock = threading.Lock()
-        self._eval_executor: concurrent.futures.ThreadPoolExecutor | None = None
-        self._active_eval_future: concurrent.futures.Future[list[CompletedLessonEval]] | None = None
-        self._pending_eval_job: ScheduledEvalJob | None = None
 
         self._tokenizer = config.tokenizer
 
@@ -517,33 +461,27 @@ class RolloutWorker:
             self.config.inference_type,
             self.config.inference_config,
             self.config.inflight_weight_updates,
-            self.config.weight_transfer,
-            runtime.weight_transfer.arrow_flight_coordinator,
         )
 
         # Need to build the policy model and then use that to start the inference server
         self._build_models()
         self._policy_ctx.start_server(self._policy_model)
 
-        self._transfer_client: WeightTransferClient | None = None
-        if not self._policy_ctx.owns_weight_transfer():
-            self._transfer_client = create_weight_transfer_client(
-                config.weight_transfer,
-                mesh=self._policy_ctx.mesh,
-                axis_mapping=self._policy_ctx.axis_mapping,
-                coordinator_handle=runtime.weight_transfer.arrow_flight_coordinator,
-            )
+        self._transfer_client = create_weight_transfer_client(
+            config.weight_transfer,
+            mesh=self._policy_ctx.mesh,
+            axis_mapping=self._policy_ctx.axis_mapping,
+            coordinator_handle=runtime.weight_transfer.arrow_flight_coordinator,
+        )
 
         # TODO(power) -- replace this with a wait_until_ready() on the levanter inference server
         time.sleep(1.0)
 
         self._environments = {}
         self._curriculum_actor = runtime.curriculum
-        if isinstance(self._policy_ctx, PackedvLLMInferenceContext):
-            self._eval_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="rollout-eval")
 
         self.weight_transfer_thread: threading.Thread | None = None
-        if self.config.inflight_weight_updates and not self._policy_ctx.owns_weight_transfer():
+        if self.config.inflight_weight_updates:
             self.weight_transfer_thread = threading.Thread(
                 target=self._sync_weights_loop,
                 name=f"{self.config.run_id}-weight-sync",
@@ -567,7 +505,6 @@ class RolloutWorker:
         n_examples: int,
         n_generations: int,
         mode: str,
-        request_kind: InferenceRequestKind,
         rng,
     ) -> tuple[RolloutBatch | None, dict | None]:
         """Sample a batch of rollouts from the environment for the given lesson ID."""
@@ -587,19 +524,11 @@ class RolloutWorker:
             temperature=temperature,
             prng_key=rng,
             mode=mode,
-            request_kind=request_kind,
             max_tokens=max_tokens,
             top_k=top_k,
             stop=stop_tokens,
             system_prompt=self.config.system_prompt,
         )
-
-        batch_weight_step = self._current_weight_step
-        context_weight_id = self._policy_ctx.current_weight_id(request_kind=request_kind)
-        if context_weight_id is not None:
-            batch_weight_step = context_weight_id
-            if request_kind == InferenceRequestKind.TRAIN:
-                self._current_weight_step = context_weight_id
 
         if len(rollout_groups) == 0:
             logger.warning("No valid rollouts generated in this batch...")
@@ -609,14 +538,14 @@ class RolloutWorker:
             "Generated rollout with %d groups from lesson %s at step %d",
             len(rollout_groups),
             lesson_id,
-            batch_weight_step,
+            self._current_weight_step,
         )
 
         # Create metadata once for this batch
         batch_metadata = RolloutMetadata(
             worker_id=f"{socket.gethostname()}_{os.getpid()}",
             timestamp=time.time(),
-            weight_step=batch_weight_step,
+            weight_step=self._current_weight_step,
         )
 
         # Attach metadata to each rollout in each group
@@ -834,165 +763,98 @@ class RolloutWorker:
         metrics[f"{prefix}/{lesson_id}/top_k"] = top_k if top_k is not None else -1
         return metrics
 
-    def _compute_lesson_eval(
+    def _log_lesson_eval(
+        self,
+        lesson_id: str,
+        eval_type: Literal["eval", "micro_eval"],
+        batch: RolloutBatch,
+        step: int,
+        weight_step: int,
+        metrics: Mapping[str, Any],
+    ) -> None:
+        """Log one completed evaluation batch."""
+        log_metrics = self._build_prompt_example_metrics(
+            lesson_id,
+            batch,
+            step,
+            eval_type=eval_type,
+        )
+        log_metrics.update(metrics)
+        log_metrics["inference.weight_step"] = weight_step
+        if eval_type == "eval":
+            log_metrics["inference.train_step"] = step
+        self.tracker.log(log_metrics)
+        logger.info(
+            "Eval metrics for lesson %s at weight_step=%d: %s",
+            lesson_id,
+            weight_step,
+            metrics,
+        )
+
+    def _evaluate_lesson(
         self,
         lesson_id: str,
         n_examples: int,
         eval_type: Literal["eval", "micro_eval"],
         rng,
         step: int,
-        weight_step: int,
-    ) -> CompletedLessonEval:
-        """Compute one lesson eval without mutating trackers or curriculum state."""
-        N_EVAL_GENERATIONS = 1
-        request_kind = _request_kind_for_eval_type(eval_type)
-
+    ) -> RolloutBatchStats:
+        """Evaluate a single lesson and log metrics."""
+        n_eval_generations = 1
         batch, _ = self._sample_batch(
             lesson_id=lesson_id,
             n_examples=n_examples,
-            n_generations=N_EVAL_GENERATIONS,
+            n_generations=n_eval_generations,
             mode="eval",
-            request_kind=request_kind,
             rng=rng,
         )
         if batch is None:
             raise RuntimeError(f"Eval batch for lesson {lesson_id} produced no rollouts")
+
         stats = _compute_batch_stats(batch, lesson_id)
         sampling_params = self.config.curriculum_config.lessons[lesson_id].sampling_params
         metrics = self._build_eval_metrics(
             prefix=f"inference.{eval_type}",
             lesson_id=lesson_id,
             batch=batch,
-            n_generations=N_EVAL_GENERATIONS,
+            n_generations=n_eval_generations,
             temperature=sampling_params.temperature,
             top_k=sampling_params.top_k,
         )
-        return CompletedLessonEval(
+        self._log_lesson_eval(
             lesson_id=lesson_id,
             eval_type=eval_type,
-            step=step,
-            weight_step=weight_step,
             batch=batch,
-            stats=stats,
+            step=step,
+            weight_step=self._current_weight_step,
             metrics=metrics,
         )
-
-    def _consume_lesson_eval(self, result: CompletedLessonEval) -> None:
-        """Apply tracker and curriculum side effects for a completed lesson eval."""
-        tracker_step = self._next_tracker_step()
-        log_metrics = self._build_prompt_example_metrics(
-            result.lesson_id,
-            result.batch,
-            result.step,
-            eval_type=result.eval_type,
-        )
-        log_metrics.update(result.metrics)
-        log_metrics["inference.weight_step"] = result.weight_step
-        if result.eval_type == "eval":
-            log_metrics["inference.train_step"] = result.step
-        self.tracker.log(log_metrics, step=tracker_step)
-        logger.info(
-            "Eval metrics for lesson %s at tracker_step=%d weight_step=%d: %s",
-            result.lesson_id,
-            tracker_step,
-            result.weight_step,
-            result.metrics,
-        )
-        if result.eval_type == "eval":
+        if eval_type == "eval":
             self._curriculum_actor.update_lesson_stats.remote(
-                result.stats.rollout_stats, mode="eval", current_step=result.step
+                stats.rollout_stats,
+                mode="eval",
+                current_step=step,
             ).result()
+        return stats
 
-    def _run_eval_job(self, job: ScheduledEvalJob) -> list[CompletedLessonEval]:
-        """Compute one queued eval job on the background executor."""
-        if job.lesson_id is not None:
-            return [
-                self._compute_lesson_eval(
-                    lesson_id=job.lesson_id,
-                    n_examples=self.config.curriculum_config.micro_eval_n_examples,
-                    eval_type=job.eval_type,
-                    rng=job.rng,
-                    step=job.step,
-                    weight_step=job.weight_step,
-                )
-            ]
-
+    def _evaluate_curriculum(self, rng, step: int) -> None:
+        """Evaluate all lessons and update the curriculum actor."""
         lesson_names = list(self.config.curriculum_config.lessons.keys())
         if not lesson_names:
             logger.info("No lessons to evaluate")
-            return []
+            return
 
         logger.info("Evaluating %d lessons", len(lesson_names))
-        results = []
         for lesson_id in lesson_names:
-            results.append(
-                self._compute_lesson_eval(
-                    lesson_id=lesson_id,
-                    n_examples=self.config.curriculum_config.eval_n_examples,
-                    eval_type=job.eval_type,
-                    rng=job.rng,
-                    step=job.step,
-                    weight_step=job.weight_step,
-                )
+            self._evaluate_lesson(
+                lesson_id=lesson_id,
+                n_examples=self.config.curriculum_config.eval_n_examples,
+                eval_type="eval",
+                rng=rng,
+                step=step,
             )
-        return results
-
-    def _supports_async_eval(self) -> bool:
-        return self._eval_executor is not None
-
-    def _enqueue_eval_job(self, job: ScheduledEvalJob) -> None:
-        """Start or coalesce an eval job without blocking train rollout generation."""
-        if self._eval_executor is None:
-            self._consume_eval_results(self._run_eval_job(job))
-            return
-
-        with self._eval_lock:
-            if self._active_eval_future is None:
-                logger.info("Submitting async %s job", job.eval_type)
-                self._active_eval_future = self._eval_executor.submit(self._run_eval_job, job)
-                return
-
-            previous_job = self._pending_eval_job
-            replacement_job = _coalesce_eval_job(previous_job, job)
-            if replacement_job is not None:
-                self._pending_eval_job = replacement_job
-                logger.info(
-                    "Coalesced pending eval job to %s at step %d",
-                    replacement_job.eval_type,
-                    replacement_job.step,
-                )
-
-    def _poll_eval_jobs(self) -> None:
-        """Harvest completed async eval jobs and submit the latest pending one."""
-        if self._eval_executor is None:
-            return
-
-        completed_future: concurrent.futures.Future[list[CompletedLessonEval]] | None = None
-        with self._eval_lock:
-            if self._active_eval_future is None or not self._active_eval_future.done():
-                return
-            completed_future = self._active_eval_future
-            self._active_eval_future = None
-
-        results = completed_future.result()
-        self._consume_eval_results(results)
-
-        with self._eval_lock:
-            if self._pending_eval_job is None or not self._running:
-                return
-            next_job = self._pending_eval_job
-            self._pending_eval_job = None
-            logger.info("Submitting coalesced async %s job", next_job.eval_type)
-            self._active_eval_future = self._eval_executor.submit(self._run_eval_job, next_job)
-
-    def _consume_eval_results(self, results: list[CompletedLessonEval]) -> None:
-        for result in results:
-            self._consume_lesson_eval(result)
 
     def _resume_safe_transfer_metrics(self) -> dict[str, float | int]:
-        if self._transfer_client is None:
-            return {}
-
         current_metrics = self._transfer_client.get_metrics()
         current_counters = _rollout_transfer_counter_snapshot(current_metrics)
         delta = _rollout_transfer_counter_delta(current_counters, self._last_transfer_counters)
@@ -1004,9 +866,6 @@ class RolloutWorker:
         ).result()
         self._last_transfer_counters = current_counters
         return _rollout_transfer_metrics_for_logging(current_metrics, cumulative_counters)
-
-    def _next_tracker_step(self) -> int:
-        return self._runtime.run_state.next_rollout_tracker_step.remote(self.config.worker_index).result()
 
     def _log_rollout_metrics(
         self,
@@ -1027,33 +886,12 @@ class RolloutWorker:
         log_metrics["inference.weight_step"] = self._current_weight_step
         if self._current_train_step >= 0:
             log_metrics["inference.train_step"] = self._current_train_step
-        tracker_step = self._next_tracker_step()
         logger.info(
-            "Logging metrics at rollout_step=%d tracker_step=%d weight_step=%d",
+            "Logging metrics at rollout_step=%d weight_step=%d",
             rollout_step,
-            tracker_step,
             self._current_weight_step,
         )
-        self.tracker.log(log_metrics, step=tracker_step)
-
-    def _shutdown_eval_executor(self) -> None:
-        if self._eval_executor is None:
-            return
-
-        active_future: concurrent.futures.Future[list[CompletedLessonEval]] | None
-        with self._eval_lock:
-            active_future = self._active_eval_future
-            self._active_eval_future = None
-            self._pending_eval_job = None
-
-        if active_future is not None:
-            try:
-                self._consume_eval_results(active_future.result())
-            except Exception:
-                logger.exception("Async eval failed during shutdown")
-
-        self._eval_executor.shutdown(wait=True)
-        self._eval_executor = None
+        self.tracker.log(log_metrics)
 
     def run(self):
         """Main inference worker loop."""
@@ -1071,36 +909,25 @@ class RolloutWorker:
                 max_wait_time = self.config.weight_transfer.max_weight_transfer_wait_time
                 if max_wait_time <= 0:
                     max_wait_time = 1200.0  # 20 minutes default for first-weight wait
-                if self._policy_ctx.owns_weight_transfer():
-                    logger.info(
-                        "Waiting for packed rollout replicas to synchronize initial weights (timeout %.1fs)...",
-                        max_wait_time,
-                    )
-                    initial_weight_id = self._policy_ctx.wait_for_initial_weights(timeout=max_wait_time)
-                    if initial_weight_id is None or initial_weight_id < -1:
-                        raise RuntimeError("Packed rollout inference context did not become ready for initial weights.")
-                    self._current_weight_step = initial_weight_id
-                    logger.info("Packed rollout replicas ready at weight step %d", initial_weight_id)
-                else:
-                    logger.info(
-                        "Waiting for first weight transfer before starting inference (timeout %.1fs)...",
-                        max_wait_time,
-                    )
-                    start_time = time.time()
-                    while True:
-                        if self._first_weights_received.wait(timeout=10.0):
-                            break
+                logger.info(
+                    "Waiting for first weight transfer before starting inference (timeout %.1fs)...",
+                    max_wait_time,
+                )
+                start_time = time.time()
+                while True:
+                    if self._first_weights_received.wait(timeout=10.0):
+                        break
 
-                        if not self._running:
-                            logger.info("Shutdown requested while waiting for first weights")
-                            return
+                    if not self._running:
+                        logger.info("Shutdown requested while waiting for first weights")
+                        return
 
-                        elapsed = time.time() - start_time
-                        if max_wait_time - elapsed <= 0:
-                            raise RuntimeError("Timed out waiting for initial weight transfer.")
+                    elapsed = time.time() - start_time
+                    if max_wait_time - elapsed <= 0:
+                        raise RuntimeError("Timed out waiting for initial weight transfer.")
 
-                        logger.info("Still waiting for first weight transfer (elapsed: %.1fs)", elapsed)
-                    logger.info("First weights received, starting inference loop")
+                    logger.info("Still waiting for first weight transfer (elapsed: %.1fs)", elapsed)
+                logger.info("First weights received, starting inference loop")
 
             use_jax_rng = self.config.inference_type == "levanter"
 
@@ -1115,7 +942,6 @@ class RolloutWorker:
 
             while self._running:
                 step_start = time.time()
-                self._poll_eval_jobs()
 
                 # Check if training is done before generating more rollouts
                 if not self._check_run_state():
@@ -1132,9 +958,6 @@ class RolloutWorker:
                     break
 
                 # Guard: never generate rollouts with dummy weights
-                context_weight_id = self._policy_ctx.current_weight_id()
-                if context_weight_id is not None:
-                    self._current_weight_step = context_weight_id
                 if self._current_weight_step < -1:
                     logger.warning(
                         "No valid weights received yet (weight_step=%d), retrying sync...",
@@ -1172,14 +995,13 @@ class RolloutWorker:
                         rng, micro_eval_rng = jrandom.split(rng)
                     else:
                         micro_eval_rng = py_rng.randint(0, 2**31 - 1)
-                    micro_eval_job = ScheduledEvalJob(
+                    self._evaluate_lesson(
                         lesson_id=lesson_id,
+                        n_examples=self.config.curriculum_config.micro_eval_n_examples,
                         eval_type="micro_eval",
                         rng=micro_eval_rng,
                         step=self._current_weight_step,
-                        weight_step=self._current_weight_step,
                     )
-                    self._enqueue_eval_job(micro_eval_job)
 
                 # Full eval: comprehensive check on all lessons once per completed trainer step.
                 if _should_run_curriculum_eval(
@@ -1192,13 +1014,7 @@ class RolloutWorker:
                         rng, eval_rng = jrandom.split(rng)
                     else:
                         eval_rng = py_rng.randint(0, 2**31 - 1)
-                    eval_job = ScheduledEvalJob(
-                        eval_type="eval",
-                        rng=eval_rng,
-                        step=self._current_train_step,
-                        weight_step=self._current_weight_step,
-                    )
-                    self._enqueue_eval_job(eval_job)
+                    self._evaluate_curriculum(eval_rng, self._current_train_step)
                     self._last_eval_train_step = self._current_train_step
 
                 logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
@@ -1220,7 +1036,6 @@ class RolloutWorker:
                     n_examples=lesson_config.sampling_params.n_prompts,
                     n_generations=lesson_config.sampling_params.n_generations_per_prompt,
                     mode="train",
-                    request_kind=InferenceRequestKind.TRAIN,
                     rng=input_rng,
                 )
                 batch_time = time.time() - batch_start_time
@@ -1268,7 +1083,6 @@ class RolloutWorker:
                 faulthandler.cancel_dump_traceback_later()
 
                 if self.config.log_freq > 0 and step % self.config.log_freq == 0:
-                    self._poll_eval_jobs()
                     self._log_rollout_metrics(
                         rollout_metrics=eval_metrics,
                         env_metrics=env_metrics,
@@ -1286,7 +1100,6 @@ class RolloutWorker:
         finally:
             faulthandler.cancel_dump_traceback_later()
             self._running = False
-            self._shutdown_eval_executor()
             try:
                 if hasattr(self.tracker, "finish"):
                     self.tracker.finish()

@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.train_worker import (
     BatchPrepTiming,
+    InitialRolloutState,
     TrainWorker,
+    _initial_rollout_state,
     _resume_safe_weight_transfer_metrics,
     _training_step_timing_metrics,
 )
@@ -56,6 +58,208 @@ def test_record_train_step_updates_replay_buffer_and_shared_run_state():
     worker._record_train_step(7)
 
     assert recorded_steps == [7, 7]
+
+
+def test_initial_rollout_state_uses_bootstrap_weights_for_fresh_run():
+    assert _initial_rollout_state(0) == InitialRolloutState(weight_step=-1, published_train_step=None)
+
+
+def test_initial_rollout_state_reuses_recovered_step_for_resumed_run():
+    assert _initial_rollout_state(68) == InitialRolloutState(weight_step=68, published_train_step=68)
+
+
+def test_seed_initial_rollout_state_updates_replay_buffer_only_for_fresh_run():
+    recorded_steps: list[int] = []
+
+    class _FakeRemoteMethod:
+        def remote(self, step: int) -> None:
+            recorded_steps.append(step)
+
+    class _FakeRunState:
+        update_train_step = _FakeRemoteMethod()
+
+    worker = TrainWorker.__new__(TrainWorker)
+    worker.replay_buffer = SimpleNamespace(set_current_step=recorded_steps.append)
+    worker._runtime = SimpleNamespace(run_state=_FakeRunState())
+
+    worker._seed_initial_rollout_state(InitialRolloutState(weight_step=-1, published_train_step=None))
+
+    assert recorded_steps == [-1]
+
+
+def test_seed_initial_rollout_state_publishes_resumed_step():
+    recorded_steps: list[int] = []
+
+    class _FakeRemoteMethod:
+        def remote(self, step: int) -> None:
+            recorded_steps.append(step)
+
+    class _FakeRunState:
+        update_train_step = _FakeRemoteMethod()
+
+    worker = TrainWorker.__new__(TrainWorker)
+    worker.replay_buffer = SimpleNamespace(set_current_step=recorded_steps.append)
+    worker._runtime = SimpleNamespace(run_state=_FakeRunState())
+
+    worker._seed_initial_rollout_state(InitialRolloutState(weight_step=68, published_train_step=68))
+
+    assert recorded_steps == [68, 68]
+
+
+def test_train_bootstraps_fresh_run_with_step_minus_one(monkeypatch):
+    served_weight_steps: list[int] = []
+    waited_weight_steps: list[int] = []
+    replay_steps: list[int] = []
+    published_steps: list[int] = []
+
+    class _FakeRemoteMethod:
+        def remote(self, step: int) -> None:
+            published_steps.append(step)
+
+    class _FakeRunState:
+        update_train_step = _FakeRemoteMethod()
+
+    class _FakeReplayLoader:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeTransferServer:
+        def serve_weights(self, weight_step: int, model: object) -> None:
+            served_weight_steps.append(weight_step)
+
+        def cleanup(self) -> None:
+            return None
+
+    class _FakeTrainer:
+        def __init__(self, *, config, optimizer, loss_fn):
+            del config, optimizer, loss_fn
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def initial_state(self, key, *, model):
+            del key
+            return SimpleNamespace(step=0, model=model)
+
+        def train(self, state, data_loader) -> None:
+            del state, data_loader
+
+    monkeypatch.setattr("marin.rl.train_worker.Trainer", _FakeTrainer)
+
+    worker = TrainWorker.__new__(TrainWorker)
+    worker.config = SimpleNamespace(
+        run_id="resume-test",
+        trainer=SimpleNamespace(
+            checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=False)),
+            num_train_steps=10,
+            seed=0,
+        ),
+        optimizer=SimpleNamespace(build=lambda num_steps: object()),
+        weight_transfer=SimpleNamespace(debug_weight_transfer=False, sync_interval_steps=1),
+    )
+    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model, _: lambda model, batch, key: 0.0)
+    worker.reference_model = object()
+    worker.initial_model = object()
+    worker.replay_buffer = SimpleNamespace(set_current_step=replay_steps.append)
+    worker.replay_loader = _FakeReplayLoader()
+    worker.transfer_server = _FakeTransferServer()
+    worker.data_loader = object()
+    worker._runtime = SimpleNamespace(run_state=_FakeRunState())
+    worker._drop_bootstrap_model_references = lambda: None
+    worker._configure_training_hooks = lambda trainer: None
+    worker._wait_for_initial_rollouts = lambda *, weight_step: waited_weight_steps.append(weight_step) or True
+    worker.stop = lambda: None
+
+    worker.train()
+
+    assert replay_steps == [-1]
+    assert published_steps == []
+    assert served_weight_steps == [-1]
+    assert waited_weight_steps == [-1]
+
+
+def test_train_reuses_recovered_step_on_resume(monkeypatch):
+    served_weight_steps: list[int] = []
+    waited_weight_steps: list[int] = []
+    replay_steps: list[int] = []
+    published_steps: list[int] = []
+
+    class _FakeRemoteMethod:
+        def remote(self, step: int) -> None:
+            published_steps.append(step)
+
+    class _FakeRunState:
+        update_train_step = _FakeRemoteMethod()
+
+    class _FakeReplayLoader:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeTransferServer:
+        def serve_weights(self, weight_step: int, model: object) -> None:
+            served_weight_steps.append(weight_step)
+
+        def cleanup(self) -> None:
+            return None
+
+    class _FakeTrainer:
+        def __init__(self, *, config, optimizer, loss_fn):
+            del config, optimizer, loss_fn
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def initial_state(self, key, *, model):
+            del key
+            return SimpleNamespace(step=68, model=model)
+
+        def train(self, state, data_loader) -> None:
+            del state, data_loader
+
+    monkeypatch.setattr("marin.rl.train_worker.Trainer", _FakeTrainer)
+
+    worker = TrainWorker.__new__(TrainWorker)
+    worker.config = SimpleNamespace(
+        run_id="resume-test",
+        trainer=SimpleNamespace(
+            checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=False)),
+            num_train_steps=100,
+            seed=0,
+        ),
+        optimizer=SimpleNamespace(build=lambda num_steps: object()),
+        weight_transfer=SimpleNamespace(debug_weight_transfer=False, sync_interval_steps=1),
+    )
+    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model, _: lambda model, batch, key: 0.0)
+    worker.reference_model = object()
+    worker.initial_model = object()
+    worker.replay_buffer = SimpleNamespace(set_current_step=replay_steps.append)
+    worker.replay_loader = _FakeReplayLoader()
+    worker.transfer_server = _FakeTransferServer()
+    worker.data_loader = object()
+    worker._runtime = SimpleNamespace(run_state=_FakeRunState())
+    worker._drop_bootstrap_model_references = lambda: None
+    worker._configure_training_hooks = lambda trainer: None
+    worker._wait_for_initial_rollouts = lambda *, weight_step: waited_weight_steps.append(weight_step) or True
+    worker.stop = lambda: None
+
+    worker.train()
+
+    assert replay_steps == [68]
+    assert published_steps == [68]
+    assert served_weight_steps == [68]
+    assert waited_weight_steps == [68]
 
 
 def test_resume_safe_weight_transfer_metrics_counts_bootstrap_and_sync_hooks():

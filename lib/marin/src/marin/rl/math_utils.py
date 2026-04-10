@@ -155,12 +155,6 @@ def normalize_answer(answer: str | None) -> str | None:
         return answer
 
 
-def _fix_fracs(string):
-    """Convert \\frac{a}{b} to (a)/(b), handling all variants. (Legacy - use process_latex_fractions)"""
-    # Use new abstraction
-    return process_latex_fractions(string)
-
-
 def process_latex_fractions(text: str) -> str:
     """Convert \\frac{a}{b} to (a)/(b), handling all variants."""
     # Normalize variants
@@ -205,22 +199,6 @@ def _fix_a_slash_b(string):
         return new_string
     except BaseException:
         return string
-
-
-def _remove_right_units(string):
-    # "\\text{ " only ever occurs (at least in the val set) when describing units
-    if "\\text{ " in string:
-        splits = string.split("\\text{ ")
-        assert len(splits) == 2
-        return splits[0]
-    else:
-        return string
-
-
-def _fix_sqrt(string):
-    """Convert \\sqrt{x} or \\sqrt x to \\sqrt{x}. (Legacy - use process_latex_sqrt)"""
-    # Use new abstraction for converting to text format
-    return process_latex_sqrt(string)
 
 
 def process_latex_sqrt(text: str) -> str:
@@ -371,68 +349,6 @@ def extract_boxed(text: str) -> str | None:
         return content[:dollar_pos] if dollar_pos >= 0 else content
 
     return text
-
-
-def _strip_string(string):
-    # linebreaks
-    string = string.replace("\n", "")
-    # print(string)
-
-    # remove inverse spaces
-    string = string.replace("\\!", "")
-    # print(string)
-
-    # replace \\ with \
-    string = string.replace("\\\\", "\\")
-    # print(string)
-
-    # replace tfrac and dfrac with frac
-    string = string.replace("tfrac", "frac")
-    string = string.replace("dfrac", "frac")
-    # print(string)
-
-    # print(string)
-
-    # Remove circ (degrees)
-    string = string.replace("^{\\circ}", "")
-    string = string.replace("^\\circ", "")
-
-    # remove dollar signs
-    string = string.replace("\\$", "")
-
-    # remove units (on the right)
-    string = _remove_right_units(string)
-
-    # remove percentage
-    string = string.replace("\\%", "")
-    string = string.replace("\\%", "")
-
-    # " 0." equivalent to " ." and "{0." equivalent to "{." Alternatively, add "0" if "." is the start of the string
-    string = string.replace(" .", " 0.")
-    string = string.replace("{.", "{0.")
-    # if empty, return empty string
-    if len(string) == 0:
-        return string
-    if string[0] == ".":
-        string = "0" + string
-
-    # to consider: get rid of e.g. "k = " or "q = " at beginning
-    if len(string.split("=")) == 2:
-        if len(string.split("=")[0]) <= 2:
-            string = string.split("=")[1]
-
-    # remove spaces
-    string = string.replace(" ", "")
-
-    # manually change 0.5 --> \frac{1}{2}
-    if string == "0.5":
-        string = "\\frac{1}{2}"
-
-    # NOTE: X/Y changed to \frac{X}{Y} in dataset, but in simple cases fix in
-    # case the model output is X/Y
-    string = _fix_a_slash_b(string)
-
-    return string
 
 
 # sympy might hang -- we don't care about trying to be lenient in these cases

@@ -13,6 +13,7 @@ import zstandard
 from rigging.filesystem import open_url
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_exists
+from fray.cluster import ResourceConfig
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext
@@ -21,7 +22,8 @@ from zephyr.writers import atomic_rename
 logger = logging.getLogger(__name__)
 
 myagent = "marin-nemotron-ingress/1.0"
-NCC_PATH_FILE_URL = "https://data.commoncrawl.org/contrib/Nemotron/Nemotron-CC/data-jsonl.paths.gz"
+NCC_BASE_URL = "https://data.commoncrawl.org"
+NCC_PATHS_SUFFIX = "contrib/Nemotron/Nemotron-CC/data-jsonl.paths.gz"
 
 
 def _iter_jsonl_from_zstd_stream(raw_stream) -> Iterator[dict]:
@@ -45,9 +47,9 @@ def _iter_jsonl_from_zstd_stream(raw_stream) -> Iterator[dict]:
                 yield json.loads(line_bytes)
 
 
-def download_single_nemotron_path(input_file_path: str, output_file_path: str) -> dict:
+def download_single_nemotron_path(input_file_path: str, output_file_path: str, base_url: str = NCC_BASE_URL) -> dict:
     """Fetches content from a Common Crawl path, streaming records to zstd output."""
-    cc_url = f"https://data.commoncrawl.org/{input_file_path}"
+    cc_url = f"{base_url}/{input_file_path}"
     logger.info(f"Downloading Nemotron CC file {cc_url} to {output_file_path}")
 
     session = requests.Session()
@@ -76,13 +78,14 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str) -
     return {"input_file": input_file_path, "output_file": output_file_path, "num_records": num_records}
 
 
-def download_nemotron_cc(output_path: str) -> None:
+def download_nemotron_cc(output_path: str, base_url: str = NCC_BASE_URL) -> None:
     """Download and process Nemotron-CC dataset from Common Crawl."""
 
     paths_file_path = os.path.join(output_path, "data-jsonl.paths")
+    paths_file_url = f"{base_url}/{NCC_PATHS_SUFFIX}"
     logger.info(f"Downloading Nemotron CC path file {paths_file_path}")
 
-    with open_url(NCC_PATH_FILE_URL, "rb") as f, open_url(paths_file_path, "wb") as f_out:
+    with open_url(paths_file_url, "rb") as f, open_url(paths_file_path, "wb") as f_out:
         f_out.write(f.read())
 
     logger.info(f"Reading paths from {paths_file_path}")
@@ -98,11 +101,13 @@ def download_nemotron_cc(output_path: str) -> None:
     pipeline = (
         Dataset.from_list(all_files)
         .filter(lambda file_info: not fsspec_exists(file_info[1]))
-        .map(lambda file_info: download_single_nemotron_path(*file_info))
+        .map(lambda file_info: download_single_nemotron_path(file_info[0], file_info[1], base_url=base_url))
         .write_jsonl(os.path.join(output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
     )
 
-    ctx = ZephyrContext(name="download-nemotron-cc")
+    # Each worker downloads a ~350MB zstd file and decompresses to ~1.5-2GB in memory.
+    # Default ZephyrContext resources (1GB) causes OOMKill; 4GB gives sufficient headroom.
+    ctx = ZephyrContext(name="download-nemotron-cc", resources=ResourceConfig(cpu=1, ram="4g"))
     ctx.execute(pipeline)
 
     logger.info(f"Downloaded Nemotron CC files to {output_path}")

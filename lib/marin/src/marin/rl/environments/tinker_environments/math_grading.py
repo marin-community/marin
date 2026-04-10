@@ -426,7 +426,20 @@ def should_allow_eval(expr: str):
         if bad_string in expr:
             return False
 
-    return all(re.search(bad_regex, expr) is not None for bad_regex in BAD_REGEXES)
+    for bad_regex in BAD_REGEXES:
+        if re.search(bad_regex, expr) is not None:
+            return False
+
+    return True
+
+
+def _sympy_simplify_with_timeout(expr, timeout=_SYMPY_TIMEOUT):
+    """Run sympy.simplify with a hard process-level timeout."""
+    try:
+        return _run_in_process_with_timeout(sympy.simplify, (expr,), timeout)
+    except TimeoutError:
+        logger.warning("sympy.simplify timed out after %ds", timeout)
+        raise
 
 
 def _sympy_simplify_with_timeout(expr, timeout=_SYMPY_TIMEOUT):

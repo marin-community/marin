@@ -6,7 +6,7 @@ Environment Wrapper for the Environments Hub by Prime-Intellect, which contains 
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import Any, ClassVar, cast
 
 import jax.numpy as jnp
 import numpy as np
@@ -16,10 +16,6 @@ from marin.rl.environments.process_vllm_results import process_vllm_chat_results
 from marin.rl.environments.inference_ctx import BaseInferenceContext
 from marin.rl.environments.inference_ctx.base import InferenceRequestKind
 from marin.rl.types import Rollout, RolloutGroup
-
-# Lazy import for optional dependencies
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 

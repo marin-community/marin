@@ -6,7 +6,6 @@
 import asyncio
 import logging
 import os
-import sys
 import urllib.parse
 from dataclasses import dataclass
 from functools import partial
@@ -26,29 +25,10 @@ from haliax.util import is_named_array
 from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
+from levanter._debug_logging import flush_debug_output
 from levanter.utils import fsspec_utils, jax_utils
 
 logger = logging.getLogger(__name__)
-
-
-def _flush_debug_checkpointer_output() -> None:
-    seen_handlers: set[int] = set()
-    for candidate in (logger, logging.getLogger()):
-        for handler in candidate.handlers:
-            handler_id = id(handler)
-            if handler_id in seen_handlers:
-                continue
-            seen_handlers.add(handler_id)
-            try:
-                handler.flush()
-            except Exception:
-                pass
-
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.flush()
-        except Exception:
-            pass
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -84,6 +64,11 @@ def build_kvstore_spec(path: str) -> dict:
             # Custom endpoint with no explicit region: use a placeholder to prevent
             # tensorstore from trying (and failing) to discover the region via HEAD bucket.
             spec["aws_region"] = "us-east-1"
+
+        # Supplying credentials explicitly reduces noisy AWS CRT logs in containers.
+        if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
+            spec["aws_credentials"] = {"type": "environment"}
+
         return spec
     elif parsed.scheme == "gs":
         return {"driver": "gcs", "bucket": parsed.netloc, "path": parsed.path.lstrip("/")}
@@ -197,7 +182,7 @@ def tree_serialize_leaves_tensorstore(
             largest_path or "<none>",
             _format_gib(largest_array_bytes),
         )
-        _flush_debug_checkpointer_output()
+        flush_debug_output(logger)
 
     # Create specs for each array
     tspecs = []
@@ -207,11 +192,11 @@ def tree_serialize_leaves_tensorstore(
 
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize entering manager.serialize for %s", checkpoint_dir)
-        _flush_debug_checkpointer_output()
+        flush_debug_output(logger)
     manager.serialize(arrays, tspecs, on_commit_callback=commit_callback)
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize returned from manager.serialize for %s", checkpoint_dir)
-        _flush_debug_checkpointer_output()
+        flush_debug_output(logger)
 
     if manager_was_none:
         manager.wait_until_finished()

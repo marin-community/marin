@@ -36,20 +36,6 @@ class BaseInferenceContext:
     def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
         raise NotImplementedError
 
-    def owns_weight_transfer(self) -> bool:
-        """Return whether this context manages weight sync internally."""
-        return False
-
-    def wait_for_initial_weights(self, timeout: float) -> int | None:
-        """Wait until the context is ready to serve real model weights."""
-        del timeout
-        return None
-
-    def current_weight_id(self, request_kind: InferenceRequestKind = InferenceRequestKind.TRAIN) -> int | None:
-        """Return the latest batch-consistent weight id served by the context."""
-        del request_kind
-        return None
-
     def shutdown(self) -> None:
         raise NotImplementedError
 
@@ -90,11 +76,12 @@ class BaseInferenceContext:
         if not choice.logprobs or not choice.logprobs.content:
             raise ValueError("Choice missing logprobs. Use logprobs=True in API call.")
 
+        vocab = self.tokenizer.get_vocab()
         tokens = []
         for t in choice.logprobs.content:
-            # Use convert_tokens_to_ids for correct BPE round-trip
-            # The server uses convert_ids_to_tokens which preserves BPE format (e.g., Ġ for spaces)
-            token_id = self.tokenizer.convert_tokens_to_ids(t.token)
+            token_id = vocab.get(t.token)
+            if token_id is None:
+                raise ValueError(f"Token {t.token!r} not found in vocabulary")
             tokens.append(token_id)
 
         if not tokens:

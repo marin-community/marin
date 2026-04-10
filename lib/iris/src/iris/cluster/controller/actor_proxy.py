@@ -20,7 +20,8 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from iris.cluster.controller.db import ControllerDB, Endpoint, EndpointQuery, decode_rows, endpoint_query_sql
+from iris.cluster.controller.db import ControllerDB, EndpointQuery, endpoint_query_sql
+from iris.cluster.controller.schema import ENDPOINT_PROJECTION
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,7 @@ class ActorProxy:
         query = EndpointQuery(exact_name=name)
         sql, params = endpoint_query_sql(query)
         with self._db.read_snapshot() as q:
-            endpoints = decode_rows(Endpoint, q.fetchall(sql, tuple(params)))
+            endpoints = ENDPOINT_PROJECTION.decode(q.fetchall(sql, tuple(params)))
         if not endpoints:
             return None
         return endpoints[0].address

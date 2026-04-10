@@ -8,9 +8,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.db import ControllerDB, TaskDetail, decode_rows
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.types import JobName
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 from tests.cluster.controller.conftest import (
     FakeProvider,
     make_job_request,
@@ -53,12 +54,11 @@ def test_dry_run_scheduling_does_not_dispatch(dry_run_controller):
     controller._run_scheduling()
 
     with state._db.snapshot() as q:
-        tasks = decode_rows(
-            TaskDetail,
+        tasks = TASK_DETAIL_PROJECTION.decode(
             q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (JobName.root("test-user", "dry-job").to_wire(),)),
         )
     assert len(tasks) == 1
-    assert tasks[0].state == cluster_pb2.TASK_STATE_PENDING
+    assert tasks[0].state == job_pb2.TASK_STATE_PENDING
 
 
 def test_dry_run_provider_sync_skipped(dry_run_controller):

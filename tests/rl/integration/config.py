@@ -35,7 +35,7 @@ from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
-from transformers import AutoTokenizer
+from levanter.tokenizers import load_tokenizer
 
 from fray.v2 import current_client
 from marin.rl.curriculum import Curriculum
@@ -256,7 +256,7 @@ def create_qwen_config():
 
 
 def create_qwen_tokenizer():
-    return AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
+    return load_tokenizer("Qwen/Qwen3-0.6B")
 
 
 def create_vllm_inference_config():

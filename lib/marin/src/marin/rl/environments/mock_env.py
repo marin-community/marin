@@ -10,7 +10,7 @@ from typing import Any, ClassVar, Protocol
 
 import jax
 import numpy as np
-from transformers import PreTrainedTokenizer
+from levanter.tokenizers import MarinTokenizer
 
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext, InferenceRequestKind
 from marin.rl.types import RolloutGroup
@@ -206,7 +206,7 @@ class SequentialDigitsTask:
 
         return examples
 
-    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer: PreTrainedTokenizer) -> float:
+    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer: MarinTokenizer) -> float:
         """Compute reward based on sequential digit quality.
 
         Reward structure:

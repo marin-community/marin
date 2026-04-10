@@ -18,7 +18,6 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.models.llama import LlamaConfig
 from marin.rl.environments.inference_ctx import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 from marin.rl.weight_transfer import (
-    ArrowFlightExportStrategy,
     WeightTransferConfig,
     WeightTransferMode,
     create_weight_transfer_client,
@@ -263,13 +262,12 @@ def test_concurrent_clients(weight_transfer_config, sample_params):
         client_2.cleanup()
 
 
-def test_arrow_flight_sequential_host_flatten_exports_and_tracks_bytes(sample_params):
+def test_arrow_flight_exports_and_tracks_bytes(sample_params):
     with tempfile.TemporaryDirectory() as temp_dir:
         config = WeightTransferConfig(
             mode=WeightTransferMode.ARROW_FLIGHT,
             sync_interval_steps=1,
             checkpoint_dir=temp_dir,
-            export_strategy=ArrowFlightExportStrategy.SEQUENTIAL_HOST_FLATTEN,
         )
 
         server, client = create_test_weight_transfer_pair(config)

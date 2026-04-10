@@ -1095,8 +1095,7 @@ class AllConfig(Protocol):
 
 
 def initialize(config: TrainerConfig | AllConfig):
-    """Initializes jax, logging, setting the run name/id in the process. Also initializes tracking and saves config
-    as hyperparameters and an artifact"""
+    """Initializes jax and logging, then initializes tracking and logs config hyperparameters."""
     if isinstance(config, TrainerConfig):
         trainer_config = config
     else:

@@ -4,16 +4,13 @@
 import gc
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass
 from enum import StrEnum
 
-import jax
-import jax.numpy as jnp
 import numpy as np
-from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.models.lm_model import LmHeadModel
+from levanter.tokenizers import load_tokenizer
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
@@ -114,6 +111,8 @@ class vLLMInferenceContext(BaseInferenceContext):
         self.mesh = None
         self.axis_mapping = {}
         self.tokenizer = load_tokenizer(inference_config.model_name)
+        # Reverse vocab map for logprob token string display
+        self._id_to_token: dict[int, str] = {v: k for k, v in self.tokenizer.get_vocab().items()}
         self.model_name = inference_config.model_name
         self.canonical_model_name = inference_config.canonical_model_name or inference_config.model_name
         self.sampling_config = inference_config.sampling_params
@@ -195,59 +194,6 @@ class vLLMInferenceContext(BaseInferenceContext):
             kv_cache_metrics=inference_config.kv_cache_metrics,
         )
 
-    def _convert_vllm_state_dict_to_trainer_keys(
-        self, state_dict_trainer: dict, state_dict_vllm: dict, mapping: dict
-    ) -> dict:
-        state_dict_vllm_with_trainer_keys = {}
-        for src_path, _ in state_dict_trainer.items():
-            src_key = ".".join(str(p) for p in src_path)
-
-            # Try to find a matching pattern
-            matched = False
-            for src_pattern, (dst_pattern, _) in mapping.items():
-
-                if not re.match(src_pattern, src_key):
-                    continue
-
-                match_layer_number = re.match(r".*layers\.(\d+).*", src_key)
-                if match_layer_number:
-                    layer_number = int(match_layer_number.group(1))
-                    dst_path = []
-                    for part in dst_pattern.split("."):
-                        if part == "*":
-                            dst_path.append(layer_number)
-                        else:
-                            dst_path.append(part)
-                    dst_path = tuple(dst_path)
-                    if dst_path in state_dict_vllm:
-                        state_dict_vllm_with_trainer_keys[src_path] = state_dict_vllm[dst_path]
-                        matched = True
-                        break
-                else:
-                    dst_path = tuple(dst_pattern.split("."))
-                    if dst_path in state_dict_vllm:
-                        state_dict_vllm_with_trainer_keys[src_path] = state_dict_vllm[dst_path]
-                        matched = True
-                        break
-
-            if not matched:
-                print(f"Warning: No mapping found for {src_key}")
-
-        return state_dict_vllm_with_trainer_keys
-
-    def _check_weight_differences(self, state_dict: dict, state_dict_other: dict):
-        for key in state_dict:
-            if key in state_dict_other:
-                assert (
-                    state_dict[key].shape == state_dict_other[key].shape
-                ), f"Shape mismatch for key {key}: {state_dict[key].shape} != {state_dict_other[key].shape}"
-                weight = jax.device_get(state_dict[key]).astype(jnp.bfloat16)
-                weight_other = jax.device_get(state_dict_other[key]).astype(jnp.bfloat16)
-                print(
-                    f"Weight {key}, max diff: {jnp.max(jnp.abs(weight - weight_other))}, \
-                    mean diff: {jnp.mean(jnp.abs(weight - weight_other))}"
-                )
-
     def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
         """Tokenize the prompt with the choice's prompt token IDs.
 
@@ -275,7 +221,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             logprobs_content = []
             for token_id, logprob_dict in zip(output.token_ids, output.logprobs, strict=False):
                 # Get the token string (may be None for padding token IDs)
-                token = self.tokenizer.convert_ids_to_tokens(token_id)
+                token = self._id_to_token.get(token_id)
                 if token is None:
                     token = f"<id_{token_id}>"
 
@@ -287,7 +233,7 @@ class vLLMInferenceContext(BaseInferenceContext):
                     if logprob_obj.rank == 1:
                         selected_logprob = logprob_obj.logprob
 
-                    token_str = self.tokenizer.convert_ids_to_tokens(tid)
+                    token_str = self._id_to_token.get(tid)
                     if token_str is None:
                         token_str = f"<id_{tid}>"
                     top_logprobs.append(
@@ -392,7 +338,6 @@ class vLLMInferenceContext(BaseInferenceContext):
             stop: Stop sequences
             system_prompt: Optional system prompt (only used if prompts are strings)
         """
-        del request_kind
         if SamplingParams is None:
             raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
         kwargs = {

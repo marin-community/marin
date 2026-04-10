@@ -1,33 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import concurrent.futures
-import threading
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import fsspec
 import pytest
 
-from marin.rl.environments.inference_ctx import PackedvLLMInferenceContextConfig
 from marin.rl.environments.inference_ctx.staging import stage_vllm_metadata_locally
 from marin.rl.environments.inference_ctx.vllm import VLLMSamplingConfig, vLLMInferenceContextConfig
 from marin.rl.run_state import RolloutTransferCounters
 from marin.rl.rollout_worker import (
-    CompletedLessonEval,
-    RolloutBatchStats,
     RolloutTracker,
     RolloutTrackerConfig,
     RolloutTransferCounterSnapshot,
     RolloutWorker,
-    ScheduledEvalJob,
     _should_run_curriculum_eval,
     _should_run_micro_eval,
-    _coalesce_eval_job,
     create_inference_context,
 )
-from marin.rl.weight_transfer import WeightTransferConfig
 
 
 def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
@@ -122,18 +113,8 @@ def test_resume_safe_transfer_metrics_logs_attempt_and_cumulative_values_after_c
     }
 
 
-def test_log_rollout_metrics_uses_shared_tracker_step_and_logs_weight_train_steps():
-    recorded_worker_indices: list[int] = []
+def test_log_rollout_metrics_uses_wandb_default_step_and_logs_weight_train_steps():
     recorded_logs: list[tuple[dict[str, float | int], int | None]] = []
-
-    class _FakeRemoteResult:
-        def result(self) -> int:
-            return 42
-
-    class _FakeRemoteMethod:
-        def remote(self, worker_index: int) -> _FakeRemoteResult:
-            recorded_worker_indices.append(worker_index)
-            return _FakeRemoteResult()
 
     class _FakeTracker:
         def log(self, metrics: dict[str, float | int], step=None):
@@ -141,7 +122,6 @@ def test_log_rollout_metrics_uses_shared_tracker_step_and_logs_weight_train_step
 
     worker = object.__new__(RolloutWorker)
     worker.config = SimpleNamespace(worker_index=1)
-    worker._runtime = SimpleNamespace(run_state=SimpleNamespace(next_rollout_tracker_step=_FakeRemoteMethod()))
     worker._resume_safe_transfer_metrics = lambda: {"successful_receives": 10}
     worker._policy_ctx = SimpleNamespace(get_metrics=lambda: {"cache_hits": 3})
     worker._rollout_writer = SimpleNamespace(get_metrics=lambda: {"queued_batches": 2})
@@ -156,7 +136,6 @@ def test_log_rollout_metrics_uses_shared_tracker_step_and_logs_weight_train_step
         rollout_step=30,
     )
 
-    assert recorded_worker_indices == [1]
     assert recorded_logs == [
         (
             {
@@ -169,33 +148,13 @@ def test_log_rollout_metrics_uses_shared_tracker_step_and_logs_weight_train_step
                 "inference.weight_step": -1,
                 "inference.train_step": 248,
             },
-            42,
+            None,
         )
     ]
 
 
-def test_consume_lesson_eval_logs_with_shared_tracker_step_and_context_metrics():
-    recorded_worker_indices: list[int] = []
+def test_log_lesson_eval_uses_wandb_default_step_and_context_metrics():
     recorded_logs: list[tuple[dict[str, object], int | None]] = []
-    recorded_curriculum_updates: list[tuple[list[object], str, int]] = []
-
-    class _FakeRemoteResult:
-        def result(self):
-            return 17
-
-    class _FakeTrackerStepMethod:
-        def remote(self, worker_index: int) -> _FakeRemoteResult:
-            recorded_worker_indices.append(worker_index)
-            return _FakeRemoteResult()
-
-    class _FakeCurriculumResult:
-        def result(self):
-            return None
-
-    class _FakeCurriculumMethod:
-        def remote(self, rollout_stats: list[object], mode: str, current_step: int) -> _FakeCurriculumResult:
-            recorded_curriculum_updates.append((rollout_stats, mode, current_step))
-            return _FakeCurriculumResult()
 
     class _FakeTracker:
         def log(self, metrics: dict[str, object], step=None):
@@ -203,35 +162,22 @@ def test_consume_lesson_eval_logs_with_shared_tracker_step_and_context_metrics()
 
     worker = object.__new__(RolloutWorker)
     worker.config = SimpleNamespace(worker_index=0)
-    worker._runtime = SimpleNamespace(run_state=SimpleNamespace(next_rollout_tracker_step=_FakeTrackerStepMethod()))
-    worker._curriculum_actor = SimpleNamespace(update_lesson_stats=_FakeCurriculumMethod())
     worker._build_prompt_example_metrics = lambda lesson_id, batch, step, eval_type="eval": {
         f"inference.{eval_type}/{lesson_id}/sample_table": "table"
     }
+    worker._current_train_step = 12
+    worker._current_weight_step = -1
     worker.tracker = _FakeTracker()
 
-    rollout_stats = [SimpleNamespace()]
-    result = CompletedLessonEval(
+    worker._log_lesson_eval(
         lesson_id="lesson-a",
         eval_type="eval",
         step=12,
         weight_step=-1,
         batch=SimpleNamespace(groups=[]),
-        stats=RolloutBatchStats(
-            total_count=1,
-            success_count=1,
-            rollout_stats=rollout_stats,
-            avg_reward=1.0,
-            pass_at_one=1.0,
-            pass_at_k=1.0,
-            avg_at_k=1.0,
-        ),
         metrics={"inference.eval/lesson-a/avg_reward": 1.0},
     )
 
-    worker._consume_lesson_eval(result)
-
-    assert recorded_worker_indices == [0]
     assert recorded_logs == [
         (
             {
@@ -240,10 +186,9 @@ def test_consume_lesson_eval_logs_with_shared_tracker_step_and_context_metrics()
                 "inference.weight_step": -1,
                 "inference.train_step": 12,
             },
-            17,
+            None,
         )
     ]
-    assert recorded_curriculum_updates == [(rollout_stats, "eval", 12)]
 
 
 def test_stage_vllm_metadata_locally_copies_hf_metadata(tmp_path, monkeypatch):
@@ -292,52 +237,12 @@ def test_create_inference_context_uses_local_metadata_for_remote_inflight_vllm(m
             load_format="runai_streamer",
         ),
         inflight_weight_updates=True,
-        weight_transfer_config=WeightTransferConfig(),
-        coordinator_handle=None,
     )
 
     assert isinstance(ctx, _FakeAsyncContext)
     assert captured["config"].model_name == "/tmp/staged-model"
     assert captured["config"].load_format == "dummy"
     assert captured["config"].kv_cache_metrics is True
-
-
-def test_create_inference_context_uses_packed_vllm_context(monkeypatch):
-    captured = {}
-
-    class _FakePackedContext:
-        def __init__(self, *, inference_config, inflight_weight_updates, weight_transfer_config, coordinator_handle):
-            captured["config"] = inference_config
-            captured["inflight_weight_updates"] = inflight_weight_updates
-            captured["weight_transfer_config"] = weight_transfer_config
-            captured["coordinator_handle"] = coordinator_handle
-
-    monkeypatch.setattr("marin.rl.rollout_worker.PackedvLLMInferenceContext", _FakePackedContext)
-
-    packed_config = PackedvLLMInferenceContextConfig(
-        model_name="test-model",
-        canonical_model_name="meta-llama/Llama-3.1-8B-Instruct",
-        max_model_len=2048,
-        tensor_parallel_size_per_replica=2,
-        gpu_memory_utilization=0.9,
-        replica_chip_groups=("0,1", "2,3"),
-        sampling_params=VLLMSamplingConfig(),
-    )
-    weight_transfer_config = WeightTransferConfig()
-
-    ctx = create_inference_context(
-        "vllm",
-        packed_config,
-        inflight_weight_updates=True,
-        weight_transfer_config=weight_transfer_config,
-        coordinator_handle="coord-handle",
-    )
-
-    assert isinstance(ctx, _FakePackedContext)
-    assert captured["config"] == packed_config
-    assert captured["inflight_weight_updates"] is True
-    assert captured["weight_transfer_config"] == weight_transfer_config
-    assert captured["coordinator_handle"] == "coord-handle"
 
 
 @pytest.mark.parametrize(
@@ -417,68 +322,3 @@ def test_should_run_micro_eval_rejects_nonpositive_frequency():
             micro_eval_frequency=0,
             worker_index=0,
         )
-
-
-def test_coalesce_eval_job_prefers_full_eval_and_newer_steps():
-    existing = ScheduledEvalJob(eval_type="micro_eval", lesson_id="lesson-a", rng=1, step=10, weight_step=10)
-    replacement = ScheduledEvalJob(eval_type="eval", rng=2, step=12, weight_step=12)
-
-    assert _coalesce_eval_job(existing, replacement) == replacement
-
-
-def test_async_eval_job_submission_coalesces_pending_work():
-    worker = object.__new__(RolloutWorker)
-    worker._eval_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    worker._eval_lock = threading.Lock()
-    worker._active_eval_future = None
-    worker._pending_eval_job = None
-    worker._running = True
-
-    started = threading.Event()
-    release_first_job = threading.Event()
-    events: list[tuple[str, str, int]] = []
-
-    def fake_run_eval_job(job: ScheduledEvalJob) -> list[CompletedLessonEval]:
-        events.append(("start", job.eval_type, job.step))
-        if job.step == 1:
-            started.set()
-            assert release_first_job.wait(timeout=5)
-        return []
-
-    def fake_consume_eval_results(results: list[CompletedLessonEval]) -> None:
-        events.append(("consume", "results", len(results)))
-
-    worker._run_eval_job = fake_run_eval_job
-    worker._consume_eval_results = fake_consume_eval_results
-
-    first_job = ScheduledEvalJob(eval_type="micro_eval", lesson_id="lesson-a", rng=1, step=1, weight_step=1)
-    second_job = ScheduledEvalJob(eval_type="micro_eval", lesson_id="lesson-b", rng=2, step=2, weight_step=2)
-    third_job = ScheduledEvalJob(eval_type="eval", rng=3, step=3, weight_step=3)
-
-    try:
-        worker._enqueue_eval_job(first_job)
-        assert started.wait(timeout=5)
-
-        worker._enqueue_eval_job(second_job)
-        worker._enqueue_eval_job(third_job)
-        assert worker._pending_eval_job == third_job
-
-        release_first_job.set()
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            worker._poll_eval_jobs()
-            with worker._eval_lock:
-                active_done = worker._active_eval_future is None or worker._active_eval_future.done()
-                pending_empty = worker._pending_eval_job is None
-            if active_done and pending_empty:
-                worker._poll_eval_jobs()
-                break
-            time.sleep(0.01)
-        worker._poll_eval_jobs()
-    finally:
-        worker._running = False
-        worker._eval_executor.shutdown(wait=True)
-
-    assert ("start", "micro_eval", 1) in events
-    assert ("start", "eval", 3) in events
-    assert ("start", "micro_eval", 2) not in events

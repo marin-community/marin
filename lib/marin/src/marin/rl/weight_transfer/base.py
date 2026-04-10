@@ -10,10 +10,8 @@ weight transfer implementations.
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
 from jaxtyping import PyTree
 
@@ -24,13 +22,6 @@ class WeightTransferMode(Enum):
     GCS_CHECKPOINT = "gcs_checkpoint"
     JAX_TRANSFER_SERVER = "jax_transfer_server"
     ARROW_FLIGHT = "arrow_flight"
-
-
-class ArrowFlightExportStrategy(Enum):
-    """How Arrow Flight export prepares trainer weights for serving."""
-
-    TREE_JIT = "tree_jit"
-    SEQUENTIAL_HOST_FLATTEN = "sequential_host_flatten"
 
 
 @dataclass
@@ -102,7 +93,6 @@ class WeightTransferConfig:
     flight_port: int = 0  # 0 = auto-assign
     convert_to_bfloat16: bool = True
     """Whether to convert weights to bfloat16 during transfer. Reduces transfer size by 50% for float32 weights."""
-    export_strategy: ArrowFlightExportStrategy = ArrowFlightExportStrategy.TREE_JIT
     debug_weight_transfer: bool = False
 
 
@@ -128,7 +118,7 @@ class WeightTransferServer(ABC):
     def get_metrics(self) -> dict:
         pass
 
-    def get_debug_snapshot(self) -> Mapping[str, Any]:
+    def get_debug_snapshot(self) -> dict[str, object]:
         """Return lightweight server-local debug state for checkpoint diagnostics."""
         return {}
 

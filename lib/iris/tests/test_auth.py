@@ -5,8 +5,9 @@
 import pytest
 from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.rpc import cluster_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 
 from .conftest import _make_controller_only_config
 
@@ -18,7 +19,7 @@ def _login_for_jwt(url: str, identity_token: str) -> str:
     """Exchange a raw identity token for a JWT via the Login RPC."""
     client = ControllerServiceClientSync(address=url, timeout_ms=10000)
     try:
-        resp = client.login(cluster_pb2.LoginRequest(identity_token=identity_token))
+        resp = client.login(job_pb2.LoginRequest(identity_token=identity_token))
         return resp.token
     finally:
         client.close()
@@ -39,7 +40,7 @@ def test_static_auth_rpc_access():
     url = controller.start()
 
     try:
-        list_req = cluster_pb2.Controller.ListWorkersRequest()
+        list_req = controller_pb2.Controller.ListWorkersRequest()
 
         unauth_client = ControllerServiceClientSync(address=url, timeout_ms=5000)
         with pytest.raises(ConnectError, match=r"(?i)(authorization|authenticat)"):
@@ -84,7 +85,7 @@ def test_static_auth_job_ownership():
         client_a = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_a])
 
         entrypoint = Entrypoint.from_callable(_quick)
-        launch_req = cluster_pb2.Controller.LaunchJobRequest(
+        launch_req = controller_pb2.Controller.LaunchJobRequest(
             name="/user-a/auth-owned-job",
             entrypoint=entrypoint.to_proto(),
             resources=ResourceSpec(cpu=1, memory="1g").to_proto(),
@@ -95,9 +96,9 @@ def test_static_auth_job_ownership():
         injector_b = AuthTokenInjector(StaticTokenProvider(jwt_b))
         client_b = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_b])
         with pytest.raises(ConnectError, match="cannot access resources owned by"):
-            client_b.terminate_job(cluster_pb2.Controller.TerminateJobRequest(job_id=job_id))
+            client_b.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id))
 
-        client_a.terminate_job(cluster_pb2.Controller.TerminateJobRequest(job_id=job_id))
+        client_a.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id))
 
         client_a.close()
         client_b.close()

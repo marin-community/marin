@@ -29,6 +29,13 @@ onMounted(refresh)
 
 const expandedDemand = ref<Set<string>>(new Set())
 const expandedSlices = ref<Set<string>>(new Set())
+const collapsedPools = ref<Set<string>>(new Set())
+
+function togglePool(pool: string) {
+  const next = new Set(collapsedPools.value)
+  next.has(pool) ? next.delete(pool) : next.add(pool)
+  collapsedPools.value = next
+}
 
 function toggleDemand(name: string) {
   const next = new Set(expandedDemand.value)
@@ -106,11 +113,19 @@ interface AvailabilityBadge {
   classes: string
 }
 
-function groupAvailabilityBadge(group: ScaleGroupStatus): AvailabilityBadge | null {
+function groupAvailabilityBadge(group: ScaleGroupStatus, section?: PoolSection): AvailabilityBadge | null {
   const status = group.availabilityStatus
   const blockedMs = timestampMs(group.blockedUntil)
   const cooldownMs = timestampMs(group.scaleUpCooldownUntil)
   const now = Date.now()
+
+  // Check for tier-blocked state (pool monotonicity)
+  if (section && section.blockedAtTier) {
+    const tier = group.config?.allocationTier ?? 0
+    if (tier > section.blockedAtTier) {
+      return { label: 'tier-blocked', classes: 'bg-status-danger-bg text-status-danger border-status-danger-border opacity-60' }
+    }
+  }
 
   if (status === 'requesting') {
     return { label: 'in-flight', classes: 'bg-status-purple-bg text-status-purple border-status-purple-border' }
@@ -220,6 +235,74 @@ const sortedGroupStatuses = computed<GroupRoutingStatus[]>(() => {
     return (a.group ?? '').localeCompare(b.group ?? '')
   })
 })
+
+// Pool grouping for tier chain display
+interface PoolSection {
+  pool: string
+  groups: GroupRoutingStatus[]
+  blockedAtTier: number | null  // lowest tier in quota_exceeded/backoff, or null
+}
+
+const poolSections = computed<PoolSection[]>(() => {
+  const poolMap = new Map<string, GroupRoutingStatus[]>()
+  const unpooled: GroupRoutingStatus[] = []
+
+  for (const gs of sortedGroupStatuses.value) {
+    const group = groupIndex.value[gs.group]
+    const pool = group?.config?.quotaPool
+    if (pool) {
+      if (!poolMap.has(pool)) poolMap.set(pool, [])
+      poolMap.get(pool)!.push(gs)
+    } else {
+      unpooled.push(gs)
+    }
+  }
+
+  const sections: PoolSection[] = []
+  for (const [pool, poolGroups] of poolMap) {
+    // Sort by allocation_tier within the pool
+    poolGroups.sort((a, b) => {
+      const ta = groupIndex.value[a.group]?.config?.allocationTier ?? 0
+      const tb = groupIndex.value[b.group]?.config?.allocationTier ?? 0
+      return ta - tb
+    })
+
+    // Find the lowest blocked tier
+    let blockedAtTier: number | null = null
+    for (const gs of poolGroups) {
+      const group = groupIndex.value[gs.group]
+      if (!group) continue
+      const tier = group.config?.allocationTier ?? 0
+      const status = group.availabilityStatus
+      if (tier > 0 && (status === 'quota_exceeded' || status === 'backoff')) {
+        if (blockedAtTier === null || tier < blockedAtTier) {
+          blockedAtTier = tier
+        }
+      }
+    }
+
+    sections.push({ pool, groups: poolGroups, blockedAtTier })
+  }
+
+  if (unpooled.length > 0) {
+    sections.push({ pool: '__unpooled', groups: unpooled, blockedAtTier: null })
+  }
+
+  return sections
+})
+
+function isTierBlocked(gs: GroupRoutingStatus, section: PoolSection): boolean {
+  if (!section.blockedAtTier) return false
+  const group = groupIndex.value[gs.group]
+  const tier = group?.config?.allocationTier ?? 0
+  return tier > section.blockedAtTier
+}
+
+function tierLabel(gs: GroupRoutingStatus): string {
+  const group = groupIndex.value[gs.group]
+  const tier = group?.config?.allocationTier ?? 0
+  return tier > 0 ? `T${tier}` : ''
+}
 
 function isInactiveRow(gs: GroupRoutingStatus): boolean {
   const group = groupIndex.value[gs.group]
@@ -463,12 +546,56 @@ function idleThresholdMs(groupName: string): number {
             </tr>
           </thead>
           <tbody>
-            <template v-for="gs in sortedGroupStatuses" :key="gs.group">
+            <template v-for="section in poolSections" :key="section.pool || '__unpooled'">
+              <!-- Pool header row -->
+              <tr class="bg-surface border-b border-surface-border cursor-pointer hover:bg-surface-raised" @click="togglePool(section.pool)">
+                <td colspan="8" class="px-3 py-1.5">
+                  <div class="flex items-center gap-2">
+                    <span class="text-[10px] text-text-muted">
+                      {{ collapsedPools.has(section.pool) ? '▶' : '▼' }}
+                    </span>
+                    <span class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
+                      {{ section.pool === '__unpooled' ? 'Unpooled' : `Pool: ${section.pool}` }}
+                    </span>
+                    <span
+                      v-if="section.blockedAtTier"
+                      class="inline-flex items-center px-1.5 py-0.5 rounded text-xs border
+                             bg-status-danger-bg text-status-danger border-status-danger-border"
+                    >
+                      blocked at tier {{ section.blockedAtTier }}+
+                    </span>
+                    <!-- Tier chain visualization (not shown for unpooled groups) -->
+                    <span v-if="section.pool !== '__unpooled'" class="flex items-center gap-0.5 text-xs text-text-muted ml-2">
+                      <template v-for="(gs, idx) in section.groups" :key="gs.group">
+                        <span v-if="idx > 0" class="text-text-muted mx-0.5">&rarr;</span>
+                        <span
+                          :class="[
+                            'px-1 py-0.5 rounded border text-[11px] font-mono',
+                            isTierBlocked(gs, section)
+                              ? 'bg-status-danger-bg text-status-danger border-status-danger-border line-through'
+                              : groupIndex[gs.group]?.availabilityStatus === 'quota_exceeded'
+                                ? 'bg-status-danger-bg text-status-danger border-status-danger-border'
+                                : groupIndex[gs.group]?.availabilityStatus === 'backoff'
+                                  ? 'bg-status-orange-bg text-status-orange border-status-orange-border'
+                                  : 'bg-surface border-surface-border text-text-secondary',
+                          ]"
+                        >
+                          {{ tierLabel(gs) }}
+                        </span>
+                      </template>
+                    </span>
+                  </div>
+                </td>
+              </tr>
+
+            <template v-for="gs in section.groups" :key="gs.group">
               <!-- Main row -->
               <tr
+                v-if="!collapsedPools.has(section.pool)"
                 :class="[
                   'border-b border-surface-border-subtle hover:bg-surface-raised transition-colors',
                   isInactiveRow(gs) ? 'opacity-50' : '',
+                  isTierBlocked(gs, section) ? 'opacity-40' : '',
                 ]"
               >
                 <!-- Priority -->
@@ -488,14 +615,14 @@ function idleThresholdMs(groupName: string): number {
                       &#x26a0; {{ groupFailures(gs.group) }} fail{{ groupFailures(gs.group) > 1 ? 's' : '' }}
                     </span>
                   </div>
-                  <div v-if="groupIndex[gs.group] && groupAvailabilityBadge(groupIndex[gs.group])" class="mt-0.5">
+                  <div v-if="groupIndex[gs.group] && groupAvailabilityBadge(groupIndex[gs.group], section)" class="mt-0.5">
                     <span
                       :class="[
                         'inline-flex items-center px-1.5 py-0.5 rounded text-xs border',
-                        groupAvailabilityBadge(groupIndex[gs.group])!.classes,
+                        groupAvailabilityBadge(groupIndex[gs.group], section)!.classes,
                       ]"
                     >
-                      {{ groupAvailabilityBadge(groupIndex[gs.group])!.label }}
+                      {{ groupAvailabilityBadge(groupIndex[gs.group], section)!.label }}
                     </span>
                   </div>
                 </td>
@@ -576,7 +703,7 @@ function idleThresholdMs(groupName: string): number {
               </tr>
 
               <!-- Slice detail (expanded) -->
-              <tr v-if="expandedSlices.has(gs.group) && groupHasSlices(gs.group)" class="bg-surface-sunken">
+              <tr v-if="expandedSlices.has(gs.group) && groupHasSlices(gs.group) && (!collapsedPools.has(section.pool))" class="bg-surface-sunken">
                 <td colspan="8" class="px-6 py-3">
                   <div class="space-y-1.5">
                     <div
@@ -615,7 +742,7 @@ function idleThresholdMs(groupName: string): number {
               </tr>
 
               <!-- Demand detail (expanded) -->
-              <tr v-if="expandedDemand.has(gs.group) && groupDemand(gs.group) > 0" class="bg-surface-sunken">
+              <tr v-if="expandedDemand.has(gs.group) && groupDemand(gs.group) > 0 && (!collapsedPools.has(section.pool))" class="bg-surface-sunken">
                 <td colspan="8" class="px-6 py-3">
                   <div class="space-y-1">
                     <div
@@ -633,6 +760,7 @@ function idleThresholdMs(groupName: string): number {
                   </div>
                 </td>
               </tr>
+            </template>
             </template>
           </tbody>
         </table>
