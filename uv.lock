@@ -4638,7 +4638,7 @@ wheels = [
 
 [[package]]
 name = "marin"
-version = "0.1.0"
+version = "0.99"
 source = { editable = "lib/marin" }
 dependencies = [
     { name = "braceexpand" },
@@ -4959,7 +4959,7 @@ test = [
 
 [[package]]
 name = "marin-fray"
-version = "0.1.0"
+version = "0.99"
 source = { editable = "lib/fray" }
 dependencies = [
     { name = "click" },
@@ -5113,7 +5113,7 @@ dev = [
 
 [[package]]
 name = "marin-iris"
-version = "0.1.0"
+version = "0.99"
 source = { editable = "lib/iris" }
 dependencies = [
     { name = "click" },
@@ -5225,7 +5225,7 @@ examples = [
 
 [[package]]
 name = "marin-levanter"
-version = "1.2"
+version = "0.99"
 source = { editable = "lib/levanter" }
 dependencies = [
     { name = "async-lru" },
@@ -5438,7 +5438,7 @@ test = [
 
 [[package]]
 name = "marin-rigging"
-version = "0.1.0"
+version = "0.99"
 source = { editable = "lib/rigging" }
 dependencies = [
     { name = "fsspec" },
@@ -5496,7 +5496,7 @@ requires-dist = [
 
 [[package]]
 name = "marin-zephyr"
-version = "0.1.0"
+version = "0.99"
 source = { editable = "lib/zephyr" }
 dependencies = [
     { name = "braceexpand" },
