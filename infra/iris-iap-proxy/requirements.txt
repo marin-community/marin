@@ -1,6 +1,4 @@
 starlette>=0.50.0
 uvicorn[standard]>=0.23.0
 httpx>=0.28.1
-google-auth>=2.0
 google-cloud-compute>=1.0
-google-cloud-secret-manager>=2.0

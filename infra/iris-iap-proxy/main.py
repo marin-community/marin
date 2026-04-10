@@ -10,7 +10,6 @@ requests reach this container, so the proxy trusts the IAP-supplied
 """
 
 import logging
-import os
 from contextlib import asynccontextmanager
 
 import httpx
@@ -44,31 +43,8 @@ _client: httpx.AsyncClient | None = None
 _client_base_url: str | None = None
 
 
-def _get_proxy_token() -> str | None:
-    """Read the proxy's own API key from the environment (set via Secret Manager)."""
-    secret_name = os.environ.get("PROXY_TOKEN_SECRET")
-    if not secret_name:
-        return None
-    try:
-        from google.cloud import secretmanager
-
-        sm = secretmanager.SecretManagerServiceClient()
-        project = os.environ.get("GCP_PROJECT", "hai-gcp-models")
-        name = f"projects/{project}/secrets/{secret_name}/versions/latest"
-        response = sm.access_secret_version(request={"name": name})
-        return response.payload.data.decode("utf-8").strip()
-    except Exception:
-        logger.exception("Failed to read proxy token from Secret Manager")
-        return None
-
-
-_proxy_token: str | None = None
-
-
 @asynccontextmanager
 async def _lifespan(app: Starlette):
-    global _proxy_token
-    _proxy_token = _get_proxy_token()
     yield
     if _client is not None:
         await _client.aclose()
@@ -139,24 +115,15 @@ async def _proxy(request: Request) -> Response:
 
 
 async def _health(request: Request) -> JSONResponse:
-    """Health check — does not require IAP."""
-    # Optionally ping the controller to verify connectivity.
-    if _proxy_token:
-        try:
-            client = await _get_client()
-            resp = await client.get("/health", timeout=5.0)
-            controller_ok = resp.status_code == 200
-        except Exception:
-            controller_ok = False
-    else:
-        controller_ok = None  # unknown, no token configured
+    """Health check — pings the controller to verify connectivity."""
+    try:
+        client = await _get_client()
+        resp = await client.get("/health", timeout=5.0)
+        controller_ok = resp.status_code == 200
+    except Exception:
+        controller_ok = False
 
-    return JSONResponse(
-        {
-            "status": "ok",
-            "controller_reachable": controller_ok,
-        }
-    )
+    return JSONResponse({"status": "ok", "controller_reachable": controller_ok})
 
 
 routes = [

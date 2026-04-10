@@ -7,100 +7,98 @@
 # Uses Cloud Run's built-in IAP support (--iap flag) — no load balancer,
 # serverless NEG, or SSL certificate required.
 #
-# Prerequisites (one-time setup — see SETUP section below):
-#   1. Create a service account for the proxy
-#   2. Configure OAuth consent screen + client (Cloud Console)
-#   3. Apply OAuth client to IAP settings
-#   4. Deploy the Cloud Run service with --iap (this script)
-#   5. Grant the IAP service agent roles/run.invoker
-#   6. Grant team members IAP access
+# One service per cluster: the cluster name maps to both the Cloud Run
+# service name and the GCE label used for controller discovery.
 #
 # Usage:
-#   ./deploy.sh                    # deploy to Cloud Run
-#   ./deploy.sh --setup            # print one-time setup commands
+#   ./deploy.sh marin              # deploy iris-iap-proxy-marin
+#   ./deploy.sh marin-dev          # deploy iris-iap-proxy-marin-dev
+#   ./deploy.sh marin --setup      # print one-time setup commands
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
 PROJECT="hai-gcp-models"
 REGION="us-central1"
-SERVICE="iris-iap-proxy"
+ZONE="us-central1-a"
 SA_NAME="iris-iap-proxy"
 SA_EMAIL="${SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 VPC_NETWORK="default"
 VPC_SUBNET="default"
 
-if [[ "${1:-}" == "--setup" ]]; then
-    cat <<'SETUP'
-=== One-Time Setup ===
+CLUSTER="${1:-}"
+if [[ -z "${CLUSTER}" || "${CLUSTER}" == "--setup" ]]; then
+    echo "Usage: $0 <cluster> [--setup]" >&2
+    echo "  e.g.  $0 marin" >&2
+    echo "        $0 marin-dev" >&2
+    exit 1
+fi
 
-# 1. Create service account
-gcloud iam service-accounts create iris-iap-proxy \
-  --project=hai-gcp-models \
+SERVICE="iris-iap-proxy-${CLUSTER}"
+CONTROLLER_LABEL="iris-${CLUSTER}-controller"
+
+if [[ "${2:-}" == "--setup" ]]; then
+    cat <<SETUP
+=== One-Time Setup (cluster=${CLUSTER}, service=${SERVICE}) ===
+
+# 1. Create service account (shared across all clusters — only run once)
+gcloud iam service-accounts create ${SA_NAME} \\
+  --project=${PROJECT} \\
   --display-name="Iris IAP Proxy"
 
-# Grant compute.viewer for VM discovery
-gcloud projects add-iam-policy-binding hai-gcp-models \
-  --member="serviceAccount:iris-iap-proxy@hai-gcp-models.iam.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding ${PROJECT} \\
+  --member="serviceAccount:${SA_EMAIL}" \\
   --role="roles/compute.viewer"
 
-# Grant Secret Manager access for proxy token
-gcloud projects add-iam-policy-binding hai-gcp-models \
-  --member="serviceAccount:iris-iap-proxy@hai-gcp-models.iam.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding ${PROJECT} \\
+  --member="serviceAccount:${SA_EMAIL}" \\
   --role="roles/secretmanager.secretAccessor"
 
-# 2. Configure OAuth consent screen (Cloud Console — one-time)
-#    Go to: https://console.cloud.google.com/auth/branding?project=hai-gcp-models
+# 2. Configure OAuth consent screen (Cloud Console — one-time per project)
+#    https://console.cloud.google.com/auth/branding?project=${PROJECT}
 #    Select "External" audience type.
 
-# 3. Create OAuth client (Cloud Console)
-#    Go to: https://console.cloud.google.com/auth/clients?project=hai-gcp-models
+# 3. Create OAuth client (Cloud Console — one-time per project)
+#    https://console.cloud.google.com/auth/clients?project=${PROJECT}
 #    Create a "Web application" client.
 #    Add authorized redirect URI:
 #      https://iap.googleapis.com/v1/oauth/clientIds/<CLIENT_ID>:handleRedirect
 
-# 4. Apply OAuth client to IAP settings
+# 4. Apply OAuth client to IAP settings (one-time per project)
 #    Create iap_settings.yaml:
 #      access_settings:
 #        oauth_settings:
 #          client_id: <CLIENT_ID>
 #          client_secret: <CLIENT_SECRET>
-#
-#    Then apply:
-#    gcloud iap settings set iap_settings.yaml --project=hai-gcp-models
+#    gcloud iap settings set iap_settings.yaml --project=${PROJECT}
 
 # 5. Deploy the Cloud Run service (use deploy.sh without --setup)
 
-# 6. Grant the IAP service agent permission to invoke the Cloud Run service
+# 6. Grant the IAP service agent permission to invoke this Cloud Run service.
 #    Find your project number:
-#    gcloud projects describe hai-gcp-models --format='value(projectNumber)'
-gcloud run services add-iam-policy-binding iris-iap-proxy \
-  --region=us-central1 \
-  --member="serviceAccount:service-<PROJECT_NUMBER>@gcp-sa-iap.iam.gserviceaccount.com" \
+#    gcloud projects describe ${PROJECT} --format='value(projectNumber)'
+gcloud run services add-iam-policy-binding ${SERVICE} \\
+  --region=${REGION} \\
+  --member="serviceAccount:service-<PROJECT_NUMBER>@gcp-sa-iap.iam.gserviceaccount.com" \\
   --role="roles/run.invoker"
 
 # 7. Grant team members access through IAP
-gcloud iap web add-iam-policy-binding \
-  --member="user:you@example.com" \
-  --role="roles/iap.httpsResourceAccessor" \
-  --region=us-central1 \
-  --resource-type=cloud-run \
-  --service=iris-iap-proxy
+gcloud iap web add-iam-policy-binding \\
+  --member="user:you@example.com" \\
+  --role="roles/iap.httpsResourceAccessor" \\
+  --region=${REGION} \\
+  --resource-type=cloud-run \\
+  --service=${SERVICE}
 
-# 8. (Optional) Create the proxy API key and store in Secret Manager
-# iris --cluster=marin key create --name iap-proxy
-# echo -n "<KEY>" | gcloud secrets create iris-iap-proxy-token \
-#   --project=hai-gcp-models --data-file=-
-
-# 9. Verify IAP is enabled
-gcloud run services describe iris-iap-proxy --region=us-central1
+# 8. Verify IAP is enabled
+gcloud run services describe ${SERVICE} --region=${REGION}
 # Look for: Iap Enabled: true
 
 SETUP
     exit 0
 fi
 
-echo "==> Building and deploying ${SERVICE} to Cloud Run..."
+echo "==> Building and deploying ${SERVICE} (cluster=${CLUSTER}, label=${CONTROLLER_LABEL})..."
 
 gcloud beta run deploy "${SERVICE}" \
   --project="${PROJECT}" \
@@ -112,7 +110,7 @@ gcloud beta run deploy "${SERVICE}" \
   --network="${VPC_NETWORK}" \
   --subnet="${VPC_SUBNET}" \
   --vpc-egress=private-ranges-only \
-  --set-env-vars="GCP_PROJECT=${PROJECT},CONTROLLER_ZONE=us-central1-a,CONTROLLER_LABEL=iris-marin-controller,CONTROLLER_PORT=10000,PROXY_TOKEN_SECRET=iris-iap-proxy-token" \
+  --set-env-vars="GCP_PROJECT=${PROJECT},CONTROLLER_ZONE=${ZONE},CONTROLLER_LABEL=${CONTROLLER_LABEL},CONTROLLER_PORT=10000" \
   --timeout=300 \
   --memory=512Mi \
   --cpu=1 \
