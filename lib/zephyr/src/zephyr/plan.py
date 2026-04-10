@@ -106,6 +106,7 @@ class Write:
     skip_existing: bool = False
     # Writer-specific parameters
     levanter_metadata: dict | None = None
+    levanter_batch_size: int | None = None
     schema: Any = None  # For parquet
 
 
@@ -421,6 +422,7 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
                     writer_type=op.writer_type,
                     skip_existing=op.skip_existing,
                     levanter_metadata=op.levanter_metadata,
+                    levanter_batch_size=op.levanter_batch_size,
                     schema=op.schema,
                 )
             )
@@ -782,7 +784,10 @@ def run_stage(
                 result = write_parquet_file(stream, output_path, schema=op.schema)["path"]
             elif op.writer_type == "levanter_cache":
                 metadata = op.levanter_metadata if op.levanter_metadata is not None else {}
-                result = write_levanter_cache(stream, output_path, metadata=metadata)["path"]
+                kwargs: dict[str, Any] = {"metadata": metadata}
+                if op.levanter_batch_size is not None:
+                    kwargs["batch_size"] = op.levanter_batch_size
+                result = write_levanter_cache(stream, output_path, **kwargs)["path"]
             elif op.writer_type == "binary":
                 result = write_binary_file(stream, output_path)["path"]
             elif op.writer_type == "vortex":

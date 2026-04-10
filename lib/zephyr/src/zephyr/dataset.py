@@ -161,6 +161,7 @@ class WriteOp:
 
     # Format-specific parameters (only used by relevant writer)
     levanter_metadata: dict[str, Any] | None = None
+    levanter_batch_size: int | None = None
     schema: object | None = None  # For parquet (pyarrow.Schema)
     skip_existing: bool = False  # Skip writing if output file already exists
 
@@ -727,6 +728,7 @@ class Dataset(Generic[T]):
         output_pattern: str | Callable[[int, int], str],
         metadata: dict[str, Any],
         skip_existing: bool = False,
+        batch_size: int | None = None,
     ) -> Dataset[str]:
         """Write tokenized records to Levanter cache format.
 
@@ -734,6 +736,10 @@ class Dataset(Generic[T]):
         in training. Each shard creates a separate cache directory.
         The output pattern supports substitutions: {shard:05d}, {total:05d}, {basename}
         or can be a callable that takes (shard_idx, total_shards) and returns the output path.
+
+        Args:
+            batch_size: Number of records to accumulate before flushing to disk.
+                Defaults to 16384. Lower values reduce peak memory for large documents.
         """
         return Dataset(
             self.source,
@@ -743,6 +749,7 @@ class Dataset(Generic[T]):
                     _normalize_output_pattern(output_pattern),
                     writer_type="levanter_cache",
                     levanter_metadata=metadata,
+                    levanter_batch_size=batch_size,
                     skip_existing=skip_existing,
                 ),
             ],

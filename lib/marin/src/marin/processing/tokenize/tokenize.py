@@ -76,6 +76,10 @@ class TokenizeConfigBase(abc.ABC):
     this many shards instead of deriving the count from max_workers. This can be useful if you want
     more shards than max_workers, for example to mitigate the cost of retrying a single shard."""
 
+    levanter_batch_size: int | None = None
+    """Number of tokenized records to accumulate before flushing to disk. Defaults to 16384.
+    Lower values reduce peak memory for datasets with large documents."""
+
     @abc.abstractmethod
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -398,6 +402,7 @@ def tokenize(config: TokenizeConfigBase):
                 f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}",
                 metadata={},
                 skip_existing=True,
+                batch_size=config.levanter_batch_size,
             )
         )
 
