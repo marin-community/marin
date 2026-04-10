@@ -208,6 +208,292 @@ eval were completely isolated, a single packed worker would still be
    packed inference at 6,223 tok/s beats `e4ms2`'s per-worker 3,336 tok/s
    by ~1.9× — exactly the 2×TP=2 speedup the design predicted.
 
+## 2026-04-10 (second correction): work division, eval gating, and the real math
+
+My earlier "corrected" story was still incomplete. After re-reading
+`rollout_worker.py`, `curriculum.py`, and `replay_buffer.py` and going
+back to the data, here is how it actually works.
+
+### How work is divided between rollout workers
+
+**It isn't.** Each rollout worker independently runs the same loop with
+the same `n_prompts` (set to 64 in these runs) and the same
+`n_generations_per_prompt` (16). Each `env.sample()` call produces 64
+unique questions × 16 responses each = 1024 samples, which is exactly
+one `train_batch_size` (1024 in `RLJobConfig`).
+
+So each worker independently produces full trainer batches. They do not
+split the 64 questions between them. The only coordination is a single
+curriculum actor that they both call via RPC, which returns a lesson id
+for a given seed (`sample_lesson(seed: int)`); with a single-lesson
+curriculum like `math_full` both workers pick the same lesson every
+time, then each independently samples questions from the environment
+with its own RNG.
+
+Rollouts are pooled through a shared `ReplayBuffer`:
+
+- Both workers write `RolloutBatch`es into `rollout_storage` (GCS
+  queue). Each batch has a `weight_step` equal to the active weight
+  when it was generated.
+- `ReplayBufferConfig` here is
+  `capacity=4096, max_samples=1, max_rollout_step_delay=1`.
+- The trainer reads the queue, drops any batch older than
+  `current_step - 1`, computes RLOO advantages, and samples
+  `local_batch_size` individual rollouts per step.
+- Because `max_samples=1`, each rollout is consumed at most once. Any
+  extras that can't be used within the 1-step staleness window are
+  dropped.
+
+So with two workers both producing full batches, **some rollouts get
+dropped** — this IS wasteful, but it's the simple-and-robust design
+choice. In the `e4ms2` baseline: 103 + 137 = 240 rollout batches
+produced over 200 trainer steps → ~17% of rollout compute discarded.
+
+### Eval is pinned to worker_index == 0
+
+The key gate I missed on the first read is in
+`lib/marin/src/marin/rl/rollout_worker.py:365-399`:
+
+```python
+def _should_run_curriculum_eval(*, worker_index, ...):
+    if worker_index != 0:
+        return False
+    ...
+
+def _should_run_micro_eval(*, worker_index, ...):
+    if worker_index != 0:
+        return False
+    ...
+```
+
+**Only worker 0 runs curriculum eval and micro eval.** All other rollout
+workers are train-only. This is why `e4ms2`'s rollout-1 shows 137
+logged train batches vs rollout-0's 103 over the same 24,326 s: worker
+1 spends all its time on train while worker 0 is also running full
+eval (500 problems on MATH-500) every `eval_frequency=1` steps.
+
+In the packed single-worker runs, that worker IS worker 0, so it
+inherits all the eval load with no second worker to compensate.
+
+### The actual per-worker cadence numbers (from wandb)
+
+From `_timestamp` diffs in the per-run JSONs (full 200-step `e4ms2`):
+
+| Worker | logged train batches | wall span (s) | per-batch cadence (s) |
+|---|---|---|---|
+| `e4ms2` rollout-0 (train + eval) | 103 | 24,326 | **236** |
+| `e4ms2` rollout-1 (train only)   | 137 | 24,350 | **178** |
+| `e4ms2` combined                 | 240 | ~24,400 | **102** |
+| `e4ms2` trainer                  | 200 steps | 24,405 | **122 / step** |
+
+Worker 0 is ~33% slower than worker 1 because of eval work. But more
+importantly: **each individual worker's per-batch cadence (178 s or
+236 s) is significantly slower than the trainer's step cadence
+(122 s).** One worker alone cannot keep up.
+
+The magic of two workers is just the arithmetic: two workers running
+independently bring the combined production cadence to ~102 s per
+batch, slightly *faster* than the trainer's 122 s step cadence, so the
+trainer almost never has to wait (`loading_time` median = 4 s).
+
+### Why `PKR-001` is starved
+
+PKR-001 has one rollout worker, which is `worker_index=0`, so it's
+doing train + full eval at eval_frequency=1. It's the exact
+equivalent of `e4ms2`'s rollout-0 running alone, with no rollout-1 to
+compensate.
+
+- Trainer compute cost: still 61 s per step (identical to `e4ms2`).
+- Trainer needs one rollout per step to proceed.
+- Single worker per-batch cadence: ≥178 s (what rollout-1 alone would
+  be without eval), and much worse with eval on top — probably in the
+  200 s+ range, matching the 185 s rollout wall-clock cadence measured
+  for PKR-001.
+- `max_rollout_step_delay=1` means the trainer can only use rollouts
+  from the current weight or the one before; it can't stockpile older
+  rollouts to hide the gap.
+- So the trainer's `loading_time` jumps from 4 s to 95 s per step — it's
+  waiting on the sole rollout worker to finish its next batch.
+
+Total packed cadence ≈ 61 s (compute) + 95 s (wait for next batch) +
+~24 s (hook + weight serve) ≈ 180 s/step, matching the measured
+180.4 s median.
+
+### The actual diagrams
+
+Baseline (`e4ms2`), the way it really is:
+
+```
+                            ┌──────────────────┐
+                            │ Trainer           │
+                            │ publishes wt N    │
+                            │ every ~122 s      │
+                            └─────────┬─────────┘
+                                      │ Arrow Flight stream
+                 ┌────────────────────┴────────────────────┐
+                 │                                         │
+                 ▼                                         ▼
+    ┌──────────────────────────┐             ┌──────────────────────────┐
+    │ Rollout-0 (worker_index=0)│             │ Rollout-1 (worker_index=1)│
+    │ v5p-8 TP=4               │             │ v5p-8 TP=4               │
+    │                          │             │                          │
+    │ bg wt-sync thread (1 Hz) │             │ bg wt-sync thread (1 Hz) │
+    │                          │             │                          │
+    │ main loop:               │             │ main loop:               │
+    │  sample lesson           │             │  sample lesson           │
+    │  [micro_eval]  ←── eval  │             │  (skipped, idx != 0)     │
+    │  [full eval 500 probs]   │             │  (skipped, idx != 0)     │
+    │  env.sample(n_prompts=64,│             │  env.sample(n_prompts=64,│
+    │             n_gens=16)   │             │             n_gens=16)   │
+    │  → 1024 samples          │             │  → 1024 samples          │
+    │  write batch to storage  │             │  write batch to storage  │
+    │                          │             │                          │
+    │  cadence: 1 batch/236 s  │             │  cadence: 1 batch/178 s  │
+    │  (eval load slows it)    │             │                          │
+    └────────────┬─────────────┘             └────────────┬─────────────┘
+                 │                                        │
+                 └───────────────┬────────────────────────┘
+                                 ▼
+                        ┌─────────────────┐
+                        │ Rollout storage │
+                        │ (GCS queue)     │
+                        └────────┬────────┘
+                                 │
+                                 ▼
+                     ┌───────────────────────┐
+                     │ Trainer replay buffer │
+                     │  max_rollout_step_    │
+                     │    delay = 1          │
+                     │  max_samples = 1      │
+                     │                       │
+                     │ pulls 1024 samples/   │
+                     │ trainer step          │
+                     │                       │
+                     │ combined arrival rate:│
+                     │   1 batch / 102 s     │
+                     │ consumption rate:     │
+                     │   1 step / 122 s      │
+                     │ → trainer never waits │
+                     │   (loading_time ≈ 4 s)│
+                     └───────────────────────┘
+```
+
+Packed (`PKR-001`), the way it really is:
+
+```
+                            ┌──────────────────┐
+                            │ Trainer           │
+                            │ publishes wt N    │
+                            │ every ~180 s      │
+                            │ (starved)         │
+                            └─────────┬─────────┘
+                                      │
+                                      ▼
+    ┌───────────────────────────────────────────────────────┐
+    │ Packed parent process, worker_index=0                  │
+    │ v5p-8, one process, two local vLLM children            │
+    │                                                        │
+    │ main loop:                                             │
+    │   sample lesson                                        │
+    │   [micro_eval]     ← yes (worker_index == 0)           │
+    │   [full eval 500]  ← yes (eval_frequency=1 → every step)│
+    │   env.sample(n_prompts=64, n_gens=16)                  │
+    │                                                        │
+    │   batch_completions(request_kind=...)                  │
+    │     _reserve_replicas(kind)  ← parent-side mutex       │
+    │        train: prefer (0,1), fall back to (0,) if r1    │
+    │               is reserved by eval                      │
+    │        eval: always (1,)                               │
+    │     _resolve_dispatch_weight()  ← activate pending wt  │
+    │                                   if both idle         │
+    │     split prompts across reserved replicas             │
+    │                                                        │
+    │   ┌─────────────────────┐  ┌─────────────────────┐    │
+    │   │ Replica 0 (TP=2)    │  │ Replica 1 (TP=2)    │    │
+    │   │ chips 0,1           │  │ chips 2,3           │    │
+    │   │                     │  │                     │    │
+    │   │ own bg wt-sync      │  │ own bg wt-sync      │    │
+    │   │ fetches weights     │  │ fetches weights     │    │
+    │   │ independently       │  │ independently       │    │
+    │   │                     │  │                     │    │
+    │   │ serves generates    │  │ serves generates    │    │
+    │   │ via socket IPC from │  │ via socket IPC from │    │
+    │   │ parent              │  │ parent              │    │
+    │   └─────────────────────┘  └─────────────────────┘    │
+    │                                                        │
+    │   cadence: ~180 s per train batch                      │
+    │   (train and eval time-share the same 4 chips)         │
+    └────────────────────┬───────────────────────────────────┘
+                         │
+                         ▼
+                ┌─────────────────┐
+                │ Rollout storage │
+                └────────┬────────┘
+                         │
+                         ▼
+            ┌───────────────────────────┐
+            │ Trainer replay buffer     │
+            │ arrival: 1 batch / ~180 s │
+            │ consumption (desired):    │
+            │   1 step / ~90 s          │
+            │ → trainer WAITS           │
+            │   (loading_time ≈ 95 s)   │
+            └───────────────────────────┘
+```
+
+### Takeaways
+
+1. **Rollout workers do not coordinate work.** Each one independently
+   runs the full `n_prompts=64` × `n_gens=16` = 1024-sample batch every
+   iteration. Some of this output is dropped by the replay buffer due
+   to the 1-step staleness window — that's ~17 % waste in `e4ms2`, and
+   it's the price of the zero-coordination design.
+
+2. **Eval is pinned to worker 0.** In 2-worker setups this quietly
+   does a lot of work for you: worker 1 is effectively a train-only
+   machine, so even when worker 0 is spending a long time on full eval
+   the trainer still gets fresh batches from worker 1. In a 1-worker
+   (or packed) setup, there is no such fallback — worker 0 has to do
+   everything.
+
+3. **The 2 workers beat 1 because of arrival-rate arithmetic, not
+   coordination.** One worker cadences at 178–236 s per batch, slower
+   than the trainer's 122 s step cadence. Two workers independent of
+   each other halve the combined arrival time to 102 s, which just
+   barely stays ahead of the trainer. In the single-worker packed
+   case, there's no halving, so the trainer waits.
+
+4. **`max_rollout_step_delay=1` is a hard constraint.** The trainer
+   can't use stockpiled rollouts from earlier weights. So the relevant
+   rate is not "total rollouts over run time", it's "rollouts that
+   arrive within 1 weight step of each trainer step". With one packed
+   worker, the effective arrival rate within that window is not enough.
+
+### Reasonable next steps (again, updated)
+
+1. **Move full curriculum eval off the rollout worker entirely.** Run
+   it on the trainer itself between steps, or on a separate small TPU.
+   This turns the packed single-worker setup into a "packed train-only
+   worker", and the effective per-batch cadence should drop toward the
+   ~70-80 s range the 2-replica packed generator can achieve. At that
+   rate one packed `v5p-8` could actually keep up with a trainer
+   running at ~90 s/step. **This is the cheapest test of the original
+   cost-halving pitch.**
+
+2. **Relax `max_rollout_step_delay`.** Letting the trainer accept
+   slightly older rollouts (e.g. delay=2 or 3) lets the single packed
+   worker front-load production, at the cost of some off-policy drift.
+   Quantify the off-policy hit first.
+
+3. **Lower `eval_frequency` from 1 to e.g. 5.** Trades eval-metric
+   resolution for cadence. PKR-003 already hinted that this helps but
+   isn't a full fix on its own.
+
+4. **If none of the above gets it cheap, go back to 2 packed workers
+   on 2 × `v5p-8`.** Same TPU budget as `e4ms2` but with 4 replicas
+   serving rollouts, which clearly wins on throughput but loses the
+   cost-halving pitch.
+
 ## 2026-04-10: Correction — "pipeline depth" was the wrong model
 
 After re-reading the rollout worker and weight-transfer code I have to
