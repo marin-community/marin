@@ -131,9 +131,10 @@ message SliceConfig {
   AcceleratorType accelerator_type = 3;
   string accelerator_variant = 4;
   map<string, string> labels = 5;
-  bool preemptible = 6;
+  reserved 6;  // was: bool preemptible (replaced by capacity_type)
   int32 gpu_count = 7;          // number of GPUs per VM (populated from ScaleGroupResources)
   int32 disk_size_gb = 8;       // boot disk size in GB (populated from ScaleGroupResources)
+  CapacityType capacity_type = 14;  // populated from ScaleGroupResources
   oneof platform {
     GcpSliceConfig gcp = 10;
     CoreweaveSliceConfig coreweave = 11;
@@ -152,6 +153,14 @@ enum AcceleratorType {
   ACCELERATOR_TYPE_CPU = 1;
   ACCELERATOR_TYPE_GPU = 2;
   ACCELERATOR_TYPE_TPU = 3;
+}
+
+// Capacity type for TPU provisioning — controls which GCP API is used.
+enum CapacityType {
+  CAPACITY_TYPE_UNSPECIFIED = 0;
+  CAPACITY_TYPE_PREEMPTIBLE = 1;  // gcloud compute tpus tpu-vm create --preemptible
+  CAPACITY_TYPE_ON_DEMAND = 2;    // gcloud compute tpus tpu-vm create (no flag)
+  CAPACITY_TYPE_RESERVED = 3;     // gcloud alpha compute tpus queued-resources create --reserved
 }
 
 // Reserved: VmType enum was removed (dispatch now via SliceConfig.WhichOneof("platform"))
@@ -173,8 +182,10 @@ message ScaleGroupResources {
   string device_variant = 11;       // e.g. "v5litepod-16", "H100"
   int32 device_count = 12;          // GPUs or TPU chips per VM
 
-  // Scheduling attribute derived from config
-  bool preemptible = 20;
+  reserved 20;  // was: bool preemptible (replaced by capacity_type)
+
+  // Capacity type — controls which provisioning API is used
+  CapacityType capacity_type = 21;
 }
 
 message WorkerSettings {
@@ -187,7 +198,9 @@ message ScaleGroupConfig {
   reserved 2;  // was: vm_type (removed, use slice_template.WhichOneof)
 
   // Scaling policy
-  int32 min_slices = 3 [features.field_presence = EXPLICIT];
+  // Extra slices to keep warm beyond current demand.
+  // Target = min(demand + buffer_slices, max_slices).
+  int32 buffer_slices = 3 [features.field_presence = EXPLICIT];
   int32 max_slices = 4 [features.field_presence = EXPLICIT];
 
   reserved 9;   // was: accelerator_type (moved to ScaleGroupResources.device_type)
@@ -216,6 +229,17 @@ message ScaleGroupConfig {
   // What to create when scaling up — the slice template
   SliceConfig slice_template = 50;
   WorkerSettings worker = 60;
+
+  // Allocation pool grouping. Groups sharing a quota_pool propagate
+  // quota-exceeded state: when tier N fails, tiers > N are blocked.
+  // If empty, quota state is independent (default behavior).
+  string quota_pool = 80;
+
+  // Tier within the quota pool (1-based, lower = smaller/preferred).
+  // When tier N hits quota or backoff, tiers > N in the same pool are
+  // skipped during routing. Groups at the same tier are independent.
+  // 0 means unset (not part of any tier ordering).
+  int32 allocation_tier = 81 [features.field_presence = EXPLICIT];
 }
 
 // ============================================================================
@@ -249,7 +273,8 @@ message WorkerConfig {
   AcceleratorType accelerator_type = 20;
   string accelerator_variant = 21;
   int32 gpu_count = 22;
-  bool preemptible = 23;
+  reserved 23;  // was: bool preemptible (replaced by capacity_type)
+  CapacityType capacity_type = 24;
 
   // Scheduling attributes
   map<string, string> worker_attributes = 30;

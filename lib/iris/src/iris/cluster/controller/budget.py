@@ -13,11 +13,11 @@ from iris.cluster.controller.db import ACTIVE_TASK_STATES, QuerySnapshot
 from iris.cluster.controller.schema import proto_cache, proto_decoder
 from iris.cluster.types import JobName
 from iris.cluster.types import get_gpu_count, get_tpu_count
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 T = TypeVar("T")
 
-_RESOURCE_SPEC_DECODER = proto_decoder(cluster_pb2.ResourceSpecProto)
+_RESOURCE_SPEC_DECODER = proto_decoder(job_pb2.ResourceSpecProto)
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ class UserBudgetDefaults:
     budget_limit: int = 0
     """Max budget value (0 = unlimited)."""
 
-    max_band: int = cluster_pb2.PRIORITY_BAND_INTERACTIVE
+    max_band: int = job_pb2.PRIORITY_BAND_INTERACTIVE
     """Default max priority band (proto int) for new users."""
 
 
@@ -91,11 +91,11 @@ def compute_effective_band(
 
     PRODUCTION tasks are never downgraded.  A budget_limit of 0 means unlimited.
     """
-    if task_band == cluster_pb2.PRIORITY_BAND_PRODUCTION:
+    if task_band == job_pb2.PRIORITY_BAND_PRODUCTION:
         return task_band
     limit = user_budgets.get(user_id, 0)
     if limit > 0 and user_spend.get(user_id, 0) > limit:
-        return max(task_band, cluster_pb2.PRIORITY_BAND_BATCH)
+        return max(task_band, job_pb2.PRIORITY_BAND_BATCH)
     return task_band
 
 

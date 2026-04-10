@@ -33,7 +33,7 @@ controller:
     port: 10000
 
 scale_groups:
-  # Active scale group with capacity (non-preemptible so executor-style jobs land here)
+  # Active scale group with capacity (on-demand so executor-style jobs land here)
   tpu_v5e_4:
     num_vms: 1
     resources:
@@ -43,8 +43,8 @@ scale_groups:
       device_type: tpu
       device_variant: v5litepod-4
       device_count: 4
-      preemptible: false
-    min_slices: 2
+      capacity_type: on-demand
+    buffer_slices: 2
     max_slices: 10
     slice_template:
       num_vms: 1
@@ -62,8 +62,8 @@ scale_groups:
       device_type: tpu
       device_variant: v5litepod-16
       device_count: 8
-      preemptible: true
-    min_slices: 1
+      capacity_type: preemptible
+    buffer_slices: 1
     max_slices: 5
     slice_template:
       num_vms: 4
@@ -81,8 +81,8 @@ scale_groups:
       device_type: tpu
       device_variant: v6e-256
       device_count: 8
-      preemptible: true
-    min_slices: 0
+      capacity_type: preemptible
+    buffer_slices: 0
     max_slices: 0  # ZERO MAX - simulates no quota available
     slice_template:
       num_vms: 64
@@ -100,8 +100,8 @@ scale_groups:
       device_type: gpu
       device_variant: a100-40gb
       device_count: 1
-      preemptible: false
-    min_slices: 0
+      capacity_type: on-demand
+    buffer_slices: 0
     max_slices: 0
     slice_template:
       num_vms: 1
@@ -119,8 +119,8 @@ scale_groups:
       device_type: tpu
       device_variant: v5litepod-8
       device_count: 4
-      preemptible: true
-    min_slices: 0
+      capacity_type: preemptible
+    buffer_slices: 0
     max_slices: 1
     slice_template:
       num_vms: 1
@@ -137,8 +137,8 @@ scale_groups:
       device_type: tpu
       device_variant: v5litepod-8
       device_count: 4
-      preemptible: true
-    min_slices: 0
+      capacity_type: preemptible
+    buffer_slices: 0
     max_slices: 1
     slice_template:
       num_vms: 1
@@ -155,8 +155,8 @@ scale_groups:
       device_type: tpu
       device_variant: v5litepod-8
       device_count: 4
-      preemptible: true
-    min_slices: 0
+      capacity_type: preemptible
+    buffer_slices: 0
     max_slices: 1
     slice_template:
       num_vms: 1

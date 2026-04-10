@@ -357,18 +357,26 @@ class JaggedArrayStore:
 
         @return: new JaggedArrayStore with resolved tensorstores
         """
-        offsets = ts.open(_unshaped_spec(self.offsets))
-        data = ts.open(_unshaped_spec(self.data))
-        shapes = future_from_value(None) if self.shapes is None else ts.open(_unshaped_spec(self.shapes.spec()))
+        offsets = ts.open(_unshaped_spec(self.offsets, retain_context=False), **_reload_kwargs())
+        data = ts.open(_unshaped_spec(self.data, retain_context=False), **_reload_kwargs())
+        shapes = (
+            future_from_value(None)
+            if self.shapes is None
+            else ts.open(_unshaped_spec(self.shapes, retain_context=False), **_reload_kwargs())
+        )
 
         offsets, data, shapes = await asyncio.gather(offsets, data, shapes)
 
         return JaggedArrayStore(offsets, data, shapes, self.item_rank)
 
     def reload(self) -> "JaggedArrayStore":
-        offsets = ts.open(_unshaped_spec(self.offsets))
-        data = ts.open(_unshaped_spec(self.data))
-        shapes = None if self.shapes is None else ts.open(_unshaped_spec(self.shapes.spec())).result()
+        offsets = ts.open(_unshaped_spec(self.offsets, retain_context=False), **_reload_kwargs())
+        data = ts.open(_unshaped_spec(self.data, retain_context=False), **_reload_kwargs())
+        shapes = (
+            None
+            if self.shapes is None
+            else ts.open(_unshaped_spec(self.shapes, retain_context=False), **_reload_kwargs()).result()
+        )
 
         offsets = offsets.result()
         data = data.result()
@@ -555,9 +563,17 @@ class JaggedArrayStore:
         return data_start, data_stop, offsets
 
 
-def _unshaped_spec(store: ts.TensorStore) -> ts.Spec:
-    spec = store.spec(retain_context=True)
+def _unshaped_spec(store: ts.TensorStore, *, retain_context: bool = True) -> ts.Spec:
+    spec = store.spec(retain_context=retain_context)
     return spec
+
+
+def _reload_kwargs() -> dict:
+    """Fresh context + recheck so reload picks up mutations from the writer."""
+    return {
+        "context": ts.Context({"cache_pool": _READ_CACHE_SETTINGS}),
+        "recheck_cached_data": True,
+    }
 
 
 def _ts_open_kwargs(mode: str) -> dict:

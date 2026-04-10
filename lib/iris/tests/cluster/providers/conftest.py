@@ -120,7 +120,7 @@ class FakeSliceHandle:
     def describe(self) -> SliceStatus:
         return self._status
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         self.terminated = True
         if self.terminate_error is not None:
             raise self.terminate_error

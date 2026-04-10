@@ -1,0 +1,636 @@
+// Copyright The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2023";
+
+// Shared types used by ControllerService, WorkerService, and clients.
+// Controller- and worker-specific request/response messages live in
+// controller.proto and worker.proto respectively.
+package iris.job;
+
+import "logging.proto";
+import "time.proto";
+
+// ============================================================================
+// SHARED TYPES
+// ============================================================================
+
+message Empty {}
+
+// --- Authentication ---
+message LoginRequest {
+  string identity_token = 1;
+}
+message LoginResponse {
+  string token = 1;
+  string key_id = 2;
+  string user_id = 3;
+}
+
+message GetAuthInfoRequest {}
+message GetAuthInfoResponse {
+  string provider = 1;        // "gcp" or "static" or "" (no auth)
+  string gcp_project_id = 2;  // set when provider == "gcp"
+}
+
+message CreateApiKeyRequest {
+  string user_id = 1;
+  string name = 2;
+  int64 ttl_ms = 3;
+}
+message CreateApiKeyResponse {
+  string key_id = 1;
+  string token = 2;
+  string key_prefix = 3;
+}
+
+message RevokeApiKeyRequest {
+  string key_id = 1;
+}
+
+message ListApiKeysRequest {
+  string user_id = 1;
+}
+message ApiKeyInfo {
+  string key_id = 1;
+  string key_prefix = 2;
+  string user_id = 3;
+  string name = 4;
+  int64 created_at_ms = 5;
+  int64 last_used_at_ms = 6;
+  int64 expires_at_ms = 7;
+  bool revoked = 8;
+}
+message ListApiKeysResponse {
+  repeated ApiKeyInfo keys = 1;
+}
+
+message GetCurrentUserRequest {}
+message GetCurrentUserResponse {
+  string user_id = 1;
+  string role = 2;
+  string display_name = 3;
+}
+
+// --- Profiling ---
+// Shared by both ControllerService and WorkerService (controller proxies to worker).
+
+// CPU profiling configuration (py-spy)
+message CpuProfile {
+  enum Format {
+    FORMAT_UNSPECIFIED = 0;
+    FLAMEGRAPH = 1;     // SVG flamegraph
+    SPEEDSCOPE = 2;     // JSON for speedscope viewer
+    RAW = 3;            // Text output
+  }
+  Format format = 1;
+  int32 rate_hz = 2;    // Sample rate (default: 20)
+  bool native = 3;  // Collect native (C/C++) frames via py-spy --native; default true when unset
+}
+
+// Memory profiling configuration (memray)
+message MemoryProfile {
+  enum Format {
+    FORMAT_UNSPECIFIED = 0;
+    FLAMEGRAPH = 1;     // HTML flamegraph with memory timeline
+    TABLE = 2;          // Text summary table
+    STATS = 3;          // JSON statistics
+    RAW = 4;            // Raw .bin trace file (use with memray CLI locally)
+  }
+  Format format = 1;
+  bool leaks = 2;       // Focus on potential memory leaks
+}
+
+// Thread dump configuration
+message ThreadsProfile {
+  bool locals = 1;  // Include local variables in the dump (--locals flag)
+}
+
+// Profile type selector
+message ProfileType {
+  oneof profiler {
+    CpuProfile cpu = 1;
+    MemoryProfile memory = 2;
+    ThreadsProfile threads = 3;
+  }
+}
+
+message ProfileTaskRequest {
+  // Target to profile. Accepts either:
+  //   /job/name/task/0             - task (uses current/latest attempt)
+  //   /job/name/task/0:attempt_id  - specific task attempt (optional)
+  //   /system/process              - the local process (worker or controller)
+  string target = 4;
+  int32 duration_seconds = 2;   // How long to sample (default: 10)
+  ProfileType profile_type = 3;
+
+  reserved 1;  // was task_id, replaced by target
+}
+
+message ProfileTaskResponse {
+  bytes profile_data = 1;       // SVG/JSON/HTML/text output
+  string error = 2;             // Non-empty if profiling failed
+}
+
+// --- Process Status ---
+// Shared by both ControllerService and WorkerService.
+// Returns local process info (host, resource usage) and recent process logs.
+
+message ProcessInfo {
+  string hostname = 1;
+  int32 pid = 2;
+  string python_version = 3;
+  int64 uptime_ms = 4;          // Process uptime in milliseconds
+  int64 memory_rss_bytes = 5;   // Resident set size
+  int64 memory_vms_bytes = 6;   // Virtual memory size
+  int32 thread_count = 8;
+  int32 open_fd_count = 9;      // Open file descriptors
+  int64 memory_total_bytes = 10; // Total system memory
+  int32 cpu_count = 11;          // Number of CPU cores
+  string git_hash = 12;          // Git commit hash baked in at image build time (IRIS_GIT_HASH)
+  reserved 7;                    // Formerly process cpu_percent; use cpu_millicores instead.
+  int32 cpu_millicores = 13;     // Process CPU usage over the sample window
+}
+
+message GetProcessStatusRequest {
+  int32 max_log_lines = 1;     // Max log entries to include (0 = default 200)
+  string log_substring = 2;    // Substring filter for logs
+  string min_log_level = 3;    // Minimum log level filter
+
+  // Target process. Uses the same naming convention as profiling/logs:
+  //   /system/process              - the local process (default if empty)
+  //   /system/worker/<worker_id>   - proxy to a specific worker
+  string target = 4;
+}
+
+message GetProcessStatusResponse {
+  ProcessInfo process_info = 1;
+  repeated iris.logging.LogEntry log_entries = 2;
+}
+
+enum JobState {
+  JOB_STATE_UNSPECIFIED = 0;
+  JOB_STATE_PENDING = 1;
+  JOB_STATE_BUILDING = 2;
+  JOB_STATE_RUNNING = 3;
+  JOB_STATE_SUCCEEDED = 4;
+  JOB_STATE_FAILED = 5;
+  JOB_STATE_KILLED = 6;
+  JOB_STATE_WORKER_FAILED = 7;
+  JOB_STATE_UNSCHEDULABLE = 8;  // Couldn't be scheduled within timeout
+}
+
+// Task state mirrors job state - a task is a single unit of execution within a job
+enum TaskState {
+  TASK_STATE_UNSPECIFIED = 0;
+  TASK_STATE_PENDING = 1;
+  TASK_STATE_BUILDING = 2;
+  TASK_STATE_RUNNING = 3;
+  TASK_STATE_SUCCEEDED = 4;
+  TASK_STATE_FAILED = 5;
+  TASK_STATE_KILLED = 6;
+  TASK_STATE_WORKER_FAILED = 7;
+  TASK_STATE_UNSCHEDULABLE = 8;
+  TASK_STATE_ASSIGNED = 9;
+  TASK_STATE_PREEMPTED = 10;
+}
+
+// Status of a single task within a job
+message TaskStatus {
+  string task_id = 1;                 // "/job/full/path/with/task/0"
+  TaskState state = 4;
+
+  string worker_id = 5;
+  string worker_address = 6;
+
+  int32 exit_code = 7;
+  string error = 8;
+
+  iris.time.Timestamp started_at = 9;
+  iris.time.Timestamp finished_at = 10;
+
+  map<string, int32> ports = 11;      // Per-task port allocations
+  ResourceUsage resource_usage = 12;
+  BuildMetrics build_metrics = 13;
+
+  int32 current_attempt_id = 14;
+  repeated TaskAttempt attempts = 15;
+
+  // Scheduling diagnostics for pending tasks (dashboard display)
+  string pending_reason = 16;         // Why task can't be scheduled (empty if schedulable)
+  bool can_be_scheduled = 17;         // Whether task is currently schedulable
+  // field 18 was log_directory, removed
+  string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
+}
+
+// Record of a single task execution attempt
+message TaskAttempt {
+  int32 attempt_id = 1;
+  string worker_id = 2;
+  TaskState state = 3;
+  int32 exit_code = 4;
+  string error = 5;
+  iris.time.Timestamp started_at = 6;
+  iris.time.Timestamp finished_at = 7;
+  bool is_worker_failure = 8;
+}
+
+message ResourceUsage {
+  int64 memory_mb = 1;
+  int64 disk_mb = 2;
+  int32 cpu_millicores = 3;
+  int64 memory_peak_mb = 4;
+  reserved 5;                  // Formerly task cpu_percent; use cpu_millicores instead.
+  int32 process_count = 6;
+}
+
+// Host-level resource snapshot collected by the worker during each heartbeat.
+message WorkerResourceSnapshot {
+  iris.time.Timestamp timestamp = 1;
+  // Host CPU utilization as percentage (0-100 averaged across cores)
+  int32 host_cpu_percent = 2;
+  // Host memory
+  int64 memory_used_bytes = 3;
+  int64 memory_total_bytes = 4;
+  // Host disk (primary mount)
+  int64 disk_used_bytes = 5;
+  int64 disk_total_bytes = 6;
+  // Aggregate task stats
+  int32 running_task_count = 7;
+  int32 total_process_count = 8;
+  // Network bandwidth (bytes/sec, computed as delta between heartbeats)
+  int64 net_recv_bps = 9;
+  int64 net_sent_bps = 10;
+}
+
+message BuildMetrics {
+  iris.time.Timestamp build_started = 1;
+  iris.time.Timestamp build_finished = 2;
+  bool from_cache = 3;
+  string image_tag = 4;
+}
+
+message JobStatus {
+  string job_id = 1;
+  JobState state = 2;
+  int32 exit_code = 3;
+  string error = 4;
+  iris.time.Timestamp started_at = 5;
+  iris.time.Timestamp finished_at = 6;
+
+  // Port allocations
+  map<string, int32> ports = 7;
+
+  ResourceUsage resource_usage = 8;
+
+  // Status message for current phase (e.g., "downloading bundle", "populating uv cache")
+  string status_message = 9;
+
+  BuildMetrics build_metrics = 10;
+
+  reserved 13;  // was serialized_result (removed: dead store, never populated)
+
+  int32 failure_count = 17;                // Total task failures (aggregated)
+  int32 preemption_count = 18;             // Total task preemptions (aggregated)
+
+  repeated TaskStatus tasks = 24;          // Per-task status (always included)
+
+  // Job metadata from request (for dashboard display)
+  string name = 25;                        // Job name from request
+  iris.time.Timestamp submitted_at = 26;
+
+  // Resource specification from job request (for dashboard display)
+  ResourceSpecProto resources = 27;
+
+  // Aggregated task state counts: {"running": 2, "pending": 5, "succeeded": 10}
+  map<string, int32> task_state_counts = 28;
+
+  // Convenience counts (could derive from task_state_counts)
+  int32 task_count = 29;
+  int32 completed_count = 30;
+
+  // Diagnostic message for pending/failed jobs (e.g., "No workers match constraint: gpu=true")
+  string pending_reason = 31;
+
+  // Whether this job currently has direct child jobs.
+  bool has_children = 32;
+}
+
+// ============================================================================
+// RESERVATION
+// ============================================================================
+
+// A single reservation entry describing one worker's worth of resources.
+// Duplicate entries to reserve multiple workers of the same type.
+message ReservationEntry {
+  // Resource spec for one worker.
+  ResourceSpecProto resources = 1;
+
+  // Constraints for routing (region, zone, preemptible, etc.).
+  repeated Constraint constraints = 2;
+}
+
+// Reservation configuration attached to a job. The autoscaler pre-provisions
+// capacity and the reserving job is held pending until all entries are fulfilled.
+message ReservationConfig {
+  // Resource entries to reserve. Each entry = one worker.
+  repeated ReservationEntry entries = 1;
+}
+
+// ============================================================================
+// RESOURCE SPECIFICATION
+// ============================================================================
+
+// Device configuration - used in ResourceSpecProto
+message DeviceConfig {
+  oneof device {
+    CpuDevice cpu = 1;
+    GpuDevice gpu = 2;
+    TpuDevice tpu = 3;
+  }
+}
+
+message CpuDevice {
+  string variant = 1;  // Always "cpu"
+}
+
+message GpuDevice {
+  string variant = 1;  // e.g., "A100", "H100", "auto"
+  int32 count = 2;     // Number of GPUs
+}
+
+message TpuDevice {
+  string variant = 1;       // e.g., "v5litepod-16", "v4-8"
+  string topology = 2;      // topology spec (e.g., "2x2x1")
+  int32 count = 3;          // Number of TPU chips on this worker
+}
+
+// Unified resource specification for jobs
+// Used by both controller (for scheduling) and worker (for enforcement)
+// All resource quantities are in machine-readable units (bytes, cores).
+// Clients should create a ResourceSpec dataclass and call .to_proto().
+message ResourceSpecProto {
+  // Compute resources
+  int32 cpu_millicores = 1;   // CPU in millicores (1000 = 1 core)
+  int64 memory_bytes = 4;     // RAM in bytes
+  int64 disk_bytes = 9;       // Disk space in bytes
+
+  // Device configuration
+  DeviceConfig device = 5;
+}
+
+// ============================================================================
+// ENVIRONMENT CONFIGURATION
+// ============================================================================
+
+// Job environment configuration
+message EnvironmentConfig {
+  repeated string pip_packages = 1;  // Additional pip packages to install
+  map<string, string> env_vars = 2;  // Environment variables to set
+  repeated string extras = 3;         // Extra dependency groups for uv (e.g., ["tpu", "eval"])
+  string python_version = 4;         // Client Python version (e.g., "3.11") for task container base image
+  string dockerfile = 5;             // Pre-generated Dockerfile content (generated by client, used by worker)
+}
+
+// ============================================================================
+// ENTRYPOINT
+// ============================================================================
+
+// Command-line entrypoint for script execution.
+message CommandEntrypoint {
+  repeated string argv = 1;  // e.g., ["python", "train.py", "--epochs", "10"]
+}
+
+// Structured entrypoint for the runtime layer. Separates environment setup
+// from the actual user command so runtimes can handle them differently
+// (e.g., process runtime skips setup since host env is already configured).
+message RuntimeEntrypoint {
+  // Shell commands to set up the environment (uv sync, pip install, venv activation).
+  // Executed in order before run_command. Runtimes that don't need env setup skip these.
+  repeated string setup_commands = 1;
+
+  // The user's actual command to execute.
+  CommandEntrypoint run_command = 2;
+
+  // Files to write to $IRIS_WORKDIR/{key} before execution.
+  map<string, bytes> workdir_files = 3;
+
+  // References to externalized workdir files stored in the blob store.
+  // key -> blob_id (SHA-256 hash). Worker resolves these via BundleStore.
+  map<string, string> workdir_file_refs = 4;
+}
+
+// ============================================================================
+// WORKER ATTRIBUTES
+// ============================================================================
+
+// Typed attribute value for worker attributes and constraint matching.
+// Workers report attributes (e.g., tpu-name, tpu-worker-id) at registration.
+// Jobs can filter workers using constraints on these attributes.
+message AttributeValue {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double float_value = 3;
+  }
+}
+
+// Constraint operators for filtering workers by attributes.
+enum ConstraintOp {
+  CONSTRAINT_OP_EQ = 0;         // Attribute equals value
+  CONSTRAINT_OP_NE = 1;         // Attribute not equals value
+  CONSTRAINT_OP_EXISTS = 2;     // Attribute exists (value ignored)
+  CONSTRAINT_OP_NOT_EXISTS = 3; // Attribute does not exist (value ignored)
+  CONSTRAINT_OP_GT = 4;         // Attribute greater than value (numeric)
+  CONSTRAINT_OP_GE = 5;         // Attribute greater than or equal to value (numeric)
+  CONSTRAINT_OP_LT = 6;         // Attribute less than value (numeric)
+  CONSTRAINT_OP_LE = 7;         // Attribute less than or equal to value (numeric)
+  CONSTRAINT_OP_IN = 8;         // Attribute value is in the provided set (disjunction)
+}
+
+// Whether a constraint is hard (required) or soft (preferred).
+// Hard constraints filter workers: non-matching workers are excluded.
+// Soft constraints rank workers: matching workers are preferred but
+// non-matching workers are still eligible.
+enum ConstraintMode {
+  CONSTRAINT_MODE_REQUIRED = 0;  // Hard constraint (default, backwards-compatible)
+  CONSTRAINT_MODE_PREFERRED = 1; // Soft constraint: prefer matching, allow non-matching
+}
+
+// Constraint for filtering workers by attribute.
+// Used in LaunchJobRequest to specify which workers can run a job.
+message Constraint {
+  string key = 1;           // Attribute key to match (e.g., "tpu-name")
+  ConstraintOp op = 2;      // Comparison operator
+  AttributeValue value = 3; // Value to compare against (ignored for EXISTS/NOT_EXISTS)
+  repeated AttributeValue values = 4; // Set of values for IN operator
+  ConstraintMode mode = 5;  // Hard (default) or soft
+}
+
+// Wrapper used when constraints need to be serialized as a standalone blob.
+message ConstraintList {
+  repeated Constraint constraints = 1;
+}
+
+// Coscheduling configuration for multi-host jobs.
+// When set, all tasks in the job must be scheduled atomically onto workers
+// that share the same value for the specified group_by attribute.
+message CoschedulingConfig {
+  string group_by = 1;  // Attribute key to group workers by (e.g., "tpu-name")
+}
+
+// ============================================================================
+// WORKER METADATA
+// ============================================================================
+
+// Typed metadata about a worker's environment, collected at registration.
+message WorkerMetadata {
+  // Basic compute resources
+  string hostname = 1;
+  string ip_address = 2;
+  int32 cpu_count = 3;
+  int64 memory_bytes = 4;
+  int64 disk_bytes = 5;
+  DeviceConfig device = 6;
+
+  // TPU environment (from TPU_* env vars)
+  string tpu_name = 10;                    // TPU_NAME
+  string tpu_worker_hostnames = 11;        // TPU_WORKER_HOSTNAMES
+  string tpu_worker_id = 12;               // TPU_WORKER_ID
+  string tpu_chips_per_host_bounds = 13;   // TPU_CHIPS_PER_HOST_BOUNDS
+
+  // GPU info (from nvidia-smi)
+  int32 gpu_count = 20;
+  string gpu_name = 21;
+  int32 gpu_memory_mb = 22;
+
+  // GCE instance metadata
+  string gce_instance_name = 30;
+  string gce_zone = 31;
+
+  // Worker attributes for constraint-based scheduling.
+  // Standard attributes include:
+  //   tpu-name: TPU slice name (string)
+  //   tpu-worker-id: Worker ID within slice (int)
+  //   tpu-topology: TPU topology variant, e.g. "v5litepod-16" (string)
+  //   tpu-vm-count: Number of VMs in the TPU slice (int)
+  // Additional attributes can be set via IRIS_WORKER_ATTRIBUTES env var
+  // using format: key1=value1,key2=value2 (e.g., taint:maintenance=true,pool=large-jobs)
+  map<string, AttributeValue> attributes = 40;
+
+  // DEPRECATED: No longer used for worker identification.
+  // Worker identity is now set via RegisterRequest.worker_id.
+  // Field kept for proto wire compatibility but ignored by the controller.
+  string vm_address = 41;
+
+  // Git commit hash baked into the worker image at build time (IRIS_GIT_HASH).
+  // Allows the controller to surface per-worker version info for debugging.
+  string git_hash = 42;
+}
+
+enum JobPreemptionPolicy {
+  JOB_PREEMPTION_POLICY_UNSPECIFIED = 0;
+  JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN = 1;
+  JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN = 2;
+}
+
+enum ExistingJobPolicy {
+  EXISTING_JOB_POLICY_UNSPECIFIED = 0;
+  EXISTING_JOB_POLICY_ERROR = 1;
+  EXISTING_JOB_POLICY_KEEP = 2;
+  EXISTING_JOB_POLICY_RECREATE = 3;
+}
+
+enum PriorityBand {
+  PRIORITY_BAND_UNSPECIFIED = 0;  // defaults to INTERACTIVE
+  PRIORITY_BAND_PRODUCTION = 1;   // admin-only, never preempted
+  PRIORITY_BAND_INTERACTIVE = 2;  // normal work, default
+  PRIORITY_BAND_BATCH = 3;        // opportunistic, preemptible
+}
+
+// ============================================================================
+// HEARTBEAT PROTOCOL (Controller -> Worker)
+// ============================================================================
+
+// Task execution request sent from controller to worker via heartbeat.
+// Elevated from the Worker message namespace to break the circular dependency
+// between controller.proto and worker.proto.
+message RunTaskRequest {
+  string task_id = 1;             // Full task ID: "/job/full/path/with/task/0"
+  int32 num_tasks = 2;            // Total tasks in job (for IRIS_NUM_TASKS)
+
+  RuntimeEntrypoint entrypoint = 3;  // Structured entrypoint for runtime layer
+  EnvironmentConfig environment = 4;
+  string bundle_id = 5;
+  ResourceSpecProto resources = 6;
+  iris.time.Duration timeout = 7;
+  repeated string ports = 8;
+  int32 attempt_id = 9;
+  repeated Constraint constraints = 10; // Original job constraints for child-job inheritance metadata
+
+  // Per-task task container image. When empty, the worker uses its
+  // cluster-configured default_task_image. Used for jobs that need a
+  // custom runtime (e.g. an image with runsc/skopeo for sandboxing
+  // untrusted child workloads).
+  string task_image = 11;
+}
+
+// Lean task status reported by the worker during heartbeat.
+// Covers both running and completed tasks in a single type.
+// Elevated from the Controller message namespace to break the circular
+// dependency between controller.proto and worker.proto.
+message WorkerTaskStatus {
+  string task_id = 1;
+  int32 attempt_id = 2;
+  TaskState state = 3;
+  int32 exit_code = 4;
+  string error = 5;
+  iris.time.Timestamp finished_at = 6;
+  // field 7 was log_directory, removed
+  ResourceUsage resource_usage = 8;
+  // Carried by old workers that predate push-based LogService.
+  // New workers push logs directly; this field is only populated during
+  // rolling upgrades and will be removed once all workers are updated.
+  repeated iris.logging.LogEntry log_entries = 9;
+  string container_id = 10;         // Platform container identifier (Docker container ID, K8s pod name)
+}
+
+message HeartbeatRequest {
+  // Tasks to start on this worker
+  repeated RunTaskRequest tasks_to_run = 1;
+
+  // Tasks to kill on this worker
+  repeated string tasks_to_kill = 2;
+
+  // Tasks the controller believes this worker is running.
+  // Worker compares against its actual state and reports completions/failures.
+  repeated WorkerTaskStatus expected_tasks = 3;
+}
+
+message HeartbeatResponse {
+  // All tasks known to the worker (running + recently completed), reported as a
+  // single unified list.  Replaces the former running_tasks + completed_tasks split.
+  repeated WorkerTaskStatus tasks = 4;
+
+  // Current host-level resource snapshot
+  WorkerResourceSnapshot resource_snapshot = 3;
+
+  // Worker health status. When false, the worker has detected a local fault
+  // (disk full, cannot write tempfile, etc.) and should be immediately
+  // marked as permanently failed by the controller.
+  bool worker_healthy = 5;
+
+  // Human-readable description of the health check failure.
+  string health_error = 6;
+}

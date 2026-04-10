@@ -3,21 +3,28 @@
 
 import dataclasses
 import datetime
+import faulthandler
+import gc
 import json
 import logging
 import os
 import pathlib
 import queue
+import resource
+import sys
 import threading
 import time
+import tracemalloc
 import urllib.parse
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Callable, List, Optional, ParamSpec, Sequence, TypeVar, Union
+from typing import Any, Callable, List, Optional, ParamSpec, Sequence, TypeVar, Union
 
 import equinox
 import fsspec
 import haliax.partitioning
+import humanfriendly
 import jax
 import jax.numpy as jnp
 from draccus import field
@@ -26,6 +33,7 @@ from haliax.jax_utils import is_in_jit, is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 from jaxtyping import PyTree
 
+from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
@@ -42,10 +50,323 @@ M = TypeVar("M", bound=PyTree)
 Sig = ParamSpec("Sig")
 
 
+def _format_bytes_human_readable(num_bytes: int | None) -> str | None:
+    if num_bytes is None:
+        return None
+    return humanfriendly.format_size(num_bytes, binary=True)
+
+
+def _current_process_rss_bytes() -> int | None:
+    try:
+        rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    except Exception:
+        return None
+
+    return rss * 1024
+
+
+CheckpointDebugStateProvider = Callable[[], Mapping[str, Any]]
+_DEBUG_CHECKPOINTER_STATE_PROVIDERS: dict[str, CheckpointDebugStateProvider] = {}
+_DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK = threading.Lock()
+
+
+def register_debug_checkpointer_state_provider(name: str, provider: CheckpointDebugStateProvider) -> None:
+    """Register a debug state provider that contributes extra checkpoint diagnostics."""
+    with _DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK:
+        _DEBUG_CHECKPOINTER_STATE_PROVIDERS[name] = provider
+
+
+def unregister_debug_checkpointer_state_provider(name: str) -> None:
+    """Unregister a previously registered checkpoint debug state provider."""
+    with _DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK:
+        _DEBUG_CHECKPOINTER_STATE_PROVIDERS.pop(name, None)
+
+
+def _collect_debug_checkpointer_state() -> dict[str, Any]:
+    with _DEBUG_CHECKPOINTER_STATE_PROVIDER_LOCK:
+        providers = list(_DEBUG_CHECKPOINTER_STATE_PROVIDERS.items())
+
+    snapshots: dict[str, Any] = {}
+    for name, provider in providers:
+        try:
+            snapshots[name] = dict(provider())
+        except Exception as exc:
+            snapshots[name] = {"provider_error": f"{type(exc).__name__}: {exc}"}
+    return snapshots
+
+
+def _manager_debug_state(manager: GlobalAsyncCheckpointManager | None) -> dict[str, Any]:
+    if manager is None:
+        return {}
+
+    thread = getattr(manager, "_thread", None)
+    futures = getattr(manager, "_commit_futures", None)
+    exception = getattr(manager, "_exception", None)
+
+    commit_futures_count = None
+    if futures is not None:
+        try:
+            commit_futures_count = len(futures)
+        except Exception:
+            commit_futures_count = None
+
+    commit_futures_done = None
+    if futures is not None:
+        try:
+            commit_futures_done = sum(1 for future in futures if hasattr(future, "done") and future.done())
+        except Exception:
+            commit_futures_done = None
+
+    return {
+        "previous_async_commit_alive": bool(thread is not None and thread.is_alive()),
+        "previous_async_commit_thread_name": getattr(thread, "name", None),
+        "previous_async_commit_futures": commit_futures_count,
+        "previous_async_commit_futures_done": commit_futures_done,
+        "previous_async_commit_exception": None if exception is None else f"{type(exception).__name__}: {exception}",
+    }
+
+
+def _checkpoint_debug_json(state: Mapping[str, Any]) -> str:
+    return json.dumps(dict(state), sort_keys=True, default=str)
+
+
+def _tracemalloc_memory_state() -> dict[str, str]:
+    if not tracemalloc.is_tracing():
+        return {}
+
+    current_bytes, peak_bytes = tracemalloc.get_traced_memory()
+    return {
+        "python_tracemalloc_current": _format_bytes_human_readable(current_bytes),
+        "python_tracemalloc_peak": _format_bytes_human_readable(peak_bytes),
+    }
+
+
+def _format_tracemalloc_growth(snapshot: tracemalloc.Snapshot | None, limit: int) -> list[str]:
+    if snapshot is None or not tracemalloc.is_tracing() or limit <= 0:
+        return []
+
+    current_snapshot = tracemalloc.take_snapshot()
+    stats = [stat for stat in current_snapshot.compare_to(snapshot, "lineno") if stat.size_diff > 0][:limit]
+    return [
+        (
+            f"{stat.traceback[0].filename}:{stat.traceback[0].lineno} "
+            f"size_diff={_format_bytes_human_readable(stat.size_diff)} count_diff={stat.count_diff}"
+        )
+        for stat in stats
+        if stat.traceback
+    ]
+
+
+def _run_debug_gc() -> dict[str, Any]:
+    rss_before = _format_bytes_human_readable(_current_process_rss_bytes())
+    gc_counts_before = gc.get_count()
+    tracked_objects_before = len(gc.get_objects())
+    tracemalloc_before = _tracemalloc_memory_state()
+
+    collected = gc.collect()
+
+    rss_after = _format_bytes_human_readable(_current_process_rss_bytes())
+    gc_counts_after = gc.get_count()
+    tracked_objects_after = len(gc.get_objects())
+    tracemalloc_after = _tracemalloc_memory_state()
+
+    return {
+        "collected_objects": collected,
+        "gc_counts_before": gc_counts_before,
+        "gc_counts_after": gc_counts_after,
+        "tracked_objects_before": tracked_objects_before,
+        "tracked_objects_after": tracked_objects_after,
+        "gc_garbage_len": len(gc.garbage),
+        "rss_before": rss_before,
+        "rss_after": rss_after,
+        **{f"{key}_before": value for key, value in tracemalloc_before.items()},
+        **{f"{key}_after": value for key, value in tracemalloc_after.items()},
+    }
+
+
+class _CheckpointProgressLogger:
+    def __init__(
+        self,
+        *,
+        step: int,
+        checkpoint_path: str,
+        manager: GlobalAsyncCheckpointManager | None = None,
+        interval: float = 60.0,
+        dump_stacks_after: float | None = None,
+        top_allocations: int = 8,
+        flush_logs: bool = True,
+    ):
+        self.step = step
+        self.checkpoint_path = checkpoint_path
+        self.manager = manager
+        self.interval = interval
+        self.phase = "starting"
+        self.started_at = time.time()
+        self.phase_started_at = self.started_at
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._lock = threading.Lock()
+        self._stack_dumped = False
+        self._dump_after = dump_stacks_after
+        self._top_allocations = top_allocations
+        self._flush_logs = flush_logs
+        self._tracemalloc_baseline = tracemalloc.take_snapshot() if tracemalloc.is_tracing() else None
+
+    def _log(self, level: int, message: str, *args: Any) -> None:
+        logger.log(level, message, *args)
+        if self._flush_logs:
+            flush_debug_output(logger)
+
+    def _log_memory_state(self, event: str, *, include_top_allocations: bool = False) -> None:
+        state: dict[str, Any] = {
+            "event": event,
+            "phase": self.phase,
+            "rss": _format_bytes_human_readable(_current_process_rss_bytes()),
+            "gc_counts": gc.get_count(),
+            "gc_garbage_len": len(gc.garbage),
+            **_tracemalloc_memory_state(),
+        }
+        manager_state = _manager_debug_state(self.manager)
+        if manager_state:
+            state["manager"] = manager_state
+        extra_state = _collect_debug_checkpointer_state()
+        if extra_state:
+            state["providers"] = extra_state
+
+        self._log(
+            logging.INFO,
+            "Checkpoint debug snapshot: step=%d state=%s",
+            self.step,
+            _checkpoint_debug_json(state),
+        )
+
+        if include_top_allocations:
+            top_growth = _format_tracemalloc_growth(self._tracemalloc_baseline, self._top_allocations)
+            if top_growth:
+                self._log(
+                    logging.INFO,
+                    "Checkpoint debug tracemalloc growth: step=%d top=%s",
+                    self.step,
+                    json.dumps(top_growth, default=str),
+                )
+
+    def log_gc_snapshot(self, event: str) -> None:
+        self._log(
+            logging.INFO,
+            "Checkpoint debug gc: step=%d state=%s",
+            self.step,
+            _checkpoint_debug_json({"event": event, **_run_debug_gc()}),
+        )
+
+    def reset_tracemalloc_baseline(self, reason: str) -> None:
+        if not tracemalloc.is_tracing():
+            return
+        self._tracemalloc_baseline = tracemalloc.take_snapshot()
+        self._log(
+            logging.INFO,
+            "Checkpoint debug tracemalloc baseline reset: step=%d reason=%s",
+            self.step,
+            reason,
+        )
+
+    def start(self) -> None:
+        self._log(
+            logging.INFO,
+            "PHASE: CHECKPOINT step=%d phase=%s path=%s",
+            self.step,
+            self.phase,
+            self.checkpoint_path,
+        )
+        self._log_memory_state("checkpoint_start")
+        self._thread.start()
+
+    def set_phase(self, phase: str) -> None:
+        with self._lock:
+            self.phase = phase
+            self.phase_started_at = time.time()
+        self._log(
+            logging.INFO,
+            "PHASE: CHECKPOINT step=%d phase=%s path=%s",
+            self.step,
+            phase,
+            self.checkpoint_path,
+        )
+        self._log_memory_state(f"phase_{phase}", include_top_allocations=True)
+
+    def finish(self, status: str) -> None:
+        self._stop_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+
+        elapsed = time.time() - self.started_at
+        self._log_memory_state(f"checkpoint_{status}", include_top_allocations=True)
+        self._log(
+            logging.INFO,
+            "PHASE: CHECKPOINT step=%d phase=%s path=%s elapsed=%.2fs",
+            self.step,
+            status,
+            self.checkpoint_path,
+            elapsed,
+        )
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self.interval):
+            with self._lock:
+                phase = self.phase
+                phase_elapsed = time.time() - self.phase_started_at
+
+            total_elapsed = time.time() - self.started_at
+            rss = _format_bytes_human_readable(_current_process_rss_bytes())
+            rss_suffix = f", rss={rss}" if rss is not None else ""
+            self._log(
+                logging.INFO,
+                "Checkpoint still running: step=%d phase=%s total_elapsed=%.1fs phase_elapsed=%.1fs%s",
+                self.step,
+                phase,
+                total_elapsed,
+                phase_elapsed,
+                rss_suffix,
+            )
+            self._log_memory_state("checkpoint_progress", include_top_allocations=True)
+
+            if self._dump_after is not None and not self._stack_dumped and total_elapsed >= self._dump_after:
+                self._stack_dumped = True
+                self._log(
+                    logging.WARNING,
+                    "Checkpoint exceeded %.1fs at step %d; dumping Python thread stacks",
+                    self._dump_after,
+                    self.step,
+                )
+                faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+                if self._flush_logs:
+                    flush_debug_output(logger)
+
+
 @dataclass(frozen=True)
 class CheckpointInterval:
     every: int  # how often to checkpoint
     until: Optional[int] = None  # until what step to save checkpoints with this policy, None means forever
+
+
+@dataclass
+class CheckpointDebugConfig:
+    enabled: bool = False
+    log_interval: float = 60.0
+    dump_stacks_after: float | None = None
+    tracemalloc_frames: int = 25
+    top_allocations: int = 8
+    force_gc_before_serialize: bool = True
+    flush_logs: bool = True
+
+    def validate(self) -> None:
+        assert self.log_interval > 0, "checkpoint debug log_interval must be positive"
+        if self.dump_stacks_after is not None:
+            assert self.dump_stacks_after > 0, "checkpoint debug dump_stacks_after must be positive when set"
+        assert self.tracemalloc_frames > 0, "checkpoint debug tracemalloc_frames must be positive"
+        assert self.top_allocations >= 0, "checkpoint debug top_allocations must be non-negative"
+
+    def __post_init__(self) -> None:
+        self.validate()
 
 
 class Checkpointer:
@@ -73,6 +394,8 @@ class Checkpointer:
         keep_params: PyTree[FilterSpec] = True,
         dt_now_injection: Optional[Callable[[], datetime.datetime]] = None,
         delete_old_temp_checkpoints: bool = True,
+        delete_previous_temporary_checkpoint_after_save: bool = True,
+        debug: CheckpointDebugConfig | None = None,
     ):
         """
         Class for managing checkpoints. Saves checkpoints according to two policies: time and step.
@@ -88,7 +411,10 @@ class Checkpointer:
             step_policies: the step policies to use
             keep_params: a PyTree of FilterSpecs that specifies which parameters to keep in the checkpoint
             dt_now_injection: a function that returns the current time. useful for testing
-            delete_old_temp_checkpoints: if True, delete old checkpoints when saving a new one
+            delete_old_temp_checkpoints: if True, carry forward a temporary checkpoint discovered at startup so the
+                next successful save can clean it up.
+            delete_previous_temporary_checkpoint_after_save: if True, delete the previously saved temporary checkpoint
+                after a new checkpoint commits successfully.
         """
         self.base_path = str(base_path)
         self.save_interval = save_interval
@@ -97,6 +423,8 @@ class Checkpointer:
         self._dt_now_injection = dt_now_injection or datetime.datetime.now
         self._last_save_time = self._dt_now_injection()
         self._last_save_step = 0
+        self.delete_previous_temporary_checkpoint_after_save = delete_previous_temporary_checkpoint_after_save
+        self.debug = debug or CheckpointDebugConfig()
 
         # ensure that the step_policies are sorted. We could sort, but instead we'll just insist that they are sorted
         # since it's probably a typo if they aren't
@@ -223,6 +551,13 @@ class Checkpointer:
 
             def callback():
                 if last_checkpoint is not None:
+                    if not self.delete_previous_temporary_checkpoint_after_save:
+                        logger.info(
+                            "Keeping previous temporary checkpoint %s after saving new checkpoint because "
+                            "delete_previous_temporary_checkpoint_after_save=False.",
+                            last_checkpoint,
+                        )
+                        return
                     # check if we still want to delete it. Sometimes we like to replace the metadata of the last
                     # checkpoint. It'd be nice if the process weren't manual, but this is a good compromise
                     try:
@@ -301,6 +636,7 @@ class Checkpointer:
             manager=self._manager,
             commit_callback=commit_callback,
             is_temporary=is_temporary,
+            debug=self.debug,
         )
         self._last_save_step = step
         self._last_save_time = self._dt_now_injection()
@@ -321,6 +657,7 @@ def save_checkpoint(
     *,
     commit_callback: Optional[Callable[[], None]] = None,
     is_temporary: bool = True,
+    debug: CheckpointDebugConfig | None = None,
 ):
     """
     Save a checkpoint to a given path using TensorStore with OCDBT.
@@ -340,22 +677,67 @@ def save_checkpoint(
     """
     step = int(step)
     checkpoint_path = str(checkpoint_path)
+    checkpoint_debug = debug or CheckpointDebugConfig()
     logger.info(f"Saving checkpoint to {checkpoint_path} for step {step}")
+    progress_logger: _CheckpointProgressLogger | None = None
+    if checkpoint_debug.enabled:
+        if not tracemalloc.is_tracing():
+            tracemalloc.start(checkpoint_debug.tracemalloc_frames)
+        progress_logger = _CheckpointProgressLogger(
+            step=step,
+            checkpoint_path=checkpoint_path,
+            manager=manager,
+            interval=checkpoint_debug.log_interval,
+            dump_stacks_after=checkpoint_debug.dump_stacks_after,
+            top_allocations=checkpoint_debug.top_allocations,
+            flush_logs=checkpoint_debug.flush_logs,
+        )
+        progress_logger.start()
 
     fs: AbstractFileSystem
     fs, plain_path = _get_fs_and_plain_path(checkpoint_path)
     fs.makedirs(plain_path, exist_ok=True)
+    if progress_logger is not None:
+        progress_logger.set_phase("filesystem_ready")
 
     def my_callback():
-        _save_metadata(checkpoint_path, fs, step, is_temporary)
-        logger.info(f"Saved checkpoint to {checkpoint_path} for step {step}")
+        if progress_logger is not None:
+            progress_logger.set_phase("metadata_write")
+        status = "completed"
+        try:
+            _save_metadata(checkpoint_path, fs, step, is_temporary)
+            logger.info(f"Saved checkpoint to {checkpoint_path} for step {step}")
 
-        if commit_callback is not None:
-            commit_callback()
+            if commit_callback is not None:
+                commit_callback()
+        except Exception:
+            status = "failed"
+            raise
+        finally:
+            if progress_logger is not None:
+                progress_logger.finish(status)
 
     tree = equinox.filter(tree, lambda x: is_jax_array_like(x) or isinstance(x, (int, float, bool, complex)))
 
-    tree_serialize_leaves_tensorstore(checkpoint_path, tree, manager, commit_callback=my_callback)
+    try:
+        if progress_logger is not None:
+            if checkpoint_debug.force_gc_before_serialize:
+                progress_logger.log_gc_snapshot("pre_tensorstore_serialize")
+                progress_logger.reset_tracemalloc_baseline("post_gc_pre_tensorstore_serialize")
+            progress_logger.set_phase("tensorstore_serialize")
+        tree_serialize_leaves_tensorstore(
+            checkpoint_path,
+            tree,
+            manager,
+            commit_callback=my_callback,
+            debug_checkpointer=checkpoint_debug.enabled,
+        )
+        if progress_logger is not None:
+            progress_logger.set_phase("async_commit_in_flight")
+    except Exception:
+        if progress_logger is not None:
+            progress_logger.finish("failed")
+        raise
 
     return checkpoint_path
 
@@ -599,6 +981,10 @@ class CheckpointerConfig:
 
     This is useful if the run is being preempted and restarted, and you want to keep the old checkpoints.
     """
+    delete_previous_temporary_checkpoint_after_save: bool = True
+    """If True, delete the previously saved temporary checkpoint after a successful new save."""
+    debug: CheckpointDebugConfig = field(default_factory=CheckpointDebugConfig)
+    """Checkpoint-path diagnostics. Disabled by default."""
 
     def expanded_path(self, run_id) -> str:
         if self.append_run_id_to_base_path:
@@ -612,12 +998,16 @@ class CheckpointerConfig:
             save_interval=self.save_interval,
             step_policies=keeps,
             delete_old_temp_checkpoints=self.delete_old_temp_checkpoints,
+            delete_previous_temporary_checkpoint_after_save=self.delete_previous_temporary_checkpoint_after_save,
+            debug=self.debug,
         )
 
     def __post_init__(self):
         # Workaround for Executor using placeholder types.
         if isinstance(self.base_path, str):
             self.base_path = os.path.expanduser(self.base_path)
+        if isinstance(self.debug, dict):
+            self.debug = CheckpointDebugConfig(**self.debug)
 
         # validate the checkpoint intervals.
         # we want to make sure that the intervals are monotonic. only the last one can be None
@@ -629,6 +1019,8 @@ class CheckpointerConfig:
                     interval["until"] is None or interval["until"] > prev_interval["until"]
                 ), "Checkpoint intervals must be monotonic"
             prev_interval = interval
+
+        self.debug.validate()
 
 
 def is_checkpoint_path(path: str) -> bool:

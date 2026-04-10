@@ -4,11 +4,6 @@
 """
 Download and process Ar5iv dataset from a zip file.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --memory=10GB \
-    lib/marin/src/marin/download/ar5iv/download.py \
-    --input_path gs://bucket/ar5iv.zip \
-    --output_path gs://bucket/output
 """
 
 import json

@@ -18,7 +18,8 @@ from typing import Any
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -112,38 +113,13 @@ def task_is_finished(
     state: int, failure_count: int, max_retries_failure: int, preemption_count: int, max_retries_preemption: int
 ) -> bool:
     """Whether a task has reached a terminal state with no remaining retries."""
-    if state == cluster_pb2.TASK_STATE_SUCCEEDED:
+    if state == job_pb2.TASK_STATE_SUCCEEDED:
         return True
-    if state in (cluster_pb2.TASK_STATE_KILLED, cluster_pb2.TASK_STATE_UNSCHEDULABLE):
+    if state in (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_UNSCHEDULABLE):
         return True
-    if state == cluster_pb2.TASK_STATE_FAILED:
+    if state == job_pb2.TASK_STATE_FAILED:
         return failure_count > max_retries_failure
-    if state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PREEMPTED):
-        return preemption_count > max_retries_preemption
-    return False
-
-
-def task_can_be_scheduled(
-    state: int,
-    current_attempt_id: int,
-    failure_count: int,
-    max_retries_failure: int,
-    preemption_count: int,
-    max_retries_preemption: int,
-) -> bool:
-    if state != cluster_pb2.TASK_STATE_PENDING:
-        return False
-    return current_attempt_id < 0 or not task_is_finished(
-        state, failure_count, max_retries_failure, preemption_count, max_retries_preemption
-    )
-
-
-def task_is_retry_exhausted(
-    state: int, failure_count: int, max_retries_failure: int, preemption_count: int, max_retries_preemption: int
-) -> bool:
-    if state == cluster_pb2.TASK_STATE_FAILED:
-        return failure_count > max_retries_failure
-    if state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PREEMPTED):
+    if state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED):
         return preemption_count > max_retries_preemption
     return False
 
@@ -155,75 +131,56 @@ def task_row_is_finished(task: Any) -> bool:
 
 
 def task_row_can_be_scheduled(task: Any) -> bool:
-    return task_can_be_scheduled(
-        task.state,
-        task.current_attempt_id,
-        task.failure_count,
-        task.max_retries_failure,
-        task.preemption_count,
-        task.max_retries_preemption,
+    if task.state != job_pb2.TASK_STATE_PENDING:
+        return False
+    return task.current_attempt_id < 0 or not task_is_finished(
+        task.state, task.failure_count, task.max_retries_failure, task.preemption_count, task.max_retries_preemption
     )
-
-
-def worker_available_cpu_millicores(total_cpu_millicores: int, committed_cpu_millicores: int) -> int:
-    return total_cpu_millicores - committed_cpu_millicores
-
-
-def worker_available_memory(total_memory_bytes: int, committed_mem_bytes: int) -> int:
-    return total_memory_bytes - committed_mem_bytes
-
-
-def worker_available_gpus(total_gpu_count: int, committed_gpu: int) -> int:
-    return total_gpu_count - committed_gpu
-
-
-def worker_available_tpus(total_tpu_count: int, committed_tpu: int) -> int:
-    return total_tpu_count - committed_tpu
 
 
 TERMINAL_TASK_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.TASK_STATE_SUCCEEDED,
-        cluster_pb2.TASK_STATE_FAILED,
-        cluster_pb2.TASK_STATE_KILLED,
-        cluster_pb2.TASK_STATE_UNSCHEDULABLE,
-        cluster_pb2.TASK_STATE_WORKER_FAILED,
-        cluster_pb2.TASK_STATE_PREEMPTED,
+        job_pb2.TASK_STATE_SUCCEEDED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_KILLED,
+        job_pb2.TASK_STATE_UNSCHEDULABLE,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_PREEMPTED,
     }
 )
 
 TERMINAL_JOB_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.JOB_STATE_SUCCEEDED,
-        cluster_pb2.JOB_STATE_FAILED,
-        cluster_pb2.JOB_STATE_KILLED,
-        cluster_pb2.JOB_STATE_WORKER_FAILED,
-        cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+        job_pb2.JOB_STATE_SUCCEEDED,
+        job_pb2.JOB_STATE_FAILED,
+        job_pb2.JOB_STATE_KILLED,
+        job_pb2.JOB_STATE_WORKER_FAILED,
+        job_pb2.JOB_STATE_UNSCHEDULABLE,
     }
 )
 
 ACTIVE_TASK_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.TASK_STATE_ASSIGNED,
-        cluster_pb2.TASK_STATE_BUILDING,
-        cluster_pb2.TASK_STATE_RUNNING,
+        job_pb2.TASK_STATE_ASSIGNED,
+        job_pb2.TASK_STATE_BUILDING,
+        job_pb2.TASK_STATE_RUNNING,
     }
 )
 
 # Tasks executing on a worker (subset of ACTIVE that excludes ASSIGNED).
 EXECUTING_TASK_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.TASK_STATE_BUILDING,
-        cluster_pb2.TASK_STATE_RUNNING,
+        job_pb2.TASK_STATE_BUILDING,
+        job_pb2.TASK_STATE_RUNNING,
     }
 )
 
 # Failure states that trigger coscheduled sibling cascades.
 FAILURE_TASK_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.TASK_STATE_FAILED,
-        cluster_pb2.TASK_STATE_WORKER_FAILED,
-        cluster_pb2.TASK_STATE_PREEMPTED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_PREEMPTED,
     }
 )
 
@@ -257,7 +214,7 @@ def attempt_is_terminal(state: int) -> bool:
 
 def attempt_is_worker_failure(state: int) -> bool:
     """Check if an attempt is a worker failure or preemption."""
-    return state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PREEMPTED)
+    return state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED)
 
 
 @dataclass(frozen=True)
@@ -384,6 +341,7 @@ class ControllerDB:
     _READ_POOL_SIZE = 8
     DB_FILENAME = "controller.sqlite3"
     AUTH_DB_FILENAME = "auth.sqlite3"
+    PROFILES_DB_FILENAME = "profiles.sqlite3"
 
     def __init__(self, db_dir: Path):
         import time
@@ -392,6 +350,7 @@ class ControllerDB:
         self._db_dir.mkdir(parents=True, exist_ok=True)
         self._db_path = self._db_dir / self.DB_FILENAME
         self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
+        self._profiles_db_path = self._db_dir / self.PROFILES_DB_FILENAME
         self._lock = RLock()
 
         t0 = time.monotonic()
@@ -399,6 +358,7 @@ class ControllerDB:
         self._conn.row_factory = sqlite3.Row
         self._configure(self._conn)
         self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
+        self._conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
         logger.info("DB opened in %.2fs (path=%s)", time.monotonic() - t0, self._db_path)
 
         t0 = time.monotonic()
@@ -469,6 +429,7 @@ class ControllerDB:
             conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             conn.row_factory = sqlite3.Row
             self._configure(conn)
+            conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
             conn.execute("PRAGMA query_only = ON")
             self._read_pool.put(conn)
 
@@ -483,6 +444,10 @@ class ControllerDB:
     @property
     def auth_db_path(self) -> Path:
         return self._auth_db_path
+
+    @property
+    def profiles_db_path(self) -> Path:
+        return self._profiles_db_path
 
     @staticmethod
     def _configure(conn: sqlite3.Connection) -> None:
@@ -636,6 +601,10 @@ class ControllerDB:
     def secrets_table(self) -> str:
         return "auth.controller_secrets"
 
+    @property
+    def task_profiles_table(self) -> str:
+        return "profiles.task_profiles"
+
     def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:
         """Create user if not exists. Does not update role for existing users."""
         self.execute(
@@ -734,10 +703,20 @@ class ControllerDB:
                     dst.write(src.read())
                 auth_tmp.rename(self._auth_db_path)
 
+            # Download profiles DB if present in source
+            profiles_source = f"{source_dir_str}/{self.PROFILES_DB_FILENAME}"
+            fs2, fs_path2 = fsspec.core.url_to_fs(profiles_source)
+            if fs2.exists(fs_path2):
+                profiles_tmp = self._profiles_db_path.with_suffix(".tmp")
+                with fsspec.core.open(profiles_source, "rb") as src, open(profiles_tmp, "wb") as dst:
+                    dst.write(src.read())
+                profiles_tmp.rename(self._profiles_db_path)
+
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)
             self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
+            self._conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
             self._init_read_pool()
         self.apply_migrations()
 
@@ -857,7 +836,7 @@ def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOut
     """
     from iris.cluster.controller.schema import proto_cache, proto_decoder
 
-    decoder = proto_decoder(cluster_pb2.Controller.LaunchJobRequest)
+    decoder = proto_decoder(controller_pb2.Controller.LaunchJobRequest)
     now_ms = now.epoch_ms()
     executing_states = tuple(sorted(EXECUTING_TASK_STATES))
     placeholders = ",".join("?" for _ in executing_states)
@@ -939,10 +918,10 @@ def healthy_active_workers_with_attributes(db: ControllerDB) -> list:
         dc_replace(
             w,
             attributes=attrs_by_worker.get(w.worker_id, {}),
-            available_cpu_millicores=worker_available_cpu_millicores(w.total_cpu_millicores, w.committed_cpu_millicores),
-            available_memory=worker_available_memory(w.total_memory_bytes, w.committed_mem),
-            available_gpus=worker_available_gpus(w.total_gpu_count, w.committed_gpu),
-            available_tpus=worker_available_tpus(w.total_tpu_count, w.committed_tpu),
+            available_cpu_millicores=w.total_cpu_millicores - w.committed_cpu_millicores,
+            available_memory=w.total_memory_bytes - w.committed_mem,
+            available_gpus=w.total_gpu_count - w.committed_gpu,
+            available_tpus=w.total_tpu_count - w.committed_tpu,
         )
         for w in workers
     ]
@@ -956,7 +935,7 @@ def insert_task_profile(
     The DB trigger caps profiles at 10 per (task_id, profile_kind), evicting the oldest automatically.
     """
     db.execute(
-        "INSERT INTO task_profiles (task_id, profile_data, captured_at_ms, profile_kind) VALUES (?, ?, ?, ?)",
+        "INSERT INTO profiles.task_profiles (task_id, profile_data, captured_at_ms, profile_kind) VALUES (?, ?, ?, ?)",
         (task_id, profile_data, captured_at.epoch_ms(), profile_kind),
     )
 
@@ -973,13 +952,14 @@ def get_task_profiles(
     """
     if profile_kind is not None:
         query = (
-            "SELECT profile_data, captured_at_ms, profile_kind FROM task_profiles"
+            "SELECT profile_data, captured_at_ms, profile_kind FROM profiles.task_profiles"
             " WHERE task_id = ? AND profile_kind = ? ORDER BY id DESC"
         )
         params: tuple[str, ...] = (task_id, profile_kind)
     else:
         query = (
-            "SELECT profile_data, captured_at_ms, profile_kind FROM task_profiles" " WHERE task_id = ? ORDER BY id DESC"
+            "SELECT profile_data, captured_at_ms, profile_kind FROM profiles.task_profiles"
+            " WHERE task_id = ? ORDER BY id DESC"
         )
         params = (task_id,)
     with db.read_snapshot() as q:

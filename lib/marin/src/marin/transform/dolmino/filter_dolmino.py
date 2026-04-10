@@ -4,13 +4,6 @@
 """
 Filter dolmino dataset by minimum document length.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --memory=10GB --num-cpus=2 \
-    lib/marin/src/marin/transform/dolmino/filter_dolmino.py \
-    --input_path gs://path/to/dolmino \
-    --output_path gs://path/to/output \
-    --split wiki \
-    --min_length 1000
 """
 
 import dataclasses

@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
-from fray.v1.cluster.ray import get_scheduling_strategy
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.utils import remove_tpu_lockfile_on_exit
@@ -58,11 +57,6 @@ class ModelConfig:
 
 
 class Evaluator(ABC):
-    def _get_scheduling_strategy(self, resource_config: ResourceConfig | None):
-        if resource_config is None:
-            return None
-        return get_scheduling_strategy(resource_config)
-
     @abstractmethod
     def launch_evaluate_with_ray(
         self,

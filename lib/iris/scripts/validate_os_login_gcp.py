@@ -212,8 +212,9 @@ def main() -> int:
     cluster_config = load_config(args.config)
     vm_group = _choose_scale_group(cluster_config, want_vm=True, explicit_name=args.vm_group)
     tpu_group = _choose_scale_group(cluster_config, want_vm=False, explicit_name=args.tpu_group)
-    if not cluster_config.scale_groups[tpu_group].slice_template.preemptible:
-        raise ValueError(f"Scale group {tpu_group!r} must be preemptible for this validator")
+    tpu_capacity = cluster_config.scale_groups[tpu_group].resources.capacity_type
+    if tpu_capacity != config_pb2.CAPACITY_TYPE_PREEMPTIBLE:
+        raise ValueError(f"Scale group {tpu_group!r} must use capacity_type=preemptible for this validator")
 
     private_key, _comment = _make_temp_ssh_key(args.ttl)
     controller_service_account = cluster_config.controller.gcp.service_account

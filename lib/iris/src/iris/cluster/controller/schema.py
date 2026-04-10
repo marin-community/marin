@@ -18,7 +18,8 @@ from threading import Lock
 from typing import Any, Generic, TypeVar
 
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from rigging.timing import Timestamp
 
 T = TypeVar("T")
@@ -112,10 +113,10 @@ def proto_decoder(proto_factory: Callable[[], T]) -> Callable[[Any], T]:
     return decode
 
 
-def _constraint_list_decoder(blob: bytes | None) -> list[cluster_pb2.Constraint]:
+def _constraint_list_decoder(blob: bytes | None) -> list[job_pb2.Constraint]:
     if blob is None:
         return []
-    cl = cluster_pb2.ConstraintList()
+    cl = job_pb2.ConstraintList()
     cl.ParseFromString(blob)
     return list(cl.constraints)
 
@@ -557,8 +558,8 @@ JOBS = Table(
             "BLOB",
             "NOT NULL",
             python_name="request",
-            python_type=cluster_pb2.Controller.LaunchJobRequest,
-            decoder=proto_decoder(cluster_pb2.Controller.LaunchJobRequest),
+            python_type=controller_pb2.Controller.LaunchJobRequest,
+            decoder=proto_decoder(controller_pb2.Controller.LaunchJobRequest),
             expensive=True,
             cached=True,
         ),
@@ -618,8 +619,8 @@ JOBS = Table(
             "BLOB",
             "",
             python_name="resources",
-            python_type=cluster_pb2.ResourceSpecProto | None,
-            decoder=_nullable(proto_decoder(cluster_pb2.ResourceSpecProto)),
+            python_type=job_pb2.ResourceSpecProto | None,
+            decoder=_nullable(proto_decoder(job_pb2.ResourceSpecProto)),
             default=None,
             expensive=True,
             cached=True,
@@ -713,8 +714,8 @@ TASKS = Table(
             "BLOB",
             "",
             python_name="resource_usage",
-            python_type=cluster_pb2.ResourceUsage | None,
-            decoder=_nullable(proto_decoder(cluster_pb2.ResourceUsage)),
+            python_type=job_pb2.ResourceUsage | None,
+            decoder=_nullable(proto_decoder(job_pb2.ResourceUsage)),
             expensive=True,
         ),
         Column("current_attempt_id", "INTEGER", "NOT NULL DEFAULT -1", python_type=int, decoder=int),
@@ -840,8 +841,8 @@ WORKERS = Table(
             "BLOB",
             "NOT NULL",
             python_name="metadata",
-            python_type=cluster_pb2.WorkerMetadata,
-            decoder=proto_decoder(cluster_pb2.WorkerMetadata),
+            python_type=job_pb2.WorkerMetadata,
+            decoder=proto_decoder(job_pb2.WorkerMetadata),
             expensive=True,
         ),
         Column("healthy", "INTEGER", "NOT NULL CHECK (healthy IN (0, 1))", python_type=bool, decoder=_decode_bool_int),
@@ -1163,9 +1164,9 @@ LOGS = Table(
     indexes=("CREATE INDEX IF NOT EXISTS idx_logs_key ON logs(key, id)",),
 )
 
-# Migration 0005 + 0014
+# Migration 0005 + 0014 + 0023 (moved to profiles DB)
 TASK_PROFILES = Table(
-    "task_profiles",
+    "profiles.task_profiles",
     "tp",
     columns=(
         Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
@@ -1183,13 +1184,13 @@ TASK_PROFILES = Table(
         Column("profile_kind", "TEXT", "NOT NULL DEFAULT 'cpu'", python_type=str, decoder=str, default="cpu"),
     ),
     indexes=(
-        # Migration 0014 replaced idx_task_profiles_task with this
-        "CREATE INDEX IF NOT EXISTS idx_task_profiles_task_kind"
+        "CREATE INDEX IF NOT EXISTS profiles.idx_task_profiles_task_kind"
         " ON task_profiles(task_id, profile_kind, id DESC)",
     ),
     triggers=(
-        # Migration 0014 replaced the original trigger
-        """CREATE TRIGGER IF NOT EXISTS trg_task_profiles_cap
+        # Trigger lives in the profiles schema; SQLite prohibits qualified table
+        # names inside trigger bodies, so we use unqualified references.
+        """CREATE TRIGGER IF NOT EXISTS profiles.trg_task_profiles_cap
 AFTER INSERT ON task_profiles
 BEGIN
   DELETE FROM task_profiles
@@ -1319,7 +1320,6 @@ MAIN_TABLES: tuple[Table, ...] = (
     SLICES,
     RESERVATION_CLAIMS,
     LOGS,
-    TASK_PROFILES,
     USER_BUDGETS,
 )
 
@@ -1327,6 +1327,8 @@ AUTH_TABLES: tuple[Table, ...] = (
     AUTH_API_KEYS,
     AUTH_CONTROLLER_SECRETS,
 )
+
+PROFILES_TABLES: tuple[Table, ...] = (TASK_PROFILES,)
 
 # ---------------------------------------------------------------------------
 # Hand-written row dataclasses
@@ -1356,7 +1358,7 @@ class JobRow:
     has_reservation: bool
     name: str
     depth: int
-    resources: cluster_pb2.ResourceSpecProto | None
+    resources: job_pb2.ResourceSpecProto | None
     has_coscheduling: bool
     coscheduling_group_by: str
     scheduling_timeout_ms: int | None
@@ -1381,8 +1383,8 @@ class JobSchedulingRow:
     has_reservation: bool
     name: str
     depth: int
-    resources: cluster_pb2.ResourceSpecProto | None
-    constraints: list[cluster_pb2.Constraint]
+    resources: job_pb2.ResourceSpecProto | None
+    constraints: list[job_pb2.Constraint]
     has_coscheduling: bool
     coscheduling_group_by: str
     scheduling_timeout_ms: int | None
@@ -1407,13 +1409,13 @@ class JobDetailRow:
     has_reservation: bool
     name: str
     depth: int
-    resources: cluster_pb2.ResourceSpecProto | None
-    constraints: list[cluster_pb2.Constraint]
+    resources: job_pb2.ResourceSpecProto | None
+    constraints: list[job_pb2.Constraint]
     has_coscheduling: bool
     coscheduling_group_by: str
     scheduling_timeout_ms: int | None
     max_task_failures: int
-    request: cluster_pb2.Controller.LaunchJobRequest
+    request: controller_pb2.Controller.LaunchJobRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -1450,7 +1452,7 @@ class TaskDetailRow:
     exit_code: int | None
     started_at: Timestamp | None
     finished_at: Timestamp | None
-    resource_usage: cluster_pb2.ResourceUsage | None
+    resource_usage: job_pb2.ResourceUsage | None
     current_worker_id: WorkerId | None
     current_worker_address: str | None
     container_id: str | None = None
@@ -1504,7 +1506,7 @@ class WorkerDetailRow:
     total_tpu_count: int
     device_type: str
     device_variant: str
-    metadata: cluster_pb2.WorkerMetadata
+    metadata: job_pb2.WorkerMetadata
     attributes: dict = dataclasses.field(default_factory=dict)
     available_cpu_millicores: int = 0
     available_memory: int = 0

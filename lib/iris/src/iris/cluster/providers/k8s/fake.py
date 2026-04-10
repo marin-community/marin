@@ -26,9 +26,11 @@ from iris.cluster.service_mode import ServiceMode
 
 from iris.cluster.providers.k8s.types import (
     ExecResult,
+    K8sResource,
     KubectlError,
     KubectlLogLine,
     KubectlLogResult,
+    PodResourceUsage,
     parse_k8s_quantity,
 )
 
@@ -45,22 +47,6 @@ VALID_RESOURCE_TYPES = frozenset(
         "rdma/ib",
     }
 )
-
-# kubectl accepts plural resource names (e.g. "pods") but manifests use
-# singular kind (e.g. "Pod"). Normalize for consistent internal lookup.
-_PLURAL_TO_SINGULAR = {
-    "pods": "pod",
-    "nodes": "node",
-    "configmaps": "configmap",
-    "events": "event",
-    "deployments": "deployment",
-    "replicasets": "replicaset",
-    "statefulsets": "statefulset",
-    "daemonsets": "daemonset",
-    "jobs": "job",
-    "services": "service",
-    "nodepools": "nodepool",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -139,12 +125,6 @@ class NodePoolConfig:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
-
-
-def _normalize_resource(resource: str) -> str:
-    """Normalize a resource type string to its singular lowercase form."""
-    lower = resource.lower()
-    return _PLURAL_TO_SINGULAR.get(lower, lower)
 
 
 def _extract_resource_requests(spec: dict) -> dict[str, int]:
@@ -301,7 +281,8 @@ class InMemoryK8sService:
         self._exec_responses: dict[str, list[ExecResult]] = {}
         self._file_contents: dict[tuple[str, str], bytes] = {}  # (pod_name, path) -> data
         self._rm_files_calls: list[tuple[str, list[str]]] = []
-        self._top_pod_overrides: dict[str, tuple[int, int] | None] = {}
+        self._top_pod_overrides: dict[str, PodResourceUsage | None] = {}
+        self._log_watermarks: dict[str, int] = {}  # pod_name -> bytes consumed
 
         # Node model
         self._nodes: dict[str, FakeNode] = {}
@@ -321,6 +302,11 @@ class InMemoryK8sService:
         kind = manifest.get("kind", "")
         if not kind:
             raise KubectlError("Manifest missing 'kind'")
+
+        try:
+            K8sResource.from_kind(kind)
+        except ValueError as e:
+            raise KubectlError(f"Unknown manifest kind: {kind!r}") from e
 
         name = manifest.get("metadata", {}).get("name", "")
         if not name:
@@ -580,7 +566,7 @@ class InMemoryK8sService:
 
     def transition_pod(self, name: str, phase: str, *, exit_code: int | None = None, reason: str | None = None) -> None:
         """Manually override pod status phase and optional container status."""
-        key = ("pod", name)
+        key = (K8sResource.PODS.plural, name)
         manifest = self._resources.get(key)
         if manifest is None:
             raise KubectlError(f"Pod {name!r} not found")
@@ -616,17 +602,17 @@ class InMemoryK8sService:
         """Pre-populate file content readable via read_file."""
         self._file_contents[(pod_name, path)] = data
 
-    def set_top_pod(self, pod_name: str, result: tuple[int, int] | None) -> None:
+    def set_top_pod(self, pod_name: str, result: PodResourceUsage | None) -> None:
         """Configure a specific top_pod result for a pod."""
         self._top_pod_overrides[pod_name] = result
 
-    def seed_resource(self, kind: str, name: str, manifest: dict) -> None:
+    def seed_resource(self, resource: K8sResource, name: str, manifest: dict) -> None:
         """Directly insert a resource into the in-memory store for test setup.
 
         Use this to pre-populate pods, nodes, etc. without going through
         apply_json validation and scheduling.
         """
-        self._resources[(kind.lower(), name)] = manifest
+        self._resources[(resource.plural, name)] = manifest
 
     # -- Protocol methods --
 
@@ -637,34 +623,34 @@ class InMemoryK8sService:
     def apply_json(self, manifest: dict) -> None:
         self._check_failure("apply_json")
         self._validate_manifest(manifest)
-        kind = _normalize_resource(manifest["kind"])
+        resource = K8sResource.from_kind(manifest["kind"])
         name = manifest["metadata"]["name"]
-        self._resources[(kind, name)] = manifest
+        self._resources[(resource.plural, name)] = manifest
 
         # Run scheduling for pod-bearing manifests
-        if kind == "pod":
+        if resource is K8sResource.PODS:
             self._schedule_pod(manifest)
 
-        if self._mode == ServiceMode.LOCAL and kind == "pod":
+        if self._mode == ServiceMode.LOCAL and resource is K8sResource.PODS:
             self._run_pod_locally(name, manifest)
 
-    def get_json(self, resource: str, name: str, *, cluster_scoped: bool = False) -> dict | None:
+    def get_json(self, resource: K8sResource, name: str) -> dict | None:
         self._check_failure("get_json")
-        return self._resources.get((_normalize_resource(resource), name))
+        return self._resources.get((resource.plural, name))
 
     def list_json(
         self,
-        resource: str,
+        resource: K8sResource,
         *,
         labels: dict[str, str] | None = None,
         field_selector: str | None = None,
-        cluster_scoped: bool = False,
     ) -> list[dict]:
         self._check_failure("list_json")
-        normalized = _normalize_resource(resource)
+        plural = resource.plural
+        self._check_failure(f"list_json:{plural}")
 
         # Nodes: merge FakeNode objects and any raw node manifests in _resources
-        if normalized == "node":
+        if resource is K8sResource.NODES:
             results = []
             seen_names: set[str] = set()
             for node in self._nodes.values():
@@ -674,8 +660,8 @@ class InMemoryK8sService:
                 results.append(node.to_k8s_dict())
                 seen_names.add(node.name)
             # Also include raw node dicts stored via direct _resources manipulation
-            for (kind, name), manifest in self._resources.items():
-                if kind != "node" or name in seen_names:
+            for (stored_plural, name), manifest in self._resources.items():
+                if stored_plural != plural or name in seen_names:
                     continue
                 if labels:
                     res_labels = manifest.get("metadata", {}).get("labels", {})
@@ -685,8 +671,8 @@ class InMemoryK8sService:
             return results
 
         results = []
-        for (kind, _), manifest in self._resources.items():
-            if kind != normalized:
+        for (stored_plural, _), manifest in self._resources.items():
+            if stored_plural != plural:
                 continue
             if labels:
                 res_labels = manifest.get("metadata", {}).get("labels", {})
@@ -697,20 +683,33 @@ class InMemoryK8sService:
             results.append(manifest)
         return results
 
-    def delete(
-        self, resource: str, name: str, *, cluster_scoped: bool = False, force: bool = False, wait: bool = True
-    ) -> None:
+    def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None:
         self._check_failure("delete")
-        normalized = _normalize_resource(resource)
-        self._resources.pop((normalized, name), None)
+        self._resources.pop((resource.plural, name), None)
 
         # Release resources when deleting a pod
-        if normalized == "pod":
+        if resource is K8sResource.PODS:
             self._release_pod_resources(name)
 
-    def delete_many(self, resource: str, names: list[str], *, cluster_scoped: bool = False, wait: bool = False) -> None:
+    def delete_many(self, resource: K8sResource, names: list[str], *, wait: bool = False) -> None:
         """Delete multiple resources by name."""
         for name in names:
+            self.delete(resource, name)
+
+    def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
+        """Delete all resources matching the given label selector."""
+        self._check_failure("delete_by_labels")
+        if not labels:
+            return
+        plural = resource.plural
+        to_delete = []
+        for (stored_plural, name), manifest in self._resources.items():
+            if stored_plural != plural:
+                continue
+            res_labels = manifest.get("metadata", {}).get("labels", {})
+            if all(res_labels.get(k) == v for k, v in labels.items()):
+                to_delete.append(name)
+        for name in to_delete:
             self.delete(resource, name)
 
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str:
@@ -727,20 +726,28 @@ class InMemoryK8sService:
         pod_name: str,
         *,
         container: str | None = None,
-        byte_offset: int = 0,
+        since_time: datetime | None = None,
+        limit_bytes: int | None = None,
     ) -> KubectlLogResult:
         self._check_failure("stream_logs")
+        pod_exists = any(name == pod_name for (_, name) in self._resources)
+        has_logs = pod_name in self._logs
+        if not pod_exists and not has_logs:
+            raise KubectlError(f"pod {pod_name!r} not found")
         text = self._logs.get(pod_name, "")
         raw = text.encode("utf-8")
-        if len(raw) <= byte_offset:
-            return KubectlLogResult(lines=[], byte_offset=byte_offset)
-        remaining = raw[byte_offset:].decode("utf-8")
+        watermark = self._log_watermarks.get(pod_name, 0) if since_time is not None else 0
+        if len(raw) <= watermark:
+            return KubectlLogResult(lines=[], last_timestamp=since_time)
+        remaining = raw[watermark:].decode("utf-8")
         lines = [
             KubectlLogLine(timestamp=datetime.now(UTC), stream="stdout", data=line)
             for line in remaining.splitlines()
             if line
         ]
-        return KubectlLogResult(lines=lines, byte_offset=len(raw))
+        self._log_watermarks[pod_name] = len(raw)
+        last_ts = lines[-1].timestamp if lines else since_time
+        return KubectlLogResult(lines=lines, last_timestamp=last_ts)
 
     def exec(
         self,
@@ -758,16 +765,16 @@ class InMemoryK8sService:
             return ExecResult(returncode=1, stdout="", stderr=f"pod {pod_name!r} not found")
         return ExecResult(returncode=0, stdout="", stderr="")
 
-    def set_image(self, resource: str, name: str, container: str, image: str, *, namespaced: bool = False) -> None:
+    def set_image(self, resource: K8sResource, name: str, container: str, image: str) -> None:
         self._check_failure("set_image")
-        manifest = self._resources.get((_normalize_resource(resource), name))
+        manifest = self._resources.get((resource.plural, name))
         if manifest is None:
-            raise KubectlError(f"{resource}/{name} not found")
+            raise KubectlError(f"{resource.plural}/{name} not found")
 
-    def rollout_restart(self, resource: str, name: str, *, namespaced: bool = False) -> None:
+    def rollout_restart(self, resource: K8sResource, name: str) -> None:
         self._check_failure("rollout_restart")
 
-    def rollout_status(self, resource: str, name: str, *, timeout: float = 600.0, namespaced: bool = False) -> None:
+    def rollout_status(self, resource: K8sResource, name: str, *, timeout: float = 600.0) -> None:
         self._check_failure("rollout_status")
 
     def get_events(self, field_selector: str | None = None) -> list[dict]:
@@ -780,12 +787,12 @@ class InMemoryK8sService:
                 results.append(event)
         return results
 
-    def top_pod(self, pod_name: str) -> tuple[int, int] | None:
+    def top_pod(self, pod_name: str) -> PodResourceUsage | None:
         self._check_failure("top_pod")
         if pod_name in self._top_pod_overrides:
             return self._top_pod_overrides[pod_name]
         if any(name == pod_name for (_, name) in self._resources):
-            return (100, 256 * 1024 * 1024)  # 100m CPU, 256Mi memory
+            return PodResourceUsage(cpu_millicores=100, memory_bytes=256 * 1024 * 1024)
         return None
 
     def read_file(

@@ -167,6 +167,73 @@ jobs:
             --tb=short -v \
             --timeout=1200
 
+      - name: Collect controller and worker logs
+        if: failure()
+        env:
+          LOG_DIR: ${{ github.workspace }}/iris-cloud-logs
+        run: |
+          mkdir -p "$LOG_DIR"
+          if [ -z "$IRIS_CONTROLLER_URL" ]; then
+            echo "No controller URL, skipping log collection"
+            exit 0
+          fi
+          cd lib/iris
+
+          # Cluster status (controller process info + worker summary)
+          uv run --group dev iris \
+            --config=examples/smoke-gcp.yaml \
+            cluster status \
+            --url "$IRIS_CONTROLLER_URL" \
+            > "$LOG_DIR/cluster-status.txt" 2>&1 || true
+
+          # Fetch recent controller and worker logs via RPC
+          uv run --group dev python3 -c "
+          import json, sys
+          from iris.rpc import controller_connect
+          from iris.rpc import controller_pb2, job_pb2
+
+          url = '$IRIS_CONTROLLER_URL'
+          client = controller_connect.ControllerServiceClientSync(url)
+
+          # Controller process status with recent logs
+          proc = client.get_process_status(job_pb2.GetProcessStatusRequest())
+          with open('$LOG_DIR/controller-process.json', 'w') as f:
+              json.dump({
+                  'git_hash': proc.process_info.git_hash,
+                  'pid': proc.process_info.pid,
+                  'memory_mb': proc.process_info.memory_mb,
+                  'recent_logs': [l.message for l in proc.process_info.recent_logs],
+              }, f, indent=2)
+
+          # List workers and fetch status for each
+          workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
+          for w in workers:
+              wid = w.worker_id
+              try:
+                  status = client.get_worker_status(
+                      controller_pb2.Controller.GetWorkerStatusRequest(worker_id=wid)
+                  )
+                  with open(f'$LOG_DIR/worker-{wid}.json', 'w') as f:
+                      json.dump({
+                          'worker_id': wid,
+                          'healthy': w.healthy,
+                          'address': w.address,
+                          'recent_logs': [l.message for l in (status.process_info.recent_logs if status.HasField('process_info') else [])],
+                      }, f, indent=2)
+              except Exception as e:
+                  with open(f'$LOG_DIR/worker-{wid}.txt', 'w') as f:
+                      f.write(f'Failed to fetch status: {e}\n')
+          " 2>&1 || true
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iris-cloud-smoke-logs
+          path: iris-cloud-logs/
+          retention-days: 14
+          if-no-files-found: ignore
+
       - name: Stop tunnel
         if: always()
         run: |

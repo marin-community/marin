@@ -10,7 +10,9 @@ from connectrpc.errors import ConnectError
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.log_server.server import LogServiceImpl
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from iris.rpc.auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Timestamp
 
@@ -40,7 +42,7 @@ def _make_service(state, mock_controller, tmp_path, auth=None):
         state._db,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
+        log_service=LogServiceImpl(),
         auth=auth or ControllerAuth(),
     )
 
@@ -63,12 +65,12 @@ def _as_user(fn, user_id="alice", *args, **kwargs):
         _verified_identity.reset(reset)
 
 
-def _make_job_request(name: str, band: int = 0) -> cluster_pb2.Controller.LaunchJobRequest:
-    return cluster_pb2.Controller.LaunchJobRequest(
+def _make_job_request(name: str, band: int = 0) -> controller_pb2.Controller.LaunchJobRequest:
+    return controller_pb2.Controller.LaunchJobRequest(
         name=name,
         entrypoint=make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
         priority_band=band,
     )
@@ -85,10 +87,10 @@ def test_admin_can_set_budget(state, mock_controller, tmp_path):
     # Set budget as admin
     _as_admin(
         service.set_user_budget,
-        cluster_pb2.Controller.SetUserBudgetRequest(
+        controller_pb2.Controller.SetUserBudgetRequest(
             user_id="alice",
             budget_limit=5000,
-            max_band=cluster_pb2.PRIORITY_BAND_INTERACTIVE,
+            max_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         ),
         None,
     )
@@ -96,12 +98,12 @@ def test_admin_can_set_budget(state, mock_controller, tmp_path):
     # Get budget back
     resp = _as_admin(
         service.get_user_budget,
-        cluster_pb2.Controller.GetUserBudgetRequest(user_id="alice"),
+        controller_pb2.Controller.GetUserBudgetRequest(user_id="alice"),
         None,
     )
     assert resp.user_id == "alice"
     assert resp.budget_limit == 5000
-    assert resp.max_band == cluster_pb2.PRIORITY_BAND_INTERACTIVE
+    assert resp.max_band == job_pb2.PRIORITY_BAND_INTERACTIVE
     assert resp.budget_spent == 0
 
 
@@ -117,10 +119,10 @@ def test_non_admin_cannot_set_budget(state, mock_controller, tmp_path):
         _as_user(
             service.set_user_budget,
             "alice",
-            cluster_pb2.Controller.SetUserBudgetRequest(
+            controller_pb2.Controller.SetUserBudgetRequest(
                 user_id="alice",
                 budget_limit=5000,
-                max_band=cluster_pb2.PRIORITY_BAND_INTERACTIVE,
+                max_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
             ),
             None,
         )
@@ -137,7 +139,7 @@ def test_non_admin_cannot_submit_production(state, mock_controller, tmp_path):
     service = _make_service(state, mock_controller, tmp_path, auth=auth)
 
     # Submit PRODUCTION band as non-admin user -> should fail
-    request = _make_job_request("/alice/prod-job", band=cluster_pb2.PRIORITY_BAND_PRODUCTION)
+    request = _make_job_request("/alice/prod-job", band=job_pb2.PRIORITY_BAND_PRODUCTION)
     with pytest.raises(ConnectError) as exc_info:
         _as_user(
             service.launch_job,
@@ -161,16 +163,16 @@ def test_band_validation_rejects_above_max_band(state, mock_controller, tmp_path
     # Set alice's max_band to BATCH (sort key 3)
     _as_admin(
         service.set_user_budget,
-        cluster_pb2.Controller.SetUserBudgetRequest(
+        controller_pb2.Controller.SetUserBudgetRequest(
             user_id="alice",
             budget_limit=0,
-            max_band=cluster_pb2.PRIORITY_BAND_BATCH,
+            max_band=job_pb2.PRIORITY_BAND_BATCH,
         ),
         None,
     )
 
     # Try to submit INTERACTIVE (sort key 2 < 3) -> should fail
-    request = _make_job_request("/alice/interactive-job", band=cluster_pb2.PRIORITY_BAND_INTERACTIVE)
+    request = _make_job_request("/alice/interactive-job", band=job_pb2.PRIORITY_BAND_INTERACTIVE)
     with pytest.raises(ConnectError) as exc_info:
         _as_user(
             service.launch_job,
@@ -193,10 +195,10 @@ def test_budget_spend_reflects_running_tasks(state, mock_controller, tmp_path):
     # Set budget for alice
     _as_admin(
         service.set_user_budget,
-        cluster_pb2.Controller.SetUserBudgetRequest(
+        controller_pb2.Controller.SetUserBudgetRequest(
             user_id="alice",
             budget_limit=10000,
-            max_band=cluster_pb2.PRIORITY_BAND_INTERACTIVE,
+            max_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         ),
         None,
     )
@@ -211,7 +213,7 @@ def test_budget_spend_reflects_running_tasks(state, mock_controller, tmp_path):
     state.register_or_refresh_worker(
         worker_id=worker_id,
         address="worker-1:8080",
-        metadata=cluster_pb2.WorkerMetadata(
+        metadata=job_pb2.WorkerMetadata(
             hostname="worker-1",
             ip_address="127.0.0.1",
             cpu_count=8,
@@ -227,14 +229,14 @@ def test_budget_spend_reflects_running_tasks(state, mock_controller, tmp_path):
         HeartbeatApplyRequest(
             worker_id=worker_id,
             worker_resource_snapshot=None,
-            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING)],
+            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
         )
     )
 
     # Get budget — spend should be non-zero
     resp = _as_admin(
         service.get_user_budget,
-        cluster_pb2.Controller.GetUserBudgetRequest(user_id="alice"),
+        controller_pb2.Controller.GetUserBudgetRequest(user_id="alice"),
         None,
     )
     assert resp.budget_spent > 0
@@ -250,13 +252,13 @@ def test_list_user_budgets(state, mock_controller, tmp_path):
 
     # Set budgets for multiple users
     for user_id, limit, band in [
-        ("alice", 5000, cluster_pb2.PRIORITY_BAND_INTERACTIVE),
-        ("bob", 3000, cluster_pb2.PRIORITY_BAND_BATCH),
-        ("charlie", 0, cluster_pb2.PRIORITY_BAND_PRODUCTION),
+        ("alice", 5000, job_pb2.PRIORITY_BAND_INTERACTIVE),
+        ("bob", 3000, job_pb2.PRIORITY_BAND_BATCH),
+        ("charlie", 0, job_pb2.PRIORITY_BAND_PRODUCTION),
     ]:
         _as_admin(
             service.set_user_budget,
-            cluster_pb2.Controller.SetUserBudgetRequest(
+            controller_pb2.Controller.SetUserBudgetRequest(
                 user_id=user_id,
                 budget_limit=limit,
                 max_band=band,
@@ -267,7 +269,7 @@ def test_list_user_budgets(state, mock_controller, tmp_path):
     # List all budgets
     resp = _as_admin(
         service.list_user_budgets,
-        cluster_pb2.Controller.ListUserBudgetsRequest(),
+        controller_pb2.Controller.ListUserBudgetsRequest(),
         None,
     )
     assert len(resp.users) == 3
@@ -279,7 +281,7 @@ def test_list_user_budgets(state, mock_controller, tmp_path):
     assert by_user["alice"].budget_limit == 5000
     assert by_user["bob"].budget_limit == 3000
     assert by_user["charlie"].budget_limit == 0
-    assert by_user["charlie"].max_band == cluster_pb2.PRIORITY_BAND_PRODUCTION
+    assert by_user["charlie"].max_band == job_pb2.PRIORITY_BAND_PRODUCTION
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +294,7 @@ def test_admin_can_submit_production(state, mock_controller, tmp_path):
     auth = ControllerAuth(provider="static")
     service = _make_service(state, mock_controller, tmp_path, auth=auth)
 
-    request = _make_job_request("/admin/prod-job", band=cluster_pb2.PRIORITY_BAND_PRODUCTION)
+    request = _make_job_request("/admin/prod-job", band=job_pb2.PRIORITY_BAND_PRODUCTION)
     resp = _as_admin(service.launch_job, request, None)
     assert resp.job_id == "/admin/prod-job"
 
@@ -308,7 +310,7 @@ def test_get_budget_not_found(state, mock_controller, tmp_path):
     with pytest.raises(ConnectError) as exc_info:
         _as_admin(
             service.get_user_budget,
-            cluster_pb2.Controller.GetUserBudgetRequest(user_id="nonexistent"),
+            controller_pb2.Controller.GetUserBudgetRequest(user_id="nonexistent"),
             None,
         )
     assert exc_info.value.code == Code.NOT_FOUND
@@ -326,7 +328,7 @@ def test_set_budget_invalid_max_band(state, mock_controller, tmp_path):
     with pytest.raises(ConnectError) as exc_info:
         _as_admin(
             service.set_user_budget,
-            cluster_pb2.Controller.SetUserBudgetRequest(
+            controller_pb2.Controller.SetUserBudgetRequest(
                 user_id="alice",
                 budget_limit=5000,
                 max_band=99,  # invalid
@@ -348,10 +350,10 @@ def test_set_budget_empty_user_id(state, mock_controller, tmp_path):
     with pytest.raises(ConnectError) as exc_info:
         _as_admin(
             service.set_user_budget,
-            cluster_pb2.Controller.SetUserBudgetRequest(
+            controller_pb2.Controller.SetUserBudgetRequest(
                 user_id="",
                 budget_limit=5000,
-                max_band=cluster_pb2.PRIORITY_BAND_INTERACTIVE,
+                max_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
             ),
             None,
         )
@@ -386,10 +388,10 @@ def test_user_can_read_own_budget(state, mock_controller, tmp_path):
     # Set budget as admin first
     _as_admin(
         service.set_user_budget,
-        cluster_pb2.Controller.SetUserBudgetRequest(
+        controller_pb2.Controller.SetUserBudgetRequest(
             user_id="alice",
             budget_limit=5000,
-            max_band=cluster_pb2.PRIORITY_BAND_INTERACTIVE,
+            max_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         ),
         None,
     )
@@ -398,7 +400,7 @@ def test_user_can_read_own_budget(state, mock_controller, tmp_path):
     resp = _as_user(
         service.get_user_budget,
         "alice",
-        cluster_pb2.Controller.GetUserBudgetRequest(user_id="alice"),
+        controller_pb2.Controller.GetUserBudgetRequest(user_id="alice"),
         None,
     )
     assert resp.user_id == "alice"

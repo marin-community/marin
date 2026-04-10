@@ -1,5 +1,5 @@
 # Iris production configuration for Marin cluster
-# Usage: uv run iris cluster --config=examples/marin.yaml start
+# Usage: uv run iris --cluster=marin cluster start
 
 platform:
   label_prefix: marin
@@ -35,403 +35,136 @@ controller:
     boot_disk_size_gb: 100
     port: 10000
 
+# ---------------------------------------------------------------------------
+# TPU pools — each pool defines a TPU family + scheduling class.
+# Sizes are expanded into per-(size, zone) scale groups with topology-derived
+# fields (device_variant, num_vms, device_count) and allocation tier metadata
+# (quota_pool, allocation_tier) for monotonic quota blocking.
+# ---------------------------------------------------------------------------
+tpu_pools:
+  # v5e (v5litepod) — europe-west4-b, us-west4-a
+  # Per-VM: ct5lp-hightpu-4t — 112 vCPU, 192 GiB RAM
+  v5e-serving:
+    family: v5e
+    zones: [europe-west4-b, us-west4-a]
+    base_priority: 10
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv5-lite
+    sizes:
+      4:   { buffer_slices: 2, max_slices: 1024 }
+      8:   { buffer_slices: 2, max_slices: 512 }
+
+  v5e-preemptible:
+    family: v5e
+    zones: [europe-west4-b, us-west4-a]
+    base_priority: 10
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv5-lite
+    sizes:
+      16:  { max_slices: 256 }
+      32:  { max_slices: 128 }
+      64:  { max_slices: 64 }
+      128: { max_slices: 32 }
+      256: { max_slices: 16 }
+
+  # v6e — europe-west4-a, us-east1-d, us-east5-b
+  # Per-VM: ct6e-standard-4t — 180 vCPU, 720 GiB RAM
+  v6e-preemptible:
+    family: v6e
+    zones: [europe-west4-a, us-east1-d, us-east5-b]
+    base_priority: 10
+    resources: { cpu: 180, ram: 720GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv6e
+    sizes:
+      4:   { buffer_slices: 2, max_slices: 1024 }
+      8:   { max_slices: 512 }
+      16:  { max_slices: 256 }
+      32:  { max_slices: 128 }
+      64:  { max_slices: 64 }
+      128: { max_slices: 32 }
+      256: { max_slices: 16 }
+
+  # v5p — us-central1-a, us-east5-a
+  # Per-VM: ct5p-hightpu-4t — 208 vCPU, 448 GiB RAM
+  v5p-preemptible:
+    family: v5p
+    zones: [us-central1-a, us-east5-a]
+    base_priority: 20
+    resources: { cpu: 208, ram: 448GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv5
+    sizes:
+      8:    { max_slices: 2048 }
+      16:   { max_slices: 1024 }
+      32:   { max_slices: 512 }
+      64:   { max_slices: 256 }
+      128:  { max_slices: 128 }
+      256:  { max_slices: 64 }
+      512:  { max_slices: 32 }
+      1024: { max_slices: 16 }
+      2048: { max_slices: 8 }
+
+  # v4 — us-central2-b
+  # Per-VM: ct4p-hightpu-4t — 240 vCPU, ~400 GiB RAM
+  v4-preemptible:
+    family: v4
+    zones: [us-central2-b]
+    base_priority: 20
+    resources: { cpu: 240, ram: 400GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: tpu-ubuntu2204-base
+    sizes:
+      8:    { max_slices: 2048 }
+      16:   { max_slices: 1024 }
+      32:   { max_slices: 512 }
+      64:   { max_slices: 256 }
+      128:  { max_slices: 128 }
+      256:  { max_slices: 64 }
+      512:  { max_slices: 32 }
+      1024: { max_slices: 16 }
+      2048: { max_slices: 8 }
+      4096: { max_slices: 4 }
+
+  v4-reserved:
+    family: v4
+    zones: [us-central2-b]
+    base_priority: 1000
+    resources: { cpu: 240, ram: 400GB, disk: 100GB, capacity_type: reserved }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: tpu-ubuntu2204-base
+    sizes:
+      32: { buffer_slices: 0, max_slices: 4 }
+
+# ---------------------------------------------------------------------------
+# Non-TPU scale groups (not part of tpu_pools)
+# ---------------------------------------------------------------------------
 scale_groups:
-  # Low-priority fallback CPU VM group for non-preemptible scheduling.
-  # Intentionally lower priority than accelerator groups.
-  # e2-highmem-2: best on-demand RAM/$ on GCP (~$0.09/hr, 8 GB/vCPU).
+  # Low-priority fallback CPU VM group for on-demand scheduling.
+  # n2-highmem-2: 2 vCPU / 16 GiB, available in all target zones including us-central2-b.
   cpu_vm_e2_highmem_2_ondemand:
     zones: [us-central1-a, us-central2-b, us-east1-b, us-east1-d, us-east5-a, us-east5-b, us-west1-a, us-west4-a, europe-west4-a, europe-west4-b]
     num_vms: 1
-    priority: 1000
-    resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, preemptible: false }
-    min_slices: 0
+    priority: 500
+    resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
+    buffer_slices: 0
     max_slices: 4
     slice_template:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         mode: GCP_SLICE_MODE_VM
-        machine_type: e2-highmem-2
-
-  # ---------------------------------------------------------------------------
-  # v5e (v5litepod) — europe-west4-b, us-west4-a
-  # Per-VM: ct5lp-hightpu-4t — 112 vCPU, 192 GiB RAM, 4 TPU chips
-  # ---------------------------------------------------------------------------
-  tpu_v5e_4:
-    zones: [europe-west4-b, us-west4-a]
-    num_vms: 1
-    priority: 10
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-4, device_count: 4, preemptible: true }
-    min_slices: 3
-    max_slices: 1024
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5-lite
-  tpu_v5e_8:
-    zones: [europe-west4-b, us-west4-a]
-    num_vms: 1
-    priority: 20
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-8, device_count: 8, preemptible: true }
-    min_slices: 0
-    max_slices: 512
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5-lite
-  tpu_v5e_16:
-    zones: [europe-west4-b, us-west4-a]
-    num_vms: 4
-    priority: 30
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-16, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 256
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5-lite
-  tpu_v5e_32:
-    zones: [europe-west4-b, us-west4-a]
-    num_vms: 8
-    priority: 40
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-32, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 128
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5-lite
-  tpu_v5e_64:
-    zones: [europe-west4-b, us-west4-a]
-    num_vms: 16
-    priority: 50
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-64, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 64
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5-lite
-  tpu_v5e_128:
-    zones: [europe-west4-b, us-west4-a]
-    num_vms: 32
-    priority: 60
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-128, device_count: 4, preemptible: true }
-    min_slices: 1
-    max_slices: 32
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5-lite
-  tpu_v5e_256:
-    zones: [europe-west4-b, us-west4-a]
-    num_vms: 64
-    priority: 70
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-256, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 16
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5-lite
-
-  # ---------------------------------------------------------------------------
-  # v6e — europe-west4-a, us-east1-d, us-east5-b
-  # Per-VM: ct6e-standard-4t — 180 vCPU, 720 GiB RAM, 4 TPU chips
-  # ---------------------------------------------------------------------------
-  tpu_v6e_4:
-    zones: [europe-west4-a, us-east1-d, us-east5-b]
-    num_vms: 1
-    priority: 10
-    resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-4, device_count: 4, preemptible: true }
-    min_slices: 1
-    max_slices: 1024
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv6e
-  tpu_v6e_8:
-    zones: [europe-west4-a, us-east1-d, us-east5-b]
-    num_vms: 1
-    priority: 20
-    resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-8, device_count: 8, preemptible: true }
-    min_slices: 0
-    max_slices: 512
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv6e
-  tpu_v6e_16:
-    zones: [europe-west4-a, us-east1-d, us-east5-b]
-    num_vms: 4
-    priority: 30
-    resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-16, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 256
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv6e
-  tpu_v6e_32:
-    zones: [europe-west4-a, us-east1-d, us-east5-b]
-    num_vms: 8
-    priority: 40
-    resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-32, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 128
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv6e
-  tpu_v6e_64:
-    zones: [europe-west4-a, us-east1-d, us-east5-b]
-    num_vms: 16
-    priority: 50
-    resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-64, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 64
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv6e
-  tpu_v6e_128:
-    zones: [europe-west4-a, us-east1-d, us-east5-b]
-    num_vms: 32
-    priority: 60
-    resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-128, device_count: 4, preemptible: true }
-    min_slices: 1
-    max_slices: 32
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv6e
-  tpu_v6e_256:
-    zones: [europe-west4-a, us-east1-d, us-east5-b]
-    num_vms: 64
-    priority: 70
-    resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-256, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 16
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv6e
-
-  # ---------------------------------------------------------------------------
-  # v5p — us-central1-a, us-east5-a
-  # Per-VM: ct5p-hightpu-4t — 208 vCPU, 448 GiB RAM, 4 TPU chips
-  # num_vms must match iris.cluster.types TPU vm_count for gang-scheduled jobs.
-  # ---------------------------------------------------------------------------
-  tpu_v5p_8:
-    zones: [us-central1-a, us-east5-a]
-    num_vms: 1
-    priority: 20
-    resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-8, device_count: 4, preemptible: true }
-    min_slices: 8
-    max_slices: 2048
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5
-  tpu_v5p_16:
-    zones: [us-central1-a, us-east5-a]
-    num_vms: 2
-    priority: 30
-    resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-16, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 1024
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5
-  tpu_v5p_32:
-    zones: [us-central1-a, us-east5-a]
-    num_vms: 4
-    priority: 40
-    resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-32, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 512
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5
-  tpu_v5p_64:
-    zones: [us-central1-a, us-east5-a]
-    num_vms: 8
-    priority: 50
-    resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-64, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 256
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5
-  tpu_v5p_128:
-    zones: [us-central1-a, us-east5-a]
-    num_vms: 16
-    priority: 60
-    resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-128, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 128
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5
-  tpu_v5p_256:
-    zones: [us-central1-a, us-east5-a]
-    num_vms: 32
-    priority: 70
-    resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-256, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 64
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5
-  tpu_v5p_512:
-    zones: [us-central1-a, us-east5-a]
-    num_vms: 64
-    priority: 80
-    resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-512, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 32
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5
-  tpu_v5p_1024:
-    zones: [us-central1-a, us-east5-a]
-    num_vms: 128
-    priority: 90
-    resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-1024, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 16
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5
-  tpu_v5p_2048:
-    zones: [us-central1-a, us-east5-a]
-    num_vms: 256
-    priority: 100
-    resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-2048, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 8
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: v2-alpha-tpuv5
-
-  # ---------------------------------------------------------------------------
-  # v4 — us-central2-b
-  # Per-VM: ct4p-hightpu-4t — 240 vCPU, ~400 GiB RAM, 4 TPU chips
-  # ---------------------------------------------------------------------------
-  tpu_v4_8:
-    zones: [us-central2-b]
-    num_vms: 1
-    priority: 20
-    resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-8, device_count: 4, preemptible: true }
-    min_slices: 2
-    max_slices: 2048
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: tpu-ubuntu2204-base
-  tpu_v4_16:
-    zones: [us-central2-b]
-    num_vms: 2
-    priority: 30
-    resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-16, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 1024
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: tpu-ubuntu2204-base
-  tpu_v4_32:
-    zones: [us-central2-b]
-    num_vms: 4
-    priority: 40
-    resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-32, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 512
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: tpu-ubuntu2204-base
-  tpu_v4_64:
-    zones: [us-central2-b]
-    num_vms: 8
-    priority: 50
-    resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-64, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 256
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: tpu-ubuntu2204-base
-  tpu_v4_128:
-    zones: [us-central2-b]
-    num_vms: 16
-    priority: 60
-    resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-128, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 128
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: tpu-ubuntu2204-base
-  tpu_v4_256:
-    zones: [us-central2-b]
-    num_vms: 32
-    priority: 70
-    resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-256, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 64
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: tpu-ubuntu2204-base
-  tpu_v4_512:
-    zones: [us-central2-b]
-    num_vms: 64
-    priority: 80
-    resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-512, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 32
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: tpu-ubuntu2204-base
-  tpu_v4_1024:
-    zones: [us-central2-b]
-    num_vms: 128
-    priority: 90
-    resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-1024, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 16
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: tpu-ubuntu2204-base
-  tpu_v4_2048:
-    zones: [us-central2-b]
-    num_vms: 256
-    priority: 100
-    resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-2048, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 8
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: tpu-ubuntu2204-base
-  tpu_v4_4096:
-    zones: [us-central2-b]
-    num_vms: 512
-    priority: 110
-    resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-4096, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 4
-    slice_template:
-      gcp:
-        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        runtime_version: tpu-ubuntu2204-base
+        machine_type: n2-highmem-2

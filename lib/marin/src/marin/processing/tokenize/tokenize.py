@@ -17,7 +17,6 @@ import time
 from collections.abc import Iterator, Sequence
 
 import draccus
-import transformers
 from rigging.filesystem import open_url
 from datasets import load_dataset_builder
 from fray.v2 import ResourceConfig
@@ -29,6 +28,7 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
     preprocessor_for_format,
 )
+from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
 from levanter.store.cache import consolidate_shard_caches
 from levanter.store.tree_store import TreeStore
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
@@ -66,6 +66,10 @@ class TokenizeConfigBase(abc.ABC):
     max_workers: int = 4096
     cache_copy_max_workers: int = 128
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
+
+    tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
+    """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly.
+    KITOKEN uses the kitoken library."""
 
     num_shards: int | None = None
     """Override the number tokenize shards. When set, files are grouped to produce approximately
@@ -258,7 +262,11 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[Sequence[dict]]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    tokenizer: transformers.PreTrainedTokenizer = zephyr_worker_ctx().get_shared("tokenizer")
+    ctx = zephyr_worker_ctx()
+    name = ctx.get_shared("tokenizer_name")
+    backend = ctx.get_shared("tokenizer_backend")
+    # load_tokenizer is @lru_cache, so this only loads once per worker process.
+    tokenizer: MarinTokenizer = load_tokenizer(name, backend=backend)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     batch_count = 0
@@ -393,8 +401,10 @@ def tokenize(config: TokenizeConfigBase):
             )
         )
 
-        # Broadcast the tokenizer to all workers via ZephyrContext
-        ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
+        # Broadcast tokenizer config to workers. We send name + backend rather than
+        # the tokenizer object because not all backends support pickling.
+        ctx.put("tokenizer_name", config.tokenizer)
+        ctx.put("tokenizer_backend", config.tokenizer_backend)
 
         tokenize_start = time.monotonic()
         shard_paths = ctx.execute(temp_shards)

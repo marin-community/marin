@@ -117,7 +117,6 @@ class GcpControllerProvider:
             project=self.worker_provider.project_id,
             label_prefix=self.worker_provider.label_prefix,
             ssh_config=self.worker_provider.ssh_config,
-            service_account=self.controller_service_account,
             local_port=local_port,
         )
 
@@ -179,7 +178,7 @@ def _build_tunnel_ssh_cmd(
 ) -> list[str]:
     auth_mode = _ssh_auth_mode(ssh_config)
     use_os_login = auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN and not force_metadata
-    key_file = ssh_key_file(ssh_config)
+    key_file = ssh_key_file(ssh_config, effective_service_account)
 
     target = vm_name
     if use_os_login:
@@ -228,7 +227,6 @@ def _gcp_tunnel(
     project: str,
     label_prefix: str,
     ssh_config: config_pb2.SshConfig | None,
-    service_account: str | None = None,
     local_port: int | None = None,
     timeout: float = 60.0,
 ) -> Iterator[str]:
@@ -238,8 +236,8 @@ def _gcp_tunnel(
     that may be listening on the same port on a different address family (IPv6).
     Picks a free port automatically if none is specified.
     """
-    effective_service_account = ssh_impersonate_service_account(ssh_config, service_account)
-    key_file = ssh_key_file(ssh_config)
+    effective_service_account = ssh_impersonate_service_account(ssh_config)
+    key_file = ssh_key_file(ssh_config, effective_service_account)
     _check_gcloud_ssh_key(key_file)
 
     if local_port is None:

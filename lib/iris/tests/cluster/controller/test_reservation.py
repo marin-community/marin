@@ -27,7 +27,7 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
 
-from iris.cluster.controller.db import job_is_finished, task_can_be_scheduled
+from iris.cluster.controller.db import job_is_finished, task_row_can_be_scheduled
 from iris.cluster.controller.schema import WorkerRow
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
@@ -47,7 +47,8 @@ from iris.cluster.constraints import (
     get_device_variant,
 )
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from rigging.timing import Timestamp
 from tests.cluster.controller.conftest import (
     FakeProvider,
@@ -63,16 +64,16 @@ from tests.cluster.controller.conftest import (
 )
 
 
-def _cpu_device() -> cluster_pb2.DeviceConfig:
-    return cluster_pb2.DeviceConfig(cpu=cluster_pb2.CpuDevice(variant="cpu"))
+def _cpu_device() -> job_pb2.DeviceConfig:
+    return job_pb2.DeviceConfig(cpu=job_pb2.CpuDevice(variant="cpu"))
 
 
-def _gpu_device(variant: str = "H100", count: int = 8) -> cluster_pb2.DeviceConfig:
-    return cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant=variant, count=count))
+def _gpu_device(variant: str = "H100", count: int = 8) -> job_pb2.DeviceConfig:
+    return job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant=variant, count=count))
 
 
-def _cpu_metadata() -> cluster_pb2.WorkerMetadata:
-    meta = cluster_pb2.WorkerMetadata(
+def _cpu_metadata() -> job_pb2.WorkerMetadata:
+    meta = job_pb2.WorkerMetadata(
         hostname="test",
         ip_address="127.0.0.1",
         cpu_count=8,
@@ -80,12 +81,12 @@ def _cpu_metadata() -> cluster_pb2.WorkerMetadata:
         disk_bytes=100 * 1024**3,
         device=_cpu_device(),
     )
-    meta.attributes[WellKnownAttribute.DEVICE_TYPE].CopyFrom(cluster_pb2.AttributeValue(string_value="cpu"))
+    meta.attributes[WellKnownAttribute.DEVICE_TYPE].CopyFrom(job_pb2.AttributeValue(string_value="cpu"))
     return meta
 
 
-def _gpu_metadata(variant: str = "H100") -> cluster_pb2.WorkerMetadata:
-    meta = cluster_pb2.WorkerMetadata(
+def _gpu_metadata(variant: str = "H100") -> job_pb2.WorkerMetadata:
+    meta = job_pb2.WorkerMetadata(
         hostname="test-gpu",
         ip_address="127.0.0.1",
         cpu_count=32,
@@ -93,12 +94,12 @@ def _gpu_metadata(variant: str = "H100") -> cluster_pb2.WorkerMetadata:
         disk_bytes=500 * 1024**3,
         device=_gpu_device(variant),
     )
-    meta.attributes[WellKnownAttribute.DEVICE_TYPE].CopyFrom(cluster_pb2.AttributeValue(string_value="gpu"))
-    meta.attributes[WellKnownAttribute.DEVICE_VARIANT].CopyFrom(cluster_pb2.AttributeValue(string_value=variant.lower()))
+    meta.attributes[WellKnownAttribute.DEVICE_TYPE].CopyFrom(job_pb2.AttributeValue(string_value="gpu"))
+    meta.attributes[WellKnownAttribute.DEVICE_VARIANT].CopyFrom(job_pb2.AttributeValue(string_value=variant.lower()))
     return meta
 
 
-def _default_attributes_for_device(device: cluster_pb2.DeviceConfig) -> dict[str, AttributeValue]:
+def _default_attributes_for_device(device: job_pb2.DeviceConfig) -> dict[str, AttributeValue]:
     """Build the worker attributes that the real env_probe would set from config."""
     attrs: dict[str, AttributeValue] = {}
     dt = get_device_type(device)
@@ -111,7 +112,7 @@ def _default_attributes_for_device(device: cluster_pb2.DeviceConfig) -> dict[str
 
 def _make_worker(
     worker_id: str,
-    metadata: cluster_pb2.WorkerMetadata | None = None,
+    metadata: job_pb2.WorkerMetadata | None = None,
     attributes: dict[str, AttributeValue] | None = None,
     healthy: bool = True,
 ) -> WorkerRow:
@@ -153,12 +154,12 @@ def _make_worker(
 
 
 def _make_reservation_entry(
-    device: cluster_pb2.DeviceConfig | None = None,
-    constraints: list[cluster_pb2.Constraint] | None = None,
-) -> cluster_pb2.ReservationEntry:
+    device: job_pb2.DeviceConfig | None = None,
+    constraints: list[job_pb2.Constraint] | None = None,
+) -> job_pb2.ReservationEntry:
     dev = device or _cpu_device()
-    return cluster_pb2.ReservationEntry(
-        resources=cluster_pb2.ResourceSpecProto(
+    return job_pb2.ReservationEntry(
+        resources=job_pb2.ResourceSpecProto(
             cpu_millicores=1000,
             memory_bytes=1024**3,
             device=dev,
@@ -167,21 +168,21 @@ def _make_reservation_entry(
     )
 
 
-def _entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    entrypoint = cluster_pb2.RuntimeEntrypoint()
+def _entrypoint() -> job_pb2.RuntimeEntrypoint:
+    entrypoint = job_pb2.RuntimeEntrypoint()
     entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
 
 
 def _make_job_request_with_reservation(
     name: str = "res-job",
-    reservation_entries: list[cluster_pb2.ReservationEntry] | None = None,
-) -> cluster_pb2.Controller.LaunchJobRequest:
-    req = cluster_pb2.Controller.LaunchJobRequest(
+    reservation_entries: list[job_pb2.ReservationEntry] | None = None,
+) -> controller_pb2.Controller.LaunchJobRequest:
+    req = controller_pb2.Controller.LaunchJobRequest(
         name=name,
         entrypoint=_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
     if reservation_entries:
@@ -201,7 +202,7 @@ def _make_controller() -> Controller:
 def _register_worker(
     state: ControllerTransitions,
     worker_id: str,
-    metadata: cluster_pb2.WorkerMetadata | None = None,
+    metadata: job_pb2.WorkerMetadata | None = None,
 ) -> WorkerId:
     wid = WorkerId(worker_id)
     state.register_or_refresh_worker(
@@ -216,7 +217,7 @@ def _register_worker(
 def _submit_job(
     state: ControllerTransitions,
     job_id: str,
-    request: cluster_pb2.Controller.LaunchJobRequest,
+    request: controller_pb2.Controller.LaunchJobRequest,
 ) -> JobName:
     jid = JobName.root("test-user", job_id)
     request.name = jid.to_wire()
@@ -264,10 +265,10 @@ def test_worker_matches_with_constraint():
         _cpu_metadata(),
         attributes={WellKnownAttribute.REGION: AttributeValue("us-central1")},
     )
-    constraint = cluster_pb2.Constraint(
+    constraint = job_pb2.Constraint(
         key=WellKnownAttribute.REGION,
-        op=cluster_pb2.CONSTRAINT_OP_EQ,
-        value=cluster_pb2.AttributeValue(string_value="us-central1"),
+        op=job_pb2.CONSTRAINT_OP_EQ,
+        value=job_pb2.AttributeValue(string_value="us-central1"),
     )
     entry = _make_reservation_entry(_cpu_device(), constraints=[constraint])
     assert _worker_matches_reservation_entry(worker, entry)
@@ -276,10 +277,10 @@ def test_worker_matches_with_constraint():
 def test_worker_rejects_unmet_constraint():
     """Worker without the required attribute fails the constraint check."""
     worker = _make_worker("w1", _cpu_metadata())
-    constraint = cluster_pb2.Constraint(
+    constraint = job_pb2.Constraint(
         key=WellKnownAttribute.REGION,
-        op=cluster_pb2.CONSTRAINT_OP_EQ,
-        value=cluster_pb2.AttributeValue(string_value="us-central1"),
+        op=job_pb2.CONSTRAINT_OP_EQ,
+        value=job_pb2.AttributeValue(string_value="us-central1"),
     )
     entry = _make_reservation_entry(_cpu_device(), constraints=[constraint])
     assert not _worker_matches_reservation_entry(worker, entry)
@@ -536,11 +537,11 @@ def test_gate_unsatisfied_when_claims_below_entries():
 def test_gate_satisfied_for_jobs_without_reservation():
     """Jobs without a reservation always pass the gate."""
     ctrl = _make_controller()
-    req = cluster_pb2.Controller.LaunchJobRequest(
+    req = controller_pb2.Controller.LaunchJobRequest(
         name="no-res",
         entrypoint=_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
     jid = _submit_job(ctrl.state, "no-res", req)
@@ -628,7 +629,7 @@ def test_taint_injection_does_not_mutate_original():
 
 def _make_job_requirements() -> JobRequirements:
     return JobRequirements(
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         constraints=[],
         is_coscheduled=False,
         coscheduling_group_by=None,
@@ -647,7 +648,7 @@ def test_taint_constraint_added_to_non_reservation_jobs():
     constraints = result[JobName.root("test-user", "regular")].constraints
     not_exists = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(not_exists) == 1
-    assert not_exists[0].op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
+    assert not_exists[0].op == job_pb2.CONSTRAINT_OP_NOT_EXISTS
 
 
 def test_taint_constraint_not_added_to_reservation_jobs():
@@ -664,7 +665,7 @@ def test_taint_constraint_not_added_to_reservation_jobs():
     constraints = result[res_job].constraints
     eq = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(eq) == 1
-    assert eq[0].op == cluster_pb2.CONSTRAINT_OP_EQ
+    assert eq[0].op == job_pb2.CONSTRAINT_OP_EQ
     assert eq[0].value.string_value == res_job.to_wire()
 
 
@@ -686,7 +687,7 @@ def test_taint_constraint_mixed_jobs():
     # Direct reservation job: EQ constraint
     res_constraints = [c for c in result[res_job].constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(res_constraints) == 1
-    assert res_constraints[0].op == cluster_pb2.CONSTRAINT_OP_EQ
+    assert res_constraints[0].op == job_pb2.CONSTRAINT_OP_EQ
     assert res_constraints[0].value.string_value == res_job.to_wire()
 
     # Descendant: no taint constraint
@@ -696,19 +697,19 @@ def test_taint_constraint_mixed_jobs():
     # Regular job: NOT_EXISTS constraint
     reg_constraints = [c for c in result[reg_job].constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(reg_constraints) == 1
-    assert reg_constraints[0].op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
+    assert reg_constraints[0].op == job_pb2.CONSTRAINT_OP_NOT_EXISTS
 
 
 def test_taint_constraint_preserves_existing_constraints():
     """Existing constraints are preserved when the taint constraint is added."""
-    existing = cluster_pb2.Constraint(
+    existing = job_pb2.Constraint(
         key=WellKnownAttribute.REGION,
-        op=cluster_pb2.CONSTRAINT_OP_EQ,
-        value=cluster_pb2.AttributeValue(string_value="us-central1"),
+        op=job_pb2.CONSTRAINT_OP_EQ,
+        value=job_pb2.AttributeValue(string_value="us-central1"),
     )
     jobs = {
         JobName.root("test-user", "regular"): JobRequirements(
-            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
             constraints=[existing],
             is_coscheduled=False,
             coscheduling_group_by=None,
@@ -777,7 +778,7 @@ def test_preference_pass_falls_through_on_no_capacity():
     task_id = job_id.task(0)
     # Request more CPU than the worker has
     req = JobRequirements(
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=999_000, memory_bytes=1024**3),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=999_000, memory_bytes=1024**3),
         constraints=[],
         is_coscheduled=False,
         coscheduling_group_by=None,
@@ -824,7 +825,7 @@ def test_preference_pass_skips_coscheduled_jobs():
     job_id = JobName.root("test-user", "cosched-job")
     task_id = job_id.task(0)
     req = JobRequirements(
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         constraints=[],
         is_coscheduled=True,
         coscheduling_group_by=WellKnownAttribute.TPU_NAME,
@@ -872,7 +873,7 @@ def test_preference_pass_deducts_capacity():
     task_id_1 = job_id.task(1)
     # Each task wants 4000m CPU; w1 has 8000m, so only one fits.
     req = JobRequirements(
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=4000, memory_bytes=1024**3),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=4000, memory_bytes=1024**3),
         constraints=[],
         is_coscheduled=False,
         coscheduling_group_by=None,
@@ -920,7 +921,7 @@ def test_region_constraint_injected_from_claimed_workers():
 
     assert len(result) == 1
     assert result[0].key == WellKnownAttribute.REGION
-    assert result[0].op == cluster_pb2.CONSTRAINT_OP_EQ
+    assert result[0].op == job_pb2.CONSTRAINT_OP_EQ
     assert result[0].value.string_value == "us-central1"
 
 
@@ -934,10 +935,10 @@ def test_region_constraint_not_injected_when_already_present():
     jid = _submit_job(ctrl.state, "j1", req)
     ctrl._claim_workers_for_reservations()
 
-    existing = cluster_pb2.Constraint(
+    existing = job_pb2.Constraint(
         key=WellKnownAttribute.REGION,
-        op=cluster_pb2.CONSTRAINT_OP_EQ,
-        value=cluster_pb2.AttributeValue(string_value="us-east1"),
+        op=job_pb2.CONSTRAINT_OP_EQ,
+        value=job_pb2.AttributeValue(string_value="us-east1"),
     )
     result = _reservation_region_constraints(
         jid.to_wire(),
@@ -992,7 +993,7 @@ def test_region_constraint_multiple_regions():
 
     assert len(result) == 1
     assert result[0].key == WellKnownAttribute.REGION
-    assert result[0].op == cluster_pb2.CONSTRAINT_OP_IN
+    assert result[0].op == job_pb2.CONSTRAINT_OP_IN
     regions = {v.string_value for v in result[0].values}
     assert regions == {"us-central1", "us-east1"}
 
@@ -1032,11 +1033,11 @@ def test_find_reservation_ancestor_returns_parent_with_reservation():
     parent_jid = _submit_job(ctrl.state, "res-parent", parent_req)
 
     child_jid = JobName.from_string("/test-user/res-parent/child")
-    child_req = cluster_pb2.Controller.LaunchJobRequest(
+    child_req = controller_pb2.Controller.LaunchJobRequest(
         name=child_jid.to_wire(),
         entrypoint=_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
     ctrl.state.submit_job(child_jid, child_req, Timestamp.now())
@@ -1056,22 +1057,22 @@ def test_find_reservation_ancestor_returns_grandparent():
 
     # Parent (no reservation)
     parent_jid = JobName.from_string("/test-user/gp/parent")
-    parent_req = cluster_pb2.Controller.LaunchJobRequest(
+    parent_req = controller_pb2.Controller.LaunchJobRequest(
         name=parent_jid.to_wire(),
         entrypoint=_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
     ctrl.state.submit_job(parent_jid, parent_req, Timestamp.now())
 
     # Grandchild
     gc_jid = JobName.from_string("/test-user/gp/parent/gc")
-    gc_req = cluster_pb2.Controller.LaunchJobRequest(
+    gc_req = controller_pb2.Controller.LaunchJobRequest(
         name=gc_jid.to_wire(),
         entrypoint=_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
     ctrl.state.submit_job(gc_jid, gc_req, Timestamp.now())
@@ -1083,11 +1084,11 @@ def test_find_reservation_ancestor_returns_grandparent():
 def test_find_reservation_ancestor_returns_none_for_root_job():
     """Root job with no reservation returns None."""
     ctrl = _make_controller()
-    req = cluster_pb2.Controller.LaunchJobRequest(
+    req = controller_pb2.Controller.LaunchJobRequest(
         name="no-res",
         entrypoint=_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
     jid = _submit_job(ctrl.state, "no-res", req)
@@ -1097,21 +1098,21 @@ def test_find_reservation_ancestor_returns_none_for_root_job():
 def test_find_reservation_ancestor_returns_none_when_no_ancestor_has_reservation():
     """Child of a non-reservation parent returns None."""
     ctrl = _make_controller()
-    parent_req = cluster_pb2.Controller.LaunchJobRequest(
+    parent_req = controller_pb2.Controller.LaunchJobRequest(
         name="plain-parent",
         entrypoint=_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
     _submit_job(ctrl.state, "plain-parent", parent_req)
 
     child_jid = JobName.from_string("/test-user/plain-parent/child")
-    child_req = cluster_pb2.Controller.LaunchJobRequest(
+    child_req = controller_pb2.Controller.LaunchJobRequest(
         name=child_jid.to_wire(),
         entrypoint=_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
     ctrl.state.submit_job(child_jid, child_req, Timestamp.now())
@@ -1143,15 +1144,15 @@ def test_taint_exemption_for_children_of_reservation_job():
 
     # Child job (NO reservation) requesting GPU
     child_jid = JobName.from_string("/test-user/res-parent/child")
-    child_req = cluster_pb2.Controller.LaunchJobRequest(
+    child_req = controller_pb2.Controller.LaunchJobRequest(
         name=child_jid.to_wire(),
         entrypoint=_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(
+        resources=job_pb2.ResourceSpecProto(
             cpu_millicores=1000,
             memory_bytes=1024**3,
             device=_gpu_device("H100"),
         ),
-        environment=cluster_pb2.EnvironmentConfig(),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
     ctrl.state.submit_job(child_jid, child_req, Timestamp.now())
@@ -1190,7 +1191,7 @@ def test_taint_exemption_for_children_of_reservation_job():
     if parent_jid in modified_jobs:
         parent_constraints = [c for c in modified_jobs[parent_jid].constraints if c.key == RESERVATION_TAINT_KEY]
         assert len(parent_constraints) == 1
-        assert parent_constraints[0].op == cluster_pb2.CONSTRAINT_OP_EQ
+        assert parent_constraints[0].op == job_pb2.CONSTRAINT_OP_EQ
 
 
 def test_grandchildren_inherit_reservation_from_ancestor():
@@ -1202,11 +1203,11 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     _register_worker(ctrl.state, "a2", _gpu_metadata("A100"))
 
     # Root job (CPU, no reservation)
-    root_req = cluster_pb2.Controller.LaunchJobRequest(
+    root_req = controller_pb2.Controller.LaunchJobRequest(
         name="root",
         entrypoint=_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
     _submit_job(ctrl.state, "root", root_req)
@@ -1238,30 +1239,30 @@ def test_grandchildren_inherit_reservation_from_ancestor():
 
     # Grandchild-A (under child-A) requesting H100
     gc_a_jid = JobName.from_string("/test-user/root/child-a/gc-a")
-    gc_a_req = cluster_pb2.Controller.LaunchJobRequest(
+    gc_a_req = controller_pb2.Controller.LaunchJobRequest(
         name=gc_a_jid.to_wire(),
         entrypoint=_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(
+        resources=job_pb2.ResourceSpecProto(
             cpu_millicores=1000,
             memory_bytes=1024**3,
             device=_gpu_device("H100"),
         ),
-        environment=cluster_pb2.EnvironmentConfig(),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
     ctrl.state.submit_job(gc_a_jid, gc_a_req, Timestamp.now())
 
     # Grandchild-B (under child-B) requesting A100
     gc_b_jid = JobName.from_string("/test-user/root/child-b/gc-b")
-    gc_b_req = cluster_pb2.Controller.LaunchJobRequest(
+    gc_b_req = controller_pb2.Controller.LaunchJobRequest(
         name=gc_b_jid.to_wire(),
         entrypoint=_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(
+        resources=job_pb2.ResourceSpecProto(
             cpu_millicores=1000,
             memory_bytes=1024**3,
             device=_gpu_device("A100"),
         ),
-        environment=cluster_pb2.EnvironmentConfig(),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
     ctrl.state.submit_job(gc_b_jid, gc_b_req, Timestamp.now())
@@ -1303,12 +1304,12 @@ def test_grandchildren_inherit_reservation_from_ancestor():
         if direct_jid in modified_jobs:
             direct_constraints = [c for c in modified_jobs[direct_jid].constraints if c.key == RESERVATION_TAINT_KEY]
             assert len(direct_constraints) == 1
-            assert direct_constraints[0].op == cluster_pb2.CONSTRAINT_OP_EQ
+            assert direct_constraints[0].op == job_pb2.CONSTRAINT_OP_EQ
 
     # Unrelated job DOES get NOT_EXISTS constraint
     unrelated_jid = JobName.root("test-user", "unrelated")
     unrelated_req = JobRequirements(
-        resources=cluster_pb2.ResourceSpecProto(
+        resources=job_pb2.ResourceSpecProto(
             cpu_millicores=1000,
             memory_bytes=1024**3,
             device=_gpu_device("H100"),
@@ -1322,7 +1323,7 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     unrelated_constraints = modified_jobs[unrelated_jid].constraints
     not_exists = [c for c in unrelated_constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(not_exists) == 1
-    assert not_exists[0].op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
+    assert not_exists[0].op == job_pb2.CONSTRAINT_OP_NOT_EXISTS
 
 
 def test_unrelated_job_blocked_when_all_workers_claimed():
@@ -1344,7 +1345,7 @@ def test_unrelated_job_blocked_when_all_workers_claimed():
     # Unrelated job requesting GPU
     unrelated_jid = JobName.root("test-user", "unrelated")
     unrelated_req = JobRequirements(
-        resources=cluster_pb2.ResourceSpecProto(
+        resources=job_pb2.ResourceSpecProto(
             cpu_millicores=1000,
             memory_bytes=1024**3,
             device=_gpu_device("H100"),
@@ -1361,7 +1362,7 @@ def test_unrelated_job_blocked_when_all_workers_claimed():
     constraints = modified_jobs[unrelated_jid].constraints
     not_exists = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(not_exists) == 1
-    assert not_exists[0].op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
+    assert not_exists[0].op == job_pb2.CONSTRAINT_OP_NOT_EXISTS
 
 
 # =============================================================================
@@ -1414,9 +1415,9 @@ def test_holder_task_worker_death_no_failure_record(state):
         state.queue_assignments([Assignment(task_id=holder_task.task_id, worker_id=worker_id)])
         current_holder = _query_task_with_attempts(state, holder_task.task_id)
         assert current_holder is not None
-        assert current_holder.state == cluster_pb2.TASK_STATE_ASSIGNED
+        assert current_holder.state == job_pb2.TASK_STATE_ASSIGNED
         # active_worker_id: non-None when state is not PENDING
-        assert current_holder.state != cluster_pb2.TASK_STATE_PENDING
+        assert current_holder.state != job_pb2.TASK_STATE_PENDING
         current_attempt = current_holder.attempts[-1] if current_holder.attempts else None
         active_wid = current_attempt.worker_id if current_attempt is not None else current_holder.current_worker_id
         assert active_wid == worker_id
@@ -1431,23 +1432,16 @@ def test_holder_task_worker_death_no_failure_record(state):
         assert holder_task is not None
         current_state = _query_task(state, holder_task.task_id).state
         assert (
-            current_state == cluster_pb2.TASK_STATE_PENDING
-        ), f"cycle {cycle}: expected PENDING, got {cluster_pb2.TaskState.Name(current_state)}"
+            current_state == job_pb2.TASK_STATE_PENDING
+        ), f"cycle {cycle}: expected PENDING, got {job_pb2.TaskState.Name(current_state)}"
         assert holder_task.preemption_count == 0, f"cycle {cycle}: preemption_count leaked"
         assert holder_task.failure_count == 0, f"cycle {cycle}: failure_count leaked"
         assert (
             len(holder_task.attempts) == 0
         ), f"cycle {cycle}: attempt list leaked ({len(holder_task.attempts)} entries)"
         # active_worker_id should be None when PENDING
-        assert holder_task.state == cluster_pb2.TASK_STATE_PENDING, "no active worker after death"
-        assert task_can_be_scheduled(
-            holder_task.state,
-            holder_task.current_attempt_id,
-            holder_task.failure_count,
-            holder_task.max_retries_failure,
-            holder_task.preemption_count,
-            holder_task.max_retries_preemption,
-        ), "holder task must be schedulable again"
+        assert holder_task.state == job_pb2.TASK_STATE_PENDING, "no active worker after death"
+        assert task_row_can_be_scheduled(holder_task), "holder task must be schedulable again"
 
 
 def test_holder_task_removed_from_worker_when_parent_succeeds(state):
@@ -1492,7 +1486,7 @@ def test_holder_task_removed_from_worker_when_parent_succeeds(state):
                 TaskUpdate(
                     task_id=parent_task.task_id,
                     attempt_id=parent_task.current_attempt_id,
-                    new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+                    new_state=job_pb2.TASK_STATE_SUCCEEDED,
                 )
             ],
         )
@@ -1501,8 +1495,8 @@ def test_holder_task_removed_from_worker_when_parent_succeeds(state):
     holder_task = _query_task(state, holder_task.task_id)
     assert holder_task is not None
     holder_state = _query_task(state, holder_task.task_id).state
-    assert holder_state == cluster_pb2.TASK_STATE_KILLED, (
-        "expected holder task KILLED after parent success, " f"got {cluster_pb2.TaskState.Name(holder_state)}"
+    assert holder_state == job_pb2.TASK_STATE_KILLED, (
+        "expected holder task KILLED after parent success, " f"got {job_pb2.TaskState.Name(holder_state)}"
     )
     assert holder_task.task_id not in _worker_running_tasks(state, wid_holder)
 
@@ -1539,7 +1533,7 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
     # (loop body never executes, so the old code never reached _cancel_child_jobs).
     parent_task_ref = _query_task(state, parent_task.task_id)
     assert parent_task_ref is not None
-    state.set_task_state_for_test(parent_task.task_id, cluster_pb2.TASK_STATE_KILLED)
+    state.set_task_state_for_test(parent_task.task_id, job_pb2.TASK_STATE_KILLED)
 
     # Fire JobCancelledEvent. All parent tasks are now terminal so the loop
     # skips them. Only the explicit _cancel_child_jobs call at the end of
@@ -1549,8 +1543,8 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
     holder_task = _query_task(state, holder_task.task_id)
     assert holder_task is not None
     assert (
-        _query_task(state, holder_task.task_id).state == cluster_pb2.TASK_STATE_KILLED
-    ), f"expected holder task KILLED, got {cluster_pb2.TaskState.Name(_query_task(state, holder_task.task_id).state)}"
+        _query_task(state, holder_task.task_id).state == job_pb2.TASK_STATE_KILLED
+    ), f"expected holder task KILLED, got {job_pb2.TaskState.Name(_query_task(state, holder_task.task_id).state)}"
     assert holder_task.task_id not in _worker_running_tasks(state, wid), (
         "holder task must be removed from worker.running_tasks; " "stale entry would block scale-down idle detection"
     )
@@ -1561,12 +1555,12 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
 # =============================================================================
 
 
-def _tpu_device(variant: str = "v5p-64", count: int = 4) -> cluster_pb2.DeviceConfig:
-    return cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant=variant, count=count))
+def _tpu_device(variant: str = "v5p-64", count: int = 4) -> job_pb2.DeviceConfig:
+    return job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant=variant, count=count))
 
 
-def _tpu_metadata(variant: str = "v5p-64", region: str | None = None) -> cluster_pb2.WorkerMetadata:
-    meta = cluster_pb2.WorkerMetadata(
+def _tpu_metadata(variant: str = "v5p-64", region: str | None = None) -> job_pb2.WorkerMetadata:
+    meta = job_pb2.WorkerMetadata(
         hostname="test-tpu",
         ip_address="127.0.0.1",
         cpu_count=32,
@@ -1574,14 +1568,14 @@ def _tpu_metadata(variant: str = "v5p-64", region: str | None = None) -> cluster
         disk_bytes=500 * 1024**3,
         device=_tpu_device(variant),
     )
-    meta.attributes[WellKnownAttribute.DEVICE_TYPE].CopyFrom(cluster_pb2.AttributeValue(string_value="tpu"))
-    meta.attributes[WellKnownAttribute.DEVICE_VARIANT].CopyFrom(cluster_pb2.AttributeValue(string_value=variant.lower()))
+    meta.attributes[WellKnownAttribute.DEVICE_TYPE].CopyFrom(job_pb2.AttributeValue(string_value="tpu"))
+    meta.attributes[WellKnownAttribute.DEVICE_VARIANT].CopyFrom(job_pb2.AttributeValue(string_value=variant.lower()))
     if region:
-        meta.attributes["region"].CopyFrom(cluster_pb2.AttributeValue(string_value=region))
+        meta.attributes["region"].CopyFrom(job_pb2.AttributeValue(string_value=region))
     return meta
 
 
-def _region_constraint(region: str) -> cluster_pb2.Constraint:
+def _region_constraint(region: str) -> job_pb2.Constraint:
     """Create a region=<value> constraint proto."""
     return Constraint(key="region", op=ConstraintOp.EQ, value=region).to_proto()
 
@@ -1634,7 +1628,7 @@ def test_holder_task_not_scheduled_on_wrong_device_type(state):
 
     # Register a CPU worker and a TPU worker, both in the same region.
     cpu_meta = _cpu_metadata()
-    cpu_meta.attributes["region"].CopyFrom(cluster_pb2.AttributeValue(string_value="us-central2"))
+    cpu_meta.attributes["region"].CopyFrom(job_pb2.AttributeValue(string_value="us-central2"))
     cpu_wid = _register_worker(state, "cpu-worker", metadata=cpu_meta)
     tpu_wid = _register_worker(state, "tpu-worker", metadata=_tpu_metadata("v5p-64", region="us-central2"))
 

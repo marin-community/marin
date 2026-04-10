@@ -22,7 +22,7 @@ from marin.utils import rebase_file_path
 import pyarrow as pa
 import logging
 from fray.v2 import ResourceConfig
-from zephyr import ZephyrContext, counters, write_vortex_file
+from zephyr import ZephyrContext, counters, write_parquet_file
 from zephyr.dataset import Dataset
 
 logger = logging.getLogger(__name__)
@@ -92,7 +92,7 @@ def dedup_exact_paragraph(
             input_path,
             f"{output_path}/data/",
             old_extension=_get_extension(input_path),
-            new_extension=".vortex",
+            new_extension=".parquet",
         )
 
         total = 0
@@ -134,7 +134,7 @@ def dedup_exact_paragraph(
             if doc_level_record and doc_level_record["attributes"]["dup_spans"]:
                 yield doc_level_record
 
-        result = write_vortex_file(group_by_doc_id(counting_iter()), output_file)
+        result = write_parquet_file(group_by_doc_id(counting_iter()), output_file)
         return {**result, "total": total, "dups": dups, "unique": total - dups}
 
     def annotate_dups(key_hash: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:

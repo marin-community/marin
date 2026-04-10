@@ -5,12 +5,12 @@ import { controllerRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName } from '@/types/status'
 import type {
-  JobStatus, TaskStatus, LaunchJobRequest,
+  JobStatus, TaskStatus, LaunchJobRequest, JobQuery,
   GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
   ResourceUsage,
 } from '@/types/rpc'
-import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatDeviceConfig } from '@/utils/formatting'
-import { flattenJobTree, getLeafJobName, getParentJobName, jobsWithChildren } from '@/utils/jobTree'
+import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig } from '@/utils/formatting'
+import { getLeafJobName } from '@/utils/jobTree'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
@@ -29,8 +29,9 @@ const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed
 const job = ref<JobStatus | null>(null)
 const jobRequest = ref<LaunchJobRequest | null>(null)
 const tasks = ref<TaskStatus[]>([])
-const descendantJobs = ref<JobStatus[]>([])
+const childJobsByParent = ref<Map<string, JobStatus[]>>(new Map())
 const expandedChildJobs = ref<Set<string>>(new Set())
+const loadingChildJobs = ref<Set<string>>(new Set())
 const loading = ref(true)
 const error = ref<string | null>(null)
 const profilingTaskId = ref<string | null>(null)
@@ -38,13 +39,11 @@ const copiedName = ref(false)
 const taskSearch = ref('')
 const stateFilter = ref('')
 
-type SortColumn = 'task' | 'state' | 'mem' | 'cpu' | 'duration'
+type SortColumn = 'task' | 'state' | 'mem' | 'peakMem' | 'cpu' | 'duration'
 type SortDir = 'asc' | 'desc'
-type ChildJobsView = 'direct' | 'all'
 
 const sortColumn = ref<SortColumn | null>(null)
 const sortDir = ref<SortDir>('asc')
-const childJobsView = ref<ChildJobsView>('direct')
 
 type ChildSortColumn = 'name' | 'state' | 'duration'
 const childSortColumn = ref<ChildSortColumn | null>(null)
@@ -82,6 +81,16 @@ async function copyJobName() {
 
 let fetchGeneration = 0
 
+async function fetchChildJobs(parentJobId: string): Promise<JobStatus[]> {
+  const response = await controllerRpcCall<ListJobsResponse>('ListJobs', {
+    query: {
+      scope: 'JOB_QUERY_SCOPE_CHILDREN',
+      parentJobId,
+    } satisfies JobQuery,
+  })
+  return response.jobs ?? []
+}
+
 async function fetchData() {
   const gen = ++fetchGeneration
   error.value = null
@@ -99,19 +108,12 @@ async function fetchData() {
     jobRequest.value = jobResp.request ?? null
     tasks.value = tasksResp.tasks ?? []
 
-    // Fetch child jobs using the job name as a prefix filter
-    const jobName = jobResp.job.name
-    if (jobName) {
-      const childResp = await controllerRpcCall<ListJobsResponse>('ListJobs', {
-        nameFilter: jobName,
-        limit: 500,
-      })
-      if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
-      const prefix = jobName + '/'
-      descendantJobs.value = (childResp.jobs ?? []).filter(j => j.name.startsWith(prefix))
-    } else {
-      descendantJobs.value = []
-    }
+    const parentIds = [props.jobId, ...expandedChildJobs.value]
+    const childEntries = await Promise.all(
+      parentIds.map(async parentJobId => [parentJobId, await fetchChildJobs(parentJobId)] as const),
+    )
+    if (gen !== fetchGeneration) return
+    childJobsByParent.value = new Map(childEntries)
   } catch (e) {
     if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
     error.value = e instanceof Error ? e.message : String(e)
@@ -143,9 +145,9 @@ watch(() => props.jobId, () => {
   job.value = null
   jobRequest.value = null
   tasks.value = []
-  descendantJobs.value = []
+  childJobsByParent.value = new Map()
   expandedChildJobs.value = new Set()
-  childJobsView.value = 'direct'
+  loadingChildJobs.value = new Set()
   error.value = null
   fetchData()
   startRefresh()
@@ -173,9 +175,14 @@ function formatMemMb(usage: ResourceUsage | undefined): string {
   return `${mb} MB`
 }
 
+function formatPeakMemMb(usage: ResourceUsage | undefined): string {
+  if (!usage?.memoryPeakMb) return '-'
+  const mb = parseInt(usage.memoryPeakMb, 10)
+  return `${mb} MB`
+}
+
 function formatCpu(usage: ResourceUsage | undefined): string {
-  if (!usage || usage.cpuPercent === undefined || usage.cpuPercent === 0) return '-'
-  return `${usage.cpuPercent.toFixed(0)}%`
+  return formatCpuMillicores(usage?.cpuMillicores)
 }
 
 function taskIndex(taskId: string): string {
@@ -186,13 +193,6 @@ function taskIndex(taskId: string): string {
 }
 
 // -- Child job helpers --
-
-const visibleChildJobs = computed(() => {
-  if (childJobsView.value === 'all') return descendantJobs.value
-  const parentName = job.value?.name
-  if (!parentName) return []
-  return descendantJobs.value.filter(child => getParentJobName(child.name) === parentName)
-})
 
 function childJobDurationMs(j: JobStatus): number {
   const started = timestampMs(j.startedAt)
@@ -222,15 +222,50 @@ const childJobComparator = computed<((a: JobStatus, b: JobStatus) => number) | u
   }
 })
 
-const flattenedChildJobs = computed(() => flattenJobTree(visibleChildJobs.value, expandedChildJobs.value, childJobComparator.value))
-const expandableChildJobs = computed(() => jobsWithChildren(visibleChildJobs.value))
+const flattenedChildJobs = computed(() => {
+  const result: Array<{ job: JobStatus; depth: number }> = []
 
-function toggleExpandedChildJob(jobName: string) {
+  function walk(parentJobId: string, depth: number) {
+    const children = childJobsByParent.value.get(parentJobId) ?? []
+    const sorted = childJobComparator.value ? [...children].sort(childJobComparator.value) : children
+    for (const child of sorted) {
+      result.push({ job: child, depth })
+      if (expandedChildJobs.value.has(child.jobId)) {
+        walk(child.jobId, depth + 1)
+      }
+    }
+  }
+
+  walk(props.jobId, 0)
+  return result
+})
+
+async function loadChildJobs(parentJobId: string) {
+  if (loadingChildJobs.value.has(parentJobId)) return
+  const nextLoading = new Set(loadingChildJobs.value)
+  nextLoading.add(parentJobId)
+  loadingChildJobs.value = nextLoading
+  try {
+    const children = await fetchChildJobs(parentJobId)
+    const nextChildren = new Map(childJobsByParent.value)
+    nextChildren.set(parentJobId, children)
+    childJobsByParent.value = nextChildren
+  } finally {
+    const doneLoading = new Set(loadingChildJobs.value)
+    doneLoading.delete(parentJobId)
+    loadingChildJobs.value = doneLoading
+  }
+}
+
+function toggleExpandedChildJob(jobStatus: JobStatus) {
   const next = new Set(expandedChildJobs.value)
-  if (next.has(jobName)) {
-    next.delete(jobName)
+  if (next.has(jobStatus.jobId)) {
+    next.delete(jobStatus.jobId)
   } else {
-    next.add(jobName)
+    next.add(jobStatus.jobId)
+    if (!childJobsByParent.value.has(jobStatus.jobId)) {
+      void loadChildJobs(jobStatus.jobId)
+    }
   }
   expandedChildJobs.value = next
 }
@@ -316,6 +351,37 @@ const taskCounts = computed(() => {
   return counts
 })
 
+const MAX_FAILURE_EXAMPLES = 5
+
+interface AttemptSummary {
+  taskId: string
+  taskIndex: string
+  attemptId: number
+  error: string
+  finishedAtMs: number
+}
+
+function collectAttemptsByState(stateName: string): AttemptSummary[] {
+  const results: AttemptSummary[] = []
+  for (const task of tasks.value) {
+    for (const attempt of task.attempts ?? []) {
+      if (stateToName(attempt.state) !== stateName) continue
+      results.push({
+        taskId: task.taskId,
+        taskIndex: taskIndex(task.taskId),
+        attemptId: attempt.attemptId,
+        error: attempt.error ?? '',
+        finishedAtMs: timestampMs(attempt.finishedAt),
+      })
+    }
+  }
+  results.sort((a, b) => b.finishedAtMs - a.finishedAtMs)
+  return results
+}
+
+const recentTaskFailures = computed<AttemptSummary[]>(() => collectAttemptsByState('failed'))
+const recentPreemptions = computed<AttemptSummary[]>(() => collectAttemptsByState('worker_failed'))
+
 const acceleratorDisplay = computed(() => {
   const j = job.value
   const req = jobRequest.value
@@ -388,8 +454,11 @@ const filteredTasks = computed(() => {
       case 'mem':
         cmp = (parseInt(a.resourceUsage?.memoryMb ?? '0') || 0) - (parseInt(b.resourceUsage?.memoryMb ?? '0') || 0)
         break
+      case 'peakMem':
+        cmp = (parseInt(a.resourceUsage?.memoryPeakMb ?? '0') || 0) - (parseInt(b.resourceUsage?.memoryPeakMb ?? '0') || 0)
+        break
       case 'cpu':
-        cmp = (a.resourceUsage?.cpuPercent ?? 0) - (b.resourceUsage?.cpuPercent ?? 0)
+        cmp = (a.resourceUsage?.cpuMillicores ?? 0) - (b.resourceUsage?.cpuMillicores ?? 0)
         break
       case 'duration':
         cmp = taskDurationMs(a) - taskDurationMs(b)
@@ -404,7 +473,7 @@ const filteredTasks = computed(() => {
 
 function buildProfileType(profilerType: string, format: string | null): Record<string, unknown> {
   if (profilerType === 'cpu') return { cpu: { format: format ?? 'SPEEDSCOPE' } }
-  if (profilerType === 'memory') return { memory: { format: format ?? 'FLAMEGRAPH' } }
+  if (profilerType === 'memory') return { memory: { format: format ?? 'RAW' } }
   return { threads: {} }
 }
 
@@ -422,13 +491,18 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
       return
     }
     if (resp.profileData) {
-      const decoded = atob(resp.profileData)
-      const blob = new Blob([decoded], { type: 'application/octet-stream' })
+      const bin = atob(resp.profileData)
+      const bytes = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) {
+        bytes[i] = bin.charCodeAt(i)
+      }
+      const blob = new Blob([bytes], { type: 'application/octet-stream' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
       const ts = new Date().toISOString().replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+Z$/, '')
-      a.download = `${ts}_profile-${taskId.replace(/\//g, '_')}.out`
+      const ext = profilerType === 'memory' ? 'bin' : 'out'
+      a.download = `${ts}_profile-${taskId.replace(/\//g, '_')}.${ext}`
       a.click()
       URL.revokeObjectURL(url)
     }
@@ -501,6 +575,72 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         <pre class="mt-2 p-3 bg-surface rounded text-xs font-mono whitespace-pre-wrap">{{ job.pendingReason }}</pre>
       </div>
 
+      <!-- Recent task attempt failures callout -->
+      <div
+        v-if="recentTaskFailures.length > 0"
+        class="mb-4 px-4 py-3 bg-status-danger-bg border border-status-danger-border rounded-lg"
+      >
+        <span class="font-semibold text-status-danger text-sm">
+          {{ recentTaskFailures.length }} failed task attempt{{ recentTaskFailures.length !== 1 ? 's' : '' }}
+        </span>
+        <div class="mt-2 flex flex-col gap-1">
+          <div
+            v-for="f in recentTaskFailures.slice(0, MAX_FAILURE_EXAMPLES)"
+            :key="`${f.taskId}-${f.attemptId}`"
+            class="text-xs text-text-secondary"
+          >
+            <RouterLink
+              :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(f.taskId)}`"
+              class="text-accent hover:underline font-mono"
+            >
+              task {{ f.taskIndex }}
+            </RouterLink>
+            <span class="text-text-muted"> attempt {{ f.attemptId }}</span>
+            <span v-if="f.finishedAtMs" class="text-text-muted"> · {{ formatRelativeTime(f.finishedAtMs) }}</span>
+            <span v-if="f.error" class="text-status-danger"> · {{ f.error.length > 120 ? f.error.slice(0, 120) + '…' : f.error }}</span>
+          </div>
+          <span
+            v-if="recentTaskFailures.length > MAX_FAILURE_EXAMPLES"
+            class="text-xs text-text-muted"
+          >
+            … and {{ recentTaskFailures.length - MAX_FAILURE_EXAMPLES }} more
+          </span>
+        </div>
+      </div>
+
+      <!-- Recent preemption failures callout -->
+      <div
+        v-if="recentPreemptions.length > 0"
+        class="mb-4 px-4 py-3 bg-status-warning-bg border border-status-warning-border rounded-lg"
+      >
+        <span class="font-semibold text-status-warning text-sm">
+          {{ recentPreemptions.length }} preempted attempt{{ recentPreemptions.length !== 1 ? 's' : '' }}
+        </span>
+        <div class="mt-2 flex flex-col gap-1">
+          <div
+            v-for="f in recentPreemptions.slice(0, MAX_FAILURE_EXAMPLES)"
+            :key="`${f.taskId}-${f.attemptId}`"
+            class="text-xs text-text-secondary"
+          >
+            <RouterLink
+              :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(f.taskId)}`"
+              class="text-accent hover:underline font-mono"
+            >
+              task {{ f.taskIndex }}
+            </RouterLink>
+            <span class="text-text-muted"> attempt {{ f.attemptId }}</span>
+            <span v-if="f.finishedAtMs" class="text-text-muted"> · {{ formatRelativeTime(f.finishedAtMs) }}</span>
+            <span v-if="f.error" class="text-status-warning"> · {{ f.error.length > 120 ? f.error.slice(0, 120) + '…' : f.error }}</span>
+          </div>
+          <span
+            v-if="recentPreemptions.length > MAX_FAILURE_EXAMPLES"
+            class="text-xs text-text-muted"
+          >
+            … and {{ recentPreemptions.length - MAX_FAILURE_EXAMPLES }} more
+          </span>
+        </div>
+      </div>
+
       <!-- Info cards -->
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <InfoCard title="Job Status">
@@ -565,26 +705,6 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary">
             Child Jobs
           </h3>
-          <div class="inline-flex rounded-md border border-surface-border bg-surface p-0.5">
-            <button
-              class="px-2.5 py-1 text-xs rounded transition-colors"
-              :class="childJobsView === 'direct'
-                ? 'bg-accent text-white'
-                : 'text-text-secondary hover:bg-surface-raised hover:text-text'"
-              @click="childJobsView = 'direct'"
-            >
-              Direct only
-            </button>
-            <button
-              class="px-2.5 py-1 text-xs rounded transition-colors"
-              :class="childJobsView === 'all'
-                ? 'bg-accent text-white'
-                : 'text-text-secondary hover:bg-surface-raised hover:text-text'"
-              @click="childJobsView = 'all'"
-            >
-              All descendants
-            </button>
-          </div>
         </div>
         <table class="w-full border-collapse">
           <thead>
@@ -614,11 +734,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               >
                 <span class="inline-flex items-center gap-1">
                   <button
-                    v-if="expandableChildJobs.has(node.job.name)"
+                    v-if="node.job.hasChildren"
                     class="text-text-muted hover:text-text select-none w-4 text-center text-xs"
-                    @click.stop="toggleExpandedChildJob(node.job.name)"
+                    @click.stop="toggleExpandedChildJob(node.job)"
                   >
-                    {{ expandedChildJobs.has(node.job.name) ? '▼' : '▶' }}
+                    {{ loadingChildJobs.has(node.job.jobId) ? '…' : (expandedChildJobs.has(node.job.jobId) ? '▼' : '▶') }}
                   </button>
                   <span v-else class="w-4" />
                   <RouterLink
@@ -713,6 +833,9 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('mem')">
                 Mem <span v-if="sortColumn === 'mem'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('peakMem')">
+                Peak Mem <span v-if="sortColumn === 'peakMem'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('cpu')">
                 CPU <span v-if="sortColumn === 'cpu'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
@@ -759,6 +882,9 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                 {{ formatMemMb(task.resourceUsage) }}
               </td>
               <td class="px-3 py-2 text-[13px] font-mono">
+                {{ formatPeakMemMb(task.resourceUsage) }}
+              </td>
+              <td class="px-3 py-2 text-[13px] font-mono">
                 {{ formatCpu(task.resourceUsage) }}
               </td>
               <td class="px-3 py-2 text-[13px] font-mono text-text-secondary">
@@ -785,7 +911,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                   <button
                     class="px-2 py-0.5 text-[11px] font-semibold rounded bg-status-success text-white hover:opacity-80 disabled:opacity-50"
                     :disabled="profilingTaskId === task.taskId"
-                    @click="handleProfile(task.taskId, 'memory', 'FLAMEGRAPH')"
+                    @click="handleProfile(task.taskId, 'memory', 'RAW')"
                   >
                     {{ profilingTaskId === task.taskId ? '⏳' : 'MEM' }}
                   </button>

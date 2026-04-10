@@ -1533,13 +1533,6 @@ def _estimate_periodicity(steps: list[int]) -> int | None:
     return best_diff
 
 
-def _active_category(active: dict[str, int]) -> str | None:
-    for category in ("communication", "compute", "stall", "host", "other"):
-        if active[category] > 0:
-            return category
-    return None
-
-
 def _active_device_category(active: dict[str, int]) -> str | None:
     for category in ("communication", "compute"):
         if active[category] > 0:

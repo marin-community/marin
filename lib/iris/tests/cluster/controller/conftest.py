@@ -26,19 +26,16 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
+from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     TERMINAL_TASK_STATES,
     ControllerDB,
     _decode_attribute_rows,
     job_is_finished,
-    task_can_be_scheduled,
-    task_is_finished,
-    worker_available_cpu_millicores,
-    worker_available_gpus,
-    worker_available_memory,
-    worker_available_tpus,
+    task_row_can_be_scheduled,
+    task_row_is_finished,
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
@@ -52,8 +49,9 @@ from iris.cluster.controller.schema import (
     tasks_with_attempts,
 )
 from iris.cluster.controller.provider import ProviderUnsupportedError
-from iris.cluster.controller.scaling_group import ScalingGroup
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -62,40 +60,20 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.log_store import LogStore
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2, config_pb2, logging_pb2
+from iris.rpc import config_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 from tests.cluster.providers.conftest import make_mock_platform
 
-# ---------------------------------------------------------------------------
-# Convenience wrappers around standalone functions for test readability.
-# These accept a row object and unpack the fields needed by the standalone fn.
-# ---------------------------------------------------------------------------
-
-
-def check_task_can_be_scheduled(t: TaskDetailRow) -> bool:
-    """Whether a task row is eligible for scheduling."""
-    return task_can_be_scheduled(
-        t.state,
-        t.current_attempt_id,
-        t.failure_count,
-        t.max_retries_failure,
-        t.preemption_count,
-        t.max_retries_preemption,
-    )
-
-
-def check_task_is_finished(t: TaskDetailRow) -> bool:
-    """Whether a task row has reached a terminal state with no remaining retries."""
-    return task_is_finished(
-        t.state, t.failure_count, t.max_retries_failure, t.preemption_count, t.max_retries_preemption
-    )
+check_task_can_be_scheduled = task_row_can_be_scheduled
+check_task_is_finished = task_row_is_finished
 
 
 def check_job_is_finished(j: JobDetailRow) -> bool:
@@ -112,31 +90,12 @@ class FakeProvider:
     ) -> list[tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]]:
         return [(b, None, "no stub") for b in batches]
 
-    def fetch_live_logs(
-        self,
-        worker_id: WorkerId,
-        address: str | None,
-        task_id: str,
-        attempt_id: int,
-        cursor: int,
-        max_lines: int,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        raise ProviderUnsupportedError("fake")
-
-    def fetch_process_logs(
-        self,
-        worker_id: WorkerId,
-        address: str | None,
-        request: cluster_pb2.FetchLogsRequest,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        raise ProviderUnsupportedError("fake")
-
     def get_process_status(
         self,
         worker_id: WorkerId,
         address: str | None,
-        request: cluster_pb2.GetProcessStatusRequest,
-    ) -> cluster_pb2.GetProcessStatusResponse:
+        request: job_pb2.GetProcessStatusRequest,
+    ) -> job_pb2.GetProcessStatusResponse:
         raise ProviderUnsupportedError("fake")
 
     def on_worker_failed(self, worker_id: WorkerId, address: str | None) -> None:
@@ -145,9 +104,9 @@ class FakeProvider:
     def profile_task(
         self,
         address: str,
-        request: cluster_pb2.ProfileTaskRequest,
+        request: job_pb2.ProfileTaskRequest,
         timeout_ms: int,
-    ) -> cluster_pb2.ProfileTaskResponse:
+    ) -> job_pb2.ProfileTaskResponse:
         raise ProviderUnsupportedError("fake")
 
     def close(self) -> None:
@@ -180,14 +139,22 @@ def mock_controller() -> MockController:
 
 
 @pytest.fixture
-def controller_service(state, mock_controller, tmp_path) -> ControllerServiceImpl:
-    """ControllerServiceImpl with fresh DB, log store, and mock controller."""
+def log_service(state, tmp_path) -> LogServiceImpl:
+    """LogServiceImpl with its own internal log store."""
+    svc = LogServiceImpl(log_dir=tmp_path / "log_service_logs")
+    yield svc
+    svc.close()
+
+
+@pytest.fixture
+def controller_service(state, log_service, mock_controller, tmp_path) -> ControllerServiceImpl:
+    """ControllerServiceImpl with fresh DB, log service, and mock controller."""
     return ControllerServiceImpl(
         state,
         state._db,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_store=state._log_store,
+        log_service=log_service,
     )
 
 
@@ -198,38 +165,46 @@ def controller_service(state, mock_controller, tmp_path) -> ControllerServiceImp
 
 @contextmanager
 def make_controller_state(**kwargs):
-    """Yield a ControllerTransitions with a fresh temp DB and log store, cleaning up on exit."""
+    """Yield a ControllerTransitions with a fresh temp DB, cleaning up on exit."""
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     try:
         db = ControllerDB(db_dir=tmp)
-        log_store = LogStore(log_dir=tmp / "logs")
-        yield ControllerTransitions(db=db, log_store=log_store, **kwargs)
-        log_store.close()
+        yield ControllerTransitions(db=db, **kwargs)
         db.close()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
-    entrypoint = cluster_pb2.RuntimeEntrypoint()
+def make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:
+    entrypoint = job_pb2.RuntimeEntrypoint()
     entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     return entrypoint
 
 
-def make_direct_job_request(name: str = "test-job", replicas: int = 1) -> cluster_pb2.Controller.LaunchJobRequest:
+def make_direct_job_request(
+    name: str = "test-job",
+    replicas: int = 1,
+    task_image: str = "",
+) -> controller_pb2.Controller.LaunchJobRequest:
     job_name = JobName.root("test-user", name)
-    return cluster_pb2.Controller.LaunchJobRequest(
+    return controller_pb2.Controller.LaunchJobRequest(
         name=job_name.to_wire(),
         entrypoint=make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
         replicas=replicas,
+        task_image=task_image,
     )
 
 
-def submit_direct_job(state: ControllerTransitions, name: str, replicas: int = 1) -> list[JobName]:
+def submit_direct_job(
+    state: ControllerTransitions,
+    name: str,
+    replicas: int = 1,
+    task_image: str = "",
+) -> list[JobName]:
     jid = JobName.root("test-user", name)
-    req = make_direct_job_request(name, replicas)
+    req = make_direct_job_request(name, replicas, task_image=task_image)
     state.submit_job(jid, req, Timestamp.now())
     with state._db.snapshot() as q:
         tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
@@ -310,8 +285,8 @@ def building_counts(state: ControllerTransitions) -> dict[WorkerId, int]:
             "WHERE t.state IN (?, ?) AND j.is_reservation_holder = 0 "
             "GROUP BY a.worker_id ORDER BY a.worker_id ASC",
             (
-                cluster_pb2.TASK_STATE_BUILDING,
-                cluster_pb2.TASK_STATE_ASSIGNED,
+                job_pb2.TASK_STATE_BUILDING,
+                job_pb2.TASK_STATE_ASSIGNED,
             ),
             decoders={"worker_id": WorkerId, "c": int},
         )
@@ -322,7 +297,7 @@ def register_worker(
     state: ControllerTransitions,
     worker_id: str,
     address: str,
-    metadata: cluster_pb2.WorkerMetadata,
+    metadata: job_pb2.WorkerMetadata,
     healthy: bool = True,
     slice_id: str = "",
     scale_group: str = "",
@@ -341,7 +316,7 @@ def register_worker(
     return wid
 
 
-def inject_device_constraints(request: cluster_pb2.Controller.LaunchJobRequest) -> None:
+def inject_device_constraints(request: controller_pb2.Controller.LaunchJobRequest) -> None:
     """Auto-inject device constraints from the resource spec, mirroring service.py.
 
     In production, the service layer merges auto-generated device constraints
@@ -361,7 +336,7 @@ def inject_device_constraints(request: cluster_pb2.Controller.LaunchJobRequest) 
 def submit_job(
     state: ControllerTransitions,
     job_id: str,
-    request: cluster_pb2.Controller.LaunchJobRequest,
+    request: controller_pb2.Controller.LaunchJobRequest,
     timestamp_ms: int | None = None,
 ) -> list:
     """Submit a job and return created task rows.
@@ -424,17 +399,19 @@ def make_job_request(
     max_retries_preemption: int = 0,
     scheduling_timeout_seconds: int = 0,
     priority_band: int = 0,
-) -> cluster_pb2.Controller.LaunchJobRequest:
+    task_image: str = "",
+) -> controller_pb2.Controller.LaunchJobRequest:
     job_name = JobName.from_string(name) if name.startswith("/") else JobName.root("test-user", name)
-    request = cluster_pb2.Controller.LaunchJobRequest(
+    request = controller_pb2.Controller.LaunchJobRequest(
         name=job_name.to_wire(),
         entrypoint=make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=cpu * 1000, memory_bytes=memory_bytes),
-        environment=cluster_pb2.EnvironmentConfig(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=cpu * 1000, memory_bytes=memory_bytes),
+        environment=job_pb2.EnvironmentConfig(),
         max_retries_failure=max_retries_failure,
         max_retries_preemption=max_retries_preemption,
         replicas=replicas,
         priority_band=priority_band,
+        task_image=task_image,
     )
     if scheduling_timeout_seconds > 0:
         request.scheduling_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(scheduling_timeout_seconds)))
@@ -448,21 +425,21 @@ def make_worker_metadata(
     gpu_count: int = 0,
     gpu_name: str = "",
     tpu_name: str = "",
-) -> cluster_pb2.WorkerMetadata:
+) -> job_pb2.WorkerMetadata:
     """Build WorkerMetadata with device config and well-known attributes.
 
     Populates device-type and device-variant attributes so constraint-based
     scheduling works the same way as production.
     """
-    device = cluster_pb2.DeviceConfig()
+    device = job_pb2.DeviceConfig()
     if tpu_name:
-        device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=tpu_name))
+        device.tpu.CopyFrom(job_pb2.TpuDevice(variant=tpu_name))
     elif gpu_count > 0:
-        device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant=gpu_name or "auto", count=gpu_count))
+        device.gpu.CopyFrom(job_pb2.GpuDevice(variant=gpu_name or "auto", count=gpu_count))
     else:
-        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+        device.cpu.CopyFrom(job_pb2.CpuDevice(variant="cpu"))
 
-    meta = cluster_pb2.WorkerMetadata(
+    meta = job_pb2.WorkerMetadata(
         hostname="test-worker",
         ip_address="127.0.0.1",
         cpu_count=cpu,
@@ -515,10 +492,10 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> li
         _replace(
             w,
             attributes=attrs_by_worker.get(w.worker_id, {}),
-            available_cpu_millicores=worker_available_cpu_millicores(w.total_cpu_millicores, w.committed_cpu_millicores),
-            available_memory=worker_available_memory(w.total_memory_bytes, w.committed_mem),
-            available_gpus=worker_available_gpus(w.total_gpu_count, w.committed_gpu),
-            available_tpus=worker_available_tpus(w.total_tpu_count, w.committed_tpu),
+            available_cpu_millicores=w.total_cpu_millicores - w.committed_cpu_millicores,
+            available_memory=w.total_memory_bytes - w.committed_mem,
+            available_gpus=w.total_gpu_count - w.committed_gpu,
+            available_tpus=w.total_tpu_count - w.committed_tpu,
         )
         for w in workers
     ]
@@ -540,7 +517,7 @@ def dispatch_task(state: ControllerTransitions, task: TaskDetailRow, worker_id: 
                 TaskUpdate(
                     task_id=task.task_id,
                     attempt_id=query_task(state, task.task_id).current_attempt_id,
-                    new_state=cluster_pb2.TASK_STATE_RUNNING,
+                    new_state=job_pb2.TASK_STATE_RUNNING,
                 )
             ],
         )
@@ -557,7 +534,7 @@ def transition_task(
 ) -> object:
     task = query_task_with_attempts(state, task_id)
     assert task is not None
-    if new_state == cluster_pb2.TASK_STATE_KILLED:
+    if new_state == job_pb2.TASK_STATE_KILLED:
         return state.cancel_job(task.job_id, reason=error or "killed")
     # Compute worker_id: prefer current attempt's worker, fall back to current_worker_id.
     current_attempt = task.attempts[-1] if task.attempts else None
@@ -681,14 +658,14 @@ def make_scale_group_config(**kwargs: object) -> config_pb2.ScaleGroupConfig:
     accelerator_variant = kwargs.pop("accelerator_variant", "v5p-8")
     runtime_version = kwargs.pop("runtime_version", None)
     zones = kwargs.pop("zones", None)
-    preemptible = kwargs.pop("preemptible", None)
+    capacity_type = kwargs.pop("capacity_type", None)
     config = ensure_scale_group_resources(config_pb2.ScaleGroupConfig(**kwargs))
     config.resources.device_type = accelerator_type
     if accelerator_variant:
         config.resources.device_variant = accelerator_variant
-    if preemptible is not None:
-        config.slice_template.preemptible = preemptible
-        config.resources.preemptible = preemptible
+    if capacity_type is not None:
+        config.slice_template.capacity_type = capacity_type
+        config.resources.capacity_type = capacity_type
 
     # Derive slice template fields from resources, matching what
     # _derive_slice_config_from_resources() does in production config loading.
@@ -719,14 +696,14 @@ def make_demand_entries(
     device_type: DeviceType = DeviceType.TPU,
     device_variant: str | None = "v5p-8",
     device_variants: frozenset[str] | None = None,
-    preemptible: bool | None = None,
+    capacity_type: int | None = None,
     required_regions: frozenset[str] | None = None,
     required_zones: frozenset[str] | None = None,
     task_prefix: str = "task",
 ) -> list[DemandEntry]:
     if count <= 0:
         return []
-    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
+    resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
     if device_type == DeviceType.TPU:
         resources.device.tpu.variant = device_variant or ""
     elif device_type == DeviceType.GPU:
@@ -736,6 +713,7 @@ def make_demand_entries(
     effective_variants = device_variants
     if effective_variants is None and device_variant is not None:
         effective_variants = frozenset({device_variant})
+    preemptible = (capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE) if capacity_type is not None else None
     normalized = PlacementRequirements(
         device_type=device_type,
         device_variants=effective_variants,
@@ -751,8 +729,8 @@ def make_demand_entries(
         )
     if effective_variants:
         constraint_list.append(device_variant_constraint(sorted(effective_variants)))
-    if preemptible is not None:
-        constraint_list.append(preemptible_constraint(preemptible))
+    if capacity_type is not None:
+        constraint_list.append(preemptible_constraint(capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE))
     if required_regions:
         constraint_list.append(region_constraint(sorted(required_regions)))
     if required_zones:
@@ -784,7 +762,7 @@ def make_big_demand_entries(
     coschedule_group_id: str | None = None,
 ) -> list[DemandEntry]:
     """Create demand entries with explicit resource sizes for packing tests."""
-    resources = cluster_pb2.ResourceSpecProto(
+    resources = job_pb2.ResourceSpecProto(
         cpu_millicores=cpu_millicores,
         memory_bytes=memory_bytes,
         disk_bytes=disk_bytes,

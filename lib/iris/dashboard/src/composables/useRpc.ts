@@ -92,6 +92,26 @@ export async function controllerRpcCall<T>(method: string, body?: Record<string,
   return resp.json() as Promise<T>
 }
 
+/** RPC composable for LogService endpoints. */
+export function useLogServiceRpc<T>(
+  method: string,
+  body?: RpcBody,
+): RpcState<T> {
+  return useRpc<T>('iris.logging.LogService', method, body)
+}
+
+/** One-shot RPC call for LogService. */
+export async function logServiceRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
+  const resp = await fetch(`/iris.logging.LogService/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  })
+  handleUnauthorized(resp)
+  if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
+  return resp.json() as Promise<T>
+}
+
 export async function workerRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
   const resp = await fetch(`/iris.cluster.WorkerService/${method}`, {
     method: 'POST',

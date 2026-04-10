@@ -18,8 +18,11 @@ from iris.cluster.client.bundle import BundleCreator
 from iris.cluster.log_store._types import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
-from iris.rpc import cluster_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.logging_connect import LogServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
 from iris.time_proto import duration_to_proto
 from rigging.timing import Deadline, Duration, ExponentialBackoff
@@ -65,24 +68,30 @@ class RemoteClusterClient:
             timeout_ms=timeout_ms,
             interceptors=interceptors,
         )
+        self._log_client = LogServiceClientSync(
+            address=controller_address,
+            timeout_ms=timeout_ms,
+            interceptors=interceptors,
+        )
 
     def submit_job(
         self,
         job_id: JobName,
         entrypoint: Entrypoint,
-        resources: cluster_pb2.ResourceSpecProto,
-        environment: cluster_pb2.EnvironmentConfig | None = None,
+        resources: job_pb2.ResourceSpecProto,
+        environment: job_pb2.EnvironmentConfig | None = None,
         ports: list[str] | None = None,
         scheduling_timeout: Duration | None = None,
-        constraints: list[cluster_pb2.Constraint] | None = None,
-        coscheduling: cluster_pb2.CoschedulingConfig | None = None,
+        constraints: list[job_pb2.Constraint] | None = None,
+        coscheduling: job_pb2.CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
-        reservation: cluster_pb2.ReservationConfig | None = None,
-        preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
-        existing_job_policy: cluster_pb2.ExistingJobPolicy = cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        reservation: job_pb2.ReservationConfig | None = None,
+        preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+        existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        task_image: str | None = None,
     ) -> JobName:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
@@ -94,7 +103,7 @@ class RemoteClusterClient:
 
         runtime_ep = build_runtime_entrypoint(entrypoint, env_config)
 
-        request = cluster_pb2.Controller.LaunchJobRequest(
+        request = controller_pb2.Controller.LaunchJobRequest(
             name=job_id.to_wire(),
             entrypoint=runtime_ep,
             resources=resources,
@@ -106,6 +115,7 @@ class RemoteClusterClient:
             max_retries_preemption=max_retries_preemption,
             preemption_policy=preemption_policy,
             existing_job_policy=existing_job_policy,
+            task_image=task_image or "",
         )
         if self._bundle_id:
             request.bundle_id = self._bundle_id
@@ -131,9 +141,9 @@ class RemoteClusterClient:
         response = call_with_retry(f"launch_job({job_id})", _call)
         return JobName.from_wire(response.job_id)
 
-    def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
+    def get_job_status(self, job_id: JobName) -> job_pb2.JobStatus:
         def _call():
-            request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
+            request = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
             response = self._client.get_job_status(request)
             return response.job
 
@@ -143,7 +153,7 @@ class RemoteClusterClient:
         """Lightweight batch query returning only the state enum per job."""
 
         def _call():
-            request = cluster_pb2.Controller.GetJobStateRequest(
+            request = controller_pb2.Controller.GetJobStateRequest(
                 job_ids=[jid.to_wire() for jid in job_ids],
             )
             response = self._client.get_job_state(request)
@@ -164,7 +174,7 @@ class RemoteClusterClient:
         job_id: JobName,
         timeout: float = 300.0,
         poll_interval: float = 2.0,
-    ) -> cluster_pb2.JobStatus:
+    ) -> job_pb2.JobStatus:
         """Wait for job to complete with exponential backoff polling.
 
         If the controller becomes unavailable, retries with backoff for up to
@@ -218,7 +228,7 @@ class RemoteClusterClient:
         poll_interval: float,
         since_ms: int = 0,
         min_level: str = "",
-    ) -> cluster_pb2.JobStatus:
+    ) -> job_pb2.JobStatus:
         """Wait for job completion while streaming task logs via the controller RPC.
 
         Delegates log reading to the controller (which has the correct storage
@@ -230,7 +240,7 @@ class RemoteClusterClient:
         non-fatal -- they log a warning but never abort monitoring.
         """
         deadline = Deadline.from_seconds(timeout)
-        terminal_status: cluster_pb2.JobStatus | None = None
+        terminal_status: job_pb2.JobStatus | None = None
         source = build_log_source(job_id)
         cursor: int = 0
 
@@ -243,7 +253,7 @@ class RemoteClusterClient:
                 unavailable_tolerance=CONTROLLER_UNAVAILABLE_TOLERANCE,
             )
 
-            state_name = cluster_pb2.JobState.Name(state)
+            state_name = job_pb2.JobState.Name(state)
 
             try:
                 log_response = self.fetch_logs(source, since_ms=since_ms, cursor=cursor, min_level=min_level)
@@ -284,7 +294,7 @@ class RemoteClusterClient:
             time.sleep(poll_interval)
 
     def terminate_job(self, job_id: JobName) -> None:
-        request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())
+        request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())
         self._client.terminate_job(request)
 
     def register_endpoint(
@@ -295,7 +305,7 @@ class RemoteClusterClient:
         metadata: dict[str, str] | None = None,
     ) -> str:
         endpoint_id = str(uuid.uuid4())
-        request = cluster_pb2.Controller.RegisterEndpointRequest(
+        request = controller_pb2.Controller.RegisterEndpointRequest(
             name=name,
             address=address,
             task_id=task_attempt.task_id.to_wire(),
@@ -312,30 +322,30 @@ class RemoteClusterClient:
 
     def unregister_endpoint(self, endpoint_id: str) -> None:
         """Unregister an endpoint via RPC."""
-        request = cluster_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
+        request = controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
         self._client.unregister_endpoint(request)
 
-    def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[cluster_pb2.Controller.Endpoint]:
+    def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]:
         def _call():
-            request = cluster_pb2.Controller.ListEndpointsRequest(prefix=prefix, exact=exact)
+            request = controller_pb2.Controller.ListEndpointsRequest(prefix=prefix, exact=exact)
             response = self._client.list_endpoints(request, timeout_ms=10_000)
             return list(response.endpoints)
 
         return call_with_retry("list_endpoints", _call)
 
-    def list_workers(self) -> list[cluster_pb2.Controller.WorkerHealthStatus]:
+    def list_workers(self) -> list[controller_pb2.Controller.WorkerHealthStatus]:
         """List all workers registered with the controller."""
 
         def _call():
-            request = cluster_pb2.Controller.ListWorkersRequest()
+            request = controller_pb2.Controller.ListWorkersRequest()
             response = self._client.list_workers(request)
             return list(response.workers)
 
         return call_with_retry("list_workers", _call)
 
-    def list_jobs(self) -> list[cluster_pb2.JobStatus]:
+    def list_jobs(self) -> list[job_pb2.JobStatus]:
         def _call():
-            request = cluster_pb2.Controller.ListJobsRequest()
+            request = controller_pb2.Controller.ListJobsRequest()
             response = self._client.list_jobs(request)
             return list(response.jobs)
 
@@ -343,9 +353,10 @@ class RemoteClusterClient:
 
     def shutdown(self, wait: bool = True) -> None:
         del wait
+        self._log_client.close()
         self._client.close()
 
-    def get_task_status(self, task_name: JobName) -> cluster_pb2.TaskStatus:
+    def get_task_status(self, task_name: JobName) -> job_pb2.TaskStatus:
         """Get status of a specific task within a job.
 
         Args:
@@ -357,13 +368,13 @@ class RemoteClusterClient:
         task_name.require_task()
 
         def _call():
-            request = cluster_pb2.Controller.GetTaskStatusRequest(task_id=task_name.to_wire())
+            request = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_name.to_wire())
             response = self._client.get_task_status(request)
             return response.task
 
         return call_with_retry(f"get_task_status({task_name})", _call)
 
-    def list_tasks(self, job_id: JobName) -> list[cluster_pb2.TaskStatus]:
+    def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.
 
         Args:
@@ -374,7 +385,7 @@ class RemoteClusterClient:
         """
 
         def _call():
-            request = cluster_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
+            request = controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
             response = self._client.list_tasks(request)
             return list(response.tasks)
 
@@ -390,8 +401,8 @@ class RemoteClusterClient:
         substring: str = "",
         min_level: str = "",
         tail: bool = False,
-    ) -> cluster_pb2.FetchLogsResponse:
-        request = cluster_pb2.FetchLogsRequest(
+    ) -> logging_pb2.FetchLogsResponse:
+        request = logging_pb2.FetchLogsRequest(
             source=source,
             since_ms=since_ms,
             cursor=cursor,
@@ -402,11 +413,11 @@ class RemoteClusterClient:
         )
 
         def _call():
-            return self._client.fetch_logs(request)
+            return self._log_client.fetch_logs(request)
 
         return call_with_retry(f"fetch_logs({source})", _call)
 
-    def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
+    def get_autoscaler_status(self) -> controller_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.
 
         Returns:
@@ -414,7 +425,7 @@ class RemoteClusterClient:
         """
 
         def _call():
-            request = cluster_pb2.Controller.GetAutoscalerStatusRequest()
+            request = controller_pb2.Controller.GetAutoscalerStatusRequest()
             return self._client.get_autoscaler_status(request)
 
         return call_with_retry("get_autoscaler_status", _call)

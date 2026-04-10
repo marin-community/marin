@@ -45,7 +45,6 @@ export interface ResourceUsage {
   diskMb?: string
   cpuMillicores?: number
   memoryPeakMb?: string
-  cpuPercent?: number
   processCount?: number
 }
 
@@ -120,6 +119,18 @@ export interface JobStatus {
   taskCount?: number
   completedCount?: number
   pendingReason?: string
+  hasChildren?: boolean
+}
+
+export interface JobQuery {
+  scope?: string
+  parentJobId?: string
+  nameFilter?: string
+  stateFilter?: string
+  sortField?: string
+  sortDirection?: string
+  offset?: number
+  limit?: number
 }
 
 // -- Controller RPC Responses --
@@ -190,7 +201,7 @@ export interface ListWorkersResponse {
 
 export interface WorkerResourceSnapshot {
   timestamp?: ProtoTimestamp
-  cpuPercent?: number
+  hostCpuPercent?: number
   memoryUsedBytes?: string
   memoryTotalBytes?: string
   diskUsedBytes?: string
@@ -255,9 +266,14 @@ export interface SliceInfo {
   idle?: boolean
 }
 
+export interface ScaleGroupConfig {
+  quotaPool?: string
+  allocationTier?: number
+}
+
 export interface ScaleGroupStatus {
   name: string
-  config?: Record<string, unknown>
+  config?: ScaleGroupConfig
   currentDemand?: number
   peakDemand?: number
   backoffUntil?: ProtoTimestamp
@@ -398,7 +414,7 @@ export interface ProcessInfo {
   uptimeMs?: string
   memoryRssBytes?: string
   memoryVmsBytes?: string
-  cpuPercent?: number
+  cpuMillicores?: number
   threadCount?: number
   openFdCount?: number
   memoryTotalBytes?: string
@@ -500,4 +516,3 @@ export interface GetSchedulerStateResponse {
   totalPending: number
   totalRunning: number
 }
-

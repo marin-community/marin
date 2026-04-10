@@ -234,6 +234,32 @@ def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
     db.close()
 
 
+def test_replace_from_reattaches_profiles_db(tmp_path: Path) -> None:
+    """replace_from() must re-attach the profiles DB so profile tables remain accessible."""
+    from rigging.timing import Timestamp
+
+    from iris.cluster.controller.db import get_task_profiles, insert_task_profile
+
+    db = ControllerDB(db_dir=tmp_path)
+    insert_task_profile(db, "task-1", b"profile-data", Timestamp.now())
+
+    backup_dir = tmp_path / "backup"
+    backup_dir.mkdir()
+    db.backup_to(backup_dir / "controller.sqlite3")
+
+    # The profiles DB is a separate file; copy it into the backup dir so
+    # replace_from can find it.
+    import shutil
+
+    shutil.copy2(db.profiles_db_path, backup_dir / ControllerDB.PROFILES_DB_FILENAME)
+
+    db.replace_from(str(backup_dir))
+
+    profiles = get_task_profiles(db, "task-1")
+    assert len(profiles) == 1
+    db.close()
+
+
 def test_migration_with_dml_does_not_leave_open_transaction(tmp_path: Path) -> None:
     """Migrations that issue DML (e.g. UPDATE) must not leave an implicit
     transaction open, which would cause the subsequent BEGIN IMMEDIATE for

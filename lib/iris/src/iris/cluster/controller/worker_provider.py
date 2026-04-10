@@ -17,10 +17,11 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
-from iris.cluster.types import JobName, TaskAttempt, WorkerId
-from iris.rpc import cluster_pb2, logging_pb2
-from iris.rpc.cluster_connect import WorkerServiceClientSync
+from iris.cluster.log_store._types import LogPusherProtocol, TaskAttempt, task_log_key
+from iris.cluster.types import JobName, WorkerId
+from iris.rpc import job_pb2
+from iris.rpc import worker_pb2
+from iris.rpc.worker_connect import WorkerServiceClientSync
 from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
@@ -70,12 +71,12 @@ class RpcWorkerStubFactory:
 
 def _apply_request_from_response(
     worker_id: WorkerId,
-    response: cluster_pb2.HeartbeatResponse,
+    response: job_pb2.HeartbeatResponse,
 ) -> HeartbeatApplyRequest:
     """Convert a HeartbeatResponse proto to a HeartbeatApplyRequest."""
     updates: list[TaskUpdate] = []
     for entry in response.tasks:
-        if entry.state in (cluster_pb2.TASK_STATE_UNSPECIFIED, cluster_pb2.TASK_STATE_PENDING):
+        if entry.state in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING):
             continue
         updates.append(
             TaskUpdate(
@@ -85,7 +86,6 @@ def _apply_request_from_response(
                 error=entry.error or None,
                 exit_code=entry.exit_code if entry.HasField("exit_code") else None,
                 resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
-                log_entries=list(entry.log_entries),
                 container_id=entry.container_id or None,
             )
         )
@@ -105,6 +105,7 @@ class WorkerProvider:
     """
 
     stub_factory: WorkerStubFactory
+    log_pusher: LogPusherProtocol | None = None
     parallelism: int = 32
     _pool: ThreadPoolExecutor = field(init=False)
 
@@ -144,12 +145,12 @@ class WorkerProvider:
             if rule := chaos("controller.heartbeat.iteration"):
                 sleep(rule.delay_seconds)
             expected_tasks.append(
-                cluster_pb2.Controller.WorkerTaskStatus(
+                job_pb2.WorkerTaskStatus(
                     task_id=entry.task_id.to_wire(),
                     attempt_id=entry.attempt_id,
                 )
             )
-        request = cluster_pb2.HeartbeatRequest(
+        request = job_pb2.HeartbeatRequest(
             tasks_to_run=batch.tasks_to_run,
             tasks_to_kill=batch.tasks_to_kill,
             expected_tasks=expected_tasks,
@@ -160,63 +161,29 @@ class WorkerProvider:
             health_error = response.health_error or "worker reported unhealthy"
             raise ProviderError(f"worker {batch.worker_id} reported unhealthy: {health_error}")
 
+        # Forward log entries from old workers that still piggyback logs on
+        # heartbeat responses.  New workers push logs directly via LogPusher.
+        if self.log_pusher:
+            for entry in response.tasks:
+                if entry.log_entries:
+                    key = task_log_key(
+                        TaskAttempt(task_id=JobName.from_wire(entry.task_id), attempt_id=entry.attempt_id)
+                    )
+                    self.log_pusher.push(key, list(entry.log_entries))
+
         return _apply_request_from_response(batch.worker_id, response)
-
-    def fetch_live_logs(
-        self,
-        worker_id: WorkerId,
-        address: str | None,
-        task_id: str,
-        attempt_id: int,
-        cursor: int,
-        max_lines: int,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        if not address:
-            raise ProviderError(f"Worker {worker_id} has no address")
-        stub = self.stub_factory.get_stub(address)
-        resp = stub.fetch_logs(
-            cluster_pb2.FetchLogsRequest(
-                source=task_log_key(TaskAttempt(task_id=JobName.from_wire(task_id), attempt_id=attempt_id)),
-                cursor=cursor,
-                max_lines=max_lines,
-            ),
-            timeout_ms=10000,
-        )
-        return list(resp.entries), resp.cursor
-
-    def fetch_process_logs(
-        self,
-        worker_id: WorkerId,
-        address: str | None,
-        request: cluster_pb2.FetchLogsRequest,
-    ) -> tuple[list[logging_pb2.LogEntry], int]:
-        if not address:
-            raise ProviderError(f"Worker {worker_id} has no address")
-        stub = self.stub_factory.get_stub(address)
-        # Forward the full request but override source to the worker's process log key.
-        forwarded = cluster_pb2.FetchLogsRequest(
-            source=PROCESS_LOG_KEY,
-            cursor=request.cursor,
-            max_lines=request.max_lines,
-            since_ms=request.since_ms,
-            substring=request.substring,
-            tail=request.tail,
-            min_level=request.min_level,
-        )
-        resp = stub.fetch_logs(forwarded, timeout_ms=10000)
-        return list(resp.entries), resp.cursor
 
     def get_process_status(
         self,
         worker_id: WorkerId,
         address: str | None,
-        request: cluster_pb2.GetProcessStatusRequest,
-    ) -> cluster_pb2.GetProcessStatusResponse:
+        request: job_pb2.GetProcessStatusRequest,
+    ) -> job_pb2.GetProcessStatusResponse:
         if not address:
             raise ProviderError(f"Worker {worker_id} has no address")
         stub = self.stub_factory.get_stub(address)
         # Forward with target cleared — the worker serves its own process status.
-        forwarded = cluster_pb2.GetProcessStatusRequest(
+        forwarded = job_pb2.GetProcessStatusRequest(
             max_log_lines=request.max_log_lines,
             log_substring=request.log_substring,
             min_log_level=request.min_log_level,
@@ -230,18 +197,18 @@ class WorkerProvider:
     def profile_task(
         self,
         address: str,
-        request: cluster_pb2.ProfileTaskRequest,
+        request: job_pb2.ProfileTaskRequest,
         timeout_ms: int,
-    ) -> cluster_pb2.ProfileTaskResponse:
+    ) -> job_pb2.ProfileTaskResponse:
         stub = self.stub_factory.get_stub(address)
         return stub.profile_task(request, timeout_ms=timeout_ms)
 
     def exec_in_container(
         self,
         address: str,
-        request: cluster_pb2.Worker.ExecInContainerRequest,
+        request: worker_pb2.Worker.ExecInContainerRequest,
         timeout_seconds: int = 60,
-    ) -> cluster_pb2.Worker.ExecInContainerResponse:
+    ) -> worker_pb2.Worker.ExecInContainerResponse:
         stub = self.stub_factory.get_stub(address)
         # Negative timeout means no limit; use a large RPC deadline (1 hour)
         if timeout_seconds < 0:
