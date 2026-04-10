@@ -510,6 +510,15 @@ message Controller {
     repeated GetUserBudgetResponse users = 1;
   }
 
+  // --- Heartbeat Refactor: Worker pushes task state transitions ---
+  message UpdateTaskStatusRequest {
+    string worker_id = 1;
+    repeated iris.job.WorkerTaskStatus updates = 2;
+  }
+  message UpdateTaskStatusResponse {
+    repeated string tasks_to_stop = 1;
+  }
+
   // --- Scheduler State ---
   message GetSchedulerStateRequest {}
 
@@ -637,4 +646,7 @@ service ControllerService {
 
   // Scheduler state (dashboard)
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
+
+  // Worker-to-controller task status push
+  rpc UpdateTaskStatus(Controller.UpdateTaskStatusRequest) returns (Controller.UpdateTaskStatusResponse);
 }

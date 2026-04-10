@@ -2601,3 +2601,16 @@ class ControllerServiceImpl:
             total_pending=total_pending,
             total_running=len(running_protos),
         )
+
+    def update_task_status(
+        self,
+        request: controller_pb2.Controller.UpdateTaskStatusRequest,
+        _ctx: Any,
+    ) -> controller_pb2.Controller.UpdateTaskStatusResponse:
+        """Worker pushes task state transitions. Phase 0: no-op stub."""
+        logger.debug(
+            "UpdateTaskStatus from worker %s: %d updates (not yet active)",
+            request.worker_id,
+            len(request.updates),
+        )
+        return controller_pb2.Controller.UpdateTaskStatusResponse()
