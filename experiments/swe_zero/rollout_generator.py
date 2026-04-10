@@ -37,10 +37,12 @@ MAX_OUTPUT_TOKENS = 1024
 so input + output fit in the model's context window even after many turns
 have grown the conversation."""
 MAX_TOTAL_TOKENS = 8192
-RESERVE_TOKENS = 256
+RESERVE_TOKENS = 768
 """Headroom subtracted from max_total_tokens when computing the per-turn
-``max_tokens`` ceiling. Avoids 400 errors when input is close to the model's
-context length."""
+``max_tokens`` ceiling. Bumped from 256 → 768 because the char-based prompt
+estimate undershot vLLM's actual tokenization in ~12% of high-concurrency
+benchmark rollouts, blowing the input + max_tokens > 8192 budget. 768 covers
+the worst observed slack (~700 tokens) with margin."""
 EXEC_TIMEOUT_SECONDS = 30.0
 OBSERVATION_MAX_CHARS = 8000
 
