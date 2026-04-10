@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Multi-turn rollout generator using mini-swe-agent v2 format.
+Multi-turn rollout generator using mini-swe-agent v1 format.
 
-Generates execution-free agentic rollouts by orchestrating multi-turn
-conversations where the model outputs bash commands and receives simulated
-outputs, matching mini-swe-agent v2's THOUGHT + ```mswea_bash_command format.
+For each rollout we materialize a fresh per-PR worktree (a real checkout of
+the repo at base_commit with test_patch applied), then drive a multi-turn
+conversation with the LM where each assistant turn produces one bash command
+and we run it against the worktree via the SWE-ZERO sandbox.
 """
 
 from __future__ import annotations
@@ -21,31 +22,33 @@ from openai import OpenAI
 from experiments.swe_zero.data_loader import PRRecord
 from experiments.swe_zero.scaffold import (
     SYSTEM_PROMPT,
-    RepoSnapshot,
     build_task_message,
+    execute_in_worktree,
     extract_bash_command,
-    simulate_bash,
 )
+from experiments.swe_zero.worktree import materialize_worktree
 
 logger = logging.getLogger(__name__)
 
 MAX_TURNS = 30
 MAX_OUTPUT_TOKENS = 1024
 """Hard cap on completion tokens per turn. Kept well below max_total_tokens
-so the input + output fit in the model's context window even after many turns
+so input + output fit in the model's context window even after many turns
 have grown the conversation."""
 MAX_TOTAL_TOKENS = 8192
 RESERVE_TOKENS = 256
 """Headroom subtracted from max_total_tokens when computing the per-turn
 ``max_tokens`` ceiling. Avoids 400 errors when input is close to the model's
 context length."""
+EXEC_TIMEOUT_SECONDS = 30.0
+OBSERVATION_MAX_CHARS = 8000
 
 
 @dataclass
 class RolloutStep:
-    """A single step in a rollout trace (mini-swe-agent v2 format)."""
+    """A single step in a rollout trace (mini-swe-agent v1 format)."""
 
-    role: str  # "system" | "user" | "assistant" | "observation"
+    role: str  # "system" | "user" | "assistant"
     content: str = ""
     bash_command: str | None = None
     extra: dict | None = None
@@ -61,7 +64,7 @@ class RolloutStep:
 
 @dataclass
 class Rollout:
-    """A complete multi-turn rollout trace in mini-swe-agent v2 format."""
+    """A complete multi-turn rollout trace in mini-swe-agent v1 format."""
 
     instance_id: str
     repo: str
@@ -76,7 +79,7 @@ class Rollout:
         return {
             "instance_id": self.instance_id,
             "repo": self.repo,
-            "trajectory_format": "mini-swe-agent-1.1",
+            "trajectory_format": "mini-swe-agent-1",
             "messages": [s.to_dict() for s in self.steps],
             "info": {
                 "exit_status": "Submitted" if self.finished else self.error or "incomplete",
@@ -91,17 +94,12 @@ class Rollout:
 
     def actions_text(self) -> str:
         """Concatenation of all bash commands for diversity measurement."""
-        parts = []
-        for step in self.steps:
-            if step.bash_command:
-                parts.append(step.bash_command)
-        return "\n".join(parts)
+        return "\n".join(step.bash_command for step in self.steps if step.bash_command)
 
 
 def _estimate_tokens(messages: list[dict]) -> int:
-    """Rough token count estimate (4 chars ~ 1 token)."""
-    text = json.dumps(messages)
-    return len(text) // 4
+    """Rough token count estimate (4 chars ≈ 1 token)."""
+    return len(json.dumps(messages)) // 4
 
 
 def generate_rollout(
@@ -112,98 +110,90 @@ def generate_rollout(
     max_turns: int = MAX_TURNS,
     max_total_tokens: int = MAX_TOTAL_TOKENS,
 ) -> Rollout:
-    """
-    Generate a single execution-free rollout for a PR.
+    """Generate a single execution-free rollout for a PR.
 
-    Uses mini-swe-agent v2 format: model outputs THOUGHT + bash command,
-    environment returns simulated bash output.
+    Materializes a per-rollout worktree (real checkout at base_commit + test
+    patch), drives a multi-turn conversation, and runs each bash command in
+    the SWE-ZERO sandbox. Always cleans up the worktree on exit.
     """
-    snapshot = RepoSnapshot.from_pr(pr)
     rollout = Rollout(instance_id=pr.instance_id, repo=pr.repo)
     start_time = time.monotonic()
 
-    system_msg = {"role": "system", "content": SYSTEM_PROMPT}
-    user_msg = {"role": "user", "content": build_task_message(pr)}
+    try:
+        worktree = materialize_worktree(pr)
+    except Exception as e:
+        rollout.error = f"Failed to materialize worktree: {e}"
+        rollout.duration_sec = time.monotonic() - start_time
+        logger.error(rollout.error)
+        return rollout
 
-    rollout.steps.append(RolloutStep(role="system", content=SYSTEM_PROMPT))
-    rollout.steps.append(RolloutStep(role="user", content=build_task_message(pr)))
+    try:
+        system_msg = {"role": "system", "content": SYSTEM_PROMPT}
+        user_msg = {"role": "user", "content": build_task_message(pr)}
+        rollout.steps.append(RolloutStep(role="system", content=SYSTEM_PROMPT))
+        rollout.steps.append(RolloutStep(role="user", content=user_msg["content"]))
+        messages: list[dict] = [system_msg, user_msg]
 
-    messages: list[dict] = [system_msg, user_msg]
-
-    for turn in range(max_turns):
-        # Compute a per-turn max_tokens ceiling that fits in the remaining
-        # context window. The ~4 chars per token estimate is conservative
-        # enough that we don't hit vLLM's "max_tokens too large" 400 error
-        # for the prompt sizes we generate.
-        input_tokens_estimate = _estimate_tokens(messages)
-        budget_remaining = max_total_tokens - input_tokens_estimate - RESERVE_TOKENS
-        if budget_remaining <= 64:
-            logger.info(
-                "Token budget exhausted at turn %d for %s (input~%d, total=%d)",
-                turn,
-                pr.instance_id,
-                input_tokens_estimate,
-                max_total_tokens,
-            )
-            break
-        max_tokens_this_turn = min(MAX_OUTPUT_TOKENS, budget_remaining)
-
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens_this_turn,
-            )
-        except Exception as e:
-            rollout.error = f"API error at turn {turn}: {e}"
-            logger.error(rollout.error)
-            break
-
-        choice = response.choices[0]
-        assistant_text = choice.message.content or ""
-
-        if response.usage:
-            rollout.total_prompt_tokens += response.usage.prompt_tokens
-            rollout.total_completion_tokens += response.usage.completion_tokens
-
-        # Extract bash command from response
-        bash_cmd = extract_bash_command(assistant_text)
-
-        rollout.steps.append(RolloutStep(role="assistant", content=assistant_text, bash_command=bash_cmd))
-        messages.append({"role": "assistant", "content": assistant_text})
-
-        if bash_cmd is None:
-            # Model didn't produce a bash block — v1 would raise FormatError
-            # and prompt for a single action. We send a format error message.
-            err = "Please always provide EXACTLY ONE action in triple backticks."
-            rollout.steps.append(RolloutStep(role="user", content=err))
-            messages.append({"role": "user", "content": err})
-            if choice.finish_reason == "stop":
-                # Likely the model is done responding entirely
+        for turn in range(max_turns):
+            input_tokens_estimate = _estimate_tokens(messages)
+            budget_remaining = max_total_tokens - input_tokens_estimate - RESERVE_TOKENS
+            if budget_remaining <= 64:
+                logger.info(
+                    "Token budget exhausted at turn %d for %s (input~%d)",
+                    turn,
+                    pr.instance_id,
+                    input_tokens_estimate,
+                )
                 break
-            continue
+            max_tokens_this_turn = min(MAX_OUTPUT_TOKENS, budget_remaining)
 
-        # Simulate the bash command
-        observation = simulate_bash(bash_cmd, snapshot)
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens_this_turn,
+                )
+            except Exception as e:
+                rollout.error = f"API error at turn {turn}: {e}"
+                logger.error(rollout.error)
+                break
 
-        # v1 submission detection: first line of the bash output must be
-        # COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT (or MINI_SWE_AGENT_FINAL_OUTPUT)
-        first_line = observation.lstrip().splitlines()[0].strip() if observation.strip() else ""
-        if first_line in ("COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT", "MINI_SWE_AGENT_FINAL_OUTPUT"):
-            rollout.finished = True
-            break
+            choice = response.choices[0]
+            assistant_text = choice.message.content or ""
+            if response.usage:
+                rollout.total_prompt_tokens += response.usage.prompt_tokens
+                rollout.total_completion_tokens += response.usage.completion_tokens
 
-        # v1 truncates long outputs in the timeout_template; do similar here.
-        if len(observation) > 10000:
-            observation = observation[:5000] + "\n\n... (output truncated) ...\n\n" + observation[-2000:]
+            bash_cmd = extract_bash_command(assistant_text)
+            rollout.steps.append(RolloutStep(role="assistant", content=assistant_text, bash_command=bash_cmd))
+            messages.append({"role": "assistant", "content": assistant_text})
 
-        # v1 observation format: "Observation: {{output}}"
-        obs_text = f"Observation: {observation}" if observation else "Observation: "
-        rollout.steps.append(RolloutStep(role="user", content=obs_text))
-        messages.append({"role": "user", "content": obs_text})
+            if bash_cmd is None:
+                err = "Please always provide EXACTLY ONE action in triple backticks."
+                rollout.steps.append(RolloutStep(role="user", content=err))
+                messages.append({"role": "user", "content": err})
+                if choice.finish_reason == "stop":
+                    break
+                continue
 
-    rollout.duration_sec = time.monotonic() - start_time
+            exec_result = execute_in_worktree(bash_cmd, worktree, timeout_seconds=EXEC_TIMEOUT_SECONDS)
+            observation = exec_result.as_observation(max_chars=OBSERVATION_MAX_CHARS)
+
+            # v1 submission detection: first non-empty line of bash output must be
+            # COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT (or MINI_SWE_AGENT_FINAL_OUTPUT).
+            first_line = observation.lstrip().splitlines()[0].strip() if observation.strip() else ""
+            if first_line in ("COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT", "MINI_SWE_AGENT_FINAL_OUTPUT"):
+                rollout.finished = True
+                break
+
+            obs_text = f"Observation: {observation}" if observation else "Observation: "
+            rollout.steps.append(RolloutStep(role="user", content=obs_text))
+            messages.append({"role": "user", "content": obs_text})
+    finally:
+        worktree.cleanup()
+        rollout.duration_sec = time.monotonic() - start_time
+
     return rollout
 
 
