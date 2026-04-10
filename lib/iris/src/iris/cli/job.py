@@ -28,6 +28,7 @@ from iris.client.client import Job, JobFailedError
 from iris.cluster.constraints import (
     Constraint,
     WellKnownAttribute,
+    device_variant_constraint,
     infer_preemptible_constraint,
     region_constraint,
     zone_constraint,
@@ -323,16 +324,60 @@ def build_resources(
     memory: str = "1GB",
     disk: str = "5GB",
 ) -> ResourceSpec:
-    """Build ResourceSpec from CLI arguments."""
+    """Build ResourceSpec from CLI arguments.
+
+    When ``tpu`` contains multiple comma-separated variants, the first one is
+    used as the canonical device (its chip count drives resource accounting),
+    and the alternatives are surfaced separately via ``build_tpu_alternatives``
+    so the caller can attach a ``device_variant_constraint`` accepting any of
+    them. All variants must have the same ``vm_count``.
+    """
     spec = ResourceSpec(cpu=cpu, memory=memory, disk=disk)
 
     if tpu:
-        spec.device = tpu_device(tpu)
+        primary, _ = _parse_tpu_alternatives(tpu)
+        spec.device = tpu_device(primary)
     elif gpu:
         variant, count = parse_gpu_spec(gpu)
         spec.device = gpu_device(variant, count)
 
     return spec
+
+
+def _parse_tpu_alternatives(tpu_arg: str) -> tuple[str, list[str]]:
+    """Split a ``--tpu`` value into (primary, alternatives).
+
+    The CLI accepts a comma-separated list (e.g. ``v6e-4,v5litepod-4``) so a
+    single job can be schedulable on any of the listed variants. The first
+    variant is canonical; the rest are alternatives. All listed variants must
+    share the same ``vm_count`` so multinode coscheduling stays consistent.
+    """
+    variants = [v.strip() for v in tpu_arg.split(",") if v.strip()]
+    if not variants:
+        raise click.BadParameter("--tpu must specify at least one TPU variant")
+    if len(variants) == 1:
+        return variants[0], []
+
+    primary = variants[0]
+    alternatives = variants[1:]
+    primary_topo = get_tpu_topology(primary)
+    for alt in alternatives:
+        alt_topo = get_tpu_topology(alt)
+        if alt_topo.vm_count != primary_topo.vm_count:
+            raise click.BadParameter(
+                f"TPU alternative {alt!r} has vm_count={alt_topo.vm_count} "
+                f"but primary {primary!r} has vm_count={primary_topo.vm_count}. "
+                f"All TPU alternatives must share the same vm_count."
+            )
+    return primary, alternatives
+
+
+def build_tpu_alternatives(tpu_arg: str | None) -> list[str]:
+    """Return the list of all TPU variants requested via ``--tpu``."""
+    if not tpu_arg:
+        return []
+    primary, alternatives = _parse_tpu_alternatives(tpu_arg)
+    return [primary, *alternatives]
 
 
 def parse_reservation_spec(spec: str) -> list[ReservationEntry]:
@@ -466,13 +511,18 @@ def run_iris_job(
     job_name = job_name or generate_job_name(command)
     extras = extras or []
 
-    replicas, coscheduling = resolve_multinode_defaults(tpu, gpu, replicas)
+    tpu_variants = build_tpu_alternatives(tpu)
+    primary_tpu = tpu_variants[0] if tpu_variants else None
+
+    replicas, coscheduling = resolve_multinode_defaults(primary_tpu, gpu, replicas)
 
     constraints: list[Constraint] = []
     if regions:
         constraints.append(region_constraint(list(regions)))
     if zone:
         constraints.append(zone_constraint(zone))
+    if len(tpu_variants) > 1:
+        constraints.append(device_variant_constraint(tpu_variants))
 
     # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
     # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
@@ -493,7 +543,10 @@ def run_iris_job(
     logger.info(f"Command: {' '.join(command)}")
     logger.info(f"Resources: cpu={resources.cpu:g}, memory={resources.memory}, disk={resources.disk}")
     if resources.device and resources.device.HasField("tpu"):
-        logger.info(f"TPU: {resources.device.tpu.variant}")
+        if len(tpu_variants) > 1:
+            logger.info(f"TPU: {resources.device.tpu.variant} (alternatives: {', '.join(tpu_variants[1:])})")
+        else:
+            logger.info(f"TPU: {resources.device.tpu.variant}")
     if resources.device and resources.device.HasField("gpu"):
         gpu_dev = resources.device.gpu
         logger.info(f"GPU: {gpu_dev.count}x {gpu_dev.variant or 'any'}")
@@ -637,7 +690,16 @@ Examples:
     type=(str, str),
     help="Set environment variables for the job (KEY VALUE). Can be repeated.",
 )
-@click.option("--tpu", type=str, help="TPU type to request (e.g., v5litepod-16)")
+@click.option(
+    "--tpu",
+    type=str,
+    help=(
+        "TPU type to request (e.g., v5litepod-16). Pass a comma-separated list "
+        "(e.g., v6e-4,v5litepod-4) to allow scheduling on any of the listed "
+        "variants — useful when capacity is contested. All variants must share "
+        "the same vm_count."
+    ),
+)
 @click.option("--gpu", type=str, help="GPU spec: VARIANTxCOUNT (e.g., H100x8), COUNT (e.g., 8), or VARIANT (e.g., H100)")
 @click.option("--cpu", type=float, default=0.5, show_default=True, help="Number of CPUs to request")
 @click.option("--memory", type=str, default="1GB", show_default=True, help="Memory size to request (e.g., 8GB, 512MB)")
@@ -708,7 +770,7 @@ def run(
         if not arg.startswith("-"):
             break
         raise click.UsageError(
-            f"Unknown option {arg!r}. " f"Iris options must come before '--'. Did you mean a different flag?"
+            f"Unknown option {arg!r}. Iris options must come before '--'. Did you mean a different flag?"
         )
 
     env_vars_dict = load_env_vars(env_vars)
