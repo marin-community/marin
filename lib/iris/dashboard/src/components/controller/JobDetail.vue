@@ -351,36 +351,36 @@ const taskCounts = computed(() => {
   return counts
 })
 
-const FAILED_ATTEMPT_STATES = new Set(['failed', 'worker_failed'])
 const MAX_FAILURE_EXAMPLES = 5
 
-interface FailedAttemptSummary {
+interface AttemptSummary {
   taskId: string
   taskIndex: string
   attemptId: number
   error: string
   finishedAtMs: number
-  isWorkerFailure: boolean
 }
 
-const recentFailedAttempts = computed<FailedAttemptSummary[]>(() => {
-  const failures: FailedAttemptSummary[] = []
+function collectAttemptsByState(stateName: string): AttemptSummary[] {
+  const results: AttemptSummary[] = []
   for (const task of tasks.value) {
     for (const attempt of task.attempts ?? []) {
-      if (!FAILED_ATTEMPT_STATES.has(stateToName(attempt.state))) continue
-      failures.push({
+      if (stateToName(attempt.state) !== stateName) continue
+      results.push({
         taskId: task.taskId,
         taskIndex: taskIndex(task.taskId),
         attemptId: attempt.attemptId,
         error: attempt.error ?? '',
         finishedAtMs: timestampMs(attempt.finishedAt),
-        isWorkerFailure: attempt.isWorkerFailure ?? false,
       })
     }
   }
-  failures.sort((a, b) => b.finishedAtMs - a.finishedAtMs)
-  return failures
-})
+  results.sort((a, b) => b.finishedAtMs - a.finishedAtMs)
+  return results
+}
+
+const recentTaskFailures = computed<AttemptSummary[]>(() => collectAttemptsByState('failed'))
+const recentPreemptions = computed<AttemptSummary[]>(() => collectAttemptsByState('worker_failed'))
 
 const acceleratorDisplay = computed(() => {
   const j = job.value
@@ -577,15 +577,15 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
 
       <!-- Recent task attempt failures callout -->
       <div
-        v-if="recentFailedAttempts.length > 0"
+        v-if="recentTaskFailures.length > 0"
         class="mb-4 px-4 py-3 bg-status-danger-bg border border-status-danger-border rounded-lg"
       >
         <span class="font-semibold text-status-danger text-sm">
-          {{ recentFailedAttempts.length }} recent task attempt failure{{ recentFailedAttempts.length !== 1 ? 's' : '' }}
+          {{ recentTaskFailures.length }} failed task attempt{{ recentTaskFailures.length !== 1 ? 's' : '' }}
         </span>
         <div class="mt-2 flex flex-col gap-1">
           <div
-            v-for="f in recentFailedAttempts.slice(0, MAX_FAILURE_EXAMPLES)"
+            v-for="f in recentTaskFailures.slice(0, MAX_FAILURE_EXAMPLES)"
             :key="`${f.taskId}-${f.attemptId}`"
             class="text-xs text-text-secondary"
           >
@@ -600,10 +600,43 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             <span v-if="f.error" class="text-status-danger"> · {{ f.error.length > 120 ? f.error.slice(0, 120) + '…' : f.error }}</span>
           </div>
           <span
-            v-if="recentFailedAttempts.length > MAX_FAILURE_EXAMPLES"
+            v-if="recentTaskFailures.length > MAX_FAILURE_EXAMPLES"
             class="text-xs text-text-muted"
           >
-            … and {{ recentFailedAttempts.length - MAX_FAILURE_EXAMPLES }} more
+            … and {{ recentTaskFailures.length - MAX_FAILURE_EXAMPLES }} more
+          </span>
+        </div>
+      </div>
+
+      <!-- Recent preemption failures callout -->
+      <div
+        v-if="recentPreemptions.length > 0"
+        class="mb-4 px-4 py-3 bg-status-warning-bg border border-status-warning-border rounded-lg"
+      >
+        <span class="font-semibold text-status-warning text-sm">
+          {{ recentPreemptions.length }} preempted attempt{{ recentPreemptions.length !== 1 ? 's' : '' }}
+        </span>
+        <div class="mt-2 flex flex-col gap-1">
+          <div
+            v-for="f in recentPreemptions.slice(0, MAX_FAILURE_EXAMPLES)"
+            :key="`${f.taskId}-${f.attemptId}`"
+            class="text-xs text-text-secondary"
+          >
+            <RouterLink
+              :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(f.taskId)}`"
+              class="text-accent hover:underline font-mono"
+            >
+              task {{ f.taskIndex }}
+            </RouterLink>
+            <span class="text-text-muted"> attempt {{ f.attemptId }}</span>
+            <span v-if="f.finishedAtMs" class="text-text-muted"> · {{ formatRelativeTime(f.finishedAtMs) }}</span>
+            <span v-if="f.error" class="text-status-warning"> · {{ f.error.length > 120 ? f.error.slice(0, 120) + '…' : f.error }}</span>
+          </div>
+          <span
+            v-if="recentPreemptions.length > MAX_FAILURE_EXAMPLES"
+            class="text-xs text-text-muted"
+          >
+            … and {{ recentPreemptions.length - MAX_FAILURE_EXAMPLES }} more
           </span>
         </div>
       </div>
