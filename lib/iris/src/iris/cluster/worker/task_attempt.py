@@ -284,6 +284,7 @@ class TaskAttempt:
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
+        self.on_state_change: Callable[[TaskState], None] | None = None
 
     @classmethod
     def adopt(
@@ -479,6 +480,11 @@ class TaskAttempt:
                 self.error = error
             if exit_code is not None:
                 self.exit_code = exit_code
+        if self.on_state_change is not None:
+            try:
+                self.on_state_change(state)
+            except Exception:
+                logger.debug("on_state_change callback failed", exc_info=True)
 
     def duration(self) -> Duration | None:
         """Calculate how long the attempt ran.
