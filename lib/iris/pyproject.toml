@@ -71,6 +71,14 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/iris"]
 
+[tool.hatch.build.targets.wheel.force-include]
+# Cluster YAML configs live outside src/ because they are configuration data,
+# not Python package source. force-include maps them into the wheel at
+# iris/examples/ so that when iris is installed as a wheel, the bundled configs
+# are reachable via ``importlib.resources.files("iris") / "examples"`` (and
+# via the _bundled_iris_examples_dir() probe in iris.cli.main).
+"examples" = "iris/examples"
+
 [tool.pytest.ini_options]
 timeout = 10
 addopts = "-n auto --durations=25 -m 'not slow and not docker' -v"
