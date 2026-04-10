@@ -276,6 +276,7 @@ async def generate_rollout_async(
     temperature: float = 1.0,
     max_turns: int = MAX_TURNS,
     max_total_tokens: int = MAX_TOTAL_TOKENS,
+    system_prompt: str | None = None,
 ) -> Rollout:
     """Async version of ``generate_rollout``.
 
@@ -284,7 +285,13 @@ async def generate_rollout_async(
     for the blocking subprocess calls (worktree materialize / safe_exec /
     cleanup) so the event loop can multiplex many rollouts on a single
     Python process.
+
+    ``system_prompt`` overrides the default ``SYSTEM_PROMPT`` from
+    scaffold.py for this rollout. Used by the ablation runner to compare
+    prompt variants without rebuilding the whole pipeline.
     """
+    sys_prompt = system_prompt if system_prompt is not None else SYSTEM_PROMPT
+
     rollout = Rollout(instance_id=pr.instance_id, repo=pr.repo)
     start_time = time.monotonic()
 
@@ -297,9 +304,9 @@ async def generate_rollout_async(
         return rollout
 
     try:
-        system_msg = {"role": "system", "content": SYSTEM_PROMPT}
+        system_msg = {"role": "system", "content": sys_prompt}
         user_msg = {"role": "user", "content": build_task_message(pr)}
-        rollout.steps.append(RolloutStep(role="system", content=SYSTEM_PROMPT))
+        rollout.steps.append(RolloutStep(role="system", content=sys_prompt))
         rollout.steps.append(RolloutStep(role="user", content=user_msg["content"]))
         messages: list[dict] = [system_msg, user_msg]
 
@@ -390,12 +397,16 @@ async def generate_rollouts_async(
     concurrency: int = DEFAULT_CONCURRENCY,
     temperature: float = 1.0,
     max_total_tokens: int = MAX_TOTAL_TOKENS,
+    system_prompt: str | None = None,
     progress_callback=None,
 ) -> list[Rollout]:
     """Run many rollouts concurrently with a bounded semaphore.
 
     ``progress_callback`` if provided is invoked as ``cb(done, total, rollout)``
     each time a rollout finishes; useful for incremental GCS saves.
+
+    ``system_prompt`` overrides the default ``SYSTEM_PROMPT`` from scaffold.py
+    for every rollout in this run; used by the ablation runner.
     """
     semaphore = asyncio.Semaphore(concurrency)
     total = sum(b.n_rollouts for b in batches)
@@ -412,6 +423,7 @@ async def generate_rollouts_async(
                 pr,
                 temperature=temperature,
                 max_total_tokens=max_total_tokens,
+                system_prompt=system_prompt,
             )
         async with completed_lock:
             completed += 1
@@ -452,6 +464,7 @@ def run_rollouts_concurrently(
     concurrency: int = DEFAULT_CONCURRENCY,
     temperature: float = 1.0,
     max_total_tokens: int = MAX_TOTAL_TOKENS,
+    system_prompt: str | None = None,
     progress_callback=None,
 ) -> list[Rollout]:
     """Sync entry point for the async concurrent path.
@@ -470,6 +483,7 @@ def run_rollouts_concurrently(
                 concurrency=concurrency,
                 temperature=temperature,
                 max_total_tokens=max_total_tokens,
+                system_prompt=system_prompt,
                 progress_callback=progress_callback,
             )
         finally:

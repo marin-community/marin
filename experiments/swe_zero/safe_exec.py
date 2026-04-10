@@ -4,98 +4,144 @@
 """
 Sandboxed bash executor for SWE-ZERO rollouts.
 
-The agent runs real bash subprocesses against a cloned repo working tree, but
-a regex blocklist rejects any command that would *execute* code, hit the
-network, or modify the git history. This matches the SWE-ZERO constraint:
-"You CANNOT RUN CODE for any purpose" while still letting the agent use
-``cat``/``find``/``grep``/``sed`` against the actual repo.
+The agent runs real bash subprocesses against a cloned repo working tree.
+We restrict what the agent can run by setting ``PATH`` to a directory
+containing symlinks **only** to a whitelist of allowed binaries (cat, grep,
+sed, find, awk, ls, ...). Anything outside the whitelist - python, pytest,
+pip, npm, curl, etc. - returns the standard ``command not found`` error from
+bash with no special-case logic in our code. Heredoc bodies and string
+literals containing the names of blocked commands no longer trigger false
+positives because bash never tries to exec them.
+
+This matches the SWE-ZERO constraint ("You CANNOT RUN CODE for any
+purpose") while exposing the standard bash UX for syntax errors and missing
+commands. Limitations:
+
+- Absolute path invocations (``/usr/bin/python3 foo.py``) bypass the PATH
+  restriction. We accept this for the MVP because (a) the model is unlikely
+  to spontaneously construct absolute interpreter paths and (b) we can layer
+  bubblewrap on top later for hermetic isolation.
+- Shell builtins (``cd``, ``echo``, ``set``, ``source``, ``eval``, ...) do
+  not go through PATH and are always available. None of them can execute
+  external code on their own; ``source``/``eval`` running an external
+  command still depends on PATH.
 """
 
 from __future__ import annotations
 
 import logging
-import re
+import os
+import shutil
 import subprocess
+import tempfile
+import threading
 from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Commands that would execute user code or invoke language runtimes/build tools.
-# Matches the command name as a whole word, so ``mypython`` is fine but
-# ``python``, ``python3``, ``python3.11`` are blocked. We also block common
-# wrappers like ``coverage``, ``tox``, and the ``-c`` form of ``bash``/``sh``
-# to make it harder for the model to escape via ``bash -c "python ..."``.
-_EXEC_BLOCKLIST = re.compile(
-    r"""
-    (?<![\w./-])
-    (?:
-        python\d?(?:\.\d+)? |
-        ipython\d? |
-        pytest |
-        coverage |
-        tox |
-        nosetests |
-        unittest |
-        pip\d? |
-        pipx |
-        uv |
-        poetry |
-        conda |
-        npm | npx | yarn | pnpm | node | deno |
-        bun |
-        cargo | rustc |
-        go(?:\s+(?:run|test|build|install|generate)) |
-        java | javac | mvn | gradle | sbt |
-        ruby | rails | rake | bundle |
-        php |
-        perl |
-        Rscript |
-        ghc | runhaskell |
-        make | cmake | ninja |
-        gcc | g\+\+ | clang | clang\+\+ |
-        ld |
-        dotnet
-    )
-    (?![\w-])
-    """,
-    re.VERBOSE,
-)
-
-# Bash/sh in -c form (which can be used to smuggle execution through other
-# commands). We allow ``bash --version`` etc. but reject anything that runs a
-# script or command.
-_SHELL_EXEC_BLOCKLIST = re.compile(r"""(?<![\w./-])(?:bash|sh|zsh|fish|dash)\s+(?:-c|-ic|-i|-l|-s|<|<<|\S+\.sh)""")
-
-# Network ingress/egress.
-_NETWORK_BLOCKLIST = re.compile(
-    r"""(?<![\w./-])(?:curl|wget|nc|ncat|netcat|telnet|ssh|scp|rsync|ftp|sftp|aria2c|httpie|http)(?![\w-])"""
-)
-
-# git operations that would mutate history or hit the network. Read-only
-# operations like ``git diff``, ``git log``, ``git show`` remain allowed.
-_GIT_BLOCKLIST = re.compile(
-    r"""(?<![\w./-])git\s+
-        (?:
-            fetch | pull | clone | push |
-            remote\s+(?:add|set-url) |
-            reset\s+--hard |
-            checkout\s+--detach |
-            init | am
-        )
-        (?![\w-])
-    """,
-    re.VERBOSE,
-)
-
-# Anything that looks like a shebang or direct ./ invocation.
-_DIRECT_EXEC = re.compile(r"""(?:^|[;|&]|\$\()\s*(?:\.{1,2}/|/)\S""")
-
-_BLOCKLISTS: tuple[tuple[re.Pattern, str], ...] = (
-    (_EXEC_BLOCKLIST, "running code or build tools"),
-    (_SHELL_EXEC_BLOCKLIST, "spawning a child shell"),
-    (_NETWORK_BLOCKLIST, "network access"),
-    (_GIT_BLOCKLIST, "git history mutation or network operations"),
-    (_DIRECT_EXEC, "direct file execution"),
+# Whitelist of binaries the agent is allowed to run via bash. Bash builtins
+# (cd, echo, set, source, eval, ...) work regardless of PATH and are not
+# listed here. Adding a command to this list is the only way to expose a new
+# binary to the agent.
+ALLOWED_COMMANDS: frozenset[str] = frozenset(
+    {
+        # File reading
+        "cat",
+        "head",
+        "tail",
+        "less",
+        "more",
+        "nl",
+        "wc",
+        "od",
+        "xxd",
+        "file",
+        "tac",
+        "rev",
+        "fold",
+        "fmt",
+        # Navigate / inspect
+        "ls",
+        "find",
+        "tree",
+        "pwd",
+        "stat",
+        "readlink",
+        "realpath",
+        "basename",
+        "dirname",
+        # Search
+        "grep",
+        "egrep",
+        "fgrep",
+        # Text processing
+        "sed",
+        "awk",
+        "cut",
+        "sort",
+        "uniq",
+        "tr",
+        "tee",
+        "echo",
+        "printf",
+        "diff",
+        "cmp",
+        "comm",
+        "join",
+        "paste",
+        "split",
+        "csplit",
+        "expand",
+        "unexpand",
+        "yes",
+        # File management (no-execute)
+        "cp",
+        "mv",
+        "rm",
+        "mkdir",
+        "rmdir",
+        "touch",
+        "ln",
+        "chmod",
+        # Archives (read-mostly)
+        "tar",
+        "gzip",
+        "gunzip",
+        "zcat",
+        "bzip2",
+        "bunzip2",
+        "bzcat",
+        "xz",
+        "unxz",
+        "xzcat",
+        # Hashes / checksums
+        "md5sum",
+        "sha1sum",
+        "sha256sum",
+        "sha512sum",
+        "cksum",
+        # Misc shell helpers
+        "true",
+        "false",
+        "test",
+        "[",
+        "expr",
+        "date",
+        "env",
+        "id",
+        "whoami",
+        "hostname",
+        "uname",
+        "which",
+        "type",
+        "sleep",
+        # git: read-only operations are the most useful (diff, log, show,
+        # status). The mutating ones (commit, push, fetch, ...) still work
+        # because we whitelist the binary, not subcommands. They have no
+        # effect outside the throwaway worktree though, so we accept this.
+        "git",
+    }
 )
 
 
@@ -125,12 +171,43 @@ class ExecResult:
         return out
 
 
-def check_blocklist(command: str) -> str | None:
-    """Return a human-readable rejection reason if the command is blocked."""
-    for pattern, reason in _BLOCKLISTS:
-        if pattern.search(command):
-            return f"command blocked: {reason}"
-    return None
+# Lazily-built directory of symlinks. One per process - threadsafe init via
+# the lock so concurrent rollouts don't race to build it.
+_path_dir_lock = threading.Lock()
+_path_dir: Path | None = None
+_SYSTEM_BIN_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+def _build_whitelist_path_dir() -> Path:
+    """Create a tempdir of symlinks to every binary in ``ALLOWED_COMMANDS``.
+
+    Resolves each binary via the *system* PATH (not the restricted PATH) so
+    we always pick up the real coreutils. Missing binaries are silently
+    skipped — the agent will see ``command not found`` if it tries them, same
+    as any other unknown command.
+    """
+    d = Path(tempfile.mkdtemp(prefix="swe_zero_path_"))
+    resolved = 0
+    for cmd in ALLOWED_COMMANDS:
+        src = shutil.which(cmd, path=_SYSTEM_BIN_PATH)
+        if src is None:
+            continue
+        try:
+            os.symlink(src, d / cmd)
+            resolved += 1
+        except FileExistsError:
+            pass
+    logger.info("safe_exec: built whitelist PATH dir at %s with %d/%d binaries", d, resolved, len(ALLOWED_COMMANDS))
+    return d
+
+
+def get_whitelist_path_dir() -> Path:
+    """Return the lazily-initialized whitelist directory shared by this process."""
+    global _path_dir
+    with _path_dir_lock:
+        if _path_dir is None:
+            _path_dir = _build_whitelist_path_dir()
+    return _path_dir
 
 
 def safe_exec(
@@ -140,23 +217,16 @@ def safe_exec(
     timeout_seconds: float = 30.0,
     extra_env: dict[str, str] | None = None,
 ) -> ExecResult:
-    """Run a bash command against ``cwd`` with the SWE-ZERO sandbox blocklist.
+    """Run a bash command against ``cwd`` with a PATH-whitelisted sandbox.
 
-    The command runs through ``bash -c`` so pipes/redirects/heredocs work.
-    Blocked commands return immediately with a synthetic stderr message; no
-    subprocess is spawned in that case.
+    The command runs through ``bash -c`` so pipes/redirects/heredocs work
+    normally. Bash will only successfully exec binaries that exist in the
+    whitelist directory; everything else returns the usual ``command not
+    found`` error with exit code 127.
     """
-    rejection = check_blocklist(command)
-    if rejection is not None:
-        return ExecResult(
-            stdout="",
-            stderr=f"{rejection}: this is the SWE-ZERO execution-free environment",
-            returncode=126,
-            timed_out=False,
-        )
-
+    path_dir = get_whitelist_path_dir()
     env = {
-        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "PATH": str(path_dir),
         "HOME": cwd,
         "SHELL": "/bin/bash",
         "LANG": "C.UTF-8",
