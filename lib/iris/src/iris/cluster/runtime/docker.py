@@ -348,14 +348,20 @@ class DockerContainerHandle:
         setup_script = self._generate_setup_script()
         self._write_setup_script(setup_script)
 
-        # Build containers run without a Docker memory limit — uv sync on a large
-        # workspace can exceed any fixed ceiling (confirmed OOM at 8 GB on a host
-        # with 1.4 TB free; CONSTRAINT_MEMCG in dmesg). The host cgroup still
-        # bounds usage; we just don't add an artificial container-level cap.
+        # Build containers get max(32 GB, task request) memory — uv sync on a large
+        # workspace OOMed at the old 8 GB ceiling on a host with 1.4 TB free.
+        task_memory_bytes = self.config.resources.memory_bytes if self.config.resources else 0
+        build_memory_bytes = (
+            max(self._BUILD_MEMORY_LIMIT_BYTES, task_memory_bytes)
+            if task_memory_bytes
+            else self._BUILD_MEMORY_LIMIT_BYTES
+        )
+        build_memory_mb = build_memory_bytes // (1024 * 1024)
+
         build_container_id = self._docker_create(
             command=["bash", "/app/_setup_env.sh"],
             label_suffix="_build",
-            memory_limit_mb=None,
+            memory_limit_mb=build_memory_mb,
         )
 
         build_logs: list[LogLine] = []
@@ -596,6 +602,8 @@ exec {quoted_cmd}
     # -------------------------------------------------------------------------
     # Docker CLI helpers
     # -------------------------------------------------------------------------
+
+    _BUILD_MEMORY_LIMIT_BYTES = 32 * 1024**3
 
     def _docker_create(
         self,
