@@ -1045,6 +1045,7 @@ class LmEvalHarnessConfig:
     """
 
     task_spec: list[TaskConfig | str]
+    include_path: str | list[str] | None = None
     max_examples: int | None = None
     max_length: int | None = None
     log_samples: bool = False
@@ -1052,6 +1053,7 @@ class LmEvalHarnessConfig:
     apply_chat_template: bool = False
     fewshot_as_multiturn: bool = False
     confirm_run_unsafe_code: bool = True
+    max_packed_segments: int = 64
     sample_logging: SampleLoggingConfig = dataclasses.field(default_factory=SampleLoggingConfig)
     generation_kwargs: dict = dataclasses.field(
         default_factory=lambda: {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
@@ -1096,7 +1098,7 @@ class LmEvalHarnessConfig:
         logger.info("Loading tasks...")
         import lm_eval.tasks as tasks
 
-        manager = tasks.TaskManager()
+        manager = tasks.TaskManager(include_path=self.include_path)
         # we need to do it this way b/c i can't figure out how to run e.g. hellaswag 0 shot and 10 shot in a single run
         this_tasks = {}
         for task in tqdm(self.to_task_spec()):
@@ -1174,6 +1176,13 @@ class LmEvalHarnessConfig:
                 this_task.config.task, lm_eval_task_name, our_name
             )
             return this_task
+        elif isinstance(this_task, tasks.Task):
+            # Base Task subclass (e.g. DnaVepLlrEvalTask). Rename via task_name if available.
+            if hasattr(this_task, "_task_name"):
+                this_task._task_name = self._replace_name_with_our_name(
+                    this_task._task_name or lm_eval_task_name, lm_eval_task_name, our_name
+                )
+            return this_task
         else:
             raise ValueError(f"Unknown task type: {this_task}")
 
@@ -1242,6 +1251,20 @@ class EvalHarnessMainConfig:
         return load_tokenizer(self.tokenizer)
 
 
+def _inject_subset_results(outputs: dict, tasks_to_run: dict) -> None:
+    """Merge per-subset metrics from tasks that collect them into the outputs dict.
+
+    Tasks like DnaVepLlrEvalTask store stratified metrics in a ``_subset_results``
+    dict during aggregation.  This helper surfaces those metrics so they flow
+    through ``log_report_to_tracker`` to wandb.
+    """
+    for task_name, task_obj in tasks_to_run.items():
+        # Duck-type check: lm-eval's base Task class doesn't define _subset_results,
+        # but custom tasks (e.g. DnaVepLlrEvalTask) may attach it for per-subset metrics.
+        if hasattr(task_obj, "_subset_results") and task_obj._subset_results:
+            outputs["results"].setdefault(task_name, {}).update(task_obj._subset_results)
+
+
 def run_lm_eval_harness(
     config: LmEvalHarnessConfig,
     model,
@@ -1274,6 +1297,9 @@ def run_lm_eval_harness(
     outputs = _actually_run_eval_harness(
         config, model, tasks_to_run, tokenizer, EvalBatch, axis_resources, mp, profiler_config
     )
+
+    if outputs is not None:
+        _inject_subset_results(outputs, tasks_to_run)
 
     return outputs
 
@@ -1320,7 +1346,7 @@ def _actually_run_eval_harness(
         axis_resources,
         tokenizer,
         mp,
-        max_packed_segments=64,
+        max_packed_segments=config.max_packed_segments,
         generation_kwargs=config.generation_kwargs,
         sample_logging_config=config.sample_logging,
         profiler_config=profiler_config,
@@ -1610,6 +1636,9 @@ def lm_eval_harness(
 
         if jax.process_index() == 0:
             assert outputs is not None
+
+            _inject_subset_results(outputs, tasks_to_run)
+
             log_report_to_tracker("lm_eval", outputs, levanter.tracker.current_tracker())
             logger.info("Logged report to tracker")
 
@@ -1659,6 +1688,12 @@ def _iterate_tokenized_requests(
     # Combine contexts and completions for full tokenization
     combined_texts = [context + completion for context, completion in zip(contexts, completions)]
 
+    # If the tokenizer appends EOS, context_enc will have a trailing EOS that
+    # doesn't exist at that position in combined_enc (combined only has EOS at
+    # the very end, after the completion).  Strip it so context_enc_len reflects
+    # the true prompt boundary in the combined sequence.
+    eos_id = tokenizer.eos_token_id
+
     # Batch tokenization for combined and context separately
     for batch_indices in batched(range(len(requests)), batch_size):
         # Extract batch data
@@ -1674,6 +1709,13 @@ def _iterate_tokenized_requests(
             all_enc = combined_encodings["input_ids"][off]
 
             context_enc_len = len(context_enc)
+
+            # Fix prompt/completion boundary when the tokenizer appends EOS.
+            # context_enc may end with EOS but combined_enc has no EOS at that
+            # position — the EOS only appears at the very end of combined_enc.
+            if eos_id is not None and context_enc_len > 0 and context_enc[-1] == eos_id:
+                if context_enc_len > len(all_enc) or all_enc[context_enc_len - 1] != eos_id:
+                    context_enc_len -= 1
 
             if len(all_enc) > max_length:
                 logger.warning(f"Request {i} is too long. Truncating.")
