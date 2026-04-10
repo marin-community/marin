@@ -7,9 +7,8 @@ import { stateToName } from '@/types/status'
 import type {
   TaskStatus,
   GetTaskStatusResponse,
-  GetTaskLogsResponse,
 } from '@/types/rpc'
-import { timestampMs, formatBytes, formatDuration, formatRelativeTime } from '@/utils/formatting'
+import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
 
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -53,7 +52,7 @@ const startedDisplay = computed(() =>
 )
 
 // Resource gauge values from resourceUsage (MB -> bytes for the gauge)
-const cpuUsed = computed(() => task.value?.resourceUsage?.cpuPercent ?? 0)
+const cpuUsed = computed(() => (task.value?.resourceUsage?.cpuMillicores ?? 0) / 1000)
 const memUsedMb = computed(() => {
   const raw = task.value?.resourceUsage?.memoryMb
   return raw ? parseFloat(raw) : 0
@@ -73,9 +72,15 @@ const MAX_HISTORY = 60
 
 watch(task, (t) => {
   if (!t?.resourceUsage) return
-  cpuHistory.value = [...cpuHistory.value, t.resourceUsage.cpuPercent ?? 0].slice(-MAX_HISTORY)
+  cpuHistory.value = [...cpuHistory.value, (t.resourceUsage.cpuMillicores ?? 0) / 1000].slice(-MAX_HISTORY)
   const memMb = t.resourceUsage.memoryMb ? parseFloat(t.resourceUsage.memoryMb) : 0
   memHistory.value = [...memHistory.value, memMb].slice(-MAX_HISTORY)
+})
+
+const cpuTotal = computed(() => {
+  const maxObserved = Math.max(...cpuHistory.value, cpuUsed.value, 0)
+  if (maxObserved <= 0) return 1
+  return Math.max(1, maxObserved * 1.5)
 })
 
 // Build metrics
@@ -178,7 +183,7 @@ watch(() => props.taskId, async () => {
         <InfoCard title="Resources">
           <template v-if="task.resourceUsage">
             <div class="space-y-3">
-              <ResourceGauge label="CPU" :used="cpuUsed" :total="100" unit="%" />
+              <ResourceGauge label="CPU" :used="cpuUsed" :total="cpuTotal" unit="cores" />
               <ResourceGauge
                 label="Memory"
                 :used="memUsedMb * 1024 * 1024"
@@ -198,7 +203,7 @@ watch(() => props.taskId, async () => {
                 Processes: {{ task.resourceUsage.processCount }}
               </div>
               <div v-if="task.resourceUsage.cpuMillicores">
-                CPU millicores: {{ task.resourceUsage.cpuMillicores }}
+                CPU: {{ formatCpuMillicores(task.resourceUsage.cpuMillicores) }}
               </div>
             </div>
           </template>

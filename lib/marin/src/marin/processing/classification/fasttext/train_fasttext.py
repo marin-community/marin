@@ -19,7 +19,7 @@ from datetime import datetime
 
 import draccus
 from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 from marin.processing.classification.dataset_utils import (
     Attribute,
     DatasetConfig,

@@ -9,15 +9,6 @@ the attributes.  Handles two cases:
   (e.g., __label__hq), filter on threshold.
 - Span removal produces attributes (e.g., duplicate_text spans). Remove text spans.
 - Document removal via attribute produced by deduplication.
-
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --memory=512MB --cluster=us-central2 \\
-    --entry-point consolidate \\
-    lib/marin/src/marin/processing/classification/consolidate.py \\
-    --input_path gs://marin-us-central2/processed/documents \\
-    --output_path gs://marin-us-central2/processed/filtered \\
-    --filters '[{"type": "classify", "attribute_path": "gs://...attributes/quality",
-                 "name": "fasttext", "label": "__label__hq", "lower_threshold": 0.5}]'
 """
 
 import logging
@@ -27,6 +18,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
+from fray import ResourceConfig
 from marin.utils import (
     fsspec_exists,
     fsspec_glob,
@@ -95,6 +87,9 @@ class ConsolidateConfig:
 
     filetype: str = "jsonl.gz"
     """The filetype of the input data."""
+
+    worker_resources: ResourceConfig | None = None
+    """Resource config per Zephyr worker. Uses Zephyr defaults (1 CPU, 1g RAM) when None."""
 
 
 # Dictionary-based navigation guide for extracting IDs from different corpus types
@@ -341,7 +336,9 @@ def consolidate(config: ConsolidateConfig):
 
     output_pattern = f"{config.output_path}/part-{{shard:04d}}.parquet"
 
-    ctx = ZephyrContext(name="consolidate-filter")
+    ctx = ZephyrContext(
+        name="consolidate-filter", **({"resources": config.worker_resources} if config.worker_resources else {})
+    )
     results = ctx.execute(
         Dataset.from_list(input_paths)
         .map_shard(

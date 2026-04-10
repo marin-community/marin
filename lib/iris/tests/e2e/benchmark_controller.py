@@ -43,9 +43,11 @@ import psutil
 from iris.client.client import IrisClient, Job, ResourceSpec
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.types import Entrypoint, EnvironmentSpec, get_tpu_topology, tpu_device
-from iris.logging import configure_logging
-from iris.rpc import cluster_pb2, config_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from rigging.log_setup import configure_logging
+from iris.rpc import config_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +127,7 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
         sg = config.scale_groups[sg_name]
         sg.name = sg_name
         sg.num_vms = num_vms
-        sg.min_slices = count
+        sg.buffer_slices = count
         sg.max_slices = count
         sg.resources.cpu_millicores = int(float(cpu) * 1000)
         sg.resources.memory_bytes = _parse_size(memory)
@@ -133,7 +135,8 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
         sg.resources.device_count = tpu_count
         sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
         sg.resources.device_variant = variant
-        sg.slice_template.preemptible = True
+        sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+        sg.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
         sg.slice_template.num_vms = num_vms
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
         sg.slice_template.accelerator_variant = variant
@@ -204,7 +207,7 @@ def _wait_for_workers(controller_client: ControllerServiceClientSync, min_worker
     """Wait for workers to register with the controller."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        request = cluster_pb2.Controller.ListWorkersRequest()
+        request = controller_pb2.Controller.ListWorkersRequest()
         response = controller_client.list_workers(request)
         healthy = [w for w in response.workers if w.healthy]
         if len(healthy) >= min_workers:
@@ -237,9 +240,8 @@ def _wait_for_job(job: Job, timeout: float) -> JobResult:
             poll_interval=2.0,
             raise_on_failure=False,
             stream_logs=True,
-            include_children=True,
         )
-        state_name = cluster_pb2.JobState.Name(status.state)
+        state_name = job_pb2.JobState.Name(status.state)
         return JobResult(job=job, state_name=state_name, elapsed=time.monotonic() - start)
     except Exception as e:
         return JobResult(job=job, state_name="UNKNOWN", elapsed=time.monotonic() - start, error=e)
@@ -366,12 +368,13 @@ def _make_single_worker_config() -> config_pb2.IrisClusterConfig:
     sg = config.scale_groups["local-cpu"]
     sg.name = "local-cpu"
     sg.num_vms = 1
-    sg.min_slices = 1
+    sg.buffer_slices = 1
     sg.max_slices = 1
     sg.resources.cpu_millicores = 128 * 1000
     sg.resources.memory_bytes = 256 * 1024**3
     sg.resources.disk_bytes = 500 * 1024**3
     sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
     sg.slice_template.local.SetInParent()
 
     return make_local_config(config)
@@ -680,7 +683,7 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
                     ep_name = f"{job.job_id}/worker-{t}"
                     endpoint_names.append(ep_name)
                     controller_client.register_endpoint(
-                        cluster_pb2.Controller.RegisterEndpointRequest(
+                        controller_pb2.Controller.RegisterEndpointRequest(
                             name=ep_name,
                             address=f"10.0.0.{t % 256}:{10000 + t}",
                             job_id=job.job_id.to_wire(),
@@ -703,7 +706,7 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
             _time_rpc(
                 "ListEndpoints (exact)",
                 lambda: controller_client.list_endpoints(
-                    cluster_pb2.Controller.ListEndpointsRequest(prefix=sample_name, exact=True)
+                    controller_pb2.Controller.ListEndpointsRequest(prefix=sample_name, exact=True)
                 ),
                 iters,
             )
@@ -713,7 +716,7 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
             _time_rpc(
                 f"ListEndpoints (prefix, ~{tasks_per_job} results)",
                 lambda: controller_client.list_endpoints(
-                    cluster_pb2.Controller.ListEndpointsRequest(prefix=sample_prefix)
+                    controller_pb2.Controller.ListEndpointsRequest(prefix=sample_prefix)
                 ),
                 iters,
             )
@@ -722,7 +725,7 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
             _time_rpc(
                 f"GetJobStatus ({tasks_per_job} tasks)",
                 lambda: controller_client.get_job_status(
-                    cluster_pb2.Controller.GetJobStatusRequest(job_id=jobs[0].job_id.to_wire())
+                    controller_pb2.Controller.GetJobStatusRequest(job_id=jobs[0].job_id.to_wire())
                 ),
                 iters,
             )
@@ -731,7 +734,7 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
             _time_rpc(
                 f"ListTasks (job filter, {tasks_per_job} tasks)",
                 lambda: controller_client.list_tasks(
-                    cluster_pb2.Controller.ListTasksRequest(job_id=jobs[0].job_id.to_wire())
+                    controller_pb2.Controller.ListTasksRequest(job_id=jobs[0].job_id.to_wire())
                 ),
                 iters,
             )
@@ -739,14 +742,14 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
             # ListTasks unfiltered (all tasks)
             _time_rpc(
                 f"ListTasks (all, {total_tasks} tasks)",
-                lambda: controller_client.list_tasks(cluster_pb2.Controller.ListTasksRequest()),
+                lambda: controller_client.list_tasks(controller_pb2.Controller.ListTasksRequest()),
                 iters,
             )
 
             # ListWorkers
             _time_rpc(
                 "ListWorkers",
-                lambda: controller_client.list_workers(cluster_pb2.Controller.ListWorkersRequest()),
+                lambda: controller_client.list_workers(controller_pb2.Controller.ListWorkersRequest()),
                 iters,
             )
 

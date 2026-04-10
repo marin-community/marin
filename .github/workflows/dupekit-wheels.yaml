@@ -32,8 +32,11 @@ jobs:
           filters: |
             relevant:
               - 'rust/dupekit/**'
+              - 'scripts/rust_package.py'
               - '.github/workflows/dupekit-wheels.yaml'
 
+  # Linux wheels (x86_64 + aarch64) cross-compiled via zig on ubuntu.
+  # macOS wheels (x86_64 + arm64) built natively on macos-14.
   build:
     needs: changes
     if: needs.changes.outputs.should_run == 'true'
@@ -41,124 +44,38 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64
-          - os: ubuntu-latest
-            target: aarch64
-          - os: macos-latest
-            target: x86_64
+            targets: linux
           - os: macos-14
-            target: aarch64
+            targets: macos
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: PyO3/maturin-action@v1
-        with:
-          command: build
-          args: --release --out dist --manifest-path rust/dupekit/Cargo.toml
-          target: ${{ matrix.target }}
-          manylinux: 2_28
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-${{ matrix.os }}-${{ matrix.target }}
-          path: dist/*.whl
-
-  sdist:
-    needs: changes
-    if: needs.changes.outputs.should_run == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: PyO3/maturin-action@v1
-        with:
-          command: sdist
-          args: --out dist --manifest-path rust/dupekit/Cargo.toml
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sdist
-          path: dist/*.tar.gz
-
-  release:
-    if: needs.changes.outputs.should_run == 'true' && startsWith(github.ref, 'refs/tags/dupekit-v')
-    needs: [changes, build, sdist]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-
-  update-release:
-    if: needs.changes.outputs.should_run == 'true' && github.ref == 'refs/heads/main'
-    needs: [changes, build, sdist]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Compute release metadata
-        id: meta
-        run: |
-          VERSION=$(grep '^version' rust/dupekit/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "pinned_tag=dupekit-${VERSION}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      # Rolling release (convenience alias)
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: dupekit-latest
-          name: "dupekit (latest wheels)"
-          prerelease: true
-          make_latest: false
-          files: dist/*
-
-      # Commit-pinned release for reproducibility
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.meta.outputs.pinned_tag }}
-          name: "dupekit ${{ steps.meta.outputs.version }} (${{ steps.meta.outputs.short_sha }})"
-          prerelease: true
-          make_latest: false
-          files: dist/*
-
-  update-pyproject:
-    if: needs.changes.outputs.should_run == 'true' && github.ref == 'refs/heads/main'
-    needs: [changes, update-release]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
+      - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v7
 
-      - name: Update pyproject.toml and uv.lock with pinned dupekit release
-        run: |
-          set -euo pipefail
+      - name: Build wheels
+        run: python scripts/rust_package.py --skip-publish --targets ${{ matrix.targets }}
 
-          VERSION=$(grep '^version' rust/dupekit/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          PINNED_TAG="dupekit-${VERSION}-${SHORT_SHA}"
-          echo "Dupekit version: $VERSION, tag: $PINNED_TAG"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist/*
 
-          FIND_LINKS_URL="https://github.com/marin-community/marin/releases/expanded_assets/${PINNED_TAG}"
+  release:
+    if: needs.changes.outputs.should_run == 'true' && github.ref == 'refs/heads/main'
+    needs: [changes, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
 
-          # Update find-links to point to the pinned release
-          sed -i "s|find-links = \[\"https://github.com/marin-community/marin/releases/expanded_assets/dupekit-[^\"]*\"\]|find-links = [\"${FIND_LINKS_URL}\"]|" pyproject.toml
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
-          # Update dupekit version pin in dependencies
-          sed -i 's|^\(\s*\)"dupekit[^"]*"|    "dupekit >= '"${VERSION}"'"|' pyproject.toml
-
-          # Regenerate uv.lock so devs don't get dirty lockfile diffs
-          uv lock
+      - name: Publish release and update pyproject
+        run: python scripts/rust_package.py --skip-build
 
       - uses: peter-evans/create-pull-request@v7
         with:

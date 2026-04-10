@@ -7,7 +7,7 @@ import logging
 
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.execution import WorkerContext, ZephyrContext, zephyr_worker_ctx
+from zephyr.execution import CounterSnapshot, WorkerContext, ZephyrContext, zephyr_worker_ctx
 from zephyr.expr import Expr, col, lit
 from zephyr.plan import compute_plan
 from zephyr.readers import InputFileSpec, load_file, load_jsonl, load_parquet, load_vortex, load_zip_members

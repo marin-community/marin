@@ -24,7 +24,7 @@ from iris.cluster.types import (
     gpu_device,
     tpu_device,
 )
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 
 def _add(a, b):
@@ -199,12 +199,12 @@ def test_task_name_attempt_zero():
 # ---------------------------------------------------------------------------
 
 
-def _proto_constraint(key: str, string_value: str, op: int = cluster_pb2.CONSTRAINT_OP_EQ) -> cluster_pb2.Constraint:
+def _proto_constraint(key: str, string_value: str, op: int = job_pb2.CONSTRAINT_OP_EQ) -> job_pb2.Constraint:
     """Build a proto Constraint with a string value."""
-    return cluster_pb2.Constraint(
+    return job_pb2.Constraint(
         key=key,
         op=op,
-        value=cluster_pb2.AttributeValue(string_value=string_value),
+        value=job_pb2.AttributeValue(string_value=string_value),
     )
 
 
@@ -439,7 +439,7 @@ def test_constraint_in_proto_roundtrip():
     """IN constraint survives a proto round-trip."""
     original = Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=("us-central1", "eu-west4"))
     proto = original.to_proto()
-    assert proto.op == cluster_pb2.CONSTRAINT_OP_IN
+    assert proto.op == job_pb2.CONSTRAINT_OP_IN
     assert len(proto.values) == 2
     restored = Constraint.from_proto(proto)
     assert restored == original
@@ -450,11 +450,11 @@ def test_constraint_in_proto_roundtrip():
 # ---------------------------------------------------------------------------
 
 
-def _proto_in_constraint(key: str, string_values: list[str]) -> cluster_pb2.Constraint:
+def _proto_in_constraint(key: str, string_values: list[str]) -> job_pb2.Constraint:
     """Build a proto Constraint with IN op and multiple string values."""
-    c = cluster_pb2.Constraint(key=key, op=cluster_pb2.CONSTRAINT_OP_IN)
+    c = job_pb2.Constraint(key=key, op=job_pb2.CONSTRAINT_OP_IN)
     for sv in string_values:
-        c.values.append(cluster_pb2.AttributeValue(string_value=sv))
+        c.values.append(job_pb2.AttributeValue(string_value=sv))
     return c
 
 
@@ -472,7 +472,7 @@ def test_required_regions_in_single():
 
 def test_required_regions_in_empty_values_raises():
     """IN constraint with no values is invalid."""
-    c = cluster_pb2.Constraint(key=WellKnownAttribute.REGION, op=cluster_pb2.CONSTRAINT_OP_IN)
+    c = job_pb2.Constraint(key=WellKnownAttribute.REGION, op=job_pb2.CONSTRAINT_OP_IN)
     with pytest.raises(ValueError, match="at least one value"):
         extract_placement_requirements([c])
 
@@ -497,7 +497,7 @@ def test_extract_placement_requirements_with_in_region():
 
 def test_constraints_from_resources_tpu():
     """TPU resource spec produces device-type and device-variant constraints."""
-    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=2000)
+    resources = job_pb2.ResourceSpecProto(cpu_millicores=2000)
     resources.device.CopyFrom(tpu_device("v5litepod-16"))
     result = constraints_from_resources(resources)
     keys = {c.key for c in result}
@@ -510,7 +510,7 @@ def test_constraints_from_resources_tpu():
 
 
 def test_constraints_from_resources_gpu():
-    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=2000)
+    resources = job_pb2.ResourceSpecProto(cpu_millicores=2000)
     resources.device.CopyFrom(gpu_device("H100", count=8))
     result = constraints_from_resources(resources)
     type_c = next(c for c in result if c.key == WellKnownAttribute.DEVICE_TYPE)
@@ -521,23 +521,23 @@ def test_constraints_from_resources_gpu():
 
 def test_constraints_from_resources_cpu_produces_nothing():
     """CPU-only resource spec produces no device constraints."""
-    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=2000)
-    resources.device.CopyFrom(cluster_pb2.DeviceConfig(cpu=cluster_pb2.CpuDevice()))
+    resources = job_pb2.ResourceSpecProto(cpu_millicores=2000)
+    resources.device.CopyFrom(job_pb2.DeviceConfig(cpu=job_pb2.CpuDevice()))
     result = constraints_from_resources(resources)
     assert result == []
 
 
 def test_constraints_from_resources_no_device():
     """Resource spec with no device field produces no constraints."""
-    resources = cluster_pb2.ResourceSpecProto(cpu_millicores=2000)
+    resources = job_pb2.ResourceSpecProto(cpu_millicores=2000)
     result = constraints_from_resources(resources)
     assert result == []
 
 
 def test_constraints_from_resources_auto_variant_skipped():
     """Variant 'auto' is not emitted as a constraint."""
-    resources = cluster_pb2.ResourceSpecProto()
-    resources.device.CopyFrom(cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="auto", count=1)))
+    resources = job_pb2.ResourceSpecProto()
+    resources.device.CopyFrom(job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="auto", count=1)))
     result = constraints_from_resources(resources)
     assert len(result) == 1
     assert result[0].key == WellKnownAttribute.DEVICE_TYPE
@@ -589,7 +589,7 @@ def test_adjust_tpu_replicas_single_host_and_edge_cases():
 def test_merge_auto_constraints_with_user_variant_override():
     """User multi-variant IN constraint replaces auto-generated single-variant EQ."""
     auto = constraints_from_resources(
-        cluster_pb2.ResourceSpecProto(
+        job_pb2.ResourceSpecProto(
             cpu_millicores=2000,
             device=tpu_device("v5litepod-16"),
         )

@@ -38,7 +38,6 @@ from fray.v2.types import (
     create_environment,
     get_tpu_topology,
 )
-from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -209,8 +208,14 @@ def build_runtime_env(request: JobRequest) -> dict:
             pip_packages=list(environment.pip_packages),
             env_vars=env_vars,
         )
-        runtime_env["working_dir"] = environment.workspace
-        runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
+        import re
+
+        from iris.cluster.client.bundle import create_workspace_dir  # lazy: avoid PyPI iris conflict on workers
+
+        runtime_env["working_dir"] = create_workspace_dir(
+            environment.workspace,
+            exclude=re.compile(r"^(tests|docs)(/|$)|\.pack$"),
+        )
         runtime_env["config"] = {"setup_timeout_seconds": 1800}
     else:
         python_path = build_python_path(submodules_dir=os.path.join(environment.workspace, "submodules"))
@@ -492,6 +497,8 @@ class _RayActorHostBase:
         args: tuple,
         kwargs: dict,
     ):
+        from rigging.log_setup import configure_logging
+
         configure_logging(level=logging.INFO)
 
         self._shutdown_event = threading.Event()
@@ -599,6 +606,10 @@ class RayProxyMethod:
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         object_ref = self._ray_handle._proxy_call.remote(self._method_name, args, kwargs)
         return RayActorFuture(object_ref)
+
+    def submit(self, *args: Any, **kwargs: Any) -> ActorFuture:
+        """Long-running operation path. Same as remote() for Ray backend."""
+        return self.remote(*args, **kwargs)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         object_ref = self._ray_handle._proxy_call.remote(self._method_name, args, kwargs)

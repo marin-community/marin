@@ -735,7 +735,7 @@ def run_on_pod(
     tpu_type: str,
     *,
     num_slices: int | Sequence[int] = 1,
-    max_retries_preemption=10000,
+    max_retries_preemption=1000,
     max_retries_failure=10,
     runtime_env: dict | None = None,
 ):
@@ -768,7 +768,7 @@ def run_on_pod_ray(
     remote_fn: RemoteFunction,
     tpu_type: str,
     num_slices: int | Sequence[int] = 1,
-    max_retries_preemption: int = 10000,
+    max_retries_preemption: int = 1000,
     max_retries_failure: int = 10,
     runtime_env: dict | None = None,
 ):

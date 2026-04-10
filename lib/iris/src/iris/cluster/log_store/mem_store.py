@@ -5,10 +5,11 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from threading import Lock
 
-from iris.cluster.log_store._types import LogReadResult
+from iris.cluster.log_store._types import REGEX_META_RE, LogReadResult
 from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
@@ -28,23 +29,28 @@ def _matches_common_filters(row: _Row, since_ms: int, substring_filter: str, min
     return True
 
 
-def _rows_to_entries(rows: list[_Row], include_key: bool) -> list[logging_pb2.LogEntry]:
+def _rows_to_entries(rows: list[_Row], include_key: bool, exact_key: str | None = None) -> list[logging_pb2.LogEntry]:
     entries: list[logging_pb2.LogEntry] = []
+    # For exact-key queries, parse attempt_id once from the key.
+    fixed_attempt_id = 0
+    if not include_key and exact_key and ":" in exact_key:
+        try:
+            parsed = TaskAttempt.from_wire(exact_key)
+            fixed_attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
+        except ValueError:
+            pass
     for row in rows:
         _seq, key, source, data, epoch_ms, level = row
         entry = logging_pb2.LogEntry(source=source, data=data, level=level)
         entry.timestamp.epoch_ms = epoch_ms
         if include_key:
+            entry.key = key
             parsed = TaskAttempt.from_wire(key)
             entry.attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
+        else:
+            entry.attempt_id = fixed_attempt_id
         entries.append(entry)
     return entries
-
-
-def _is_shallow_match(key: str, prefix: str) -> bool:
-    """True when key is a direct child of prefix (no further '/' separators)."""
-    suffix = key[len(prefix) :]
-    return "/" not in suffix
 
 
 class MemStore:
@@ -98,12 +104,19 @@ class MemStore:
         min_level: str = "",
     ) -> LogReadResult:
         min_level_enum = str_to_log_level(min_level) if min_level else 0
+        is_pattern = bool(REGEX_META_RE.search(key))
+
+        if is_pattern:
+            pat = re.compile(key)
+            key_match = lambda k: pat.fullmatch(k) is not None  # noqa: E731
+        else:
+            key_match = lambda k: k == key  # noqa: E731
 
         with self._lock:
             rows = [
                 r
                 for r in self._rows
-                if r[1] == key
+                if key_match(r[1])
                 and r[0] > cursor
                 and _matches_common_filters(r, since_ms, substring_filter, min_level_enum)
             ]
@@ -119,44 +132,10 @@ class MemStore:
             return LogReadResult(entries=[], cursor=cursor)
 
         max_seq = max(r[0] for r in rows)
-        return LogReadResult(entries=_rows_to_entries(rows, include_key=False), cursor=max_seq)
-
-    def get_logs_by_prefix(
-        self,
-        prefix: str,
-        *,
-        cursor: int = 0,
-        since_ms: int = 0,
-        substring_filter: str = "",
-        max_lines: int = 0,
-        tail: bool = False,
-        min_level: str = "",
-        shallow: bool = False,
-    ) -> LogReadResult:
-        min_level_enum = str_to_log_level(min_level) if min_level else 0
-
-        with self._lock:
-            rows = [
-                r
-                for r in self._rows
-                if r[1].startswith(prefix)
-                and r[0] > cursor
-                and (not shallow or _is_shallow_match(r[1], prefix))
-                and _matches_common_filters(r, since_ms, substring_filter, min_level_enum)
-            ]
-
-        rows.sort(key=lambda r: r[0])
-
-        if tail and max_lines > 0:
-            rows = rows[-max_lines:]
-        elif max_lines > 0:
-            rows = rows[:max_lines]
-
-        if not rows:
-            return LogReadResult(entries=[], cursor=cursor)
-
-        max_seq = max(r[0] for r in rows)
-        return LogReadResult(entries=_rows_to_entries(rows, include_key=True), cursor=max_seq)
+        return LogReadResult(
+            entries=_rows_to_entries(rows, include_key=is_pattern, exact_key=key if not is_pattern else None),
+            cursor=max_seq,
+        )
 
     def has_logs(self, key: str) -> bool:
         with self._lock:

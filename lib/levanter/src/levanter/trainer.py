@@ -30,7 +30,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -1095,8 +1095,7 @@ class AllConfig(Protocol):
 
 
 def initialize(config: TrainerConfig | AllConfig):
-    """Initializes jax, logging, setting the run name/id in the process. Also initializes tracking and saves config
-    as hyperparameters and an artifact"""
+    """Initializes jax and logging, then initializes tracking and logs config hyperparameters."""
     if isinstance(config, TrainerConfig):
         trainer_config = config
     else:

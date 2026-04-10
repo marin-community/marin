@@ -1,26 +1,17 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-from functools import cached_property
 from itertools import chain
 from typing import Sequence, Any
 
-import numpy as np
 import regex
-from tokenizers import normalizers
-from transformers import PreTrainedTokenizerBase, BatchEncoding, PreTrainedTokenizerFast
 
 from levanter.data import BatchProcessor
-from levanter.utils.hf_utils import HfTokenizer, num_cpus_used_by_tokenizer
+from levanter.tokenizers import MarinTokenizer
+from levanter.utils.py_utils import logical_cpu_core_count
 
 LONG_STRING_WORKAROUND = 10_000
 ws = regex.compile(r"\s")
-
-
-def _maybe_force_tokenizer_parallelism(tokenizer: PreTrainedTokenizerBase):
-    if tokenizer.is_fast and os.getenv("TOKENIZERS_PARALLELISM") is None:
-        os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 
 class BatchTokenizer(BatchProcessor[dict, dict]):
@@ -30,24 +21,25 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
 
     def __init__(
         self,
-        tokenizer: HfTokenizer,
+        tokenizer: MarinTokenizer,
         text_field: str = "text",
         enforce_bos: bool = True,
         enforce_eos: bool = True,
         *,
         override_resources=None,
         _workaround_len: int = LONG_STRING_WORKAROUND,
+        long_string_workaround: bool = False,
         return_attention_mask: bool = False,
         padding=False,
-        max_length=None,
+        max_length: int | None = None,
     ):
-        _maybe_force_tokenizer_parallelism(tokenizer)
         self.tokenizer = tokenizer
         self.text_field = text_field
         self.override_resources = override_resources
         self.return_attention_mask = return_attention_mask
         self.padding = padding
-        self.max_length = max_length if max_length is not None else self.tokenizer.model_max_length
+        self.max_length = max_length
+        self._long_string_workaround = long_string_workaround
 
         if tokenizer.bos_token_id is None:
             enforce_bos = False
@@ -55,7 +47,7 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
             enforce_eos = False
 
         if enforce_eos or enforce_bos:
-            input_ids = tokenizer("hi there")["input_ids"]
+            input_ids = tokenizer.encode("hi there", add_special_tokens=True)
             should_append_eos = input_ids[-1] != tokenizer.eos_token_id and enforce_eos
             should_append_bos = input_ids[0] != tokenizer.bos_token_id and enforce_bos
         else:
@@ -70,30 +62,34 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         batch_text = [example[self.text_field] for example in batch]
 
         if self._need_to_add_bos:
-            batch_text = [self.tokenizer.bos_token + " " + d for d in batch_text]
+            bos = self.tokenizer.bos_token
+            assert bos is not None
+            batch_text = [bos + " " + d for d in batch_text]
         if self._need_to_add_eos:
-            batch_text = [d + " " + self.tokenizer.eos_token for d in batch_text]
+            eos = self.tokenizer.eos_token
+            assert eos is not None
+            batch_text = [d + " " + eos for d in batch_text]
 
-        if self._needs_long_sequence_workaround:
+        if self._long_string_workaround:
             batch_text, needs_merge = self._break_for_long_sequences(batch_text)
         else:
             needs_merge = []
 
-        if self.padding is not False:
-            encoding = self.tokenizer(
-                batch_text,
-                return_attention_mask=self.return_attention_mask,
-                verbose=False,
-                padding=self.padding,
-                max_length=self.max_length,
-                truncation=True,
-            )  # type: ignore
-        else:
-            encoding = self.tokenizer(batch_text, return_attention_mask=self.return_attention_mask, verbose=False)  # type: ignore
+        encoded = self.tokenizer.encode_batch(batch_text)
+
+        # Build a dict-of-lists structure analogous to the old BatchEncoding.
+        encoding: dict[str, list] = {"input_ids": encoded}
+
+        if self.return_attention_mask:
+            encoding["attention_mask"] = [[1] * len(ids) for ids in encoded]
+
+        if self.padding is not False and self.max_length is not None:
+            encoding = _apply_padding_and_truncation(
+                encoding, self.max_length, self.padding, pad_token_id=self.tokenizer.pad_token_id or 0
+            )
 
         if needs_merge:
-            new_encoding = self._merge_split_encodings(batch_text, encoding, needs_merge)
-            encoding = BatchEncoding(new_encoding)
+            encoding = self._merge_split_encodings(batch_text, encoding, needs_merge)
 
         unbatched = [dict(zip(encoding, t)) for t in zip(*[encoding[k] for k in encoding])]
         return unbatched
@@ -120,7 +116,7 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
     def metadata(self) -> dict[str, Any]:
         return {
             "tokenizer": self.tokenizer.name_or_path,
-            "vocab_size": len(self.tokenizer),
+            "vocab_size": self.tokenizer.vocab_size,
             "return_attention_mask": self.return_attention_mask,
             "padding": self.padding,
             "max_length": self.max_length,
@@ -130,7 +126,11 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
 
     @property
     def output_exemplar(self) -> dict:
-        return dict(**self.tokenizer("hi there", return_attention_mask=self.return_attention_mask, verbose=False))
+        ids = self.tokenizer.encode("hi there")
+        result: dict[str, Any] = {"input_ids": ids}
+        if self.return_attention_mask:
+            result["attention_mask"] = [1] * len(ids)
+        return result
 
     @property
     def name_or_path(self):
@@ -140,22 +140,13 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
     def vocab_size(self):
         return self.tokenizer.vocab_size
 
-    @cached_property
-    def _needs_long_sequence_workaround(self):
-        if isinstance(self.tokenizer, PreTrainedTokenizerFast):
-            normalizer = self.tokenizer.backend_tokenizer.normalizer
-            if normalizer is None:
-                return False
-            return isinstance(normalizer, (normalizers.Replace, normalizers.Sequence))
-        return False
-
     @property
     def num_cpus(self) -> int:
         if self.override_resources is not None:
             cpus = self.override_resources.get("num_cpus", None)
             if cpus is not None:
                 return cpus
-        return num_cpus_used_by_tokenizer(self.tokenizer)
+        return min(max(1, logical_cpu_core_count() - 4), 12)
 
     @property
     def num_gpus(self) -> int:
@@ -169,30 +160,38 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         for k, v in encoding.items():
             if len(v) == 0:
                 continue
-            if isinstance(v[0], np.ndarray):
-                v_out = []
-                vs_to_merge = []
-                for i in range(len(batch)):
-                    if not needs_merge[i]:
-                        if len(vs_to_merge) > 0:
-                            v_out.append(np.concatenate(vs_to_merge))
-                        vs_to_merge = []
-                    vs_to_merge.append(v[i])
-                if len(vs_to_merge) > 0:
-                    v_out.append(np.concatenate(vs_to_merge))
-                new_encoding[k] = v_out
-            elif isinstance(v[0], list):
-                v_out = []
-                vs_to_merge = []
-                for i in range(len(batch)):
-                    if not needs_merge[i]:
-                        if len(vs_to_merge) > 0:
-                            v_out.append(list(chain(*vs_to_merge)))  # type: ignore[name-defined]
-                        vs_to_merge = []
-                    vs_to_merge.append(v[i])
-                if len(vs_to_merge) > 0:
-                    v_out.append(list(chain(*vs_to_merge)))  # type: ignore[name-defined]
-                new_encoding[k] = v_out
-            else:
-                raise ValueError(f"Unknown type {type(v[0])}")
+            v_out = []
+            vs_to_merge: list[list[int]] = []
+            for i in range(len(batch)):
+                if not needs_merge[i]:
+                    if len(vs_to_merge) > 0:
+                        v_out.append(list(chain(*vs_to_merge)))
+                    vs_to_merge = []
+                vs_to_merge.append(v[i])
+            if len(vs_to_merge) > 0:
+                v_out.append(list(chain(*vs_to_merge)))
+            new_encoding[k] = v_out
         return new_encoding
+
+
+def _apply_padding_and_truncation(
+    encoding: dict[str, list[list[int]]], max_length: int, padding, pad_token_id: int = 0
+) -> dict[str, list[list[int]]]:
+    """Truncate sequences to max_length and optionally pad to uniform length."""
+    for k in encoding:
+        encoding[k] = [seq[:max_length] for seq in encoding[k]]
+
+    if padding is False:
+        return encoding
+
+    if padding == "max_length":
+        target_len = max_length
+    else:
+        # padding=True means pad to the longest in the batch
+        target_len = max(len(seq) for seq in encoding["input_ids"]) if encoding["input_ids"] else 0
+
+    for k in encoding:
+        pad_value = pad_token_id if k == "input_ids" else 0
+        encoding[k] = [seq + [pad_value] * (target_len - len(seq)) for seq in encoding[k]]
+
+    return encoding

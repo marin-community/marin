@@ -7,7 +7,7 @@ import os
 import time
 from collections.abc import Callable
 
-from iris.time_utils import Deadline, Duration
+from rigging.timing import Deadline, Duration
 
 
 class SentinelFile:

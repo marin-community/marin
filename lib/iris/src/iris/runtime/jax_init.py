@@ -18,7 +18,7 @@ import os
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.time_utils import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 

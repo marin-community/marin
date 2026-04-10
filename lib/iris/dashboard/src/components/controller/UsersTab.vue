@@ -5,7 +5,7 @@ import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type { ListUsersResponse, UserSummary } from '@/types/rpc'
 import EmptyState from '@/components/shared/EmptyState.vue'
 
-const TERMINAL_JOB_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed'])
+const TERMINAL_JOB_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'preempted'])
 
 const { data, loading, error, refresh } = useControllerRpc<ListUsersResponse>('ListUsers')
 

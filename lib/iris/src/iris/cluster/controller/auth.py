@@ -17,7 +17,8 @@ import time
 
 import jwt
 
-from iris.cluster.controller.db import API_KEYS, ApiKey, ControllerDB
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import API_KEY_PROJECTION, ApiKeyRow
 from iris.rpc import config_pb2
 from iris.rpc.auth import (
     GcpAccessTokenVerifier,
@@ -26,7 +27,7 @@ from iris.rpc.auth import (
     VerifiedIdentity,
     hash_token,
 )
-from iris.time_utils import Timestamp
+from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +58,12 @@ def create_api_key(
     )
 
 
-def lookup_api_key_by_hash(db: ControllerDB, key_hash: str) -> ApiKey | None:
+def lookup_api_key_by_hash(db: ControllerDB, key_hash: str) -> ApiKeyRow | None:
     """Find an API key by its SHA-256 hash."""
-    table = dataclasses.replace(API_KEYS, sql_name=db.api_keys_table)
     with db.snapshot() as q:
-        return q.one(table, where=table.c.key_hash == key_hash)
+        return API_KEY_PROJECTION.decode_one(
+            q.fetchall(f"SELECT * FROM {db.api_keys_table} WHERE key_hash = ? LIMIT 1", (key_hash,))
+        )
 
 
 def touch_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> None:
@@ -82,13 +84,14 @@ def revoke_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> bool:
         return cur._cursor.rowcount > 0
 
 
-def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list[ApiKey]:
+def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list[ApiKeyRow]:
     """List API keys, optionally filtered by user."""
-    table = dataclasses.replace(API_KEYS, sql_name=db.api_keys_table)
     with db.snapshot() as q:
         if user_id:
-            return q.select(table, where=table.c.user_id == user_id)
-        return q.select(table)
+            return API_KEY_PROJECTION.decode(
+                q.fetchall(f"SELECT * FROM {db.api_keys_table} WHERE user_id = ?", (user_id,))
+            )
+        return API_KEY_PROJECTION.decode(q.fetchall(f"SELECT * FROM {db.api_keys_table}"))
 
 
 def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -> list[str]:

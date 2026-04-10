@@ -25,7 +25,7 @@ from iris.cluster.constraints import (
     split_hard_soft,
 )
 
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 from .conftest import eq_constraint, in_constraint
 
@@ -161,8 +161,8 @@ def _make_resources(
     cpu_millicores: int = 500,
     memory_bytes: int = 1 * 1024**3,
     device: str | None = None,
-) -> cluster_pb2.ResourceSpecProto:
-    r = cluster_pb2.ResourceSpecProto(cpu_millicores=cpu_millicores, memory_bytes=memory_bytes)
+) -> job_pb2.ResourceSpecProto:
+    r = job_pb2.ResourceSpecProto(cpu_millicores=cpu_millicores, memory_bytes=memory_bytes)
     if device == "cpu":
         r.device.cpu.variant = "cpu"
     elif device == "tpu":
@@ -235,29 +235,29 @@ def test_infer_preemptible_constraint_noop_for_gpu():
 def test_preemptible_constraint_soft_default_logic():
     """preemptible=True defaults to soft, preemptible=False defaults to hard."""
     c_true = preemptible_constraint(True)
-    assert c_true.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    assert c_true.mode == job_pb2.CONSTRAINT_MODE_PREFERRED
     assert c_true.value == "true"
 
     c_false = preemptible_constraint(False)
-    assert c_false.mode == cluster_pb2.CONSTRAINT_MODE_REQUIRED
+    assert c_false.mode == job_pb2.CONSTRAINT_MODE_REQUIRED
     assert c_false.value == "false"
 
 
 def test_preemptible_constraint_soft_override():
     """Explicit soft= overrides the default logic."""
     c = preemptible_constraint(True, soft=False)
-    assert c.mode == cluster_pb2.CONSTRAINT_MODE_REQUIRED
+    assert c.mode == job_pb2.CONSTRAINT_MODE_REQUIRED
 
     c2 = preemptible_constraint(False, soft=True)
-    assert c2.mode == cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    assert c2.mode == job_pb2.CONSTRAINT_MODE_PREFERRED
 
 
 def test_split_hard_soft():
     hard = eq_constraint("region", "us-central1")
-    soft = cluster_pb2.Constraint(
+    soft = job_pb2.Constraint(
         key="preemptible",
-        op=cluster_pb2.CONSTRAINT_OP_EQ,
-        mode=cluster_pb2.CONSTRAINT_MODE_PREFERRED,
+        op=job_pb2.CONSTRAINT_OP_EQ,
+        mode=job_pb2.CONSTRAINT_MODE_PREFERRED,
     )
     soft.value.string_value = "true"
     hard_list, soft_list = split_hard_soft([hard, soft])
@@ -281,19 +281,19 @@ def test_soft_constraint_score_counts_matches():
         "region": AttributeValue("us-central1"),
     }
     soft1 = eq_constraint("preemptible", "true")
-    soft1.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    soft1.mode = job_pb2.CONSTRAINT_MODE_PREFERRED
     soft2 = eq_constraint("region", "eu-west1")
-    soft2.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    soft2.mode = job_pb2.CONSTRAINT_MODE_PREFERRED
     # Only preemptible matches
     assert soft_constraint_score(attrs, [soft1, soft2]) == 1
     # Both match
     soft2_match = eq_constraint("region", "us-central1")
-    soft2_match.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    soft2_match.mode = job_pb2.CONSTRAINT_MODE_PREFERRED
     assert soft_constraint_score(attrs, [soft1, soft2_match]) == 2
 
 
 def test_soft_constraint_score_zero_when_no_match():
     attrs = {"preemptible": AttributeValue("false")}
     soft = eq_constraint("preemptible", "true")
-    soft.mode = cluster_pb2.CONSTRAINT_MODE_PREFERRED
+    soft.mode = job_pb2.CONSTRAINT_MODE_PREFERRED
     assert soft_constraint_score(attrs, [soft]) == 0

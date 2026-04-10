@@ -9,6 +9,7 @@ from typing import Literal, TypeAlias, cast
 
 import jax
 import jax.numpy as jnp
+from jax.sharding import NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float
 
 from .config import (
@@ -53,6 +54,78 @@ IMPLEMENTATIONS = {
 _DEFAULT_IMPLEMENTATIONS: tuple[Implementation, ...] = ("xla",)
 
 
+def _sharding_of(value: jax.Array):
+    try:
+        sharding = value.sharding  # type: ignore[attr-defined]
+    except Exception:
+        sharding = None
+    if sharding is not None:
+        return sharding
+
+    aval = getattr(value, "aval", None)
+    if aval is None:
+        return None
+    return getattr(aval, "sharding", None)
+
+
+def _named_sharding_of(value: jax.Array) -> NamedSharding | None:
+    sharding = _sharding_of(value)
+    if isinstance(sharding, NamedSharding):
+        return sharding
+    return None
+
+
+def _partition_axes(entry: object) -> tuple[str, ...]:
+    if entry is None:
+        return ()
+    if isinstance(entry, tuple):
+        return tuple(axis for axis in entry if axis is not None)
+    if isinstance(entry, str):
+        return (entry,)
+    return ()
+
+
+def _merged_partition_entry(entries: Sequence[object]) -> str | tuple[str, ...] | None:
+    merged: list[str] = []
+    for entry in entries:
+        for axis in _partition_axes(entry):
+            if axis not in merged:
+                merged.append(axis)
+    if not merged:
+        return None
+    if len(merged) == 1:
+        return merged[0]
+    return tuple(merged)
+
+
+def _reshape_merge_leading_axes(value: jax.Array, num_axes: int) -> jax.Array:
+    merged = math.prod(value.shape[:num_axes]) if num_axes else 1
+    out_sharding = None
+    sharding = _named_sharding_of(value)
+    if sharding is not None:
+        merged_entry = _merged_partition_entry(sharding.spec[:num_axes])
+        out_sharding = NamedSharding(sharding.mesh, P(merged_entry, *sharding.spec[num_axes:]))
+    return jax.lax.reshape(value, (merged, *value.shape[num_axes:]), out_sharding=out_sharding)
+
+
+def _reshape_restore_leading_axes(
+    value: jax.Array,
+    *,
+    leading_shape: tuple[int, ...],
+    leading_source: jax.Array,
+) -> jax.Array:
+    out_sharding = None
+    source_sharding = _named_sharding_of(leading_source)
+    value_sharding = _named_sharding_of(value)
+    if source_sharding is not None:
+        tail_spec = value_sharding.spec[1:] if value_sharding is not None else (None,) * (value.ndim - 1)
+        out_sharding = NamedSharding(
+            source_sharding.mesh,
+            P(*source_sharding.spec[: len(leading_shape)], *tail_spec),
+        )
+    return jax.lax.reshape(value, (*leading_shape, *value.shape[1:]), out_sharding=out_sharding)
+
+
 def _flatten_intra_chunk_inputs(
     a_log_cumsum: Float[Array, "... chunk"],
     src_scale: Float[Array, "... chunk"],
@@ -75,14 +148,13 @@ def _flatten_intra_chunk_inputs(
     if b.shape[-2] != chunk_size or c.shape[-2] != chunk_size or x.shape[-2] != chunk_size:
         raise ValueError("All inputs must share the same chunk axis.")
 
-    groups = math.prod(leading_shape) if leading_shape else 1
     return (
-        a_log_cumsum.reshape(groups, chunk_size),
-        src_scale.reshape(groups, chunk_size),
-        out_correction.reshape(groups, chunk_size),
-        b.reshape(groups, chunk_size, b.shape[-1]),
-        c.reshape(groups, chunk_size, c.shape[-1]),
-        x.reshape(groups, chunk_size, x.shape[-1]),
+        _reshape_merge_leading_axes(a_log_cumsum, len(leading_shape)),
+        _reshape_merge_leading_axes(src_scale, len(leading_shape)),
+        _reshape_merge_leading_axes(out_correction, len(leading_shape)),
+        _reshape_merge_leading_axes(b, len(leading_shape)),
+        _reshape_merge_leading_axes(c, len(leading_shape)),
+        _reshape_merge_leading_axes(x, len(leading_shape)),
     ), leading_shape
 
 
@@ -114,7 +186,7 @@ def mamba3_intra_chunk(
         if fn is None:
             raise ValueError(f"Unsupported Mamba-3 implementation: {impl}.")
         y = fn(*flat_inputs)
-        return y.reshape(leading_shape + y.shape[-2:])
+        return _reshape_restore_leading_axes(y, leading_shape=leading_shape, leading_source=a_log_cumsum)
 
     raise ValueError("No Mamba-3 implementation was provided.")
 
@@ -138,14 +210,13 @@ def mamba3_chunk_state(
     if b.shape[-2] != chunk_size or x.shape[-2] != chunk_size:
         raise ValueError("`b` and `x` must share the same chunk axis as `a_log_cumsum`.")
 
-    groups = math.prod(leading_shape) if leading_shape else 1
     y = mamba3_chunk_state_xla_batched(
-        a_log_cumsum.reshape(groups, chunk_size),
-        src_scale.reshape(groups, chunk_size),
-        b.reshape(groups, chunk_size, b.shape[-1]),
-        x.reshape(groups, chunk_size, x.shape[-1]),
+        _reshape_merge_leading_axes(a_log_cumsum, len(leading_shape)),
+        _reshape_merge_leading_axes(src_scale, len(leading_shape)),
+        _reshape_merge_leading_axes(b, len(leading_shape)),
+        _reshape_merge_leading_axes(x, len(leading_shape)),
     )
-    return y.reshape(leading_shape + y.shape[-2:])
+    return _reshape_restore_leading_axes(y, leading_shape=leading_shape, leading_source=a_log_cumsum)
 
 
 def mamba3_chunked_forward_from_transformed(
@@ -167,14 +238,13 @@ def mamba3_chunked_forward_from_transformed(
     if a_log_cumsum.ndim < 2 or src_scale.shape != a_log_cumsum.shape or out_correction.shape != a_log_cumsum.shape:
         raise ValueError("Expected transformed inputs with shape `[..., chunks, chunk]`.")
     leading_shape = a_log_cumsum.shape[:-2]
-    groups = math.prod(leading_shape) if leading_shape else 1
     num_chunks, chunk_size = a_log_cumsum.shape[-2:]
-    flat_a_log_cumsum = a_log_cumsum.reshape(groups, num_chunks, chunk_size)
-    flat_src_scale = src_scale.reshape(groups, num_chunks, chunk_size)
-    flat_out_correction = out_correction.reshape(groups, num_chunks, chunk_size)
-    flat_b = b.reshape(groups, num_chunks, chunk_size, b.shape[-1])
-    flat_c = c.reshape(groups, num_chunks, chunk_size, c.shape[-1])
-    flat_x = x.reshape(groups, num_chunks, chunk_size, x.shape[-1])
+    flat_a_log_cumsum = _reshape_merge_leading_axes(a_log_cumsum, len(leading_shape))
+    flat_src_scale = _reshape_merge_leading_axes(src_scale, len(leading_shape))
+    flat_out_correction = _reshape_merge_leading_axes(out_correction, len(leading_shape))
+    flat_b = _reshape_merge_leading_axes(b, len(leading_shape))
+    flat_c = _reshape_merge_leading_axes(c, len(leading_shape))
+    flat_x = _reshape_merge_leading_axes(x, len(leading_shape))
 
     if implementation not in (None, "xla", "reference"):
         raise ValueError(f"Unsupported Mamba-3 implementation: {implementation}.")
@@ -198,7 +268,10 @@ def mamba3_chunked_forward_from_transformed(
             flat_x,
         )
 
-    return y.reshape(leading_shape + y.shape[-3:]), final_state.reshape(leading_shape + final_state.shape[-2:])
+    return (
+        _reshape_restore_leading_axes(y, leading_shape=leading_shape, leading_source=a_log_cumsum),
+        _reshape_restore_leading_axes(final_state, leading_shape=leading_shape, leading_source=x),
+    )
 
 
 def mamba3_chunked_forward(
@@ -218,16 +291,18 @@ def mamba3_chunked_forward(
 
     if implementation == "reference":
         leading_shape = dt.shape[:-2]
-        groups = math.prod(leading_shape) if leading_shape else 1
         y, final_state = mamba3_direct_recurrence_reference_batched(
-            dt.reshape(groups, dt.shape[-2], dt.shape[-1]),
-            lam.reshape(groups, lam.shape[-2], lam.shape[-1]),
-            a.reshape(groups, a.shape[-2], a.shape[-1]) if a.shape == dt.shape else a.reshape(groups, a.shape[-1]),
-            b.reshape(groups, b.shape[-3], b.shape[-2], b.shape[-1]),
-            c.reshape(groups, c.shape[-3], c.shape[-2], c.shape[-1]),
-            x.reshape(groups, x.shape[-3], x.shape[-2], x.shape[-1]),
+            _reshape_merge_leading_axes(dt, len(leading_shape)),
+            _reshape_merge_leading_axes(lam, len(leading_shape)),
+            _reshape_merge_leading_axes(a, len(leading_shape)),
+            _reshape_merge_leading_axes(b, len(leading_shape)),
+            _reshape_merge_leading_axes(c, len(leading_shape)),
+            _reshape_merge_leading_axes(x, len(leading_shape)),
         )
-        return y.reshape(leading_shape + y.shape[-3:]), final_state.reshape(leading_shape + final_state.shape[-2:])
+        return (
+            _reshape_restore_leading_axes(y, leading_shape=leading_shape, leading_source=dt),
+            _reshape_restore_leading_axes(final_state, leading_shape=leading_shape, leading_source=x),
+        )
 
     src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
     a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
@@ -271,15 +346,14 @@ def mamba3_mimo_chunked_forward_from_transformed(
         raise ValueError("Expected transformed inputs with shape `[..., chunks, chunk]`.")
 
     leading_shape = a_log_cumsum.shape[:-2]
-    groups = math.prod(leading_shape) if leading_shape else 1
     num_chunks, chunk_size = a_log_cumsum.shape[-2:]
-    flat_a_log_cumsum = a_log_cumsum.reshape(groups, num_chunks, chunk_size)
-    flat_src_scale = src_scale.reshape(groups, num_chunks, chunk_size)
-    flat_out_correction = out_correction.reshape(groups, num_chunks, chunk_size)
-    flat_b = b.reshape(groups, num_chunks, chunk_size, b.shape[-2], b.shape[-1])
-    flat_c = c.reshape(groups, num_chunks, chunk_size, c.shape[-2], c.shape[-1])
-    flat_x = x_base.reshape(groups, num_chunks, chunk_size, x_base.shape[-1])
-    flat_z = z_base.reshape(groups, num_chunks, chunk_size, z_base.shape[-1])
+    flat_a_log_cumsum = _reshape_merge_leading_axes(a_log_cumsum, len(leading_shape))
+    flat_src_scale = _reshape_merge_leading_axes(src_scale, len(leading_shape))
+    flat_out_correction = _reshape_merge_leading_axes(out_correction, len(leading_shape))
+    flat_b = _reshape_merge_leading_axes(b, len(leading_shape))
+    flat_c = _reshape_merge_leading_axes(c, len(leading_shape))
+    flat_x = _reshape_merge_leading_axes(x_base, len(leading_shape))
+    flat_z = _reshape_merge_leading_axes(z_base, len(leading_shape))
 
     if implementation == "reference":
         y, final_state = mamba3_mimo_chunked_forward_reference_batched(
@@ -308,7 +382,10 @@ def mamba3_mimo_chunked_forward_from_transformed(
             w_o,
         )
 
-    return y.reshape(leading_shape + y.shape[-3:]), final_state.reshape(leading_shape + final_state.shape[-2:])
+    return (
+        _reshape_restore_leading_axes(y, leading_shape=leading_shape, leading_source=a_log_cumsum),
+        _reshape_restore_leading_axes(final_state, leading_shape=leading_shape, leading_source=x_base),
+    )
 
 
 def mamba3_mimo_chunked_forward(
@@ -332,20 +409,22 @@ def mamba3_mimo_chunked_forward(
 
     if implementation == "reference":
         leading_shape = dt.shape[:-2]
-        groups = math.prod(leading_shape) if leading_shape else 1
         y, final_state = mamba3_mimo_direct_recurrence_reference_batched(
-            dt.reshape(groups, dt.shape[-2], dt.shape[-1]),
-            lam.reshape(groups, lam.shape[-2], lam.shape[-1]),
-            a.reshape(groups, a.shape[-2], a.shape[-1]) if a.shape == dt.shape else a.reshape(groups, a.shape[-1]),
-            b.reshape(groups, b.shape[-4], b.shape[-3], b.shape[-2], b.shape[-1]),
-            c.reshape(groups, c.shape[-4], c.shape[-3], c.shape[-2], c.shape[-1]),
-            x_base.reshape(groups, x_base.shape[-3], x_base.shape[-2], x_base.shape[-1]),
-            z_base.reshape(groups, z_base.shape[-3], z_base.shape[-2], z_base.shape[-1]),
+            _reshape_merge_leading_axes(dt, len(leading_shape)),
+            _reshape_merge_leading_axes(lam, len(leading_shape)),
+            _reshape_merge_leading_axes(a, len(leading_shape)),
+            _reshape_merge_leading_axes(b, len(leading_shape)),
+            _reshape_merge_leading_axes(c, len(leading_shape)),
+            _reshape_merge_leading_axes(x_base, len(leading_shape)),
+            _reshape_merge_leading_axes(z_base, len(leading_shape)),
             w_x,
             w_z,
             w_o,
         )
-        return y.reshape(leading_shape + y.shape[-3:]), final_state.reshape(leading_shape + final_state.shape[-2:])
+        return (
+            _reshape_restore_leading_axes(y, leading_shape=leading_shape, leading_source=dt),
+            _reshape_restore_leading_axes(final_state, leading_shape=leading_shape, leading_source=x_base),
+        )
 
     src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
     a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
@@ -434,8 +513,7 @@ def _grouped_qk_to_chunked_state_rank(
     chunk_size: int,
 ) -> Float[Array, "batch heads chunks chunk state rank"]:
     heads_per_group = num_heads // tensor.shape[3]
-    head_to_group = jnp.arange(num_heads) // heads_per_group
-    by_head = jnp.take(tensor, head_to_group, axis=3)
+    by_head = tensor if tensor.shape[3] == num_heads else jnp.repeat(tensor, heads_per_group, axis=3)
     state_rank = by_head.transpose(0, 3, 1, 4, 2)
     num_chunks = tensor.shape[1] // chunk_size
     return state_rank.reshape(tensor.shape[0], num_heads, num_chunks, chunk_size, tensor.shape[-1], tensor.shape[2])
@@ -484,99 +562,6 @@ def _package_attentionish_outputs(
     if return_final_k:
         return output, cast(jax.Array, final_k)
     return output
-
-
-def _mamba3_attentionish_forward_chunked_from_transformed(
-    q_chunked: Float[Array, "batch heads chunks chunk state"],
-    k_chunked: Float[Array, "batch heads chunks chunk state"],
-    v_chunked: Float[Array, "batch heads chunks chunk value"],
-    *,
-    a_log_cumsum: Float[Array, "batch heads chunks chunk"],
-    src_scale: Float[Array, "batch heads chunks chunk"],
-    out_correction: Float[Array, "batch heads chunks chunk"],
-    q_bias: Float[Array, "heads state"] | None = None,
-    k_bias: Float[Array, "heads state"] | None = None,
-    d: Float[Array, "heads"] | None = None,
-    return_final_state: bool = False,
-    implementation: Implementation | Sequence[Implementation] | None = None,
-) -> jax.Array | tuple[jax.Array, jax.Array]:
-    """Run the attention-style SISO kernel from chunk-packed transformed inputs."""
-
-    if q_chunked.shape != k_chunked.shape:
-        raise ValueError(
-            f"`q_chunked` and `k_chunked` must have the same shape, got {q_chunked.shape} and {k_chunked.shape}."
-        )
-    if q_chunked.ndim != 5 or v_chunked.ndim != 5:
-        raise ValueError(
-            "Expected `q_chunked/k_chunked` with shape `[B, H, K, C, N]` and `v_chunked` with shape `[B, H, K, C, P]`."
-        )
-    batch, heads, num_chunks, chunk_size, state_dim = q_chunked.shape
-    if v_chunked.shape[:4] != (batch, heads, num_chunks, chunk_size):
-        raise ValueError("`v_chunked` must share batch, head, chunk, and token axes with `q_chunked`.")
-    if a_log_cumsum.shape != (batch, heads, num_chunks, chunk_size):
-        raise ValueError("`a_log_cumsum` must have shape `[B, H, K, C]`.")
-    if src_scale.shape != a_log_cumsum.shape or out_correction.shape != a_log_cumsum.shape:
-        raise ValueError("`src_scale` and `out_correction` must match `a_log_cumsum`.")
-    if q_bias is not None and q_bias.shape != (heads, state_dim):
-        raise ValueError(f"`q_bias` must have shape `[H, N]`, got {q_bias.shape}.")
-    if k_bias is not None and k_bias.shape != (heads, state_dim):
-        raise ValueError(f"`k_bias` must have shape `[H, N]`, got {k_bias.shape}.")
-    if d is not None and d.shape != (heads,):
-        raise ValueError(f"`d` must have shape `[H]`, got {d.shape}.")
-    if implementation not in (None, "xla", "reference"):
-        raise ValueError(
-            "Prepacked attention-style SISO is currently available only for the XLA and reference implementations."
-        )
-
-    with jax.named_scope("mamba3_attentionish_siso_prepacked"):
-        if q_bias is not None:
-            q_chunked = q_chunked + q_bias[None, :, None, None, :]
-        if k_bias is not None:
-            k_chunked = k_chunked + k_bias[None, :, None, None, :]
-
-        groups = batch * heads
-        flat_c = q_chunked.reshape(groups, num_chunks, chunk_size, state_dim)
-        flat_b = k_chunked.reshape(groups, num_chunks, chunk_size, state_dim)
-        flat_v = v_chunked.reshape(groups, num_chunks, chunk_size, v_chunked.shape[-1])
-        flat_a_log_cumsum = a_log_cumsum.reshape(groups, num_chunks, chunk_size)
-        flat_src_scale = src_scale.reshape(groups, num_chunks, chunk_size)
-        flat_out_correction = out_correction.reshape(groups, num_chunks, chunk_size)
-
-        with jax.named_scope("chunked_core"):
-            if implementation == "reference":
-                output_chunked, final_state = mamba3_chunked_forward_reference_batched(
-                    flat_a_log_cumsum,
-                    flat_src_scale,
-                    flat_out_correction,
-                    flat_b,
-                    flat_c,
-                    flat_v,
-                )
-            else:
-                output_chunked, final_state = mamba3_chunked_forward_xla_batched(
-                    flat_a_log_cumsum,
-                    flat_src_scale,
-                    flat_out_correction,
-                    flat_b,
-                    flat_c,
-                    flat_v,
-                )
-
-        if d is not None:
-            flat_d = jnp.broadcast_to(d[None, :], (batch, heads)).reshape(groups)
-            output_chunked = output_chunked + flat_d[:, None, None, None] * flat_v
-
-        output = output_chunked.reshape(batch, heads, num_chunks, chunk_size, v_chunked.shape[-1]).transpose(
-            0, 2, 3, 1, 4
-        )
-        output = output.reshape(batch, num_chunks * chunk_size, heads, v_chunked.shape[-1])
-        if not return_final_state:
-            return output
-
-        formatted_final_state = final_state.reshape(
-            batch, heads, final_state.shape[-2], final_state.shape[-1]
-        ).transpose(0, 1, 3, 2)
-        return output, formatted_final_state
 
 
 def mamba3_attentionish_forward_from_transformed(
@@ -645,31 +630,61 @@ def mamba3_attentionish_forward_from_transformed(
             src_scale = _materialize_chunked_layout(src_scale)
             out_correction = _materialize_chunked_layout(out_correction)
 
-        output_or_output_state = _mamba3_attentionish_forward_chunked_from_transformed(
-            q_chunked,
-            k_chunked,
-            v_chunked,
-            q_bias=q_bias,
-            k_bias=k_bias,
-            d=d,
-            a_log_cumsum=a_log_cumsum,
-            src_scale=src_scale,
-            out_correction=out_correction,
-            return_final_state=return_final_state,
-            implementation=implementation,
-        )
-        if return_final_state:
-            output, formatted_final_state = cast(tuple[jax.Array, jax.Array], output_or_output_state)
-        else:
-            output = cast(jax.Array, output_or_output_state)
-            formatted_final_state = None
+        groups = batch * heads
+        flat_c = _reshape_merge_leading_axes(q_chunked, 2)
+        flat_b = _reshape_merge_leading_axes(k_chunked, 2)
+        flat_v = _reshape_merge_leading_axes(v_chunked, 2)
+        flat_a_log_cumsum = _reshape_merge_leading_axes(a_log_cumsum, 2)
+        flat_src_scale = _reshape_merge_leading_axes(src_scale, 2)
+        flat_out_correction = _reshape_merge_leading_axes(out_correction, 2)
 
-        formatted_final_k = None
-        if return_final_k:
-            final_k = jnp.take(k, seq_len - 1, axis=1)
-            if k_bias is not None:
-                final_k = final_k + k_bias[None, ...]
-            formatted_final_k = final_k
+        with jax.named_scope("chunked_core"):
+            if implementation == "reference":
+                output_chunked, final_state = mamba3_chunked_forward_reference_batched(
+                    flat_a_log_cumsum,
+                    flat_src_scale,
+                    flat_out_correction,
+                    flat_b,
+                    flat_c,
+                    flat_v,
+                )
+            else:
+                output_chunked, final_state = mamba3_chunked_forward_xla_batched(
+                    flat_a_log_cumsum,
+                    flat_src_scale,
+                    flat_out_correction,
+                    flat_b,
+                    flat_c,
+                    flat_v,
+                )
+
+        with jax.named_scope("diagonal_skip"):
+            if d is not None:
+                flat_d = jnp.broadcast_to(d[None, :], (batch, heads)).reshape(groups)
+                output_chunked = output_chunked + flat_d[:, None, None, None] * flat_v
+
+        with jax.named_scope("package_output"):
+            output = _reshape_restore_leading_axes(
+                output_chunked,
+                leading_shape=(batch, heads),
+                leading_source=q_chunked,
+            ).transpose(0, 2, 3, 1, 4)
+            output = output.reshape(batch, seq_len, heads, v.shape[-1])
+            formatted_final_state = (
+                _reshape_restore_leading_axes(
+                    final_state,
+                    leading_shape=(batch, heads),
+                    leading_source=q_chunked,
+                ).transpose(0, 1, 3, 2)
+                if return_final_state
+                else None
+            )
+            formatted_final_k = None
+            if return_final_k:
+                final_k = jnp.take(k, seq_len - 1, axis=1)
+                if k_bias is not None:
+                    final_k = final_k + k_bias[None, ...]
+                formatted_final_k = final_k
 
         return _package_attentionish_outputs(
             output,
@@ -804,14 +819,14 @@ def mamba3_mimo_attentionish_forward_from_transformed(
     )
 
     groups = batch * heads
-    flat_c = q_chunked.reshape(groups, num_chunks, chunk_size, state_dim, rank)
-    flat_b = k_chunked.reshape(groups, num_chunks, chunk_size, state_dim, rank)
-    flat_x = v_chunked.reshape(groups, num_chunks, chunk_size, v.shape[-1])
-    flat_a_log_cumsum = a_log_cumsum.reshape(groups, num_chunks, chunk_size)
-    flat_src_scale = src_scale.reshape(groups, num_chunks, chunk_size)
-    flat_out_correction = out_correction.reshape(groups, num_chunks, chunk_size)
-    flat_w_v = _reshape_attentionish_weights(mimo_v, batch=batch).reshape(groups, v.shape[-1], rank)
-    flat_w_o = _reshape_attentionish_weights(mimo_o, batch=batch).reshape(groups, v.shape[-1], rank)
+    flat_c = _reshape_merge_leading_axes(q_chunked, 2)
+    flat_b = _reshape_merge_leading_axes(k_chunked, 2)
+    flat_x = _reshape_merge_leading_axes(v_chunked, 2)
+    flat_a_log_cumsum = _reshape_merge_leading_axes(a_log_cumsum, 2)
+    flat_src_scale = _reshape_merge_leading_axes(src_scale, 2)
+    flat_out_correction = _reshape_merge_leading_axes(out_correction, 2)
+    flat_w_v = _reshape_merge_leading_axes(_reshape_attentionish_weights(mimo_v, batch=batch), 2)
+    flat_w_o = _reshape_merge_leading_axes(_reshape_attentionish_weights(mimo_o, batch=batch), 2)
     flat_x_ranked = mamba3_mimo_rank_expand_chunked(flat_x, flat_w_v)
 
     if implementation == "reference":
@@ -837,13 +852,11 @@ def mamba3_mimo_attentionish_forward_from_transformed(
         if d.shape != (heads,):
             raise ValueError(f"`d` must have shape `[H]`, got {d.shape}.")
         flat_d = jnp.broadcast_to(d[None, :], (batch, heads)).reshape(groups)
-        y_ranked = y_ranked + flat_d[:, None, None, None] * flat_x_ranked
+        y_ranked = y_ranked + flat_d[:, None, None, None, None] * flat_x_ranked
 
     if z_chunked is not None:
-        flat_z = z_chunked.reshape(groups, num_chunks, chunk_size, z.shape[-1])
-        flat_w_z = _reshape_attentionish_weights(cast(jax.Array, mimo_z), batch=batch).reshape(
-            groups, z.shape[-1], rank
-        )
+        flat_z = _reshape_merge_leading_axes(z_chunked, 2)
+        flat_w_z = _reshape_merge_leading_axes(_reshape_attentionish_weights(cast(jax.Array, mimo_z), batch=batch), 2)
         if reduce_o:
             output = mamba3_mimo_apply_gate_and_collapse_chunked(
                 y_ranked, mamba3_mimo_rank_expand_chunked(flat_z, flat_w_z), flat_w_o
@@ -857,17 +870,26 @@ def mamba3_mimo_attentionish_forward_from_transformed(
         output = mamba3_mimo_rank_collapse_chunked(y_ranked, flat_w_o) if reduce_o else y_ranked
 
     if reduce_o:
-        output = (
-            output.reshape(batch, heads, num_chunks, chunk_size, v.shape[-1])
-            .transpose(0, 2, 3, 1, 4)
-            .reshape(batch, seq_len, heads, v.shape[-1])
-        )
+        output = _reshape_restore_leading_axes(
+            output,
+            leading_shape=(batch, heads),
+            leading_source=q_chunked,
+        ).transpose(0, 2, 3, 1, 4)
+        output = output.reshape(batch, seq_len, heads, v.shape[-1])
     else:
-        output = output.reshape(batch, heads, num_chunks, rank, chunk_size, v.shape[-1]).transpose(0, 2, 4, 3, 1, 5)
+        output = _reshape_restore_leading_axes(
+            output,
+            leading_shape=(batch, heads),
+            leading_source=q_chunked,
+        ).transpose(0, 2, 4, 3, 1, 5)
         output = output.reshape(batch, seq_len, rank, heads, v.shape[-1])
 
     formatted_final_state = (
-        final_state.reshape(batch, heads, final_state.shape[-2], final_state.shape[-1]).transpose(0, 1, 3, 2)
+        _reshape_restore_leading_axes(
+            final_state,
+            leading_shape=(batch, heads),
+            leading_source=q_chunked,
+        ).transpose(0, 1, 3, 2)
         if return_final_state
         else None
     )

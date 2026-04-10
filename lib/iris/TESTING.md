@@ -103,7 +103,7 @@ being tested.
 
 ## Timing and Polling
 
-Avoid bare `time.sleep()` in polling loops. Use `iris.time_utils.Deadline`,
+Avoid bare `time.sleep()` in polling loops. Use `rigging.timing.Deadline`,
 `ExponentialBackoff.wait_until()`, or `wait_for_condition` from test utilities.
 
 A single short sleep to let a background thread start is acceptable when
@@ -184,7 +184,7 @@ IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_smoke.py -o
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http://localhost:8080 -o "addopts="
 
 # Cloud mode: full lifecycle (start cluster, then pass URL to pytest)
-# Step 1: iris --config=examples/smoke-gcp.yaml cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
+# Step 1: iris --cluster=smoke-gcp cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
 # Step 2: uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # K8s runtime tests (requires a running cluster — kind, k3d, minikube, etc.)

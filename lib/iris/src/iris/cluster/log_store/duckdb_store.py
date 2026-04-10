@@ -15,7 +15,7 @@ Lifecycle of a log entry:
           concatenates the new rows, and writes a replacement file. This
           keeps the file count low (no thousands of tiny files).
        b. If the newest segment is already large (>= ``SEGMENT_TARGET_BYTES``),
-          a new Parquet file is created.
+          a new Parquet file is created (named by the new buffer's min_seq).
        c. The sealed RAM buffer is removed (readers no longer need it).
        d. The new/updated file is copied to GCS (best-effort).
        e. GC drops oldest local segments past count/byte limits.
@@ -46,13 +46,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Condition, Lock
 
+
 import duckdb
 import fsspec.core
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from iris.cluster.log_store._types import _EST_BYTES_PER_ROW, _LIKE_ESCAPE_TABLE, LogReadResult
+from iris.cluster.log_store._types import _EST_BYTES_PER_ROW, REGEX_META_RE, LogReadResult
 from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
@@ -100,17 +101,12 @@ _ROW_GROUP_SIZE = 16_384
 _TAIL_SEQ_MARGIN = 10
 
 
-def _escape_like(s: str) -> str:
-    """Escape SQL LIKE wildcards so the string matches literally."""
-    return s.translate(_LIKE_ESCAPE_TABLE)
-
-
 def _prefix_upper_bound(prefix: str) -> str | None:
     """Return the exclusive upper bound for a prefix range, or None if unbounded.
 
     All strings starting with ``prefix`` satisfy ``prefix <= s < upper``.
     This lets DuckDB use range predicates on Parquet row-group statistics
-    instead of LIKE, which isn't pushed down through parameterized queries.
+    instead of regexp_matches, which isn't pushed down through parameterized queries.
     """
     if not prefix:
         return None
@@ -127,20 +123,37 @@ def _fsspec_copy(src: str, dst: str) -> None:
         f_dst.write(f_src.read())
 
 
-def _recover_max_seq(log_dir: Path) -> int:
-    """Parse the max sequence number from existing Parquet segment filenames.
+def _read_seq_bounds(path: Path) -> tuple[int, int]:
+    """Read min/max seq from Parquet row-group statistics."""
+    try:
+        meta = pq.read_metadata(path)
+        schema = meta.schema.to_arrow_schema()
+        seq_idx = schema.get_field_index("seq")
+        min_seq = 0
+        max_seq = 0
+        for i in range(meta.num_row_groups):
+            col = meta.row_group(i).column(seq_idx)
+            if col.statistics is not None and col.statistics.has_min_max:
+                if not min_seq or col.statistics.min < min_seq:
+                    min_seq = col.statistics.min
+                if col.statistics.max > max_seq:
+                    max_seq = col.statistics.max
+        return min_seq, max_seq
+    except Exception:
+        return 0, 0
 
-    Filenames are ``logs_{min_seq:019d}_{max_seq:019d}.parquet``.
+
+def _recover_max_seq(log_dir: Path) -> int:
+    """Recover the max sequence number by reading Parquet row-group statistics.
+
+    Filenames are ``logs_{min_seq:019d}.parquet``.
     Returns max_seq + 1 so the counter can resume, or 1 if no files exist.
     """
     max_seen = -1
-    for p in log_dir.glob("logs_*_*.parquet"):
-        parts = p.stem.split("_")
-        if len(parts) >= 3:
-            try:
-                max_seen = max(max_seen, int(parts[2]))
-            except ValueError:
-                continue
+    for p in log_dir.glob("logs_*.parquet"):
+        _, max_seq = _read_seq_bounds(p)
+        if max_seq > max_seen:
+            max_seen = max_seq
     return max_seen + 1 if max_seen >= 0 else 1
 
 
@@ -423,10 +436,8 @@ class DuckDBLogStore:
         self._segments_rwlock = _RWLock()
 
         # Discover pre-existing Parquet files from a previous run.
-        for p in sorted(self._log_dir.glob("logs_*_*.parquet")):
-            parts = p.stem.split("_")
-            min_seq = int(parts[1]) if len(parts) >= 3 else 0
-            max_seq = int(parts[2]) if len(parts) >= 3 else 0
+        for p in sorted(self._log_dir.glob("logs_*.parquet")):
+            min_seq, max_seq = _read_seq_bounds(p)
             min_key, max_key = _read_key_bounds(p)
             self._local_segments.append(
                 _LocalSegment(
@@ -490,51 +501,33 @@ class DuckDBLogStore:
         tail: bool = False,
         min_level: str = "",
     ) -> LogReadResult:
-        """Fetch logs for a single key."""
+        """Fetch logs for a key or regex pattern.
+
+        If the key contains regex metacharacters, it is interpreted as a
+        regular expression and matched with DuckDB's ``regexp_matches()``.
+        Otherwise it is treated as an exact key lookup.
+        """
         min_level_enum = str_to_log_level(min_level) if min_level else 0
+        is_pattern = bool(REGEX_META_RE.search(key))
 
-        where_parts = ["key = $key", "seq > $cursor"]
-        params: dict = {"key": key, "cursor": cursor}
+        if not is_pattern:
+            where_parts = ["key = $key", "seq > $cursor"]
+            params: dict = {"key": key, "cursor": cursor}
+            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
+            return self._execute_read(
+                where_parts,
+                params,
+                max_lines,
+                tail,
+                cursor,
+                include_key_in_select=False,
+                segment_filter=_SegmentFilter(exact_key=key),
+                exact_key=key,
+            )
+
+        # Regex pattern path.
+        where_parts, params, segment_filter = _regex_query(key, cursor)
         _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-
-        return self._execute_read(
-            where_parts,
-            params,
-            max_lines,
-            tail,
-            cursor,
-            include_key_in_select=False,
-            segment_filter=_SegmentFilter(exact_key=key),
-        )
-
-    def get_logs_by_prefix(
-        self,
-        prefix: str,
-        *,
-        cursor: int = 0,
-        since_ms: int = 0,
-        substring_filter: str = "",
-        max_lines: int = 0,
-        tail: bool = False,
-        min_level: str = "",
-        shallow: bool = False,
-    ) -> LogReadResult:
-        """Fetch logs for all keys matching prefix, ordered by seq."""
-        min_level_enum = str_to_log_level(min_level) if min_level else 0
-
-        # Use range predicates instead of LIKE so DuckDB can push them down
-        # to Parquet row-group statistics and skip non-matching row groups.
-        where_parts = ["key >= $prefix_lo", "seq > $cursor"]
-        params: dict = {"prefix_lo": prefix, "cursor": cursor}
-        upper = _prefix_upper_bound(prefix)
-        if upper is not None:
-            where_parts.append("key < $prefix_hi")
-            params["prefix_hi"] = upper
-        if shallow:
-            where_parts.append("key NOT LIKE $shallow_exclude ESCAPE '\\'")
-            params["shallow_exclude"] = _escape_like(prefix) + "%/%"
-        _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-
         return self._execute_read(
             where_parts,
             params,
@@ -542,7 +535,7 @@ class DuckDBLogStore:
             tail,
             cursor,
             include_key_in_select=True,
-            segment_filter=_SegmentFilter(prefix=prefix),
+            segment_filter=segment_filter,
         )
 
     def has_logs(self, key: str) -> bool:
@@ -654,55 +647,48 @@ class DuckDBLogStore:
                 combined = combined.sort_by([("key", "ascending"), ("seq", "ascending")])
                 combined_min_seq = latest.min_seq
                 combined_max_seq = new_max_seq
-                filename = f"logs_{combined_min_seq:019d}_{combined_max_seq:019d}.parquet"
+                # Reuse the same filename (keyed only on min_seq) so the GCS
+                # upload overwrites the old object in place — no deletion needed.
+                filename = f"logs_{combined_min_seq:019d}.parquet"
                 filepath = self._log_dir / filename
 
-                # Write to a temp file first, then rename for atomicity.
+                # Write combined data to a temp file. Then hold the write lock
+                # across both the rename and the segment-list update so that no
+                # reader can snapshot a state where the file has the combined
+                # content AND the sealed buffer is still in RAM tables (which
+                # would cause double-counting).
                 tmp_path = filepath.with_suffix(".parquet.tmp")
                 pq.write_table(
                     combined, tmp_path, compression="zstd", row_group_size=_ROW_GROUP_SIZE, write_page_index=True
                 )
-                tmp_path.rename(filepath)
-
                 key_col = combined.column("key")
                 seg = _LocalSegment(
                     path=str(filepath),
-                    size_bytes=filepath.stat().st_size,
+                    size_bytes=tmp_path.stat().st_size,
                     min_seq=combined_min_seq,
                     max_seq=combined_max_seq,
                     min_key=key_col[0].as_py(),
                     max_key=key_col[-1].as_py(),
                 )
 
-                with self._lock:
-                    # Replace the old segment with the consolidated one.
-                    try:
-                        # Find and remove the old segment from the deque.
+                self._segments_rwlock.write_acquire()
+                try:
+                    tmp_path.rename(filepath)
+                    with self._lock:
                         for i, s in enumerate(self._local_segments):
                             if s.path == latest.path:
                                 del self._local_segments[i]
                                 break
-                    except (ValueError, IndexError):
-                        pass
-                    self._local_segments.append(seg)
-                    try:
-                        self._sealed.remove(sealed)
-                    except ValueError:
-                        pass
-                    sealed.flushed = True
+                        self._local_segments.append(seg)
+                        try:
+                            self._sealed.remove(sealed)
+                        except ValueError:
+                            pass
+                        sealed.flushed = True
+                finally:
+                    self._segments_rwlock.write_release()
 
-                # Delete the old segment file (now replaced). Hold the write lock
-                # so concurrent reads that snapshotted the old path finish first.
-                if str(filepath) != latest.path:
-                    self._segments_rwlock.write_acquire()
-                    try:
-                        Path(latest.path).unlink(missing_ok=True)
-                    except Exception:
-                        logger.warning("Failed to delete old segment %s", latest.path, exc_info=True)
-                    finally:
-                        self._segments_rwlock.write_release()
-
-                # GCS offload for the consolidated file.
+                # GCS upload overwrites the same object (same filename).
                 self._offload_to_gcs(filename, filepath)
                 self._gc_local_segments()
                 return
@@ -712,7 +698,7 @@ class DuckDBLogStore:
                 # Fall through to write as a new standalone segment.
 
         # Write as a new standalone segment.
-        filename = f"logs_{new_min_seq:019d}_{new_max_seq:019d}.parquet"
+        filename = f"logs_{new_min_seq:019d}.parquet"
         filepath = self._log_dir / filename
 
         try:
@@ -747,16 +733,6 @@ class DuckDBLogStore:
         self._offload_to_gcs(filename, filepath)
         self._gc_local_segments()
 
-    def _offload_to_gcs(self, filename: str, filepath: Path) -> None:
-        """Copy a Parquet file to GCS (best-effort)."""
-        if not self._remote_log_dir:
-            return
-        remote_path = f"{self._remote_log_dir.rstrip('/')}/{filename}"
-        try:
-            _fsspec_copy(str(filepath), remote_path)
-        except Exception:
-            logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
-
     def _gc_local_segments(self) -> None:
         """Drop oldest local Parquet segments if count or size exceeds limits.
 
@@ -778,7 +754,7 @@ class DuckDBLogStore:
         if not to_delete:
             return
 
-        # Hold the write lock while deleting files so concurrent reads
+        # Hold the write lock while deleting local files so concurrent reads
         # (which hold the read lock) finish before we unlink anything.
         self._segments_rwlock.write_acquire()
         try:
@@ -789,6 +765,16 @@ class DuckDBLogStore:
                     logger.warning("Failed to delete old segment %s", path, exc_info=True)
         finally:
             self._segments_rwlock.write_release()
+
+    def _offload_to_gcs(self, filename: str, filepath: Path) -> None:
+        """Copy a Parquet file to GCS (best-effort)."""
+        if not self._remote_log_dir:
+            return
+        remote_path = f"{self._remote_log_dir.rstrip('/')}/{filename}"
+        try:
+            _fsspec_copy(str(filepath), remote_path)
+        except Exception:
+            logger.warning("Failed to offload %s to GCS", filepath, exc_info=True)
 
     # ------------------------------------------------------------------
     # Internal: read
@@ -803,6 +789,7 @@ class DuckDBLogStore:
         default_cursor: int,
         include_key_in_select: bool,
         segment_filter: _SegmentFilter = _SEGMENT_FILTER_ALL,
+        exact_key: str | None = None,
     ) -> LogReadResult:
         # Acquire the segments read lock BEFORE snapshotting paths. This
         # guarantees that no file in our snapshot can be deleted (by GC or
@@ -870,14 +857,24 @@ class DuckDBLogStore:
                 parsed = TaskAttempt.from_wire(r[1])
                 entry = logging_pb2.LogEntry(source=r[2], data=r[3], level=r[5])
                 entry.timestamp.epoch_ms = r[4]
+                entry.key = r[1]
                 entry.attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
                 entries.append(entry)
         else:
             entries = []
+            # Parse attempt_id from the exact key once for all entries.
+            attempt_id = 0
+            if exact_key and ":" in exact_key:
+                try:
+                    parsed = TaskAttempt.from_wire(exact_key)
+                    attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
+                except ValueError:
+                    pass
             for r in rows:
                 # r: (seq, source, data, epoch_ms, level)
                 entry = logging_pb2.LogEntry(source=r[1], data=r[2], level=r[4])
                 entry.timestamp.epoch_ms = r[3]
+                entry.attempt_id = attempt_id
                 entries.append(entry)
 
         return LogReadResult(entries=entries, cursor=max_seq)
@@ -886,6 +883,57 @@ class DuckDBLogStore:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _regex_literal_prefix(pattern: str) -> str:
+    """Extract the literal prefix from a regex pattern.
+
+    Returns the leading portion of *pattern* that contains no regex
+    metacharacters, so it can be used for Parquet range pushdown.
+    """
+    match = REGEX_META_RE.search(pattern)
+    if match is None:
+        return pattern
+    return pattern[: match.start()]
+
+
+def _regex_query(pattern: str, cursor: int) -> tuple[list[str], dict, _SegmentFilter]:
+    """Build WHERE clauses and segment filter for a regex pattern.
+
+    Extracts a literal prefix for Parquet range pushdown. If the pattern
+    is purely a prefix (literal text followed only by ``.*``), range
+    predicates alone suffice. Otherwise ``regexp_matches()`` is added.
+    """
+    literal_prefix = _regex_literal_prefix(pattern)
+
+    # Pure-prefix pattern: "some/prefix/.*" — the literal prefix covers
+    # everything and the trailing .* matches any suffix.
+    suffix = pattern[len(literal_prefix) :]
+    is_pure_prefix = suffix in (".*", "")
+
+    if is_pure_prefix and literal_prefix:
+        where_parts = ["key >= $prefix_lo", "seq > $cursor"]
+        params: dict = {"prefix_lo": literal_prefix, "cursor": cursor}
+        upper = _prefix_upper_bound(literal_prefix)
+        if upper is not None:
+            where_parts.append("key < $prefix_hi")
+            params["prefix_hi"] = upper
+        return where_parts, params, _SegmentFilter(prefix=literal_prefix)
+
+    # General regex pattern — use regexp_matches with optional prefix pushdown.
+    where_parts = ["regexp_matches(key, $key_pattern)", "seq > $cursor"]
+    params = {"key_pattern": pattern, "cursor": cursor}
+    if literal_prefix:
+        upper = _prefix_upper_bound(literal_prefix)
+        where_parts.append("key >= $prefix_lo")
+        params["prefix_lo"] = literal_prefix
+        if upper is not None:
+            where_parts.append("key < $prefix_hi")
+            params["prefix_hi"] = upper
+        segment_filter = _SegmentFilter(prefix=literal_prefix)
+    else:
+        segment_filter = _SEGMENT_FILTER_ALL
+    return where_parts, params, segment_filter
 
 
 def _add_common_filters(
@@ -900,8 +948,8 @@ def _add_common_filters(
         where_parts.append("epoch_ms > $since_ms")
         params["since_ms"] = since_ms
     if substring_filter:
-        where_parts.append("data LIKE $substring ESCAPE '\\'")
-        params["substring"] = f"%{_escape_like(substring_filter)}%"
+        where_parts.append("contains(data, $substring)")
+        params["substring"] = substring_filter
     if min_level_enum > 0:
         where_parts.append("(level = 0 OR level >= $min_level)")
         params["min_level"] = min_level_enum

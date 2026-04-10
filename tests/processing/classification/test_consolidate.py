@@ -130,7 +130,7 @@ def test_consolidate_filters_and_writes_output(tmp_path):
         output_file.exists()
     ), f"Expected consolidated output file to be written. Files in {output_root}: {list(output_root.iterdir())}"
 
-    output_rows = load_parquet(output_file)
+    output_rows = load_parquet(str(output_file))
 
     kept_ids = {row["id"] for row in output_rows}
     assert kept_ids == {"doc-1", "doc-2"}, f"Expected to keep doc-1 and doc-2, but got {kept_ids}"
@@ -157,7 +157,7 @@ def test_dedupe_consolidate_integration(fox_corpus):
     assert result["mode"] == DedupMode.EXACT_PARAGRAPH
 
     # Verify dedupe output exists and has same structure as input
-    dedupe_output_files = list(Path(dedupe_output_dir).glob("data/*.vortex"))
+    dedupe_output_files = list(Path(dedupe_output_dir).glob("data/*.parquet"))
     assert len(dedupe_output_files) > 0
 
     # Now run consolidate using the dedupe attributes
@@ -171,7 +171,7 @@ def test_dedupe_consolidate_integration(fox_corpus):
                 type=FilterType.REMOVE_SPANS,
                 attribute_path=f"{dedupe_output_dir}/data",
                 name="dup_spans",
-                attribute_filetype="vortex",
+                attribute_filetype="parquet",
                 keep_if_missing=True,
             )
         ],
@@ -179,8 +179,11 @@ def test_dedupe_consolidate_integration(fox_corpus):
 
     consolidate(consolidate_config)
 
-    # Read consolidated output
-    consolidated_by_id = {row["id"]: row for row in load_parquet(consolidated_dir)}
+    # Read consolidated output from all parquet shards
+    consolidated_rows = []
+    for pq_file in sorted(Path(consolidated_dir).glob("*.parquet")):
+        consolidated_rows.extend(load_parquet(str(pq_file)))
+    consolidated_by_id = {row["id"]: row for row in consolidated_rows}
     assert len(consolidated_by_id) > 0
 
     # Verify that duplicate spans have been removed

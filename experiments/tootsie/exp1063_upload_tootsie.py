@@ -25,7 +25,7 @@ executor_main([upload_step])
 
 from dataclasses import dataclass, field
 
-from marin.download.huggingface.upload_gcs_to_hf import UploadConfig, upload_gcs_to_hf
+from marin.utilities.upload_gcs_to_hf import UploadConfig, upload_gcs_to_hf
 from marin.execution.executor import ExecutorStep, executor_main
 
 

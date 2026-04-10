@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -30,7 +30,7 @@ import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
-from levanter.data.text import LmDataConfig, LMMixtureDatasetConfig
+from levanter.data.text import DatasetComponent, LmDataConfig, LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
@@ -74,7 +74,7 @@ class SaveLogprobsOnPodConfig:
 
 def _force_pack_data(data: LmDataConfig) -> LmDataConfig:
     packed_components = {
-        name: replace(component, pack=True)
+        name: replace(component, pack=True) if isinstance(component, DatasetComponent) else component
         for name, component in data.components.items()
     }
     packed_data = replace(data, components=packed_components, block_cross_document_attention=True)
@@ -115,13 +115,17 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
             activations = model.activations(example.tokens, example.attn_mask, key=key)
             logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)
             loss = next_token_loss(
-                model.Pos, model.Vocab, logits=logits,
-                true_ids=example.tokens, loss_weight=example.loss_weight, reduction=None,
+                model.Pos,
+                model.Vocab,
+                logits=logits,
+                true_ids=example.tokens,
+                loss_weight=example.loss_weight,
+                reduction=None,
             )
             logprobs = hax.nn.log_softmax(logits, axis=model.Vocab)
-        
+
             return loss.rearrange((EvalBatch, Pos)), logprobs.rearrange((EvalBatch, Pos, model.Vocab))
-        
+
         @hax.named_jit
         def compute_top(logprobs: hax.NamedArray, k: int):
             top_k_values, top_k_indices = hax.top_k(logprobs, model.Vocab, k=k, new_axis="top_k")
@@ -140,11 +144,9 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
                 raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
             converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
             converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
-            model = converter.load_pretrained(
-                model_config.model_type, ref=hf_checkpoint, dtype=mp.compute_dtype
-            )
+            model = converter.load_pretrained(model_config.model_type, ref=hf_checkpoint, dtype=mp.compute_dtype)
         else:
-            assert False, "Should not get here"
+            raise AssertionError("Should not get here")
 
         for name, dataset in validation_sets.items():
             output_file = os.path.join(config.output_path, name, "outputs.jsonl.gz")
@@ -174,7 +176,9 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
                                 (b_topk_vals, b_topk_ids), tiled=True
                             )
 
-                        b_tokens, b_seg_ids = batch.tokens.rearrange((EvalBatch, Pos)), batch.attn_mask.segment_ids[0].rearrange((EvalBatch, Pos))
+                        b_tokens, b_seg_ids = batch.tokens.rearrange((EvalBatch, Pos)), batch.attn_mask.segment_ids[
+                            0
+                        ].rearrange((EvalBatch, Pos))
                         b_loss, b_tokens, b_seg_ids = multihost_utils.process_allgather(
                             (b_loss, b_tokens, b_seg_ids), tiled=True
                         )

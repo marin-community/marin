@@ -21,23 +21,13 @@ def db(tmp_path: Path) -> ControllerDB:
 def _seed_test_data(db: ControllerDB) -> None:
     """Insert minimal data into the migrated schema for query testing."""
     with db.transaction() as cur:
-        cur.insert(
-            "users",
-            {
-                "user_id": "alice",
-                "created_at_ms": 1000,
-                "display_name": "Alice",
-                "role": "admin",
-            },
+        cur.execute(
+            "INSERT INTO users (user_id, created_at_ms, display_name, role) VALUES (?, ?, ?, ?)",
+            ("alice", 1000, "Alice", "admin"),
         )
-        cur.insert(
-            "users",
-            {
-                "user_id": "bob",
-                "created_at_ms": 2000,
-                "display_name": "Bob",
-                "role": "user",
-            },
+        cur.execute(
+            "INSERT INTO users (user_id, created_at_ms, display_name, role) VALUES (?, ?, ?, ?)",
+            ("bob", 2000, "Bob", "user"),
         )
 
         for i, (user, state) in enumerate(
@@ -48,48 +38,54 @@ def _seed_test_data(db: ControllerDB) -> None:
             ]
         ):
             job_id = f"/user/job-{i}"
-            cur.insert(
-                "jobs",
-                {
-                    "job_id": job_id,
-                    "user_id": user,
-                    "parent_job_id": None,
-                    "root_job_id": job_id,
-                    "depth": 0,
-                    "request_proto": b"fake-proto",
-                    "state": state,
-                    "submitted_at_ms": 1000 + i * 100,
-                    "root_submitted_at_ms": 1000 + i * 100,
-                    "started_at_ms": 2000 + i * 100,
-                    "finished_at_ms": None if state == 3 else 3000 + i * 100,
-                    "error": None,
-                    "exit_code": None if state == 3 else 0,
-                    "num_tasks": 2,
-                    "is_reservation_holder": 0,
-                },
+            cur.execute(
+                "INSERT INTO jobs (job_id, user_id, parent_job_id, root_job_id, depth, request_proto, state,"
+                " submitted_at_ms, root_submitted_at_ms, started_at_ms, finished_at_ms, error, exit_code,"
+                " num_tasks, is_reservation_holder) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    job_id,
+                    user,
+                    None,
+                    job_id,
+                    0,
+                    b"fake-proto",
+                    state,
+                    1000 + i * 100,
+                    1000 + i * 100,
+                    2000 + i * 100,
+                    None if state == 3 else 3000 + i * 100,
+                    None,
+                    None if state == 3 else 0,
+                    2,
+                    0,
+                ),
             )
             for t in range(2):
-                cur.insert(
-                    "tasks",
-                    {
-                        "task_id": f"{job_id}/task-{t}",
-                        "job_id": job_id,
-                        "task_index": t,
-                        "state": state,
-                        "error": None,
-                        "exit_code": None if state == 3 else 0,
-                        "submitted_at_ms": 1000 + i * 100,
-                        "started_at_ms": 2000 + i * 100,
-                        "finished_at_ms": None if state == 3 else 3000 + i * 100,
-                        "max_retries_failure": 3,
-                        "max_retries_preemption": 5,
-                        "failure_count": 0,
-                        "preemption_count": 0,
-                        "current_attempt_id": 0,
-                        "priority_neg_depth": 0,
-                        "priority_root_submitted_ms": 1000 + i * 100,
-                        "priority_insertion": t,
-                    },
+                cur.execute(
+                    "INSERT INTO tasks (task_id, job_id, task_index, state, error, exit_code,"
+                    " submitted_at_ms, started_at_ms, finished_at_ms, max_retries_failure,"
+                    " max_retries_preemption, failure_count, preemption_count, current_attempt_id,"
+                    " priority_neg_depth, priority_root_submitted_ms, priority_insertion)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        f"{job_id}/task-{t}",
+                        job_id,
+                        t,
+                        state,
+                        None,
+                        None if state == 3 else 0,
+                        1000 + i * 100,
+                        2000 + i * 100,
+                        None if state == 3 else 3000 + i * 100,
+                        3,
+                        5,
+                        0,
+                        0,
+                        0,
+                        0,
+                        1000 + i * 100,
+                        t,
+                    ),
                 )
 
 

@@ -1,16 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from enum import StrEnum, auto
 import logging
 import os
 import pyarrow as pa
 import pyarrow.json as pa_json
+import wandb
 
 from fray.v2 import ResourceConfig
 from marin.utilities.wandb_utils import init_wandb
-from marin.utils import fsspec_glob
+from marin.utils import fsspec_glob, rebase_file_path
+from zephyr import counters, write_parquet_file
 from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
 
 logger = logging.getLogger(__name__)
@@ -144,3 +146,77 @@ def _find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
         # NOTE: if the base_path is in the input_files, means it's a specific file, so rebase to its directory
         base_path = os.path.dirname(base_path)
     return base_path
+
+
+def make_document_dedup_aggregator(
+    *,
+    idx_to_path: dict[int, str],
+    input_paths: str | list[str],
+    output_path: str,
+    counter_prefix: str,
+) -> Callable[[int, Iterator[dict]], dict]:
+    """Return a group_by reducer that counts dedup stats and writes parquet output.
+
+    The returned callable maps ``(file_idx, records) -> dict`` with keys
+    ``total``, ``dups``, ``unique`` plus whatever ``write_parquet_file`` returns.
+
+    Used identically by both exact-document and fuzzy-document dedup.
+    """
+
+    def aggregate(file_idx: int, records: Iterator[dict]) -> dict:
+        input_path = idx_to_path[file_idx]
+        output_file = rebase_file_path(
+            _find_base_path(input_paths, [input_path]),
+            input_path,
+            f"{output_path}/data/",
+            old_extension=_get_extension(input_path),
+            new_extension=".parquet",
+        )
+
+        total = 0
+        dups = 0
+
+        def counting_iter():
+            nonlocal total, dups
+            for record in records:
+                is_dup: bool = record["is_dup"]
+                total += 1
+                counters.increment(f"{counter_prefix}/total")
+                if is_dup:
+                    dups += 1
+                    counters.increment(f"{counter_prefix}/dups")
+                else:
+                    counters.increment(f"{counter_prefix}/unique")
+                yield record
+
+        def only_dups(records: Iterator[dict]) -> Iterator[dict]:
+            for record in records:
+                if record["is_dup"]:
+                    yield {"id": record["id"], "attributes": {"dup_doc": True}}
+
+        result = write_parquet_file(only_dups(counting_iter()), output_file)
+        return {**result, "total": total, "dups": dups, "unique": total - dups}
+
+    return aggregate
+
+
+def finalize_dedup(shard_results: list[dict], mode: DedupMode, method: str, level: str) -> dict:
+    """Aggregate shard counters, log summary, finish wandb, and return result dict.
+
+    Shared epilogue for all three dedup entry points.
+    """
+    counter_dict = _aggregate_shard_counters(shard_results, method=method, level=level)
+    logger.info(
+        "%s %s total: %s, dups: %s, unique: %s",
+        method.capitalize(),
+        level,
+        counter_dict[f"dedup/{method}/{level}/total"],
+        counter_dict[f"dedup/{method}/{level}/dups"],
+        counter_dict[f"dedup/{method}/{level}/unique"],
+    )
+
+    if wandb.run:
+        wandb.log(counter_dict)
+        wandb.finish()
+
+    return {"success": True, "mode": str(mode)} | counter_dict

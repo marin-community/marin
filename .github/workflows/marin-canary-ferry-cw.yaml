@@ -30,7 +30,7 @@ jobs:
     env:
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: gpu
-      CANARY_BATCH_SIZE: "32"
+      CANARY_BATCH_SIZE: "16"
       CANARY_TARGET_TOKENS: "6553600"
       CANARY_MIN_STEPS: "40"
       CANARY_MAX_LOSS: "8.0"
@@ -89,7 +89,7 @@ jobs:
         run: |
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
-            --memory=16G --disk=16G --cpu=1 --extra=cpu \
+            --memory=2G --disk=4G --cpu=1 --extra=cpu \
             -e MARIN_PREFIX s3://marin-na/marin/ \
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \

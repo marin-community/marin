@@ -37,8 +37,9 @@ from iris.cluster.providers.types import (
 from iris.cluster.providers.gcp.bootstrap import (
     build_controller_bootstrap_script_from_config,
 )
+from iris.cluster.providers.gcp.ssh import OS_LOGIN_METADATA
 from iris.rpc import config_pb2
-from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timer
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 
 logger = logging.getLogger(__name__)
 
@@ -302,6 +303,10 @@ def _build_controller_vm_config(
         vm_config.gcp.zone = zone
         vm_config.gcp.machine_type = gcp_ctrl.machine_type or "n2-standard-4"
         vm_config.gcp.boot_disk_size_gb = gcp_ctrl.boot_disk_size_gb or 100
+        vm_config.gcp.service_account = gcp_ctrl.service_account
+        if config.defaults.ssh.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
+            for key, value in OS_LOGIN_METADATA.items():
+                vm_config.metadata[key] = value
     elif which == "manual":
         manual_ctrl = config.controller.manual
         if not manual_ctrl.host:
@@ -345,7 +350,7 @@ def start_controller(
             logger.info("Existing controller at %s is healthy", address)
             return address, existing_vm
         logger.info("Existing controller is unhealthy, terminating and recreating")
-        existing_vm.terminate()
+        existing_vm.terminate(wait=True)
 
     # Create new controller VM
     vm_config = _build_controller_vm_config(config)
@@ -354,7 +359,7 @@ def start_controller(
 
     # Wait for connection
     if not vm.wait_for_connection(timeout=Duration.from_seconds(300)):
-        vm.terminate()
+        vm.terminate(wait=True)
         raise RuntimeError(f"Controller VM {vm_config.name} did not become reachable within 300s")
 
     # Bootstrap
@@ -419,6 +424,6 @@ def stop_controller(platform: WorkerInfraProvider, config: config_pb2.IrisCluste
     vm = _discover_controller_vm(platform, label_prefix)
     if vm:
         logger.info("Stopping controller VM %s", vm.vm_id)
-        vm.terminate()
+        vm.terminate(wait=True)
     else:
         logger.info("No controller VM found to stop")

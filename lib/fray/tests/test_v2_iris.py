@@ -8,14 +8,18 @@ Integration tests that need a running cluster are marked with @pytest.mark.iris.
 """
 
 import pickle
+from unittest.mock import MagicMock
 
 import pytest
 
 from fray.v2.iris_backend import (
+    FrayIrisClient,
     IrisActorHandle,
     convert_constraints,
 )
 from fray.v2.types import (
+    Entrypoint,
+    JobRequest,
     ResourceConfig,
     TpuConfig,
 )
@@ -57,6 +61,17 @@ class TestConvertConstraints:
         assert c.op == ConstraintOp.IN
         assert c.values == ("us-central1", "us-central2")
 
+    def test_zone_produces_eq_constraint(self):
+        resources = ResourceConfig(zone="us-east1-d")
+        constraints = convert_constraints(resources)
+        zone_constraints = [c for c in constraints if c.key == "zone"]
+        assert len(zone_constraints) == 1
+        c = zone_constraints[0]
+        from iris.cluster.constraints import ConstraintOp
+
+        assert c.op == ConstraintOp.EQ
+        assert c.value == "us-east1-d"
+
 
 class TestConvertConstraintsDeviceAlternatives:
     def test_no_alternatives_produces_no_device_constraint(self):
@@ -93,6 +108,69 @@ class TestIrisActorHandlePickle:
         data = pickle.dumps(handle)
         restored = pickle.loads(data)
         assert restored._client is None
+
+
+class TestImagePlumbing:
+    def test_resource_config_image_default_is_none(self):
+        rc = ResourceConfig()
+        assert rc.image is None
+
+    def test_resource_config_image_set(self):
+        rc = ResourceConfig(image="custom/swetrace:dev")
+        assert rc.image == "custom/swetrace:dev"
+
+    def test_create_actor_group_passes_task_image_to_iris(self):
+        """resources.image must reach the underlying iris.submit() call as task_image."""
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-123")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        class _DummyActor:
+            pass
+
+        client.create_actor_group(
+            _DummyActor,
+            name="dummy",
+            count=2,
+            resources=ResourceConfig(cpu=2, ram="4g", image="custom/swetrace:dev"),
+        )
+
+        kwargs = fake_iris.submit.call_args.kwargs
+        assert kwargs["task_image"] == "custom/swetrace:dev"
+        assert kwargs["replicas"] == 2
+
+    def test_create_actor_group_default_image_is_none(self):
+        """When ResourceConfig.image is unset, task_image flows through as None."""
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-123")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        class _DummyActor:
+            pass
+
+        client.create_actor_group(_DummyActor, name="dummy", count=1)
+
+        kwargs = fake_iris.submit.call_args.kwargs
+        assert kwargs["task_image"] is None
+
+    def test_submit_job_passes_task_image_to_iris(self):
+        """resources.image on a top-level job request reaches iris.submit()."""
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-456")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        def _noop():
+            return None
+
+        request = JobRequest(
+            name="test-job",
+            entrypoint=Entrypoint.from_callable(_noop),
+            resources=ResourceConfig(cpu=1, ram="2g", image="custom/swetrace:dev"),
+        )
+        client.submit(request)
+
+        kwargs = fake_iris.submit.call_args.kwargs
+        assert kwargs["task_image"] == "custom/swetrace:dev"
 
 
 class TestWithTpuFlexible:

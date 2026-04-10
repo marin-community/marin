@@ -5,7 +5,7 @@ import logging
 
 import pytest
 
-from iris.logging import (
+from rigging.log_setup import (
     BufferedLogRecord,
     LevelPrefixFormatter,
     LogRingBuffer,
@@ -93,19 +93,19 @@ def test_slow_log_silent_when_fast(caplog):
 
 
 def test_configure_logging_captures_records():
-    import iris.logging as iris_logging
+    import rigging.log_setup as log_setup
 
-    iris_logging._configured = False
+    log_setup._configured = False
     old_handlers = logging.getLogger().handlers[:]
     try:
-        buf = iris_logging.configure_logging(level=logging.DEBUG)
+        buf = log_setup.configure_logging(level=logging.DEBUG)
         logger = logging.getLogger("iris.test.configure_test")
         logger.debug("cfg-test-msg")
         results = buf.query(prefix="iris.test.configure_test")
         assert len(results) >= 1
         assert "cfg-test-msg" in results[-1].message
     finally:
-        iris_logging._configured = False
+        log_setup._configured = False
         root = logging.getLogger()
         root.handlers.clear()
         root.handlers.extend(old_handlers)
@@ -158,12 +158,12 @@ def test_level_prefix_formatter_produces_expected_format():
 def test_configure_logging_uses_level_prefix_format():
     """configure_logging produces log lines with single-letter level prefix."""
 
-    import iris.logging as iris_logging
+    import rigging.log_setup as log_setup
 
-    iris_logging._configured = False
+    log_setup._configured = False
     old_handlers = logging.getLogger().handlers[:]
     try:
-        iris_logging.configure_logging(level=logging.DEBUG)
+        log_setup.configure_logging(level=logging.DEBUG)
         root = logging.getLogger()
         # Find the stderr handler and capture its output
         for h in root.handlers:
@@ -185,7 +185,7 @@ def test_configure_logging_uses_level_prefix_format():
         else:
             pytest.fail("No StreamHandler found after configure_logging")
     finally:
-        iris_logging._configured = False
+        log_setup._configured = False
         root = logging.getLogger()
         root.handlers.clear()
         root.handlers.extend(old_handlers)

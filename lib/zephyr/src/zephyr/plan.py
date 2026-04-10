@@ -23,7 +23,7 @@ from typing import Any, Protocol
 
 import msgspec
 from iris.env_resources import TaskResources as _TaskResources
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 
 from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
 
@@ -46,7 +46,7 @@ from zephyr.dataset import (
 )
 from zephyr.expr import Expr
 from zephyr.readers import InputFileSpec
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

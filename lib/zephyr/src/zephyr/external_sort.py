@@ -31,7 +31,7 @@ from itertools import islice
 import fsspec
 import zstandard as zstd
 from iris.env_resources import TaskResources
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 
 logger = logging.getLogger(__name__)
 

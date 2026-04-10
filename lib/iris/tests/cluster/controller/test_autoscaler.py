@@ -14,14 +14,10 @@ import time
 
 import pytest
 
-from iris.cluster.controller.autoscaler import (
-    Autoscaler,
-    DEFAULT_UNRESOLVABLE_TIMEOUT,
-    ScalingAction,
-    ScalingDecision,
-    route_demand,
-)
-from iris.cluster.controller.scaling_group import ScalingGroup
+from iris.cluster.controller.autoscaler import Autoscaler, DEFAULT_UNRESOLVABLE_TIMEOUT
+from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
+from iris.cluster.controller.autoscaler.routing import route_demand
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.providers.types import (
     CloudSliceState,
     QuotaExhaustedError,
@@ -36,7 +32,8 @@ from tests.cluster.providers.conftest import (
 from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.types import WorkerStatus
 from iris.rpc import config_pb2, vm_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_proto import duration_to_proto
+from rigging.timing import Duration, Timestamp
 
 from .conftest import (
     make_autoscaler,
@@ -52,7 +49,7 @@ def scale_group_config() -> config_pb2.ScaleGroupConfig:
     """A standard scale group configuration."""
     return make_scale_group_config(
         name="test-group",
-        min_slices=0,
+        buffer_slices=0,
         max_slices=5,
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
@@ -83,7 +80,7 @@ class TestAutoscalerScaleUp:
         assert len(decisions) == 1
         assert decisions[0].action == ScalingAction.SCALE_UP
         assert decisions[0].scale_group == "test-group"
-        assert "required_slices=1 > pending=0" in decisions[0].reason
+        assert "demand=1" in decisions[0].reason
 
     @pytest.mark.parametrize(
         "discovered,demand_count,reason",
@@ -146,11 +143,11 @@ class TestAutoscalerScaleUp:
 
         assert len(decisions) == 0
 
-    def test_scales_up_to_enforce_min_slices(self):
-        """Scales up to enforce min_slices even with zero demand."""
+    def test_scales_up_to_fill_buffer(self):
+        """Scales up to fill buffer_slices even with zero demand."""
         config = make_scale_group_config(
             name="test-group",
-            min_slices=2,
+            buffer_slices=2,
             max_slices=5,
             runtime_version="v2-alpha-tpuv5",
             zones=["us-central1-a"],
@@ -161,16 +158,16 @@ class TestAutoscalerScaleUp:
 
         decisions = autoscaler.evaluate([])
 
-        assert len(decisions) == 1
-        assert decisions[0].action == ScalingAction.SCALE_UP
-        assert "below min_slices" in decisions[0].reason
-        assert "0 < 2" in decisions[0].reason
+        assert len(decisions) == 2
+        assert all(d.action == ScalingAction.SCALE_UP for d in decisions)
+        assert "target=2" in decisions[0].reason
+        assert "buffer=2" in decisions[0].reason
 
-    def test_no_scale_up_when_at_min_slices(self):
-        """Does not scale up when already at min_slices and no demand."""
+    def test_no_scale_up_when_buffer_satisfied(self):
+        """Does not scale up when buffer_slices already satisfied and no demand."""
         config = make_scale_group_config(
             name="test-group",
-            min_slices=2,
+            buffer_slices=2,
             max_slices=5,
             runtime_version="v2-alpha-tpuv5",
             zones=["us-central1-a"],
@@ -203,7 +200,7 @@ class TestAutoscalerScaleUp:
 
         assert len(decisions) == 1
         assert decisions[0].action == ScalingAction.SCALE_UP
-        assert "required_slices=1 > pending=0" in decisions[0].reason
+        assert "demand=1" in decisions[0].reason
 
 
 class TestAutoscalerScaleDown:
@@ -243,11 +240,11 @@ class TestAutoscalerScaleDown:
 
         assert group.slice_count() == 1
 
-    def test_no_scale_down_at_min_slices(self):
-        """Does not scale down when at min_slices."""
+    def test_no_scale_down_at_buffer_target(self):
+        """Does not scale down when at buffer target."""
         config = make_scale_group_config(
             name="test-group",
-            min_slices=2,
+            buffer_slices=2,
             max_slices=5,
             runtime_version="v2-alpha-tpuv5",
             zones=["us-central2-b"],
@@ -446,7 +443,7 @@ class TestAutoscalerExecution:
 
     def test_execute_skips_unknown_scale_group(self):
         """execute() skips decisions for unknown scale groups."""
-        config = make_scale_group_config(name="known-group", min_slices=0, max_slices=5)
+        config = make_scale_group_config(name="known-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
         group = ScalingGroup(config, platform)
 
@@ -468,8 +465,8 @@ class TestAutoscalerExecution:
 class TestAutoscalerWorkerFailure:
     """Tests for worker failure handling."""
 
-    def test_notify_worker_failed_terminates_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """notify_worker_failed() terminates the slice containing the worker."""
+    def test_terminate_slices_for_workers_terminates_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """terminate_slices_for_workers() terminates the slice containing the worker."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
@@ -478,24 +475,26 @@ class TestAutoscalerWorkerFailure:
         _mark_discovered_ready(group, [mock_handle])
 
         failed_worker_id = "slice-001-vm-0"
-        autoscaler.notify_worker_failed(failed_worker_id)
+        autoscaler.terminate_slices_for_workers([failed_worker_id])
 
         assert group.slice_count() == 0
 
-    def test_notify_worker_failed_unknown_worker_is_noop(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """notify_worker_failed() does nothing for unknown workers."""
+    def test_terminate_slices_for_workers_unknown_worker_is_noop(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """terminate_slices_for_workers() does nothing for unknown workers."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
-        autoscaler.notify_worker_failed("unknown-worker-99")
+        autoscaler.terminate_slices_for_workers(["unknown-worker-99"])
 
         assert group.slice_count() == 1
 
-    def test_notify_worker_failed_returns_sibling_worker_ids(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """notify_worker_failed() returns sibling worker IDs for multi-VM slices."""
+    def test_terminate_slices_for_workers_returns_sibling_worker_ids(
+        self, scale_group_config: config_pb2.ScaleGroupConfig
+    ):
+        """terminate_slices_for_workers() returns sibling worker IDs for multi-VM slices."""
         # Create a slice with 4 VMs
         mock_handle = make_mock_slice_handle(
             "slice-001",
@@ -510,13 +509,13 @@ class TestAutoscalerWorkerFailure:
 
         # Fail the first worker -- should return 3 sibling worker IDs
         failed_worker_id = "slice-001-vm-0"
-        siblings = autoscaler.notify_worker_failed(failed_worker_id)
+        siblings = autoscaler.terminate_slices_for_workers([failed_worker_id])
 
         expected_siblings = [f"slice-001-vm-{i}" for i in range(1, 4)]
         assert sorted(siblings) == sorted(expected_siblings)
         assert group.slice_count() == 0
 
-    def test_notify_worker_failed_returns_empty_for_single_vm_slice(
+    def test_terminate_slices_for_workers_returns_empty_for_single_vm_slice(
         self, scale_group_config: config_pb2.ScaleGroupConfig
     ):
         """Single-VM slices return no siblings."""
@@ -528,14 +527,32 @@ class TestAutoscalerWorkerFailure:
         _mark_discovered_ready(group, [mock_handle])
 
         failed_worker_id = "slice-001-vm-0"
-        siblings = autoscaler.notify_worker_failed(failed_worker_id)
+        siblings = autoscaler.terminate_slices_for_workers([failed_worker_id])
 
         assert siblings == []
 
-    def test_notify_worker_failed_cleans_up_even_if_terminate_fails(
+    def test_terminate_slices_for_workers_dedupes_by_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """Workers from the same slice trigger one slice termination."""
+        mock_handle = make_mock_slice_handle(
+            "slice-001",
+            all_ready=True,
+            vm_states=[vm_pb2.VM_STATE_READY] * 4,
+        )
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        autoscaler = make_autoscaler({"test-group": group})
+        _mark_discovered_ready(group, [mock_handle])
+
+        siblings = autoscaler.terminate_slices_for_workers(["slice-001-vm-0", "slice-001-vm-1"])
+
+        assert siblings == ["slice-001-vm-2", "slice-001-vm-3"]
+        assert group.slice_count() == 0
+
+    def test_terminate_slices_for_workers_cleans_up_even_if_terminate_fails(
         self, scale_group_config: config_pb2.ScaleGroupConfig
     ):
-        """notify_worker_failed() removes the slice even if terminate() raises."""
+        """terminate_slices_for_workers() removes the slice even if terminate() raises."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         mock_handle.terminate_error = RuntimeError("resource not found")
         platform = make_mock_platform(slices_to_discover=[mock_handle])
@@ -545,7 +562,7 @@ class TestAutoscalerWorkerFailure:
         _mark_discovered_ready(group, [mock_handle])
 
         failed_worker_id = "slice-001-vm-0"
-        siblings = autoscaler.notify_worker_failed(failed_worker_id)
+        siblings = autoscaler.terminate_slices_for_workers([failed_worker_id])
 
         # Slice should be removed despite terminate() failure
         assert group.slice_count() == 0
@@ -592,8 +609,8 @@ class TestAutoscalerStatusReporting:
 
     def test_get_status_includes_all_groups(self):
         """get_status() includes status for all groups."""
-        config1 = make_scale_group_config(name="group-1", min_slices=0, max_slices=5)
-        config2 = make_scale_group_config(name="group-2", min_slices=0, max_slices=5)
+        config1 = make_scale_group_config(name="group-1", buffer_slices=0, max_slices=5)
+        config2 = make_scale_group_config(name="group-2", buffer_slices=0, max_slices=5)
 
         platform1 = make_mock_platform()
         platform2 = make_mock_platform()
@@ -618,7 +635,7 @@ class TestAutoscalerStatusReporting:
 
     def test_get_status_includes_last_routing_decision(self):
         """get_status() includes the last routing decision."""
-        config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
+        config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         group = ScalingGroup(config, make_mock_platform())
         autoscaler = make_autoscaler({"test-group": group})
 
@@ -673,7 +690,7 @@ class TestAutoscalerQuotaHandling:
 
     def test_quota_exceeded_sets_group_unavailable(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """QuotaExhaustedError sets group to QUOTA_EXCEEDED state."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("Quota exceeded")
@@ -681,7 +698,7 @@ class TestAutoscalerQuotaHandling:
             scale_group_config, platform, scale_up_cooldown=Duration.from_ms(0), quota_timeout=Duration.from_ms(60_000)
         )
         config = config_pb2.AutoscalerConfig()
-        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
+        config.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.001)))
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -708,7 +725,7 @@ class TestAutoscalerQuotaHandling:
         )
         group_fallback = ScalingGroup(config_fallback, platform_fallback, scale_up_cooldown=Duration.from_ms(0))
         config = config_pb2.AutoscalerConfig()
-        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
+        config.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.001)))
         autoscaler = make_autoscaler({"primary": group_primary, "fallback": group_fallback}, config=config)
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -722,7 +739,7 @@ class TestAutoscalerQuotaHandling:
 
     def test_quota_state_expires_after_timeout(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """QUOTA_EXCEEDED state expires after timeout."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("Quota exceeded")
@@ -743,7 +760,7 @@ class TestAutoscalerQuotaHandling:
 
     def test_generic_error_triggers_backoff_not_quota(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Non-quota errors trigger backoff, not quota exceeded state."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
         platform.create_slice.side_effect = RuntimeError("TPU unavailable")
@@ -756,7 +773,7 @@ class TestAutoscalerQuotaHandling:
             backoff_initial=backoff,
         )
         config = config_pb2.AutoscalerConfig()
-        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
+        config.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.001)))
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -783,7 +800,7 @@ class TestAutoscalerActionLogging:
         assert action.action_type == "scale_up"
         assert action.scale_group == "test-group"
         assert action.slice_id != ""
-        assert "required_slices" in action.reason
+        assert "demand=" in action.reason
 
     def test_action_log_records_quota_exceeded(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Verify quota exceeded events are logged."""
@@ -813,7 +830,7 @@ class TestAutoscalerActionLogging:
         _mark_discovered_ready(group, [mock_handle])
 
         failed_worker_id = "slice-001-vm-0"
-        autoscaler.notify_worker_failed(failed_worker_id)
+        autoscaler.terminate_slices_for_workers([failed_worker_id])
 
         status = autoscaler.get_status()
         actions_by_type = {a.action_type: a for a in status.recent_actions}
@@ -866,9 +883,9 @@ class TestScalingGroupRequestingState:
 
     def test_begin_scale_up_sets_requesting_state(self):
         """begin_scale_up() causes availability() to return REQUESTING."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
-        config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
+        config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
         group = ScalingGroup(config, platform)
 
@@ -880,9 +897,9 @@ class TestScalingGroupRequestingState:
 
     def test_complete_scale_up_clears_requesting_state(self):
         """complete_scale_up() removes REQUESTING state."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
-        config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
+        config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
         group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0))
 
@@ -899,9 +916,9 @@ class TestScalingGroupRequestingState:
 
     def test_cancel_scale_up_clears_requesting_state(self):
         """cancel_scale_up() removes REQUESTING state."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
-        config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
+        config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
         group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0))
 
@@ -916,7 +933,7 @@ class TestScalingGroupRequestingState:
 
     def test_pending_scale_up_counts_toward_slice_count(self):
         """Pending scale-up counts toward slice_count and max_slices check."""
-        config = make_scale_group_config(name="test-group", min_slices=0, max_slices=1)
+        config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=1)
         platform = make_mock_platform()
         group = ScalingGroup(config, platform)
 
@@ -926,8 +943,8 @@ class TestScalingGroupRequestingState:
 
     def test_demand_routing_prefers_requesting_groups(self):
         """route_demand() prefers pending/requesting groups."""
-        config1 = make_scale_group_config(name="group-1", min_slices=0, max_slices=5, priority=10)
-        config2 = make_scale_group_config(name="group-2", min_slices=0, max_slices=5, priority=20)
+        config1 = make_scale_group_config(name="group-1", buffer_slices=0, max_slices=5, priority=10)
+        config2 = make_scale_group_config(name="group-2", buffer_slices=0, max_slices=5, priority=20)
 
         platform1 = make_mock_platform()
         platform2 = make_mock_platform()
@@ -956,7 +973,7 @@ class TestAutoscalerAsyncScaleUp:
 
     def test_execute_scale_up_returns_immediately(self):
         """_execute_scale_up returns immediately without blocking."""
-        config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
+        config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
 
         platform = make_mock_platform()
         original_create = platform.create_slice.side_effect
@@ -986,9 +1003,9 @@ class TestAutoscalerAsyncScaleUp:
 
     def test_group_marked_requesting_during_scale_up(self):
         """Group shows REQUESTING immediately after execute(), cleared when done."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
-        config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
+        config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
         original_create = platform.create_slice.side_effect
 
@@ -1023,7 +1040,7 @@ class TestAutoscalerAsyncScaleUp:
 
     def test_autoscaler_shutdown_waits_for_scale_up(self):
         """shutdown() waits for in-flight scale-ups to complete."""
-        config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
+        config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
 
         platform = make_mock_platform()
         original_create = platform.create_slice.side_effect
@@ -1054,7 +1071,7 @@ class TestAutoscalerAsyncScaleUp:
 
     def test_autoscaler_shutdown_terminates_all_slices(self):
         """shutdown() terminates all slices."""
-        config = make_scale_group_config(name="test-group", min_slices=0, max_slices=5)
+        config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
 
         discovered_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[discovered_handle])
@@ -1180,7 +1197,7 @@ class TestGpuScaleGroupBugs:
         """When a slice transitions to READY, last_active should be initialized."""
         config = make_scale_group_config(
             name="h100-8x",
-            min_slices=0,
+            buffer_slices=0,
             max_slices=1,
         )
         platform = make_mock_platform()
@@ -1221,7 +1238,7 @@ class TestGpuScaleGroupBugs:
         demand temporarily drops to 0."""
         config = make_scale_group_config(
             name="h100-8x",
-            min_slices=0,
+            buffer_slices=0,
             max_slices=2,
         )
         discovered = [
@@ -1312,7 +1329,7 @@ class TestMultiSliceScaleUp:
 
     def test_cooldown_group_accepts_demand_but_blocks_scale_up(self):
         """A group in COOLDOWN accepts demand routing but blocks scale-up until cooldown expires."""
-        from iris.cluster.controller.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = make_scale_group_config(name="test-group", max_slices=5, num_vms=1, priority=10)
         platform = make_mock_platform()
@@ -1407,7 +1424,7 @@ class TestMultiSliceScaleUp:
         decisions = autoscaler.evaluate(big_demand)
         assert len(decisions) == 2
         assert all(d.action == ScalingAction.SCALE_UP for d in decisions)
-        assert "required_slices=2 > pending=0" in decisions[0].reason
+        assert "demand=2" in decisions[0].reason
 
     def test_scale_down_target_uses_packed_demand(self):
         """Scale-down uses packed required_slices, not entry count."""

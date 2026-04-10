@@ -9,11 +9,11 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-arrow = { version = "57.1", features = ["pyarrow"] }
+arrow = { version = "57.1", default-features = false, features = ["pyarrow"] }
 blake2 = "0.10"
 blake3 = "1.8"
 hex = "0.4"
-parquet = { version = "57.1" }
+parquet = { version = "57.1", default-features = false, features = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd"] }
 pyo3 = { version = "0.26", features = [
     "extension-module",
     "abi3-py311",

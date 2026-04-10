@@ -8,12 +8,6 @@ Usage:
 - Register your adapter in preference_data_adapters.py
 - Run this script with TransformPreferenceDatasetConfig.
 
-Example:
-uv run zephyr --backend=ray --max-parallelism=100 --memory=8GB \
-    lib/marin/src/marin/transform/conversation/transform_preference_data.py \
-    --input_path gs://bucket/path/to/dataset \
-    --output_path gs://bucket/output/path \
-    --source HuggingFaceH4/ultrafeedback_binarized
 """
 
 import hashlib
@@ -25,7 +19,7 @@ import datasets
 import draccus
 import fsspec
 from datasets import get_dataset_config_info
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ZephyrContext, write_jsonl_file
 
 from marin.utils import is_path_like

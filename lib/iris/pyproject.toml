@@ -3,15 +3,18 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "iris"
-version = "0.1.0"
+name = "marin-iris"
+version = "0.99"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+    "marin-rigging",
     "click>=8.3.1",
     "cloudpickle>=3.1.2",
     "connect-python>=0.9.0",
     "fsspec>=2024.0.0",
     "gcsfs>=2024.0.0",
+    "google-auth>=2.0",
+    "google-cloud-tpu>=1.18.0",
     "s3fs>=2024.0.0",
     "grpcio>=1.76.0",
     "httpx>=0.28.1",
@@ -23,12 +26,16 @@ dependencies = [
     "tabulate>=0.9.0",
     "typing-extensions>=4.0",
     "uvicorn[standard]>=0.23.0",
-    "duckdb>=1.0.0",
-    "pyarrow>=19.0.0",
     "zstandard>=0.22.0",
 ]
 
 [project.optional-dependencies]
+controller = [
+    "duckdb>=1.0.0",
+    "pyarrow>=19.0.0",
+    "kubernetes>=31.0.0",
+]
+worker = []
 
 [project.scripts]
 iris = "iris.cli:iris"
@@ -42,6 +49,9 @@ examples = [
     "nbformat>=5.10.4",
 ]
 dev = [
+    "duckdb>=1.0.0",
+    "pyarrow>=19.0.0",
+    "kubernetes>=31.0.0",
     "ipykernel>=7.1.0",
     "jupyter>=1.1.1",
     "nbconvert>=7.16.6",
@@ -61,8 +71,16 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/iris"]
 
+[tool.hatch.build.targets.wheel.force-include]
+# Cluster YAML configs live outside src/ because they are configuration data,
+# not Python package source. force-include maps them into the wheel at
+# iris/examples/ so that when iris is installed as a wheel, the bundled configs
+# are reachable via Path(__file__).parent.parent / "examples" (the wheel-layout
+# probe in _bundled_iris_examples_dir() in iris.cli.main).
+"examples" = "iris/examples"
+
 [tool.pytest.ini_options]
-timeout = 30
+timeout = 10
 addopts = "-n auto --durations=25 -m 'not slow and not docker' -v"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",

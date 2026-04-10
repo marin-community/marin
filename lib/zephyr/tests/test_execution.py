@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from fray.v2 import ResourceConfig
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext, zephyr_worker_ctx
+from zephyr.execution import CounterSnapshot, ZephyrContext, zephyr_worker_ctx
 
 
 def test_simple_map(zephyr_ctx):
@@ -29,6 +29,96 @@ def test_filter(zephyr_ctx):
     ds = Dataset.from_list([1, 2, 3, 4, 5]).filter(lambda x: x > 3)
     results = list(zephyr_ctx.execute(ds))
     assert sorted(results) == [4, 5]
+
+
+def test_subprocess_propagates_user_counters(zephyr_ctx):
+    """User counters incremented inside the shard subprocess flow back to the coordinator.
+
+    Each task runs in a fresh Python subprocess, so ``counters.increment`` writes
+    into a ``_SubprocessWorkerContext`` that lives only in the child. This test
+    verifies the result file ships those increments back to the parent worker,
+    which then forwards them to the coordinator via ``report_result``. Without
+    that round-trip, the coordinator's ``get_counters`` would silently report 0.
+
+    Uses a direct logging handler attachment (rather than ``caplog``) so the
+    test works whether or not pytest's logging plugin is enabled.
+    """
+    import logging
+
+    from zephyr import counters
+
+    def increment_per_item(x: int) -> int:
+        counters.increment("docs", 1)
+        counters.increment("doubled_sum", x * 2)
+        return x
+
+    captured: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record.getMessage())
+
+    handler = _Capture(level=logging.INFO)
+    target_logger = logging.getLogger("zephyr.execution")
+    prior_level = target_logger.level
+    target_logger.addHandler(handler)
+    target_logger.setLevel(logging.INFO)
+    try:
+        ds = Dataset.from_list([1, 2, 3, 4, 5]).map(increment_per_item)
+        results = list(zephyr_ctx.execute(ds))
+    finally:
+        target_logger.removeHandler(handler)
+        target_logger.setLevel(prior_level)
+
+    assert sorted(results) == [1, 2, 3, 4, 5]
+
+    # Coordinator logs the aggregated counters on shutdown. Look for the most
+    # recent "Final counters:" line and check the dict it printed.
+    final_lines = [m for m in captured if "Final counters:" in m]
+    assert final_lines, "coordinator did not log Final counters — counter plumbing is broken"
+    last = final_lines[-1]
+    assert "'docs': 5" in last, f"expected 'docs': 5 in {last!r}"
+    assert "'doubled_sum': 30" in last, f"expected 'doubled_sum': 30 in {last!r}"
+
+
+def test_subprocess_exception_includes_subprocess_traceback(zephyr_ctx):
+    """Exceptions raised inside the shard subprocess surface with the original frame info.
+
+    Cloudpickling an exception drops ``__traceback__`` so a naive re-raise in
+    the parent shows only the parent's stack at the re-raise site, not where
+    the exception actually happened in the user lambda. The subprocess
+    attaches the formatted traceback as a ``__notes__`` entry, which Python
+    prints inline when the exception finally propagates. Verify both the
+    original exception type AND a snippet from the user-code frame survive
+    the round-trip.
+    """
+    from zephyr.execution import ZephyrWorkerError
+
+    def buggy_index_lookup(x: int) -> int:
+        # Force a non-trivial subprocess-side exception with a recognizable
+        # source line. The parent should surface the function name and the
+        # offending statement, not just the bare `IndexError`.
+        empty: tuple = ()
+        return empty[x]
+
+    ds = Dataset.from_list([0]).map(buggy_index_lookup)
+
+    with pytest.raises(ZephyrWorkerError) as exc_info:
+        list(zephyr_ctx.execute(ds))
+
+    rendered = str(exc_info.value) + "".join(getattr(exc_info.value, "__notes__", []))
+    # The wrapping ZephyrWorkerError should chain through the parent's
+    # report_error path. Either the chained cause or the notes payload
+    # must contain the user-frame breadcrumb.
+    chained = rendered
+    cur: BaseException | None = exc_info.value
+    while cur is not None:
+        chained += str(cur) + "".join(getattr(cur, "__notes__", []))
+        cur = cur.__cause__ or cur.__context__
+
+    assert (
+        "buggy_index_lookup" in chained or "tuple index out of range" in chained
+    ), f"subprocess traceback was not preserved through report_error; got: {chained!r}"
 
 
 def test_shared_data(integration_client, tmp_path):
@@ -247,10 +337,10 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
     assert attempt_b == 1
 
     # Worker B reports success
-    coord.report_result("worker-B", 0, attempt_b, TaskResult(shard=ListShard(refs=[])))
+    coord.report_result("worker-B", 0, attempt_b, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     # Worker A's stale result (attempt 0) should be ignored
-    coord.report_result("worker-A", 0, attempt_a, TaskResult(shard=ListShard(refs=[])))
+    coord.report_result("worker-A", 0, attempt_a, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     # Only one completion should be counted
     assert coord._completed_shards == 1
@@ -317,6 +407,7 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
         0,
         attempt_b,
         TaskResult(shard=ListShard(refs=[winner_ref])),
+        CounterSnapshot.empty(),
     )
 
     # Worker A's stale result is rejected
@@ -325,6 +416,7 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
         0,
         attempt_a,
         TaskResult(shard=ListShard(refs=[stale_ref])),
+        CounterSnapshot.empty(),
     )
 
     # Winner's data is directly readable (no rename needed)
@@ -363,6 +455,85 @@ def test_shard_streaming_low_memory(tmp_path):
 
     # Re-iteration works (reads from disk again, not cached)
     assert list(shard) == [0, 1, 2, 3, 4, 10, 11, 12, 13, 14, 20, 21, 22, 23, 24]
+
+
+def test_report_error_requeues_until_max_shard_failures(actor_context, tmp_path):
+    """report_error re-queues a task until MAX_SHARD_FAILURES, then aborts."""
+    from unittest.mock import MagicMock
+
+    from zephyr.execution import (
+        MAX_SHARD_FAILURES,
+        ListShard,
+        ShardTask,
+        WorkerState,
+        ZephyrCoordinator,
+    )
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    # Each failure should re-queue until the limit
+    for i in range(MAX_SHARD_FAILURES - 1):
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
+        _task, _attempt, _config = pulled
+        coord.report_error("worker-0", 0, f"error-{i}")
+        assert coord._fatal_error is None, f"Should not abort on failure {i + 1}"
+        assert coord._worker_states["worker-0"] == WorkerState.READY
+
+    # The final failure should set _fatal_error
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    coord.report_error("worker-0", 0, "final-error")
+    assert coord._fatal_error is not None
+    assert "Shard 0" in coord._fatal_error
+    assert "final-error" in coord._fatal_error
+
+
+def test_heartbeat_death_aborts_at_max_shard_failures(actor_context, tmp_path):
+    """When a shard's worker keeps dying (heartbeat timeout), abort after
+    MAX_SHARD_FAILURES re-queues instead of retrying forever."""
+    from unittest.mock import MagicMock
+
+    from zephyr.execution import (
+        MAX_SHARD_FAILURES,
+        ListShard,
+        ShardTask,
+        ZephyrCoordinator,
+    )
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    for _i in range(MAX_SHARD_FAILURES):
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
+        # Simulate worker death via heartbeat timeout
+        coord._last_seen["worker-0"] = 0.0
+        coord.check_heartbeats(timeout=0.0)
+
+    assert coord._fatal_error is not None
+    assert "Shard 0" in coord._fatal_error
 
 
 def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
@@ -438,7 +609,7 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
         pulled = coord.pull_task("worker-0")
         assert pulled is not None and pulled != "SHUTDOWN"
         _task, attempt, _config = pulled
-        coord.report_result("worker-0", 0, attempt, TaskResult(shard=ListShard(refs=[])))
+        coord.report_result("worker-0", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     t = threading.Thread(target=recover_and_complete)
     t.start()
@@ -586,13 +757,13 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     pulled = coord.pull_task("worker-A")
     assert pulled is not None and pulled != "SHUTDOWN"
     _task, attempt, _config = pulled
-    coord.report_result("worker-A", 0, attempt, TaskResult(shard=ListShard(refs=[])))
+    coord.report_result("worker-A", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     # Queue empty, but not last stage -> None
     result = coord.pull_task("worker-A")
     assert result is None
 
-    # Last stage: empty queue returns SHUTDOWN
+    # Last stage: single task, worker completes it, queue empty -> SHUTDOWN
     task2 = ShardTask(
         shard_idx=0,
         total_shards=1,
@@ -604,11 +775,75 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     pulled = coord.pull_task("worker-A")
     assert pulled is not None and pulled != "SHUTDOWN"
     _task, attempt, _config = pulled
-    coord.report_result("worker-A", 0, attempt, TaskResult(shard=ListShard(refs=[])))
+    coord.report_result("worker-A", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
-    # Queue empty on last stage -> SHUTDOWN
+    # Queue empty on last stage, nothing in-flight -> SHUTDOWN
     result = coord.pull_task("worker-A")
     assert result == "SHUTDOWN"
+
+    # Last stage with in-flight tasks: idle workers still get SHUTDOWN
+    tasks_2 = [
+        ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test-last2")
+        for i in range(2)
+    ]
+    coord.start_stage("stage-2", tasks_2, is_last_stage=True)
+    coord.pull_task("worker-A")  # task 0 in-flight
+    # Queue has one task left; worker-B takes it
+    coord.pull_task("worker-B")  # task 1 in-flight
+    # Queue empty, tasks in-flight -> SHUTDOWN (workers exit immediately)
+    result = coord.pull_task("worker-C")
+    assert result == "SHUTDOWN"
+
+
+def test_last_stage_deadlock_detected_when_worker_job_dies(actor_context, tmp_path):
+    """Coordinator aborts if the worker job dies while last-stage work is outstanding."""
+    from unittest.mock import MagicMock
+
+    from zephyr.execution import ListShard, ShardTask, TaskResult, ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    tasks = [
+        ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test")
+        for i in range(2)
+    ]
+    coord.start_stage("last-stage", tasks, is_last_stage=True)
+
+    # Set up a mock worker group so _check_worker_group can query it.
+    mock_group = MagicMock()
+    mock_group.is_done.return_value = False
+    coord.set_worker_group(mock_group)
+
+    # Two workers pull both tasks.
+    coord.heartbeat("worker-A")
+    coord.heartbeat("worker-B")
+    pulled_a = coord.pull_task("worker-A")
+    coord.pull_task("worker-B")
+
+    # Worker A finishes → gets SHUTDOWN (queue empty, last stage).
+    _task_a, attempt_a, _ = pulled_a
+    coord.report_result(
+        "worker-A", _task_a.shard_idx, attempt_a, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+    )
+    assert coord.pull_task("worker-A") == "SHUTDOWN"
+
+    # Worker B crashes → heartbeat timeout → shard 1 requeued.
+    coord._last_seen["worker-B"] = coord._last_seen["worker-B"] - 200
+    coord.check_heartbeats(timeout=10)
+    assert len(coord._task_queue) == 1
+
+    # Worker job is still running — no abort yet.
+    coord._check_worker_group()
+    assert coord._fatal_error is None
+
+    # Worker job dies permanently (Iris exhausted retries).
+    mock_group.is_done.return_value = True
+    coord._check_worker_group()
+
+    # Coordinator should detect the deadlock and abort.
+    assert coord._fatal_error is not None
+    assert "terminated permanently" in coord._fatal_error
 
 
 def test_coordinator_loop_crash_aborts_pipeline(actor_context, tmp_path):

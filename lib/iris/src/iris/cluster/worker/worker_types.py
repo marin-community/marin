@@ -8,9 +8,11 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
-from iris.rpc import cluster_pb2, logging_pb2
-from iris.rpc.cluster_pb2 import TaskState
-from iris.time_utils import Timestamp
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
+from iris.rpc.job_pb2 import TaskState
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Timestamp
 
 
 class LogLine(BaseModel):
@@ -36,7 +38,7 @@ class LogLine(BaseModel):
             source=self.source,
             data=self.data,
         )
-        proto.timestamp.CopyFrom(Timestamp.from_seconds(self.timestamp.timestamp()).to_proto())
+        proto.timestamp.CopyFrom(timestamp_to_proto(Timestamp.from_seconds(self.timestamp.timestamp())))
         return proto
 
 
@@ -63,6 +65,6 @@ class TaskInfo(Protocol):
         """Current task state (PENDING, RUNNING, SUCCEEDED, etc.)."""
         ...
 
-    def to_proto(self) -> cluster_pb2.TaskStatus:
+    def to_proto(self) -> job_pb2.TaskStatus:
         """Convert to protobuf TaskStatus message."""
         ...

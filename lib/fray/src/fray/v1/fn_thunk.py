@@ -28,10 +28,10 @@ from typing import Any
 
 import click
 import cloudpickle
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 
 from fray.v1.cluster.base import Entrypoint
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

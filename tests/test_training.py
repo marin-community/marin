@@ -53,8 +53,8 @@ class MockNestedConfig:
 def test_lm_config_with_train_urls_allowed_out_of_region(trainer_config):
     """train/validation source URLs are exempt from region checks."""
     with (
-        patch("iris.marin_fs.marin_region", return_value="us-central1"),
-        patch("iris.marin_fs.get_bucket_location", return_value="us-east1"),
+        patch("rigging.filesystem.marin_region", return_value="us-central1"),
+        patch("rigging.filesystem.get_bucket_location", return_value="us-east1"),
     ):
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
@@ -69,8 +69,8 @@ def test_lm_config_with_train_urls_allowed_out_of_region(trainer_config):
 def test_recursive_path_checking(trainer_config):
     """Paths are checked recursively in nested structures."""
     with (
-        patch("iris.marin_fs.marin_region", return_value="us-central1"),
-        patch("iris.marin_fs.get_bucket_location", return_value="us-east1"),
+        patch("rigging.filesystem.marin_region", return_value="us-central1"),
+        patch("rigging.filesystem.get_bucket_location", return_value="us-east1"),
     ):
         nested_data = MockNestedDataConfig(
             cache_dir="gs://bucket/path", subdir={"file": "gs://bucket/other/path", "list": ["gs://bucket/another/path"]}
@@ -89,8 +89,8 @@ def test_recursive_path_checking(trainer_config):
 def test_dataclass_recursive_checking(trainer_config):
     """Paths are checked recursively in dataclass objects."""
     with (
-        patch("iris.marin_fs.marin_region", return_value="us-central1"),
-        patch("iris.marin_fs.get_bucket_location", return_value="us-east1"),
+        patch("rigging.filesystem.marin_region", return_value="us-central1"),
+        patch("rigging.filesystem.get_bucket_location", return_value="us-east1"),
     ):
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
@@ -106,8 +106,8 @@ def test_dataclass_recursive_checking(trainer_config):
 def test_pathlib_path_handling(trainer_config):
     """pathlib.Path objects that represent GCS URIs are handled correctly."""
     with (
-        patch("iris.marin_fs.marin_region", return_value="us-central1"),
-        patch("iris.marin_fs.get_bucket_location", return_value="us-east1"),
+        patch("rigging.filesystem.marin_region", return_value="us-central1"),
+        patch("rigging.filesystem.get_bucket_location", return_value="us-east1"),
     ):
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(

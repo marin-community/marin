@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import fsspec
 import haliax as hax
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 import haliax.haxtyping as ht
 import jax.numpy as jnp
 import numpy as np

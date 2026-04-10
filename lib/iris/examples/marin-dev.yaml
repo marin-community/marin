@@ -1,6 +1,6 @@
 # Iris development cluster configuration
 # Mirrors production marin.yaml with isolated state and smaller scale caps.
-# Usage: uv run iris cluster --config=examples/marin-dev.yaml start
+# Usage: uv run iris --cluster=marin-dev cluster start
 
 platform:
   label_prefix: marin-dev
@@ -8,6 +8,9 @@ platform:
     project_id: hai-gcp-models
 
 defaults:
+  ssh:
+    auth_mode: SSH_AUTH_MODE_OS_LOGIN
+    impersonate_service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
   autoscaler:
     evaluation_interval:
       milliseconds: 10000
@@ -28,128 +31,89 @@ worker_provider: {}
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   gcp:
+    service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
     zone: us-central1-a
-    machine_type: e2-standard-4
+    machine_type: e2-highmem-4
     boot_disk_size_gb: 100
     port: 10000
 
+tpu_pools:
+  v5e-preemptible:
+    family: v5e
+    zones: [europe-west4-b, us-west4-a]
+    base_priority: 10
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv5-lite
+    sizes:
+      4:  { max_slices: 1024 }
+      8:  { max_slices: 512 }
+      16: { max_slices: 256 }
+
+  v6e-preemptible:
+    family: v6e
+    zones: [europe-west4-a, us-east1-d, us-east5-b]
+    base_priority: 10
+    resources: { cpu: 180, ram: 720GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv6e
+    sizes:
+      4:  { max_slices: 1024 }
+      8:  { max_slices: 512 }
+      16: { max_slices: 256 }
+
+  v5p-preemptible:
+    family: v5p
+    zones: [us-central1-a, us-east5-a]
+    base_priority: 20
+    resources: { cpu: 208, ram: 448GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv5
+    sizes:
+      8:  { max_slices: 2048 }
+      16: { max_slices: 1024 }
+
+  v4-preemptible:
+    family: v4
+    zones: [us-central2-b]
+    base_priority: 20
+    resources: { cpu: 240, ram: 400GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: tpu-ubuntu2204-base
+    sizes:
+      8:  { max_slices: 2048 }
+      16: { max_slices: 1024 }
+
+  v4-reserved:
+    family: v4
+    zones: [us-central2-b]
+    base_priority: 1000
+    resources: { cpu: 240, ram: 400GB, disk: 100GB, capacity_type: reserved }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: tpu-ubuntu2204-base
+    sizes:
+      32: { buffer_slices: 0, max_slices: 1 }
+
 scale_groups:
   cpu_vm_e2_highmem_2_ondemand:
-    zones: [us-central1-a, us-east1-b, us-west1-a, europe-west4-a]
+    zones: [us-central1-a, us-central2-b, us-east1-b, us-east1-d, us-east5-a, us-east5-b, us-west1-a, us-west4-a, europe-west4-a, europe-west4-b]
     num_vms: 1
-    priority: 1000
-    resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, preemptible: false }
-    min_slices: 0
+    priority: 500
+    resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
+    buffer_slices: 0
     max_slices: 1
     slice_template:
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         mode: GCP_SLICE_MODE_VM
-        machine_type: e2-highmem-2
-
-  # v5e (v5litepod) — capped at 4 slices per group
-  tpu_v5e_4:
-    zones: [europe-west4-b, us-west4-a]
-    num_vms: 1
-    priority: 10
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-4, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 1024
-    slice_template:
-      gcp:
-        runtime_version: v2-alpha-tpuv5-lite
-  tpu_v5e_8:
-    zones: [europe-west4-b, us-west4-a]
-    num_vms: 1
-    priority: 20
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-8, device_count: 8, preemptible: true }
-    min_slices: 0
-    max_slices: 512
-    slice_template:
-      gcp:
-        runtime_version: v2-alpha-tpuv5-lite
-  tpu_v5e_16:
-    zones: [europe-west4-b, us-west4-a]
-    num_vms: 4
-    priority: 30
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-16, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 256
-    slice_template:
-      gcp:
-        runtime_version: v2-alpha-tpuv5-lite
-
-  # v6e — capped at 4 slices per group
-  tpu_v6e_4:
-    zones: [europe-west4-a, us-east1-d, us-east5-b]
-    num_vms: 1
-    priority: 10
-    resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-4, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 1024
-    slice_template:
-      gcp:
-        runtime_version: v2-alpha-tpuv6e
-  tpu_v6e_8:
-    zones: [europe-west4-a, us-east1-d, us-east5-b]
-    num_vms: 1
-    priority: 20
-    resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-8, device_count: 8, preemptible: true }
-    min_slices: 0
-    max_slices: 512
-    slice_template:
-      gcp:
-        runtime_version: v2-alpha-tpuv6e
-  tpu_v6e_16:
-    zones: [europe-west4-a, us-east1-d, us-east5-b]
-    num_vms: 4
-    priority: 30
-    resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-16, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 256
-    slice_template:
-      gcp:
-        runtime_version: v2-alpha-tpuv6e
-
-  # v5p — capped at 4 slices per group
-  tpu_v5p_8:
-    zones: [us-central1-a, us-east5-a]
-    num_vms: 1
-    priority: 20
-    resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-8, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 2048
-    slice_template:
-      gcp:
-        runtime_version: v2-alpha-tpuv5
-  tpu_v5p_16:
-    zones: [us-central1-a, us-east5-a]
-    num_vms: 2
-    priority: 30
-    resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-16, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 1024
-    slice_template:
-      gcp:
-        runtime_version: v2-alpha-tpuv5
-
-  # v4 — capped at 4 slices per group
-  tpu_v4_8:
-    zones: [us-central2-b]
-    num_vms: 1
-    priority: 20
-    resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-8, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 2048
-    slice_template:
-      gcp:
-        runtime_version: tpu-ubuntu2204-base
-  tpu_v4_16:
-    zones: [us-central2-b]
-    num_vms: 2
-    priority: 30
-    resources: { cpu: 240, ram: 400GB, disk: 100GB, device_type: tpu, device_variant: v4-16, device_count: 4, preemptible: true }
-    min_slices: 0
-    max_slices: 1024
-    slice_template:
-      gcp:
-        runtime_version: tpu-ubuntu2204-base
+        machine_type: n2-highmem-2

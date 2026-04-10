@@ -32,7 +32,8 @@ from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
 from iris.cluster.providers.remote_exec import DirectSshRemoteExec
 from iris.cluster.worker.env_probe import construct_worker_id
 from iris.rpc import config_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.time_proto import duration_from_proto
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class ManualStandaloneWorkerHandle(RemoteExecWorkerBase):
     def status(self) -> WorkerStatus:
         return WorkerStatus(state=CloudWorkerState.RUNNING)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         if self._on_terminate:
             self._on_terminate()
 
@@ -173,7 +174,7 @@ class ManualSliceHandle:
 
         return SliceStatus(state=state, worker_count=len(self._hosts), workers=workers)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         if self._terminated:
             return
         self._terminated = True
@@ -381,7 +382,7 @@ class ManualWorkerProvider:
             if self._ssh_config.key_file:
                 key_file = self._ssh_config.key_file
             if self._ssh_config.HasField("connect_timeout"):
-                connect_timeout = Duration.from_proto(self._ssh_config.connect_timeout)
+                connect_timeout = duration_from_proto(self._ssh_config.connect_timeout)
 
         if manual_config is not None:
             ssh_user = getattr(manual_config, "ssh_user", "")

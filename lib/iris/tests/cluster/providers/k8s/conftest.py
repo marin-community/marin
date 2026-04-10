@@ -10,6 +10,7 @@ import pytest
 from iris.cluster.controller.transitions import DirectProviderBatch
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.providers.k8s.fake import InMemoryK8sService
+from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.providers.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
@@ -17,7 +18,20 @@ from iris.cluster.providers.k8s.tasks import (
     _LABEL_RUNTIME,
     _RUNTIME_LABEL_VALUE,
 )
-from iris.rpc import cluster_pb2
+from iris.log_server.server import LogServiceImpl
+from iris.rpc import logging_pb2
+from iris.rpc import job_pb2
+
+
+class InProcessLogPusher:
+    """Test-friendly log pusher that calls LogServiceImpl directly."""
+
+    def __init__(self, log_service: LogServiceImpl) -> None:
+        self._log_service = log_service
+
+    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
+        if entries:
+            self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries), ctx=None)
 
 
 @pytest.fixture
@@ -26,13 +40,27 @@ def k8s() -> InMemoryK8sService:
 
 
 @pytest.fixture
-def provider(k8s):
-    return K8sTaskProvider(
+def log_service() -> LogServiceImpl:
+    return LogServiceImpl()
+
+
+@pytest.fixture
+def log_pusher(log_service) -> InProcessLogPusher:
+    return InProcessLogPusher(log_service)
+
+
+@pytest.fixture
+def provider(k8s, log_pusher):
+    p = K8sTaskProvider(
         kubectl=k8s,
         namespace="iris",
         default_image="myrepo/iris:latest",
         cache_dir="/cache",
+        log_pusher=log_pusher,
+        log_poll_interval=1.0,
     )
+    yield p
+    p.close()
 
 
 def pod_config(
@@ -43,8 +71,8 @@ def pod_config(
     return PodConfig(namespace=namespace, default_image=default_image, **kwargs)
 
 
-def make_run_req(task_id: str, attempt_id: int = 0, cpu_mc: int = 1000) -> cluster_pb2.Worker.RunTaskRequest:
-    req = cluster_pb2.Worker.RunTaskRequest()
+def make_run_req(task_id: str, attempt_id: int = 0, cpu_mc: int = 1000) -> job_pb2.RunTaskRequest:
+    req = job_pb2.RunTaskRequest()
     req.task_id = task_id
     req.attempt_id = attempt_id
     req.entrypoint.run_command.argv.extend(["python", "train.py"])
@@ -103,7 +131,7 @@ def populate_pod(
     pod = make_pod(name, phase, exit_code=exit_code, reason=reason)
     pod["kind"] = "Pod"
     pod["metadata"]["labels"] = base_labels
-    k8s.seed_resource("pod", name, pod)
+    k8s.seed_resource(K8sResource.PODS, name, pod)
 
 
 def populate_node(
@@ -120,7 +148,7 @@ def populate_node(
         "spec": {"taints": taints or []},
         "status": {"allocatable": {"cpu": cpu, "memory": memory}},
     }
-    k8s.seed_resource("node", name, node)
+    k8s.seed_resource(K8sResource.NODES, name, node)
 
 
 def populate_running_pod_resource(
@@ -151,19 +179,19 @@ def populate_running_pod_resource(
             ]
         },
     }
-    k8s.seed_resource("pod", name, pod)
+    k8s.seed_resource(K8sResource.PODS, name, pod)
 
 
-def add_eq_constraint(req: cluster_pb2.Worker.RunTaskRequest, key: str, value: str) -> None:
+def add_eq_constraint(req: job_pb2.RunTaskRequest, key: str, value: str) -> None:
     """Add an EQ string constraint to a RunTaskRequest."""
     c = req.constraints.add()
     c.key = key
-    c.op = cluster_pb2.CONSTRAINT_OP_EQ
+    c.op = job_pb2.CONSTRAINT_OP_EQ
     c.value.string_value = value
 
 
 def common_env_from_req(
-    req: cluster_pb2.Worker.RunTaskRequest,
+    req: job_pb2.RunTaskRequest,
     controller_address: str | None = None,
 ) -> dict[str, str]:
     """Call build_common_iris_env with fields extracted from a RunTaskRequest."""

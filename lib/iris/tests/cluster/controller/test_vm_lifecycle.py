@@ -45,7 +45,7 @@ from iris.cluster.providers.types import (
     WorkerStatus,
 )
 from iris.rpc import config_pb2
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 # Short timeout so unhealthy health checks fail fast in tests
 _TEST_HEALTH_CHECK_TIMEOUT = 0.5
@@ -127,7 +127,7 @@ class FakeWorkerHandle:
     def reboot(self) -> None:
         pass
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         self.terminated = True
 
     def set_labels(self, labels: dict[str, str]) -> None:

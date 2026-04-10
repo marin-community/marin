@@ -19,8 +19,10 @@ from typing import Protocol
 
 from iris.cluster.constraints import WellKnownAttribute, accelerator_type_to_string
 from iris.cluster.types import get_tpu_topology
-from iris.rpc import cluster_pb2, config_pb2
-from iris.time_utils import Timestamp
+from iris.rpc import config_pb2
+from iris.rpc import job_pb2
+from iris.time_proto import timestamp_to_proto
+from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -231,12 +233,12 @@ def _build_worker_attributes(
     *,
     accelerator_type: int,
     accelerator_variant: str,
-    preemptible: bool,
+    capacity_type: int,
     tpu_name: str,
     tpu_worker_id: str,
-    device: cluster_pb2.DeviceConfig,
+    device: job_pb2.DeviceConfig,
     extra_attributes: dict[str, str],
-) -> dict[str, cluster_pb2.AttributeValue]:
+) -> dict[str, job_pb2.AttributeValue]:
     """Build worker attributes for constraint-based scheduling.
 
     Scheduling-relevant attributes (device-type, device-variant, preemptible)
@@ -251,43 +253,42 @@ def _build_worker_attributes(
     TPU topology and VM count are derived from device_variant when device_type
     is TPU.
     """
-    attributes: dict[str, cluster_pb2.AttributeValue] = {}
+    attributes: dict[str, job_pb2.AttributeValue] = {}
 
     # Scheduling attributes from config
     device_type_str = accelerator_type_to_string(accelerator_type)
-    attributes[WellKnownAttribute.DEVICE_TYPE] = cluster_pb2.AttributeValue(string_value=device_type_str)
+    attributes[WellKnownAttribute.DEVICE_TYPE] = job_pb2.AttributeValue(string_value=device_type_str)
 
     if accelerator_variant:
-        attributes[WellKnownAttribute.DEVICE_VARIANT] = cluster_pb2.AttributeValue(
-            string_value=accelerator_variant.lower()
-        )
+        attributes[WellKnownAttribute.DEVICE_VARIANT] = job_pb2.AttributeValue(string_value=accelerator_variant.lower())
 
-    attributes[WellKnownAttribute.PREEMPTIBLE] = cluster_pb2.AttributeValue(string_value=str(preemptible).lower())
+    is_preemptible = capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+    attributes[WellKnownAttribute.PREEMPTIBLE] = job_pb2.AttributeValue(string_value=str(is_preemptible).lower())
 
     # TPU multi-host identity from GCP metadata probes
     if tpu_name:
-        attributes[WellKnownAttribute.TPU_NAME] = cluster_pb2.AttributeValue(string_value=tpu_name)
-        attributes[WellKnownAttribute.TPU_WORKER_ID] = cluster_pb2.AttributeValue(
+        attributes[WellKnownAttribute.TPU_NAME] = job_pb2.AttributeValue(string_value=tpu_name)
+        attributes[WellKnownAttribute.TPU_WORKER_ID] = job_pb2.AttributeValue(
             int_value=int(tpu_worker_id) if tpu_worker_id else 0
         )
 
     # TPU topology attributes derived from variant
     if accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU and accelerator_variant:
-        attributes[WellKnownAttribute.TPU_TOPOLOGY] = cluster_pb2.AttributeValue(string_value=accelerator_variant)
+        attributes[WellKnownAttribute.TPU_TOPOLOGY] = job_pb2.AttributeValue(string_value=accelerator_variant)
         try:
             topo = get_tpu_topology(accelerator_variant)
-            attributes[WellKnownAttribute.TPU_VM_COUNT] = cluster_pb2.AttributeValue(int_value=topo.vm_count)
+            attributes[WellKnownAttribute.TPU_VM_COUNT] = job_pb2.AttributeValue(int_value=topo.vm_count)
         except ValueError:
             logger.warning("Unknown TPU topology: %s", accelerator_variant)
 
     # GPU diagnostic attributes from device config (populated by build_worker_metadata)
     if device.HasField("gpu"):
-        attributes[WellKnownAttribute.GPU_VARIANT] = cluster_pb2.AttributeValue(string_value=device.gpu.variant)
-        attributes[WellKnownAttribute.GPU_COUNT] = cluster_pb2.AttributeValue(int_value=device.gpu.count)
+        attributes[WellKnownAttribute.GPU_VARIANT] = job_pb2.AttributeValue(string_value=device.gpu.variant)
+        attributes[WellKnownAttribute.GPU_COUNT] = job_pb2.AttributeValue(int_value=device.gpu.count)
 
     # Custom user attributes from YAML worker.attributes (merged last so they can override)
     for key, value in extra_attributes.items():
-        attributes[key] = cluster_pb2.AttributeValue(string_value=value)
+        attributes[key] = job_pb2.AttributeValue(string_value=value)
 
     return attributes
 
@@ -378,14 +379,14 @@ def build_worker_metadata(
     accelerator_type: int = 0,
     accelerator_variant: str = "",
     gpu_count_override: int = 0,
-    preemptible: bool = False,
+    capacity_type: int = 0,
     worker_attributes: dict[str, str] | None = None,
-) -> cluster_pb2.WorkerMetadata:
+) -> job_pb2.WorkerMetadata:
     """Combine hardware probe results with platform-provided config.
 
     Scheduling-relevant attributes (device-type, device-variant, preemptible) are
     derived from WorkerConfig fields (accelerator_type, accelerator_variant,
-    preemptible). Hardware probes populate diagnostic fields on WorkerMetadata
+    capacity_type). Hardware probes populate diagnostic fields on WorkerMetadata
     (gpu_name, tpu_worker_hostnames, etc.) but do not influence the attributes map.
 
     The DeviceConfig oneof on WorkerMetadata is still built from config + probe
@@ -393,7 +394,7 @@ def build_worker_metadata(
     """
     extra_attributes = worker_attributes or {}
 
-    device = cluster_pb2.DeviceConfig()
+    device = job_pb2.DeviceConfig()
 
     if accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU or hardware.tpu_type:
         tpu_type = hardware.tpu_type
@@ -405,7 +406,7 @@ def build_worker_metadata(
             except ValueError:
                 logger.warning("Unknown TPU topology: %s", tpu_type)
         variant = accelerator_variant or tpu_type
-        device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=variant, count=tpu_chip_count))
+        device.tpu.CopyFrom(job_pb2.TpuDevice(variant=variant, count=tpu_chip_count))
         gpu_count = 0
         gpu_name = ""
         gpu_memory_mb = 0
@@ -413,14 +414,14 @@ def build_worker_metadata(
         gpu_count = gpu_count_override or hardware.gpu_count
         gpu_name = accelerator_variant or hardware.gpu_name or "auto"
         gpu_memory_mb = hardware.gpu_memory_mb
-        device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant=gpu_name, count=gpu_count))
+        device.gpu.CopyFrom(job_pb2.GpuDevice(variant=gpu_name, count=gpu_count))
     elif accelerator_type == config_pb2.ACCELERATOR_TYPE_CPU:
-        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant=accelerator_variant or "cpu"))
+        device.cpu.CopyFrom(job_pb2.CpuDevice(variant=accelerator_variant or "cpu"))
         gpu_count = 0
         gpu_name = ""
         gpu_memory_mb = 0
     else:
-        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+        device.cpu.CopyFrom(job_pb2.CpuDevice(variant="cpu"))
         gpu_count = 0
         gpu_name = ""
         gpu_memory_mb = 0
@@ -428,14 +429,14 @@ def build_worker_metadata(
     attributes = _build_worker_attributes(
         accelerator_type=accelerator_type,
         accelerator_variant=accelerator_variant,
-        preemptible=preemptible,
+        capacity_type=capacity_type,
         tpu_name=hardware.tpu_name,
         tpu_worker_id=hardware.tpu_worker_id,
         device=device,
         extra_attributes=extra_attributes,
     )
 
-    return cluster_pb2.WorkerMetadata(
+    return job_pb2.WorkerMetadata(
         hostname=hardware.hostname,
         ip_address=hardware.ip_address,
         cpu_count=hardware.cpu_count,
@@ -458,23 +459,23 @@ def build_worker_metadata(
 class EnvironmentProvider(Protocol):
     """Protocol for worker environment probing."""
 
-    def probe(self) -> cluster_pb2.WorkerMetadata: ...
+    def probe(self) -> job_pb2.WorkerMetadata: ...
 
 
 class FixedEnvironmentProvider:
     """Returns pre-built worker metadata. Used by LOCAL mode and tests."""
 
-    def __init__(self, metadata: cluster_pb2.WorkerMetadata):
+    def __init__(self, metadata: job_pb2.WorkerMetadata):
         self._metadata = metadata
 
-    def probe(self) -> cluster_pb2.WorkerMetadata:
+    def probe(self) -> job_pb2.WorkerMetadata:
         return self._metadata
 
 
 class DefaultEnvironmentProvider:
     """Default implementation that probes real system resources."""
 
-    def probe(self) -> cluster_pb2.WorkerMetadata:
+    def probe(self) -> job_pb2.WorkerMetadata:
         hardware = probe_hardware()
         return build_worker_metadata(hardware)
 
@@ -579,9 +580,9 @@ class HostMetricsCollector:
         self._prev_net_sent = 0
         self._prev_net_time: float = 0.0
 
-    def collect(self) -> cluster_pb2.WorkerResourceSnapshot:
-        snapshot = cluster_pb2.WorkerResourceSnapshot()
-        snapshot.timestamp.CopyFrom(Timestamp.now().to_proto())
+    def collect(self) -> job_pb2.WorkerResourceSnapshot:
+        snapshot = job_pb2.WorkerResourceSnapshot()
+        snapshot.timestamp.CopyFrom(timestamp_to_proto(Timestamp.now()))
 
         self._collect_memory(snapshot)
         self._collect_disk(snapshot)
@@ -590,7 +591,7 @@ class HostMetricsCollector:
 
         return snapshot
 
-    def _collect_memory(self, snapshot: cluster_pb2.WorkerResourceSnapshot) -> None:
+    def _collect_memory(self, snapshot: job_pb2.WorkerResourceSnapshot) -> None:
         try:
             with open("/proc/meminfo") as f:
                 meminfo: dict[str, int] = {}
@@ -604,7 +605,7 @@ class HostMetricsCollector:
         except (OSError, ValueError):
             pass
 
-    def _collect_disk(self, snapshot: cluster_pb2.WorkerResourceSnapshot) -> None:
+    def _collect_disk(self, snapshot: job_pb2.WorkerResourceSnapshot) -> None:
         try:
             usage = shutil.disk_usage(self._disk_path)
             snapshot.disk_total_bytes = usage.total
@@ -612,7 +613,7 @@ class HostMetricsCollector:
         except OSError:
             pass
 
-    def _collect_cpu(self, snapshot: cluster_pb2.WorkerResourceSnapshot) -> None:
+    def _collect_cpu(self, snapshot: job_pb2.WorkerResourceSnapshot) -> None:
         """Compute CPU utilization as a delta between consecutive /proc/stat reads."""
         try:
             with open("/proc/stat") as f:
@@ -628,14 +629,14 @@ class HostMetricsCollector:
                 delta_idle = idle - self._prev_cpu_idle
 
                 if delta_total > 0 and self._prev_cpu_total > 0:
-                    snapshot.cpu_percent = max(0, min(100, 100 - int(delta_idle * 100 / delta_total)))
+                    snapshot.host_cpu_percent = max(0, min(100, 100 - int(delta_idle * 100 / delta_total)))
 
                 self._prev_cpu_total = total
                 self._prev_cpu_idle = idle
         except (OSError, ValueError, IndexError):
             pass
 
-    def _collect_network(self, snapshot: cluster_pb2.WorkerResourceSnapshot) -> None:
+    def _collect_network(self, snapshot: job_pb2.WorkerResourceSnapshot) -> None:
         """Compute network bandwidth as bytes/sec delta from /proc/net/dev.
 
         Sums all non-loopback interfaces. Works inside Docker/K8s containers

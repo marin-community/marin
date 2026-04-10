@@ -23,11 +23,12 @@ def migrate(conn: sqlite3.Connection) -> None:
     if already_backfilled:
         return
 
-    from iris.rpc import cluster_pb2
+    from iris.cluster.controller.transitions import _has_reservation_flag
+    from iris.rpc import controller_pb2
 
     rows = conn.execute("SELECT job_id, request_proto FROM jobs WHERE request_proto IS NOT NULL").fetchall()
     for row in rows:
-        proto = cluster_pb2.Controller.LaunchJobRequest()
+        proto = controller_pb2.Controller.LaunchJobRequest()
         proto.ParseFromString(row[1])
-        if proto.HasField("reservation") and proto.reservation.entries:
+        if _has_reservation_flag(proto):
             conn.execute("UPDATE jobs SET has_reservation = 1 WHERE job_id = ?", (row[0],))

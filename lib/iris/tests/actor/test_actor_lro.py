@@ -78,7 +78,7 @@ def test_lro_cancel():
     try:
         client = _make_client(port)
         # Start a slow operation
-        op_id = client.start_operation("slow_add", 1, 2, delay=1.0)
+        op_id = client.start_operation("slow_add", 1, 2, delay=0.1)
 
         # Cancel immediately
         op = client.cancel_operation(op_id)

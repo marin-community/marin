@@ -11,8 +11,9 @@ from iris.client.client import IrisClient, Job
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished
-from iris.rpc import cluster_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 
 IRIS_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
@@ -33,7 +34,7 @@ class _IrisTestHelper:
     def wait_for_workers(self, count: int, timeout: float = 30):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            resp = self.controller_client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+            resp = self.controller_client.list_workers(controller_pb2.Controller.ListWorkersRequest())
             healthy = [w for w in resp.workers if w.healthy]
             if len(healthy) >= count:
                 return
@@ -48,11 +49,11 @@ class _IrisTestHelper:
             environment=EnvironmentSpec(),
         )
 
-    def wait(self, job: Job, timeout: float = 30) -> cluster_pb2.JobStatus:
+    def wait(self, job: Job, timeout: float = 30) -> job_pb2.JobStatus:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             resp = self.controller_client.get_job_status(
-                cluster_pb2.Controller.GetJobStatusRequest(job_id=job.job_id.to_wire())
+                controller_pb2.Controller.GetJobStatusRequest(job_id=job.job_id.to_wire())
             )
             if is_job_finished(resp.job.state):
                 return resp.job
@@ -78,7 +79,7 @@ def test_checkpoint_restore():
         tc.wait(job, timeout=30)
         saved_job_id = job.job_id.to_wire()
 
-        ckpt = controller_client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
+        ckpt = controller_client.begin_checkpoint(controller_pb2.Controller.BeginCheckpointRequest())
         assert ckpt.checkpoint_path, "begin_checkpoint returned empty path"
         assert ckpt.job_count >= 1
         controller_client.close()
@@ -90,15 +91,13 @@ def test_checkpoint_restore():
             url=url, client=IrisClient.remote(url, workspace=IRIS_ROOT), controller_client=controller_client
         )
 
-        resp = controller_client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=saved_job_id))
-        assert (
-            resp.job.state == cluster_pb2.JOB_STATE_SUCCEEDED
-        ), f"Pre-restart job has state {resp.job.state} after restore"
+        resp = controller_client.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=saved_job_id))
+        assert resp.job.state == job_pb2.JOB_STATE_SUCCEEDED, f"Pre-restart job has state {resp.job.state} after restore"
 
         tc.wait_for_workers(1, timeout=30)
         post_job = tc.submit(_quick, "post-restart")
         status = tc.wait(post_job, timeout=30)
-        assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+        assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
         controller_client.close()
     finally:

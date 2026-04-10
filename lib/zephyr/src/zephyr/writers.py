@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import queue
+import tempfile
 import threading
 import uuid
 from collections.abc import Callable, Iterable
@@ -13,14 +14,13 @@ from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 import itertools
 import os
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    import pyarrow as pa
-
-from iris.marin_fs import open_url, url_to_fs
+import pyarrow as pa
+from rigging.filesystem import open_url, url_to_fs
 import msgspec
 import logging
+from zephyr import counters
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +56,28 @@ def atomic_rename(output_path: str) -> Iterable[str]:
     Yields a unique temporary path to write to. On successful exit, atomically
     renames the temp file to the final path. On failure, cleans up the temp file.
 
+    For S3-compatible stores, writes to a local temp directory first, then uploads
+    via fs.put() to avoid server-side multipart copy which is unreliable on some
+    providers (e.g. Cloudflare R2).
+
     Example:
         with atomic_rename("output.jsonl.gz") as tmp_path:
             write_data(tmp_path)
         # File is now at output.jsonl.gz
     """
+    if output_path.startswith("s3://"):
+        fs, resolved_path = url_to_fs(output_path)
+        with tempfile.TemporaryDirectory() as local_tmp_dir:
+            local_path = os.path.join(local_tmp_dir, "output")
+            yield local_path
+            if os.path.isdir(local_path):
+                # Trailing slash prevents fsspec from nesting under an extra
+                # "output/" level when the destination already exists.
+                fs.put(local_path + "/", resolved_path, recursive=True)
+            else:
+                fs.put(local_path, resolved_path)
+        return
+
     temp_path = unique_temp_path(output_path)
     fs = url_to_fs(output_path)[0]
 
@@ -91,6 +108,24 @@ def ensure_parent_dir(path: str) -> None:
             os.makedirs(output_dir, exist_ok=True)
 
 
+@contextmanager
+def _open_write_stream(fs, resolved_path: str, output_path: str):
+    """Open a binary write stream with compression inferred from ``output_path``."""
+    if output_path.endswith(".zst"):
+        import zstandard as zstd
+
+        cctx = zstd.ZstdCompressor(level=2, threads=1)
+        with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE) as raw_f:
+            with cctx.stream_writer(raw_f) as f:
+                yield f
+    elif output_path.endswith(".gz"):
+        with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE, compression="gzip") as f:
+            yield f
+    else:
+        with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
+            yield f
+
+
 def write_jsonl_file(records: Iterable, output_path: str) -> dict:
     """Write records to a JSONL file with automatic compression."""
     ensure_parent_dir(output_path)
@@ -100,33 +135,17 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
 
     with atomic_rename(output_path) as temp_path:
         fs, resolved_temp = url_to_fs(temp_path)
-        if output_path.endswith(".zst"):
-            import zstandard as zstd
-
-            cctx = zstd.ZstdCompressor(level=2, threads=1)
-            with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as raw_f:
-                with cctx.stream_writer(raw_f) as f:
-                    for record in records:
-                        f.write(encoder.encode(record) + b"\n")
-                        count += 1
-        elif output_path.endswith(".gz"):
-            with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE, compression="gzip") as f:
-                for record in records:
-                    f.write(encoder.encode(record) + b"\n")
-                    count += 1
-        else:
-            with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
-                for record in records:
-                    f.write(encoder.encode(record) + b"\n")
-                    count += 1
+        with _open_write_stream(fs, resolved_temp, output_path) as f:
+            for record in records:
+                f.write(encoder.encode(record) + b"\n")
+                count += 1
+                counters.increment("zephyr/records_out")
 
     return {"path": output_path, "count": count}
 
 
 def infer_arrow_schema(records: list[dict[str, Any]]) -> Any:
     """Infer a PyArrow schema from a batch of record dicts"""
-    import pyarrow as pa
-
     return pa.Table.from_pylist(records).schema
 
 
@@ -148,8 +167,6 @@ def _accumulate_tables(
     tracks byte size incrementally, and yields a single ``concat_tables``
     result each time the threshold is reached.
     """
-    import pyarrow as pa
-
     chunks: list[pa.Table] = []
     bytesize = 0
     convert: Callable | None = None
@@ -192,7 +209,6 @@ def write_parquet_file(
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
     """
-    import pyarrow as pa
     import pyarrow.parquet as pq
 
     ensure_parent_dir(output_path)
@@ -206,6 +222,7 @@ def write_parquet_file(
                     writer = pq.ParquetWriter(temp_path, table.schema)
                 writer.write_table(table)
                 count += len(table)
+                counters.increment("zephyr/records_out", len(table))
         finally:
             if writer is not None:
                 writer.close()
@@ -236,7 +253,6 @@ def write_vortex_file(
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
     """
-    import pyarrow as pa
     import vortex
 
     ensure_parent_dir(output_path)
@@ -258,9 +274,11 @@ def write_vortex_file(
     def _array_batches():
         nonlocal count
         count += len(first_table)
+        counters.increment("zephyr/records_out", len(first_table))
         yield vortex.Array.from_arrow(first_table)
         for table in table_iter:
             count += len(table)
+            counters.increment("zephyr/records_out", len(table))
             yield vortex.Array.from_arrow(table)
 
     array_iter = vortex.ArrayIterator.from_iter(dtype, _array_batches())
@@ -386,9 +404,11 @@ def write_levanter_cache(
             with ThreadedBatchWriter(_drain_batches) as threaded:
                 threaded.submit([exemplar])
                 count += 1
+                counters.increment("zephyr/records_out")
                 for batch in batchify(record_iter, n=_LEVANTER_BATCH_SIZE):
                     threaded.submit(batch)
                     count += len(batch)
+                    counters.increment("zephyr/records_out", len(batch))
                     logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
 
     logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
@@ -411,5 +431,6 @@ def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
             for record in records:
                 f.write(record)
                 count += 1
+                counters.increment("zephyr/records_out")
 
     return {"path": output_path, "count": count}

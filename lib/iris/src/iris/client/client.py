@@ -30,7 +30,6 @@ from connectrpc.errors import ConnectError
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.cluster.client import (
-    BundleCreator,
     ClusterClient,
     JobInfo,
     RemoteClusterClient,
@@ -40,6 +39,7 @@ from iris.cluster.client import (
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
 from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
+from iris.cluster.log_store import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -51,8 +51,9 @@ from iris.cluster.types import (
     TaskAttempt,
     adjust_tpu_replicas,
 )
-from iris.rpc import cluster_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.rpc import job_pb2
+from iris.time_proto import timestamp_from_proto
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -63,66 +64,36 @@ class TaskLogEntry:
 
     Attributes:
         timestamp: When the log line was produced
-        worker_id: Worker that produced this log
         task_id: Task that produced this log
         source: Log source - "stdout", "stderr", or "build"
         data: Log line content
         attempt_id: Which attempt produced this log (0-indexed)
+        key: Log store key (populated on multi-key queries)
     """
 
     timestamp: Timestamp
-    worker_id: str
     task_id: JobName
     source: str
     data: str
     attempt_id: int = 0
+    key: str = ""
 
 
-class DefaultTaskStateLogger:
-    """Default :class:`~iris.cluster.client.remote_client.TaskStateLogger` that
-    logs task lifecycle events and streamed output to the module logger.
-    """
-
-    def task_started(self, job_id: str, status: cluster_pb2.JobStatus) -> None:
-        state_name = cluster_pb2.JobState.Name(status.state)
-        logger.info("job=%s started with state=%s", job_id, state_name)
-
-    def task_finished(self, job_id: str, status: cluster_pb2.JobStatus) -> None:
-        """Log terminal state; warnings for failures, info for success."""
-        state_name = cluster_pb2.JobState.Name(status.state)
-        if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
-            logger.info("job=%s completed with state=%s", job_id, state_name)
-        else:
-            parts = [f"job={job_id} terminated with state={state_name}"]
-            if status.exit_code:
-                parts.append(f"exit_code={status.exit_code}")
-            if status.error:
-                parts.append(f"error={status.error!r}")
-            logger.warning(" | ".join(parts))
-
-    def task_logging(self, response: cluster_pb2.Controller.GetTaskLogsResponse) -> None:
-        for batch in response.task_logs:
-            task_id = JobName.from_wire(batch.task_id)
-            worker_id = batch.worker_id or "?"
-            if batch.error:
-                logger.warning("task=%s worker=%s | error fetching logs: %s", task_id, worker_id, batch.error)
-            for proto in batch.logs:
-                logger.info(
-                    "worker=%s task=%s attempt=%d | %s",
-                    worker_id,
-                    task_id,
-                    proto.attempt_id,
-                    proto.data,
-                )
+def _task_id_from_key(key: str) -> JobName:
+    """Extract the task JobName from a log entry key (e.g. "/user/job/0:3" -> "/user/job/0")."""
+    colon = key.rfind(":")
+    if colon >= 0:
+        return JobName.from_wire(key[:colon])
+    return JobName.from_wire(key)
 
 
 class JobFailedError(Exception):
     """Raised when a job ends in a non-SUCCESS terminal state."""
 
-    def __init__(self, job_id: JobName, status: cluster_pb2.JobStatus):
+    def __init__(self, job_id: JobName, status: job_pb2.JobStatus):
         self.job_id = job_id
         self.status = status
-        state_name = cluster_pb2.JobState.Name(status.state)
+        state_name = job_pb2.JobState.Name(status.state)
         msg = f"Job {job_id} {state_name}"
         if status.error:
             msg += f": {status.error}"
@@ -170,7 +141,7 @@ class Task:
         """Parent job identifier."""
         return self._task_name.parent or self._task_name
 
-    def status(self) -> cluster_pb2.TaskStatus:
+    def status(self) -> job_pb2.TaskStatus:
         """Get current task status.
 
         Returns:
@@ -179,12 +150,12 @@ class Task:
         return self._client._cluster_client.get_task_status(self.task_id)
 
     @property
-    def state(self) -> cluster_pb2.TaskState:
+    def state(self) -> job_pb2.TaskState:
         """Get current task state (shortcut for status().state)."""
         return self.status().state
 
     def logs(self, *, start: Timestamp | None = None, max_lines: int = 0) -> list[TaskLogEntry]:
-        """Fetch logs for this task.
+        """Fetch logs for this task (all attempts).
 
         Args:
             start: Only return logs after this timestamp (None = from beginning)
@@ -193,25 +164,23 @@ class Task:
         Returns:
             List of TaskLogEntry objects from the task
         """
-        response = self._client._cluster_client.fetch_task_logs(
-            self.task_id,
+        source = build_log_source(self._task_name)
+        response = self._client._cluster_client.fetch_logs(
+            source,
             since_ms=start.epoch_ms() if start else 0,
-            max_total_lines=max_lines,
+            max_lines=max_lines,
         )
-        if response.task_logs:
-            batch = response.task_logs[0]
-            return [
-                TaskLogEntry(
-                    timestamp=Timestamp.from_proto(e.timestamp),
-                    worker_id=batch.worker_id or "",
-                    task_id=self.task_id,
-                    source=e.source,
-                    data=e.data,
-                    attempt_id=e.attempt_id,
-                )
-                for e in batch.logs
-            ]
-        return []
+        return [
+            TaskLogEntry(
+                timestamp=timestamp_from_proto(e.timestamp),
+                task_id=self.task_id,
+                source=e.source,
+                data=e.data,
+                attempt_id=e.attempt_id,
+                key=e.key,
+            )
+            for e in response.entries
+        ]
 
 
 class Job:
@@ -247,7 +216,7 @@ class Job:
     def __repr__(self) -> str:
         return f"Job({self._job_id!r})"
 
-    def status(self) -> cluster_pb2.JobStatus:
+    def status(self) -> job_pb2.JobStatus:
         """Get current job status.
 
         Returns:
@@ -255,8 +224,16 @@ class Job:
         """
         return self._client._cluster_client.get_job_status(self._job_id)
 
+    def state_only(self) -> int:
+        """Lightweight state query that avoids loading tasks/attempts/workers."""
+        states = self._client._cluster_client.get_job_states([self._job_id])
+        wire_id = self._job_id.to_wire()
+        if wire_id not in states:
+            raise KeyError(f"Job {wire_id} not found")
+        return states[wire_id]
+
     @property
-    def state(self) -> cluster_pb2.JobState:
+    def state(self) -> job_pb2.JobState:
         """Get current job state (shortcut for status().state)."""
         return self.status().state
 
@@ -276,9 +253,9 @@ class Job:
         *,
         raise_on_failure: bool = True,
         stream_logs: bool = False,
-        include_children: bool = False,
+        since_ms: int = 0,
         min_level: str = "",
-    ) -> cluster_pb2.JobStatus:
+    ) -> job_pb2.JobStatus:
         """Wait for job to complete.
 
         Args:
@@ -286,6 +263,7 @@ class Job:
             poll_interval: Maximum time between status checks
             raise_on_failure: If True, raise JobFailedError on any non-SUCCESS terminal state
             stream_logs: If True, stream logs from all tasks interleaved
+            since_ms: Only show logs after this epoch millisecond timestamp
             min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
 
         Returns:
@@ -298,35 +276,18 @@ class Job:
         if not stream_logs:
             status = self._client._cluster_client.wait_for_job(self._job_id, timeout, poll_interval)
         else:
-            status = self._wait_with_multi_task_streaming(timeout, poll_interval, include_children, min_level)
+            status = self._client._cluster_client.wait_for_job_with_streaming(
+                self._job_id,
+                timeout=timeout,
+                poll_interval=poll_interval,
+                since_ms=since_ms,
+                min_level=min_level,
+            )
 
-        if raise_on_failure and status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
+        if raise_on_failure and status.state != job_pb2.JOB_STATE_SUCCEEDED:
             raise JobFailedError(self._job_id, status)
 
         return status
-
-    def _wait_with_multi_task_streaming(
-        self,
-        timeout: float,
-        poll_interval: float,
-        include_children: bool,
-        min_level: str = "",
-    ) -> cluster_pb2.JobStatus:
-        """Wait while streaming logs from all tasks using batch log fetching.
-
-        Uses a single batch RPC call per poll interval to fetch logs from all tasks,
-        rather than N individual calls. The batch API uses an autoincrement id cursor
-        for efficient incremental fetching.
-        """
-        return self._client._cluster_client.wait_for_job_with_streaming(
-            self._job_id,
-            timeout=timeout,
-            poll_interval=poll_interval,
-            include_children=include_children,
-            since_ms=0,
-            state_logger=DefaultTaskStateLogger(),
-            min_level=min_level,
-        )
 
     def terminate(self) -> None:
         """Terminate this job."""
@@ -550,12 +511,6 @@ class IrisClient:
         Returns:
             IrisClient wrapping RemoteClusterClient
         """
-        bundle_blob = None
-        if workspace is not None:
-            creator = BundleCreator(workspace)
-            bundle_blob = creator.create_bundle()
-            logger.info(f"Workspace bundle size: {len(bundle_blob) / 1024 / 1024:.1f} MB")
-
         interceptors = []
         if token_provider is not None:
             interceptors.append(AuthTokenInjector(token_provider))
@@ -563,7 +518,7 @@ class IrisClient:
         cluster = RemoteClusterClient(
             controller_address=controller_address,
             bundle_id=bundle_id,
-            bundle_blob=bundle_blob,
+            workspace=workspace,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
         )
@@ -603,12 +558,13 @@ class IrisClient:
         coscheduling: CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
-        max_retries_preemption: int = 100,
+        max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
         user: str | None = None,
         reservation: list[ReservationEntry] | None = None,
-        preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
-        existing_job_policy: cluster_pb2.ExistingJobPolicy = cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+        existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        task_image: str | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -627,6 +583,10 @@ class IrisClient:
             timeout: Per-task timeout (None = no timeout)
             user: Optional explicit user override for top-level jobs
             reservation: Resource entries to pre-provision before scheduling (None = no reservation)
+            task_image: Optional override for the task container image. When None,
+                the worker uses its cluster-configured default_task_image. Used for
+                jobs that need a custom runtime (e.g. an image with runsc/skopeo
+                for sandboxing untrusted child workloads).
 
         Returns:
             Job handle for the submitted job
@@ -698,7 +658,7 @@ class IrisClient:
         coscheduling_proto = coscheduling.to_proto() if coscheduling else None
         reservation_proto = None
         if reservation:
-            reservation_proto = cluster_pb2.ReservationConfig(
+            reservation_proto = job_pb2.ReservationConfig(
                 entries=[e.to_proto() for e in reservation],
             )
 
@@ -719,6 +679,7 @@ class IrisClient:
                 reservation=reservation_proto,
                 preemption_policy=preemption_policy,
                 existing_job_policy=existing_job_policy,
+                task_image=task_image,
             )
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:
@@ -727,7 +688,7 @@ class IrisClient:
 
         return Job(self, canonical_id)
 
-    def status(self, job_id: JobName) -> cluster_pb2.JobStatus:
+    def status(self, job_id: JobName) -> job_pb2.JobStatus:
         """Get job status.
 
         Args:
@@ -749,9 +710,9 @@ class IrisClient:
     def list_jobs(
         self,
         *,
-        states: list[cluster_pb2.JobState] | None = None,
+        states: list[job_pb2.JobState] | None = None,
         prefix: JobName | None = None,
-    ) -> list[cluster_pb2.JobStatus]:
+    ) -> list[job_pb2.JobStatus]:
         """List jobs with optional filtering.
 
         Args:
@@ -788,10 +749,10 @@ class IrisClient:
             List of job IDs that were terminated
         """
         terminal_states = {
-            cluster_pb2.JOB_STATE_SUCCEEDED,
-            cluster_pb2.JOB_STATE_FAILED,
-            cluster_pb2.JOB_STATE_KILLED,
-            cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+            job_pb2.JOB_STATE_SUCCEEDED,
+            job_pb2.JOB_STATE_FAILED,
+            job_pb2.JOB_STATE_KILLED,
+            job_pb2.JOB_STATE_UNSCHEDULABLE,
         }
 
         jobs = self.list_jobs(prefix=prefix)
@@ -804,7 +765,7 @@ class IrisClient:
             terminated.append(job_id)
         return terminated
 
-    def task_status(self, task_name: JobName) -> cluster_pb2.TaskStatus:
+    def task_status(self, task_name: JobName) -> job_pb2.TaskStatus:
         """Get status of a specific task.
 
         Args:
@@ -815,7 +776,7 @@ class IrisClient:
         """
         return self._cluster_client.get_task_status(task_name)
 
-    def list_tasks(self, job_id: JobName) -> list[cluster_pb2.TaskStatus]:
+    def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.
 
         Args:
@@ -830,53 +791,53 @@ class IrisClient:
         self,
         target: JobName,
         *,
-        include_children: bool = False,
         start: Timestamp | None = None,
         max_lines: int = 0,
-        substring: str | None = None,
+        substring: str = "",
         attempt_id: int = -1,
         min_level: str = "",
+        tail: bool = False,
     ) -> list[TaskLogEntry]:
         """Fetch logs for a task or job.
 
+        Builds a regex source pattern from the target:
+        - Task + all attempts: /user/job/0:.*
+        - Task + specific attempt: /user/job/0:<attempt_id>  (exact match)
+        - Job (all tasks): /user/job/.*
+
         Args:
-            target: Task ID or Job ID (detected by trailing numeric)
-            include_children: Include logs from child jobs (job ID only)
+            target: Task ID or Job ID
             start: Only return logs after this timestamp (None = from beginning)
-            max_lines: Maximum number of log lines to return (0 = unlimited)
+            max_lines: Maximum number of log lines to return (0 = server default)
             substring: Substring filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
             min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+            tail: If True, return the most recent lines instead of earliest
 
         Returns:
             List of TaskLogEntry objects, sorted by timestamp
         """
-        response = self._cluster_client.fetch_task_logs(
-            target,
-            include_children=include_children,
+        source = build_log_source(target, attempt_id)
+        response = self._cluster_client.fetch_logs(
+            source,
             since_ms=start.epoch_ms() if start else 0,
-            max_total_lines=max_lines,
+            max_lines=max_lines,
             substring=substring,
-            attempt_id=attempt_id,
             min_level=min_level,
+            tail=tail,
         )
 
-        result: list[TaskLogEntry] = []
-        for batch in response.task_logs:
-            task_id = JobName.from_wire(batch.task_id)
-            worker_id = batch.worker_id or ""
-            for proto in batch.logs:
-                result.append(
-                    TaskLogEntry(
-                        timestamp=Timestamp.from_proto(proto.timestamp),
-                        worker_id=worker_id,
-                        task_id=task_id,
-                        source=proto.source,
-                        data=proto.data,
-                        attempt_id=proto.attempt_id,
-                    )
-                )
-
+        result = [
+            TaskLogEntry(
+                timestamp=timestamp_from_proto(e.timestamp),
+                task_id=_task_id_from_key(e.key),
+                source=e.source,
+                data=e.data,
+                attempt_id=e.attempt_id,
+                key=e.key,
+            )
+            for e in response.entries
+        ]
         result.sort(key=lambda x: x.timestamp.epoch_ms())
         return result
 

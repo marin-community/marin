@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from iris.test_util import SentinelFile, wait_for_condition
-from iris.time_utils import Duration
+from rigging.timing import Duration
 
 
 def test_sentinel_file_signal_and_wait(tmp_path: Path) -> None:

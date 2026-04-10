@@ -8,13 +8,12 @@ from functools import lru_cache
 
 import numpy
 
-import transformers
 from levanter.data.text import BlockShuffleConfig, DatasetComponent, LmDataConfig
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
 from marin.execution import unwrap_versioned_value
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
-from marin.utils import load_tokenizer_with_backoff
 
 TokenizerStep = ExecutorStep[TokenizeConfig]
 
@@ -29,6 +28,9 @@ _KNOWN_VOCAB_SIZES: dict[str, int] = {
     "meta-llama/Llama-2-7b": 32_000,
     "gpt2": 50_257,
 }
+
+# The marin tokenizer is a re-upload of the llama3 tokenizer with a custom chat template.
+_EQUIVALENT_TOKENIZERS = frozenset({"meta-llama/Meta-Llama-3.1-8B", "marin-community/marin-tokenizer"})
 
 
 def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_raw_paths: bool) -> DatasetComponent:
@@ -322,10 +324,12 @@ def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LmDataConfig:
     )
 
 
-@lru_cache(maxsize=32)
-def _load_tokenizer(tokenizer_name: str) -> transformers.PreTrainedTokenizer:
-    """Load and cache a tokenizer by name"""
-    return load_tokenizer_with_backoff(tokenizer_name)
+def _load_tokenizer(tokenizer_name: str) -> MarinTokenizer:
+    """Load and cache a tokenizer by name.
+
+    Delegates to levanter.tokenizers.load_tokenizer which is already lru_cached.
+    """
+    return load_tokenizer(tokenizer_name)
 
 
 @lru_cache(maxsize=128)
@@ -348,7 +352,7 @@ def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
         resolved_name,
     )
     tokenizer = _load_tokenizer(resolved_name)
-    return len(tokenizer)
+    return tokenizer.vocab_size
 
 
 def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
@@ -356,11 +360,9 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     tokenizer1 = unwrap_versioned_value(tokenizer1)
     tokenizer2 = unwrap_versioned_value(tokenizer2)
 
-    from experiments.llama import llama3_tokenizer
-    from experiments.marin_models import marin_tokenizer
-
-    # special case, i'm sorry
-    if tokenizer1 in {llama3_tokenizer, marin_tokenizer} and tokenizer2 in {llama3_tokenizer, marin_tokenizer}:
+    # The marin tokenizer is a re-upload of the llama3 tokenizer with a custom chat template,
+    # so they share the same vocabulary and token IDs.
+    if tokenizer1 in _EQUIVALENT_TOKENIZERS and tokenizer2 in _EQUIVALENT_TOKENIZERS:
         return True
 
     t1 = _load_tokenizer(tokenizer1)
@@ -381,7 +383,7 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
         if vocab2[token] != id1:
             return False
 
-    if getattr(t1, "chat_template", None) is not None and getattr(t2, "chat_template", None) is not None:
+    if t1.chat_template is not None and t2.chat_template is not None:
         if t1.chat_template != t2.chat_template:
             return False
 

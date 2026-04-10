@@ -1,0 +1,91 @@
+# Persistent CoreWeave CI cluster. Both scale groups are pinned at min=max=1
+# so nodes stay warm between runs — only controller and worker pods are reset.
+
+platform:
+  label_prefix: iris-ci
+  coreweave:
+    region: US-WEST-04A
+    namespace: iris-ci
+    kubeconfig_path: ~/.kube/coreweave-iris
+    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+
+storage:
+  remote_state_dir: s3://marin-na/iris/state/ci
+
+kubernetes_provider:
+  namespace: iris-ci
+  default_image: ghcr.io/marin-community/iris-task:latest
+  host_network: true
+  cache_dir: /mnt/local/iris-cache
+  controller_address: http://iris-ci-controller-svc.iris-ci.svc.cluster.local:10000
+
+controller:
+  image: ghcr.io/marin-community/iris-controller:latest
+  coreweave:
+    port: 10000
+    service_name: iris-ci-controller-svc
+    scale_group: cpu-erapids
+
+defaults:
+  autoscaler:
+    evaluation_interval:
+      milliseconds: 10000
+    scale_up_delay:
+      milliseconds: 60000
+    scale_down_delay:
+      milliseconds: 300000
+    startup_grace_period:
+      milliseconds: 1200000    # 20 min — nodes are pinned warm so this rarely fires
+  task_env:
+    MARIN_PREFIX: s3://marin-na/marin
+  worker:
+    docker_image: ghcr.io/marin-community/iris-worker:latest
+    port: 10001
+    cache_dir: /mnt/local/iris-cache
+    runtime: kubernetes
+    default_task_image: ghcr.io/marin-community/iris-task:latest
+
+scale_groups:
+  cpu-erapids:
+    num_vms: 1
+    resources:
+      cpu: 64
+      ram: 256GB
+      disk: 1TB
+      device_type: cpu
+      capacity_type: on-demand
+    worker:
+      attributes:
+        region: US-WEST-04A
+        pool: cpu-erapids
+    buffer_slices: 1
+    max_slices: 1
+    priority: 50
+    slice_template:
+      num_vms: 1
+      coreweave:
+        region: US-WEST-04A
+        instance_type: cd-gp-i64-erapids
+
+  h100-8x:
+    num_vms: 1
+    resources:
+      cpu: 128
+      ram: 2048GB
+      disk: 1TB
+      device_type: gpu
+      device_variant: H100
+      device_count: 8
+      capacity_type: on-demand
+    worker:
+      attributes:
+        region: US-WEST-04A
+        pool: h100-8x
+    buffer_slices: 1
+    max_slices: 1
+    priority: 100
+    slice_template:
+      num_vms: 1
+      coreweave:
+        region: US-WEST-04A
+        instance_type: gd-8xh100ib-i128

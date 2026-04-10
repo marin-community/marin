@@ -9,6 +9,7 @@ to remote storage and restoring the DB file from a remote checkpoint.
 Checkpoint layout (remote):
     {remote_state_dir}/controller-state/{epoch_ms}/controller.sqlite3.zst
     {remote_state_dir}/controller-state/{epoch_ms}/auth.sqlite3.zst
+    {remote_state_dir}/controller-state/{epoch_ms}/profiles.sqlite3.zst
 
 Files are compressed with zstandard (level 3) before upload.  On download,
 compressed (.zst) files are preferred; uncompressed files are accepted as
@@ -33,8 +34,8 @@ from pathlib import Path
 import fsspec.core
 import zstandard
 
-from iris.cluster.controller.db import JOBS, TASKS, WORKERS, ControllerDB
-from iris.time_utils import Duration, Timestamp
+from iris.cluster.controller.db import ControllerDB
+from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -88,74 +89,143 @@ def _fsspec_copy(src: str, dst: str) -> None:
 
 
 def _backup_sqlite_file(source: Path, dest: Path) -> None:
-    """Hot-backup a standalone SQLite file using the backup API."""
+    """Hot-backup a standalone SQLite file using the backup API.
+
+    After the backup, the destination is switched from WAL to DELETE
+    journal mode so the result is a single self-contained file without
+    -wal/-shm sidecars.  This prevents corruption when the file is
+    later compressed and uploaded without its WAL/SHM companions.
+    """
     src_conn = sqlite3.connect(str(source))
     dst_conn = sqlite3.connect(str(dest))
     try:
         src_conn.backup(dst_conn)
+        dst_conn.execute("PRAGMA journal_mode = DELETE")
         dst_conn.commit()
     finally:
         dst_conn.close()
         src_conn.close()
 
 
-def write_checkpoint(
-    db: ControllerDB,
-    remote_state_dir: str,
-) -> tuple[str, CheckpointResult]:
-    """Write a timestamped, zstd-compressed SQLite checkpoint to remote storage.
+@dataclass(frozen=True)
+class DatabaseBackup:
+    """Temporary local backup files produced by ``backup_databases``."""
 
-    Layout:
-        {remote_state_dir}/controller-state/{epoch_ms}/controller.sqlite3.zst
-        {remote_state_dir}/controller-state/{epoch_ms}/auth.sqlite3.zst
+    main_path: Path
+    auth_path: Path | None
+    profiles_path: Path | None
+    created_at: Timestamp
 
-    Old checkpoints (> 3 days) are pruned best-effort after the write.
-    Returns the remote directory path and a summary of checkpoint contents.
+    def cleanup(self) -> None:
+        """Remove temporary backup files."""
+        self.main_path.unlink(missing_ok=True)
+        if self.auth_path is not None:
+            self.auth_path.unlink(missing_ok=True)
+        if self.profiles_path is not None:
+            self.profiles_path.unlink(missing_ok=True)
+
+
+def backup_databases(db: ControllerDB) -> DatabaseBackup:
+    """Create local SQLite backup copies of the main and auth databases.
+
+    Should be called while holding the write lock against the main DB -- it
+    uses the SQLite backup API for a consistent snapshot.  The returned
+    ``DatabaseBackup`` owns the temporary files and must be cleaned up by the
+    caller (via ``DatabaseBackup.cleanup``).
     """
     created_at = Timestamp.now()
-    prefix = remote_state_dir.rstrip("/") + "/controller-state"
-    checkpoint_dir = f"{prefix}/{created_at.epoch_ms()}"
-
-    # Backup main DB (compressed)
-    main_remote = f"{checkpoint_dir}/{ControllerDB.DB_FILENAME}.zst"
     tmp_dir = db.db_path.parent
     tmp_dir.mkdir(parents=True, exist_ok=True)
+
     fd, tmp_name = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
     os.close(fd)
-    tmp_path = Path(tmp_name)
-    tmp_zst = tmp_path.with_suffix(".sqlite3.zst")
+    main_tmp = Path(tmp_name)
+
+    auth_tmp: Path | None = None
+    auth_path = db.auth_db_path
+    if auth_path.exists():
+        fd2, tmp_name2 = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
+        os.close(fd2)
+        auth_tmp = Path(tmp_name2)
+
+    profiles_tmp: Path | None = None
+    profiles_path = db.profiles_db_path
+    if profiles_path.exists():
+        fd3, tmp_name3 = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
+        os.close(fd3)
+        profiles_tmp = Path(tmp_name3)
+
+    backup = DatabaseBackup(main_path=main_tmp, auth_path=auth_tmp, profiles_path=profiles_tmp, created_at=created_at)
+    ok = False
     try:
-        db.backup_to(tmp_path)
-        _compress_zstd(tmp_path, tmp_zst)
+        db.backup_to(main_tmp)
+        if auth_tmp is not None:
+            _backup_sqlite_file(auth_path, auth_tmp)
+        if profiles_tmp is not None:
+            _backup_sqlite_file(profiles_path, profiles_tmp)
+        ok = True
+    finally:
+        if not ok:
+            backup.cleanup()
+
+    return backup
+
+
+def upload_checkpoint(
+    db: ControllerDB,
+    backup: DatabaseBackup,
+    remote_state_dir: str,
+) -> tuple[str, CheckpointResult]:
+    """Compress, upload, count rows, and prune old checkpoints.
+
+    This is the slow half of checkpointing (zstd compression + GCS upload)
+    and does not need any write lock on the database.
+    """
+    prefix = remote_state_dir.rstrip("/") + "/controller-state"
+    checkpoint_dir = f"{prefix}/{backup.created_at.epoch_ms()}"
+
+    # Compress and upload main DB.  Backup files are owned by the caller
+    # (via DatabaseBackup.cleanup); we only clean up the intermediate .zst.
+    main_remote = f"{checkpoint_dir}/{ControllerDB.DB_FILENAME}.zst"
+    tmp_zst = backup.main_path.with_suffix(".sqlite3.zst")
+    try:
+        _compress_zstd(backup.main_path, tmp_zst)
         _fsspec_copy(str(tmp_zst), main_remote)
         logger.info("checkpoint main DB uploaded to %s", main_remote)
     finally:
-        tmp_path.unlink(missing_ok=True)
         tmp_zst.unlink(missing_ok=True)
 
-    # Backup auth DB (compressed)
-    auth_path = db.auth_db_path
-    if auth_path.exists():
+    # Compress and upload auth DB.
+    if backup.auth_path is not None:
         auth_remote = f"{checkpoint_dir}/{ControllerDB.AUTH_DB_FILENAME}.zst"
-        fd2, tmp_name2 = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
-        os.close(fd2)
-        tmp_path2 = Path(tmp_name2)
-        tmp_zst2 = tmp_path2.with_suffix(".sqlite3.zst")
+        tmp_zst2 = backup.auth_path.with_suffix(".sqlite3.zst")
         try:
-            _backup_sqlite_file(auth_path, tmp_path2)
-            _compress_zstd(tmp_path2, tmp_zst2)
+            _compress_zstd(backup.auth_path, tmp_zst2)
             _fsspec_copy(str(tmp_zst2), auth_remote)
             logger.info("checkpoint auth DB uploaded to %s", auth_remote)
         finally:
-            tmp_path2.unlink(missing_ok=True)
             tmp_zst2.unlink(missing_ok=True)
 
-    with db.snapshot() as snapshot:
-        job_count = snapshot.count(JOBS)
-        task_count = snapshot.count(TASKS)
-        worker_count = snapshot.count(WORKERS)
+    # Compress and upload profiles DB.
+    if backup.profiles_path is not None:
+        profiles_remote = f"{checkpoint_dir}/{ControllerDB.PROFILES_DB_FILENAME}.zst"
+        tmp_zst3 = backup.profiles_path.with_suffix(".sqlite3.zst")
+        try:
+            _compress_zstd(backup.profiles_path, tmp_zst3)
+            _fsspec_copy(str(tmp_zst3), profiles_remote)
+            logger.info("checkpoint profiles DB uploaded to %s", profiles_remote)
+        finally:
+            tmp_zst3.unlink(missing_ok=True)
+
+    # Row counts are read from the live DB (not the backup) for convenience.
+    # They may diverge slightly from the backup contents if writes occurred
+    # between backup and upload, but this is acceptable for checkpoint metadata.
+    with db.read_snapshot() as snapshot:
+        job_count = snapshot.fetchone("SELECT COUNT(*) FROM jobs")[0]  # type: ignore[index]
+        task_count = snapshot.fetchone("SELECT COUNT(*) FROM tasks")[0]  # type: ignore[index]
+        worker_count = snapshot.fetchone("SELECT COUNT(*) FROM workers")[0]  # type: ignore[index]
     result = CheckpointResult(
-        created_at=created_at,
+        created_at=backup.created_at,
         job_count=job_count,
         task_count=task_count,
         worker_count=worker_count,
@@ -170,6 +240,23 @@ def write_checkpoint(
         logger.warning("Failed to prune old checkpoints", exc_info=True)
 
     return checkpoint_dir, result
+
+
+def write_checkpoint(
+    db: ControllerDB,
+    remote_state_dir: str,
+) -> tuple[str, CheckpointResult]:
+    """Write a timestamped, zstd-compressed SQLite checkpoint to remote storage.
+
+    Convenience wrapper that calls ``backup_databases`` then ``upload_checkpoint``.
+    Callers that need fine-grained lock control (e.g. ``begin_checkpoint``)
+    should call the two phases separately.
+    """
+    backup = backup_databases(db)
+    try:
+        return upload_checkpoint(db, backup, remote_state_dir)
+    finally:
+        backup.cleanup()
 
 
 def _reconstruct_uri(remote_state_dir: str, fs_path: str) -> str:
@@ -285,8 +372,8 @@ def download_checkpoint_to_local(
 ) -> bool:
     """Download a remote checkpoint directory to a local db_dir.
 
-    Looks for controller.sqlite3(.zst) and auth.sqlite3(.zst) in the
-    checkpoint directory. Compressed files are preferred; uncompressed
+    Looks for controller.sqlite3(.zst), auth.sqlite3(.zst), and
+    profiles.sqlite3(.zst) in the checkpoint directory. Compressed files are preferred; uncompressed
     files are accepted as a fallback.
 
     If ``checkpoint_dir`` is not provided, finds the most recent
@@ -326,5 +413,14 @@ def download_checkpoint_to_local(
         local_auth = local_db_dir / ControllerDB.AUTH_DB_FILENAME
         _download_one(auth_source, local_auth, compressed=auth_compressed)
         logger.info("Downloaded auth checkpoint from %s to %s", auth_source, local_auth)
+
+    # Download profiles DB if available
+    profiles_zst = f"{source_dir}/{ControllerDB.PROFILES_DB_FILENAME}.zst"
+    profiles_plain = f"{source_dir}/{ControllerDB.PROFILES_DB_FILENAME}"
+    profiles_source, profiles_compressed = _pick_remote(profiles_zst, profiles_plain)
+    if profiles_source is not None:
+        local_profiles = local_db_dir / ControllerDB.PROFILES_DB_FILENAME
+        _download_one(profiles_source, local_profiles, compressed=profiles_compressed)
+        logger.info("Downloaded profiles checkpoint from %s to %s", profiles_source, local_profiles)
 
     return True

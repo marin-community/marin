@@ -48,7 +48,7 @@ import time
 from huggingface_hub import HfFolder
 
 import wandb
-from iris.logging import configure_logging
+from rigging.log_setup import configure_logging
 
 # Setup logger
 logger = logging.getLogger("slurm")

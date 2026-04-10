@@ -37,16 +37,14 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils import fsspec_utils
 
-from experiments.evals.task_configs import (
-    CORE_TASKS,
-    convert_to_levanter_task_config,
-)
+from experiments.evals.task_configs import CORE_TASKS
+from marin.evaluation.evaluation_config import convert_to_levanter_task_config
 from experiments.paloma import paloma_tokenized
 from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from levanter.utils.mesh import MeshConfig
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -116,13 +114,24 @@ def _truncate_wandb_name(name: str) -> str:
     return name
 
 
-def _resolve_hf_export_steps(steps_per_hf_export: int | None, steps_per_export: int) -> int | None:
+def _resolve_hf_export_steps(steps_per_hf_export: int | None, steps_per_export: int | None) -> int | None:
     """Resolve the HF export step interval: None means same as checkpoint, -1 means disabled."""
     if steps_per_hf_export is None:
         return steps_per_export
     if steps_per_hf_export == -1:
         return None
     return steps_per_hf_export
+
+
+def _checkpoint_keep(steps_per_export: int | None) -> list[dict]:
+    """Build the `keep` list for `CheckpointerConfig`.
+
+    None means keep no permanent intermediate checkpoints (only the final checkpoint
+    is saved at end-of-training, plus a rolling temporary checkpoint for resumption).
+    """
+    if steps_per_export is None:
+        return []
+    return [dict(every=steps_per_export)]
 
 
 def _validate_train_length(train_seq_len: int | None, model_config: LmConfig) -> int:
@@ -409,7 +418,7 @@ def default_train(
             steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
-                keep=[dict(every=steps_per_export)],
+                keep=_checkpoint_keep(steps_per_export),
             ),
             model_averaging=model_averaging,
             mesh=MeshConfig(
@@ -641,7 +650,7 @@ def default_dpo(
             steps_per_eval=dpo_config.steps_per_eval,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
-                keep=[dict(every=steps_per_export)],
+                keep=_checkpoint_keep(steps_per_export),
             ),
             model_averaging=None,
             mesh=MeshConfig(

@@ -25,7 +25,7 @@ from levanter.data.dataset import MappedAsyncDataset
 from levanter.data.packing import GreedyPrepackedDataset
 from levanter.models.lm_model import LmExample
 from levanter.store.cache import TreeCache
-from levanter.utils.hf_utils import HfTokenizer
+from levanter.tokenizers import MarinTokenizer
 
 from .datasets import DatasetComponent, DirectDatasetComponent, LmDataConfig
 from .formats import ChatProcessor, LmDatasetFormatBase
@@ -111,7 +111,7 @@ class PreferenceChatLmDatasetFormat(LmDatasetFormatBase):
         return "chosen_input_ids"
 
     def build_preprocessor(
-        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
         del enforce_eos, enforce_bos
         return preprocessor_for_preference_format(self, tokenizer)  # type: ignore[return-value]
@@ -127,7 +127,7 @@ class PreferenceChatProcessor(BatchProcessor[dict, ProcessedPreferenceChatDict])
 
     def __init__(
         self,
-        tokenizer: HfTokenizer,
+        tokenizer: MarinTokenizer,
         *,
         chosen_field: str = "chosen",
         rejected_field: str = "rejected",
@@ -287,7 +287,7 @@ class PreferencePairDataset(
 
 
 def preprocessor_for_preference_format(
-    format: PreferenceChatLmDatasetFormat, tokenizer: HfTokenizer
+    format: PreferenceChatLmDatasetFormat, tokenizer: MarinTokenizer
 ) -> PreferenceChatProcessor:
     """Create a preprocessor for preference chat format."""
     return PreferenceChatProcessor(

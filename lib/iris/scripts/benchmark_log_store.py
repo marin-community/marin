@@ -185,67 +185,67 @@ def benchmark_queries(
     job_prefix = f"{_job_name(mid_job)}/"
 
     p50, p95 = bench(
-        f"get_logs_by_prefix(job, ~{num_tasks} tasks, limit=100)",
-        lambda: store.get_logs_by_prefix(job_prefix, max_lines=100),
+        f"get_logs(regex(job, ~{num_tasks} tasks, limit=100)",
+        lambda: store.get_logs(job_prefix + ".*", max_lines=100),
         iterations=iterations,
     )
-    results.append((f"get_logs_by_prefix(job, ~{num_tasks} tasks, limit=100)", p50, p95))
-    print_result(f"get_logs_by_prefix(job, ~{num_tasks} tasks, limit=100)", p50, p95)
+    results.append((f"get_logs(regex(job, ~{num_tasks} tasks, limit=100)", p50, p95))
+    print_result(f"get_logs(regex(job, ~{num_tasks} tasks, limit=100)", p50, p95)
 
     p50, p95 = bench(
-        f"get_logs_by_prefix(job, ~{num_tasks} tasks, no limit)",
-        lambda: store.get_logs_by_prefix(job_prefix),
+        f"get_logs(regex(job, ~{num_tasks} tasks, no limit)",
+        lambda: store.get_logs(job_prefix + ".*"),
         iterations=iterations,
     )
-    results.append((f"get_logs_by_prefix(job, ~{num_tasks} tasks, no limit)", p50, p95))
-    print_result(f"get_logs_by_prefix(job, ~{num_tasks} tasks, no limit)", p50, p95)
+    results.append((f"get_logs(regex(job, ~{num_tasks} tasks, no limit)", p50, p95))
+    print_result(f"get_logs(regex(job, ~{num_tasks} tasks, no limit)", p50, p95)
 
     p50, p95 = bench(
-        "get_logs_by_prefix(job, tail=True, limit=100)",
-        lambda: store.get_logs_by_prefix(job_prefix, max_lines=100, tail=True),
+        "get_logs(regex(job, tail=True, limit=100)",
+        lambda: store.get_logs(job_prefix + ".*", max_lines=100, tail=True),
         iterations=iterations,
     )
-    results.append(("get_logs_by_prefix(job, tail=True, limit=100)", p50, p95))
-    print_result("get_logs_by_prefix(job, tail=True, limit=100)", p50, p95)
+    results.append(("get_logs(regex(job, tail=True, limit=100)", p50, p95))
+    print_result("get_logs(regex(job, tail=True, limit=100)", p50, p95)
 
     p50, p95 = bench(
-        "get_logs_by_prefix(job, substring='line 999')",
-        lambda: store.get_logs_by_prefix(job_prefix, substring_filter="line 999"),
+        "get_logs(regex(job, substring='line 999')",
+        lambda: store.get_logs(job_prefix + ".*", substring_filter="line 999"),
         iterations=iterations,
     )
-    results.append(("get_logs_by_prefix(job, substring='line 999')", p50, p95))
-    print_result("get_logs_by_prefix(job, substring='line 999')", p50, p95)
+    results.append(("get_logs(regex(job, substring='line 999')", p50, p95))
+    print_result("get_logs(regex(job, substring='line 999')", p50, p95)
 
     # --- Prefix with cursor continuation ---
 
-    prefix_result = store.get_logs_by_prefix(job_prefix, max_lines=500)
+    prefix_result = store.get_logs(job_prefix + ".*", max_lines=500)
     prefix_cursor = prefix_result.cursor
 
     p50, p95 = bench(
-        "get_logs_by_prefix(job, cursor=mid, limit=100)",
-        lambda: store.get_logs_by_prefix(job_prefix, cursor=prefix_cursor, max_lines=100),
+        "get_logs(regex(job, cursor=mid, limit=100)",
+        lambda: store.get_logs(job_prefix + ".*", cursor=prefix_cursor, max_lines=100),
         iterations=iterations,
     )
-    results.append(("get_logs_by_prefix(job, cursor=mid, limit=100)", p50, p95))
-    print_result("get_logs_by_prefix(job, cursor=mid, limit=100)", p50, p95)
+    results.append(("get_logs(regex(job, cursor=mid, limit=100)", p50, p95))
+    print_result("get_logs(regex(job, cursor=mid, limit=100)", p50, p95)
 
     # --- Broad prefix (all jobs under /user/) ---
 
     p50, p95 = bench(
-        "get_logs_by_prefix('/user/', limit=100)",
-        lambda: store.get_logs_by_prefix("/user/", max_lines=100),
+        "get_logs(regex('/user/', limit=100)",
+        lambda: store.get_logs("/user/.*", max_lines=100),
         iterations=iterations,
     )
-    results.append(("get_logs_by_prefix('/user/', limit=100)", p50, p95))
-    print_result("get_logs_by_prefix('/user/', limit=100)", p50, p95)
+    results.append(("get_logs(regex('/user/', limit=100)", p50, p95))
+    print_result("get_logs(regex('/user/', limit=100)", p50, p95)
 
     p50, p95 = bench(
-        "get_logs_by_prefix('/user/', tail, limit=100)",
-        lambda: store.get_logs_by_prefix("/user/", max_lines=100, tail=True),
+        "get_logs(regex('/user/', tail, limit=100)",
+        lambda: store.get_logs("/user/.*", max_lines=100, tail=True),
         iterations=iterations,
     )
-    results.append(("get_logs_by_prefix('/user/', tail, limit=100)", p50, p95))
-    print_result("get_logs_by_prefix('/user/', tail, limit=100)", p50, p95)
+    results.append(("get_logs(regex('/user/', tail, limit=100)", p50, p95))
+    print_result("get_logs(regex('/user/', tail, limit=100)", p50, p95)
 
     # --- has_logs ---
 

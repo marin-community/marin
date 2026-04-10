@@ -11,7 +11,7 @@ lost slice inventory (capacity gaps).
 
 from dataclasses import dataclass, field
 
-from iris.cluster.controller.scaling_group import (
+from iris.cluster.controller.autoscaler.scaling_group import (
     GroupSnapshot,
     SliceLifecycleState,
     SliceSnapshot,
@@ -24,7 +24,7 @@ from iris.cluster.providers.types import (
     SliceStatus,
     WorkerStatus,
 )
-from iris.time_utils import Duration, Timestamp
+from rigging.timing import Duration, Timestamp
 
 
 @dataclass
@@ -102,7 +102,7 @@ class StubSliceHandle:
             workers=list(self._workers),
         )
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         pass
 
 

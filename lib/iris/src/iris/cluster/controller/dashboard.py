@@ -40,9 +40,11 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from iris.cluster.controller.actor_proxy import PROXY_ROUTE, ActorProxy
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, on_shutdown, static_files_mount
+from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
-from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
+from iris.rpc.controller_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
+from iris.rpc.logging_connect import LogServiceWSGIApplication
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +230,7 @@ class ControllerDashboard:
     def __init__(
         self,
         service: ControllerServiceImpl,
+        log_service: LogServiceImpl,
         host: str = "0.0.0.0",
         port: int = 8080,
         auth_verifier: TokenVerifier | None = None,
@@ -235,6 +238,7 @@ class ControllerDashboard:
         auth_optional: bool = False,
     ):
         self._service = service
+        self._log_service = log_service
         self._host = host
         self._port = port
         self._auth_verifier = auth_verifier
@@ -259,6 +263,18 @@ class ControllerDashboard:
             # when present but treat everything as anonymous/admin.
             interceptors.insert(0, NullAuthInterceptor(verifier=self._auth_verifier))
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
+
+        log_wsgi_app = LogServiceWSGIApplication(service=self._log_service, interceptors=interceptors)
+        log_app = WSGIMiddleware(log_wsgi_app)
+
+        # Backward-compat: old clients call ControllerService/FetchLogs (removed
+        # from the proto in the LogService migration).  Register the already-
+        # intercepted LogService FetchLogs endpoint under the old path so the
+        # Connect protocol handles encoding, compression, and auth correctly.
+        _LOG_FETCH_ENDPOINT = "/iris.logging.LogService/FetchLogs"
+        _COMPAT_FETCH_ENDPOINT = "/iris.cluster.ControllerService/FetchLogs"
+        rpc_wsgi_app._endpoints[_COMPAT_FETCH_ENDPOINT] = log_wsgi_app._endpoints[_LOG_FETCH_ENDPOINT]
+
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         self._actor_proxy = ActorProxy(self._service._db)
@@ -276,8 +292,10 @@ class ControllerDashboard:
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
+            Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
             Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
+            Mount(log_wsgi_app.path, app=log_app),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
         ]
@@ -391,6 +409,15 @@ class ControllerDashboard:
             return Response(f"Bundle not found: {bundle_id}", status_code=404)
         return Response(data, media_type="application/zip")
 
+    @public
+    def _blob_download(self, request: Request) -> Response:
+        blob_id = request.path_params["blob_id"]
+        try:
+            data = self._service.blob_data(blob_id)
+        except FileNotFoundError:
+            return Response(f"Blob not found: {blob_id}", status_code=404)
+        return Response(data, media_type="application/octet-stream")
+
 
 class ProxyControllerDashboard:
     """Dashboard that proxies RPC calls to a remote Iris controller.
@@ -426,8 +453,10 @@ class ProxyControllerDashboard:
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/bundles/{bundle_id:str}.zip", self._proxy_bundle),
+            Route("/blobs/{blob_id:str}", self._proxy_blob),
             Route("/health", self._health),
             Route("/iris.cluster.ControllerService/{method}", self._proxy_rpc, methods=["POST"]),
+            Route("/iris.logging.LogService/{method}", self._proxy_log_rpc, methods=["POST"]),
             static_files_mount(),
         ]
 
@@ -470,9 +499,30 @@ class ProxyControllerDashboard:
             media_type=upstream_resp.headers.get("content-type"),
         )
 
+    async def _proxy_log_rpc(self, request: Request) -> Response:
+        method = request.path_params["method"]
+        body = await request.body()
+        upstream_resp = await self._client.post(
+            f"/iris.logging.LogService/{method}",
+            content=body,
+            headers={"content-type": request.headers.get("content-type", "application/json")},
+        )
+        return Response(
+            content=upstream_resp.content,
+            status_code=upstream_resp.status_code,
+            media_type=upstream_resp.headers.get("content-type"),
+        )
+
     async def _proxy_bundle(self, request: Request) -> Response:
         bundle_id = request.path_params["bundle_id"]
         upstream_resp = await self._client.get(f"/bundles/{bundle_id}.zip")
         if upstream_resp.status_code != 200:
             return Response(upstream_resp.text, status_code=upstream_resp.status_code)
         return Response(upstream_resp.content, media_type="application/zip")
+
+    async def _proxy_blob(self, request: Request) -> Response:
+        blob_id = request.path_params["blob_id"]
+        upstream_resp = await self._client.get(f"/blobs/{blob_id}")
+        if upstream_resp.status_code != 200:
+            return Response(upstream_resp.text, status_code=upstream_resp.status_code)
+        return Response(upstream_resp.content, media_type="application/octet-stream")

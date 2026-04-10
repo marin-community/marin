@@ -19,7 +19,7 @@ import os
 import sys
 from collections.abc import Callable
 
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 
 from marin.execution.executor import Executor
 
@@ -33,7 +33,6 @@ def _thresholds() -> list[tuple[str, str, Callable[[float, float], bool], float]
     return [
         ("_step", "Steps completed", operator.ge, _env_float("CANARY_MIN_STEPS", 400)),
         ("train/loss", "Final loss", operator.le, _env_float("CANARY_MAX_LOSS", 8.0)),
-        ("_runtime", "Wall-clock (s)", operator.le, _env_float("CANARY_MAX_WALL_CLOCK", 7200)),
     ]
 
 

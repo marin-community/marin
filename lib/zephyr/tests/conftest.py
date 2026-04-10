@@ -5,7 +5,6 @@
 import tempfile
 
 import atexit
-import logging
 import os
 import sys
 import threading
@@ -14,19 +13,12 @@ import traceback
 import warnings
 from pathlib import Path
 
-from iris.time_utils import ExponentialBackoff
-
-# Disable Ray's automatic UV runtime env propagation BEFORE importing ray.
-# This prevents Ray from packaging the entire working directory (~38MB) for actors.
-os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
-os.environ["MARIN_CI_DISABLE_RUNTIME_ENVS"] = "1"
+from rigging.timing import ExponentialBackoff
 
 import pytest
-import ray
 from fray.v2 import ResourceConfig
 from fray.v2.iris_backend import FrayIrisClient
 from fray.v2.local_backend import LocalClient
-from fray.v2.ray_backend.backend import RayClient
 from zephyr import load_file
 from zephyr.execution import ZephyrContext
 
@@ -46,23 +38,6 @@ def iris_cluster():
     config = make_local_config(config)
     with connect_cluster(config) as url:
         yield url
-
-
-@pytest.fixture(scope="session")
-def ray_cluster():
-    """Initialize Ray cluster for testing - reused across all tests."""
-    if not ray.is_initialized():
-        logging.info("Initializing Ray cluster for zephyr tests")
-        ray.init(
-            address="local",
-            num_cpus=8,
-            ignore_reinit_error=True,
-            logging_level="info",
-            log_to_driver=True,
-            resources={"head_node": 1},
-        )
-    yield
-    # Don't shutdown - Ray will be reused across test sessions
 
 
 # --- Local-only fixtures (functional tests) ---
@@ -93,14 +68,11 @@ def zephyr_ctx(local_client, tmp_path_factory):
 # --- Multi-backend fixtures (integration tests) ---
 
 
-@pytest.fixture(params=["local", "iris", "ray"], scope="session")
+@pytest.fixture(params=["local", "iris"], scope="session")
 def integration_client(request):
-    """Parametrized fixture providing Local, Iris, and Ray clients.
+    """Parametrized fixture providing Local and Iris clients.
 
     Session-scoped to reuse clusters across all test modules.
-    Fixtures are requested lazily to avoid initializing Ray when running
-    Iris tests (and vice-versa), since ray.is_initialized() being true
-    causes current_client() auto-detection to pick Ray.
     """
     if request.param == "local":
         client = LocalClient()
@@ -117,11 +89,6 @@ def integration_client(request):
         ctx = IrisContext(job_id=JobName.root("test-user", "test"), client=iris_client)
         with iris_ctx_scope(ctx):
             yield client
-        client.shutdown(wait=True)
-    elif request.param == "ray":
-        request.getfixturevalue("ray_cluster")
-        client = RayClient()
-        yield client
         client.shutdown(wait=True)
     else:
         raise ValueError(f"Unknown backend: {request.param}")
@@ -197,14 +164,13 @@ def _configure_marin_prefix():
 
 
 # Thread name prefixes for infrastructure threads managed by session-scoped
-# clusters (iris, ray, fray). These persist across tests and are not leaks.
+# clusters (iris, fray). These persist across tests and are not leaks.
 _INFRA_THREAD_PREFIXES = (
     "worker-server",
     "worker-lifecycle",
     "AnyIO worker thread",
     "ThreadPoolExecutor",
     "asyncio_",
-    "ray::",
     "grpc_",
     "monitoring",
 )
@@ -218,7 +184,7 @@ def _thread_cleanup():
     non-daemon threads remain after teardown. Waits briefly for threads
     that are in the process of shutting down.
 
-    Infrastructure threads from session-scoped clusters (iris, ray) are
+    Infrastructure threads from session-scoped clusters (iris) are
     excluded — they persist for the session and are not leaks.
     """
     before = {t.ident for t in threading.enumerate()}

@@ -29,7 +29,10 @@ from ray.job_submission import JobSubmissionClient
 from marin.cluster.config import find_config_by_region
 from fray.v1.cluster.ray import DashboardConfig, ray_dashboard
 from fray.v1.cluster.ray.deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
-from iris.logging import configure_logging
+from iris.cluster.client.bundle import create_workspace_dir
+
+RAY_RUN_EXCLUDE = re.compile(r"^docs(/|$)|\.pack$|^lib/levanter/docs(/|$)")
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -156,9 +159,8 @@ async def submit_and_track_job(
     logger.info(f"env_vars: {json.dumps(env_vars, indent=4)}")
 
     runtime_dict = {
-        "working_dir": current_dir,
+        "working_dir": create_workspace_dir(current_dir, exclude=RAY_RUN_EXCLUDE),
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"],
     }
 
     # add the TPU dependency for cluster jobs.

@@ -218,7 +218,14 @@ def build_image(
 
     iris_root = find_iris_root()
     dockerfile_path = iris_root / "Dockerfile"
-    context_path = Path(context) if context else iris_root
+    # Controller/worker Dockerfiles expect the marin repo root as build context
+    # so that lib/rigging (a workspace-local dep) can be COPY'd in.
+    if context:
+        context_path = Path(context)
+    elif image_type in ("controller", "worker"):
+        context_path = find_marin_root()
+    else:
+        context_path = iris_root
 
     if not dockerfile_path.exists():
         raise click.ClickException(f"Dockerfile not found: {dockerfile_path}")
@@ -272,6 +279,10 @@ def build_image(
     click.echo()
 
     if verbose:
+        cmd.extend(["--progress", "plain"])
+        result = subprocess.run(cmd)
+    elif push:
+        cmd.extend(["--progress", "plain"])
         result = subprocess.run(cmd)
     else:
         result = subprocess.run(cmd, capture_output=True, text=True)

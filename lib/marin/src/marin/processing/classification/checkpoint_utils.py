@@ -3,7 +3,7 @@
 
 import json
 
-from iris.marin_fs import open_url, url_to_fs
+from rigging.filesystem import open_url, url_to_fs
 
 
 def get_id_from_row(row: dict, id_path: tuple[str, ...]) -> str | None:

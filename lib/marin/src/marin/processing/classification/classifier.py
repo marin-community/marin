@@ -10,7 +10,7 @@ from typing import Any, ClassVar
 
 import lz4.frame
 import ray
-from iris.marin_fs import url_to_fs
+from rigging.filesystem import url_to_fs
 
 
 class BaseClassifier:
@@ -81,7 +81,7 @@ class FasttextClassifier(BaseClassifier):
 
         with FileLock(lock_file):
             if not os.path.exists(success_file):
-                fs.makedirs(f"/tmp/{model_descriptor}", exist_ok=True)
+                os.makedirs(f"/tmp/{model_descriptor}", exist_ok=True)
 
                 if is_remote_or_local_path:
                     fs.get(fs_path, local_filepath)

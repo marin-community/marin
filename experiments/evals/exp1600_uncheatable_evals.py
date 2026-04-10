@@ -22,7 +22,7 @@ from experiments.llama import llama3_tokenizer
 from experiments.models import ModelConfig as HFModelConfig, download_model_step
 from fray.cluster import ResourceConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from marin.download.uncheatable_eval.download import make_uncheatable_eval_step
+from marin.datakit.download.uncheatable_eval import make_uncheatable_eval_step
 from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of
 from marin.processing.tokenize import TokenizeConfig

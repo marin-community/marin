@@ -8,14 +8,14 @@ from functools import partial
 from typing import Any, List, Optional
 
 import jax
-from iris.marin_fs import open_url
+from rigging.filesystem import open_url
 import jax.numpy as jnp
 import numpy as np
 from jax.experimental import multihost_utils
 
 from levanter.callbacks import StepInfo
 from levanter.data import DataLoader
-from levanter.utils.hf_utils import HfTokenizer
+from levanter.tokenizers import MarinTokenizer
 
 
 def visualize_log_probs(
@@ -304,17 +304,12 @@ def _concatenate(x):
     return jnp.concatenate(x)
 
 
-def _decode_tokens_pretty(tok, ids):
-    # we want to make sure we don't have any weird characters in the output
-    # so we'll decode the tokens and then escape them
-    if hasattr(tok, "convert_ids_to_tokens"):
-        return [str(t) for t in tok.convert_ids_to_tokens(ids)]
-    else:
-        return [str(t) for t in tok.decode(ids)]
+def _decode_tokens_pretty(tok: MarinTokenizer, ids):
+    return [str(t) for t in tok.convert_ids_to_tokens(list(ids))]
 
 
 def cb_compute_and_visualize_log_probs(
-    test_data: DataLoader, tokenizer: HfTokenizer, log_prob_fn, html_dir: str, max_docs=128
+    test_data: DataLoader, tokenizer: MarinTokenizer, log_prob_fn, html_dir: str, max_docs=128
 ):
     """
         Computes log probabilities for a dataset and visualizes them using visdom.

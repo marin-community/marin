@@ -21,7 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
-from iris.time_utils import Deadline, Duration, Timestamp
+from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +226,18 @@ class RemoteWorkerHandle(Protocol):
         """Reboot the worker."""
         ...
 
+    def restart_worker(self, bootstrap_script: str) -> None:
+        """Restart the Iris worker process with a fresh bootstrap script.
+
+        Runs the bootstrap script which pulls the latest image, stops the
+        old container, and starts a new one. The new worker process discovers
+        and adopts existing task containers via Docker labels.
+
+        Args:
+            bootstrap_script: Full bootstrap script to execute on the worker VM.
+        """
+        ...
+
 
 class StandaloneWorkerHandle(RemoteWorkerHandle, Protocol):
     """Handle to a standalone worker (e.g., controller). Can be terminated and labeled.
@@ -249,7 +261,7 @@ class StandaloneWorkerHandle(RemoteWorkerHandle, Protocol):
         """Run the bootstrap script on the worker."""
         ...
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         """Destroy the worker."""
         ...
 
@@ -305,7 +317,7 @@ class SliceHandle(Protocol):
         """Query cloud state, returning status and worker handles."""
         ...
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         """Destroy the slice and all its workers."""
         ...
 

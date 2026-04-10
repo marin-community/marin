@@ -133,8 +133,8 @@ available_node_types:
             # Set Source Image =>> Ubuntu 22.04 Base VM
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
-    max_workers: 1024
-    min_workers: 4
+    max_workers: 4
+    min_workers: 0
     node_config:
       acceleratorType: v5litepod-4
       runtimeVersion: v2-alpha-tpuv5-lite
@@ -145,7 +145,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v5e_8:
-    max_workers: 1024
+    max_workers: 4
     min_workers: 0
     node_config:
       acceleratorType: v5litepod-8
@@ -157,7 +157,7 @@ available_node_types:
       TPU: 8
 
   tpu_slice_v5e_16:
-    max_workers: 1024
+    max_workers: 2
     min_workers: 0
     node_config:
       acceleratorType: v5litepod-16
@@ -169,7 +169,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v5e_32:
-    max_workers: 1024
+    max_workers: 2
     min_workers: 0
     node_config:
       acceleratorType: v5litepod-32
@@ -181,7 +181,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v5e_64:
-    max_workers: 1024
+    max_workers: 2
     min_workers: 0
     node_config:
       acceleratorType: v5litepod-64
@@ -193,8 +193,8 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v5e_128:
-    max_workers: 1024
-    min_workers: 1
+    max_workers: 1
+    min_workers: 0
     node_config:
       acceleratorType: v5litepod-128
       runtimeVersion: v2-alpha-tpuv5-lite
@@ -205,7 +205,7 @@ available_node_types:
       TPU: 4
 
   tpu_slice_v5e_256:
-    max_workers: 1024
+    max_workers: 1
     min_workers: 0
     node_config:
       acceleratorType: v5litepod-256
