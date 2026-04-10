@@ -781,6 +781,68 @@ def test_init_container_bundle_and_workdir_files():
     assert len(extra_volumes) == 1
 
 
+def test_init_container_for_workdir_file_refs():
+    """Blob refs produce an init container with IRIS_WORKDIR_BLOB_REFS env var."""
+    req = make_run_req("/my-job/task-0")
+    req.entrypoint.workdir_file_refs["_callable.pkl"] = "abcd1234" * 8
+
+    init_containers, _extra_volumes, configmap_name = _build_init_container_spec(
+        req,
+        "iris-pod-name",
+        "myrepo/iris:latest",
+        "http://ctrl:8080",
+    )
+
+    assert len(init_containers) == 1
+    ic = init_containers[0]
+    env_by_name = {e["name"]: e["value"] for e in ic["env"]}
+    assert env_by_name["IRIS_CONTROLLER_URL"] == "http://ctrl:8080"
+    assert "IRIS_WORKDIR_BLOB_REFS" in env_by_name
+
+    import json
+
+    refs = json.loads(env_by_name["IRIS_WORKDIR_BLOB_REFS"])
+    assert refs == {"_callable.pkl": "abcd1234" * 8}
+    assert configmap_name is None
+
+
+def test_no_init_container_for_blob_refs_without_controller():
+    """Blob refs without controller_address are ignored (no way to fetch)."""
+    req = make_run_req("/my-job/task-0")
+    req.entrypoint.workdir_file_refs["_callable.pkl"] = "abcd1234" * 8
+
+    init_containers, _extra_volumes, configmap_name = _build_init_container_spec(
+        req,
+        "iris-pod-name",
+        "myrepo/iris:latest",
+        None,
+    )
+
+    assert init_containers == []
+    assert configmap_name is None
+
+
+def test_init_container_workdir_files_and_blob_refs():
+    """Both inline files and blob refs produce ConfigMap + blob ref env var."""
+    req = make_run_req("/my-job/task-0")
+    req.entrypoint.workdir_files["small.txt"] = b"tiny"
+    req.entrypoint.workdir_file_refs["big.pkl"] = "deadbeef" * 8
+
+    init_containers, _extra_volumes, configmap_name = _build_init_container_spec(
+        req,
+        "iris-pod-name",
+        "myrepo/iris:latest",
+        "http://ctrl:8080",
+    )
+
+    assert len(init_containers) == 1
+    ic = init_containers[0]
+    env_by_name = {e["name"]: e["value"] for e in ic["env"]}
+    assert "IRIS_WORKDIR_FILES_SRC" in env_by_name
+    assert "IRIS_WORKDIR_BLOB_REFS" in env_by_name
+    assert configmap_name is not None
+
+
 # ---------------------------------------------------------------------------
 # Coordinator detection and PDB manifest
 # ---------------------------------------------------------------------------

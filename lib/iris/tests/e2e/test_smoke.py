@@ -910,6 +910,26 @@ def test_stress_50_tasks(smoke_cluster):
 
 
 # ============================================================================
+# Workdir file offload (large files externalized to blob store)
+# ============================================================================
+
+OFFLOAD_FILE_SIZE = 200 * 1024  # 200KB — exceeds the 100KB offload threshold
+
+
+def test_workdir_file_offload(smoke_cluster):
+    """A job with a >100KB workdir file succeeds after blob-store offloading."""
+    entrypoint = Entrypoint.from_callable(TestJobs.verify_workdir_file, "large_payload.bin", OFFLOAD_FILE_SIZE)
+    entrypoint.workdir_files["large_payload.bin"] = b"\xab" * OFFLOAD_FILE_SIZE
+    job = smoke_cluster.client.submit(
+        entrypoint=entrypoint,
+        name=f"smoke-offload-{uuid.uuid4().hex[:8]}",
+        resources=ResourceSpec(cpu=1, memory="1g"),
+    )
+    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
+
+
+# ============================================================================
 # GPU metadata (local-only, creates standalone cluster with mocked nvidia-smi)
 # ============================================================================
 

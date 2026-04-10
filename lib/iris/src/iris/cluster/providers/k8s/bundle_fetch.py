@@ -4,11 +4,13 @@
 """Standalone bundle fetch script for Kubernetes init containers.
 
 Downloads and extracts a bundle zip from the Iris controller, with
-retry logic and zip-slip protection. Uses only stdlib so the init
-container needs no extra dependencies.
+retry logic and zip-slip protection. Also fetches externalized workdir
+files (blob refs) from the controller's blob endpoint. Uses only stdlib
+so the init container needs no extra dependencies.
 """
 
 import hashlib
+import json
 import os
 import shutil
 import sys
@@ -55,6 +57,32 @@ def fetch_bundle(controller_url: str, bundle_id: str, workdir: str) -> None:
     os.remove(zip_path)
 
 
+def fetch_workdir_blob_refs(controller_url: str, blob_refs_json: str, workdir: str) -> None:
+    """Download externalized workdir files from the controller's blob endpoint."""
+    refs = json.loads(blob_refs_json)
+    for name, blob_id in refs.items():
+        url = f"{controller_url}/blobs/{blob_id}"
+        rel_path = os.path.normpath(name)
+        dst_path = os.path.join(workdir, rel_path)
+        os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=300) as resp:
+                    data = resp.read()
+                with open(dst_path, "wb") as f:
+                    f.write(data)
+                print(f"Fetched blob ref {name} ({len(data)} bytes) from {blob_id[:12]}")
+                break
+            except Exception as e:
+                if attempt == 2:
+                    raise
+                wait = 2**attempt
+                print(f"Blob fetch {name} attempt {attempt + 1} failed: {e}; retrying in {wait}s", file=sys.stderr)
+                time.sleep(wait)
+
+
 def copy_workdir_files(src_dir: str, workdir: str) -> None:
     """Copy staged workdir files from ConfigMap mount into workdir."""
     if not os.path.isdir(src_dir):
@@ -80,5 +108,9 @@ if __name__ == "__main__":
     src_dir = os.environ.get("IRIS_WORKDIR_FILES_SRC", "")
     if src_dir:
         copy_workdir_files(src_dir, workdir)
+
+    blob_refs_json = os.environ.get("IRIS_WORKDIR_BLOB_REFS", "")
+    if blob_refs_json and controller_url:
+        fetch_workdir_blob_refs(controller_url, blob_refs_json, workdir)
 
     print("Workdir staging complete.")
