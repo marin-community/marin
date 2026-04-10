@@ -70,19 +70,24 @@ def _save_diversity(report, step_dir: str) -> None:
     save_json(payload, os.path.join(step_dir, "diversity_report.json"))
 
 
-def _run_steps(api_base: str, model: str, step: int, output_dir: str) -> None:
+def _run_steps(api_base: str, model: str, step: int, output_dir: str, concurrency: int) -> None:
     """Run rollout generation against a running vLLM server."""
     from openai import OpenAI
 
     from experiments.swe_zero.data_loader import SWERebenchV2Loader
     from experiments.swe_zero.diversity import measure_diversity
-    from experiments.swe_zero.rollout_generator import Rollout, generate_rollout, generate_rollouts_for_pr
-
-    client = OpenAI(base_url=api_base, api_key="EMPTY")
+    from experiments.swe_zero.rollout_generator import (
+        Rollout,
+        RolloutBatch,
+        generate_rollout,
+        run_rollouts_concurrently,
+    )
 
     loader = SWERebenchV2Loader(language_filter="python")
 
     if step == 3:
+        # Step 3 is a single rollout — sequential is fine.
+        client = OpenAI(base_url=api_base, api_key="EMPTY")
         logger.info("=== STEP 3: 1 rollout x 1 PR x 1 repo ===")
         repos = loader.sample_repos(n=1, min_prs=10, seed=7)
         prs = loader.sample_prs(repos[0], n=1, seed=7)
@@ -90,57 +95,73 @@ def _run_steps(api_base: str, model: str, step: int, output_dir: str) -> None:
         rollout = generate_rollout(client=client, model=model, pr=prs[0], temperature=0.7)
         logger.info("Rollout: %d steps, finished=%s", len(rollout.steps), rollout.finished)
         save_json([rollout.to_dict()], os.path.join(output_dir, "step3", "rollouts.json"))
+        return
 
-    elif step == 4:
+    # Steps 4/5/6 all share the same shape: build a list of (PR, n_rollouts)
+    # batches, run them all concurrently with one shared async client, save
+    # incrementally via the progress callback, and measure diversity at the
+    # end.
+    if step == 4:
         logger.info("=== STEP 4: 10 rollouts x 1 PR ===")
         repos = loader.sample_repos(n=1, min_prs=10, seed=7)
         prs = loader.sample_prs(repos[0], n=1, seed=7)
-        rollouts = generate_rollouts_for_pr(client=client, model=model, pr=prs[0], n_rollouts=10, temperature=1.0)
+        batches = [RolloutBatch(pr=prs[0], n_rollouts=10)]
         step_dir = os.path.join(output_dir, "step4")
-        save_json([r.to_dict() for r in rollouts], os.path.join(step_dir, "rollouts.json"))
-        report = measure_diversity(rollouts)
-        logger.info(report.summary())
-        _save_diversity(report, step_dir)
-
     elif step == 5:
         logger.info("=== STEP 5: 10 rollouts x 10 PRs x 1 repo ===")
         repos = loader.sample_repos(n=1, min_prs=10, seed=7)
         prs = loader.sample_prs(repos[0], n=10, seed=7)
         logger.info("Repo: %s, %d PRs", repos[0], len(prs))
-        all_rollouts: list[Rollout] = []
+        batches = [RolloutBatch(pr=pr, n_rollouts=10) for pr in prs]
         step_dir = os.path.join(output_dir, "step5")
-        for i, pr in enumerate(prs):
-            logger.info("PR %d/%d: %s", i + 1, len(prs), pr.instance_id)
-            rollouts = generate_rollouts_for_pr(client=client, model=model, pr=pr, n_rollouts=10, temperature=1.0)
-            all_rollouts.extend(rollouts)
-            save_json([r.to_dict() for r in all_rollouts], os.path.join(step_dir, "rollouts.json"))
-        report = measure_diversity(all_rollouts)
-        logger.info(report.summary())
-        _save_diversity(report, step_dir)
-
     elif step == 6:
         logger.info("=== STEP 6: 10 rollouts x 10 PRs x 10 repos ===")
         repos = loader.sample_repos(n=10, min_prs=10, seed=7)
         logger.info("Selected %d repos", len(repos))
-        all_rollouts: list[Rollout] = []
+        batches = []
+        for repo in repos:
+            for pr in loader.sample_prs(repo, n=10, seed=7):
+                batches.append(RolloutBatch(pr=pr, n_rollouts=10))
         step_dir = os.path.join(output_dir, "step6")
-        for ri, repo in enumerate(repos):
-            logger.info("Repo %d/%d: %s", ri + 1, len(repos), repo)
-            prs = loader.sample_prs(repo, n=10, seed=7)
-            for pi, pr in enumerate(prs):
-                logger.info("  PR %d/%d: %s", pi + 1, len(prs), pr.instance_id)
-                rollouts = generate_rollouts_for_pr(client=client, model=model, pr=pr, n_rollouts=10, temperature=1.0)
-                all_rollouts.extend(rollouts)
-                if len(all_rollouts) % 100 == 0:
-                    save_json([r.to_dict() for r in all_rollouts], os.path.join(step_dir, "rollouts.json"))
-                    logger.info("  Saved %d rollouts", len(all_rollouts))
-        save_json([r.to_dict() for r in all_rollouts], os.path.join(step_dir, "rollouts.json"))
-        report = measure_diversity(all_rollouts)
-        logger.info(report.summary())
-        _save_diversity(report, step_dir)
+    else:
+        raise ValueError(f"Unknown step: {step}")
+
+    total = sum(b.n_rollouts for b in batches)
+    logger.info("Running %d total rollouts with concurrency=%d", total, concurrency)
+
+    # Incremental save every 50 rollouts so we don't lose data on preemption.
+    completed_rollouts: list[Rollout] = []
+    save_interval = max(10, min(50, total // 20))
+
+    def _on_rollout_done(done: int, total_n: int, rollout: Rollout) -> None:
+        completed_rollouts.append(rollout)
+        if done % save_interval == 0 or done == total_n:
+            save_json(
+                [r.to_dict() for r in completed_rollouts],
+                os.path.join(step_dir, "rollouts.json"),
+            )
+            logger.info("Checkpoint: saved %d/%d rollouts", done, total_n)
+
+    rollouts = run_rollouts_concurrently(
+        api_base=api_base,
+        api_key="EMPTY",
+        model=model,
+        batches=batches,
+        concurrency=concurrency,
+        temperature=1.0,
+        progress_callback=_on_rollout_done,
+    )
+
+    # Final save (the callback already saves periodically, but ensure the
+    # final state lands even if `total` doesn't divide save_interval evenly).
+    save_json([r.to_dict() for r in rollouts], os.path.join(step_dir, "rollouts.json"))
+
+    report = measure_diversity(rollouts)
+    logger.info(report.summary())
+    _save_diversity(report, step_dir)
 
 
-def _run_with_vllm(model_name: str, model_path: str, step: int, output_dir: str) -> None:
+def _run_with_vllm(model_name: str, model_path: str, step: int, output_dir: str, concurrency: int) -> None:
     """Start a VllmEnvironment and run rollout generation against it."""
     from marin.evaluation.evaluators.evaluator import ModelConfig
     from marin.inference.vllm_server import VllmEnvironment
@@ -158,7 +179,7 @@ def _run_with_vllm(model_name: str, model_path: str, step: int, output_dir: str)
 
     with remove_tpu_lockfile_on_exit(), VllmEnvironment(model_config) as env:
         logger.info("vLLM server ready at %s", env.server_url)
-        _run_steps(env.server_url, model_name, step, output_dir)
+        _run_steps(env.server_url, model_name, step, output_dir, concurrency)
 
 
 def _print_ray_run_command(model_name: str, step: int, output_dir: str, tpu_type: str) -> None:
@@ -195,16 +216,22 @@ def main():
     parser.add_argument("--output_dir", default="/tmp/swe_zero_mvp", help="Output directory (local or gs://)")
     parser.add_argument("--tpu_type", default="v6e-8", help="TPU type for cluster submission")
     parser.add_argument("--local", action="store_true", help="Run locally with VllmEnvironment (no Fray)")
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=16,
+        help="Number of rollouts in flight at once for steps 4/5/6 (vLLM batches them)",
+    )
     args = parser.parse_args()
 
     model_path = args.model_path or args.model
 
     if args.api_base:
         # Direct mode: server already running
-        _run_steps(args.api_base, args.model, args.step, args.output_dir)
+        _run_steps(args.api_base, args.model, args.step, args.output_dir, args.concurrency)
     elif args.local:
         # Local/on-worker mode: start VllmEnvironment in this process
-        _run_with_vllm(args.model, model_path, args.step, args.output_dir)
+        _run_with_vllm(args.model, model_path, args.step, args.output_dir, args.concurrency)
     else:
         # Print the ray_run.py command for cluster submission
         _print_ray_run_command(args.model, args.step, args.output_dir, args.tpu_type)

@@ -12,12 +12,13 @@ and we run it against the worktree via the SWE-ZERO sandbox.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 from dataclasses import dataclass, field
 
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 
 from experiments.swe_zero.data_loader import PRRecord
 from experiments.swe_zero.scaffold import (
@@ -26,7 +27,7 @@ from experiments.swe_zero.scaffold import (
     execute_in_worktree,
     extract_bash_command,
 )
-from experiments.swe_zero.worktree import materialize_worktree
+from experiments.swe_zero.worktree import WorkTree, materialize_worktree
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,11 @@ RESERVE_TOKENS = 256
 context length."""
 EXEC_TIMEOUT_SECONDS = 30.0
 OBSERVATION_MAX_CHARS = 8000
+
+DEFAULT_CONCURRENCY = 16
+"""Default number of rollouts in flight at once when running async. vLLM's
+continuous batching merges these into single forward passes, so a 1.7B model
+on v6e-1 runs ~10x faster than the sequential loop."""
 
 
 @dataclass
@@ -245,3 +251,228 @@ def generate_rollouts_for_pr(
             rollout.duration_sec,
         )
     return rollouts
+
+
+# ---------------------------------------------------------------------------
+# Async path: run many rollouts concurrently to keep the TPU saturated.
+# vLLM's continuous batching merges concurrent requests into single forward
+# passes, so a 1.7B model on v6e-1 runs ~10x faster than the sequential loop.
+# ---------------------------------------------------------------------------
+
+
+async def _materialize_worktree_async(pr: PRRecord) -> WorkTree:
+    return await asyncio.to_thread(materialize_worktree, pr)
+
+
+async def _execute_in_worktree_async(command: str, worktree: WorkTree, *, timeout_seconds: float):
+    return await asyncio.to_thread(execute_in_worktree, command, worktree, timeout_seconds=timeout_seconds)
+
+
+async def generate_rollout_async(
+    client: AsyncOpenAI,
+    model: str,
+    pr: PRRecord,
+    *,
+    temperature: float = 1.0,
+    max_turns: int = MAX_TURNS,
+    max_total_tokens: int = MAX_TOTAL_TOKENS,
+) -> Rollout:
+    """Async version of ``generate_rollout``.
+
+    Same per-rollout state machine as the sync version, but uses
+    ``AsyncOpenAI`` for the chat completions API and ``asyncio.to_thread``
+    for the blocking subprocess calls (worktree materialize / safe_exec /
+    cleanup) so the event loop can multiplex many rollouts on a single
+    Python process.
+    """
+    rollout = Rollout(instance_id=pr.instance_id, repo=pr.repo)
+    start_time = time.monotonic()
+
+    try:
+        worktree = await _materialize_worktree_async(pr)
+    except Exception as e:
+        rollout.error = f"Failed to materialize worktree: {e}"
+        rollout.duration_sec = time.monotonic() - start_time
+        logger.error(rollout.error)
+        return rollout
+
+    try:
+        system_msg = {"role": "system", "content": SYSTEM_PROMPT}
+        user_msg = {"role": "user", "content": build_task_message(pr)}
+        rollout.steps.append(RolloutStep(role="system", content=SYSTEM_PROMPT))
+        rollout.steps.append(RolloutStep(role="user", content=user_msg["content"]))
+        messages: list[dict] = [system_msg, user_msg]
+
+        last_prompt_tokens: int | None = None
+        last_messages_len: int | None = None
+
+        for turn in range(max_turns):
+            if last_prompt_tokens is None:
+                input_tokens_estimate = _estimate_tokens_from_chars(messages)
+            else:
+                appended = messages[last_messages_len:]
+                input_tokens_estimate = last_prompt_tokens + _estimate_tokens_from_chars(appended)
+
+            budget_remaining = max_total_tokens - input_tokens_estimate - RESERVE_TOKENS
+            if budget_remaining <= 64:
+                logger.info(
+                    "Token budget exhausted at turn %d for %s (input~%d)",
+                    turn,
+                    pr.instance_id,
+                    input_tokens_estimate,
+                )
+                break
+            max_tokens_this_turn = min(MAX_OUTPUT_TOKENS, budget_remaining)
+
+            try:
+                response = await client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens_this_turn,
+                )
+            except Exception as e:
+                rollout.error = f"API error at turn {turn}: {e}"
+                logger.error(rollout.error)
+                break
+
+            choice = response.choices[0]
+            assistant_text = choice.message.content or ""
+            if response.usage:
+                rollout.total_prompt_tokens += response.usage.prompt_tokens
+                rollout.total_completion_tokens += response.usage.completion_tokens
+                last_prompt_tokens = response.usage.prompt_tokens
+                last_messages_len = len(messages)
+
+            bash_cmd = extract_bash_command(assistant_text)
+            rollout.steps.append(RolloutStep(role="assistant", content=assistant_text, bash_command=bash_cmd))
+            messages.append({"role": "assistant", "content": assistant_text})
+
+            if bash_cmd is None:
+                err = "Please always provide EXACTLY ONE action in triple backticks."
+                rollout.steps.append(RolloutStep(role="user", content=err))
+                messages.append({"role": "user", "content": err})
+                if choice.finish_reason == "stop":
+                    break
+                continue
+
+            exec_result = await _execute_in_worktree_async(bash_cmd, worktree, timeout_seconds=EXEC_TIMEOUT_SECONDS)
+            observation = exec_result.as_observation(max_chars=OBSERVATION_MAX_CHARS)
+
+            first_line = observation.lstrip().splitlines()[0].strip() if observation.strip() else ""
+            if first_line in ("COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT", "MINI_SWE_AGENT_FINAL_OUTPUT"):
+                rollout.finished = True
+                break
+
+            obs_text = f"Observation: {observation}" if observation else "Observation: "
+            rollout.steps.append(RolloutStep(role="user", content=obs_text))
+            messages.append({"role": "user", "content": obs_text})
+    finally:
+        await asyncio.to_thread(worktree.cleanup)
+        rollout.duration_sec = time.monotonic() - start_time
+
+    return rollout
+
+
+@dataclass
+class RolloutBatch:
+    """One unit of work for ``generate_rollouts_async``: ``n_rollouts`` for a PR."""
+
+    pr: PRRecord
+    n_rollouts: int
+
+
+async def generate_rollouts_async(
+    client: AsyncOpenAI,
+    model: str,
+    batches: list[RolloutBatch],
+    *,
+    concurrency: int = DEFAULT_CONCURRENCY,
+    temperature: float = 1.0,
+    max_total_tokens: int = MAX_TOTAL_TOKENS,
+    progress_callback=None,
+) -> list[Rollout]:
+    """Run many rollouts concurrently with a bounded semaphore.
+
+    ``progress_callback`` if provided is invoked as ``cb(done, total, rollout)``
+    each time a rollout finishes; useful for incremental GCS saves.
+    """
+    semaphore = asyncio.Semaphore(concurrency)
+    total = sum(b.n_rollouts for b in batches)
+    completed = 0
+    completed_lock = asyncio.Lock()
+    results: list[Rollout] = []
+
+    async def one(pr: PRRecord, idx: int) -> Rollout:
+        nonlocal completed
+        async with semaphore:
+            r = await generate_rollout_async(
+                client,
+                model,
+                pr,
+                temperature=temperature,
+                max_total_tokens=max_total_tokens,
+            )
+        async with completed_lock:
+            completed += 1
+            done = completed
+        logger.info(
+            "Rollout %d/%d done: %s — %d steps, finished=%s, %.1fs",
+            done,
+            total,
+            pr.instance_id,
+            len(r.steps),
+            r.finished,
+            r.duration_sec,
+        )
+        if progress_callback is not None:
+            try:
+                progress_callback(done, total, r)
+            except Exception:
+                logger.exception("progress_callback failed")
+        return r
+
+    tasks = []
+    idx = 0
+    for batch in batches:
+        for _ in range(batch.n_rollouts):
+            tasks.append(asyncio.create_task(one(batch.pr, idx)))
+            idx += 1
+
+    results = await asyncio.gather(*tasks)
+    return results
+
+
+def run_rollouts_concurrently(
+    api_base: str,
+    api_key: str,
+    model: str,
+    batches: list[RolloutBatch],
+    *,
+    concurrency: int = DEFAULT_CONCURRENCY,
+    temperature: float = 1.0,
+    max_total_tokens: int = MAX_TOTAL_TOKENS,
+    progress_callback=None,
+) -> list[Rollout]:
+    """Sync entry point for the async concurrent path.
+
+    Builds an ``AsyncOpenAI`` client and runs the event loop. Use this from
+    callers that aren't already inside an event loop (i.e. ``run_swe_zero_mvp``).
+    """
+
+    async def _run() -> list[Rollout]:
+        client = AsyncOpenAI(base_url=api_base, api_key=api_key)
+        try:
+            return await generate_rollouts_async(
+                client,
+                model,
+                batches,
+                concurrency=concurrency,
+                temperature=temperature,
+                max_total_tokens=max_total_tokens,
+                progress_callback=progress_callback,
+            )
+        finally:
+            await client.close()
+
+    return asyncio.run(_run())
