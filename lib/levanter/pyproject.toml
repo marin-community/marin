@@ -47,6 +47,7 @@ dependencies = [
     "datasets>=3.1.0,<5.0",
     "gcsfs>=2024.2,<2026",
     "braceexpand>=0.1.7",
+    "chex>=0.1.86",
     "jmp>=0.0.3",
     "fsspec[http]>=2024.2,<2026",
     "tensorstore>=0.1.73",
