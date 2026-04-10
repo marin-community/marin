@@ -57,15 +57,15 @@ ENV PATH="/app/.venv/bin:$PATH"
 COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
 COPY lib/iris/pyproject.toml lib/iris/hatch_build.py ./lib/iris/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nrigging = { workspace = true }\n' > pyproject.toml \
-    && uv sync --package iris --no-install-project
+    printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\n' > pyproject.toml \
+    && uv sync --package marin-iris --no-install-project
 
 # Now copy full source for both rigging and iris, then install.
 COPY lib/rigging/src/ ./lib/rigging/src/
 COPY lib/iris/src/ ./lib/iris/src/
 COPY lib/iris/examples/ ./lib/iris/examples/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --package iris
+    uv sync --package marin-iris
 
 # Profiling tools — installed after uv sync so they aren't pruned by the exact sync.
 RUN --mount=type=cache,target=/root/.cache/uv \
