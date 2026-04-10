@@ -5,6 +5,7 @@
 
 from experiments.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
+from fray.v2 import ResourceConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from marin.datakit.download.starcoder2_extras import (
     SUBSETS,
@@ -26,6 +27,12 @@ def tokenize_starcoder2_extras(*, tokenizer: str = marin_tokenizer) -> list[Toke
             text_field="content",
             file_extensions=(".parquet",),
         )
+        # documentation contains a single 64MB OpenJDK record that peaks at ~9GB RSS
+        # during tokenization; bump worker memory to 32GB for that subset
+        if subset == "documentation":
+            doc_resources = ResourceConfig(ram="32g", disk="10g")
+        else:
+            doc_resources = None
         steps.append(
             default_tokenize(
                 name=f"starcoder2_extras/{subset}",
@@ -33,6 +40,8 @@ def tokenize_starcoder2_extras(*, tokenizer: str = marin_tokenizer) -> list[Toke
                 tokenizer=tokenizer,
                 format=TextLmDatasetFormat(text_key="text"),
                 levanter_batch_size=128,
+                resources=ResourceConfig.with_cpu(cpu=4, ram="32g", disk="10g") if subset == "documentation" else None,
+                worker_resources=doc_resources,
             )
         )
     return steps
