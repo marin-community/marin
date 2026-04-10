@@ -38,6 +38,8 @@ const profilingTaskId = ref<string | null>(null)
 const copiedName = ref(false)
 const taskSearch = ref('')
 const stateFilter = ref('')
+const resourceMin = ref<ResourceUsage | null>(null)
+const resourceMax = ref<ResourceUsage | null>(null)
 
 type SortColumn = 'task' | 'state' | 'mem' | 'peakMem' | 'cpu' | 'duration'
 type SortDir = 'asc' | 'desc'
@@ -106,6 +108,8 @@ async function fetchData() {
     }
     job.value = jobResp.job
     jobRequest.value = jobResp.request ?? null
+    resourceMin.value = jobResp.resourceMin ?? null
+    resourceMax.value = jobResp.resourceMax ?? null
     tasks.value = tasksResp.tasks ?? []
 
     const parentIds = [props.jobId, ...expandedChildJobs.value]
@@ -678,6 +682,34 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           <InfoRow label="Accelerator">{{ acceleratorDisplay }}</InfoRow>
           <InfoRow label="Replicas">{{ tasks.length || '-' }}</InfoRow>
         </InfoCard>
+      </div>
+
+      <!-- Live resource usage (min/max across running tasks) -->
+      <div
+        v-if="resourceMin && resourceMax"
+        class="mb-6 rounded-lg border border-surface-border bg-surface px-4 py-3"
+      >
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
+          Live Resource Usage (across running tasks)
+        </h3>
+        <div class="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <span class="text-text-muted">CPU:</span>
+            <span class="font-mono ml-1">{{ formatCpuMillicores(resourceMin.cpuMillicores ?? 0) }}</span>
+            <span class="text-text-muted mx-1">&ndash;</span>
+            <span class="font-mono">{{ formatCpuMillicores(resourceMax.cpuMillicores ?? 0) }}</span>
+          </div>
+          <div>
+            <span class="text-text-muted">Memory:</span>
+            <span class="font-mono ml-1">{{ formatBytes((resourceMin.memoryMb ? parseFloat(resourceMin.memoryMb) : 0) * 1024 * 1024) }}</span>
+            <span class="text-text-muted mx-1">&ndash;</span>
+            <span class="font-mono">{{ formatBytes((resourceMax.memoryMb ? parseFloat(resourceMax.memoryMb) : 0) * 1024 * 1024) }}</span>
+          </div>
+          <div v-if="resourceMax.memoryPeakMb">
+            <span class="text-text-muted">Peak Memory:</span>
+            <span class="font-mono ml-1">{{ formatBytes((resourceMax.memoryPeakMb ? parseFloat(resourceMax.memoryPeakMb) : 0) * 1024 * 1024) }}</span>
+          </div>
+        </div>
       </div>
 
       <!-- Constraints -->

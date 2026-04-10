@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
@@ -31,6 +31,7 @@ const {
 } = useControllerRpc<GetTaskStatusResponse>('GetTaskStatus', () => ({ taskId: props.taskId }))
 
 const task = computed(() => taskResponse.value?.task ?? null)
+const jobResources = computed(() => taskResponse.value?.jobResources ?? null)
 
 const normalizedState = computed(() => (task.value ? stateToName(task.value.state) : ''))
 
@@ -66,21 +67,36 @@ const diskUsedMb = computed(() => {
   return raw ? parseFloat(raw) : 0
 })
 
-const cpuHistory = ref<number[]>([])
-const memHistory = ref<number[]>([])
-const MAX_HISTORY = 60
+const cpuHistory = computed(() =>
+  (task.value?.resourceHistory ?? []).map(r => (r.cpuMillicores ?? 0) / 1000)
+)
+const memHistory = computed(() =>
+  (task.value?.resourceHistory ?? []).map(r => r.memoryMb ? parseFloat(r.memoryMb) : 0)
+)
 
-watch(task, (t) => {
-  if (!t?.resourceUsage) return
-  cpuHistory.value = [...cpuHistory.value, (t.resourceUsage.cpuMillicores ?? 0) / 1000].slice(-MAX_HISTORY)
-  const memMb = t.resourceUsage.memoryMb ? parseFloat(t.resourceUsage.memoryMb) : 0
-  memHistory.value = [...memHistory.value, memMb].slice(-MAX_HISTORY)
-})
-
+// Use job-level resource limits for gauge totals when available.
 const cpuTotal = computed(() => {
+  const jobCpu = (jobResources.value?.cpuMillicores ?? 0) / 1000
+  if (jobCpu > 0) return jobCpu
   const maxObserved = Math.max(...cpuHistory.value, cpuUsed.value, 0)
   if (maxObserved <= 0) return 1
   return Math.max(1, maxObserved * 1.5)
+})
+
+const memTotalMb = computed(() => {
+  const jobMemBytes = jobResources.value?.memoryBytes
+  if (jobMemBytes) return parseFloat(jobMemBytes) / (1024 * 1024)
+  const historyMax = memHistory.value.length > 0 ? Math.max(...memHistory.value) : 0
+  const best = Math.max(historyMax, memPeakMb.value, memUsedMb.value)
+  if (best <= 0) return 1
+  return best * 1.2
+})
+
+const diskTotalMb = computed(() => {
+  const jobDiskBytes = jobResources.value?.diskBytes
+  if (jobDiskBytes) return parseFloat(jobDiskBytes) / (1024 * 1024)
+  if (diskUsedMb.value <= 0) return 1
+  return diskUsedMb.value * 2
 })
 
 // Build metrics
@@ -111,8 +127,6 @@ onMounted(async () => {
 // Clear stale data first so loading/error states render correctly if the fetch fails.
 watch(() => props.taskId, async () => {
   taskResponse.value = null
-  cpuHistory.value = []
-  memHistory.value = []
   stopRefresh()
   await fetchTask()
   if (isActive.value) startRefresh()
@@ -187,14 +201,14 @@ watch(() => props.taskId, async () => {
               <ResourceGauge
                 label="Memory"
                 :used="memUsedMb * 1024 * 1024"
-                :total="(memPeakMb || memUsedMb * 1.5) * 1024 * 1024"
+                :total="memTotalMb * 1024 * 1024"
                 unit="bytes"
               />
               <ResourceGauge
                 v-if="diskUsedMb > 0"
                 label="Disk"
                 :used="diskUsedMb * 1024 * 1024"
-                :total="diskUsedMb * 2 * 1024 * 1024"
+                :total="diskTotalMb * 1024 * 1024"
                 unit="bytes"
               />
             </div>

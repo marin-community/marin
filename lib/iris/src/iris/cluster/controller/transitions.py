@@ -94,6 +94,10 @@ WORKER_TASK_HISTORY_RETENTION = 500
 WORKER_RESOURCE_HISTORY_RETENTION = 500
 """Maximum worker_resource_history rows retained per worker."""
 
+TASK_RESOURCE_HISTORY_RETENTION = 200
+"""Maximum task_resource_history rows retained per (task_id, attempt_id).
+Logarithmic downsampling triggers at 2x this value."""
+
 DIRECT_PROVIDER_PROMOTION_RATE = 128
 """Token bucket capacity for task promotion (pods per minute).
 
@@ -1533,6 +1537,11 @@ class ControllerTransitions:
                     "UPDATE tasks SET resource_usage_proto = ? WHERE task_id = ?",
                     (usage_payload, update.task_id.to_wire()),
                 )
+                cur.execute(
+                    "INSERT INTO task_resource_history(task_id, attempt_id, snapshot_proto, timestamp_ms) "
+                    "VALUES (?, ?, ?, ?)",
+                    (update.task_id.to_wire(), update.attempt_id, usage_payload, now_ms),
+                )
             terminal_ms: int | None = None
             started_ms: int | None = None
             task_state = prior_state
@@ -1726,6 +1735,7 @@ class ControllerTransitions:
 
             # ── Classify and split ────────────────────────────────────────
             resource_usage_params: list[tuple[bytes, str]] = []
+            task_history_params: list[tuple[str, int, bytes, int]] = []
             # (request_index, transition_request) pairs so results stay aligned.
             transition_entries: list[tuple[int, HeartbeatApplyRequest]] = []
 
@@ -1754,7 +1764,9 @@ class ControllerTransitions:
                         if update.attempt_id != int(task_row["current_attempt_id"]):
                             continue
                         if update.resource_usage is not None:
-                            resource_usage_params.append((update.resource_usage.SerializeToString(), task_id_wire))
+                            payload = update.resource_usage.SerializeToString()
+                            resource_usage_params.append((payload, task_id_wire))
+                            task_history_params.append((task_id_wire, update.attempt_id, payload, now_ms))
 
                 if transition_updates:
                     transition_entries.append(
@@ -1773,6 +1785,12 @@ class ControllerTransitions:
                 cur.executemany(
                     "UPDATE tasks SET resource_usage_proto = ? WHERE task_id = ?",
                     resource_usage_params,
+                )
+            if task_history_params:
+                cur.executemany(
+                    "INSERT INTO task_resource_history(task_id, attempt_id, snapshot_proto, timestamp_ms) "
+                    "VALUES (?, ?, ?, ?)",
+                    task_history_params,
                 )
 
             # ── Pass 2b: transitions via existing state machine ───────────
@@ -2483,6 +2501,45 @@ class ControllerTransitions:
             WORKER_RESOURCE_HISTORY_RETENTION,
         )
 
+    def prune_task_resource_history(self) -> int:
+        """Logarithmic downsampling: when a (task, attempt) exceeds 2*N rows,
+        thin the older half by deleting every other row.
+
+        Over repeated compaction cycles older data becomes exponentially sparser,
+        preserving long-term trends while bounding total row count.
+        """
+        threshold = TASK_RESOURCE_HISTORY_RETENTION * 2
+        with self._db.transaction() as cur:
+            overflows = cur.execute(
+                "SELECT task_id, attempt_id, COUNT(*) as cnt "
+                "FROM task_resource_history "
+                "GROUP BY task_id, attempt_id HAVING cnt > ?",
+                (threshold,),
+            ).fetchall()
+            ids_to_delete: list[int] = []
+            for row in overflows:
+                tid, aid = row["task_id"], row["attempt_id"]
+                all_ids = [
+                    r["id"]
+                    for r in cur.execute(
+                        "SELECT id FROM task_resource_history " "WHERE task_id = ? AND attempt_id = ? ORDER BY id ASC",
+                        (tid, aid),
+                    ).fetchall()
+                ]
+                # Keep the newest N rows untouched; thin the older portion by 2x.
+                older = all_ids[: len(all_ids) - TASK_RESOURCE_HISTORY_RETENTION]
+                ids_to_delete.extend(older[1::2])
+
+            total_deleted = 0
+            for chunk_start in range(0, len(ids_to_delete), 900):
+                chunk = ids_to_delete[chunk_start : chunk_start + 900]
+                ph = ",".join("?" * len(chunk))
+                cur.execute(f"DELETE FROM task_resource_history WHERE id IN ({ph})", tuple(chunk))
+                total_deleted += cur.rowcount
+        if total_deleted > 0:
+            logger.info("Pruned %d task_resource_history rows (log downsampling)", total_deleted)
+        return total_deleted
+
     def _batch_delete(
         self,
         sql: str,
@@ -3018,6 +3075,11 @@ class ControllerTransitions:
                     cur.execute(
                         "UPDATE tasks SET resource_usage_proto = ? WHERE task_id = ?",
                         (usage_payload, update.task_id.to_wire()),
+                    )
+                    cur.execute(
+                        "INSERT INTO task_resource_history(task_id, attempt_id, snapshot_proto, timestamp_ms) "
+                        "VALUES (?, ?, ?, ?)",
+                        (update.task_id.to_wire(), update.attempt_id, usage_payload, now_ms),
                     )
                 if update.container_id is not None:
                     cur.execute(
