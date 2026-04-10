@@ -4,8 +4,9 @@
 """Cloud Run reverse proxy for the Iris controller, protected by GCP IAP.
 
 All requests are forwarded to the controller VM discovered via GCE labels.
-The proxy validates the ``X-Goog-IAP-JWT-Assertion`` header on every request
-for defense-in-depth and extracts the caller's email for audit logging.
+Authentication is enforced by Cloud Run's native IAP integration before
+requests reach this container, so the proxy trusts the IAP-supplied
+``X-Goog-Authenticated-User-Email`` header for audit logging.
 """
 
 import logging
@@ -19,7 +20,6 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from discovery import get_controller_url
-from iap import IapValidationError, validate_iap_jwt
 
 logger = logging.getLogger(__name__)
 
@@ -118,12 +118,9 @@ def _build_upstream_headers(request: Request, iap_email: str | None) -> dict[str
 
 async def _proxy(request: Request) -> Response:
     """Forward any request to the controller."""
-    iap_email: str | None = None
-    try:
-        iap_email = validate_iap_jwt(dict(request.headers))
-    except IapValidationError as exc:
-        logger.warning("IAP validation failed: %s", exc)
-        return JSONResponse({"error": str(exc)}, status_code=401)
+    # IAP-supplied identity header. Format: "accounts.google.com:user@example.com".
+    iap_email_raw = request.headers.get("x-goog-authenticated-user-email")
+    iap_email = iap_email_raw.split(":", 1)[-1] if iap_email_raw else None
 
     client = await _get_client()
     path = request.url.path
