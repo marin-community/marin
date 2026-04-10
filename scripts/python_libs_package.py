@@ -1,0 +1,378 @@
+#!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Build, publish, and prune marin-* lib wheels.
+
+Builds the seven pure-Python marin-* lib packages (marin, marin-iris,
+marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr) into
+dist/, then optionally publishes one GitHub Release per package and updates
+a rolling pointer (marin-<pkg>-latest or marin-<pkg>-stable).
+
+Three modes:
+    nightly  -- version becomes <base>.dev<YYYYMMDD>; tag marin-<pkg>-<YYYYMMDD>
+    stable   -- version is taken from --version; tag marin-<pkg>-v<version>
+    manual   -- version becomes <base>+manual.<sha>; tag marin-<pkg>-manual-<sha>
+
+Usage:
+    python scripts/python_libs_package.py --mode nightly
+    python scripts/python_libs_package.py --mode stable --version 1.4.0
+    python scripts/python_libs_package.py --mode nightly --skip-publish
+    python scripts/python_libs_package.py --skip-build --publish-only
+
+The build is done from a temporary in-place patch of each package's version
+file plus a cross-pin rewrite of every sibling dependency. Mutations are
+reverted on exit (success OR failure) so the working tree stays clean.
+"""
+
+import argparse
+import json
+import re
+import shutil
+import subprocess
+import sys
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DIST_DIR = REPO_ROOT / "dist"
+REPO = "marin-community/marin"
+NIGHTLY_RETENTION_DAYS = 30
+
+
+# Each entry: (dist name, lib subdir, version-file path relative to lib subdir, version-file kind)
+# kind = "pyproject" -> patch  version = "..."  in pyproject.toml
+# kind = "about_py"  -> patch  __version__ = "..."  in src/<pkg>/__about__.py
+PACKAGES: dict[str, dict[str, str]] = {
+    "marin": {"path": "lib/marin", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "marin-iris": {"path": "lib/iris", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "marin-fray": {"path": "lib/fray", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "marin-rigging": {"path": "lib/rigging", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "marin-zephyr": {"path": "lib/zephyr", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "marin-levanter": {"path": "lib/levanter", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "marin-haliax": {"path": "lib/haliax", "version_file": "src/haliax/__about__.py", "kind": "about_py"},
+}
+
+SIBLING_NAMES = sorted(PACKAGES.keys(), key=len, reverse=True)
+
+
+# ---------- helpers ----------------------------------------------------------
+
+
+def _check_tool(name: str, install_hint: str) -> None:
+    if shutil.which(name) is None:
+        print(f"ERROR: '{name}' not found. Install with: {install_hint}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _git_short_sha() -> str:
+    return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True, cwd=REPO_ROOT).strip()
+
+
+def _read_base_version(pkg: str) -> str:
+    info = PACKAGES[pkg]
+    path = REPO_ROOT / info["path"] / info["version_file"]
+    text = path.read_text()
+    if info["kind"] == "pyproject":
+        m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    else:
+        m = re.search(r'^__version__\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    if not m:
+        raise RuntimeError(f"Could not read version from {path}")
+    return m.group(1)
+
+
+def _set_version(text: str, kind: str, new_version: str) -> str:
+    if kind == "pyproject":
+        new_text, count = re.subn(
+            r'^version\s*=\s*"[^"]+"',
+            f'version = "{new_version}"',
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    else:
+        new_text, count = re.subn(
+            r'^__version__\s*=\s*"[^"]+"',
+            f'__version__ = "{new_version}"',
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    if count != 1:
+        raise RuntimeError(f"Failed to patch version (kind={kind})")
+    return new_text
+
+
+# Match dependency list items: lines that are indented and start with a quoted
+# sibling name. Anchored on `^\s+"` so we never touch metadata lines like
+# `name = "marin"` (no leading whitespace) or single-line `gpu = ["..."]`
+# entries (no marin siblings appear in those today; verified by grep).
+_SIBLING_ALT = "|".join(re.escape(s) for s in sorted(PACKAGES, key=len, reverse=True))
+_SIBLING_ITEM_RE = re.compile(
+    rf'^(?P<indent>\s+)"(?P<name>{_SIBLING_ALT})(?![-\w])(?P<extras>\[[^\]]*\])?[^"]*"(?P<tail>.*)$',
+    re.MULTILINE,
+)
+
+
+def _rewrite_sibling_pins(text: str, version: str) -> str:
+    """Pin every sibling marin-* package in dependency list items to ==<version>."""
+    return _SIBLING_ITEM_RE.sub(
+        lambda m: (f'{m.group("indent")}"{m.group("name")}{m.group("extras") or ""}=={version}"{m.group("tail")}'),
+        text,
+    )
+
+
+@contextmanager
+def patched_tree(version: str):
+    """Patch every package's version file and sibling pins; revert on exit.
+
+    Captures the original text of each path exactly once, before any mutation,
+    so the finally block restores the truly-original content even if multiple
+    patches touched the same file.
+    """
+    originals: dict[Path, str] = {}
+    try:
+        for info in PACKAGES.values():
+            pyproject_path = REPO_ROOT / info["path"] / "pyproject.toml"
+            version_path = REPO_ROOT / info["path"] / info["version_file"]
+
+            if pyproject_path not in originals:
+                originals[pyproject_path] = pyproject_path.read_text()
+            if version_path not in originals:
+                originals[version_path] = version_path.read_text()
+
+            # Apply version patch first; for haliax this writes __about__.py
+            # (separate file from pyproject), for the rest it overwrites the
+            # pyproject we just snapshotted above.
+            patched_version = _set_version(originals[version_path], info["kind"], version)
+            version_path.write_text(patched_version)
+
+            # Then sibling-pin rewrite always targets pyproject.toml. Re-read
+            # in case version patch already wrote pyproject.
+            current_pyproject = pyproject_path.read_text()
+            new_pyproject = _rewrite_sibling_pins(current_pyproject, version)
+            if new_pyproject != current_pyproject:
+                pyproject_path.write_text(new_pyproject)
+        yield
+    finally:
+        for path, text in originals.items():
+            path.write_text(text)
+
+
+# ---------- build ------------------------------------------------------------
+
+
+def resolve_version(mode: str, explicit: str | None) -> tuple[str, str]:
+    """Return (build_version, tag_suffix).
+
+    nightly  -> ("<base>.dev<YYYYMMDD>", "<YYYYMMDD>")
+    stable   -> ("<explicit>",           "v<explicit>")
+    manual   -> ("<base>+manual.<sha>",  "manual-<sha>")
+    """
+    if mode == "stable":
+        if not explicit:
+            raise SystemExit("--version is required for --mode stable")
+        return explicit, f"v{explicit}"
+    if mode == "nightly":
+        date = datetime.now(timezone.utc).strftime("%Y%m%d")
+        # All seven packages share one synthetic version per nightly run so
+        # cross-pins resolve cleanly. The base is the highest-numbered version
+        # currently declared in any of the lib pyproject files; this keeps the
+        # nightly above the most recent stable so uv prefers it.
+        bases = []
+        for pkg in PACKAGES:
+            try:
+                bases.append(_read_base_version(pkg))
+            except RuntimeError:
+                continue
+        base = max(bases, key=lambda v: tuple(int(p) if p.isdigit() else 0 for p in re.split(r"[.\-+]", v)))
+        return f"{base}.dev{date}", date
+    if mode == "manual":
+        sha = _git_short_sha()
+        bases = [_read_base_version(p) for p in PACKAGES]
+        base = max(bases, key=lambda v: tuple(int(p) if p.isdigit() else 0 for p in re.split(r"[.\-+]", v)))
+        return f"{base}+manual.{sha}", f"manual-{sha}"
+    raise SystemExit(f"Unknown mode: {mode}")
+
+
+def build_wheels(version: str) -> None:
+    """Build all seven marin-* wheels into DIST_DIR with version patched in."""
+    _check_tool("uv", "https://docs.astral.sh/uv/")
+
+    if DIST_DIR.exists():
+        shutil.rmtree(DIST_DIR)
+    DIST_DIR.mkdir()
+
+    with patched_tree(version):
+        for name, info in PACKAGES.items():
+            pkg_dir = REPO_ROOT / info["path"]
+            print(f"\n--- Building {name} ({version}) ---")
+            subprocess.run(
+                ["uv", "build", "--wheel", "--out-dir", str(DIST_DIR), str(pkg_dir)],
+                check=True,
+                cwd=REPO_ROOT,
+            )
+
+    wheels = sorted(DIST_DIR.glob("*.whl"))
+    print(f"\nBuilt {len(wheels)} wheel(s):")
+    for w in wheels:
+        print(f"  {w.name}")
+    if len(wheels) != len(PACKAGES):
+        raise RuntimeError(f"Expected {len(PACKAGES)} wheels, got {len(wheels)}")
+
+
+# ---------- publish ----------------------------------------------------------
+
+
+def _wheel_for(pkg: str) -> Path:
+    """Return the dist/ wheel matching pkg (uv normalises hyphens to underscores)."""
+    stem = pkg.replace("-", "_")
+    candidates = list(DIST_DIR.glob(f"{stem}-*.whl"))
+    if not candidates:
+        raise FileNotFoundError(f"No wheel for {pkg} in {DIST_DIR}")
+    if len(candidates) > 1:
+        raise RuntimeError(f"Multiple wheels for {pkg}: {[c.name for c in candidates]}")
+    return candidates[0]
+
+
+def _gh_release_replace(tag: str, files: list[Path], title: str, notes: str, prerelease: bool) -> None:
+    """Idempotently (re)create a GitHub release with the given assets."""
+    subprocess.run(
+        ["gh", "release", "delete", tag, "--yes", "--cleanup-tag", "--repo", REPO],
+        check=False,
+        capture_output=True,
+    )
+    cmd = [
+        "gh",
+        "release",
+        "create",
+        tag,
+        *[str(f) for f in files],
+        "--repo",
+        REPO,
+        "--title",
+        title,
+        "--notes",
+        notes,
+    ]
+    if prerelease:
+        cmd.append("--prerelease")
+    subprocess.run(cmd, check=True)
+
+
+def publish_releases(version: str, tag_suffix: str, mode: str) -> None:
+    """Per-package GH release plus a rolling pointer per package.
+
+    For mode=nightly:   marin-<pkg>-<YYYYMMDD> + marin-<pkg>-latest
+    For mode=stable:    marin-<pkg>-v<version> + marin-<pkg>-stable
+    For mode=manual:    marin-<pkg>-manual-<sha> only
+    """
+    _check_tool("gh", "https://cli.github.com/")
+
+    rolling_label = {"nightly": "latest", "stable": "stable"}.get(mode)
+
+    for pkg in PACKAGES:
+        wheel = _wheel_for(pkg)
+        pinned_tag = f"{pkg}-{tag_suffix}"
+        notes = f"{pkg} {version} (auto-generated by python_libs_package.py)"
+        title = f"{pkg} {version}"
+
+        print(f"\n--- Publishing {pinned_tag} ---")
+        _gh_release_replace(
+            tag=pinned_tag,
+            files=[wheel],
+            title=title,
+            notes=notes,
+            prerelease=(mode != "stable"),
+        )
+
+        if rolling_label:
+            rolling_tag = f"{pkg}-{rolling_label}"
+            print(f"--- Updating rolling {rolling_tag} -> {version} ---")
+            _gh_release_replace(
+                tag=rolling_tag,
+                files=[wheel],
+                title=f"{pkg} ({rolling_label})",
+                notes=f"Rolling {rolling_label}. Currently pointing at {pinned_tag}.",
+                prerelease=(mode != "stable"),
+            )
+
+
+def prune_old_nightlies(retain_days: int = NIGHTLY_RETENTION_DAYS) -> None:
+    """Delete marin-<pkg>-YYYYMMDD nightly releases older than retain_days.
+
+    Leaves rolling pointers (marin-<pkg>-latest, marin-<pkg>-stable) and stable
+    tags (marin-<pkg>-v*) untouched.
+    """
+    _check_tool("gh", "https://cli.github.com/")
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retain_days)
+
+    result = subprocess.run(
+        ["gh", "release", "list", "--repo", REPO, "--limit", "1000", "--json", "tagName,createdAt"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    releases = json.loads(result.stdout)
+    sibling_alt = "|".join(re.escape(p) for p in SIBLING_NAMES)
+    nightly_re = re.compile(rf"^({sibling_alt})-(\d{{8}})$")
+
+    pruned = 0
+    for rel in releases:
+        tag = rel["tagName"]
+        if not nightly_re.match(tag):
+            continue
+        created = datetime.fromisoformat(rel["createdAt"].replace("Z", "+00:00"))
+        if created >= cutoff:
+            continue
+        print(f"Pruning {tag} (created {created.date()})")
+        subprocess.run(
+            ["gh", "release", "delete", tag, "--yes", "--cleanup-tag", "--repo", REPO],
+            check=True,
+        )
+        pruned += 1
+    print(f"\nPruned {pruned} nightly release(s) older than {retain_days} days.")
+
+
+# ---------- main -------------------------------------------------------------
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--mode", choices=["nightly", "stable", "manual"], default="nightly")
+    parser.add_argument("--version", default=None, help="Required for --mode stable")
+    parser.add_argument("--skip-build", action="store_true", help="Reuse existing dist/")
+    parser.add_argument("--skip-publish", action="store_true", help="Build only")
+    parser.add_argument("--publish-only", action="store_true", help="Same as --skip-build")
+    parser.add_argument("--skip-prune", action="store_true", help="Don't delete old nightlies")
+    args = parser.parse_args()
+
+    if args.publish_only:
+        args.skip_build = True
+
+    version, tag_suffix = resolve_version(args.mode, args.version)
+    print(f"Mode:        {args.mode}")
+    print(f"Version:     {version}")
+    print(f"Tag suffix:  {tag_suffix}")
+
+    if not args.skip_build:
+        build_wheels(version)
+    elif not DIST_DIR.exists() or not list(DIST_DIR.glob("*.whl")):
+        raise SystemExit(f"No wheels in {DIST_DIR}; remove --skip-build/--publish-only or build first.")
+
+    if args.skip_publish:
+        print(f"\nBuild complete. Wheels in {DIST_DIR}/")
+        return
+
+    publish_releases(version, tag_suffix, args.mode)
+
+    if args.mode == "nightly" and not args.skip_prune:
+        prune_old_nightlies()
+
+    print("\nDone.")
+
+
+if __name__ == "__main__":
+    main()
