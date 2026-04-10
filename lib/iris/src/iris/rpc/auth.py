@@ -379,24 +379,28 @@ class GcpAccessTokenProvider:
 class IapOidcTokenProvider:
     """Gets OIDC ID tokens for IAP programmatic access.
 
-    Tries the google-auth library's ``fetch_id_token`` first (which works on
-    GCE/Cloud Run metadata servers and with service-account JSON files), and
-    falls back to ``gcloud auth print-identity-token`` for environments where
-    only user credentials (``gcloud auth application-default login``) are
-    available — google-auth cannot mint ID tokens from user credentials, but
-    the gcloud CLI uses an internal helper that can.
+    Tries the google-auth library's ``fetch_id_token`` first (works on
+    GCE/Cloud Run metadata servers and with service-account JSON files), then
+    falls back to ``gcloud auth print-identity-token``. User credentials cannot
+    mint OIDC tokens with a custom audience, so when running locally with
+    ``gcloud auth login``, an ``impersonate_service_account`` is required —
+    typically the same SA used for SSH access (``controller.gcp.service_account``).
 
     Tokens are cached until 5 minutes before expiry.
     """
 
     _REFRESH_MARGIN_SECONDS = 300
 
-    def __init__(self, iap_audience: str):
+    def __init__(self, iap_audience: str, impersonate_service_account: str | None = None):
         self._audience = iap_audience
+        self._impersonate = impersonate_service_account
         self._cached_token: str | None = None
         self._expires_at: float = 0.0
 
     def _fetch_via_google_auth(self) -> str | None:
+        # Skip google-auth when impersonating — gcloud handles it natively.
+        if self._impersonate:
+            return None
         try:
             import google.auth.transport.requests
             from google.oauth2 import id_token
@@ -410,27 +414,25 @@ class IapOidcTokenProvider:
     def _fetch_via_gcloud(self) -> str:
         import subprocess
 
+        cmd = ["gcloud", "auth", "print-identity-token", f"--audiences={self._audience}"]
+        if self._impersonate:
+            cmd.append(f"--impersonate-service-account={self._impersonate}")
         try:
-            result = subprocess.run(
-                ["gcloud", "auth", "print-identity-token", f"--audiences={self._audience}"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
         except FileNotFoundError as exc:
             raise RuntimeError(
-                "Could not fetch IAP OIDC token: gcloud CLI not found. " "Install gcloud or run on a GCE/Cloud Run VM."
+                "Could not fetch IAP OIDC token: gcloud CLI not found. Install gcloud or run on a GCE/Cloud Run VM."
             ) from exc
         except subprocess.CalledProcessError as exc:
-            raise RuntimeError(
-                f"Could not fetch IAP OIDC token via gcloud: {exc.stderr.strip()}\n"
-                "User credentials cannot mint OIDC tokens with a custom audience. "
-                "Configure service account impersonation:\n"
-                "  gcloud config set auth/impersonate_service_account <SA_EMAIL>\n"
-                "where <SA_EMAIL> has roles/iap.httpsResourceAccessor on the IAP "
-                "resource and you have roles/iam.serviceAccountTokenCreator on it."
-            ) from exc
+            hint = ""
+            if not self._impersonate:
+                hint = (
+                    "\nUser credentials cannot mint OIDC tokens with a custom audience. "
+                    "Configure service account impersonation by setting "
+                    "defaults.ssh.impersonate_service_account in your cluster config, "
+                    "or run `gcloud config set auth/impersonate_service_account <SA_EMAIL>`."
+                )
+            raise RuntimeError(f"Could not fetch IAP OIDC token via gcloud: {exc.stderr.strip()}{hint}") from exc
         return result.stdout.strip()
 
     def get_token(self) -> str | None:

@@ -129,10 +129,17 @@ def _is_iap_url(url: str) -> bool:
     return ".appspot.com" in url or ".run.app" in url
 
 
+# Module-level fallback for IAP impersonation, set by the iris() group from
+# cluster config when available. Avoids threading the SA through every
+# rpc_client() call site.
+_IAP_IMPERSONATE_SA: str | None = None
+
+
 def rpc_client(
     address: str,
     token_provider: TokenProvider | None = None,
     iap_audience: str | None = None,
+    iap_impersonate_sa: str | None = None,
     timeout_ms: int = 30_000,
 ) -> ControllerServiceClientSync:
     """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``."""
@@ -140,19 +147,40 @@ def rpc_client(
     if iap_audience is None and _is_iap_url(address):
         iap_audience = address
 
+    if iap_impersonate_sa is None:
+        iap_impersonate_sa = _IAP_IMPERSONATE_SA
+
     if iap_audience and token_provider:
-        iap_provider = IapOidcTokenProvider(iap_audience)
+        iap_provider = IapOidcTokenProvider(iap_audience, iap_impersonate_sa)
         interceptors = [IapAuthTokenInjector(iap_provider, token_provider)]
     elif iap_audience:
         # IAP URL but no controller token yet (e.g. during login).
         # Send only the IAP OIDC token so the request passes through IAP.
-        iap_provider = IapOidcTokenProvider(iap_audience)
+        iap_provider = IapOidcTokenProvider(iap_audience, iap_impersonate_sa)
         interceptors = [AuthTokenInjector(iap_provider)]
     elif token_provider:
         interceptors = [AuthTokenInjector(token_provider)]
     else:
         interceptors = []
     return ControllerServiceClientSync(address, timeout_ms=timeout_ms, interceptors=interceptors)
+
+
+def _resolve_iap_impersonate_sa(ctx: click.Context) -> str | None:
+    """Resolve the SA to impersonate for IAP token minting from cluster config.
+
+    Mirrors the SSH impersonation pattern: prefer
+    ``defaults.ssh.impersonate_service_account``, fall back to
+    ``controller.gcp.service_account``.
+    """
+    config = ctx.obj.get("config") if ctx.obj else None
+    if config is None:
+        return None
+    ssh_sa = config.defaults.ssh.impersonate_service_account if config.HasField("defaults") else ""
+    if ssh_sa:
+        return ssh_sa
+    if config.HasField("controller") and config.controller.HasField("gcp"):
+        return config.controller.gcp.service_account or None
+    return None
 
 
 def require_controller_url(ctx: click.Context) -> str:
@@ -279,6 +307,12 @@ def iris(
 
         if iris_config.proto.HasField("auth"):
             ctx.obj["token_provider"] = create_client_token_provider(iris_config.proto.auth, cluster_name=name)
+
+        # Set fallback SA for IAP token impersonation, mirroring the SSH
+        # impersonation pattern: prefer defaults.ssh.impersonate_service_account,
+        # fall back to controller.gcp.service_account.
+        global _IAP_IMPERSONATE_SA
+        _IAP_IMPERSONATE_SA = _resolve_iap_impersonate_sa(ctx)
     else:
         name = resolve_cluster_name(None, controller_url, cluster_name)
         ctx.obj["cluster_name"] = name
