@@ -107,3 +107,20 @@ Parent issue: https://github.com/marin-community/marin/issues/4435
   - Step 5: `ray-run-kevin-run_swe_zero_mvp-20260409-203933`
   - Step 6: `ray-run-kevin-run_swe_zero_mvp-20260409-203945`
 - **Negative result**: Gemma 4 E2B is not yet usable via vllm-tpu on Iris cluster. Need vllm-tpu Docker image update or custom image with latest transformers + Gemma 4 text-only support.
+
+### 2026-04-10 — SZ-007: Switch to mini-swe-agent v1 + ricdomolm/mini-coder-1.7b
+- **Change**: Switched scaffold to mini-swe-agent v1.17.5 format and the
+  `ricdomolm/mini-coder-1.7b` model (Qwen3-1.7B fine-tuned on 400k mini-swe-agent
+  trajectories — purpose-built for this scaffold).
+- **Format details (v1)**:
+  - Action regex: `r"```bash\s*\n(.*?)\n```"` (NOT `mswea_bash_command`)
+  - System prompt requires THOUGHT + a single ```bash block
+  - Submission: first line of bash *output* must be `COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`
+  - Observation format: `Observation: {{output}}`
+- **Why this should work better**:
+  - Qwen3-1.7B is fully supported by vllm-tpu (no multimodal issues)
+  - 1.7B is much smaller than Gemma 3 4B → faster startup, fits in v6e-4 trivially
+  - Trained specifically on mini-swe-agent trajectories → high prior on producing valid format
+- **Jobs submitted** (cluster: marin-us-east5, TPU: v6e-4, model: ricdomolm/mini-coder-1.7b):
+  - Step 5: `ray-run-kevin-run_swe_zero_mvp-20260410-032016`
+  - Step 6: `ray-run-kevin-run_swe_zero_mvp-20260410-032022`
