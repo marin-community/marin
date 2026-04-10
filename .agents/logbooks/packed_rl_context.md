@@ -198,48 +198,228 @@ eval were completely isolated, a single packed worker would still be
 
 ### Open corrections to earlier logbook claims
 
-1. **"Eval ownership is the major remaining gap"** — only partially true.
-   The primary gap is rollout↔trainer serialization. Eval is a second-order
-   effect that makes it worse by collapsing 2×TP parallelism to single-TP.
+1. **"Eval ownership is the major remaining gap"** — **was actually closer
+   to the truth than the intermediate "pipeline depth" framing below
+   suggested**. The real story (after re-reading the code) is that eval
+   and train compete for the same rollout-worker generate capacity, and
+   with 1 worker there's less spare capacity to absorb eval than with 2.
 
-2. **"Reduce or isolate eval interference"** — necessary but not
-   sufficient. Even with perfect eval isolation, one packed worker cannot
-   match `e4ms2`'s effective pipeline depth of 2.
-
-3. **"Packed inference is slower than baseline"** — false. PKR-001's
+2. **"Packed inference is slower than baseline"** — false. PKR-001's
    packed inference at 6,223 tok/s beats `e4ms2`'s per-worker 3,336 tok/s
    by ~1.9× — exactly the 2×TP=2 speedup the design predicted.
 
+## 2026-04-10: Correction — "pipeline depth" was the wrong model
+
+After re-reading the rollout worker and weight-transfer code I have to
+retract the "pipeline depth 2" framing from my earlier note. It was
+wrong in two ways:
+
+1. "Pipeline parallelism" normally means splitting model *layers* across
+   devices, which is not what's happening here at all. I was abusing the
+   term.
+
+2. More importantly, I speculated that the two `e4ms2` workers
+   coordinate so one runs against weight `N` while the other runs against
+   weight `N+1`. **They do not.** I should not have said it without
+   checking.
+
+### How weight sync actually works (from the code)
+
+Every rollout worker — both the `e4ms2` workers and the packed parent's
+child replicas — does the same thing:
+
+- One background thread (`_sync_weights_loop` in `rollout_worker.py`, or
+  `_weight_sync_loop` in `packed_vllm_worker.py`) polls
+  `transfer_client.receive_weights(...)` once a second.
+- When a new weight arrives, the thread stores it as a **pending**
+  weight. The currently loaded weight is the **active** weight.
+- The main generate loop never waits for a new weight. It calls
+  `batch_completions()` against whatever weight is active.
+- Activation happens opportunistically: in the packed path, on the next
+  `batch_completions()` call, if both replicas have the same pending
+  weight and are idle, `_resolve_dispatch_weight` activates it before
+  dispatching. In the non-packed path, the background thread installs
+  the weight directly.
+
+So both `e4ms2` workers are effectively always generating against the
+latest weight they've received. They do **not** intentionally stagger —
+they both pick up weight `N+1` about 1 second after the trainer
+publishes it, at roughly the same wall-clock moment. At any instant
+both workers are almost always on the same weight.
+
+The fact that `transfer/total_polls` is ~1,150–2,600 (≈ runtime in
+seconds) per run confirms the 1-second poll cadence.
+
+### The actual architecture (diagrams)
+
+Two-rollout-worker baseline (`e4ms2`):
+
+```
+                 ┌──────────────────┐
+                 │  Trainer          │     step N → publish wt N
+                 │  (1 x v5p-8)      │     step N+1 → publish wt N+1
+                 │  compute step N   │     ...
+                 │  publish wt N+1   │
+                 └────────┬─────────┘
+                          │ Arrow Flight weight stream
+            ┌─────────────┴─────────────┐
+            │                           │
+            ▼                           ▼
+    ┌────────────────┐          ┌────────────────┐
+    │ Rollout-0      │          │ Rollout-1      │
+    │ (v5p-8, TP=4)  │          │ (v5p-8, TP=4)  │
+    │                │          │                │
+    │ bg thread      │          │ bg thread      │
+    │  polls every 1s│          │  polls every 1s│
+    │  picks up wt   │          │  picks up wt   │
+    │  asynchronously│          │  asynchronously│
+    │                │          │                │
+    │ main loop:     │          │ main loop:     │
+    │  sample lesson │          │  sample lesson │
+    │  [maybe eval]  │          │  [maybe eval]  │
+    │  generate train│          │  generate train│
+    │  write batch   │          │  write batch   │
+    └────────┬───────┘          └────────┬───────┘
+             │                           │
+             └────────────┬──────────────┘
+                          ▼
+                   ┌───────────────┐
+                   │ Rollout store │
+                   └───────┬───────┘
+                           │ trainer reads next batch
+                           ▼
+```
+
+Key points:
+- **The two workers are independent processes** running the exact same
+  code, one per TPU pod.
+- They do NOT talk to each other or coordinate weight versions.
+- Both are on the latest active weight (≈ 1s after trainer publishes).
+- Their generate loops run in parallel, so the combined throughput to
+  the rollout store is ≈ 2× one worker's rate.
+
+Packed worker:
+
+```
+                 ┌──────────────────┐
+                 │  Trainer          │
+                 └────────┬─────────┘
+                          │
+                          ▼
+                 ┌──────────────────────────────┐
+                 │ Packed parent process         │
+                 │ (1 x v5p-8)                   │
+                 │                               │
+                 │ main loop (Python):           │
+                 │  env.sample() →               │
+                 │   batch_completions():        │
+                 │    _reserve_replicas(kind)    │
+                 │      (mutex / CV)             │
+                 │    _resolve_dispatch_weight() │
+                 │    split prompts across reps  │
+                 │    submit parallel generate   │
+                 │                               │
+                 │  ┌──────────┐  ┌──────────┐   │
+                 │  │ Replica0 │  │ Replica1 │   │
+                 │  │ TP=2     │  │ TP=2     │   │
+                 │  │ chips 0,1│  │ chips 2,3│   │
+                 │  │          │  │          │   │
+                 │  │ own bg   │  │ own bg   │   │
+                 │  │ sync     │  │ sync     │   │
+                 │  │ thread   │  │ thread   │   │
+                 │  │ (polls   │  │ (polls   │   │
+                 │  │  every 1s)  │  every 1s)│  │
+                 │  └──────────┘  └──────────┘   │
+                 └───────────────┬──────────────┘
+                                 │
+                                 ▼
+                          ┌───────────────┐
+                          │ Rollout store │
+                          └───────────────┘
+```
+
+Key points:
+- **Exactly one parent process on one `v5p-8`.** Two TP=2 vLLM children
+  live inside it, pinned to chips (0,1) and (2,3).
+- Train requests prefer (0,1) — if replica 1 is free and no eval is
+  waiting, train runs on both and gets ~2× throughput. Otherwise train
+  falls back to replica 0 only (half throughput).
+- Eval requests *always* go to replica 1 exclusively.
+- Reservations are a single parent-side mutex + condition variable. While
+  eval is running on replica 1, train either waits or runs single-rep.
+
+### Why `e4ms2` beats `PKR-001` — the simple story
+
+It isn't pipeline depth, it's **aggregate capacity under an eval load**.
+
+Each rollout worker (packed or not) does a *mix* of train rollouts and
+eval rollouts in its main loop, gated by `eval_frequency`. With
+`eval_frequency=1` both runs spend a meaningful fraction of time on eval.
+
+- `e4ms2`: 2 independent workers × full TP=4 capacity each. While one
+  worker is busy on an eval batch, the other worker is still producing
+  train batches for the trainer. The trainer's batch appetite (1 batch
+  per ~61s of compute) is comfortably covered, so
+  `batch_prep_duration_seconds` stays ~4s (no waiting).
+
+- `PKR-001`: 1 worker × (2 × TP=2 replicas). When eval runs on replica
+  1, train either waits for replica 1 or drops to single-rep on replica
+  0. When eval is NOT running, train uses both replicas at ~6,200
+  tok/s. Averaged over the run, the effective train-batch rate per
+  worker is lower than one full-capacity `e4ms2` worker's rate,
+  *and* there's only one of it. So when the trainer asks for the next
+  batch, the rollout worker is often mid-generation and the trainer
+  waits (`loading_time` ≈ 95s).
+
+The packed replicas' per-kind counters from PKR-003 / PKR-004 confirm
+this: PKR-004 (10 steps, eval_frequency=1) has r1 doing 6 eval gens and
+r0/r1 asymmetry (30 vs 33), meaning 3 train batches on PKR-004 fell back
+to replica-0-only mode because replica 1 was tied up with eval.
+
+### Why this still matters
+
+- Packed inference itself is still ~2× faster per batch when both
+  replicas run in parallel (PKR-001: 6,223 tok/s vs `e4ms2` per-worker
+  3,336 tok/s). The design works.
+- The problem is that a single packed `v5p-8` has no slack: everything
+  (train, full curriculum eval, micro-eval) has to time-share the same
+  4 chips, and with normal `eval_frequency=1` eval steals enough time
+  that the trainer starves.
+- `e4ms2`'s advantage is simply having 2× the rollout capacity to
+  absorb eval without starving train. It doesn't need any clever
+  coordination — two independent loops just happen to add up.
+
 ### What this implies for next steps
 
-The question to test is no longer "can we isolate eval?" — it's **"can we
-break the trainer↔rollout serialization with a single packed worker?"**
+Unchanged direction, corrected framing: packed is only interesting as a
+single-`v5p-8` drop-in replacement for `e4ms2` if the packed worker has
+enough spare capacity to serve train rollouts at or above the trainer's
+consumption rate *while* also covering eval.
 
-Candidate approaches (need design/experiment):
+Candidate approaches:
 
-1. **Two packed rollout workers on two `v5p-8` pods.** Same TPU budget as
-   the baseline but 4 total replicas feeding the trainer, giving pipeline
-   depth 2 *and* 2× per-worker packed throughput. Likely the cleanest win
-   on paper but loses the "halve TPU cost" pitch.
+1. **Push eval off the packed worker.** Run full curriculum eval on a
+   separate small TPU (or on the trainer itself between steps). This
+   would leave both packed replicas dedicated to train. If train-only
+   packed hits ~6,200 tok/s sustained and the trainer consumes at
+   ~3,300 tok/s × effective batch size, the packed worker would sit at
+   ~50% utilization and the trainer would stop waiting. This is the
+   cleanest test of the remaining "packed = half TPU cost" pitch.
 
-2. **Stale-weight rollouts.** Let the single packed worker start the
-   next batch against weight `N` while the trainer is still producing
-   weight `N+1`. Breaks the serialization at the cost of on-policy
-   freshness — need to quantify the off-policy hit.
+2. **Reduce `eval_frequency`.** PKR-003 (sparse eval) already hinted at
+   this. Running full eval every N steps instead of every step lowers
+   average eval load proportionally. Tradeoff is worse eval-metric
+   resolution.
 
-3. **Rollout buffering / pre-fetch.** Have the packed worker generate
-   several batches ahead of the trainer's consumption, buffering in the
-   rollout storage. Requires careful bookkeeping of which weight each
-   buffered batch was generated against.
+3. **Two packed workers on 2 × `v5p-8`.** Same TPU budget as `e4ms2`
+   but with 4 total replicas. Would clearly win on throughput but
+   abandons the cost-halving pitch — only worth trying if option (1)
+   fails.
 
-4. **Overlap weight fetch/activate with generation.** The current flow
-   is `fetch → activate → generate` sequentially per replica. If replica
-   0 generated while replica 1 was fetching/activating the next weight
-   (ping-pong style), the serial fetch cost (~14s) could be hidden.
-
-The cost pitch for packed only holds if one of these approaches makes a
-single packed `v5p-8` genuinely competitive with two independent rollout
-workers in cadence, not just in raw tokens/sec.
+4. **Allow stale-weight train rollouts.** Decouple rollout generation
+   from trainer cadence so the packed worker can generate continuously
+   even while the trainer is still computing the next weight. Off-
+   policy effects need measurement before trying this.
 
 ### Data location
 
