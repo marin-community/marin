@@ -410,6 +410,15 @@ enum ConstraintOp {
   CONSTRAINT_OP_IN = 8;         // Attribute value is in the provided set (disjunction)
 }
 
+// Whether a constraint is hard (required) or soft (preferred).
+// Hard constraints filter workers: non-matching workers are excluded.
+// Soft constraints rank workers: matching workers are preferred but
+// non-matching workers are still eligible.
+enum ConstraintMode {
+  CONSTRAINT_MODE_REQUIRED = 0;  // Hard constraint (default, backwards-compatible)
+  CONSTRAINT_MODE_PREFERRED = 1; // Soft constraint: prefer matching, allow non-matching
+}
+
 // Constraint for filtering workers by attribute.
 // Used in LaunchJobRequest to specify which workers can run a job.
 message Constraint {
@@ -417,6 +426,7 @@ message Constraint {
   ConstraintOp op = 2;      // Comparison operator
   AttributeValue value = 3; // Value to compare against (ignored for EXISTS/NOT_EXISTS)
   repeated AttributeValue values = 4; // Set of values for IN operator
+  ConstraintMode mode = 5;  // Hard (default) or soft
 }
 
 // Coscheduling configuration for multi-host jobs.

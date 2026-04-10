@@ -101,9 +101,6 @@ def get_job_info() -> JobInfo | None:
         constraints: list[Constraint] = []
         if constraints_json:
             for item in json.loads(constraints_json):
-                # Strip fields not present in the local proto (e.g. controller may send `mode`
-                # from a newer proto version that's been removed from this branch).
-                item = {k: v for k, v in item.items() if k != "mode"}
                 constraints.append(Constraint.from_proto(json_format.ParseDict(item, cluster_pb2.Constraint())))
 
         info = JobInfo(
