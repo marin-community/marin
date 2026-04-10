@@ -93,6 +93,12 @@ message Controller {
     iris.job.JobPreemptionPolicy preemption_policy = 31;
     iris.job.ExistingJobPolicy existing_job_policy = 32;
     iris.job.PriorityBand priority_band = 33;
+
+    // Per-job override for the task container image. When empty, the worker
+    // uses its cluster-configured default_task_image. Used for jobs that
+    // need a custom runtime (e.g. an image with runsc/skopeo for sandboxing
+    // untrusted child workloads).
+    string task_image = 34;
   }
 
   message LaunchJobResponse {
