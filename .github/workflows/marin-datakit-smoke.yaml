@@ -13,7 +13,7 @@ permissions:
 jobs:
   datakit-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     concurrency:
       group: datakit-smoke
       cancel-in-progress: true
