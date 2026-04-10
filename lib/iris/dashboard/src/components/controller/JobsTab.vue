@@ -420,7 +420,14 @@ function sortIndicator(field: SortField): string {
 
           <!-- Failures -->
           <td class="px-3 py-2 text-[13px] text-right tabular-nums">
-            {{ node.job.failureCount ?? 0 }}
+            <span
+              v-if="(node.job.failureCount ?? 0) > 0"
+              class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
+                     text-status-danger bg-status-danger-bg border border-status-danger-border"
+            >
+              {{ node.job.failureCount }}
+            </span>
+            <span v-else class="text-text-muted">0</span>
           </td>
 
           <!-- Preemptions -->
