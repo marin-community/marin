@@ -124,3 +124,12 @@ Parent issue: https://github.com/marin-community/marin/issues/4435
 - **Jobs submitted** (cluster: marin-us-east5, TPU: v6e-4, model: ricdomolm/mini-coder-1.7b):
   - Step 5: `ray-run-kevin-run_swe_zero_mvp-20260410-032016`
   - Step 6: `ray-run-kevin-run_swe_zero_mvp-20260410-032022`
+
+### 2026-04-10 — SZ-008: Patched iris CLI for multi-TPU alternatives, Steps 5+6 RUNNING
+- **Change**: Patched `lib/iris/src/iris/cli/job.py` to make `--tpu` accept a comma-separated list of variants. The first variant becomes canonical (drives chip count); the rest become alternatives wired into a `device_variant_constraint(IN [...])` so Iris's scheduler can match any of them. All variants must share the same `vm_count` (validated up front).
+- **Why**: All preemptible TPU pools individually exhausted, but allowing any of `v6e-{1,4,8}, v5litepod-{1,4,8}, v5p-8, v4-8` lets Iris pick whichever frees up first.
+- **Submission**: `iris job run --tpu v6e-1,v6e-4,v6e-8,v5litepod-1,v5litepod-4,v5litepod-8,v5p-8,v4-8 --extra vllm ... -- python experiments/swe_zero/run_swe_zero_mvp.py --local --model ricdomolm/mini-coder-1.7b ...`
+- **Result**: Both Iris jobs are **RUNNING** within ~15 seconds of submission. Both matched to `v6e-1`.
+  - `/kevin/swe-zero-step5-multi`: running on v6e-1 (started 04:30:24Z)
+  - `/kevin/swe-zero-step6-multi`: running on v6e-1 (started 04:30:40Z)
+- **Negative**: Stale Gemma Ray jobs are stuck PENDING — Ray's stop API on PENDING jobs is a no-op (`stopped: true` returns but state stays PENDING; DELETE refuses for non-terminal state). They'll only clear when supervisor start timeout fires (and they're submitted to Iris-managed Ray clusters not Iris itself, so `iris job kill` can't see them).
