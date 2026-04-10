@@ -214,7 +214,7 @@ jobs:
             ${{ matrix.context }}
 
   swetrace-image:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'swetrace'
+    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'swetrace' || inputs.mode == '')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
