@@ -1,0 +1,5 @@
+upgrade node to 22+
+
+---
+
+why is npx still on node 18?
