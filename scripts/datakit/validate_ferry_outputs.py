@@ -3,10 +3,9 @@
 
 """Validate datakit smoke ferry outputs.
 
-Run after the iris job for the datakit smoke ferry has completed. Resolves
-the output prefix via ``MARIN_PREFIX`` (falling back to
-``marin_temp_bucket(ttl_days=1, prefix="datakit-smoke")`` — same default as
-the ferry entrypoint).
+Run after the iris job for the datakit smoke ferry has completed.
+``MARIN_PREFIX`` must be set to the GCS prefix the ferry wrote to
+(read from ``ferry_run_status.json`` by the workflow).
 
 Checks the full pipeline chain:
   download (14 files, ~9.7M rows)
@@ -23,7 +22,7 @@ import sys
 import pyarrow.parquet as pq
 from levanter.store.cache import CacheLedger
 from marin.utils import fsspec_glob
-from rigging.filesystem import marin_temp_bucket, url_to_fs
+from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -198,9 +197,11 @@ def _validate_tokens(base: str, consolidate_rows: int) -> int:
 
 def main() -> None:
     configure_logging()
-    prefix = os.environ.get("MARIN_PREFIX") or marin_temp_bucket(ttl_days=1)
-    prefix = prefix.rstrip("/")
+    prefix = os.environ.get("MARIN_PREFIX")
+    if not prefix:
+        raise SystemExit("MARIN_PREFIX must be set to the GCS prefix the ferry wrote to")
     run_id = os.environ["SMOKE_RUN_ID"]
+    prefix = prefix.rstrip("/")
     base = f"{prefix}/datakit-smoke/{run_id}"
 
     download_rows = _validate_download(base)
