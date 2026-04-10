@@ -193,9 +193,13 @@ def _run_with_vllm(
     extra_args = [
         "--max-num-seqs",
         str(max_num_seqs),
+        # Skip torch.compile / CUDA graphs. On TPU this avoids the slow
+        # precompile step that otherwise dominates startup time, at the
+        # cost of some steady-state inference throughput.
+        "--enforce-eager",
     ]
     logger.info(
-        "vLLM config: max_model_len=%d, max_num_seqs=%d, client_concurrency=%d",
+        "vLLM config: max_model_len=%d, max_num_seqs=%d, client_concurrency=%d, enforce_eager=True",
         max_model_len,
         max_num_seqs,
         concurrency,

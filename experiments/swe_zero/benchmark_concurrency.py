@@ -78,7 +78,14 @@ def main():
         path=model_path,
         engine_kwargs={"max_model_len": args.max_model_len},
     )
-    extra_args = ["--max-num-seqs", str(args.max_num_seqs)]
+    extra_args = [
+        "--max-num-seqs",
+        str(args.max_num_seqs),
+        # --enforce-eager skips torch.compile / CUDA graphs which on TPU
+        # avoids the slow precompile step, at the cost of some steady-state
+        # inference throughput.
+        "--enforce-eager",
+    ]
 
     # Pick a fixed PR set so each config sees identical work.
     loader = SWERebenchV2Loader(language_filter="python")
