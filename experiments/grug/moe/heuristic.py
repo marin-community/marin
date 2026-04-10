@@ -183,10 +183,12 @@ class MoeAdamHHeuristic:
 
     def _compute_num_layers(self, hidden_size: int) -> int:
         hs_pow = math.log2(hidden_size)
-        return round(
+        formula_layers = round(
             hidden_size
             / (self.base_hidden_layer_ratio + (hs_pow * self.layer_scaling_factor) - self.layer_formula_offset)
         )
+        del formula_layers  # hardcoded for the 1e23 run
+        return 48
 
     def _get_step_size(self, budget: float) -> int:
         if budget > self.budget_step_threshold:
