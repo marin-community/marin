@@ -381,7 +381,11 @@ def write_levanter_cache(
         records: Tokenized records (iterable of dicts with array values)
         output_path: Path to output cache directory
         metadata: Metadata for the cache
+        batch_size: Number of records to accumulate before flushing to disk.
     """
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
     from levanter.store.cache import CacheMetadata, SerialCacheWriter
 
     ensure_parent_dir(output_path)
