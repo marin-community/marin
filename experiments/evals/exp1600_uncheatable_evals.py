@@ -16,9 +16,14 @@ import logging
 from dataclasses import dataclass
 from functools import lru_cache
 
+
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
+from experiments.models import ModelConfig as HFModelConfig, download_model_step
+from fray.cluster import ResourceConfig
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from marin.datakit.download.uncheatable_eval import make_uncheatable_eval_step
+from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep, mixture_for_evaluation
@@ -112,11 +117,6 @@ def truncate_model_name(model_name: str, max_length: int = 62) -> str:
 
 @lru_cache(maxsize=1)
 def build_steps() -> list[ExecutorStep]:
-    from experiments.models import ModelConfig as HFModelConfig, download_model_step
-    from fray.cluster import ResourceConfig
-    from levanter.compat.hf_checkpoints import HFCheckpointConverter
-    from marin.evaluation.log_probs import default_lm_log_probs
-
     steps: list[ExecutorStep] = []
     for model_config in models:
         # Use model_name as tokenizer if not specified
