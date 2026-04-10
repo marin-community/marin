@@ -221,6 +221,7 @@ def _build_rl_job_config(
     tags = [*config.tags, config.model_config.name.split("/")[-1]]
     checkpoints_path = join_path(output_path, "checkpoints")
     rollout_storage_path = join_path(output_path, "rollouts")
+    metadata_path = join_path(output_path, "metadata")
 
     trainer_config = TrainerConfig(
         tracker=WandbConfig(
@@ -328,6 +329,12 @@ def _build_rl_job_config(
             name=f"{name}-rollout",
             tags=[*config.tags, "rollout", config.model_config.name.split("/")[-1]],
         ),
+        eval_tracker=RolloutTrackerConfig(
+            project=config.project_name,
+            name=f"{name}-eval",
+            tags=[*config.tags, "eval", config.model_config.name.split("/")[-1]],
+        ),
+        metadata_path=metadata_path,
         pip_dependency_groups=(
             config.model_config.pip_dependency_groups if config.model_config.pip_dependency_groups else ["vllm", "math"]
         ),
