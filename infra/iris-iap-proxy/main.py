@@ -23,8 +23,6 @@ from discovery import get_controller_url
 
 logger = logging.getLogger(__name__)
 
-_IRIS_TOKEN_HEADER = "x-iris-token"
-
 # Headers that should not be forwarded to the controller.
 _HOP_BY_HOP = frozenset(
     {
@@ -100,15 +98,6 @@ def _build_upstream_headers(request: Request, iap_email: str | None) -> dict[str
     for key, value in request.headers.items():
         if key.lower() not in _HOP_BY_HOP:
             headers[key] = value
-
-    # If the CLI sent a controller JWT via X-Iris-Token, promote it to
-    # Authorization for the controller.  Otherwise keep the original
-    # Authorization header (e.g. browser session cookie flow where IAP uses
-    # cookie-based auth and Authorization is the controller JWT).
-    iris_token = request.headers.get(_IRIS_TOKEN_HEADER)
-    if iris_token:
-        headers["authorization"] = f"Bearer {iris_token}"
-        headers.pop(_IRIS_TOKEN_HEADER, None)
 
     if iap_email:
         headers["x-forwarded-user"] = iap_email
