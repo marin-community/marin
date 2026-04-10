@@ -287,6 +287,21 @@ def vendor_copy(target: Path) -> None:
         print(f"  -> {dest.name}")
 
 
+def lock_consumer(project_dir: Path) -> None:
+    """Re-lock the consumer project so it picks up the freshly-vendored wheels.
+
+    uv lock preserves existing resolutions when constraints are already
+    satisfied, so a plain `uv lock` after vendoring keeps the old version.
+    --upgrade-package for each marin-* package forces re-resolution against
+    the new wheels in the vendor find-links directory.
+    """
+    upgrade_flags: list[str] = []
+    for pkg in PACKAGES:
+        upgrade_flags += ["--upgrade-package", pkg]
+    print(f"\nRe-locking {project_dir} ...")
+    subprocess.run(["uv", "lock", *upgrade_flags], check=True, cwd=project_dir)
+
+
 # ---------- publish ----------------------------------------------------------
 
 
@@ -395,7 +410,9 @@ def main() -> None:
         version = resolve_version(args.mode, args.version)
         print(f"Mode:        {args.mode}\nVersion:     {version}")
         build_wheels(version, args.mode)
-        vendor_copy(args.vendor.expanduser().resolve())
+        vendor_target = args.vendor.expanduser().resolve()
+        vendor_copy(vendor_target)
+        lock_consumer(vendor_target.parent)
         print("\nDone.")
         return
 
