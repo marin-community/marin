@@ -4638,7 +4638,7 @@ wheels = [
 
 [[package]]
 name = "marin"
-version = "0.1.0"
+version = "0.99"
 source = { editable = "lib/marin" }
 dependencies = [
     { name = "braceexpand" },
@@ -4959,7 +4959,7 @@ test = [
 
 [[package]]
 name = "marin-fray"
-version = "0.1.0"
+version = "0.99"
 source = { editable = "lib/fray" }
 dependencies = [
     { name = "click" },
@@ -5113,7 +5113,7 @@ dev = [
 
 [[package]]
 name = "marin-iris"
-version = "0.1.0"
+version = "0.99"
 source = { editable = "lib/iris" }
 dependencies = [
     { name = "click" },
@@ -5225,11 +5225,12 @@ examples = [
 
 [[package]]
 name = "marin-levanter"
-version = "1.2"
+version = "0.99"
 source = { editable = "lib/levanter" }
 dependencies = [
     { name = "async-lru" },
     { name = "braceexpand" },
+    { name = "chex" },
     { name = "dataclasses-json" },
     { name = "datasets" },
     { name = "deepdiff" },
@@ -5346,6 +5347,7 @@ test = [
 requires-dist = [
     { name = "async-lru", specifier = "~=2.0" },
     { name = "braceexpand", specifier = ">=0.1.7" },
+    { name = "chex", specifier = ">=0.1.86" },
     { name = "dataclasses-json", specifier = "~=0.6.4" },
     { name = "datasets", specifier = ">=3.1.0,<5.0" },
     { name = "deepdiff" },
@@ -5436,7 +5438,7 @@ test = [
 
 [[package]]
 name = "marin-rigging"
-version = "0.1.0"
+version = "0.99"
 source = { editable = "lib/rigging" }
 dependencies = [
     { name = "fsspec" },
@@ -5494,7 +5496,7 @@ requires-dist = [
 
 [[package]]
 name = "marin-zephyr"
-version = "0.1.0"
+version = "0.99"
 source = { editable = "lib/zephyr" }
 dependencies = [
     { name = "braceexpand" },
@@ -6053,13 +6055,13 @@ name = "mlx-lm"
 version = "0.29.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jinja2", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra == 'extra-5-marin-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-gpu' and extra != 'extra-5-marin-tpu')" },
+    { name = "jinja2", marker = "sys_platform == 'darwin' or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu')" },
     { name = "mlx", marker = "sys_platform == 'darwin' or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu')" },
-    { name = "numpy", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra == 'extra-5-marin-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-gpu' and extra != 'extra-5-marin-tpu')" },
-    { name = "protobuf", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra == 'extra-5-marin-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-gpu' and extra != 'extra-5-marin-tpu')" },
-    { name = "pyyaml", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra == 'extra-5-marin-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-gpu' and extra != 'extra-5-marin-tpu')" },
-    { name = "sentencepiece", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra == 'extra-5-marin-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-gpu' and extra != 'extra-5-marin-tpu')" },
-    { name = "transformers", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra == 'extra-5-marin-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-gpu' and extra != 'extra-5-marin-tpu')" },
+    { name = "numpy", marker = "sys_platform == 'darwin' or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu')" },
+    { name = "protobuf", marker = "sys_platform == 'darwin' or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu')" },
+    { name = "pyyaml", marker = "sys_platform == 'darwin' or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu')" },
+    { name = "sentencepiece", marker = "sys_platform == 'darwin' or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu')" },
+    { name = "transformers", marker = "sys_platform == 'darwin' or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e3/62/f46e1355256a114808517947f8e83ad6be310c7288c551db0fa678f47923/mlx_lm-0.29.1.tar.gz", hash = "sha256:b99180d8f33d33a077b814e550bfb2d8a59ae003d668fd1f4b3fff62a381d34b", size = 232302, upload-time = "2025-12-16T16:58:27.959Z" }
 wheels = [

@@ -2,17 +2,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build, publish, and prune marin-* lib wheels.
+"""Build and publish marin-* lib wheels.
 
 Builds the seven pure-Python marin-* lib packages (marin, marin-iris,
 marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr) into
-dist/, then optionally publishes one GitHub Release per package and updates
-a rolling pointer (marin-<pkg>-latest or marin-<pkg>-stable).
+dist/, then optionally publishes them as GitHub Releases.
 
 Four modes:
-    nightly  -- version becomes <base>.dev<YYYYMMDD>; tag marin-<pkg>-<YYYYMMDD>
-    stable   -- version is taken from --version; tag marin-<pkg>-v<version>
-    manual   -- version becomes <base>+manual.<sha>; tag marin-<pkg>-manual-<sha>
+    nightly  -- version becomes <base>.dev<YYYYMMDD>; overwrites the rolling
+                marin-<pkg>-latest tag in place. No dated history is kept;
+                reproducibility comes from stable tags, not historical nightlies.
+    stable   -- version is taken from --version; creates marin-<pkg>-v<version>
+                and overwrites marin-<pkg>-stable.
+    manual   -- version becomes <base>+manual.<sha>; build only (no publish).
+                Useful for inspecting wheels from a workflow_dispatch run.
     vendor   -- version becomes <base>.dev<YYYYMMDDHHMMSS>; copy wheels to a
                 local directory (no GH publish). For local-iteration loops
                 where a marin worktree feeds wheels into an experiment repo's
@@ -21,7 +24,7 @@ Four modes:
 
 Usage:
     python scripts/python_libs_package.py --mode nightly
-    python scripts/python_libs_package.py --mode stable --version 1.4.0
+    python scripts/python_libs_package.py --mode stable --version 1.0.0
     python scripts/python_libs_package.py --mode nightly --skip-publish
     python scripts/python_libs_package.py --skip-build --publish-only
     python scripts/python_libs_package.py --mode vendor --vendor ../tiny-tpu/vendor
@@ -29,6 +32,9 @@ Usage:
 The build is done from a temporary in-place patch of each package's version
 file plus a cross-pin rewrite of every sibling dependency. Mutations are
 reverted on exit (success OR failure) so the working tree stays clean.
+After building, dist/BUILD_INFO.json records the resolved version so that a
+subsequent --publish-only call (typically the publish job in CI) uses the
+exact version the build job produced, even if the run straddles midnight UTC.
 """
 
 import argparse
@@ -38,13 +44,12 @@ import shutil
 import subprocess
 import sys
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = REPO_ROOT / "dist"
 REPO = "marin-community/marin"
-NIGHTLY_RETENTION_DAYS = 30
 
 
 # Each entry: (dist name, lib subdir, version-file path relative to lib subdir, version-file kind)
@@ -181,35 +186,58 @@ def _highest_base_version() -> str:
     return max(bases, key=lambda v: tuple(int(p) if p.isdigit() else 0 for p in re.split(r"[.\-+]", v)))
 
 
-def resolve_version(mode: str, explicit: str | None) -> tuple[str, str]:
-    """Return (build_version, tag_suffix).
+def resolve_version(mode: str, explicit: str | None) -> str:
+    """Return the build version for the requested mode.
 
-    nightly  -> ("<base>.dev<YYYYMMDD>",       "<YYYYMMDD>")
-    stable   -> ("<explicit>",                 "v<explicit>")
-    manual   -> ("<base>+manual.<sha>",        "manual-<sha>")
-    vendor   -> ("<base>.dev<YYYYMMDDHHMMSS>", "vendor-<YYYYMMDDHHMMSS>")
+    nightly -> <base>.dev<YYYYMMDD>
+    stable  -> <explicit>
+    manual  -> <base>+manual.<sha>
+    vendor  -> <base>.dev<YYYYMMDDHHMMSS>
     """
     if mode == "stable":
         if not explicit:
             raise SystemExit("--version is required for --mode stable")
-        return explicit, f"v{explicit}"
+        return explicit
     if mode == "nightly":
         date = datetime.now(timezone.utc).strftime("%Y%m%d")
-        return f"{_highest_base_version()}.dev{date}", date
+        return f"{_highest_base_version()}.dev{date}"
     if mode == "manual":
         sha = _git_short_sha()
-        return f"{_highest_base_version()}+manual.{sha}", f"manual-{sha}"
+        return f"{_highest_base_version()}+manual.{sha}"
     if mode == "vendor":
         # Second-precision timestamp guarantees the freshly-built wheel beats
         # any nightly built earlier today, so `uv sync` in the consumer always
         # picks up the local copy without cache games.
         ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-        return f"{_highest_base_version()}.dev{ts}", f"vendor-{ts}"
+        return f"{_highest_base_version()}.dev{ts}"
     raise SystemExit(f"Unknown mode: {mode}")
 
 
-def build_wheels(version: str) -> None:
-    """Build all seven marin-* wheels into DIST_DIR with version patched in."""
+# Path inside dist/ where build_wheels persists the resolved version + mode.
+# Publish reads this instead of re-resolving so a workflow that straddles
+# midnight UTC can't compute a different date in build vs publish.
+BUILD_INFO_PATH = DIST_DIR / "BUILD_INFO.json"
+
+
+def write_build_info(version: str, mode: str) -> None:
+    BUILD_INFO_PATH.write_text(json.dumps({"version": version, "mode": mode}, indent=2))
+
+
+def read_build_info() -> dict[str, str] | None:
+    if not BUILD_INFO_PATH.is_file():
+        return None
+    return json.loads(BUILD_INFO_PATH.read_text())
+
+
+def build_wheels(version: str, mode: str) -> None:
+    """Build all seven marin-* wheels into DIST_DIR with version patched in.
+
+    Persists BUILD_INFO.json next to the wheels so the publish step (which
+    runs in a separate job and downloads dist/ as an artifact) can read the
+    exact version this build used instead of re-resolving it. That guarantees
+    a workflow run straddling midnight UTC produces a consistent version
+    across build and publish.
+    """
     _check_tool("uv", "https://docs.astral.sh/uv/")
 
     if DIST_DIR.exists():
@@ -232,6 +260,8 @@ def build_wheels(version: str) -> None:
         print(f"  {w.name}")
     if len(wheels) != len(PACKAGES):
         raise RuntimeError(f"Expected {len(PACKAGES)} wheels, got {len(wheels)}")
+
+    write_build_info(version, mode)
 
 
 # ---------- vendor -----------------------------------------------------------
@@ -296,78 +326,46 @@ def _gh_release_replace(tag: str, files: list[Path], title: str, notes: str, pre
     subprocess.run(cmd, check=True)
 
 
-def publish_releases(version: str, tag_suffix: str, mode: str) -> None:
-    """Per-package GH release plus a rolling pointer per package.
+def publish_releases(version: str, mode: str) -> None:
+    """Per-package GH release.
 
-    For mode=nightly:   marin-<pkg>-<YYYYMMDD> + marin-<pkg>-latest
-    For mode=stable:    marin-<pkg>-v<version> + marin-<pkg>-stable
-    For mode=manual:    marin-<pkg>-manual-<sha> only
+    nightly -> overwrite the rolling marin-<pkg>-latest tag in place. No dated
+               tags are kept; consumers point find-links at the rolling URL
+               and always get the most recent build. Reproducibility comes
+               from stable tags, not from historical nightlies.
+    stable  -> create marin-<pkg>-v<version> and overwrite marin-<pkg>-stable.
     """
     _check_tool("gh", "https://cli.github.com/")
 
-    rolling_label = {"nightly": "latest", "stable": "stable"}.get(mode)
-
-    for pkg in PACKAGES:
-        wheel = _wheel_for(pkg)
-        pinned_tag = f"{pkg}-{tag_suffix}"
-        notes = f"{pkg} {version} (auto-generated by python_libs_package.py)"
-        title = f"{pkg} {version}"
-
-        print(f"\n--- Publishing {pinned_tag} ---")
-        _gh_release_replace(
-            tag=pinned_tag,
-            files=[wheel],
-            title=title,
-            notes=notes,
-            prerelease=(mode != "stable"),
-        )
-
-        if rolling_label:
-            rolling_tag = f"{pkg}-{rolling_label}"
-            print(f"--- Updating rolling {rolling_tag} -> {version} ---")
+    if mode == "nightly":
+        for pkg in PACKAGES:
+            wheel = _wheel_for(pkg)
+            tag = f"{pkg}-latest"
+            print(f"\n--- Publishing {tag} ({version}) ---")
             _gh_release_replace(
-                tag=rolling_tag,
+                tag=tag,
                 files=[wheel],
-                title=f"{pkg} ({rolling_label})",
-                notes=f"Rolling {rolling_label}. Currently pointing at {pinned_tag}.",
-                prerelease=(mode != "stable"),
+                title=f"{pkg} (latest)",
+                notes=f"Rolling nightly. Currently pointing at {version}.",
+                prerelease=True,
             )
+        return
 
+    if mode == "stable":
+        for pkg in PACKAGES:
+            wheel = _wheel_for(pkg)
+            for tag, label in ((f"{pkg}-v{version}", "stable"), (f"{pkg}-stable", "rolling stable")):
+                print(f"\n--- Publishing {tag} ---")
+                _gh_release_replace(
+                    tag=tag,
+                    files=[wheel],
+                    title=f"{pkg} {version}",
+                    notes=f"{pkg} {version} ({label})",
+                    prerelease=False,
+                )
+        return
 
-def prune_old_nightlies(retain_days: int = NIGHTLY_RETENTION_DAYS) -> None:
-    """Delete marin-<pkg>-YYYYMMDD nightly releases older than retain_days.
-
-    Leaves rolling pointers (marin-<pkg>-latest, marin-<pkg>-stable) and stable
-    tags (marin-<pkg>-v*) untouched.
-    """
-    _check_tool("gh", "https://cli.github.com/")
-    cutoff = datetime.now(timezone.utc) - timedelta(days=retain_days)
-
-    result = subprocess.run(
-        ["gh", "release", "list", "--repo", REPO, "--limit", "1000", "--json", "tagName,createdAt"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    releases = json.loads(result.stdout)
-    sibling_alt = "|".join(re.escape(p) for p in SIBLING_NAMES)
-    nightly_re = re.compile(rf"^({sibling_alt})-(\d{{8}})$")
-
-    pruned = 0
-    for rel in releases:
-        tag = rel["tagName"]
-        if not nightly_re.match(tag):
-            continue
-        created = datetime.fromisoformat(rel["createdAt"].replace("Z", "+00:00"))
-        if created >= cutoff:
-            continue
-        print(f"Pruning {tag} (created {created.date()})")
-        subprocess.run(
-            ["gh", "release", "delete", tag, "--yes", "--cleanup-tag", "--repo", REPO],
-            check=True,
-        )
-        pruned += 1
-    print(f"\nPruned {pruned} nightly release(s) older than {retain_days} days.")
+    raise SystemExit(f"publish_releases called with unsupported mode: {mode}")
 
 
 # ---------- main -------------------------------------------------------------
@@ -386,38 +384,44 @@ def main() -> None:
     parser.add_argument("--skip-build", action="store_true", help="Reuse existing dist/")
     parser.add_argument("--skip-publish", action="store_true", help="Build only")
     parser.add_argument("--publish-only", action="store_true", help="Same as --skip-build")
-    parser.add_argument("--skip-prune", action="store_true", help="Don't delete old nightlies")
     args = parser.parse_args()
 
     if args.publish_only:
         args.skip_build = True
 
-    version, tag_suffix = resolve_version(args.mode, args.version)
-    print(f"Mode:        {args.mode}")
-    print(f"Version:     {version}")
-    print(f"Tag suffix:  {tag_suffix}")
-
     if args.mode == "vendor":
         if args.vendor is None:
             raise SystemExit("--vendor PATH is required for --mode vendor")
-        build_wheels(version)
+        version = resolve_version(args.mode, args.version)
+        print(f"Mode:        {args.mode}\nVersion:     {version}")
+        build_wheels(version, args.mode)
         vendor_copy(args.vendor.expanduser().resolve())
         print("\nDone.")
         return
 
     if not args.skip_build:
-        build_wheels(version)
-    elif not DIST_DIR.exists() or not list(DIST_DIR.glob("*.whl")):
-        raise SystemExit(f"No wheels in {DIST_DIR}; remove --skip-build/--publish-only or build first.")
+        version = resolve_version(args.mode, args.version)
+        print(f"Mode:        {args.mode}\nVersion:     {version}")
+        build_wheels(version, args.mode)
+    else:
+        if not DIST_DIR.exists() or not list(DIST_DIR.glob("*.whl")):
+            raise SystemExit(f"No wheels in {DIST_DIR}; remove --skip-build/--publish-only or build first.")
+        info = read_build_info()
+        if info is not None:
+            version = info["version"]
+            print(f"Mode:        {args.mode}\nVersion:     {version} (from BUILD_INFO.json)")
+        else:
+            # Legacy path: dist/ has wheels but no BUILD_INFO.json. Fall back
+            # to re-resolving; this is the only branch where the midnight-drift
+            # bug could resurface.
+            version = resolve_version(args.mode, args.version)
+            print(f"Mode:        {args.mode}\nVersion:     {version} (re-resolved; no BUILD_INFO.json)")
 
-    if args.skip_publish:
+    if args.skip_publish or args.mode == "manual":
         print(f"\nBuild complete. Wheels in {DIST_DIR}/")
         return
 
-    publish_releases(version, tag_suffix, args.mode)
-
-    if args.mode == "nightly" and not args.skip_prune:
-        prune_old_nightlies()
+    publish_releases(version, args.mode)
 
     print("\nDone.")
 

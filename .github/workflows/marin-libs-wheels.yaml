@@ -71,7 +71,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: marin-libs-wheels
-          path: dist/*.whl
+          # BUILD_INFO.json travels with the wheels so the publish job uses
+          # the same resolved version the build job stamped in, instead of
+          # re-computing it (which would drift across midnight UTC).
+          path: |
+            dist/*.whl
+            dist/BUILD_INFO.json
           retention-days: 14
 
   publish:
