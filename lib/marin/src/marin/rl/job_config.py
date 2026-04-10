@@ -155,6 +155,15 @@ class RLJobConfig:
     rollout_tracker: RolloutTrackerConfig | None = None
     """Tracker configuration for rollout workers. Uses a standalone tracker to avoid JAX deadlocks."""
 
+    eval_tracker: RolloutTrackerConfig | None = None
+    """Dedicated tracker configuration for eval and micro-eval streams."""
+
+    eval_owner_worker_index: int = 0
+    """Worker index that owns the eval tracker stream."""
+
+    metadata_path: str | None = None
+    """Base path for durable RL telemetry artifacts and event shards."""
+
     pip_dependency_groups: list[str] = field(default_factory=list)
     """Extra pip dependency groups to include for all workers."""
 
@@ -268,8 +277,11 @@ def build_worker_configs(config: RLJobConfig) -> tuple[TrainWorkerConfig, Rollou
         initial_checkpoint=config.initial_checkpoint,
         vocab_size=config.vocab_size,
         run_id=config.run_id,
+        root_run_id=config.run_id,
         curriculum_config=config.curriculum,
         seed=config.seed,
+        metadata_path=config.metadata_path,
+        instance_id=config.resolved_instance_id,
     )
 
     # Create rollout worker config
@@ -285,12 +297,17 @@ def build_worker_configs(config: RLJobConfig) -> tuple[TrainWorkerConfig, Rollou
         weight_transfer=weight_transfer_config,
         rollout_storage=config.rollout_storage,
         run_id=config.run_id,
+        root_run_id=config.run_id,
         seed=config.seed + 1000,
         inference_type=config.inference_type,
         inference_config=inference_config,
         system_prompt=config.system_prompt,
         inflight_weight_updates=config.inflight_weight_updates,
         tracker_config=config.rollout_tracker,
+        eval_tracker_config=config.eval_tracker,
+        eval_owner_worker_index=config.eval_owner_worker_index,
+        metadata_path=config.metadata_path,
+        instance_id=config.resolved_instance_id,
     )
 
     return train_worker_config, rollout_worker_config
