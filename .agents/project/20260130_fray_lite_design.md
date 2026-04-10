@@ -1,8 +1,8 @@
 # Fray-Lite Design
 
-**Status**: Draft (v5, updated migration plan)
+**Status**: Implemented (v2 API is the production interface)
 **Issue**: [#2552](https://github.com/marin-community/marin/issues/2552)
-**Research**: [fray-lite-research.md](fray-lite-research.md)
+**Research**: archived to `.agents/project/20260130_fray_lite_research.md`
 **Related**: [#2553](https://github.com/marin-community/marin/issues/2553) — Iris preemptible worker attribute (✅ done)
 
 ## Overview
@@ -861,7 +861,7 @@ lib/fray/src/fray/v2/
 │                        # (copied from v1 fray.cluster.base, replicas moved to JobRequest)
 ├── client.py            # Client protocol, current_client(), set_current_client(), wait_all()
 ├── actor.py             # ActorHandle, ActorMethod, ActorFuture, ActorGroup (all Protocols)
-├── local.py             # LocalClient implementation
+├── local_backend.py     # LocalClient implementation
 ├── ray/
 │   ├── __init__.py
 │   ├── backend.py       # RayClient (copied+adapted from v1 ray.cluster)

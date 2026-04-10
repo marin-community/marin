@@ -126,7 +126,7 @@ class ContainerStats:
     """Parsed container statistics."""
 
     memory_mb: int
-    cpu_percent: int
+    cpu_millicores: int
     process_count: int
     available: bool
 

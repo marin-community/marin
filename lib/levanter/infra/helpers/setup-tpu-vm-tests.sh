@@ -120,7 +120,7 @@ echo "Checking out branch $BRANCH"
 
 # install levanter
 uv venv
-uv sync --package levanter --extra tpu --group test --frozen
+uv sync --package marin-levanter --extra tpu --group test --frozen
 
 # Create venv_path.txt so run.sh can find the venv at monorepo root
 echo "$(pwd)/.venv" > lib/levanter/infra/venv_path.txt

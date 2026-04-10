@@ -1,5 +1,5 @@
 # Iris production configuration for Marin cluster
-# Usage: uv run iris cluster --config=examples/marin.yaml start
+# Usage: uv run iris --cluster=marin cluster start
 
 platform:
   label_prefix: marin
@@ -44,7 +44,7 @@ controller:
 tpu_pools:
   # v5e (v5litepod) — europe-west4-b, us-west4-a
   # Per-VM: ct5lp-hightpu-4t — 112 vCPU, 192 GiB RAM
-  v5e-preemptible:
+  v5e-serving:
     family: v5e
     zones: [europe-west4-b, us-west4-a]
     base_priority: 10
@@ -55,7 +55,18 @@ tpu_pools:
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
       4:   { buffer_slices: 2, max_slices: 1024 }
-      8:   { max_slices: 512 }
+      8:   { buffer_slices: 2, max_slices: 512 }
+
+  v5e-preemptible:
+    family: v5e
+    zones: [europe-west4-b, us-west4-a]
+    base_priority: 10
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: preemptible }
+    slice_template:
+      gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
+        runtime_version: v2-alpha-tpuv5-lite
+    sizes:
       16:  { max_slices: 256 }
       32:  { max_slices: 128 }
       64:  { max_slices: 64 }

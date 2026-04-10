@@ -2,8 +2,14 @@
 requires = ["uv_build>=0.7.19,<0.10.0"]
 build-backend = "uv_build"
 
+# Explicit module-name override because the dist name (marin-levanter) no
+# longer matches the import name (levanter); uv_build's default would look
+# for src/marin_levanter/ which doesn't exist.
+[tool.uv.build-backend]
+module-name = "levanter"
+
 [project]
-name = "levanter"
+name = "marin-levanter"
 version = "1.2"
 description = "Scalable Training for Foundation Models with Named Tensors and JAX"
 readme = "README.md"
@@ -28,12 +34,12 @@ classifiers = [
 ]
 
 dependencies = [
-    "haliax>=1.4.dev450",
+    "marin-haliax>=1.4.dev450",
     "equinox>=0.11.7,!=0.12.0",
     "jax>=0.8.0",
-    "fray",
-    "rigging",
-    "zephyr",
+    "marin-fray",
+    "marin-rigging",
+    "marin-zephyr",
     "einops",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
@@ -47,6 +53,7 @@ dependencies = [
     "datasets>=3.1.0,<5.0",
     "gcsfs>=2024.2,<2026",
     "braceexpand>=0.1.7",
+    "chex>=0.1.86",
     "jmp>=0.0.3",
     "fsspec[http]>=2024.2,<2026",
     "tensorstore>=0.1.73",

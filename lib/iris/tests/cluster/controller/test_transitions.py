@@ -13,7 +13,7 @@ They focus on:
 import threading
 
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
-from iris.cluster.controller.autoscaler import DemandEntry
+from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import (
     ControllerDB,

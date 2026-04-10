@@ -133,8 +133,8 @@ available_node_types:
             # Set Source Image =>> Ubuntu 22.04 Base VM
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
-    max_workers: 1024
-    min_workers: 2
+    max_workers: 4
+    min_workers: 0
     node_config:
       acceleratorType: v4-8
       runtimeVersion: tpu-ubuntu2204-base

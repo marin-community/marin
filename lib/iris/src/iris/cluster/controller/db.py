@@ -124,31 +124,6 @@ def task_is_finished(
     return False
 
 
-def task_can_be_scheduled(
-    state: int,
-    current_attempt_id: int,
-    failure_count: int,
-    max_retries_failure: int,
-    preemption_count: int,
-    max_retries_preemption: int,
-) -> bool:
-    if state != job_pb2.TASK_STATE_PENDING:
-        return False
-    return current_attempt_id < 0 or not task_is_finished(
-        state, failure_count, max_retries_failure, preemption_count, max_retries_preemption
-    )
-
-
-def task_is_retry_exhausted(
-    state: int, failure_count: int, max_retries_failure: int, preemption_count: int, max_retries_preemption: int
-) -> bool:
-    if state == job_pb2.TASK_STATE_FAILED:
-        return failure_count > max_retries_failure
-    if state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED):
-        return preemption_count > max_retries_preemption
-    return False
-
-
 def task_row_is_finished(task: Any) -> bool:
     return task_is_finished(
         task.state, task.failure_count, task.max_retries_failure, task.preemption_count, task.max_retries_preemption
@@ -156,30 +131,11 @@ def task_row_is_finished(task: Any) -> bool:
 
 
 def task_row_can_be_scheduled(task: Any) -> bool:
-    return task_can_be_scheduled(
-        task.state,
-        task.current_attempt_id,
-        task.failure_count,
-        task.max_retries_failure,
-        task.preemption_count,
-        task.max_retries_preemption,
+    if task.state != job_pb2.TASK_STATE_PENDING:
+        return False
+    return task.current_attempt_id < 0 or not task_is_finished(
+        task.state, task.failure_count, task.max_retries_failure, task.preemption_count, task.max_retries_preemption
     )
-
-
-def worker_available_cpu_millicores(total_cpu_millicores: int, committed_cpu_millicores: int) -> int:
-    return total_cpu_millicores - committed_cpu_millicores
-
-
-def worker_available_memory(total_memory_bytes: int, committed_mem_bytes: int) -> int:
-    return total_memory_bytes - committed_mem_bytes
-
-
-def worker_available_gpus(total_gpu_count: int, committed_gpu: int) -> int:
-    return total_gpu_count - committed_gpu
-
-
-def worker_available_tpus(total_tpu_count: int, committed_tpu: int) -> int:
-    return total_tpu_count - committed_tpu
 
 
 TERMINAL_TASK_STATES: frozenset[int] = frozenset(
@@ -962,10 +918,10 @@ def healthy_active_workers_with_attributes(db: ControllerDB) -> list:
         dc_replace(
             w,
             attributes=attrs_by_worker.get(w.worker_id, {}),
-            available_cpu_millicores=worker_available_cpu_millicores(w.total_cpu_millicores, w.committed_cpu_millicores),
-            available_memory=worker_available_memory(w.total_memory_bytes, w.committed_mem),
-            available_gpus=worker_available_gpus(w.total_gpu_count, w.committed_gpu),
-            available_tpus=worker_available_tpus(w.total_tpu_count, w.committed_tpu),
+            available_cpu_millicores=w.total_cpu_millicores - w.committed_cpu_millicores,
+            available_memory=w.total_memory_bytes - w.committed_mem,
+            available_gpus=w.total_gpu_count - w.committed_gpu,
+            available_tpus=w.total_tpu_count - w.committed_tpu,
         )
         for w in workers
     ]

@@ -154,12 +154,13 @@ message ProcessInfo {
   int64 uptime_ms = 4;          // Process uptime in milliseconds
   int64 memory_rss_bytes = 5;   // Resident set size
   int64 memory_vms_bytes = 6;   // Virtual memory size
-  float cpu_percent = 7;        // CPU utilization (0-100)
   int32 thread_count = 8;
   int32 open_fd_count = 9;      // Open file descriptors
   int64 memory_total_bytes = 10; // Total system memory
   int32 cpu_count = 11;          // Number of CPU cores
   string git_hash = 12;          // Git commit hash baked in at image build time (IRIS_GIT_HASH)
+  reserved 7;                    // Formerly process cpu_percent; use cpu_millicores instead.
+  int32 cpu_millicores = 13;     // Process CPU usage over the sample window
 }
 
 message GetProcessStatusRequest {
@@ -250,7 +251,7 @@ message ResourceUsage {
   int64 disk_mb = 2;
   int32 cpu_millicores = 3;
   int64 memory_peak_mb = 4;
-  int32 cpu_percent = 5;
+  reserved 5;                  // Formerly task cpu_percent; use cpu_millicores instead.
   int32 process_count = 6;
 }
 
@@ -258,7 +259,7 @@ message ResourceUsage {
 message WorkerResourceSnapshot {
   iris.time.Timestamp timestamp = 1;
   // Host CPU utilization as percentage (0-100 averaged across cores)
-  int32 cpu_percent = 2;
+  int32 host_cpu_percent = 2;
   // Host memory
   int64 memory_used_bytes = 3;
   int64 memory_total_bytes = 4;
@@ -322,7 +323,7 @@ message JobStatus {
   // Diagnostic message for pending/failed jobs (e.g., "No workers match constraint: gpu=true")
   string pending_reason = 31;
 
-  // True if this job has child jobs (for lazy-loading in the dashboard).
+  // Whether this job currently has direct child jobs.
   bool has_children = 32;
 }
 

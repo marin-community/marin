@@ -8,14 +8,23 @@ installed are skipped gracefully. The test model is meta-llama/Llama-3.1-8B,
 which requires HF authentication (tests skip if auth is missing).
 """
 
+import json
+import os
+import pathlib
+import shutil
 from unittest.mock import patch
 
 import pytest
+from huggingface_hub import __version__ as _hf_hub_version
 
 from levanter.tokenizers import (
     MarinTokenizer,
     TokenizerBackend,
     _load_tokenizer_config,
+    _stage_from_hf,
+    _stage_from_mirror,
+    _stage_tokenizer,
+    _try_load_tokenizer_from_dir,
     load_tokenizer,
 )
 
@@ -981,21 +990,27 @@ def test_load_tokenizer_caching():
 
 
 @requires_model
-def test_local_tokenizer_encode_batch():
+def test_local_tokenizer_encode_batch(tmp_path):
     """Ensure encode_batch works with local tokenizer paths (no hub round-trip)."""
-    from huggingface_hub import hf_hub_download
-    import os
-
-    path = hf_hub_download(MODEL_NAME, "tokenizer.json")
-    local_dir = os.path.dirname(path)
+    staged_dir = _stage_tokenizer(MODEL_NAME)
+    local_dir = tmp_path / "tokenizer"
+    local_dir.mkdir()
+    for fname in os.listdir(staged_dir):
+        src = os.path.join(staged_dir, fname)
+        if os.path.isfile(src):
+            shutil.copy2(src, local_dir / fname)
 
     load_tokenizer.cache_clear()
-    tok = load_tokenizer(local_dir)
+    with patch(
+        "levanter.tokenizers.hf_hub_download",
+        side_effect=AssertionError("Local tokenizer paths should not hit HF Hub"),
+    ):
+        tok = load_tokenizer(os.fspath(local_dir))
 
-    texts = [f"sentence number {i}" for i in range(20)]
-    batch_result = tok.encode_batch(texts)
-    individual = [tok.encode(t) for t in texts]
-    assert batch_result == individual
+        texts = [f"sentence number {i}" for i in range(20)]
+        batch_result = tok.encode_batch(texts)
+        individual = [tok.encode(t) for t in texts]
+        assert batch_result == individual
 
 
 # ---------------------------------------------------------------------------
@@ -1188,3 +1203,218 @@ def test_encode_batch_correctness_many_strings(backend_tokenizer):
     batch = backend_tokenizer.encode_batch(non_empty)
     individual = [backend_tokenizer.encode(t) for t in non_empty]
     assert batch == individual
+
+
+# ---------------------------------------------------------------------------
+# 15. Staging / mirror fallback tests
+# ---------------------------------------------------------------------------
+
+# Minimal tokenizer.json accepted by HfBaseTokenizer.from_file.
+_MINIMAL_TOKENIZER_JSON = {
+    "version": "1.0",
+    "truncation": None,
+    "padding": None,
+    "added_tokens": [],
+    "normalizer": None,
+    "pre_tokenizer": None,
+    "post_processor": None,
+    "decoder": None,
+    "model": {
+        "type": "BPE",
+        "dropout": None,
+        "unk_token": None,
+        "continuing_subword_prefix": None,
+        "end_of_word_suffix": None,
+        "fuse_unk": False,
+        "byte_fallback": False,
+        "vocab": {},
+        "merges": [],
+    },
+}
+
+
+@pytest.fixture
+def fake_tokenizer_dir(tmp_path):
+    """Local directory with a minimal valid tokenizer.json + tokenizer_config.json."""
+    d = tmp_path / "tokenizer_src"
+    d.mkdir()
+    (d / "tokenizer.json").write_text(json.dumps(_MINIMAL_TOKENIZER_JSON))
+    (d / "tokenizer_config.json").write_text("{}")
+    return d
+
+
+@pytest.fixture(autouse=False)
+def clear_stage_cache():
+    _stage_tokenizer.cache_clear()
+    yield
+    _stage_tokenizer.cache_clear()
+
+
+def test_try_load_tokenizer_from_dir_valid(fake_tokenizer_dir):
+    assert _try_load_tokenizer_from_dir(str(fake_tokenizer_dir))
+
+
+def test_try_load_tokenizer_from_dir_empty(tmp_path):
+    assert not _try_load_tokenizer_from_dir(str(tmp_path))
+
+
+def test_try_load_tokenizer_from_dir_corrupt(tmp_path):
+    (tmp_path / "tokenizer.json").write_text("not json")
+    assert not _try_load_tokenizer_from_dir(str(tmp_path))
+
+
+def test_stage_from_hf_copies_files_and_populates_mirror(tmp_path, fake_tokenizer_dir):
+    """_stage_from_hf copies snapshot files to local_dir and pushes each to the mirror."""
+    local_dir = tmp_path / "staged"
+    local_dir.mkdir()
+    mirror_calls: list[str] = []
+
+    with (
+        patch("levanter.tokenizers.snapshot_download", return_value=str(fake_tokenizer_dir)),
+        patch("levanter.tokenizers._populate_mirror_file", side_effect=lambda _p, url: mirror_calls.append(url)),
+    ):
+        _stage_from_hf("org/model", str(local_dir))
+
+    assert (local_dir / "tokenizer.json").exists()
+    assert (local_dir / "tokenizer_config.json").exists()
+    assert len(mirror_calls) == 2
+    assert all("org/model" in u for u in mirror_calls)
+    assert all(f"hf-hub-{_hf_hub_version}" in u for u in mirror_calls)
+
+
+def test_stage_from_mirror_copies_files(tmp_path, fake_tokenizer_dir):
+    """_stage_from_mirror fetches files from the mirror filesystem into local_dir."""
+    local_dir = tmp_path / "staged"
+    local_dir.mkdir()
+    mirror_dir = f"tokenizers/org/model/hf-hub-{_hf_hub_version}"
+    fake_entries = [f"{mirror_dir}/tokenizer.json", f"{mirror_dir}/tokenizer_config.json"]
+
+    class FakeMirrorFS:
+        def exists(self, path):
+            return path == mirror_dir
+
+        def ls(self, path, detail=False):
+            return fake_entries
+
+    def fake_fetch(src_url, dest_path):
+        fname = os.path.basename(dest_path)
+        src = fake_tokenizer_dir / fname
+        if src.exists():
+            shutil.copy2(src, dest_path)
+            return True
+        return False
+
+    with (
+        patch("levanter.tokenizers.fsspec.filesystem", return_value=FakeMirrorFS()),
+        patch("levanter.tokenizers._fetch_file_atomic", side_effect=fake_fetch),
+    ):
+        result = _stage_from_mirror("org/model", str(local_dir))
+
+    assert result is True
+    assert (local_dir / "tokenizer.json").exists()
+
+
+def test_stage_from_mirror_absent(tmp_path):
+    """_stage_from_mirror returns False when the mirror dir does not exist."""
+    local_dir = tmp_path / "staged"
+    local_dir.mkdir()
+
+    class FakeMirrorFS:
+        def exists(self, path):
+            return False
+
+        def ls(self, path, detail=False):
+            return []
+
+    with patch("levanter.tokenizers.fsspec.filesystem", return_value=FakeMirrorFS()):
+        result = _stage_from_mirror("org/model", str(local_dir))
+
+    assert result is False
+    assert not list(local_dir.iterdir())
+
+
+def test_stage_tokenizer_local_cache_hit(tmp_path, fake_tokenizer_dir, clear_stage_cache):
+    """_stage_tokenizer returns immediately when the local cache is already valid."""
+    local_dir = tmp_path / "levanter_tokenizers" / "org" / "model" / f"hf-hub-{_hf_hub_version}"
+    local_dir.mkdir(parents=True)
+    shutil.copy2(fake_tokenizer_dir / "tokenizer.json", local_dir / "tokenizer.json")
+
+    with (
+        patch("levanter.tokenizers.tempfile.gettempdir", return_value=str(tmp_path)),
+        patch("levanter.tokenizers._stage_from_mirror") as mock_mirror,
+        patch("levanter.tokenizers._stage_from_hf") as mock_hf,
+    ):
+        result = _stage_tokenizer("org/model")
+
+    assert result == str(local_dir)
+    mock_mirror.assert_not_called()
+    mock_hf.assert_not_called()
+
+
+def test_stage_tokenizer_mirror_hit(tmp_path, fake_tokenizer_dir, clear_stage_cache):
+    """_stage_tokenizer uses mirror files and skips HF Hub when mirror is populated."""
+
+    def fake_stage_from_mirror(name_or_path, local_dir):
+        shutil.copy2(fake_tokenizer_dir / "tokenizer.json", os.path.join(local_dir, "tokenizer.json"))
+        return True
+
+    with (
+        patch("levanter.tokenizers.tempfile.gettempdir", return_value=str(tmp_path)),
+        patch("levanter.tokenizers._stage_from_mirror", side_effect=fake_stage_from_mirror),
+        patch("levanter.tokenizers._stage_from_hf") as mock_hf,
+    ):
+        _stage_tokenizer("org/model")
+
+    mock_hf.assert_not_called()
+
+
+def test_stage_tokenizer_falls_through_to_hf(tmp_path, fake_tokenizer_dir, clear_stage_cache):
+    """_stage_tokenizer calls HF Hub when both local cache and mirror are empty."""
+
+    def fake_stage_from_hf(name_or_path, local_dir):
+        shutil.copy2(fake_tokenizer_dir / "tokenizer.json", os.path.join(local_dir, "tokenizer.json"))
+
+    with (
+        patch("levanter.tokenizers.tempfile.gettempdir", return_value=str(tmp_path)),
+        patch("levanter.tokenizers._stage_from_mirror", return_value=False),
+        patch("levanter.tokenizers._stage_from_hf", side_effect=fake_stage_from_hf) as mock_hf,
+    ):
+        _stage_tokenizer("org/model")
+
+    mock_hf.assert_called_once()
+
+
+def test_stage_tokenizer_corrupt_mirror_falls_through_to_hf(tmp_path, fake_tokenizer_dir, clear_stage_cache):
+    """_stage_tokenizer falls through to HF Hub when mirror returns a corrupt tokenizer."""
+
+    def corrupt_mirror(name_or_path, local_dir):
+        pathlib.Path(local_dir, "tokenizer.json").write_text("not json")
+        return True
+
+    def fake_stage_from_hf(name_or_path, local_dir):
+        shutil.copy2(fake_tokenizer_dir / "tokenizer.json", os.path.join(local_dir, "tokenizer.json"))
+
+    with (
+        patch("levanter.tokenizers.tempfile.gettempdir", return_value=str(tmp_path)),
+        patch("levanter.tokenizers._stage_from_mirror", side_effect=corrupt_mirror),
+        patch("levanter.tokenizers._stage_from_hf", side_effect=fake_stage_from_hf) as mock_hf,
+    ):
+        _stage_tokenizer("org/model")
+
+    mock_hf.assert_called_once()
+
+
+def test_stage_from_mirror_tolerates_broken_fs(tmp_path):
+    """_stage_from_mirror returns False (does not raise) when the mirror FS throws."""
+    local_dir = tmp_path / "staged"
+    local_dir.mkdir()
+
+    class BrokenMirrorFS:
+        def exists(self, path):
+            raise OSError("mirror unreachable")
+
+    with patch("levanter.tokenizers.fsspec.filesystem", return_value=BrokenMirrorFS()):
+        result = _stage_from_mirror("org/model", str(local_dir))
+
+    assert result is False
+    assert not list(local_dir.iterdir())

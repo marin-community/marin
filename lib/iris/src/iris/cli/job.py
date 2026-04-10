@@ -46,6 +46,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
+from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
 from iris.time_proto import timestamp_from_proto
 from rigging.timing import Duration, Timestamp
 
@@ -61,10 +62,6 @@ _STATE_MAP: dict[str, job_pb2.JobState] = {
     "worker_failed": job_pb2.JOB_STATE_WORKER_FAILED,
     "unschedulable": job_pb2.JOB_STATE_UNSCHEDULABLE,
 }
-
-
-def _job_state_name(state: job_pb2.JobState) -> str:
-    return job_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
 
 
 def _format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
@@ -378,6 +375,68 @@ def build_tpu_alternatives(tpu_arg: str | None) -> list[str]:
         return []
     primary, alternatives = _parse_tpu_alternatives(tpu_arg)
     return [primary, *alternatives]
+
+
+# Thresholds above which the entrypoint job is considered "extra-resource-heavy"
+# and requires --enable-extra-resources to proceed.
+_LARGE_MEMORY_THRESHOLD_BYTES: int = humanfriendly.parse_size("4GB")
+_LARGE_DISK_THRESHOLD_BYTES: int = humanfriendly.parse_size("10GB")
+
+_ACCELERATOR_HINT = (
+    "The top-level entrypoint (coordinator) job only needs CPU to schedule and "
+    "dispatch work; accelerators are attached to worker tasks spawned by the job. "
+    "If you truly need an accelerator on this entrypoint, pass --enable-extra-resources."
+)
+_LARGE_RESOURCE_HINT = (
+    "The top-level entrypoint (coordinator) job typically needs only modest CPU/RAM/disk "
+    "to schedule and dispatch work. "
+    "If this large resource request is intentional, pass --enable-extra-resources."
+)
+
+
+def validate_extra_resources(
+    tpu: str | None,
+    gpu: str | None,
+    memory: str,
+    disk: str,
+    enable_extra_resources: bool,
+) -> None:
+    """Raise UsageError if heavy resources are requested without --enable-extra-resources.
+
+    Guards against common mistakes where users attach accelerators or request
+    large RAM/disk on the entrypoint (coordinator) job instead of on worker tasks.
+
+    Args:
+        tpu: TPU type string, or None.
+        gpu: GPU spec string, or None.
+        memory: Memory size string (e.g. "8GB").
+        disk: Disk size string (e.g. "64GB").
+        enable_extra_resources: True if the user explicitly opted in.
+    """
+    if enable_extra_resources:
+        return
+
+    if tpu:
+        raise click.UsageError(f"--tpu requires --enable-extra-resources.\n{_ACCELERATOR_HINT}")
+
+    if gpu:
+        raise click.UsageError(f"--gpu requires --enable-extra-resources.\n{_ACCELERATOR_HINT}")
+
+    try:
+        memory_bytes = humanfriendly.parse_size(memory)
+    except humanfriendly.InvalidSize:
+        memory_bytes = 0  # let build_resources surface the parse error
+
+    if memory_bytes >= _LARGE_MEMORY_THRESHOLD_BYTES:
+        raise click.UsageError(f"--memory {memory} (>= 4 GB) requires --enable-extra-resources.\n{_LARGE_RESOURCE_HINT}")
+
+    try:
+        disk_bytes = humanfriendly.parse_size(disk)
+    except humanfriendly.InvalidSize:
+        disk_bytes = 0  # let build_resources surface the parse error
+
+    if disk_bytes >= _LARGE_DISK_THRESHOLD_BYTES:
+        raise click.UsageError(f"--disk {disk} (>= 10 GB) requires --enable-extra-resources.\n{_LARGE_RESOURCE_HINT}")
 
 
 def parse_reservation_spec(spec: str) -> list[ReservationEntry]:
@@ -697,10 +756,24 @@ Examples:
         "TPU type to request (e.g., v5litepod-16). Pass a comma-separated list "
         "(e.g., v6e-4,v5litepod-4) to allow scheduling on any of the listed "
         "variants — useful when capacity is contested. All variants must share "
-        "the same vm_count."
+        "the same vm_count. Requires --enable-extra-resources."
     ),
 )
-@click.option("--gpu", type=str, help="GPU spec: VARIANTxCOUNT (e.g., H100x8), COUNT (e.g., 8), or VARIANT (e.g., H100)")
+@click.option(
+    "--gpu",
+    type=str,
+    help="GPU spec: VARIANTxCOUNT (e.g., H100x8), COUNT (e.g., 8), or VARIANT (e.g., H100). Needs --enable-extra-resources.",  # noqa: E501
+)
+@click.option(
+    "--enable-extra-resources",
+    is_flag=True,
+    default=False,
+    help=(
+        "Allow accelerators (--tpu/--gpu) and large resource requests (>= 4 GB RAM or >= 10 GB disk) "
+        "on the entrypoint job. Not needed for typical coordinator jobs — accelerators should be "
+        "requested by worker tasks spawned by the job."
+    ),
+)
 @click.option("--cpu", type=float, default=0.5, show_default=True, help="Number of CPUs to request")
 @click.option("--memory", type=str, default="1GB", show_default=True, help="Memory size to request (e.g., 8GB, 512MB)")
 @click.option(
@@ -741,6 +814,7 @@ def run(
     cpu: float,
     memory: str,
     disk: str,
+    enable_extra_resources: bool,
     no_wait: bool,
     job_name: str | None,
     user: str | None,
@@ -756,6 +830,7 @@ def run(
 ):
     """Submit jobs to Iris clusters."""
     controller_url = require_controller_url(ctx)
+    validate_extra_resources(tpu, gpu, memory, disk, enable_extra_resources)
     validate_region_zone(region or None, zone, ctx.obj.get("config"))
 
     command = list(cmd)
@@ -881,7 +956,7 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
 
     for j in jobs:
         job_id = j.job_id
-        state_name = _job_state_name(j.state)
+        state_name = job_state_friendly(j.state)
         submitted = timestamp_from_proto(j.submitted_at).as_formatted_date() if j.submitted_at.epoch_ms else "-"
         resources = _format_resources(j.resources) if j.HasField("resources") else "-"
 
@@ -902,6 +977,151 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
         rows = [row[:4] for row in rows]
 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
+
+
+# Mirrors iris.cluster.controller.db.TERMINAL_TASK_STATES. Duplicated here to
+# avoid a CLI → controller.db import dependency just for the constant.
+_TERMINAL_TASK_STATES: frozenset[int] = frozenset(
+    {
+        job_pb2.TASK_STATE_SUCCEEDED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_KILLED,
+        job_pb2.TASK_STATE_UNSCHEDULABLE,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_PREEMPTED,
+    }
+)
+
+
+def _task_index(task_id: str) -> str:
+    last = task_id.rsplit("/", 1)[-1]
+    return last or task_id
+
+
+def _task_duration_ms(task: job_pb2.TaskStatus) -> int | None:
+    if not task.started_at.epoch_ms:
+        return None
+    end_ms = task.finished_at.epoch_ms or Timestamp.now().epoch_ms()
+    return max(0, end_ms - task.started_at.epoch_ms)
+
+
+def _format_duration_ms(ms: int | None) -> str:
+    if ms is None:
+        return "-"
+    return humanfriendly.format_timespan(ms / 1000)
+
+
+def _format_memory_mb(mb: int) -> str:
+    if not mb:
+        return "-"
+    return humanfriendly.format_size(mb * 1_000_000)
+
+
+def build_job_summary(
+    job_status: job_pb2.JobStatus,
+    tasks: list[job_pb2.TaskStatus],
+) -> dict:
+    """Build a structured job/task summary (CLI + test entry point).
+
+    Returns a dict with job-level fields and a per-task list including
+    peak memory, final state, exit code, and duration. Pure function over
+    protos — no RPC calls — so it can be unit-tested without a cluster.
+    """
+    task_summaries = []
+
+    def _sort_key(t: job_pb2.TaskStatus) -> tuple[int, str]:
+        idx = _task_index(t.task_id)
+        try:
+            return (int(idx), "")
+        except ValueError:
+            return (2**31, idx)
+
+    for t in sorted(tasks, key=_sort_key):
+        usage = t.resource_usage
+        task_summaries.append(
+            {
+                "task_id": t.task_id,
+                "index": _task_index(t.task_id),
+                "state": task_state_friendly(t.state),
+                # Only surface exit_code once the task is terminal. Proto scalar
+                # defaults mean a RUNNING/ASSIGNED/BUILDING task would otherwise
+                # report exit=0 and look like a clean success.
+                "exit_code": int(t.exit_code) if t.state in _TERMINAL_TASK_STATES else None,
+                "duration_ms": _task_duration_ms(t),
+                "memory_mb": int(usage.memory_mb) if usage.memory_mb else 0,
+                "memory_peak_mb": int(usage.memory_peak_mb) if usage.memory_peak_mb else 0,
+                "cpu_millicores": int(usage.cpu_millicores) if usage.cpu_millicores else 0,
+                "disk_mb": int(usage.disk_mb) if usage.disk_mb else 0,
+                "worker_id": t.worker_id,
+                "error": t.error,
+            }
+        )
+
+    return {
+        "job_id": job_status.job_id,
+        "name": job_status.name,
+        "state": job_state_friendly(job_status.state),
+        "exit_code": int(job_status.exit_code),
+        "error": job_status.error,
+        "failure_count": int(job_status.failure_count),
+        "preemption_count": int(job_status.preemption_count),
+        "task_count": int(job_status.task_count),
+        "completed_count": int(job_status.completed_count),
+        "task_state_counts": dict(job_status.task_state_counts),
+        "tasks": task_summaries,
+    }
+
+
+def _render_job_summary_text(summary: dict) -> str:
+    lines = [
+        f"Job: {summary['job_id']}" + (f" ({summary['name']})" if summary["name"] else ""),
+        f"State: {summary['state']}  exit={summary['exit_code']}  "
+        f"failures={summary['failure_count']}  preemptions={summary['preemption_count']}",
+        f"Tasks: {summary['completed_count']}/{summary['task_count']} completed  "
+        + "  ".join(f"{k}={v}" for k, v in sorted(summary["task_state_counts"].items()) if v),
+    ]
+    if summary["error"]:
+        lines.append(f"Error: {summary['error']}")
+    lines.append("")
+
+    rows = []
+    for t in summary["tasks"]:
+        rows.append(
+            [
+                t["index"],
+                t["state"],
+                "-" if t["exit_code"] is None else t["exit_code"],
+                _format_duration_ms(t["duration_ms"]),
+                _format_memory_mb(t["memory_peak_mb"]),
+                _format_memory_mb(t["memory_mb"]),
+                (t["error"] or "")[:50] + ("..." if len(t["error"] or "") > 50 else ""),
+            ]
+        )
+    headers = ["TASK", "STATE", "EXIT", "DURATION", "PEAK MEM", "CUR MEM", "ERROR"]
+    lines.append(tabulate(rows, headers=headers, tablefmt="plain"))
+    return "\n".join(lines)
+
+
+@job.command("summary")
+@click.argument("job_id")
+@click.option("--json", "json_output", is_flag=True, help="Emit structured JSON instead of a text table.")
+@click.pass_context
+def summary(ctx, job_id: str, json_output: bool) -> None:
+    """Print a per-task summary (peak memory, state, exit, duration) for a job.
+
+    Works for both running and completed jobs. Data is read from the controller's
+    existing ``GetJobStatus`` / ``ListTasks`` RPCs (no checkpoint scraping).
+    """
+    controller_url = require_controller_url(ctx)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
+    job_name = JobName.from_wire(job_id)
+    job_status = client.status(job_name)
+    tasks = client.list_tasks(job_name)
+    result = build_job_summary(job_status, tasks)
+    if json_output:
+        click.echo(json.dumps(result, indent=2, default=str))
+        return
+    click.echo(_render_job_summary_text(result))
 
 
 @job.command("logs")

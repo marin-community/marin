@@ -20,6 +20,11 @@ from iris.rpc.logging_connect import LogServiceClientSync
 _CONTROLLER_LOG_TARGET = "/system/controller"
 
 
+def _format_cpu_millicores(millicores: int) -> str:
+    """Format CPU usage in cores with the raw millicore value."""
+    return f"{millicores / 1000:g} cores ({millicores}m)"
+
+
 def _print_status(resp: job_pb2.GetProcessStatusResponse, label: str) -> None:
     """Print process status to stdout in human-readable form."""
     info = resp.process_info
@@ -28,7 +33,7 @@ def _print_status(resp: job_pb2.GetProcessStatusResponse, label: str) -> None:
     click.echo(f"PID:             {info.pid}")
     click.echo(f"Python:          {info.python_version}")
     click.echo(f"Uptime:          {humanfriendly.format_timespan(info.uptime_ms / 1000)}")
-    click.echo(f"CPU:             {info.cpu_percent:.1f}% ({info.cpu_count} cores)")
+    click.echo(f"CPU:             {_format_cpu_millicores(info.cpu_millicores)}")
     click.echo(f"Memory RSS:      {humanfriendly.format_size(info.memory_rss_bytes, binary=True)}")
     click.echo(f"Memory VMS:      {humanfriendly.format_size(info.memory_vms_bytes, binary=True)}")
     click.echo(f"Memory Total:    {humanfriendly.format_size(info.memory_total_bytes, binary=True)}")

@@ -3,18 +3,25 @@
 
 """Integration tests for priority bands, per-user fairness, and scheduling caps."""
 
+import shutil
+import tempfile
 from collections import defaultdict
+from pathlib import Path
 
-from iris.cluster.controller.budget import UserTask, compute_effective_band, compute_user_spend, interleave_by_user
-from iris.cluster.controller.controller import _schedulable_tasks
-from iris.cluster.types import JobName
+from iris.cluster.controller.budget import UserTask, compute_effective_band, interleave_by_user
+from iris.cluster.controller.controller import Controller, ControllerConfig, SchedulingOutcome, _schedulable_tasks
+from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from rigging.timing import Timestamp
 
 from .conftest import (
+    FakeProvider,
+    inject_device_constraints,
     make_controller_state,
     make_job_request,
+    make_worker_metadata,
     query_task,
     query_tasks_for_job,
     submit_job,
@@ -109,39 +116,6 @@ def test_single_task_user_beats_hundred_task_user():
         assert first_task in a_task_ids, f"Expected user-a's task first, got {first_task} (user={first_task.user})"
         # User A's single task should appear in position 0, User B's first in position 1
         assert interleaved[1].user == "user-b"
-
-
-def test_per_user_cap():
-    """max_tasks_per_user_per_cycle limits how many tasks per user are scheduled."""
-    with make_controller_state() as state:
-        cap = 3
-        # User submits 10 tasks
-        _submit_user_job(state, "greedy", "many-tasks", replicas=10)
-
-        schedulable = _schedulable_tasks(state._db)
-        with state._db.snapshot() as snap:
-            user_spend = compute_user_spend(snap)
-
-        # Interleave
-        tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
-        for task in schedulable:
-            tasks_by_band[task.priority_band].append(task)
-        interleaved: list[JobName] = []
-        for band_key in sorted(tasks_by_band.keys()):
-            band_tasks = tasks_by_band[band_key]
-            user_tasks = [UserTask(user_id=t.task_id.user, task=t.task_id) for t in band_tasks]
-            interleaved.extend(interleave_by_user(user_tasks, user_spend))
-
-        # Apply cap
-        tasks_per_user: dict[str, int] = defaultdict(int)
-        capped: list[JobName] = []
-        for task_id in interleaved:
-            if tasks_per_user[task_id.user] < cap:
-                capped.append(task_id)
-                tasks_per_user[task_id.user] += 1
-
-        assert len(capped) == cap
-        assert all(tid.user == "greedy" for tid in capped)
 
 
 def test_depth_boost_within_band():
@@ -305,6 +279,68 @@ def test_zero_budget_means_unlimited():
         for task in schedulable:
             band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
             assert band == job_pb2.PRIORITY_BAND_INTERACTIVE
+
+
+def test_unplaceable_tasks_do_not_starve_placeable_tasks():
+    """A user's CPU task is scheduled even when they have many unplaceable TPU tasks.
+
+    Regression test: a per-user input cap (max_tasks_per_user_per_cycle) applied before
+    scheduling let unplaceable TPU tasks consume all per-user slots, permanently blocking
+    CPU tasks for the same user that had available workers.  The cap must only apply to
+    actual assignments, not scheduling candidates.
+    """
+    OLD_CAP = 8  # historical default — must exceed this many TPU tasks
+    tmpdir = Path(tempfile.mkdtemp(prefix="iris_ctrl_test_"))
+    try:
+        config = ControllerConfig(
+            remote_state_dir=f"file://{tmpdir}/remote",
+            local_state_dir=tmpdir / "local",
+        )
+        ctrl = Controller(config=config, provider=FakeProvider())
+
+        # Submit OLD_CAP+2 unplaceable TPU tasks for alice (no TPU workers will be registered)
+        for i in range(OLD_CAP + 2):
+            tpu_req = controller_pb2.Controller.LaunchJobRequest(
+                name=f"/alice/tpu-job-{i}",
+                entrypoint=make_job_request().entrypoint,
+                resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+                environment=job_pb2.EnvironmentConfig(),
+                replicas=1,
+            )
+            tpu_req.resources.device.tpu.variant = "v5p-8"
+            inject_device_constraints(tpu_req)
+            jid = JobName.from_string(f"/alice/tpu-job-{i}")
+            ctrl._transitions.submit_job(jid, tpu_req, Timestamp.now())
+
+        # Submit 1 CPU task for alice — this should be placeable on the CPU worker
+        cpu_jid = JobName.from_string("/alice/cpu-job")
+        cpu_req = make_job_request(name="/alice/cpu-job", cpu=1, replicas=1)
+        inject_device_constraints(cpu_req)
+        ctrl._transitions.submit_job(cpu_jid, cpu_req, Timestamp.now())
+
+        # Register exactly 1 CPU worker — no TPU workers
+        ctrl._transitions.register_or_refresh_worker(
+            worker_id=WorkerId("cpu-worker"),
+            address="cpu-worker:8080",
+            metadata=make_worker_metadata(cpu=4, memory_bytes=8 * 1024**3),
+            ts=Timestamp.now(),
+        )
+
+        outcome = ctrl._run_scheduling()
+
+        assert outcome == SchedulingOutcome.ASSIGNMENTS_MADE, f"Expected ASSIGNMENTS_MADE, got {outcome}"
+
+        with ctrl._db.snapshot() as q:
+            cpu_tasks = TASK_DETAIL_PROJECTION.decode(
+                q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (cpu_jid.to_wire(),))
+            )
+
+        assert len(cpu_tasks) == 1
+        assert (
+            cpu_tasks[0].state == job_pb2.TASK_STATE_ASSIGNED
+        ), f"CPU task state={cpu_tasks[0].state}; unplaceable TPU tasks may be blocking it"
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def test_submit_with_explicit_band_stores_band():

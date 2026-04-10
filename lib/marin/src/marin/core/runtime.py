@@ -13,11 +13,6 @@ from marin.utils import fsspec_exists
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class RayConfig:
-    address: str | None = None
-
-
 def cached_or_construct_output(success_suffix="success", verbose=True):
     """
     Decorator to make a function idempotent. This decorator will check if the success file exists, if it does then it

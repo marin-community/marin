@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for K8sResource enum path construction and kind mapping.
+"""Tests for CloudK8sService helpers and K8sResource enum path construction.
 
 These test the path construction methods on the K8sResource enum, which
 replaced the old _api_path_for_manifest and _api_path_for_resource functions.

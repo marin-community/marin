@@ -157,7 +157,7 @@ def test_dedupe_consolidate_integration(fox_corpus):
     assert result["mode"] == DedupMode.EXACT_PARAGRAPH
 
     # Verify dedupe output exists and has same structure as input
-    dedupe_output_files = list(Path(dedupe_output_dir).glob("data/*.vortex"))
+    dedupe_output_files = list(Path(dedupe_output_dir).glob("data/*.parquet"))
     assert len(dedupe_output_files) > 0
 
     # Now run consolidate using the dedupe attributes
@@ -171,7 +171,7 @@ def test_dedupe_consolidate_integration(fox_corpus):
                 type=FilterType.REMOVE_SPANS,
                 attribute_path=f"{dedupe_output_dir}/data",
                 name="dup_spans",
-                attribute_filetype="vortex",
+                attribute_filetype="parquet",
                 keep_if_missing=True,
             )
         ],

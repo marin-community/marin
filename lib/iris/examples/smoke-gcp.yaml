@@ -1,5 +1,5 @@
 # Iris smoke-test configuration (GCP)
-# Usage: iris --config=examples/smoke-gcp.yaml cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
+# Usage: iris --cluster=smoke-gcp cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
 
 platform:
   label_prefix: smoke-ci
