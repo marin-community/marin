@@ -1,0 +1,25 @@
+kevin@kevin-cpu:~/marin-harbor$ codex version
+╭─────────────────────────────────────────────────╮
+│ ✨ Update available! 0.89.0 -> 0.117.0          │
+│ Run npm install -g @openai/codex to update.     │
+│                                                 │
+│ See full release notes:                         │
+│ https://github.com/openai/codex/releases/latest │
+╰─────────────────────────────────────────────────╯
+
+╭────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.89.0)                          │
+│                                                    │
+│ model:     gpt-5.3-codex medium   /model to change │
+│ directory: ~/marin-harbor                          │
+╰────────────────────────────────────────────────────╯
+
+  Tip: Use /feedback to send logs to the maintainers when something looks off.
+
+
+› version
+
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.
+kevin@kevin-cpu:~/marin-harbor$ which codex
+/home/kevin/.nvm/versions/node/v22.22.2/bin/codex tried upgrading codex but still not updated?
