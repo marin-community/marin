@@ -46,23 +46,37 @@ _MAX_ENCODE_CHARS = 400_000
 _MAX_HOMOGENEOUS_RUN_CHARS = 25_000
 
 
-# \s matches any whitespace, \S matches any non-whitespace.
-# {1, N} matches a run of at least 1 and at most N chars.
-# The | (alternation) ensures we split at whitespace/non-whitespace transitions.
-_SAFE_CHUNK_RE = re.compile(rf"\s{{1,{_MAX_HOMOGENEOUS_RUN_CHARS}}}|\S{{1,{_MAX_HOMOGENEOUS_RUN_CHARS}}}")
+# Match runs of N+ whitespace OR N+ non-whitespace chars. These are the only
+# points where the input MUST be split to keep each substring's longest
+# homogeneous run bounded; everything else passes through untouched so that
+# BPE merges (e.g. " world" leading-space tokens) on normal text are
+# preserved exactly as the underlying tokenizer would produce them.
+_OVERLONG_RUN_RE = re.compile(rf"\s{{{_MAX_HOMOGENEOUS_RUN_CHARS},}}|\S{{{_MAX_HOMOGENEOUS_RUN_CHARS},}}")
 
 
 def _safe_split_for_tokenizer(text: str) -> list[str]:
     """Split ``text`` into substrings safe to feed to a Rust BPE tokenizer.
 
-    Each substring is at most ``_MAX_ENCODE_CHARS`` long and contains no run
-    of more than ``_MAX_HOMOGENEOUS_RUN_CHARS`` consecutive whitespace or
-    non-whitespace characters.
+    Each substring contains no more than ``_MAX_HOMOGENEOUS_RUN_CHARS``
+    consecutive whitespace or non-whitespace characters. Inputs whose runs
+    are all within the cap are returned unchanged as a single-element list,
+    so normal text round-trips byte-identically through the tokenizer.
     """
+    if len(text) <= _MAX_HOMOGENEOUS_RUN_CHARS:
+        return [text]
+
     parts: list[str] = []
-    for i in range(0, len(text), _MAX_ENCODE_CHARS):
-        parts.extend(_SAFE_CHUNK_RE.findall(text[i : i + _MAX_ENCODE_CHARS]))
-    return parts
+    last = 0
+    for m in _OVERLONG_RUN_RE.finditer(text):
+        if m.start() > last:
+            parts.append(text[last : m.start()])
+        run = m.group()
+        for i in range(0, len(run), _MAX_HOMOGENEOUS_RUN_CHARS):
+            parts.append(run[i : i + _MAX_HOMOGENEOUS_RUN_CHARS])
+        last = m.end()
+    if last < len(text):
+        parts.append(text[last:])
+    return parts or [text]
 
 
 @runtime_checkable

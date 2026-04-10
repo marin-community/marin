@@ -686,7 +686,7 @@ def test_multi_chunk_path_preserves_bos(backend_tokenizer, monkeypatch):
 
     # Force the multi-chunk path by capping homogeneous runs at 100 chars.
     monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", 100)
-    monkeypatch.setattr(tk, "_SAFE_CHUNK_RE", re.compile(r"\s{1,100}|\S{1,100}"))
+    monkeypatch.setattr(tk, "_OVERLONG_RUN_RE", re.compile(r"\s{100,}|\S{100,}"))
     parts = tk._safe_split_for_tokenizer(text)
     assert len(parts) > 1, "Expected multi-chunk path to activate"
     assert "".join(parts) == text
@@ -750,7 +750,7 @@ def test_encode_batch_scatters_parts_back_to_originals(backend_tokenizer, monkey
     import levanter.tokenizers as tk
 
     monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", 100)
-    monkeypatch.setattr(tk, "_SAFE_CHUNK_RE", re.compile(r"\s{1,100}|\S{1,100}"))
+    monkeypatch.setattr(tk, "_OVERLONG_RUN_RE", re.compile(r"\s{100,}|\S{100,}"))
 
     short = "The quick brown fox."
     pathological = "start" + (" " * 500) + "end"
