@@ -141,8 +141,8 @@ gcloud run deploy "${SERVICE}" \
   --timeout=300 \
   --memory=512Mi \
   --cpu=1 \
-  --min-instances=0 \
-  --max-instances=5 \
+  --min-instances=1 \
+  --max-instances=1 \
   --port=8080
 
 echo "==> Deployed. Service URL:"
