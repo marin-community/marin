@@ -102,12 +102,16 @@ class Controller(_message.Message):
         job_id: str
         def __init__(self, job_id: _Optional[str] = ...) -> None: ...
     class GetJobStatusResponse(_message.Message):
-        __slots__ = ("job", "request")
+        __slots__ = ("job", "request", "resource_min", "resource_max")
         JOB_FIELD_NUMBER: _ClassVar[int]
         REQUEST_FIELD_NUMBER: _ClassVar[int]
+        RESOURCE_MIN_FIELD_NUMBER: _ClassVar[int]
+        RESOURCE_MAX_FIELD_NUMBER: _ClassVar[int]
         job: _job_pb2.JobStatus
         request: Controller.LaunchJobRequest
-        def __init__(self, job: _Optional[_Union[_job_pb2.JobStatus, _Mapping]] = ..., request: _Optional[_Union[Controller.LaunchJobRequest, _Mapping]] = ...) -> None: ...
+        resource_min: _job_pb2.ResourceUsage
+        resource_max: _job_pb2.ResourceUsage
+        def __init__(self, job: _Optional[_Union[_job_pb2.JobStatus, _Mapping]] = ..., request: _Optional[_Union[Controller.LaunchJobRequest, _Mapping]] = ..., resource_min: _Optional[_Union[_job_pb2.ResourceUsage, _Mapping]] = ..., resource_max: _Optional[_Union[_job_pb2.ResourceUsage, _Mapping]] = ...) -> None: ...
     class GetJobStateRequest(_message.Message):
         __slots__ = ("job_ids",)
         JOB_IDS_FIELD_NUMBER: _ClassVar[int]
@@ -183,10 +187,12 @@ class Controller(_message.Message):
         task_id: str
         def __init__(self, task_id: _Optional[str] = ...) -> None: ...
     class GetTaskStatusResponse(_message.Message):
-        __slots__ = ("task",)
+        __slots__ = ("task", "job_resources")
         TASK_FIELD_NUMBER: _ClassVar[int]
+        JOB_RESOURCES_FIELD_NUMBER: _ClassVar[int]
         task: _job_pb2.TaskStatus
-        def __init__(self, task: _Optional[_Union[_job_pb2.TaskStatus, _Mapping]] = ...) -> None: ...
+        job_resources: _job_pb2.ResourceSpecProto
+        def __init__(self, task: _Optional[_Union[_job_pb2.TaskStatus, _Mapping]] = ..., job_resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ...) -> None: ...
     class ListTasksRequest(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]

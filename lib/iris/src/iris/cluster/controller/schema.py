@@ -978,6 +978,31 @@ WORKER_RESOURCE_HISTORY = Table(
     ),
 )
 
+TASK_RESOURCE_HISTORY = Table(
+    "task_resource_history",
+    "trh",
+    columns=(
+        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
+        Column(
+            "task_id",
+            "TEXT",
+            "NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE",
+            python_type=JobName,
+            decoder=JobName.from_wire,
+        ),
+        Column("attempt_id", "INTEGER", "NOT NULL"),
+        Column("cpu_millicores", "INTEGER", "NOT NULL DEFAULT 0"),
+        Column("memory_mb", "INTEGER", "NOT NULL DEFAULT 0"),
+        Column("disk_mb", "INTEGER", "NOT NULL DEFAULT 0"),
+        Column("memory_peak_mb", "INTEGER", "NOT NULL DEFAULT 0"),
+        Column("timestamp_ms", "INTEGER", "NOT NULL", python_type=Timestamp, decoder=decode_timestamp_ms),
+    ),
+    indexes=(
+        "CREATE INDEX IF NOT EXISTS idx_task_resource_history_task_attempt"
+        " ON task_resource_history(task_id, attempt_id, id DESC)",
+    ),
+)
+
 ENDPOINTS = Table(
     "endpoints",
     "e",
@@ -1312,6 +1337,7 @@ MAIN_TABLES: tuple[Table, ...] = (
     WORKER_ATTRIBUTES,
     WORKER_TASK_HISTORY,
     WORKER_RESOURCE_HISTORY,
+    TASK_RESOURCE_HISTORY,
     ENDPOINTS,
     DISPATCH_QUEUE,
     TXN_LOG,

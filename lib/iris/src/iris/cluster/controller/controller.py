@@ -1285,6 +1285,10 @@ class Controller:
                     self._transitions.prune_worker_resource_history()
                 except Exception:
                     logger.exception("Worker resource history cleanup failed")
+                try:
+                    self._transitions.prune_task_resource_history()
+                except Exception:
+                    logger.exception("Task resource history cleanup failed")
 
             now = time.monotonic()
             if now - last_full_prune >= full_prune_interval:

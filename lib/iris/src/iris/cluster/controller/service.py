@@ -84,7 +84,7 @@ from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pen
 from iris.cluster.controller.query import execute_raw_query
 from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
-from iris.cluster.controller.transitions import ControllerTransitions
+from iris.cluster.controller.transitions import ControllerTransitions, TASK_RESOURCE_HISTORY_RETENTION
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.log_store import build_log_source, worker_log_key
 from iris.cluster.process_status import get_process_status
@@ -1058,9 +1058,41 @@ class ControllerServiceImpl:
         if job.submitted_at:
             proto_job_status.submitted_at.CopyFrom(timestamp_to_proto(job.submitted_at))
 
+        # Compute min/max resource usage across running tasks via pure SQL.
+        resource_min = None
+        resource_max = None
+        with self._db.read_snapshot() as q:
+            agg = q.raw(
+                "SELECT "
+                "  MIN(trh.cpu_millicores) as min_cpu, MAX(trh.cpu_millicores) as max_cpu, "
+                "  MIN(trh.memory_mb) as min_mem, MAX(trh.memory_mb) as max_mem, "
+                "  MIN(trh.disk_mb) as min_disk, MAX(trh.disk_mb) as max_disk, "
+                "  MAX(trh.memory_peak_mb) as max_peak_mem, "
+                "  COUNT(*) as cnt "
+                "FROM task_resource_history trh "
+                "JOIN tasks t ON trh.task_id = t.task_id AND trh.attempt_id = t.current_attempt_id "
+                "WHERE t.job_id = ? AND t.state IN (?, ?)",
+                (job.job_id.to_wire(), job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_BUILDING),
+            )
+        if agg and agg[0].cnt > 0:
+            row = agg[0]
+            resource_min = job_pb2.ResourceUsage(
+                memory_mb=row.min_mem,
+                cpu_millicores=row.min_cpu,
+                disk_mb=row.min_disk,
+            )
+            resource_max = job_pb2.ResourceUsage(
+                memory_mb=row.max_mem,
+                cpu_millicores=row.max_cpu,
+                disk_mb=row.max_disk,
+                memory_peak_mb=row.max_peak_mem,
+            )
+
         return controller_pb2.Controller.GetJobStatusResponse(
             job=proto_job_status,
             request=redact_request_env_vars(job.request) if job.request else None,
+            resource_min=resource_min,
+            resource_max=resource_max,
         )
 
     def get_job_state(
@@ -1225,9 +1257,37 @@ class ControllerServiceImpl:
         if twid:
             worker_address = _worker_address(self._db, twid) or ""
 
-        return controller_pb2.Controller.GetTaskStatusResponse(
-            task=task_to_proto(task, worker_address=worker_address),
-        )
+        proto = task_to_proto(task, worker_address=worker_address)
+
+        # Attach resource history and job resource limits (detail view only).
+        job_resources = None
+        with self._db.read_snapshot() as q:
+            # Fetch newest rows first so active tasks with >N rows get current data.
+            history_rows = q.raw(
+                "SELECT trh.cpu_millicores, trh.memory_mb, trh.disk_mb, trh.memory_peak_mb "
+                "FROM task_resource_history trh "
+                "WHERE trh.task_id = ? AND trh.attempt_id = ? ORDER BY trh.id DESC LIMIT ?",
+                (task_id.to_wire(), task.current_attempt_id, TASK_RESOURCE_HISTORY_RETENTION),
+            )
+            job_row = q.raw(
+                "SELECT j.request_proto FROM jobs j WHERE j.job_id = ?",
+                (task.job_id.to_wire(),),
+                decoders={"request_proto": lambda b: controller_pb2.Controller.LaunchJobRequest.FromString(b)},
+            )
+        # Reverse to oldest-first for the API contract.
+        for r in reversed(history_rows):
+            proto.resource_history.append(
+                job_pb2.ResourceUsage(
+                    cpu_millicores=r.cpu_millicores,
+                    memory_mb=r.memory_mb,
+                    disk_mb=r.disk_mb,
+                    memory_peak_mb=r.memory_peak_mb,
+                )
+            )
+        if job_row and job_row[0].request_proto.HasField("resources"):
+            job_resources = job_row[0].request_proto.resources
+
+        return controller_pb2.Controller.GetTaskStatusResponse(task=proto, job_resources=job_resources)
 
     def list_tasks(
         self,

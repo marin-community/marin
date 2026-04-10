@@ -94,6 +94,7 @@ export interface TaskStatus {
   pendingReason?: string
   canBeScheduled?: boolean
   containerId?: string
+  resourceHistory?: ResourceUsage[]
 }
 
 // -- Jobs --
@@ -144,6 +145,8 @@ export interface ListJobsResponse {
 export interface GetJobStatusResponse {
   job: JobStatus
   request?: LaunchJobRequest
+  resourceMin?: ResourceUsage
+  resourceMax?: ResourceUsage
 }
 
 export interface LaunchJobRequest {
@@ -155,6 +158,7 @@ export interface LaunchJobRequest {
 
 export interface GetTaskStatusResponse {
   task: TaskStatus
+  jobResources?: ResourceSpecProto
 }
 
 export interface ListTasksResponse {
