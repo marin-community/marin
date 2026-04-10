@@ -38,6 +38,7 @@ from marin.rl import weight_transfer
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.runtime import RLRuntimeHandles
+from marin.rl.telemetry import EventShardWriter, StepProvenance, TelemetryEvent, TrackerStream
 from marin.rl.weight_transfer import WeightTransferConfig
 
 from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, RolloutWithCount
@@ -145,6 +146,8 @@ class TrainWorkerConfig:
     loss: RLLossModule
     tokenizer: MarinTokenizer
     run_id: str
+    root_run_id: str | None = None
+    """Stable RL job run id used for shared telemetry and artifact paths."""
 
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
@@ -155,6 +158,12 @@ class TrainWorkerConfig:
 
     seed: int = 0
     """Random seed for replay buffer sampling and model construction."""
+
+    metadata_path: str | None = None
+    """Base metadata path for local RL telemetry artifacts."""
+
+    instance_id: str | None = None
+    """Coordinator invocation identifier used for per-attempt artifact naming."""
 
 
 class StreamingRolloutLoader:
@@ -269,6 +278,7 @@ class TrainWorker:
     loss_module: RLLossModule
     initial_model: LmHeadModel | None
     reference_model: LmHeadModel | None
+    _event_writer: EventShardWriter | None
 
     def __init__(
         self,
@@ -293,6 +303,9 @@ class TrainWorker:
         self._should_stop = False
         self.tokenizer = config.tokenizer
         self.loss_module = config.loss
+        self._event_writer = None
+
+        self._initialize_telemetry()
 
         self.rollout_reader = config.rollout_storage.create_reader()
 
@@ -332,6 +345,34 @@ class TrainWorker:
         logger.info("Connected to curriculum actor: %s", config.curriculum_config.actor_name)
 
         self._build_models()
+
+    def _initialize_telemetry(self) -> None:
+        metadata_path = self.config.metadata_path
+        instance_id = self.config.instance_id
+        if metadata_path is None or instance_id is None:
+            return
+
+        telemetry_run_id = self.config.root_run_id or self.config.run_id
+
+        writer = EventShardWriter(
+            metadata_path=metadata_path,
+            run_id=telemetry_run_id,
+            stream=TrackerStream.TRAINER,
+            instance_id=instance_id,
+        )
+        writer.append(
+            TelemetryEvent(
+                run_id=telemetry_run_id,
+                stream=TrackerStream.TRAINER,
+                event_type="worker_started",
+                provenance=StepProvenance(instance_id=instance_id),
+                payload={"worker_role": "trainer"},
+            )
+        )
+        register_artifact = getattr(self._runtime.run_state, "register_artifact_ref", None)
+        if register_artifact is not None:
+            register_artifact.remote(writer.artifact_ref()).result()
+        self._event_writer = writer
 
     def _build_models(self):
         """Build the initial policy model and optional retained reference model."""
