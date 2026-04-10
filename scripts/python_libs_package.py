@@ -9,16 +9,22 @@ marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr) into
 dist/, then optionally publishes one GitHub Release per package and updates
 a rolling pointer (marin-<pkg>-latest or marin-<pkg>-stable).
 
-Three modes:
+Four modes:
     nightly  -- version becomes <base>.dev<YYYYMMDD>; tag marin-<pkg>-<YYYYMMDD>
     stable   -- version is taken from --version; tag marin-<pkg>-v<version>
     manual   -- version becomes <base>+manual.<sha>; tag marin-<pkg>-manual-<sha>
+    vendor   -- version becomes <base>.dev<YYYYMMDDHHMMSS>; copy wheels to a
+                local directory (no GH publish). For local-iteration loops
+                where a marin worktree feeds wheels into an experiment repo's
+                find-links. The timestamp guarantees rebuilt wheels beat any
+                nightly already published earlier the same day.
 
 Usage:
     python scripts/python_libs_package.py --mode nightly
     python scripts/python_libs_package.py --mode stable --version 1.4.0
     python scripts/python_libs_package.py --mode nightly --skip-publish
     python scripts/python_libs_package.py --skip-build --publish-only
+    python scripts/python_libs_package.py --mode vendor --vendor ../tiny-tpu/vendor
 
 The build is done from a temporary in-place patch of each package's version
 file plus a cross-pin rewrite of every sibling dependency. Mutations are
@@ -164,12 +170,24 @@ def patched_tree(version: str):
 # ---------- build ------------------------------------------------------------
 
 
+def _highest_base_version() -> str:
+    """Return the highest version currently declared across the seven libs.
+
+    All seven packages share one synthetic version per build so cross-pins
+    resolve cleanly. Picking the max keeps the synthetic version above the
+    most recent stable so uv prefers it.
+    """
+    bases = [_read_base_version(p) for p in PACKAGES]
+    return max(bases, key=lambda v: tuple(int(p) if p.isdigit() else 0 for p in re.split(r"[.\-+]", v)))
+
+
 def resolve_version(mode: str, explicit: str | None) -> tuple[str, str]:
     """Return (build_version, tag_suffix).
 
-    nightly  -> ("<base>.dev<YYYYMMDD>", "<YYYYMMDD>")
-    stable   -> ("<explicit>",           "v<explicit>")
-    manual   -> ("<base>+manual.<sha>",  "manual-<sha>")
+    nightly  -> ("<base>.dev<YYYYMMDD>",       "<YYYYMMDD>")
+    stable   -> ("<explicit>",                 "v<explicit>")
+    manual   -> ("<base>+manual.<sha>",        "manual-<sha>")
+    vendor   -> ("<base>.dev<YYYYMMDDHHMMSS>", "vendor-<YYYYMMDDHHMMSS>")
     """
     if mode == "stable":
         if not explicit:
@@ -177,23 +195,16 @@ def resolve_version(mode: str, explicit: str | None) -> tuple[str, str]:
         return explicit, f"v{explicit}"
     if mode == "nightly":
         date = datetime.now(timezone.utc).strftime("%Y%m%d")
-        # All seven packages share one synthetic version per nightly run so
-        # cross-pins resolve cleanly. The base is the highest-numbered version
-        # currently declared in any of the lib pyproject files; this keeps the
-        # nightly above the most recent stable so uv prefers it.
-        bases = []
-        for pkg in PACKAGES:
-            try:
-                bases.append(_read_base_version(pkg))
-            except RuntimeError:
-                continue
-        base = max(bases, key=lambda v: tuple(int(p) if p.isdigit() else 0 for p in re.split(r"[.\-+]", v)))
-        return f"{base}.dev{date}", date
+        return f"{_highest_base_version()}.dev{date}", date
     if mode == "manual":
         sha = _git_short_sha()
-        bases = [_read_base_version(p) for p in PACKAGES]
-        base = max(bases, key=lambda v: tuple(int(p) if p.isdigit() else 0 for p in re.split(r"[.\-+]", v)))
-        return f"{base}+manual.{sha}", f"manual-{sha}"
+        return f"{_highest_base_version()}+manual.{sha}", f"manual-{sha}"
+    if mode == "vendor":
+        # Second-precision timestamp guarantees the freshly-built wheel beats
+        # any nightly built earlier today, so `uv sync` in the consumer always
+        # picks up the local copy without cache games.
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        return f"{_highest_base_version()}.dev{ts}", f"vendor-{ts}"
     raise SystemExit(f"Unknown mode: {mode}")
 
 
@@ -221,6 +232,29 @@ def build_wheels(version: str) -> None:
         print(f"  {w.name}")
     if len(wheels) != len(PACKAGES):
         raise RuntimeError(f"Expected {len(PACKAGES)} wheels, got {len(wheels)}")
+
+
+# ---------- vendor -----------------------------------------------------------
+
+
+def vendor_copy(target: Path) -> None:
+    """Drop freshly-built wheels into target/, replacing any prior marin-* wheels.
+
+    Cleans only files matching marin*-*.whl so unrelated files in the target
+    directory (e.g. .gitkeep, README) are left alone. Used by --mode vendor
+    to feed local wheels into a downstream experiment's find-links.
+    """
+    target.mkdir(parents=True, exist_ok=True)
+    stale = sorted(target.glob("marin*-*.whl"))
+    for s in stale:
+        s.unlink()
+    if stale:
+        print(f"\nRemoved {len(stale)} stale marin-* wheel(s) from {target}")
+    print(f"\nCopying wheels to {target}:")
+    for wheel in sorted(DIST_DIR.glob("*.whl")):
+        dest = target / wheel.name
+        shutil.copy2(wheel, dest)
+        print(f"  -> {dest.name}")
 
 
 # ---------- publish ----------------------------------------------------------
@@ -341,8 +375,14 @@ def prune_old_nightlies(retain_days: int = NIGHTLY_RETENTION_DAYS) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--mode", choices=["nightly", "stable", "manual"], default="nightly")
+    parser.add_argument("--mode", choices=["nightly", "stable", "manual", "vendor"], default="nightly")
     parser.add_argument("--version", default=None, help="Required for --mode stable")
+    parser.add_argument(
+        "--vendor",
+        type=Path,
+        default=None,
+        help="Target directory to drop wheels into (required for --mode vendor)",
+    )
     parser.add_argument("--skip-build", action="store_true", help="Reuse existing dist/")
     parser.add_argument("--skip-publish", action="store_true", help="Build only")
     parser.add_argument("--publish-only", action="store_true", help="Same as --skip-build")
@@ -356,6 +396,14 @@ def main() -> None:
     print(f"Mode:        {args.mode}")
     print(f"Version:     {version}")
     print(f"Tag suffix:  {tag_suffix}")
+
+    if args.mode == "vendor":
+        if args.vendor is None:
+            raise SystemExit("--vendor PATH is required for --mode vendor")
+        build_wheels(version)
+        vendor_copy(args.vendor.expanduser().resolve())
+        print("\nDone.")
+        return
 
     if not args.skip_build:
         build_wheels(version)
