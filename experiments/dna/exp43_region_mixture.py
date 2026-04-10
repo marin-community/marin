@@ -1,0 +1,68 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Experiment 43: Mixing 5 different genomic regions.
+
+Question: How do models perform when trained on different genomic regions
+and their mixtures?
+
+This file implements Part 1: Individual training runs on 4 regions
+(CDS, 5' UTR, 3' UTR, ncRNA) with 256 context size.
+
+TODO: Part 2 - Add mixture training runs combining regions with different weights.
+
+https://github.com/Open-Athena/bolinas-dna/issues/43
+"""
+
+import dataclasses
+
+from experiments.dna.defaults import (
+    DNA_TOKENIZER_V1,
+    FAST_RUN_CONFIG_V1,
+    dna_effective_seq_len,
+    dna_tokenize_rw_v1,
+    dna_train,
+)
+from experiments.qwen3 import qwen3_0_6b_hd128
+from marin.execution.executor import executor_main
+
+SEQ_LEN = 256
+model_config = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=dna_effective_seq_len(SEQ_LEN, DNA_TOKENIZER_V1))
+
+DATASETS = {
+    "cds": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v5_256_128",
+    "five_prime_utr": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v6_256_128",
+    "three_prime_utr": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v7_256_128",
+    "ncrna": "bolinas-dna/genomes-v4-genome_set-animals-intervals-v8_256_128",
+}
+
+
+def dataset_name(dataset: str) -> str:
+    """Extract dataset name from HuggingFace path (org/name -> name)."""
+    return dataset.split("/")[-1]
+
+
+# Double batch size for 256 context to match tokens/batch with 512 context
+train_config_256 = dataclasses.replace(FAST_RUN_CONFIG_V1, train_batch_size=FAST_RUN_CONFIG_V1.train_batch_size * 2)
+
+training_steps = []
+for region, dataset in DATASETS.items():
+    name = dataset_name(dataset)
+
+    tokenized = dna_tokenize_rw_v1(
+        name=f"{name}-rw01",
+        dataset=dataset,
+    )
+
+    train_step = dna_train(
+        name=f"exp43-{region}-r01",
+        tokenized=tokenized,
+        model_config=model_config,
+        train_config=train_config_256,
+        tags=["dna", "exp43", "regions", "fast"],
+    )
+    training_steps.append(train_step)
+
+if __name__ == "__main__":
+    executor_main(steps=training_steps)

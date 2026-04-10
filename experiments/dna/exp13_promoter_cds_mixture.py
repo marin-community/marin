@@ -1,0 +1,94 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Mixture experiment for animal promoters and CDS regions.
+
+This experiment trains on a mixture of promoter and CDS sequences with two
+different weighting schemes to study the effect of data composition:
+
+1. "equal": 50/50 weight split between promoters and CDS
+   - Since CDS dataset is ~8.4x larger, CDS sequences will be seen less often
+   - Each promoter sequence is seen ~8.4x more than each CDS sequence
+
+2. "proportional": Weights proportional to dataset sizes
+   - Each sequence from both datasets is seen approximately equally often
+   - Natural sampling based on dataset sizes
+
+https://github.com/Open-Athena/bolinas-dna/issues/13
+"""
+
+import dataclasses
+
+from experiments.defaults import default_train
+from experiments.dna.defaults import (
+    CDS_DATASET_V1,
+    DNA_TOKENIZER_V1,
+    PROMOTERS_DATASET_V1,
+    YOLO_RUN_CONFIG_V1,
+    dna_effective_seq_len,
+    dna_tokenize_rw_v1,
+)
+from experiments.qwen3 import qwen3_1_7b
+from marin.execution.executor import executor_main
+from marin.processing.tokenize import lm_mixture_data_config
+
+SEQ_LEN = 512
+model_config = dataclasses.replace(qwen3_1_7b, max_seq_len=dna_effective_seq_len(SEQ_LEN, DNA_TOKENIZER_V1))
+
+# =============================================================================
+# Dataset sizes (number of sequences)
+# =============================================================================
+
+PROMOTERS_SIZE = 22_588_618
+CDS_SIZE = 189_627_296
+# CDS is ~8.4x larger than promoters
+
+# =============================================================================
+# Weight configurations for controlled experiment
+# =============================================================================
+
+WEIGHT_CONFIGS = {
+    "equal": {
+        "promoters": 0.5,
+        "cds": 0.5,
+    },
+    "proportional": {
+        "promoters": PROMOTERS_SIZE,  # raw counts get normalized
+        "cds": CDS_SIZE,
+    },
+}
+
+# =============================================================================
+# Tokenize each dataset (shared across runs)
+# =============================================================================
+
+tokenized_datasets = {
+    "promoters": dna_tokenize_rw_v1("animal-promoters-repeat-weight-0.01", PROMOTERS_DATASET_V1),
+    "cds": dna_tokenize_rw_v1("animal-cds-repeat-weight-0.01", CDS_DATASET_V1),
+}
+
+# =============================================================================
+# Create training steps for each weight configuration
+# =============================================================================
+
+training_steps = []
+for config_name, weights in WEIGHT_CONFIGS.items():
+    mixture_config = lm_mixture_data_config(
+        components=tokenized_datasets,
+        weights=weights,
+    )
+
+    training_step = default_train(
+        name=f"promoter-cds-mixture-{config_name}-r01",
+        tokenized=mixture_config,
+        model_config=model_config,
+        train_config=YOLO_RUN_CONFIG_V1,
+        tags=["dna", "mixture", config_name],
+        eval_harness_tasks=[],
+        use_default_validation=False,
+    )
+    training_steps.append(training_step)
+
+if __name__ == "__main__":
+    executor_main(steps=[*training_steps])

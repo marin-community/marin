@@ -31,6 +31,7 @@ from .examples import (
 from .formats import (
     ChatLmDatasetFormat,
     ChatProcessor,
+    DNALmDatasetFormat,
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
@@ -47,14 +48,16 @@ from .preference import (
     dataset_for_preference_format,
     preprocessor_for_preference_format,
 )
-from ._batch_tokenizer import BatchTokenizer
+from ._batch_tokenizer import BatchTokenizer, DNABatchTokenizer
 
 __all__ = [
     "BatchTokenizer",
+    "DNABatchTokenizer",
     "ChatProcessor",
     "LmDatasetFormatBase",
     "TextLmDatasetFormat",
     "ChatLmDatasetFormat",
+    "DNALmDatasetFormat",
     "PrebuiltLmDatasetFormat",
     "ProcessedChatDict",
     "preprocessor_for_format",
