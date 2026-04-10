@@ -43,6 +43,38 @@ def _heartbeat_rpc_context(
     )
 
 
+@dataclass(frozen=True)
+class PingResult:
+    """Result of a Ping RPC to a single worker."""
+
+    worker_id: WorkerId
+    worker_address: str | None
+    resource_snapshot: job_pb2.WorkerResourceSnapshot | None = None
+    healthy: bool = True
+    health_error: str = ""
+    error: str | None = None
+
+
+def _task_updates_from_statuses(statuses: list[job_pb2.WorkerTaskStatus]) -> list[TaskUpdate]:
+    """Convert WorkerTaskStatus protos to TaskUpdate dataclasses."""
+    updates = []
+    for entry in statuses:
+        if entry.state in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING):
+            continue
+        updates.append(
+            TaskUpdate(
+                task_id=JobName.from_wire(entry.task_id),
+                attempt_id=entry.attempt_id,
+                new_state=entry.state,
+                error=entry.error or None,
+                exit_code=entry.exit_code if entry.HasField("exit_code") else None,
+                resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
+                container_id=entry.container_id or None,
+            )
+        )
+    return updates
+
+
 class WorkerStubFactory(Protocol):
     """Factory for getting cached async worker RPC stubs."""
 
@@ -245,6 +277,70 @@ class WorkerProvider:
         else:
             rpc_timeout_ms = (timeout_seconds + 5) * 1000
         return asyncio.run(stub.exec_in_container(request, timeout_ms=rpc_timeout_ms))
+
+    # --- Split heartbeat RPCs (Phase 1) ---
+
+    def ping_workers(self, workers: list[tuple[WorkerId, str | None]]) -> list[PingResult]:
+        """Send Ping RPCs to all workers in parallel. Returns per-worker results."""
+        if not workers:
+            return []
+        futures = {self._pool.submit(self._ping_one, wid, addr): (wid, addr) for wid, addr in workers}
+        results = []
+        for future in futures:
+            wid, addr = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as e:
+                results.append(PingResult(worker_id=wid, worker_address=addr, error=str(e)))
+        return results
+
+    def _ping_one(self, worker_id: WorkerId, address: str | None) -> PingResult:
+        if not address:
+            raise ProviderError(f"Worker {worker_id} has no address")
+        stub = self.stub_factory.get_stub(address)
+        response = stub.ping(worker_pb2.Worker.PingRequest())
+        if not response.healthy:
+            raise ProviderError(f"worker {worker_id} reported unhealthy: {response.health_error}")
+        return PingResult(
+            worker_id=worker_id,
+            worker_address=address,
+            resource_snapshot=response.resource_snapshot if response.resource_snapshot.ByteSize() > 0 else None,
+            healthy=response.healthy,
+            health_error=response.health_error,
+        )
+
+    def poll_tasks_on_worker(
+        self,
+        worker_id: WorkerId,
+        address: str | None,
+        expected_tasks: list[job_pb2.WorkerTaskStatus],
+    ) -> list[TaskUpdate]:
+        """Send PollTasks RPC to one worker. Returns TaskUpdates for reconciliation."""
+        if not address:
+            raise ProviderError(f"Worker {worker_id} has no address")
+        stub = self.stub_factory.get_stub(address)
+        request = worker_pb2.Worker.PollTasksRequest(expected_tasks=expected_tasks)
+        response = stub.poll_tasks(request)
+        return _task_updates_from_statuses(response.tasks)
+
+    def poll_workers(
+        self,
+        workers: dict[WorkerId, tuple[str | None, list[job_pb2.WorkerTaskStatus]]],
+    ) -> list[tuple[WorkerId, list[TaskUpdate] | None, str | None]]:
+        """Poll all workers for task states in parallel."""
+        if not workers:
+            return []
+        futures = {
+            self._pool.submit(self.poll_tasks_on_worker, wid, addr, tasks): wid for wid, (addr, tasks) in workers.items()
+        }
+        results: list[tuple[WorkerId, list[TaskUpdate] | None, str | None]] = []
+        for future in futures:
+            wid = futures[future]
+            try:
+                results.append((wid, future.result(), None))
+            except Exception as e:
+                results.append((wid, None, str(e)))
+        return results
 
     def close(self) -> None:
         self.stub_factory.close()

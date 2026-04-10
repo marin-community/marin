@@ -2770,6 +2770,58 @@ class ControllerTransitions:
             logger.info("Pruned %d %s rows", total_deleted, table)
         return total_deleted
 
+    # --- Split heartbeat helpers (Phase 1) ---
+
+    def update_worker_ping_success(self, worker_id: WorkerId, resource_snapshot: job_pb2.WorkerResourceSnapshot) -> None:
+        """Update worker timestamp and resource snapshot from a successful ping.
+
+        Does not reset consecutive_failures — that is the provider loop's domain.
+        The ping loop only updates liveness markers so the dashboard shows fresh data.
+        """
+        snapshot_bytes = resource_snapshot.SerializeToString()
+        now_ms = Timestamp.now().epoch_ms()
+        with self._db.transaction() as cur:
+            cur.execute(
+                "UPDATE workers SET last_heartbeat_ms = ?, resource_snapshot_proto = ? WHERE worker_id = ?",
+                (now_ms, snapshot_bytes, str(worker_id)),
+            )
+            cur.execute(
+                "INSERT INTO worker_resource_history(worker_id, snapshot_proto, timestamp_ms) VALUES (?, ?, ?)",
+                (str(worker_id), snapshot_bytes, now_ms),
+            )
+
+    def get_running_tasks_by_worker(
+        self,
+    ) -> dict[WorkerId, tuple[str | None, list[job_pb2.WorkerTaskStatus]]]:
+        """Get all running tasks grouped by worker for PollTasks reconciliation.
+
+        Returns {worker_id: (address, [expected_task_status, ...])} for every
+        worker that has at least one active task.
+        """
+        with self._db.read_snapshot() as snap:
+            rows = snap.fetchall(
+                "SELECT t.task_id, t.current_attempt_id, t.current_worker_id, t.current_worker_address "
+                "FROM tasks t WHERE t.state IN (?, ?, ?)",
+                tuple(ACTIVE_TASK_STATES),
+            )
+
+        by_worker: dict[WorkerId, tuple[str | None, list[job_pb2.WorkerTaskStatus]]] = {}
+        for row in rows:
+            wid_raw = row["current_worker_id"]
+            if wid_raw is None:
+                continue
+            wid = WorkerId(str(wid_raw))
+            addr = row["current_worker_address"]
+            expected = job_pb2.WorkerTaskStatus(
+                task_id=str(row["task_id"]),
+                attempt_id=int(row["current_attempt_id"]),
+            )
+            if wid not in by_worker:
+                by_worker[wid] = (addr, [])
+            by_worker[wid][1].append(expected)
+
+        return by_worker
+
     def prune_worker_task_history(self) -> int:
         """Trim worker_task_history to WORKER_TASK_HISTORY_RETENTION rows per worker."""
         return self._prune_per_worker_history(

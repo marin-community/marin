@@ -81,6 +81,7 @@ from iris.cluster.controller.budget import (
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.controller.provider import TaskProvider
+from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
@@ -99,6 +100,7 @@ from iris.cluster.controller.transitions import (
     ControllerTransitions,
     DIRECT_PROVIDER_PROMOTION_RATE,
     HeartbeatAction,
+    HeartbeatApplyRequest,
     ReservationClaim,
     SchedulingEvent,
 )
@@ -957,6 +959,19 @@ class ControllerConfig:
     the Controller starts an in-process LogServiceImpl on a free port.
     Either way, all controller code accesses the log server via RPC clients."""
 
+    use_split_heartbeat: bool = False
+    """When True, run additional Ping/Poll loops alongside the existing provider loop
+    for faster liveness detection and task reconciliation."""
+
+    ping_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
+    """How often to ping workers for liveness (split heartbeat mode)."""
+
+    poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(30.0))
+    """How often to poll workers for task reconciliation (split heartbeat mode)."""
+
+    ping_failure_threshold: int = 10
+    """Consecutive ping failures before marking worker as dead (split heartbeat mode)."""
+
 
 def _log_client_interceptors(config: "ControllerConfig") -> tuple:
     """Return Connect interceptors for controller-originated LogService RPCs.
@@ -1102,6 +1117,8 @@ class Controller:
         self._server: uvicorn.Server | None = None
         self._scheduling_thread: ManagedThread | None = None
         self._heartbeat_thread: ManagedThread | None = None
+        self._ping_thread: ManagedThread | None = None
+        self._poll_thread: ManagedThread | None = None
         self._autoscaler_thread: ManagedThread | None = None
         self._profile_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
@@ -1194,6 +1211,16 @@ class Controller:
 
         if isinstance(self._provider, K8sTaskProvider):
             self._heartbeat_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
+        elif self._config.use_split_heartbeat:
+            # Split heartbeat: existing provider loop for task dispatch + new ping/poll loops
+            # for faster liveness detection and reconciliation.
+            self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
+            self._heartbeat_thread = self._threads.spawn(self._run_provider_loop, name="provider-loop")
+            self._ping_thread = self._threads.spawn(self._run_ping_loop, name="ping-loop")
+            self._poll_thread = self._threads.spawn(self._run_poll_loop, name="poll-loop")
+            if not self._config.dry_run:
+                self._profile_thread = self._threads.spawn(self._run_profile_loop, name="profile-loop")
+                self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
         else:
             self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
             self._heartbeat_thread = self._threads.spawn(self._run_provider_loop, name="provider-loop")
@@ -1261,6 +1288,12 @@ class Controller:
         if self._heartbeat_thread:
             self._heartbeat_thread.stop()
             self._heartbeat_thread.join(timeout=join_timeout)
+        if self._ping_thread:
+            self._ping_thread.stop()
+            self._ping_thread.join(timeout=join_timeout)
+        if self._poll_thread:
+            self._poll_thread.stop()
+            self._poll_thread.join(timeout=join_timeout)
         if self._prune_thread:
             self._prune_thread.stop()
             self._prune_thread.join(timeout=join_timeout)
@@ -1448,6 +1481,135 @@ class Controller:
         self._provider_capacity = result.capacity
         if tx_result.tasks_to_kill:
             self.kill_tasks_on_workers(tx_result.tasks_to_kill, tx_result.task_kill_workers)
+
+    # --- Split heartbeat loops (Phase 1) ---
+
+    def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
+        """Get healthy active workers as (worker_id, address) tuples for ping."""
+        workers = healthy_active_workers_with_attributes(self._db)
+        return [(w.worker_id, w.address) for w in workers]
+
+    def _run_ping_loop(self, stop_event: threading.Event) -> None:
+        """Fast ping loop for liveness detection. Runs alongside provider loop.
+
+        Pings all healthy workers every ping_interval. Tracks consecutive failures
+        in-memory (separate from the DB consecutive_failures used by the provider loop).
+        When the threshold is exceeded, forcibly removes the worker and cascades task failures.
+
+        Both the ping loop and provider loop may race to fail the same worker.
+        This is safe: fail_workers_batch, on_worker_failed, and
+        terminate_slices_for_workers are all idempotent.
+        """
+        limiter = RateLimiter(interval_seconds=self._config.ping_interval.to_seconds())
+        ping_failures: dict[str, int] = {}
+
+        while not stop_event.is_set():
+            if not limiter.wait(cancel=stop_event):
+                break
+            if self._checkpoint_paused.is_set():
+                continue
+            try:
+                workers = self._get_active_worker_addresses()
+                results = self._provider.ping_workers(workers)
+
+                dead_workers: list[str] = []
+                for result in results:
+                    wid_str = str(result.worker_id)
+                    if result.error is not None:
+                        ping_failures[wid_str] = ping_failures.get(wid_str, 0) + 1
+                        if ping_failures[wid_str] >= self._config.ping_failure_threshold:
+                            dead_workers.append(wid_str)
+                            logger.warning(
+                                "Ping loop: worker %s exceeded failure threshold (%d)",
+                                wid_str,
+                                ping_failures[wid_str],
+                            )
+                    else:
+                        ping_failures.pop(wid_str, None)
+                        if result.resource_snapshot:
+                            self._transitions.update_worker_ping_success(result.worker_id, result.resource_snapshot)
+
+                if dead_workers:
+                    failure_result = self._transitions.fail_workers_batch(
+                        dead_workers, reason="ping failure threshold exceeded"
+                    )
+                    for wid, addr in failure_result.removed_workers:
+                        ping_failures.pop(str(wid), None)
+                        self._provider.on_worker_failed(wid, addr)
+
+                    if self._autoscaler and failure_result.removed_workers:
+                        actually_removed = [str(wid) for wid, _ in failure_result.removed_workers]
+                        sibling_ids = self._autoscaler.terminate_slices_for_workers(actually_removed)
+                        sibling_failures = self._transitions.fail_workers_batch(
+                            sibling_ids, reason="sibling worker failed, slice terminated"
+                        )
+                        for wid, addr in sibling_failures.removed_workers:
+                            ping_failures.pop(str(wid), None)
+                            self._provider.on_worker_failed(wid, addr)
+                        failure_result.tasks_to_kill.update(sibling_failures.tasks_to_kill)
+                        failure_result.task_kill_workers.update(sibling_failures.task_kill_workers)
+
+                    if failure_result.tasks_to_kill:
+                        self.kill_tasks_on_workers(failure_result.tasks_to_kill, failure_result.task_kill_workers)
+
+                # Clean up stale entries for workers no longer in the active set
+                active_ids = {str(wid) for wid, _ in workers}
+                for wid in list(ping_failures):
+                    if wid not in active_ids:
+                        del ping_failures[wid]
+
+            except Exception:
+                logger.exception("Ping loop iteration failed")
+
+    def _run_poll_loop(self, stop_event: threading.Event) -> None:
+        """Reconciliation safety net. Polls workers for task states every poll_interval.
+
+        Feeds results into apply_heartbeats_batch so the controller learns about
+        task state changes even if push-based updates were lost.
+        """
+        limiter = RateLimiter(interval_seconds=self._config.poll_interval.to_seconds())
+        while not stop_event.is_set():
+            if not limiter.wait(cancel=stop_event):
+                break
+            if self._checkpoint_paused.is_set():
+                continue
+            try:
+                self._poll_all_workers()
+            except Exception:
+                logger.exception("Poll loop iteration failed")
+
+    def _poll_all_workers(self) -> None:
+        """Poll all workers for task states and apply updates."""
+        running = self._transitions.get_running_tasks_by_worker()
+        if not running:
+            return
+
+        assert isinstance(self._provider, WorkerProvider)
+        poll_results = self._provider.poll_workers(running)
+
+        apply_requests: list[HeartbeatApplyRequest] = []
+        for worker_id, updates, error in poll_results:
+            if error is not None:
+                logger.warning("PollTasks failed for worker %s: %s", worker_id, error)
+                continue
+            if updates:
+                apply_requests.append(
+                    HeartbeatApplyRequest(
+                        worker_id=worker_id,
+                        worker_resource_snapshot=None,
+                        updates=updates,
+                    )
+                )
+
+        if apply_requests:
+            results = self._transitions.apply_heartbeats_batch(apply_requests)
+            all_tasks_to_kill: set[JobName] = set()
+            all_task_kill_workers: dict[JobName, WorkerId] = {}
+            for result in results:
+                all_tasks_to_kill.update(result.tasks_to_kill)
+                all_task_kill_workers.update(result.task_kill_workers)
+            if all_tasks_to_kill:
+                self.kill_tasks_on_workers(all_tasks_to_kill, all_task_kill_workers)
 
     def _run_profile_loop(self, stop_event: threading.Event) -> None:
         """Periodically capture CPU and memory profiles for all running tasks.
