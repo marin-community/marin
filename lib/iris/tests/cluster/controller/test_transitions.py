@@ -93,8 +93,6 @@ def _queued_dispatch(
 
 def _endpoints(state: ControllerTransitions, query: EndpointQuery = EndpointQuery()) -> list[EndpointRow]:
     sql, params = endpoint_query_sql(query)
-    # Add ORDER BY to match original behavior
-    sql += " ORDER BY registered_at_ms DESC, endpoint_id ASC"
     with state._db.snapshot() as q:
         return ENDPOINT_PROJECTION.decode(q.fetchall(sql, tuple(params)))
 
@@ -704,6 +702,58 @@ def test_endpoint_deleted_on_worker_failure(state):
 
     # Endpoints should be cleaned up because the worker is dead
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 0
+
+
+def test_retry_assignment_deletes_stale_endpoints_before_next_attempt(state):
+    """Retry assignment removes stale endpoints before the next attempt is assigned."""
+
+    worker_1 = register_worker(state, "w1", "host-1:8080", make_worker_metadata())
+    worker_2 = register_worker(state, "w2", "host-2:8080", make_worker_metadata())
+
+    req = make_job_request("test")
+    req.max_retries_preemption = 2
+    tasks = submit_job(state, "ns-1", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_1)
+    state.add_endpoint(
+        EndpointRow(
+            endpoint_id="ep-1",
+            name="ns-1/jax_coordinator",
+            address="10.0.0.1:8476",
+            job_id=JobName.root("test-user", "ns-1"),
+            metadata={},
+            registered_at=Timestamp.now(),
+        ),
+        task_id=task.task_id,
+    )
+
+    fail_worker(state, worker_1, "Connection lost")
+    assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
+
+    # Simulate the overlap window where a stale coordinator endpoint is still
+    # visible just before the retry is launched.
+    state.add_endpoint(
+        EndpointRow(
+            endpoint_id="ep-stale",
+            name="ns-1/jax_coordinator",
+            address="10.0.0.9:8476",
+            job_id=JobName.root("test-user", "ns-1"),
+            metadata={},
+            registered_at=Timestamp.now(),
+        ),
+        task_id=task.task_id,
+    )
+    assert [endpoint.address for endpoint in _endpoints(state, EndpointQuery(exact_name="ns-1/jax_coordinator"))] == [
+        "10.0.0.9:8476"
+    ]
+
+    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_2)])
+
+    retried_task = _query_task(state, task.task_id)
+    assert retried_task is not None
+    assert retried_task.state == cluster_pb2.TASK_STATE_ASSIGNED
+    assert _endpoints(state, EndpointQuery(exact_name="ns-1/jax_coordinator")) == []
 
 
 def test_endpoint_survives_building_state(state):
