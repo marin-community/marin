@@ -52,12 +52,23 @@ DEFAULT_TIMEOUT_S = 1800
 # Default trace event cap (≈ 200 MB JSON-framed at ~40 bytes / event).
 DEFAULT_MAX_TRACE_EVENTS = 5_000_000
 
-# Path inside the sandbox where the tracer is bind-mounted. Kept underneath
+# Path inside the sandbox where the tracer is injected. Kept underneath
 # /_marin/ so it can't collide with anything in real OSS projects.
+#
+# The tracer file is named ``sitecustomize.py`` and ``/_marin`` is added to
+# ``PYTHONPATH`` so the ``site`` module loads it at *every* interpreter
+# startup (interactive, ``-c``, scripts, ``-m``). PYTHONSTARTUP would be
+# wrong: it only fires for interactive interpreters.
 SANDBOX_TRACER_DIR = "/_marin"
-SANDBOX_TRACER_PATH = f"{SANDBOX_TRACER_DIR}/tracer.py"
+SANDBOX_TRACER_PATH = f"{SANDBOX_TRACER_DIR}/sitecustomize.py"
 SANDBOX_ENTRYPOINT_PATH = f"{SANDBOX_TRACER_DIR}/entrypoint.sh"
-SANDBOX_TRACE_FIFO = f"{SANDBOX_TRACER_DIR}/trace.fifo"
+
+# Path inside the sandbox where the trace stream is written. This is a host
+# bind-mount (NOT a tmpfs) so the file survives container teardown and the
+# host can read it back. The bind source lives at <bundle>/trace_out/.
+SANDBOX_TRACE_DIR = "/_marin_trace"
+SANDBOX_TRACE_FILE = f"{SANDBOX_TRACE_DIR}/trace.bin"
+HOST_TRACE_DIR_NAME = "trace_out"
 
 
 # ---------------------------------------------------------------------------
@@ -170,16 +181,20 @@ def _build_oci_config(
     test_cmd: str,
     image_config: dict,
     extra_env: dict[str, str],
+    host_trace_dir: Path | None = None,
     rootfs_subdir: str = "rootfs",
 ) -> dict:
     """Build a minimal OCI runtime spec for runsc.
 
     The rootfs is mounted **read-only**. Anything the test command needs to
-    write to (the project source under /testbed, the trace stream at
-    /tmp/marin-trace.bin, pip's site-packages cache, etc.) lives on a
-    tmpfs overlay so a misbehaving test can't fill the worker's disk via
-    arbitrary writes to the rootfs. The tmpfs caps are deliberately small
-    so OOM hits before disk pressure does.
+    write to lives on tmpfs overlays so a misbehaving test can't fill the
+    worker's disk via arbitrary writes to the rootfs. The tmpfs caps are
+    deliberately small so OOM hits before disk pressure does.
+
+    The trace stream is the one exception: it must survive container
+    teardown. ``host_trace_dir`` is bind-mounted at ``SANDBOX_TRACE_DIR``
+    so the entrypoint can write framed records to a real on-disk file
+    that the host can read after runsc exits.
     """
     cfg = image_config.get("config", {}) or {}
     image_env = list(cfg.get("Env") or [])
@@ -192,6 +207,56 @@ def _build_oci_config(
             key, value = entry.split("=", 1)
             env_pairs[key] = value
     env_pairs.update(extra_env)
+
+    mounts: list[dict] = [
+        {"destination": "/proc", "type": "proc", "source": "proc"},
+        {
+            "destination": "/dev",
+            "type": "tmpfs",
+            "source": "tmpfs",
+            "options": ["nosuid", "strictatime", "mode=755", "size=65536k"],
+        },
+        {
+            "destination": "/tmp",
+            "type": "tmpfs",
+            "source": "tmpfs",
+            "options": ["nosuid", "nodev", "size=2g"],
+        },
+        # Writable overlay where SWE-rebench projects live. tmpfs-backed
+        # so the rootfs stays read-only and the worker disk is protected.
+        {
+            "destination": "/testbed",
+            "type": "tmpfs",
+            "source": "tmpfs",
+            "options": ["nosuid", "nodev", "size=8g"],
+        },
+        # Writable overlays for caches the test command may try to populate
+        # (pip / cargo / npm under HOME, /var/tmp build dirs, etc.).
+        {
+            "destination": "/root",
+            "type": "tmpfs",
+            "source": "tmpfs",
+            "options": ["nosuid", "nodev", "size=4g"],
+        },
+        {
+            "destination": "/var/tmp",
+            "type": "tmpfs",
+            "source": "tmpfs",
+            "options": ["nosuid", "nodev", "size=2g"],
+        },
+    ]
+
+    if host_trace_dir is not None:
+        # Persistent host bind mount for the trace stream. tmpfs would lose
+        # the file the moment runsc exits.
+        mounts.append(
+            {
+                "destination": SANDBOX_TRACE_DIR,
+                "type": "bind",
+                "source": str(host_trace_dir.resolve()),
+                "options": ["bind", "rw", "nosuid", "nodev"],
+            }
+        )
 
     return {
         "ociVersion": "1.0.2",
@@ -211,43 +276,7 @@ def _build_oci_config(
         },
         "root": {"path": rootfs_subdir, "readonly": True},
         "hostname": "swe-trace",
-        "mounts": [
-            {"destination": "/proc", "type": "proc", "source": "proc"},
-            {
-                "destination": "/dev",
-                "type": "tmpfs",
-                "source": "tmpfs",
-                "options": ["nosuid", "strictatime", "mode=755", "size=65536k"],
-            },
-            {
-                "destination": "/tmp",
-                "type": "tmpfs",
-                "source": "tmpfs",
-                "options": ["nosuid", "nodev", "size=2g"],
-            },
-            # Writable overlay where SWE-rebench projects live. tmpfs-backed
-            # so the rootfs stays read-only and the worker disk is protected.
-            {
-                "destination": "/testbed",
-                "type": "tmpfs",
-                "source": "tmpfs",
-                "options": ["nosuid", "nodev", "size=8g"],
-            },
-            # Writable overlays for caches the test command may try to populate
-            # (pip / cargo / npm under HOME, /var/tmp build dirs, etc.).
-            {
-                "destination": "/root",
-                "type": "tmpfs",
-                "source": "tmpfs",
-                "options": ["nosuid", "nodev", "size=4g"],
-            },
-            {
-                "destination": "/var/tmp",
-                "type": "tmpfs",
-                "source": "tmpfs",
-                "options": ["nosuid", "nodev", "size=2g"],
-            },
-        ],
+        "mounts": mounts,
         "linux": {
             "namespaces": [
                 {"type": "pid"},
@@ -275,13 +304,14 @@ def _inject_tracer_and_entrypoint(
     tracer_dir = rootfs / SANDBOX_TRACER_DIR.lstrip("/")
     tracer_dir.mkdir(parents=True, exist_ok=True)
 
+    # Copy as sitecustomize.py so the site module imports it automatically
+    # at interpreter startup. tracer.py in the repo is the source of truth.
     src = Path(__file__).parent / "tracer.py"
-    shutil.copy(src, tracer_dir / "tracer.py")
+    shutil.copy(src, tracer_dir / "sitecustomize.py")
 
-    # The entrypoint redirects fd 9 to a file inside the sandbox so the tracer
-    # can write framed trace records via ``MARIN_TRACE_FD=9`` without
-    # colliding with stdout. The host reads the file out of the rootfs after
-    # the container exits.
+    # The entrypoint redirects fd 9 to a host-bind-mounted file so the
+    # framed trace records survive container teardown (the per-task tmpfs
+    # mounts at /tmp, /testbed, etc. are gone the moment runsc exits).
     #
     # We deliberately do NOT enable ``set -e``: we want the test command's
     # actual exit code, not a hard-stop on the first non-zero return. The
@@ -289,7 +319,7 @@ def _inject_tracer_and_entrypoint(
     # capture and the trace-fd close always run, regardless of test outcome.
     entrypoint_script = f"""#!/bin/sh
 export MARIN_TRACE_FD=9
-exec 9>>/tmp/marin-trace.bin
+exec 9>>{SANDBOX_TRACE_FILE}
 {test_cmd}; exit_code=$?
 exec 9>&- 2>/dev/null
 exit $exit_code
@@ -475,33 +505,56 @@ def trace_swe_row(
 
     started_at = time.monotonic()
 
-    with tempfile.TemporaryDirectory(prefix=f"swe-{instance_id}-") as tmp:
+    # Pre-sanitize the instance_id once: it's reused as both the runsc
+    # container ID *and* the tempdir prefix, and SWE-rebench instance_ids
+    # commonly contain `/` and `.` which break both usages.
+    container_id = _sanitize_container_id(instance_id)
+
+    with tempfile.TemporaryDirectory(prefix=f"{container_id}-") as tmp:
         tmp_path = Path(tmp)
         oci_dir = tmp_path / "oci"
         bundle_dir = tmp_path / "bundle"
         rootfs_dir = bundle_dir / "rootfs"
+        host_trace_dir = bundle_dir / HOST_TRACE_DIR_NAME
 
         try:
             _skopeo_copy(image_name, oci_dir)
             _umoci_unpack(oci_dir, bundle_dir)
             _inject_tracer_and_entrypoint(rootfs=rootfs_dir, test_cmd=test_cmd)
 
+            # Bind-mount target for the trace stream. Must exist before runsc
+            # starts so it can resolve the host path.
+            host_trace_dir.mkdir(parents=True, exist_ok=True)
+            # Pre-create the file so the entrypoint's `exec 9>>...` opens
+            # against an existing inode rather than creating one inside the
+            # bind mount (which has different semantics under runsc rootless).
+            (host_trace_dir / "trace.bin").touch()
+
             image_config = _load_image_config(oci_dir)
+            # Trace anything under the image's working directory by default —
+            # that's where SWE-rebench (and most build images) place the
+            # project source. ``/testbed`` is the convention used by some
+            # images so we keep it as a fallback. Users can override via
+            # row["install_config"]["trace_roots"] if needed.
+            workdir = (image_config.get("config", {}) or {}).get("WorkingDir") or "/"
+            trace_roots = ":".join(p for p in (workdir, "/testbed") if p and p != "/")
             spec = _build_oci_config(
                 bundle_dir=bundle_dir,
                 test_cmd=test_cmd,
                 image_config=image_config,
+                host_trace_dir=host_trace_dir,
                 extra_env={
-                    "PYTHONSTARTUP": SANDBOX_TRACER_PATH,
+                    # PYTHONPATH is the right hook (not PYTHONSTARTUP) — site.py
+                    # imports sitecustomize on every interpreter launch.
+                    "PYTHONPATH": SANDBOX_TRACER_DIR,
                     "PYTHONUNBUFFERED": "1",
                     "PYTHONFAULTHANDLER": "1",
-                    "MARIN_TRACE_ROOTS": "/testbed",
+                    "MARIN_TRACE_ROOTS": trace_roots or "/",
                     "MARIN_TRACE_MAX_EVENTS": str(max_trace_events),
                 },
             )
             (bundle_dir / "config.json").write_text(json.dumps(spec))
 
-            container_id = _sanitize_container_id(instance_id)
             returncode, stdout_bytes, stderr_bytes = _runsc_run(
                 bundle_dir=bundle_dir,
                 container_id=container_id,
@@ -511,7 +564,7 @@ def trace_swe_row(
             stdout, stdout_truncated = _cap_text(stdout_bytes, stdout_cap_bytes)
             stderr, stderr_truncated = _cap_text(stderr_bytes, stdout_cap_bytes)
 
-            trace_path = rootfs_dir / "tmp" / "marin-trace.bin"
+            trace_path = host_trace_dir / "trace.bin"
             trace_events, trace_total, trace_truncated, trace_meta = _read_trace_file(
                 trace_path,
                 max_events=max_trace_events,

@@ -99,7 +99,10 @@ def test_inject_tracer_creates_tracer_and_entrypoint(tmp_path: Path):
 
     _inject_tracer_and_entrypoint(rootfs=rootfs, test_cmd="pytest -q tests/")
 
-    tracer_dst = rootfs / "_marin" / "tracer.py"
+    # tracer.py is copied as sitecustomize.py so the site module loads it
+    # automatically at every interpreter startup (PYTHONSTARTUP would be
+    # wrong: it only fires for interactive interpreters).
+    tracer_dst = rootfs / "_marin" / "sitecustomize.py"
     entry_dst = rootfs / "_marin" / "entrypoint.sh"
     assert tracer_dst.exists()
     assert entry_dst.exists()
@@ -107,6 +110,8 @@ def test_inject_tracer_creates_tracer_and_entrypoint(tmp_path: Path):
     body = entry_dst.read_text()
     assert "pytest -q tests/" in body
     assert "MARIN_TRACE_FD=9" in body
+    # The trace fd must point at the host bind-mount, not a tmpfs.
+    assert "/_marin_trace/trace.bin" in body
     # set -e must NOT be present: it would short-circuit the exit-code
     # capture and the trace fd close on test failure.
     assert "set -e" not in body
@@ -236,6 +241,36 @@ def test_build_oci_config_rootfs_is_readonly_with_writable_overlays(tmp_path: Pa
     for dest in ("/tmp", "/testbed", "/root", "/var/tmp"):
         assert dest in mount_dests, f"missing writable overlay for {dest}"
         assert mount_dests[dest]["type"] == "tmpfs"
+
+
+def test_build_oci_config_includes_host_trace_bind_mount(tmp_path: Path):
+    """When host_trace_dir is set, the spec must add a bind mount for the trace stream."""
+    host_trace_dir = tmp_path / "trace_out"
+    host_trace_dir.mkdir()
+    spec = _build_oci_config(
+        bundle_dir=tmp_path,
+        test_cmd="pytest",
+        image_config={},
+        extra_env={},
+        host_trace_dir=host_trace_dir,
+    )
+    mount_dests = {m["destination"]: m for m in spec["mounts"]}
+    assert "/_marin_trace" in mount_dests
+    bind = mount_dests["/_marin_trace"]
+    assert bind["type"] == "bind"
+    assert bind["source"] == str(host_trace_dir.resolve())
+    assert "rw" in bind["options"]
+
+
+def test_build_oci_config_omits_trace_bind_when_not_requested(tmp_path: Path):
+    spec = _build_oci_config(
+        bundle_dir=tmp_path,
+        test_cmd="pytest",
+        image_config={},
+        extra_env={},
+    )
+    mount_dests = {m["destination"]: m for m in spec["mounts"]}
+    assert "/_marin_trace" not in mount_dests
 
 
 def test_build_oci_config_handles_image_with_no_config(tmp_path: Path):
