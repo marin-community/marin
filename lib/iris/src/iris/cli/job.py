@@ -46,7 +46,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
-from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
+from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, job_state_friendly, priority_band_value, task_state_friendly
 from iris.time_proto import timestamp_from_proto
 from rigging.timing import Duration, Timestamp
 
@@ -550,6 +550,7 @@ def run_iris_job(
     zone: str | None = None,
     user: str | None = None,
     reserve: tuple[str, ...] | None = None,
+    priority: str | None = None,
     token_provider: TokenProvider | None = None,
 ) -> int:
     """Core job submission logic.
@@ -621,6 +622,11 @@ def run_iris_job(
         logger.info(f"Reservation: {len(reservation)} entries")
 
     logger.info(f"Using controller: {controller_url}")
+    priority_band = job_pb2.PRIORITY_BAND_UNSPECIFIED
+    if priority is not None:
+        priority_band = priority_band_value(priority)
+        logger.info(f"Priority band: {priority}")
+
     return _submit_and_wait_job(
         controller_url=controller_url,
         job_name=job_name,
@@ -637,6 +643,7 @@ def run_iris_job(
         coscheduling=coscheduling,
         user=user,
         reservation=reservation,
+        priority_band=priority_band,
         token_provider=token_provider,
     )
 
@@ -657,6 +664,7 @@ def _submit_and_wait_job(
     coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
     reservation: list[ReservationEntry] | None = None,
+    priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     token_provider: TokenProvider | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
@@ -679,6 +687,7 @@ def _submit_and_wait_job(
         timeout=Duration.from_seconds(timeout) if timeout else None,
         user=user,
         reservation=reservation,
+        priority_band=priority_band,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
@@ -800,6 +809,12 @@ Examples:
     ),
 )
 @click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
+    default=None,
+    help="Priority band for scheduling (default: interactive). Lower bands run first; batch jobs yield to interactive.",
+)
+@click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
     help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
@@ -825,6 +840,7 @@ def run(
     zone: str | None,
     extra: tuple[str, ...],
     reserve: tuple[str, ...],
+    priority: str | None,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
@@ -871,6 +887,7 @@ def run(
             regions=region or None,
             zone=zone,
             reserve=reserve or None,
+            priority=priority,
             token_provider=ctx.obj.get("token_provider"),
         )
     except Exception:
