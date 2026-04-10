@@ -2,14 +2,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Deploy the Iris IAP proxy to Cloud Run.
+# Deploy the Iris IAP proxy to Cloud Run with native IAP integration.
+#
+# Uses Cloud Run's built-in IAP support (--iap flag) — no load balancer,
+# serverless NEG, or SSL certificate required.
 #
 # Prerequisites (one-time setup — see SETUP section below):
 #   1. Create a service account for the proxy
-#   2. Deploy the Cloud Run service (this script)
-#   3. Create a Global External Application Load Balancer with serverless NEG
-#   4. Enable IAP on the LB backend service
-#   5. Store the proxy API key in Secret Manager
+#   2. Configure OAuth consent screen + client (Cloud Console)
+#   3. Apply OAuth client to IAP settings
+#   4. Deploy the Cloud Run service with --iap (this script)
+#   5. Grant the IAP service agent roles/run.invoker
+#   6. Grant team members IAP access
 #
 # Usage:
 #   ./deploy.sh                    # deploy to Cloud Run
@@ -45,82 +49,52 @@ gcloud projects add-iam-policy-binding hai-gcp-models \
   --member="serviceAccount:iris-iap-proxy@hai-gcp-models.iam.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 
-# 2. Deploy the Cloud Run service (use deploy.sh without --setup)
+# 2. Configure OAuth consent screen (Cloud Console — one-time)
+#    Go to: https://console.cloud.google.com/auth/branding?project=hai-gcp-models
+#    Select "External" audience type.
 
-# 3. Create a serverless NEG for the Cloud Run service
-gcloud compute network-endpoint-groups create iris-iap-proxy-neg \
-  --project=hai-gcp-models \
+# 3. Create OAuth client (Cloud Console)
+#    Go to: https://console.cloud.google.com/auth/clients?project=hai-gcp-models
+#    Create a "Web application" client.
+#    Add authorized redirect URI:
+#      https://iap.googleapis.com/v1/oauth/clientIds/<CLIENT_ID>:handleRedirect
+
+# 4. Apply OAuth client to IAP settings
+#    Create iap_settings.yaml:
+#      access_settings:
+#        oauth_settings:
+#          client_id: <CLIENT_ID>
+#          client_secret: <CLIENT_SECRET>
+#
+#    Then apply:
+#    gcloud iap settings set iap_settings.yaml --project=hai-gcp-models
+
+# 5. Deploy the Cloud Run service (use deploy.sh without --setup)
+
+# 6. Grant the IAP service agent permission to invoke the Cloud Run service
+#    Find your project number:
+#    gcloud projects describe hai-gcp-models --format='value(projectNumber)'
+gcloud run services add-iam-policy-binding iris-iap-proxy \
   --region=us-central1 \
-  --network-endpoint-type=serverless \
-  --cloud-run-service=iris-iap-proxy
+  --member="serviceAccount:service-<PROJECT_NUMBER>@gcp-sa-iap.iam.gserviceaccount.com" \
+  --role="roles/run.invoker"
 
-# 4. Create a backend service
-gcloud compute backend-services create iris-iap-proxy-backend \
-  --project=hai-gcp-models \
-  --global \
-  --load-balancing-scheme=EXTERNAL_MANAGED \
-  --protocol=HTTP
-
-gcloud compute backend-services add-backend iris-iap-proxy-backend \
-  --project=hai-gcp-models \
-  --global \
-  --network-endpoint-group=iris-iap-proxy-neg \
-  --network-endpoint-group-region=us-central1
-
-# 5. Create URL map and HTTPS proxy
-gcloud compute url-maps create iris-iap-proxy-urlmap \
-  --project=hai-gcp-models \
-  --default-service=iris-iap-proxy-backend
-
-# Reserve a static IP
-gcloud compute addresses create iris-iap-proxy-ip \
-  --project=hai-gcp-models \
-  --global
-
-# Create a managed SSL certificate (replace with your domain)
-gcloud compute ssl-certificates create iris-iap-proxy-cert \
-  --project=hai-gcp-models \
-  --domains=iris.example.com \
-  --global
-
-gcloud compute target-https-proxies create iris-iap-proxy-https \
-  --project=hai-gcp-models \
-  --ssl-certificates=iris-iap-proxy-cert \
-  --url-map=iris-iap-proxy-urlmap
-
-gcloud compute forwarding-rules create iris-iap-proxy-fwd \
-  --project=hai-gcp-models \
-  --global \
-  --target-https-proxy=iris-iap-proxy-https \
-  --address=iris-iap-proxy-ip \
-  --ports=443
-
-# 6. Enable IAP on the backend service
-gcloud iap web enable \
-  --project=hai-gcp-models \
-  --resource-type=backend-services \
-  --service=iris-iap-proxy-backend
-
-# Grant team members access through IAP
+# 7. Grant team members access through IAP
 gcloud iap web add-iam-policy-binding \
-  --project=hai-gcp-models \
-  --resource-type=backend-services \
-  --service=iris-iap-proxy-backend \
   --member="user:you@example.com" \
-  --role="roles/iap.httpsResourceAccessor"
+  --role="roles/iap.httpsResourceAccessor" \
+  --region=us-central1 \
+  --resource-type=cloud-run \
+  --service=iris-iap-proxy
 
-# 7. Create the proxy API key and store in Secret Manager
+# 8. (Optional) Create the proxy API key and store in Secret Manager
 # iris --cluster=marin key create --name iap-proxy
 # echo -n "<KEY>" | gcloud secrets create iris-iap-proxy-token \
 #   --project=hai-gcp-models --data-file=-
 
-# 8. Get the IAP audience (needed for IAP_AUDIENCE env var)
-# Format: /projects/<PROJECT_NUMBER>/global/backendServices/<BACKEND_SERVICE_ID>
-# Find PROJECT_NUMBER:  gcloud projects describe hai-gcp-models --format='value(projectNumber)'
-# Find BACKEND_SERVICE_ID: gcloud compute backend-services describe iris-iap-proxy-backend --global --format='value(id)'
-# Then update the Cloud Run service env var:
-# gcloud run services update iris-iap-proxy --region=us-central1 \
-#   --update-env-vars="IAP_AUDIENCE=/projects/<NUMBER>/global/backendServices/<ID>"
+# 9. Verify IAP is enabled
+gcloud run services describe iris-iap-proxy --region=us-central1
+# Look for: Iap Enabled: true
 
 SETUP
     exit 0
@@ -134,6 +108,7 @@ gcloud run deploy "${SERVICE}" \
   --source=. \
   --service-account="${SA_EMAIL}" \
   --no-allow-unauthenticated \
+  --iap \
   --network="${VPC_NETWORK}" \
   --subnet="${VPC_SUBNET}" \
   --vpc-egress=private-ranges-only \
