@@ -1537,10 +1537,20 @@ class ControllerTransitions:
                     "UPDATE tasks SET resource_usage_proto = ? WHERE task_id = ?",
                     (usage_payload, update.task_id.to_wire()),
                 )
+                ru = update.resource_usage
                 cur.execute(
-                    "INSERT INTO task_resource_history(task_id, attempt_id, snapshot_proto, timestamp_ms) "
-                    "VALUES (?, ?, ?, ?)",
-                    (update.task_id.to_wire(), update.attempt_id, usage_payload, now_ms),
+                    "INSERT INTO task_resource_history"
+                    "(task_id, attempt_id, cpu_millicores, memory_mb, disk_mb, memory_peak_mb, timestamp_ms) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        update.task_id.to_wire(),
+                        update.attempt_id,
+                        ru.cpu_millicores,
+                        ru.memory_mb,
+                        ru.disk_mb,
+                        ru.memory_peak_mb,
+                        now_ms,
+                    ),
                 )
             terminal_ms: int | None = None
             started_ms: int | None = None
@@ -1735,7 +1745,7 @@ class ControllerTransitions:
 
             # ── Classify and split ────────────────────────────────────────
             resource_usage_params: list[tuple[bytes, str]] = []
-            task_history_params: list[tuple[str, int, bytes, int]] = []
+            task_history_params: list[tuple[str, int, int, int, int, int, int]] = []
             # (request_index, transition_request) pairs so results stay aligned.
             transition_entries: list[tuple[int, HeartbeatApplyRequest]] = []
 
@@ -1766,7 +1776,18 @@ class ControllerTransitions:
                         if update.resource_usage is not None:
                             payload = update.resource_usage.SerializeToString()
                             resource_usage_params.append((payload, task_id_wire))
-                            task_history_params.append((task_id_wire, update.attempt_id, payload, now_ms))
+                            ru = update.resource_usage
+                            task_history_params.append(
+                                (
+                                    task_id_wire,
+                                    update.attempt_id,
+                                    ru.cpu_millicores,
+                                    ru.memory_mb,
+                                    ru.disk_mb,
+                                    ru.memory_peak_mb,
+                                    now_ms,
+                                )
+                            )
 
                 if transition_updates:
                     transition_entries.append(
@@ -1788,8 +1809,9 @@ class ControllerTransitions:
                 )
             if task_history_params:
                 cur.executemany(
-                    "INSERT INTO task_resource_history(task_id, attempt_id, snapshot_proto, timestamp_ms) "
-                    "VALUES (?, ?, ?, ?)",
+                    "INSERT INTO task_resource_history"
+                    "(task_id, attempt_id, cpu_millicores, memory_mb, disk_mb, memory_peak_mb, timestamp_ms) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     task_history_params,
                 )
 
@@ -2519,6 +2541,8 @@ class ControllerTransitions:
             ids_to_delete: list[int] = []
             for row in overflows:
                 tid, aid = row["task_id"], row["attempt_id"]
+                # Load all IDs into Python for index-based thinning.
+                # Bounded by 2*N + heartbeats-per-prune-cycle (~460 rows max at N=200).
                 all_ids = [
                     r["id"]
                     for r in cur.execute(
@@ -3076,10 +3100,20 @@ class ControllerTransitions:
                         "UPDATE tasks SET resource_usage_proto = ? WHERE task_id = ?",
                         (usage_payload, update.task_id.to_wire()),
                     )
+                    ru = update.resource_usage
                     cur.execute(
-                        "INSERT INTO task_resource_history(task_id, attempt_id, snapshot_proto, timestamp_ms) "
-                        "VALUES (?, ?, ?, ?)",
-                        (update.task_id.to_wire(), update.attempt_id, usage_payload, now_ms),
+                        "INSERT INTO task_resource_history"
+                        "(task_id, attempt_id, cpu_millicores, memory_mb, disk_mb, memory_peak_mb, timestamp_ms) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            update.task_id.to_wire(),
+                            update.attempt_id,
+                            ru.cpu_millicores,
+                            ru.memory_mb,
+                            ru.disk_mb,
+                            ru.memory_peak_mb,
+                            now_ms,
+                        ),
                     )
                 if update.container_id is not None:
                     cur.execute(

@@ -991,7 +991,10 @@ TASK_RESOURCE_HISTORY = Table(
             decoder=JobName.from_wire,
         ),
         Column("attempt_id", "INTEGER", "NOT NULL"),
-        Column("snapshot_proto", "BLOB", "NOT NULL", expensive=True),
+        Column("cpu_millicores", "INTEGER", "NOT NULL DEFAULT 0"),
+        Column("memory_mb", "INTEGER", "NOT NULL DEFAULT 0"),
+        Column("disk_mb", "INTEGER", "NOT NULL DEFAULT 0"),
+        Column("memory_peak_mb", "INTEGER", "NOT NULL DEFAULT 0"),
         Column("timestamp_ms", "INTEGER", "NOT NULL", python_type=Timestamp, decoder=decode_timestamp_ms),
     ),
     indexes=(

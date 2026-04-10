@@ -71,30 +71,43 @@ def _count_history_rows(state: ControllerTransitions, task_id: JobName, attempt_
 def _send_resource_heartbeat(state: ControllerTransitions, task_id: JobName, cpu: int = 1000, mem: int = 512):
     """Send a steady-state heartbeat with resource usage."""
     usage = job_pb2.ResourceUsage(cpu_millicores=cpu, memory_mb=mem, disk_mb=10)
-    state.apply_heartbeats_batch([
-        HeartbeatApplyRequest(
-            worker_id=WorkerId("w1"),
-            worker_resource_snapshot=job_pb2.WorkerResourceSnapshot(),
-            updates=[
-                TaskUpdate(
-                    task_id=task_id,
-                    attempt_id=0,
-                    new_state=job_pb2.TASK_STATE_RUNNING,
-                    resource_usage=usage,
-                ),
-            ],
-        )
-    ])
+    state.apply_heartbeats_batch(
+        [
+            HeartbeatApplyRequest(
+                worker_id=WorkerId("w1"),
+                worker_resource_snapshot=job_pb2.WorkerResourceSnapshot(),
+                updates=[
+                    TaskUpdate(
+                        task_id=task_id,
+                        attempt_id=0,
+                        new_state=job_pb2.TASK_STATE_RUNNING,
+                        resource_usage=usage,
+                    ),
+                ],
+            )
+        ]
+    )
 
 
 def test_heartbeat_inserts_history(state):
-    """Each heartbeat with resource_usage inserts a row into task_resource_history."""
+    """Each heartbeat with resource_usage inserts a row with native columns."""
     _, task_id = _setup_running_task(state)
 
     assert _count_history_rows(state, task_id) == 0
 
     _send_resource_heartbeat(state, task_id, cpu=1000, mem=512)
     assert _count_history_rows(state, task_id) == 1
+
+    # Verify native column values.
+    with state._db.read_snapshot() as q:
+        rows = q.raw(
+            "SELECT cpu_millicores, memory_mb, disk_mb FROM task_resource_history "
+            "WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+            (task_id.to_wire(),),
+        )
+    assert rows[0].cpu_millicores == 1000
+    assert rows[0].memory_mb == 512
+    assert rows[0].disk_mb == 10
 
     _send_resource_heartbeat(state, task_id, cpu=2000, mem=1024)
     assert _count_history_rows(state, task_id) == 2
@@ -134,8 +147,7 @@ def test_prune_preserves_newest_rows(state):
         newest_before = [
             r.id
             for r in q.raw(
-                "SELECT id FROM task_resource_history WHERE task_id = ? AND attempt_id = 0 "
-                "ORDER BY id DESC LIMIT ?",
+                "SELECT id FROM task_resource_history WHERE task_id = ? AND attempt_id = 0 " "ORDER BY id DESC LIMIT ?",
                 (task_id.to_wire(), TASK_RESOURCE_HISTORY_RETENTION),
             )
         ]
