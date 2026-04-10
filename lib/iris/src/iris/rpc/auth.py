@@ -379,9 +379,14 @@ class GcpAccessTokenProvider:
 class IapOidcTokenProvider:
     """Gets OIDC ID tokens for IAP programmatic access.
 
-    Generates an OIDC ID token with the IAP client ID as the audience,
-    suitable for ``Authorization: Bearer`` when calling an IAP-protected
-    endpoint. Tokens are cached until 5 minutes before expiry.
+    Tries the google-auth library's ``fetch_id_token`` first (which works on
+    GCE/Cloud Run metadata servers and with service-account JSON files), and
+    falls back to ``gcloud auth print-identity-token`` for environments where
+    only user credentials (``gcloud auth application-default login``) are
+    available — google-auth cannot mint ID tokens from user credentials, but
+    the gcloud CLI uses an internal helper that can.
+
+    Tokens are cached until 5 minutes before expiry.
     """
 
     _REFRESH_MARGIN_SECONDS = 300
@@ -391,16 +396,41 @@ class IapOidcTokenProvider:
         self._cached_token: str | None = None
         self._expires_at: float = 0.0
 
+    def _fetch_via_google_auth(self) -> str | None:
+        try:
+            import google.auth.transport.requests
+            from google.oauth2 import id_token
+
+            request = google.auth.transport.requests.Request()
+            return id_token.fetch_id_token(request, self._audience)
+        except Exception as exc:
+            logger.debug("google-auth ID token fetch failed: %s", exc)
+            return None
+
+    def _fetch_via_gcloud(self) -> str:
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["gcloud", "auth", "print-identity-token", f"--audiences={self._audience}"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "Could not fetch IAP OIDC token: gcloud CLI not found. " "Install gcloud or run on a GCE/Cloud Run VM."
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(f"Could not fetch IAP OIDC token via gcloud: {exc.stderr.strip()}") from exc
+        return result.stdout.strip()
+
     def get_token(self) -> str | None:
         if self._cached_token is not None and time.monotonic() < self._expires_at:
             return self._cached_token
 
-        import google.auth
-        import google.auth.transport.requests
-        from google.oauth2 import id_token
-
-        request = google.auth.transport.requests.Request()
-        token = id_token.fetch_id_token(request, self._audience)
+        token = self._fetch_via_google_auth() or self._fetch_via_gcloud()
 
         self._cached_token = token
         # OIDC ID tokens are typically valid for 1 hour.
