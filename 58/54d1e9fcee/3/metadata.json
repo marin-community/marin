@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "5854d1e9fcee",
+  "session_id": "5265c513-1f7d-4db9-bb24-7c4990a7af8c",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-10T15:53:57.948227564Z",
+  "branch": "kevin/harbor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/iris/src/iris/rpc/cluster_pb2.pyi",
+    "lib/iris/src/iris/cluster/client/job_info.py",
+    "lib/iris/src/iris/rpc/cluster.proto",
+    "lib/iris/src/iris/rpc/cluster_pb2.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "45c0a054ebf1",
+  "transcript_identifier_at_start": "52d88c83-344e-4dbf-aa7f-58d4242cb025",
+  "token_usage": {
+    "input_tokens": 1939,
+    "cache_creation_tokens": 27472040,
+    "cache_read_tokens": 722798543,
+    "output_tokens": 465863,
+    "api_call_count": 1446
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-10T15:53:54.452404329Z",
+    "agent_lines": 0,
+    "human_added": 18,
+    "human_modified": 131,
+    "human_removed": 0,
+    "total_committed": 18,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-home-kevin-marin-harbor/5265c513-1f7d-4db9-bb24-7c4990a7af8c.jsonl"
+}
