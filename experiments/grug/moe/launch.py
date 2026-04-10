@@ -126,9 +126,14 @@ _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_f
     target_steps=_BASELINE_TARGET_STEPS,
 )
 
+# Public alias for the heuristic-derived baseline GrugModelConfig. Kept
+# because consumers (e.g. experiments/ferries/canary_ferry.py) import it by
+# name.
+GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _baseline_model
+
 
 baseline_moe = ExecutorStep(
-    name="grug/03_24_baseline_moe",
+    name="grug/4_10_baseline_moe",
     fn=run_grug_moe_trial,
     config=GrugMoeLaunchConfig(
         model=versioned(_baseline_model),
