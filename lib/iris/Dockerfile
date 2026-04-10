@@ -63,6 +63,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Now copy full source for both rigging and iris, then install.
 COPY lib/rigging/src/ ./lib/rigging/src/
 COPY lib/iris/src/ ./lib/iris/src/
+COPY lib/iris/examples/ ./lib/iris/examples/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --package iris
 

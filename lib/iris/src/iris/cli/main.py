@@ -58,9 +58,9 @@ def _bundled_iris_examples_dir() -> str | None:
 IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
     p
     for p in (
+        "~/.config/marin/clusters",  # user override — checked first
         "lib/iris/examples",  # in-tree marin checkout
         _bundled_iris_examples_dir(),  # editable install from sibling workspace
-        "~/.config/marin/clusters",  # user override
     )
     if p is not None
 )
