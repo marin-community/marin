@@ -5,13 +5,18 @@
 
 from fray.v2 import ResourceConfig
 
-from marin.datakit.download.common_corpus import download_common_corpus_raw_step, filter_common_corpus_step
+from marin.datakit.download.common_corpus import (
+    download_common_corpus_raw_step,
+    filter_common_corpus_step,
+    normalize_common_corpus_step,
+)
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-_raw_download = download_common_corpus_raw_step()
-common_corpus_download = filter_common_corpus_step(_raw_download).as_executor_step()
+common_corpus_download = normalize_common_corpus_step(
+    filter_common_corpus_step(download_common_corpus_raw_step())
+).as_executor_step()
 
 
 def tokenize_common_corpus(*, tokenizer: str | None = None) -> TokenizerStep:
