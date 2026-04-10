@@ -135,6 +135,39 @@ The branch should therefore focus on:
 - Retry / resume identity bugs and rollout W&B step bugs were already fixed on
   `iris_rl` before this branch split.
 
+## Merge Log
+
+### 2026-04-10: Merge origin/main into packed_rl
+
+The `iris_rl` branch was merged into main upstream, causing 30 conflicts
+with this branch. Resolved as follows:
+
+**Strategy**: Take main as canonical base for all shared RL infrastructure,
+then layer packed-RL-specific additions back on top.
+
+**Conflicts resolved (30 files)**:
+- 5 infrastructure files (levanter checkpoint, tensorstore, iris bug_report, test_checkpoint) → took main
+- `exp2039_rl_math500.py` → accepted main's deletion
+- `experiments/llama_3_8b_rl_math500.py` → took main
+- 12 core RL files (environments, inference_ctx, orchestration, rl_job, rollout_worker, etc.) → took main
+- 8 test files → took main
+
+**Packed additions layered back**:
+- `InferenceRequestKind` StrEnum added to `inference_ctx/base.py`
+- `request_kind` parameter threaded through `batch_completions()` (base, levanter, vllm) and `MarinEnv.sample()` (base, prime_intellect_env)
+- `PackedvLLM` imports/exports added to `inference_ctx/__init__.py`
+- `PackedvLLMInferenceContextConfig` added to `rl_job.py` type union
+- Stale `ArrowFlightExportStrategy` reference removed from `weight_transfer/__init__.py` (main removed this enum; auto-merge left a dangling reference)
+
+**Packed files preserved without conflict**:
+- `packed_vllm.py`, `packed_vllm_worker.py`, `packed_vllm_protocol.py`
+- `exp_iris_rl_regression_direct_gcs_packed.py`, `exp_iris_rl_regression_direct_gcs_packed_candidate.py`
+- `test_packed_vllm_inference_ctx.py`
+
+**Known residual**: `xp_iris_rl_regression_direct_gcs_prod.py` (packed_rl-only experiment probe) still references the removed `ArrowFlightExportStrategy`. This file is not on main and wasn't part of the conflict resolution; it will need updating if used.
+
+**Commit**: `e655aa35b`
+
 ## Suggested Immediate Next Step
 
 Use this branch to answer one question cleanly:
