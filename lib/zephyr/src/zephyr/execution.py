@@ -111,7 +111,6 @@ class PickleDiskChunk:
 from zephyr.shuffle import (  # noqa: E402
     ListShard,
     MemChunk,
-    ScatterParquetIterator,  # noqa: F401 — re-exported for external callers
     ScatterShard,  # noqa: F401 — re-exported for plan.py and external callers
     _build_scatter_shard_from_manifest,  # noqa: F401 — re-exported for plan.py
     _make_envelope,
@@ -975,14 +974,6 @@ class ZephyrCoordinator:
             self._chunk_prefix = prefix
             self._execution_id = execution_id
 
-    def get_chunk_config(self) -> dict:
-        """Return chunk storage configuration for workers."""
-        with self._lock:
-            return {
-                "prefix": self._chunk_prefix,
-                "execution_id": self._execution_id,
-            }
-
     def start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
         """Load a new stage's tasks into the queue (legacy compat)."""
         self._start_stage(stage_name, tasks, is_last_stage=is_last_stage)
@@ -991,14 +982,6 @@ class ZephyrCoordinator:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
         with self._lock:
             self._check_worker_heartbeats(timeout)
-
-    def collect_results(self) -> dict[int, TaskResult]:
-        """Return results for the completed stage (legacy compat)."""
-        return self._collect_results()
-
-    def signal_done(self) -> None:
-        """Signal workers that no more stages will be submitted (legacy compat)."""
-        self._shutdown_event.set()
 
 
 # ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ from collections import defaultdict
 import json
 import logging
 from dataclasses import dataclass, field
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any, NamedTuple
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
@@ -2432,65 +2432,76 @@ class ControllerTransitions:
         self._db.remove_worker_from_attr_cache(worker_id)
         return WORKER_DETAIL_PROJECTION.decode_one([row])
 
-    def prune_worker_task_history(self) -> int:
-        """Trim worker_task_history to WORKER_TASK_HISTORY_RETENTION rows per worker.
+    def _prune_per_worker_history(
+        self,
+        table: str,
+        retention: int,
+        order_by: str = "id DESC",
+    ) -> int:
+        """Trim a per-worker history table to *retention* rows per worker.
 
-        Runs on the background prune thread, not in the assignment hot path.
-        The NOT IN subquery per worker is expensive; batching all workers in a
-        single transaction amortizes the overhead versus running it on every assign.
+        Used by the background prune thread. The NOT IN subquery per worker is
+        expensive; batching all workers in a single transaction amortizes the
+        overhead versus running it on every assign/heartbeat.
         """
         with self._db.transaction() as cur:
             rows = cur.execute(
-                "SELECT worker_id, COUNT(*) as cnt FROM worker_task_history GROUP BY worker_id HAVING cnt > ?",
-                (WORKER_TASK_HISTORY_RETENTION,),
+                f"SELECT worker_id, COUNT(*) as cnt FROM {table} GROUP BY worker_id HAVING cnt > ?",
+                (retention,),
             ).fetchall()
             total_deleted = 0
             for row in rows:
                 wid = row["worker_id"]
                 cur.execute(
-                    "DELETE FROM worker_task_history "
+                    f"DELETE FROM {table} "
                     "WHERE worker_id = ? "
-                    "AND id NOT IN ("
-                    "  SELECT id FROM worker_task_history "
+                    f"AND id NOT IN ("
+                    f"  SELECT id FROM {table} "
                     "  WHERE worker_id = ? "
-                    "  ORDER BY assigned_at_ms DESC, id DESC LIMIT ?"
+                    f"  ORDER BY {order_by} LIMIT ?"
                     ")",
-                    (wid, wid, WORKER_TASK_HISTORY_RETENTION),
+                    (wid, wid, retention),
                 )
                 total_deleted += cur.rowcount
         if total_deleted > 0:
-            logger.info("Pruned %d worker_task_history rows", total_deleted)
+            logger.info("Pruned %d %s rows", total_deleted, table)
         return total_deleted
+
+    def prune_worker_task_history(self) -> int:
+        """Trim worker_task_history to WORKER_TASK_HISTORY_RETENTION rows per worker."""
+        return self._prune_per_worker_history(
+            "worker_task_history",
+            WORKER_TASK_HISTORY_RETENTION,
+            order_by="assigned_at_ms DESC, id DESC",
+        )
 
     def prune_worker_resource_history(self) -> int:
-        """Trim worker_resource_history to WORKER_RESOURCE_HISTORY_RETENTION rows per worker.
+        """Trim worker_resource_history to WORKER_RESOURCE_HISTORY_RETENTION rows per worker."""
+        return self._prune_per_worker_history(
+            "worker_resource_history",
+            WORKER_RESOURCE_HISTORY_RETENTION,
+        )
 
-        Runs on the background prune thread every ~10 minutes. Keeping this out
-        of the heartbeat hot path avoids issuing hundreds of per-worker
-        SELECT+DELETE pairs inside the apply_heartbeats_batch write transaction.
+    def _batch_delete(
+        self,
+        sql: str,
+        params: tuple[object, ...],
+        stopped: Callable[[], bool],
+        pause_between_s: float,
+    ) -> int:
+        """Delete rows in batches, sleeping between transactions.
+
+        Returns the total number of rows deleted.
         """
-        with self._db.transaction() as cur:
-            rows = cur.execute(
-                "SELECT worker_id, COUNT(*) as cnt FROM worker_resource_history GROUP BY worker_id HAVING cnt > ?",
-                (WORKER_RESOURCE_HISTORY_RETENTION,),
-            ).fetchall()
-            total_deleted = 0
-            for row in rows:
-                wid = row["worker_id"]
-                cur.execute(
-                    "DELETE FROM worker_resource_history "
-                    "WHERE worker_id = ? "
-                    "AND id NOT IN ("
-                    "  SELECT id FROM worker_resource_history "
-                    "  WHERE worker_id = ? "
-                    "  ORDER BY id DESC LIMIT ?"
-                    ")",
-                    (wid, wid, WORKER_RESOURCE_HISTORY_RETENTION),
-                )
-                total_deleted += cur.rowcount
-        if total_deleted > 0:
-            logger.info("Pruned %d worker_resource_history rows", total_deleted)
-        return total_deleted
+        total = 0
+        while not stopped():
+            with self._db.transaction() as cur:
+                batch = cur.execute(sql, params).rowcount
+            if batch == 0:
+                break
+            total += batch
+            time.sleep(pause_between_s)
+        return total
 
     def prune_old_data(
         self,
@@ -2566,64 +2577,42 @@ class ControllerTransitions:
             time.sleep(pause_between_s)
 
         # 3. Logs: batch of 1000 per transaction (no CASCADE, cheap rows)
-        logs_deleted = 0
-        while not _stopped():
-            with self._db.transaction() as cur:
-                c = cur.execute(
-                    "DELETE FROM logs WHERE rowid IN (SELECT rowid FROM logs WHERE epoch_ms < ? LIMIT 1000)",
-                    (log_cutoff_ms,),
-                )
-                batch = c.rowcount
-            if batch == 0:
-                break
-            logs_deleted += batch
-            time.sleep(pause_between_s)
+        logs_deleted = self._batch_delete(
+            "DELETE FROM logs WHERE rowid IN (SELECT rowid FROM logs WHERE epoch_ms < ? LIMIT 1000)",
+            (log_cutoff_ms,),
+            _stopped,
+            pause_between_s,
+        )
 
         # 4. txn_actions: batch of 1000 per transaction (no CASCADE)
-        txn_actions_deleted = 0
-        while not _stopped():
-            with self._db.transaction() as cur:
-                c = cur.execute(
-                    "DELETE FROM txn_actions WHERE rowid IN "
-                    "(SELECT rowid FROM txn_actions WHERE created_at_ms < ? LIMIT 1000)",
-                    (txn_cutoff_ms,),
-                )
-                batch = c.rowcount
-            if batch == 0:
-                break
-            txn_actions_deleted += batch
-            time.sleep(pause_between_s)
+        txn_actions_deleted = self._batch_delete(
+            "DELETE FROM txn_actions WHERE rowid IN "
+            "(SELECT rowid FROM txn_actions WHERE created_at_ms < ? LIMIT 1000)",
+            (txn_cutoff_ms,),
+            _stopped,
+            pause_between_s,
+        )
 
         # 5. Task profiles: batch of 1000 per transaction
-        profiles_deleted = 0
         profile_cutoff_ms = now_ms - profile_retention.to_ms()
         # 5a. Delete stale profiles by age.
-        while not _stopped():
-            with self._db.transaction() as cur:
-                c = cur.execute(
-                    "DELETE FROM profiles.task_profiles WHERE rowid IN "
-                    "(SELECT rowid FROM profiles.task_profiles WHERE captured_at_ms < ? LIMIT 1000)",
-                    (profile_cutoff_ms,),
-                )
-                batch = c.rowcount
-            if batch == 0:
-                break
-            profiles_deleted += batch
-            time.sleep(pause_between_s)
+        profiles_deleted = self._batch_delete(
+            "DELETE FROM profiles.task_profiles WHERE rowid IN "
+            "(SELECT rowid FROM profiles.task_profiles WHERE captured_at_ms < ? LIMIT 1000)",
+            (profile_cutoff_ms,),
+            _stopped,
+            pause_between_s,
+        )
         # 5b. Delete orphan profiles whose task no longer exists.
-        while not _stopped():
-            with self._db.transaction() as cur:
-                c = cur.execute(
-                    "DELETE FROM profiles.task_profiles WHERE rowid IN "
-                    "(SELECT p.rowid FROM profiles.task_profiles p"
-                    " LEFT JOIN tasks t ON p.task_id = t.task_id"
-                    " WHERE t.task_id IS NULL LIMIT 1000)",
-                )
-                batch = c.rowcount
-            if batch == 0:
-                break
-            profiles_deleted += batch
-            time.sleep(pause_between_s)
+        profiles_deleted += self._batch_delete(
+            "DELETE FROM profiles.task_profiles WHERE rowid IN "
+            "(SELECT p.rowid FROM profiles.task_profiles p"
+            " LEFT JOIN tasks t ON p.task_id = t.task_id"
+            " WHERE t.task_id IS NULL LIMIT 1000)",
+            (),
+            _stopped,
+            pause_between_s,
+        )
 
         result = PruneResult(
             jobs_deleted=jobs_deleted,
