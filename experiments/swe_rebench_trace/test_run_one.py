@@ -20,6 +20,8 @@ from experiments.swe_rebench_trace.run_one import (
     _cap_text,
     _inject_tracer_and_entrypoint,
     _make_error_result,
+    _read_trace_file,
+    _sanitize_container_id,
     trace_swe_row,
 )
 
@@ -35,6 +37,9 @@ def test_trace_swe_row_missing_test_cmd_returns_error_row():
     assert result["image_name"] == "ghcr.io/x/y:latest"
     assert result["returncode"] == -1
     assert "test_cmd" in (result.get("error") or "").lower()
+    # The error path doesn't run a sandbox, so the tracer fields are unknown.
+    assert result["tracer"] == "unknown"
+    assert result["sandbox_python"] == ""
 
 
 def test_make_error_result_round_trips_to_dict():
@@ -51,6 +56,8 @@ def test_make_error_result_round_trips_to_dict():
     assert d["duration_s"] == 1.5
     assert d["trace_events"] == []
     assert d["returncode"] == -1
+    assert d["tracer"] == "unknown"
+    assert d["sandbox_python"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -100,8 +107,84 @@ def test_inject_tracer_creates_tracer_and_entrypoint(tmp_path: Path):
     body = entry_dst.read_text()
     assert "pytest -q tests/" in body
     assert "MARIN_TRACE_FD=9" in body
+    # set -e must NOT be present: it would short-circuit the exit-code
+    # capture and the trace fd close on test failure.
+    assert "set -e" not in body
+    # The exit-code capture must be on the same line as the test command so
+    # the script keeps running even after a non-zero exit.
+    assert "; exit_code=$?" in body
+    assert "exec 9>&-" in body
+    assert "exit $exit_code" in body
     # Executable bit set.
     assert entry_dst.stat().st_mode & 0o111
+
+
+# ---------------------------------------------------------------------------
+# _sanitize_container_id
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_container_id_replaces_unsafe_chars():
+    cid = _sanitize_container_id("django/django__1.2.3")
+    # Strip the random suffix and the swe- prefix to assert the safe slug.
+    assert cid.startswith("swe-django-django-1-2-3-")
+    parts = cid.rsplit("-", 1)
+    assert len(parts[1]) == 8  # uuid suffix
+
+
+def test_sanitize_container_id_falls_back_for_empty_input():
+    cid = _sanitize_container_id("///")
+    assert cid.startswith("swe-row-")
+
+
+def test_sanitize_container_id_uniqueness_across_calls():
+    a = _sanitize_container_id("instance-x")
+    b = _sanitize_container_id("instance-x")
+    assert a != b
+
+
+# ---------------------------------------------------------------------------
+# _read_trace_file metadata extraction
+# ---------------------------------------------------------------------------
+
+
+def _frame(record: dict) -> bytes:
+    import json
+    import struct
+
+    payload = json.dumps(record).encode("utf-8")
+    return struct.pack(">I", len(payload)) + payload
+
+
+def test_read_trace_file_extracts_meta_record(tmp_path: Path):
+    path = tmp_path / "trace.bin"
+    path.write_bytes(
+        _frame({"e": "meta", "tracer": "sys.monitoring", "py": "3.12.4"})
+        + _frame({"e": "call", "f": "/testbed/x.py", "l": 1, "n": "f"})
+        + _frame({"e": "return", "f": "/testbed/x.py", "l": 5, "n": "f"})
+    )
+    events, total, truncated, meta = _read_trace_file(path, max_events=10)
+    assert meta == {"e": "meta", "tracer": "sys.monitoring", "py": "3.12.4"}
+    assert total == 2  # meta does NOT count toward total
+    assert truncated is False
+    assert [e["e"] for e in events] == ["call", "return"]
+
+
+def test_read_trace_file_returns_empty_meta_when_missing(tmp_path: Path):
+    path = tmp_path / "trace.bin"
+    path.write_bytes(_frame({"e": "call", "f": "/testbed/x.py", "l": 1, "n": "f"}))
+    _events, total, truncated, meta = _read_trace_file(path, max_events=10)
+    assert meta == {}
+    assert total == 1
+    assert truncated is False
+
+
+def test_read_trace_file_handles_missing_path(tmp_path: Path):
+    events, total, truncated, meta = _read_trace_file(tmp_path / "nope.bin", max_events=10)
+    assert events == []
+    assert total == 0
+    assert truncated is False
+    assert meta == {}
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +220,22 @@ def test_build_oci_config_merges_env_and_sets_entrypoint(tmp_path: Path):
     # Network namespace requested (private netns, no host network).
     namespaces = {ns["type"] for ns in spec["linux"]["namespaces"]}
     assert "network" in namespaces
+
+
+def test_build_oci_config_rootfs_is_readonly_with_writable_overlays(tmp_path: Path):
+    """The rootfs must be read-only; /testbed and friends must be writable tmpfs."""
+    spec = _build_oci_config(
+        bundle_dir=tmp_path,
+        test_cmd="pytest",
+        image_config={},
+        extra_env={},
+    )
+    assert spec["root"]["readonly"] is True
+    mount_dests = {m["destination"]: m for m in spec["mounts"]}
+    # Writable overlays must be present and tmpfs-backed.
+    for dest in ("/tmp", "/testbed", "/root", "/var/tmp"):
+        assert dest in mount_dests, f"missing writable overlay for {dest}"
+        assert mount_dests[dest]["type"] == "tmpfs"
 
 
 def test_build_oci_config_handles_image_with_no_config(tmp_path: Path):

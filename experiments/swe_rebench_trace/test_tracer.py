@@ -60,8 +60,11 @@ def test_emit_writes_framed_json_record(fresh_tracer, tmp_path: Path):
     # Force a flush by closing the underlying fd handle in the test.
     os.fsync(tracer._TRACE_FD)
     data = trace_path.read_bytes()
-    record = _read_one_record(data)
-    assert record == {"e": "call", "f": str(tmp_path / "x.py"), "l": 1, "n": "main"}
+    # The first record on disk is the meta record emitted by install();
+    # skip past it to find the call record we just emitted.
+    records = list(_iter_trace_records(iter([data])))
+    call_records = [r for r in records if r.get("e") == "call"]
+    assert call_records == [{"e": "call", "f": str(tmp_path / "x.py"), "l": 1, "n": "main"}]
 
 
 def test_path_filter_keeps_in_root(fresh_tracer, tmp_path: Path):
@@ -106,3 +109,19 @@ def test_install_is_noop_without_env(monkeypatch):
     sys.modules.pop("experiments.swe_rebench_trace.tracer", None)
     tracer = importlib.import_module("experiments.swe_rebench_trace.tracer")
     assert tracer._TRACE_ENABLED is False
+
+
+def test_install_emits_meta_record_first(fresh_tracer, tmp_path: Path):
+    """Tracer install() must emit a single ``e=meta`` record carrying the actual
+    sandbox interpreter mode and Python version."""
+    tracer, trace_path = fresh_tracer
+    os.fsync(tracer._TRACE_FD)
+    data = trace_path.read_bytes()
+    record = _read_one_record(data)
+    assert record is not None
+    assert record["e"] == "meta"
+    assert record["tracer"] in ("sys.monitoring", "sys.settrace")
+    # Tracer reports the current process's Python version.
+    assert record["py"] == f"{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}"
+    assert record["roots"] == [str(tmp_path)]
+    assert record["max_events"] == 1000

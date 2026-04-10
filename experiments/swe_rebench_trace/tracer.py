@@ -25,9 +25,9 @@ Three goals:
    has lower overhead and a richer event vocabulary on 3.12+. The fallback
    path uses sys.settrace and emits a similar event shape.
 
-The output stream uses length-prefixed msgpack records:
+The output stream uses length-prefixed JSON records:
 
-    [4-byte big-endian payload length][msgpack payload]
+    [4-byte big-endian payload length][JSON payload]
 
 where each payload is a dict like::
 
@@ -35,21 +35,24 @@ where each payload is a dict like::
     {"e": "return", "f": "/testbed/foo.py", "l": 18, "n": "do_thing"}
     {"e": "line", "f": "/testbed/foo.py", "l": 14, "n": "do_thing"}
 
-The consumer (``run_one.py``) reads from a unix-domain socket / pipe attached
-to ``MARIN_TRACE_FD`` and decodes the framed msgpack stream.
+A single ``{"e": "meta", ...}`` record is emitted at install time
+carrying the actual tracer mode and Python version, so the host-side
+reader doesn't have to guess.
+
+The consumer (``run_one.py``) reads the captured stream from the
+sandbox-side trace file and decodes the framed JSON records.
+
+JSON is used instead of msgpack to avoid pulling msgpack into the
+untrusted SWE-rebench images, which install their own pip environments.
+The size cost is ~2x vs msgpack, which is fine for the prototype.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import struct
 import sys
-
-# msgpack is a dep of zephyr; the SWE-rebench images install their own pip
-# environment, so we vendor a tiny encoder rather than depend on msgpack being
-# present in the sandboxed image. JSON is fine for the prototype — it costs
-# ~2x bytes vs msgpack but avoids the dep.
-import json
 
 _TRACE_ENABLED = False
 _TRACE_FD: int = -1
@@ -241,10 +244,25 @@ def install() -> None:
     _TRACE_LINES = os.environ.get("MARIN_TRACE_LINES", "0") not in ("", "0", "false", "False")
 
     _TRACE_ENABLED = True
+    tracer_mode = "sys.monitoring" if sys.version_info >= (3, 12) else "sys.settrace"
     if sys.version_info >= (3, 12):
         _enable_monitoring()
     else:
         _enable_settrace()
+
+    # Emit a single metadata record at install time so the host-side reader
+    # can recover the actual sandbox tracer mode and Python version, rather
+    # than guessing from the worker's interpreter (which can differ).
+    _emit(
+        {
+            "e": "meta",
+            "tracer": tracer_mode,
+            "py": f"{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}",
+            "lines": _TRACE_LINES,
+            "max_events": _MAX_EVENTS,
+            "roots": list(_TRACE_ROOTS),
+        }
+    )
 
 
 # Auto-install when imported via PYTHONSTARTUP. install() is idempotent and

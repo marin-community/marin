@@ -49,6 +49,12 @@ def test_proxy_config_default_allowlist_includes_pypi():
     assert not cfg.host_allowed("evil.example.com")
 
 
+def test_proxy_config_default_bind_is_loopback():
+    """The default bind must be loopback so the proxy isn't exposed beyond the worker."""
+    cfg = ProxyConfig()
+    assert cfg.bind_host == "127.0.0.1"
+
+
 # ---------------------------------------------------------------------------
 # CONNECT request parsing
 # ---------------------------------------------------------------------------
@@ -186,3 +192,28 @@ def test_proxy_allows_localhost_and_proxies_bytes():
 def test_proxy_handle_shutdown_is_idempotent(loopback_proxy):
     loopback_proxy.shutdown()
     loopback_proxy.shutdown()  # second call should not raise
+
+
+def test_proxy_header_deadline_disconnects_slow_client(loopback_proxy):
+    """A client that connects but never sends headers must be disconnected by the deadline."""
+    import time as _time
+
+    s = socket.create_connection((loopback_proxy.host, loopback_proxy.port), timeout=10.0)
+    s.settimeout(10.0)
+    started = _time.monotonic()
+    try:
+        # Don't send anything; wait for the proxy to give up.
+        # The proxy's header read deadline is 5s; recv() will return when the
+        # proxy closes its end.
+        try:
+            data = s.recv(4096)
+        except (TimeoutError, OSError):
+            data = b""
+    finally:
+        s.close()
+    elapsed = _time.monotonic() - started
+    # Must be bounded by the header deadline (5s) plus a small slack.
+    assert elapsed < 8.0, f"slow client held the connection for {elapsed:.1f}s"
+    # The proxy may have sent a 400, or may have closed without writing.
+    if data:
+        assert b"400" in data

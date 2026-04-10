@@ -25,12 +25,13 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import re
 import shutil
 import struct
 import subprocess
-import sys
 import tempfile
 import time
+import uuid
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
@@ -72,7 +73,8 @@ class TraceResult:
     image_name: str
     test_cmd: str
     runtime: str  # "runsc"
-    tracer: str  # "sys.monitoring" | "sys.settrace"
+    tracer: str  # "sys.monitoring" | "sys.settrace" | "unknown"
+    sandbox_python: str  # e.g. "3.11.8"; empty if no metadata record was emitted
     returncode: int
     duration_s: float
     stdout: str
@@ -170,7 +172,15 @@ def _build_oci_config(
     extra_env: dict[str, str],
     rootfs_subdir: str = "rootfs",
 ) -> dict:
-    """Build a minimal OCI runtime spec for runsc."""
+    """Build a minimal OCI runtime spec for runsc.
+
+    The rootfs is mounted **read-only**. Anything the test command needs to
+    write to (the project source under /testbed, the trace stream at
+    /tmp/marin-trace.bin, pip's site-packages cache, etc.) lives on a
+    tmpfs overlay so a misbehaving test can't fill the worker's disk via
+    arbitrary writes to the rootfs. The tmpfs caps are deliberately small
+    so OOM hits before disk pressure does.
+    """
     cfg = image_config.get("config", {}) or {}
     image_env = list(cfg.get("Env") or [])
     image_workdir = cfg.get("WorkingDir") or "/"
@@ -199,7 +209,7 @@ def _build_oci_config(
             "rlimits": [{"type": "RLIMIT_NOFILE", "hard": 65536, "soft": 65536}],
             "noNewPrivileges": True,
         },
-        "root": {"path": rootfs_subdir, "readonly": False},
+        "root": {"path": rootfs_subdir, "readonly": True},
         "hostname": "swe-trace",
         "mounts": [
             {"destination": "/proc", "type": "proc", "source": "proc"},
@@ -211,6 +221,28 @@ def _build_oci_config(
             },
             {
                 "destination": "/tmp",
+                "type": "tmpfs",
+                "source": "tmpfs",
+                "options": ["nosuid", "nodev", "size=2g"],
+            },
+            # Writable overlay where SWE-rebench projects live. tmpfs-backed
+            # so the rootfs stays read-only and the worker disk is protected.
+            {
+                "destination": "/testbed",
+                "type": "tmpfs",
+                "source": "tmpfs",
+                "options": ["nosuid", "nodev", "size=8g"],
+            },
+            # Writable overlays for caches the test command may try to populate
+            # (pip / cargo / npm under HOME, /var/tmp build dirs, etc.).
+            {
+                "destination": "/root",
+                "type": "tmpfs",
+                "source": "tmpfs",
+                "options": ["nosuid", "nodev", "size=4g"],
+            },
+            {
+                "destination": "/var/tmp",
                 "type": "tmpfs",
                 "source": "tmpfs",
                 "options": ["nosuid", "nodev", "size=2g"],
@@ -246,23 +278,20 @@ def _inject_tracer_and_entrypoint(
     src = Path(__file__).parent / "tracer.py"
     shutil.copy(src, tracer_dir / "tracer.py")
 
-    # The entrypoint creates a fifo, redirects fd 9 to it (so the tracer can
-    # write trace records via MARIN_TRACE_FD=9 without colliding with stdout),
-    # and execs the test command. The fifo is read by the host via runsc's
-    # rootfs bind mount path.
+    # The entrypoint redirects fd 9 to a file inside the sandbox so the tracer
+    # can write framed trace records via ``MARIN_TRACE_FD=9`` without
+    # colliding with stdout. The host reads the file out of the rootfs after
+    # the container exits.
     #
-    # NOTE: in the prototype we keep things simple by writing the trace stream
-    # to /tmp/marin-trace.bin inside the sandbox and reading it after the
-    # container exits, instead of using a fifo across the runsc boundary
-    # (which would require host-side fd inheritance support that runsc
-    # doesn't expose cleanly). The host then copies it out of the rootfs.
+    # We deliberately do NOT enable ``set -e``: we want the test command's
+    # actual exit code, not a hard-stop on the first non-zero return. The
+    # ``; exit_code=$?`` form is part of the same statement so the exit-code
+    # capture and the trace-fd close always run, regardless of test outcome.
     entrypoint_script = f"""#!/bin/sh
-set -eu
 export MARIN_TRACE_FD=9
 exec 9>>/tmp/marin-trace.bin
-{test_cmd}
-exit_code=$?
-exec 9>&-
+{test_cmd}; exit_code=$?
+exec 9>&- 2>/dev/null
 exit $exit_code
 """
     entrypoint_path = tracer_dir / "entrypoint.sh"
@@ -298,26 +327,36 @@ def _iter_trace_records(stream: Iterable[bytes]) -> Iterator[dict]:
                 continue
 
 
-def _read_trace_file(path: Path, *, max_events: int) -> tuple[list[dict], int, bool]:
+def _read_trace_file(path: Path, *, max_events: int) -> tuple[list[dict], int, bool, dict]:
     """Read a captured trace stream from disk.
 
-    Returns (events, total_count, truncated). ``events`` is capped at
+    Returns (events, total_count, truncated, meta). ``events`` is capped at
     ``max_events`` to keep the per-row dict bounded; ``total_count`` is the
-    full count read off disk before capping.
+    full count read off disk before capping. ``meta`` is the first ``e=meta``
+    record emitted by tracer.py at install time, or an empty dict if no
+    metadata record was seen (e.g. the test command never ran a Python
+    interpreter or the tracer failed to install).
+
+    The meta record is consumed from the stream — it does NOT count toward
+    ``total`` or appear in ``events``.
     """
     if not path.exists():
-        return [], 0, False
+        return [], 0, False, {}
     events: list[dict] = []
     total = 0
     truncated = False
+    meta: dict = {}
     with path.open("rb") as f:
         for record in _iter_trace_records(iter(lambda: f.read(65536), b"")):
+            if not meta and record.get("e") == "meta":
+                meta = record
+                continue
             total += 1
             if len(events) < max_events:
                 events.append(record)
             else:
                 truncated = True
-    return events, total, truncated
+    return events, total, truncated, meta
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +372,35 @@ def _cap_text(blob: bytes, cap: int) -> tuple[str, bool]:
     tail = blob[-cap // 2 :]
     sep = b"\n[... truncated ...]\n"
     return (head + sep + tail).decode("utf-8", errors="replace"), True
+
+
+# ---------------------------------------------------------------------------
+# Container ID sanitization
+# ---------------------------------------------------------------------------
+
+# OCI container IDs need to be filesystem-safe single path components: runsc
+# uses them for state-dir names. SWE-rebench instance_ids contain `/`, `.`,
+# and other characters that don't survive that path mapping, so we replace
+# anything outside the safe alphabet with `-` and append a UUID4 to guarantee
+# uniqueness across retries / parallel workers.
+_CONTAINER_ID_SAFE_CHARS = re.compile(r"[^a-z0-9-]")
+_CONTAINER_ID_MULTIPLE_DASHES = re.compile(r"-+")
+_CONTAINER_ID_MAX_INSTANCE_LEN = 48
+
+
+def _sanitize_container_id(instance_id: str) -> str:
+    """Build a runsc-safe container ID from a SWE-rebench instance_id.
+
+    Replaces any character outside ``[a-z0-9-]`` with ``-``, collapses runs
+    of dashes, trims length to ``_CONTAINER_ID_MAX_INSTANCE_LEN``, and
+    appends a uuid4 suffix to guarantee uniqueness across retries and
+    parallel workers.
+    """
+    base = _CONTAINER_ID_SAFE_CHARS.sub("-", instance_id.lower())
+    base = _CONTAINER_ID_MULTIPLE_DASHES.sub("-", base).strip("-")
+    if not base:
+        base = "row"
+    return f"swe-{base[:_CONTAINER_ID_MAX_INSTANCE_LEN]}-{uuid.uuid4().hex[:8]}"
 
 
 # ---------------------------------------------------------------------------
@@ -433,7 +501,7 @@ def trace_swe_row(
             )
             (bundle_dir / "config.json").write_text(json.dumps(spec))
 
-            container_id = f"swe-{instance_id}-{int(time.time() * 1000)}"
+            container_id = _sanitize_container_id(instance_id)
             returncode, stdout_bytes, stderr_bytes = _runsc_run(
                 bundle_dir=bundle_dir,
                 container_id=container_id,
@@ -444,7 +512,7 @@ def trace_swe_row(
             stderr, stderr_truncated = _cap_text(stderr_bytes, stdout_cap_bytes)
 
             trace_path = rootfs_dir / "tmp" / "marin-trace.bin"
-            trace_events, trace_total, trace_truncated = _read_trace_file(
+            trace_events, trace_total, trace_truncated, trace_meta = _read_trace_file(
                 trace_path,
                 max_events=max_trace_events,
             )
@@ -454,7 +522,8 @@ def trace_swe_row(
                 image_name=image_name,
                 test_cmd=test_cmd,
                 runtime="runsc",
-                tracer="sys.monitoring" if sys.version_info >= (3, 12) else "sys.settrace",
+                tracer=str(trace_meta.get("tracer") or "unknown"),
+                sandbox_python=str(trace_meta.get("py") or ""),
                 returncode=returncode,
                 duration_s=time.monotonic() - started_at,
                 stdout=stdout,
@@ -490,7 +559,8 @@ def _make_error_result(
         image_name=image_name,
         test_cmd=test_cmd,
         runtime="runsc",
-        tracer="sys.monitoring" if sys.version_info >= (3, 12) else "sys.settrace",
+        tracer="unknown",
+        sandbox_python="",
         returncode=-1,
         duration_s=duration_s,
         stdout="",

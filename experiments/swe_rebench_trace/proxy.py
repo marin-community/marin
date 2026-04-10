@@ -34,6 +34,7 @@ import os
 import re
 import socket
 import threading
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
@@ -87,10 +88,22 @@ def _compile_pattern(pattern: str) -> re.Pattern[str]:
     return re.compile(rf"^{re.escape(pattern)}$", re.IGNORECASE)
 
 
+# Maximum size and overall deadline for the request-header phase. The
+# per-recv socket timeout (set in _handle_client) covers slow individual
+# reads; the deadline here covers a slow-drip attacker that sends 1 byte
+# every 29 seconds for hours.
+_MAX_HEADER_BYTES = 16 * 1024
+_HEADER_READ_DEADLINE_S = 5.0
+
+
 @dataclass
 class ProxyConfig:
     allowlist: tuple[str, ...] = DEFAULT_ALLOWLIST
-    bind_host: str = "0.0.0.0"
+    # Default to loopback so the proxy is only reachable from the local
+    # worker process (and from the runsc sandbox via host loopback bridging
+    # if explicitly wired). Callers that need a wider bind must set this
+    # explicitly.
+    bind_host: str = "127.0.0.1"
     bind_port: int = 0  # 0 = pick a free port
     max_connections: int = 256
     _patterns: list[re.Pattern[str]] = field(default_factory=list, init=False)
@@ -149,20 +162,40 @@ def _parse_connect_target(line: str) -> tuple[str, int] | None:
 
 
 def _read_request_headers(client: socket.socket) -> bytes:
-    """Read until we hit \\r\\n\\r\\n. Returns the raw header block."""
+    """Read until we hit ``\\r\\n\\r\\n`` or the deadline expires.
+
+    A simple per-recv socket timeout isn't enough on its own: an attacker
+    can drip a single byte just before each timeout and hold the thread
+    open indefinitely. We enforce an overall deadline by tightening the
+    socket timeout on each iteration.
+    """
+    deadline = time.monotonic() + _HEADER_READ_DEADLINE_S
     buf = bytearray()
     while b"\r\n\r\n" not in buf:
-        chunk = client.recv(4096)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            client.settimeout(remaining)
+            chunk = client.recv(4096)
+        except (TimeoutError, OSError):
+            break
         if not chunk:
             break
         buf.extend(chunk)
-        if len(buf) > 16384:
+        if len(buf) > _MAX_HEADER_BYTES:
             break
     return bytes(buf)
 
 
 def _shovel(src: socket.socket, dst: socket.socket) -> None:
-    """Copy bytes one direction until either side closes."""
+    """Copy bytes one direction until either side closes.
+
+    Half-closes the destination's write side on exit so the peer sees a
+    clean EOF, then closes our local end of the source defensively. The
+    full close of both sockets still happens in ``_handle_client``'s
+    ``finally`` blocks once both shovel threads have joined.
+    """
     try:
         while True:
             data = src.recv(65536)
@@ -174,6 +207,10 @@ def _shovel(src: socket.socket, dst: socket.socket) -> None:
     finally:
         try:
             dst.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        try:
+            src.shutdown(socket.SHUT_RD)
         except OSError:
             pass
 

@@ -7,7 +7,10 @@
 #   - runsc:    gVisor OCI runtime, invoked directly by the map function
 #   - skopeo:   pulls images from Docker registries into local OCI layout
 #   - umoci:    unpacks an OCI image to a runnable rootfs + config.json
-#   - tinyproxy: in-task allowlist HTTP CONNECT proxy for selective egress
+#
+# The allowlisted egress proxy is implemented in pure Python in proxy.py
+# and runs in-process inside the Zephyr worker — no system proxy package
+# required.
 #
 # Build context must be the marin repo root:
 #   docker buildx build \
@@ -51,10 +54,9 @@ RUN set -eux; \
     rm /tmp/runsc.sha512; \
     runsc --version
 
-# skopeo + umoci + tinyproxy from Debian.
+# skopeo + umoci from Debian.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         skopeo \
         umoci \
-        tinyproxy \
     && rm -rf /var/lib/apt/lists/*
