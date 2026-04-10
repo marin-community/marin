@@ -11,7 +11,6 @@ from draccus import ChoiceRegistry
 
 from levanter.data._preprocessor import BatchProcessor
 from levanter.tokenizers import MarinTokenizer
-from levanter.utils.hf_utils import HfTokenizer
 
 from ._batch_tokenizer import BatchTokenizer, DNABatchTokenizer
 
@@ -120,7 +119,7 @@ class DNALmDatasetFormat(LmDatasetFormatBase):
     lowercase_weight: float = 1.0
 
     def build_preprocessor(
-        self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
         del enforce_eos, enforce_bos
         return DNABatchTokenizer(

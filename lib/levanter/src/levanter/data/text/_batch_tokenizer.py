@@ -9,7 +9,6 @@ import regex
 
 from levanter.data import BatchProcessor
 from levanter.tokenizers import MarinTokenizer
-from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.py_utils import logical_cpu_core_count
 
 LONG_STRING_WORKAROUND = 10_000
@@ -223,7 +222,7 @@ class DNABatchTokenizer(BatchProcessor[dict, dict]):
 
     def __init__(
         self,
-        tokenizer: HfTokenizer,
+        tokenizer: MarinTokenizer,
         text_field: str = "seq",
         uppercase_weight: float = 1.0,
         lowercase_weight: float = 1.0,
@@ -231,6 +230,7 @@ class DNABatchTokenizer(BatchProcessor[dict, dict]):
         override_resources=None,
     ):
         self.tokenizer = tokenizer
+        self._hf_tokenizer = tokenizer.as_hf_tokenizer()
         self.text_field = text_field
         self.override_resources = override_resources
         self.uppercase_weight = uppercase_weight
@@ -247,7 +247,7 @@ class DNABatchTokenizer(BatchProcessor[dict, dict]):
 
         assert len(set(len(t) for t in texts)) == 1, "All sequences must have the same length"
 
-        encodings = self.tokenizer(
+        encodings = self._hf_tokenizer(
             texts,
             # important so input ids are aligned with loss weights
             add_special_tokens=False,
@@ -304,7 +304,7 @@ class DNABatchTokenizer(BatchProcessor[dict, dict]):
     def metadata(self) -> dict[str, Any]:
         return {
             "tokenizer": self.tokenizer.name_or_path,
-            "vocab_size": len(self.tokenizer),
+            "vocab_size": self.tokenizer.vocab_size,
             "uppercase_weight": self.uppercase_weight,
             "lowercase_weight": self.lowercase_weight,
             "has_bos": self._has_bos,

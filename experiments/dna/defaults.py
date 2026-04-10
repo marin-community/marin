@@ -12,7 +12,7 @@ from collections.abc import Sequence
 
 from fray.cluster import ResourceConfig
 from levanter.data.text import DNABatchTokenizer, DNALmDatasetFormat, TextLmDatasetFormat
-from transformers import AutoTokenizer
+from levanter.tokenizers import load_tokenizer
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.simple_train_config import SimpleTrainConfig
@@ -95,7 +95,7 @@ def dna_effective_seq_len(base_seq_len: int, tokenizer_name: str) -> int:
     ``max_seq_len`` stays in sync automatically. Uses ``DNABatchTokenizer`` as the
     single source of truth for special-token detection.
     """
-    tok = AutoTokenizer.from_pretrained(tokenizer_name)
+    tok = load_tokenizer(tokenizer_name)
     bt = DNABatchTokenizer(tok)
     return base_seq_len + bt.num_special_tokens
 

@@ -4,17 +4,19 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
 import numpy as np
 import pytest
-from transformers import AutoTokenizer
 
 from levanter.data.text import DNABatchTokenizer
+from levanter.tokenizers import load_tokenizer
 
 
 def _skip_if_tokenizer_unavailable(tokenizer_name: str):
     def try_load(name):
         try:
-            AutoTokenizer.from_pretrained(name)
+            load_tokenizer(name)
         except Exception:
             return False
         return True
@@ -29,7 +31,7 @@ BOS_EOS_TOKENIZER = "bolinas-dna/tokenizer-char"
 @_skip_if_tokenizer_unavailable(NO_BOS_EOS_TOKENIZER)
 def test_no_special_tokens():
     """With a tokenizer that has no BOS/EOS, output matches input length."""
-    tokenizer = AutoTokenizer.from_pretrained(NO_BOS_EOS_TOKENIZER)
+    tokenizer = load_tokenizer(NO_BOS_EOS_TOKENIZER)
     bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.01)
 
     assert bt.num_special_tokens == 0
@@ -48,7 +50,7 @@ def test_no_special_tokens():
 @_skip_if_tokenizer_unavailable(NO_BOS_EOS_TOKENIZER)
 def test_weights_target_aligned_no_special_tokens():
     """Weights are target-aligned: loss_weight[i] reflects the case of input_ids[i+1]."""
-    tokenizer = AutoTokenizer.from_pretrained(NO_BOS_EOS_TOKENIZER)
+    tokenizer = load_tokenizer(NO_BOS_EOS_TOKENIZER)
     bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.1)
 
     # Sequence: A  C  g  t
@@ -63,7 +65,7 @@ def test_weights_target_aligned_no_special_tokens():
 @_skip_if_tokenizer_unavailable(BOS_EOS_TOKENIZER)
 def test_bos_eos_tokens_added():
     """With a tokenizer that has BOS/EOS, they are prepended/appended."""
-    tokenizer = AutoTokenizer.from_pretrained(BOS_EOS_TOKENIZER)
+    tokenizer = load_tokenizer(BOS_EOS_TOKENIZER)
     bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.01)
 
     assert bt.num_special_tokens == 2
@@ -79,14 +81,14 @@ def test_bos_eos_tokens_added():
     assert result["input_ids"][-1] == tokenizer.eos_token_id
 
     # Interior tokens should match tokenizing without special tokens
-    plain_ids = tokenizer(seq, add_special_tokens=False)["input_ids"]
+    plain_ids = tokenizer.encode(seq, add_special_tokens=False)
     np.testing.assert_array_equal(result["input_ids"][1:-1], plain_ids)
 
 
 @_skip_if_tokenizer_unavailable(BOS_EOS_TOKENIZER)
 def test_loss_weights_with_bos_eos():
     """Weights are target-aligned with BOS/EOS."""
-    tokenizer = AutoTokenizer.from_pretrained(BOS_EOS_TOKENIZER)
+    tokenizer = load_tokenizer(BOS_EOS_TOKENIZER)
     bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.1)
 
     batch = [{"seq": "ACgt"}]
@@ -102,7 +104,7 @@ def test_loss_weights_with_bos_eos():
 @_skip_if_tokenizer_unavailable(BOS_EOS_TOKENIZER)
 def test_batch_consistency_with_bos_eos():
     """All sequences in a batch get BOS/EOS and have the same length."""
-    tokenizer = AutoTokenizer.from_pretrained(BOS_EOS_TOKENIZER)
+    tokenizer = load_tokenizer(BOS_EOS_TOKENIZER)
     bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.01)
 
     batch = [{"seq": "AAAA"}, {"seq": "CCCC"}, {"seq": "TTTT"}]
@@ -115,7 +117,7 @@ def test_batch_consistency_with_bos_eos():
 
 @_skip_if_tokenizer_unavailable(NO_BOS_EOS_TOKENIZER)
 def test_metadata_no_special_tokens():
-    tokenizer = AutoTokenizer.from_pretrained(NO_BOS_EOS_TOKENIZER)
+    tokenizer = load_tokenizer(NO_BOS_EOS_TOKENIZER)
     bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.5)
     meta = bt.metadata
 
@@ -127,7 +129,7 @@ def test_metadata_no_special_tokens():
 
 @_skip_if_tokenizer_unavailable(BOS_EOS_TOKENIZER)
 def test_metadata_with_special_tokens():
-    tokenizer = AutoTokenizer.from_pretrained(BOS_EOS_TOKENIZER)
+    tokenizer = load_tokenizer(BOS_EOS_TOKENIZER)
     bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.01)
     meta = bt.metadata
 
@@ -138,9 +140,9 @@ def test_metadata_with_special_tokens():
 @_skip_if_tokenizer_unavailable(BOS_EOS_TOKENIZER)
 def test_bos_only():
     """When only BOS is defined, only BOS is prepended (no EOS)."""
-    tokenizer = AutoTokenizer.from_pretrained(BOS_EOS_TOKENIZER)
+    tokenizer = load_tokenizer(BOS_EOS_TOKENIZER)
     # Patch out EOS so only BOS is active
-    tokenizer.eos_token_id = None
+    tokenizer = dataclasses.replace(tokenizer, _eos_id=None)
     bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.1)
 
     assert bt.num_special_tokens == 1
@@ -157,7 +159,7 @@ def test_bos_only():
 @_skip_if_tokenizer_unavailable(NO_BOS_EOS_TOKENIZER)
 def test_uppercase_weight_zero():
     """Setting uppercase_weight=0 zeroes out loss for predicting uppercase targets."""
-    tokenizer = AutoTokenizer.from_pretrained(NO_BOS_EOS_TOKENIZER)
+    tokenizer = load_tokenizer(NO_BOS_EOS_TOKENIZER)
     bt = DNABatchTokenizer(tokenizer, uppercase_weight=0.0, lowercase_weight=1.0)
 
     # Sequence: A    C    g    t
@@ -172,10 +174,10 @@ def test_uppercase_weight_zero():
 @_skip_if_tokenizer_unavailable(BOS_EOS_TOKENIZER)
 def test_eos_only():
     """When only EOS is defined, only EOS is appended (no BOS)."""
-    tokenizer = AutoTokenizer.from_pretrained(BOS_EOS_TOKENIZER)
+    tokenizer = load_tokenizer(BOS_EOS_TOKENIZER)
     eos_id = tokenizer.eos_token_id
     # Patch out BOS so only EOS is active
-    tokenizer.bos_token_id = None
+    tokenizer = dataclasses.replace(tokenizer, _bos_id=None)
     bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.1)
 
     assert bt.num_special_tokens == 1
