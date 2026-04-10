@@ -3,7 +3,7 @@
 
 from marin.processing.classification.deduplication.dedup_commons import DedupMode
 from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
-from tests.processing.classification.deduplication.conftest import load_dedup_vortex_outputs
+from tests.processing.classification.deduplication.conftest import load_dedup_parquet_outputs
 
 
 def test_fuzzy_document_deduplication(fox_corpus):
@@ -24,7 +24,7 @@ def test_fuzzy_document_deduplication(fox_corpus):
     # At least 2 gray dups + 1 fuzzy dup (contaminated/high_overlap cluster)
     assert dups >= 3
 
-    by_file = load_dedup_vortex_outputs(fox_corpus["output_dir"] + "/data")
+    by_file = load_dedup_parquet_outputs(fox_corpus["output_dir"] + "/data")
 
     all_records = [r for records in by_file.values() for r in records]
     by_doc = {r["id"]: r for r in all_records}

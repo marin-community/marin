@@ -112,7 +112,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                     type=FilterType.REMOVE_SPANS,
                     attribute_path=dedup_exact_paragraph_step.cd("data"),
                     name="dup_spans",
-                    attribute_filetype="vortex",
+                    attribute_filetype="parquet",
                     keep_if_missing=True,
                 ),
             ],
