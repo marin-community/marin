@@ -75,13 +75,16 @@ def compute_tokens_and_batch(
     flops_per_token: float,
     target_steps: int = DEFAULT_TARGET_STEPS,
     min_batch_size: int = MIN_BATCH_SIZE,
-    seq_len: int = SEQ_LEN,
 ) -> tuple[float, int, int]:
-    """Derive (tokens, batch_size, num_steps) from a compute budget and FLOPs-per-token."""
+    """Derive (tokens, batch_size, num_steps) from a compute budget and FLOPs-per-token.
+
+    Uses the module-level `SEQ_LEN` constant (4096) — the whole heuristic is
+    anchored there; see the module docstring.
+    """
     tokens = budget / (3 * flops_per_token)
-    batch_exact = tokens / (target_steps * seq_len)
+    batch_exact = tokens / (target_steps * SEQ_LEN)
     batch_size = max(min_batch_size, _round_to_power_of_two(batch_exact))
-    train_steps = max(1, round(tokens / (batch_size * seq_len)))
+    train_steps = max(1, round(tokens / (batch_size * SEQ_LEN)))
     return tokens, batch_size, train_steps
 
 
@@ -246,7 +249,6 @@ def build_from_heuristic(
     heuristic: MoeAdamHHeuristic | None = None,
     target_steps: int = DEFAULT_TARGET_STEPS,
     min_batch_size: int = MIN_BATCH_SIZE,
-    seq_len: int = SEQ_LEN,
 ) -> tuple[GrugModelConfig, GrugMoeAdamHConfig, int, int]:
     """Construct (model, optimizer, batch_size, num_steps) for a compute budget.
 
@@ -263,7 +265,6 @@ def build_from_heuristic(
         fpt,
         target_steps=target_steps,
         min_batch_size=min_batch_size,
-        seq_len=seq_len,
     )
     optimizer_cfg = h.build_optimizer_config(batch_size, tokens, hidden_dim)
     return model_cfg, optimizer_cfg, batch_size, num_steps
