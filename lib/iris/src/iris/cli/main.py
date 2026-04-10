@@ -17,7 +17,14 @@ from rigging.config_discovery import resolve_cluster_config
 from rigging.log_setup import configure_logging
 from iris.rpc import config_pb2, job_pb2
 from iris.rpc import controller_pb2 as _controller_pb2
-from iris.rpc.auth import AuthTokenInjector, GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
+from iris.rpc.auth import (
+    AuthTokenInjector,
+    GcpAccessTokenProvider,
+    IapAuthTokenInjector,
+    IapOidcTokenProvider,
+    StaticTokenProvider,
+    TokenProvider,
+)
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
@@ -117,13 +124,34 @@ def _configure_client_s3(config) -> None:
     configure_client_s3(config)
 
 
+def _is_iap_url(url: str) -> bool:
+    """Return True if the URL looks like an IAP-protected endpoint."""
+    return ".appspot.com" in url or ".run.app" in url
+
+
 def rpc_client(
     address: str,
     token_provider: TokenProvider | None = None,
+    iap_audience: str | None = None,
     timeout_ms: int = 30_000,
 ) -> ControllerServiceClientSync:
     """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``."""
-    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
+    # Auto-detect IAP from the address when no explicit audience is given.
+    if iap_audience is None and _is_iap_url(address):
+        iap_audience = address
+
+    if iap_audience and token_provider:
+        iap_provider = IapOidcTokenProvider(iap_audience)
+        interceptors = [IapAuthTokenInjector(iap_provider, token_provider)]
+    elif iap_audience:
+        # IAP URL but no controller token yet (e.g. during login).
+        # Send only the IAP OIDC token so the request passes through IAP.
+        iap_provider = IapOidcTokenProvider(iap_audience)
+        interceptors = [AuthTokenInjector(iap_provider)]
+    elif token_provider:
+        interceptors = [AuthTokenInjector(token_provider)]
+    else:
+        interceptors = []
     return ControllerServiceClientSync(address, timeout_ms=timeout_ms, interceptors=interceptors)
 
 
@@ -190,6 +218,12 @@ def require_controller_url(ctx: click.Context) -> str:
     default=None,
     help="Cluster name (resolves config automatically) or used for token lookup",
 )
+@click.option(
+    "--iap",
+    "iap_audience",
+    default=None,
+    help="IAP audience for programmatic access (auto-detected for appspot.com URLs)",
+)
 @click.pass_context
 def iris(
     ctx,
@@ -198,6 +232,7 @@ def iris(
     controller_url: str | None,
     config_file: str | None,
     cluster_name: str | None,
+    iap_audience: str | None,
 ):
     """Iris cluster management."""
     ctx.ensure_object(dict)
@@ -254,6 +289,14 @@ def iris(
             credential = load_any_token()
         if credential is not None:
             ctx.obj["token_provider"] = StaticTokenProvider(credential.token)
+
+    # Store IAP audience (explicit or auto-detected from URL).
+    if iap_audience:
+        ctx.obj["iap_audience"] = iap_audience
+    elif controller_url and _is_iap_url(controller_url):
+        # Auto-detect: for appspot.com / run.app URLs, the IAP audience is
+        # the URL itself (the OIDC token audience must match the backend).
+        ctx.obj["iap_audience"] = controller_url
 
     # Store direct controller URL; tunnel from config is established lazily
     # in require_controller_url() so commands like ``cluster start`` don't block.

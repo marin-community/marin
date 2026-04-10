@@ -374,3 +374,62 @@ class GcpAccessTokenProvider:
             self._expires_at = now_mono + self._REFRESH_MARGIN_SECONDS
 
         return self._cached_token
+
+
+class IapOidcTokenProvider:
+    """Gets OIDC ID tokens for IAP programmatic access.
+
+    Generates an OIDC ID token with the IAP client ID as the audience,
+    suitable for ``Authorization: Bearer`` when calling an IAP-protected
+    endpoint. Tokens are cached until 5 minutes before expiry.
+    """
+
+    _REFRESH_MARGIN_SECONDS = 300
+
+    def __init__(self, iap_audience: str):
+        self._audience = iap_audience
+        self._cached_token: str | None = None
+        self._expires_at: float = 0.0
+
+    def get_token(self) -> str | None:
+        if self._cached_token is not None and time.monotonic() < self._expires_at:
+            return self._cached_token
+
+        import google.auth
+        import google.auth.transport.requests
+        from google.oauth2 import id_token
+
+        request = google.auth.transport.requests.Request()
+        token = id_token.fetch_id_token(request, self._audience)
+
+        self._cached_token = token
+        # OIDC ID tokens are typically valid for 1 hour.
+        self._expires_at = time.monotonic() + 3600 - self._REFRESH_MARGIN_SECONDS
+        return self._cached_token
+
+
+class IapAuthTokenInjector:
+    """Client-side interceptor for IAP-protected controllers.
+
+    Sets two headers on each outgoing request:
+    - ``Authorization: Bearer <iap-oidc-token>`` — consumed by IAP
+    - ``X-Iris-Token: <controller-jwt>`` — forwarded by the proxy as
+      ``Authorization`` to the controller
+    """
+
+    def __init__(self, iap_token_provider: IapOidcTokenProvider, controller_token_provider: "TokenProvider"):
+        self._iap_provider = iap_token_provider
+        self._controller_provider = controller_token_provider
+
+    def intercept_unary_sync(self, call_next, request, ctx):
+        headers = ctx.request_headers()
+
+        iap_token = self._iap_provider.get_token()
+        if iap_token:
+            headers["authorization"] = f"Bearer {iap_token}"
+
+        controller_token = self._controller_provider.get_token()
+        if controller_token:
+            headers["x-iris-token"] = controller_token
+
+        return call_next(request, ctx)
