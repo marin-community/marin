@@ -1,0 +1,36 @@
+{
+  "run_id": "pkr001-20260327-012712-rollout-0",
+  "rows": [
+    {
+      "_step": 1,
+      "_timestamp": 1774575749.5930796,
+      "inference.rollout_storage/cumulative_batch_count": 6,
+      "inference.rollout_storage/cumulative_write_time": 1.2759408950805664,
+      "inference.rollout_storage/last_serialize_time": 0.020041227340698242,
+      "inference.rollout_storage/last_size_bytes": 6262815.0,
+      "inference.rollout_storage/last_total_time": 0.2622036933898926,
+      "inference.rollout_storage/last_write_time": 0.24214506149291992
+    },
+    {
+      "_step": 3,
+      "_timestamp": 1774576152.102194,
+      "inference.rollout_storage/cumulative_batch_count": 9,
+      "inference.rollout_storage/cumulative_write_time": 1.9903929233551025,
+      "inference.rollout_storage/last_serialize_time": 0.021248579025268555,
+      "inference.rollout_storage/last_size_bytes": 6567832.0,
+      "inference.rollout_storage/last_total_time": 0.26220703125,
+      "inference.rollout_storage/last_write_time": 0.24094700813293457
+    },
+    {
+      "_step": 4,
+      "_timestamp": 1774576322.1886024,
+      "inference.rollout_storage/cumulative_batch_count": 10,
+      "inference.rollout_storage/cumulative_write_time": 2.222402811050415,
+      "inference.rollout_storage/last_serialize_time": 0.024893522262573242,
+      "inference.rollout_storage/last_size_bytes": 6540892.0,
+      "inference.rollout_storage/last_total_time": 0.2569141387939453,
+      "inference.rollout_storage/last_write_time": 0.2320098876953125
+    }
+  ]
+}
+

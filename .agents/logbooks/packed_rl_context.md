@@ -87,6 +87,167 @@ The branch should therefore focus on:
 3. deciding whether packed rollout can actually replace a two-rollout direct
    topology, not just run successfully
 
+## 2026-04-10: W&B Data Pull and Root-Cause Revision
+
+All nine run histories were pulled from W&B
+(`marin-community/marin_iris_rl_debug`) and saved under
+`.agents/wandb_snapshots/packed_rl_analysis/`. The raw data **contradicts
+parts of the earlier "eval contention" narrative** and exposes a different
+bottleneck.
+
+### Actual wall-clock cadence (computed from `_timestamp` diffs)
+
+| Run | Steps | Wall-clock median | Mean | Notes |
+|-----|-------|-------------------|------|-------|
+| `e4ms2` baseline | 200 | **100.5s/step** | 122.6s | stable steady state |
+| `PKR-001` | 5 | **180.4s/step** | 199.6s | packed, normal eval |
+| `PKR-003` | 10 | **182.5s/step** | 169.3s | packed, sparse eval |
+| `PKR-004` | 10 | **176.5s/step** | 424.9s | packed, normal eval (one 2406s outlier) |
+
+So PKR runs are ~80s/step slower than the baseline. The ~101s vs ~171s
+numbers in the original issue are confirmed in the median.
+
+### Trainer phase breakdown (medians, rows after warmup)
+
+| Phase (sec) | e4ms2 | PKR-001 | PKR-003 | PKR-004 |
+|---|---|---|---|---|
+| `step_duration_seconds` (trainer compute) | **61.1** | **61.0** | 82.0 | 81.7 |
+| `forward_backward_duration_seconds` | 57.2 | 25.6 | 44.1 | 39.3 |
+| `batch_prep_duration_seconds` | 4.0 | 35.4 | 32.8 | 37.4 |
+| `loading_time` | 4.0 | **95.4** | 44.3 | 42.4 |
+| `hook_time` | 16.0 | 9.7 | 12.4 | 11.4 |
+| `weight_transfer/serve_time_seconds` | 15.6 | 9.6 | 12.2 | 11.3 |
+
+**Key observation**: `step_duration_seconds` (the actual trainer compute
+step) is **identical between `e4ms2` and `PKR-001` at 61s**. The trainer
+compute path is not slower. The entire ~80s/step gap lives in
+`loading_time` / `batch_prep_duration_seconds` — i.e. the trainer sitting
+idle waiting for the next rollout batch.
+
+### Rollout-side timing (medians)
+
+| Metric | e4ms2 ro-0 | e4ms2 ro-1 | PKR-001 | PKR-003 | PKR-004 |
+|---|---|---|---|---|---|
+| rollout wall-clock cadence (sec/batch) | 121.6 | 132.3 | **185.7** | 139.2 | 200.3 |
+| `inference.throughput/batch_time_seconds` | 145.3 | 147.2 | **70.1** | 132.5 | 124.1 |
+| `inference.throughput/tokens_per_second` | 3,336 | 3,281 | **6,223** | 3,381 | 3,248 |
+| `inference.throughput/requests_per_second` | 7.05 | 6.96 | **14.61** | 7.73 | 8.25 |
+| rollout storage `last_total_time` | 0.31s | — | 0.26s | 0.24s | 0.22s |
+
+**Key observation**: PKR-001's packed inference is **nearly 2× faster per
+batch than a single `e4ms2` worker** (70s vs 145s, 6,223 tok/s vs 3,336
+tok/s). The packed sampler path is not slow — it's actually exploiting the
+2×TP=2 parallelism as designed.
+
+PKR-003 and PKR-004 drop back to ~3,300 tok/s, i.e. single-replica speed.
+Their packed replicas are no longer running train in parallel — train is
+falling back to replica 0 only because eval is holding replica 1.
+
+### Packed replica activity (final counters)
+
+| Run | r0 requests | r1 requests | r0 activations | r1 activations |
+|---|---|---|---|---|
+| PKR-001 | 15 | 15 | 6 | 6 |
+| PKR-003 | 17 | 17 | 10 | 10 |
+| PKR-004 | 30 | 33 | 9 | 9 |
+
+PKR-004 has the only run where replica 1 did more requests than replica 0,
+consistent with extra eval batches routed to replica 1.
+
+### Rollout storage is not the bottleneck
+
+Rollout storage write+serialize is <0.4s per batch across all runs. Storage
+is negligible relative to the ~80s/step gap.
+
+### Revised root-cause analysis
+
+The earlier narrative was: "packed is slow because eval contention."
+
+The data says: **packed with 1 rollout worker is slow because there is no
+pipeline parallelism between the trainer and the rollout worker**.
+
+Cycle reconstruction for PKR-001:
+
+- Trainer produces weight `N` (≈61s compute + publish)
+- Rollout worker fetches weight `N` (~14s, per `transfer/fetch_time`)
+- Rollout worker activates weight `N` on both replicas
+- Rollout worker generates the next batch (~70s)
+- Rollout worker writes the batch (~0.3s)
+- Trainer ingests the batch, computes weight `N+1`, publishes
+- …loop…
+
+`61 + 14 + ~5 + 70 + 10 + 16 ≈ 176s` — matches PKR-001's measured
+180s/step almost exactly.
+
+The `e4ms2` baseline breaks this chain by running **two independent
+rollout workers**. One worker is always one step ahead of the other, so
+the trainer can consume from an always-full pipeline. Each e4ms2 worker's
+own batch_time is 145s (slower than packed!), but with two workers the
+effective rollout arrival rate is ~72.5s — faster than trainer compute, so
+the trainer never waits.
+
+**Packed inference on `v5p-8` is not the problem. The problem is running
+only one rollout worker, which eliminates the pipeline depth that two
+independent workers provide for free.**
+
+Eval contention (the earlier story) is a *secondary* degradation: in
+PKR-003/PKR-004 it knocks packed throughput from ~6,200 tok/s back down
+to ~3,300 tok/s by preventing the 2-replica parallel mode. But even if
+eval were completely isolated, a single packed worker would still be
+~80s/step slower than `e4ms2` because of the missing pipeline depth.
+
+### Open corrections to earlier logbook claims
+
+1. **"Eval ownership is the major remaining gap"** — only partially true.
+   The primary gap is rollout↔trainer serialization. Eval is a second-order
+   effect that makes it worse by collapsing 2×TP parallelism to single-TP.
+
+2. **"Reduce or isolate eval interference"** — necessary but not
+   sufficient. Even with perfect eval isolation, one packed worker cannot
+   match `e4ms2`'s effective pipeline depth of 2.
+
+3. **"Packed inference is slower than baseline"** — false. PKR-001's
+   packed inference at 6,223 tok/s beats `e4ms2`'s per-worker 3,336 tok/s
+   by ~1.9× — exactly the 2×TP=2 speedup the design predicted.
+
+### What this implies for next steps
+
+The question to test is no longer "can we isolate eval?" — it's **"can we
+break the trainer↔rollout serialization with a single packed worker?"**
+
+Candidate approaches (need design/experiment):
+
+1. **Two packed rollout workers on two `v5p-8` pods.** Same TPU budget as
+   the baseline but 4 total replicas feeding the trainer, giving pipeline
+   depth 2 *and* 2× per-worker packed throughput. Likely the cleanest win
+   on paper but loses the "halve TPU cost" pitch.
+
+2. **Stale-weight rollouts.** Let the single packed worker start the
+   next batch against weight `N` while the trainer is still producing
+   weight `N+1`. Breaks the serialization at the cost of on-policy
+   freshness — need to quantify the off-policy hit.
+
+3. **Rollout buffering / pre-fetch.** Have the packed worker generate
+   several batches ahead of the trainer's consumption, buffering in the
+   rollout storage. Requires careful bookkeeping of which weight each
+   buffered batch was generated against.
+
+4. **Overlap weight fetch/activate with generation.** The current flow
+   is `fetch → activate → generate` sequentially per replica. If replica
+   0 generated while replica 1 was fetching/activating the next weight
+   (ping-pong style), the serial fetch cost (~14s) could be hidden.
+
+The cost pitch for packed only holds if one of these approaches makes a
+single packed `v5p-8` genuinely competitive with two independent rollout
+workers in cadence, not just in raw tokens/sec.
+
+### Data location
+
+- `.agents/wandb_snapshots/packed_rl_analysis/` — per-run JSONs with full
+  history and config (one file per run). Use these instead of re-pulling
+  from W&B on the next session.
+
+
 ## Read These First
 
 ### Primary narrative

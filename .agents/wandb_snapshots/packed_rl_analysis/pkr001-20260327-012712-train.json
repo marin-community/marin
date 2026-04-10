@@ -1,0 +1,210 @@
+{
+  "run_id": "pkr001-20260327-012712-train",
+  "kind": "train",
+  "state": "finished",
+  "config": {
+    "allow_nondivisible_batch_size": false,
+    "allow_partial_checkpoint": false,
+    "checkpointer": {
+      "append_run_id_to_base_path": true,
+      "base_path": "gs://marin-us-central1/checkpoints/pkr001-20260327-012712",
+      "delete_old_temp_checkpoints": true,
+      "keep": [
+        {
+          "every": 10000
+        }
+      ],
+      "save_interval": "0:10:00"
+    },
+    "crash_on_inf": true,
+    "crash_on_nan": true,
+    "decayed_weights": [
+      "lm_head.weight",
+      "transformer.layers.stacked.mlp.down_proj.weight",
+      "transformer.layers.stacked.mlp.gate_proj.weight",
+      "transformer.layers.stacked.mlp.up_proj.weight",
+      "transformer.layers.stacked.self_attn.k_proj.weight",
+      "transformer.layers.stacked.self_attn.o_proj.weight",
+      "transformer.layers.stacked.self_attn.q_proj.weight",
+      "transformer.layers.stacked.self_attn.v_proj.weight"
+    ],
+    "distributed": {
+      "coordinator_address": null,
+      "initialize_jax_distributed": true,
+      "local_device_ids": null,
+      "num_processes": null,
+      "process_id": null
+    },
+    "id": "pkr001-20260327-012712-train",
+    "initialize_from": null,
+    "jax_compilation_cache_dir": null,
+    "jax_config": {
+      "jax_softmax_custom_jvp": true,
+      "jax_threefry_partitionable": true
+    },
+    "load_checkpoint": null,
+    "load_checkpoint_path": null,
+    "log_dir": "logs",
+    "log_jaxprs": true,
+    "log_xla_hlo": true,
+    "max_eval_batches": null,
+    "mesh": {
+      "axes": {
+        "context": 1,
+        "model": 1
+      },
+      "batch_axis_name": "batch",
+      "dcn_axes": {
+        "replica_dcn": -1
+      },
+      "param_mapping": {
+        "embed": "data"
+      },
+      "shared_mapping": {
+        "heads": "model",
+        "mlp": "model",
+        "position": "context"
+      }
+    },
+    "model_averaging": null,
+    "mp": {
+      "compute_dtype": "jax.numpy.bfloat16",
+      "output_dtype": "jax.numpy.bfloat16",
+      "param_dtype": "jax.numpy.float32"
+    },
+    "num_train_steps": 5,
+    "per_device_eval_parallelism": 16,
+    "per_device_parallelism": 16,
+    "profiler": {
+      "enabled": false,
+      "num_steps": 25,
+      "perfetto_link": false,
+      "start_step": 5
+    },
+    "quantization": null,
+    "ray": {
+      "address": null,
+      "auto_start_cluster": false,
+      "start_workers": true
+    },
+    "require_accelerator": true,
+    "seed": 0,
+    "shutdown_at_exit": false,
+    "steps_per_eval": 100,
+    "tracker": {
+      "entity": null,
+      "group": null,
+      "id": null,
+      "mode": null,
+      "name": "pkr001-20260327-012712",
+      "project": "marin_iris_rl_debug",
+      "replicate_path": null,
+      "resume": "allow",
+      "save_code": true,
+      "save_xla_dumps": false,
+      "tags": [
+        "rl",
+        "iris-debug",
+        "regression",
+        "e4",
+        "packed-rollout",
+        "full-inflight-parity"
+      ]
+    },
+    "train_batch_size": 1024,
+    "use_explicit_mesh_axes": false,
+    "wandb": null,
+    "watch": {
+      "include_histograms": false,
+      "include_norms": true,
+      "include_per_parameter_norms": true,
+      "interval": 10,
+      "split_scan_layers": true,
+      "watch_targets": [
+        "grads",
+        "params"
+      ]
+    }
+  },
+  "summary_subset": {
+    "_step": 4,
+    "_timestamp": 1774576158.5642824,
+    "throughput/step_duration_seconds": 60.95363992199782,
+    "throughput/batch_prep_duration_seconds": 31.538139581680294,
+    "throughput/forward_backward_duration_seconds": 29.41550034031752,
+    "throughput/hook_time": 109.07373072800328,
+    "throughput/loading_time": 151.61670129300182,
+    "throughput/tokens_per_second": 34405.68935150909,
+    "weight_transfer/serve_time_seconds": 13.977555513381958,
+    "weight_transfer/successful_transfers": 7,
+    "run_progress": 0.8
+  },
+  "history_rows": [
+    {
+      "_step": 0,
+      "_timestamp": 1774575359.9912908,
+      "throughput/step_duration_seconds": 110.74297369200212,
+      "throughput/batch_prep_duration_seconds": 4.6620261669158936,
+      "throughput/forward_backward_duration_seconds": 106.08094752508623,
+      "throughput/hook_time": 10.789927862002514,
+      "throughput/loading_time": 4.662481070001377,
+      "throughput/tokens_per_second": 18937.111132960814,
+      "weight_transfer/serve_time_seconds": 9.50522232055664,
+      "weight_transfer/successful_transfers": 2,
+      "run_progress": 0
+    },
+    {
+      "_step": 1,
+      "_timestamp": 1774575461.9877334,
+      "throughput/step_duration_seconds": 88.51108352799929,
+      "throughput/batch_prep_duration_seconds": 4.0421881675720215,
+      "throughput/forward_backward_duration_seconds": 84.46889536042727,
+      "throughput/hook_time": 9.436252580002474,
+      "throughput/loading_time": 4.0433055110006535,
+      "throughput/tokens_per_second": 23693.66543046097,
+      "weight_transfer/serve_time_seconds": 9.21086573600769,
+      "weight_transfer/successful_transfers": 3,
+      "run_progress": 0.2
+    },
+    {
+      "_step": 2,
+      "_timestamp": 1774575712.5890152,
+      "throughput/step_duration_seconds": 60.97057053300159,
+      "throughput/batch_prep_duration_seconds": 60.85381627082825,
+      "throughput/forward_backward_duration_seconds": 0.11675426217334461,
+      "throughput/hook_time": 8.68994914599898,
+      "throughput/loading_time": 180.93457953399775,
+      "throughput/tokens_per_second": 34396.135408719405,
+      "weight_transfer/serve_time_seconds": 8.58570146560669,
+      "weight_transfer/successful_transfers": 4,
+      "run_progress": 0.4
+    },
+    {
+      "_step": 3,
+      "_timestamp": 1774575822.816277,
+      "throughput/step_duration_seconds": 61.00077356100155,
+      "throughput/batch_prep_duration_seconds": 39.208367586135864,
+      "throughput/forward_backward_duration_seconds": 21.792405974865687,
+      "throughput/hook_time": 10.010952679000184,
+      "throughput/loading_time": 39.2099056449988,
+      "throughput/tokens_per_second": 34379.1050109032,
+      "weight_transfer/serve_time_seconds": 9.896003723144531,
+      "weight_transfer/successful_transfers": 5,
+      "run_progress": 0.6
+    },
+    {
+      "_step": 4,
+      "_timestamp": 1774576158.5642824,
+      "throughput/step_duration_seconds": 60.95363992199782,
+      "throughput/batch_prep_duration_seconds": 31.538139581680298,
+      "throughput/forward_backward_duration_seconds": 29.41550034031752,
+      "throughput/hook_time": 109.07373072800328,
+      "throughput/loading_time": 151.61670129300182,
+      "throughput/tokens_per_second": 34405.68935150909,
+      "weight_transfer/serve_time_seconds": 13.977555513381958,
+      "weight_transfer/successful_transfers": 7,
+      "run_progress": 0.8
+    }
+  ]
+}
+

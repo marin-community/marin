@@ -1,0 +1,1036 @@
+{
+  "run_id": "e4ms2-20260326-121919-rollout-0",
+  "rows": [
+    {
+      "_step": 0,
+      "_timestamp": 1774528314.0859783,
+      "inference.rollout_storage/cumulative_batch_count": 3,
+      "inference.rollout_storage/cumulative_write_time": 0.7149252891540527,
+      "inference.rollout_storage/last_serialize_time": 0.022275447845458984,
+      "inference.rollout_storage/last_size_bytes": 5312950.0,
+      "inference.rollout_storage/last_total_time": 0.30995869636535645,
+      "inference.rollout_storage/last_write_time": 0.28766703605651855
+    },
+    {
+      "_step": 1,
+      "_timestamp": 1774528495.3786235,
+      "inference.rollout_storage/cumulative_batch_count": 4,
+      "inference.rollout_storage/cumulative_write_time": 0.9507174491882324,
+      "inference.rollout_storage/last_serialize_time": 0.025767803192138672,
+      "inference.rollout_storage/last_size_bytes": 5942600.0,
+      "inference.rollout_storage/last_total_time": 0.26157593727111816,
+      "inference.rollout_storage/last_write_time": 0.2357921600341797
+    },
+    {
+      "_step": 3,
+      "_timestamp": 1774528691.3234804,
+      "inference.rollout_storage/cumulative_batch_count": 5,
+      "inference.rollout_storage/cumulative_write_time": 1.1758229732513428,
+      "inference.rollout_storage/last_serialize_time": 0.024625301361083984,
+      "inference.rollout_storage/last_size_bytes": 6064371.0,
+      "inference.rollout_storage/last_total_time": 0.24974632263183594,
+      "inference.rollout_storage/last_write_time": 0.22510552406311035
+    },
+    {
+      "_step": 5,
+      "_timestamp": 1774528869.4518492,
+      "inference.rollout_storage/cumulative_batch_count": 6,
+      "inference.rollout_storage/cumulative_write_time": 1.41929292678833,
+      "inference.rollout_storage/last_serialize_time": 0.02303338050842285,
+      "inference.rollout_storage/last_size_bytes": 6625888.0,
+      "inference.rollout_storage/last_total_time": 0.26651906967163086,
+      "inference.rollout_storage/last_write_time": 0.2434699535369873
+    },
+    {
+      "_step": 6,
+      "_timestamp": 1774529086.02047,
+      "inference.rollout_storage/cumulative_batch_count": 7,
+      "inference.rollout_storage/cumulative_write_time": 1.6725397109985352,
+      "inference.rollout_storage/last_serialize_time": 0.026539087295532227,
+      "inference.rollout_storage/last_size_bytes": 6996204.0,
+      "inference.rollout_storage/last_total_time": 0.27980828285217285,
+      "inference.rollout_storage/last_write_time": 0.2532467842102051
+    },
+    {
+      "_step": 8,
+      "_timestamp": 1774529246.3980472,
+      "inference.rollout_storage/cumulative_batch_count": 8,
+      "inference.rollout_storage/cumulative_write_time": 1.8866949081420898,
+      "inference.rollout_storage/last_serialize_time": 0.02196788787841797,
+      "inference.rollout_storage/last_size_bytes": 5503525.0,
+      "inference.rollout_storage/last_total_time": 0.23614788055419922,
+      "inference.rollout_storage/last_write_time": 0.2141551971435547
+    },
+    {
+      "_step": 9,
+      "_timestamp": 1774529429.8777218,
+      "inference.rollout_storage/cumulative_batch_count": 9,
+      "inference.rollout_storage/cumulative_write_time": 2.1079108715057373,
+      "inference.rollout_storage/last_serialize_time": 0.02452993392944336,
+      "inference.rollout_storage/last_size_bytes": 5741906.0,
+      "inference.rollout_storage/last_total_time": 0.24575567245483398,
+      "inference.rollout_storage/last_write_time": 0.22121596336364746
+    },
+    {
+      "_step": 11,
+      "_timestamp": 1774529616.1792812,
+      "inference.rollout_storage/cumulative_batch_count": 10,
+      "inference.rollout_storage/cumulative_write_time": 2.321511745452881,
+      "inference.rollout_storage/last_serialize_time": 0.02310633659362793,
+      "inference.rollout_storage/last_size_bytes": 6184772.0,
+      "inference.rollout_storage/last_total_time": 0.23671698570251465,
+      "inference.rollout_storage/last_write_time": 0.21360087394714355
+    },
+    {
+      "_step": 12,
+      "_timestamp": 1774529815.8235052,
+      "inference.rollout_storage/cumulative_batch_count": 11,
+      "inference.rollout_storage/cumulative_write_time": 2.531111240386963,
+      "inference.rollout_storage/last_serialize_time": 0.024306297302246094,
+      "inference.rollout_storage/last_size_bytes": 6315134.0,
+      "inference.rollout_storage/last_total_time": 0.2339167594909668,
+      "inference.rollout_storage/last_write_time": 0.20959949493408203
+    },
+    {
+      "_step": 14,
+      "_timestamp": 1774530021.9405377,
+      "inference.rollout_storage/cumulative_batch_count": 12,
+      "inference.rollout_storage/cumulative_write_time": 3.162087917327881,
+      "inference.rollout_storage/last_serialize_time": 0.02510547637939453,
+      "inference.rollout_storage/last_size_bytes": 5859340.0,
+      "inference.rollout_storage/last_total_time": 0.6560921669006348,
+      "inference.rollout_storage/last_write_time": 0.630976676940918
+    },
+    {
+      "_step": 16,
+      "_timestamp": 1774530196.9136345,
+      "inference.rollout_storage/cumulative_batch_count": 13,
+      "inference.rollout_storage/cumulative_write_time": 3.3845973014831543,
+      "inference.rollout_storage/last_serialize_time": 0.025409221649169922,
+      "inference.rollout_storage/last_size_bytes": 6268870.0,
+      "inference.rollout_storage/last_total_time": 0.24792838096618652,
+      "inference.rollout_storage/last_write_time": 0.22250938415527344
+    },
+    {
+      "_step": 17,
+      "_timestamp": 1774530353.0929108,
+      "inference.rollout_storage/cumulative_batch_count": 14,
+      "inference.rollout_storage/cumulative_write_time": 3.5845344066619873,
+      "inference.rollout_storage/last_serialize_time": 0.022538423538208008,
+      "inference.rollout_storage/last_size_bytes": 5868558.0,
+      "inference.rollout_storage/last_total_time": 0.22248458862304688,
+      "inference.rollout_storage/last_write_time": 0.199937105178833
+    },
+    {
+      "_step": 18,
+      "_timestamp": 1774530570.9633942,
+      "inference.rollout_storage/cumulative_batch_count": 15,
+      "inference.rollout_storage/cumulative_write_time": 3.8319783210754395,
+      "inference.rollout_storage/last_serialize_time": 0.0227200984954834,
+      "inference.rollout_storage/last_size_bytes": 6462163.0,
+      "inference.rollout_storage/last_total_time": 0.2701742649078369,
+      "inference.rollout_storage/last_write_time": 0.24744391441345215
+    },
+    {
+      "_step": 20,
+      "_timestamp": 1774530796.9340415,
+      "inference.rollout_storage/cumulative_batch_count": 16,
+      "inference.rollout_storage/cumulative_write_time": 4.080158710479736,
+      "inference.rollout_storage/last_serialize_time": 0.022366046905517578,
+      "inference.rollout_storage/last_size_bytes": 6633792.0,
+      "inference.rollout_storage/last_total_time": 0.270557165145874,
+      "inference.rollout_storage/last_write_time": 0.24818038940429688
+    },
+    {
+      "_step": 23,
+      "_timestamp": 1774531220.148178,
+      "inference.rollout_storage/cumulative_batch_count": 19,
+      "inference.rollout_storage/cumulative_write_time": 4.824543714523315,
+      "inference.rollout_storage/last_serialize_time": 0.026018381118774414,
+      "inference.rollout_storage/last_size_bytes": 6588644.0,
+      "inference.rollout_storage/last_total_time": 0.24372458457946777,
+      "inference.rollout_storage/last_write_time": 0.2176961898803711
+    },
+    {
+      "_step": 25,
+      "_timestamp": 1774531472.1512055,
+      "inference.rollout_storage/cumulative_batch_count": 20,
+      "inference.rollout_storage/cumulative_write_time": 5.025122404098511,
+      "inference.rollout_storage/last_serialize_time": 0.025166988372802734,
+      "inference.rollout_storage/last_size_bytes": 6283641.0,
+      "inference.rollout_storage/last_total_time": 0.225754976272583,
+      "inference.rollout_storage/last_write_time": 0.2005786895751953
+    },
+    {
+      "_step": 27,
+      "_timestamp": 1774531706.1286623,
+      "inference.rollout_storage/cumulative_batch_count": 21,
+      "inference.rollout_storage/cumulative_write_time": 5.271770238876343,
+      "inference.rollout_storage/last_serialize_time": 0.023186206817626953,
+      "inference.rollout_storage/last_size_bytes": 7351716.0,
+      "inference.rollout_storage/last_total_time": 0.26984357833862305,
+      "inference.rollout_storage/last_write_time": 0.24664783477783203
+    },
+    {
+      "_step": 29,
+      "_timestamp": 1774531997.195566,
+      "inference.rollout_storage/cumulative_batch_count": 23,
+      "inference.rollout_storage/cumulative_write_time": 5.8241283893585205,
+      "inference.rollout_storage/last_serialize_time": 0.02721714973449707,
+      "inference.rollout_storage/last_size_bytes": 6264893.0,
+      "inference.rollout_storage/last_total_time": 0.34783363342285156,
+      "inference.rollout_storage/last_write_time": 0.3206062316894531
+    },
+    {
+      "_step": 31,
+      "_timestamp": 1774532269.3913307,
+      "inference.rollout_storage/cumulative_batch_count": 24,
+      "inference.rollout_storage/cumulative_write_time": 6.0534443855285645,
+      "inference.rollout_storage/last_serialize_time": 0.024187326431274414,
+      "inference.rollout_storage/last_size_bytes": 6739841.0,
+      "inference.rollout_storage/last_total_time": 0.25351905822753906,
+      "inference.rollout_storage/last_write_time": 0.22931599617004395
+    },
+    {
+      "_step": 34,
+      "_timestamp": 1774532544.184456,
+      "inference.rollout_storage/cumulative_batch_count": 25,
+      "inference.rollout_storage/cumulative_write_time": 6.301697015762329,
+      "inference.rollout_storage/last_serialize_time": 0.02600240707397461,
+      "inference.rollout_storage/last_size_bytes": 7236109.0,
+      "inference.rollout_storage/last_total_time": 0.2742652893066406,
+      "inference.rollout_storage/last_write_time": 0.24825263023376465
+    },
+    {
+      "_step": 36,
+      "_timestamp": 1774532874.2271926,
+      "inference.rollout_storage/cumulative_batch_count": 27,
+      "inference.rollout_storage/cumulative_write_time": 6.7560765743255615,
+      "inference.rollout_storage/last_serialize_time": 0.023218393325805664,
+      "inference.rollout_storage/last_size_bytes": 7023486.0,
+      "inference.rollout_storage/last_total_time": 0.24302315711975098,
+      "inference.rollout_storage/last_write_time": 0.21979498863220215
+    },
+    {
+      "_step": 38,
+      "_timestamp": 1774533117.1681921,
+      "inference.rollout_storage/cumulative_batch_count": 28,
+      "inference.rollout_storage/cumulative_write_time": 7.014236211776733,
+      "inference.rollout_storage/last_serialize_time": 0.02371501922607422,
+      "inference.rollout_storage/last_size_bytes": 7395765.0,
+      "inference.rollout_storage/last_total_time": 0.28188443183898926,
+      "inference.rollout_storage/last_write_time": 0.2581596374511719
+    },
+    {
+      "_step": 40,
+      "_timestamp": 1774533283.4432108,
+      "inference.rollout_storage/cumulative_batch_count": 29,
+      "inference.rollout_storage/cumulative_write_time": 7.514419317245483,
+      "inference.rollout_storage/last_serialize_time": 0.02471923828125,
+      "inference.rollout_storage/last_size_bytes": 7349177.0,
+      "inference.rollout_storage/last_total_time": 0.5249118804931641,
+      "inference.rollout_storage/last_write_time": 0.50018310546875
+    },
+    {
+      "_step": 43,
+      "_timestamp": 1774533632.1039805,
+      "inference.rollout_storage/cumulative_batch_count": 30,
+      "inference.rollout_storage/cumulative_write_time": 7.722927808761597,
+      "inference.rollout_storage/last_serialize_time": 0.023489713668823242,
+      "inference.rollout_storage/last_size_bytes": 6912110.0,
+      "inference.rollout_storage/last_total_time": 0.2320079803466797,
+      "inference.rollout_storage/last_write_time": 0.20850849151611328
+    },
+    {
+      "_step": 44,
+      "_timestamp": 1774533875.322545,
+      "inference.rollout_storage/cumulative_batch_count": 31,
+      "inference.rollout_storage/cumulative_write_time": 10.045259952545166,
+      "inference.rollout_storage/last_serialize_time": 0.11051774024963379,
+      "inference.rollout_storage/last_size_bytes": 6795891.0,
+      "inference.rollout_storage/last_total_time": 2.432860851287842,
+      "inference.rollout_storage/last_write_time": 2.3223321437835693
+    },
+    {
+      "_step": 46,
+      "_timestamp": 1774534076.2035832,
+      "inference.rollout_storage/cumulative_batch_count": 32,
+      "inference.rollout_storage/cumulative_write_time": 10.378156661987305,
+      "inference.rollout_storage/last_serialize_time": 0.023119688034057617,
+      "inference.rollout_storage/last_size_bytes": 7092603.0,
+      "inference.rollout_storage/last_total_time": 0.35602664947509766,
+      "inference.rollout_storage/last_write_time": 0.33289670944213867
+    },
+    {
+      "_step": 48,
+      "_timestamp": 1774534342.6412303,
+      "inference.rollout_storage/cumulative_batch_count": 33,
+      "inference.rollout_storage/cumulative_write_time": 10.589768886566162,
+      "inference.rollout_storage/last_serialize_time": 0.02441120147705078,
+      "inference.rollout_storage/last_size_bytes": 6558210.0,
+      "inference.rollout_storage/last_total_time": 0.2983686923980713,
+      "inference.rollout_storage/last_write_time": 0.21161222457885742
+    },
+    {
+      "_step": 49,
+      "_timestamp": 1774534494.5664523,
+      "inference.rollout_storage/cumulative_batch_count": 34,
+      "inference.rollout_storage/cumulative_write_time": 10.837472200393677,
+      "inference.rollout_storage/last_serialize_time": 0.023975372314453125,
+      "inference.rollout_storage/last_size_bytes": 6854328.0,
+      "inference.rollout_storage/last_total_time": 0.3365476131439209,
+      "inference.rollout_storage/last_write_time": 0.24770331382751465
+    },
+    {
+      "_step": 51,
+      "_timestamp": 1774534758.5371726,
+      "inference.rollout_storage/cumulative_batch_count": 35,
+      "inference.rollout_storage/cumulative_write_time": 11.161902666091919,
+      "inference.rollout_storage/last_serialize_time": 0.023683786392211914,
+      "inference.rollout_storage/last_size_bytes": 7035529.0,
+      "inference.rollout_storage/last_total_time": 0.41597461700439453,
+      "inference.rollout_storage/last_write_time": 0.3244304656982422
+    },
+    {
+      "_step": 54,
+      "_timestamp": 1774535025.413278,
+      "inference.rollout_storage/cumulative_batch_count": 36,
+      "inference.rollout_storage/cumulative_write_time": 11.425976037979126,
+      "inference.rollout_storage/last_serialize_time": 0.02339792251586914,
+      "inference.rollout_storage/last_size_bytes": 6819968.0,
+      "inference.rollout_storage/last_total_time": 0.3442652225494385,
+      "inference.rollout_storage/last_write_time": 0.26407337188720703
+    },
+    {
+      "_step": 56,
+      "_timestamp": 1774535239.352522,
+      "inference.rollout_storage/cumulative_batch_count": 37,
+      "inference.rollout_storage/cumulative_write_time": 11.77868938446045,
+      "inference.rollout_storage/last_serialize_time": 0.023821592330932617,
+      "inference.rollout_storage/last_size_bytes": 7153805.0,
+      "inference.rollout_storage/last_total_time": 0.44855427742004395,
+      "inference.rollout_storage/last_write_time": 0.35271334648132324
+    },
+    {
+      "_step": 57,
+      "_timestamp": 1774535451.9369519,
+      "inference.rollout_storage/cumulative_batch_count": 38,
+      "inference.rollout_storage/cumulative_write_time": 11.991596937179565,
+      "inference.rollout_storage/last_serialize_time": 0.022131919860839844,
+      "inference.rollout_storage/last_size_bytes": 6258140.0,
+      "inference.rollout_storage/last_total_time": 0.2836740016937256,
+      "inference.rollout_storage/last_write_time": 0.2129075527191162
+    },
+    {
+      "_step": 60,
+      "_timestamp": 1774535672.590751,
+      "inference.rollout_storage/cumulative_batch_count": 39,
+      "inference.rollout_storage/cumulative_write_time": 12.228389263153076,
+      "inference.rollout_storage/last_serialize_time": 0.024085283279418945,
+      "inference.rollout_storage/last_size_bytes": 6503751.0,
+      "inference.rollout_storage/last_total_time": 0.32070374488830566,
+      "inference.rollout_storage/last_write_time": 0.23679232597351074
+    },
+    {
+      "_step": 62,
+      "_timestamp": 1774535948.3839197,
+      "inference.rollout_storage/cumulative_batch_count": 40,
+      "inference.rollout_storage/cumulative_write_time": 12.451579332351685,
+      "inference.rollout_storage/last_serialize_time": 0.028870344161987305,
+      "inference.rollout_storage/last_size_bytes": 7498593.0,
+      "inference.rollout_storage/last_total_time": 0.3331155776977539,
+      "inference.rollout_storage/last_write_time": 0.2231900691986084
+    },
+    {
+      "_step": 63,
+      "_timestamp": 1774536091.8171875,
+      "inference.rollout_storage/cumulative_batch_count": 41,
+      "inference.rollout_storage/cumulative_write_time": 12.67180585861206,
+      "inference.rollout_storage/last_serialize_time": 0.023447036743164062,
+      "inference.rollout_storage/last_size_bytes": 6364878.0,
+      "inference.rollout_storage/last_total_time": 0.29998183250427246,
+      "inference.rollout_storage/last_write_time": 0.22022652626037598
+    },
+    {
+      "_step": 65,
+      "_timestamp": 1774536356.855776,
+      "inference.rollout_storage/cumulative_batch_count": 42,
+      "inference.rollout_storage/cumulative_write_time": 13.012069940567017,
+      "inference.rollout_storage/last_serialize_time": 0.024771928787231445,
+      "inference.rollout_storage/last_size_bytes": 6745509.0,
+      "inference.rollout_storage/last_total_time": 0.4236328601837158,
+      "inference.rollout_storage/last_write_time": 0.34026408195495605
+    },
+    {
+      "_step": 68,
+      "_timestamp": 1774536580.8493254,
+      "inference.rollout_storage/cumulative_batch_count": 43,
+      "inference.rollout_storage/cumulative_write_time": 13.224879503250122,
+      "inference.rollout_storage/last_serialize_time": 0.023772001266479492,
+      "inference.rollout_storage/last_size_bytes": 6621062.0,
+      "inference.rollout_storage/last_total_time": 0.2960822582244873,
+      "inference.rollout_storage/last_write_time": 0.21280956268310547
+    },
+    {
+      "_step": 70,
+      "_timestamp": 1774536912.2849638,
+      "inference.rollout_storage/cumulative_batch_count": 45,
+      "inference.rollout_storage/cumulative_write_time": 13.720787763595581,
+      "inference.rollout_storage/last_serialize_time": 0.023821353912353516,
+      "inference.rollout_storage/last_size_bytes": 6450177.0,
+      "inference.rollout_storage/last_total_time": 0.30341124534606934,
+      "inference.rollout_storage/last_write_time": 0.22496461868286133
+    },
+    {
+      "_step": 72,
+      "_timestamp": 1774537140.8141437,
+      "inference.rollout_storage/cumulative_batch_count": 46,
+      "inference.rollout_storage/cumulative_write_time": 13.977128267288208,
+      "inference.rollout_storage/last_serialize_time": 0.023157358169555664,
+      "inference.rollout_storage/last_size_bytes": 6597809.0,
+      "inference.rollout_storage/last_total_time": 0.33896899223327637,
+      "inference.rollout_storage/last_write_time": 0.25634050369262695
+    },
+    {
+      "_step": 74,
+      "_timestamp": 1774537407.035757,
+      "inference.rollout_storage/cumulative_batch_count": 47,
+      "inference.rollout_storage/cumulative_write_time": 14.22975492477417,
+      "inference.rollout_storage/last_serialize_time": 0.023929595947265625,
+      "inference.rollout_storage/last_size_bytes": 6945720.0,
+      "inference.rollout_storage/last_total_time": 0.33121681213378906,
+      "inference.rollout_storage/last_write_time": 0.2526266574859619
+    },
+    {
+      "_step": 76,
+      "_timestamp": 1774537607.4122791,
+      "inference.rollout_storage/cumulative_batch_count": 48,
+      "inference.rollout_storage/cumulative_write_time": 14.463536500930786,
+      "inference.rollout_storage/last_serialize_time": 0.023015975952148438,
+      "inference.rollout_storage/last_size_bytes": 6600380.0,
+      "inference.rollout_storage/last_total_time": 0.3130812644958496,
+      "inference.rollout_storage/last_write_time": 0.2337815761566162
+    },
+    {
+      "_step": 77,
+      "_timestamp": 1774537742.002303,
+      "inference.rollout_storage/cumulative_batch_count": 49,
+      "inference.rollout_storage/cumulative_write_time": 14.712550163269043,
+      "inference.rollout_storage/last_serialize_time": 0.023519277572631836,
+      "inference.rollout_storage/last_size_bytes": 6853547.0,
+      "inference.rollout_storage/last_total_time": 0.3308415412902832,
+      "inference.rollout_storage/last_write_time": 0.24901366233825684
+    },
+    {
+      "_step": 80,
+      "_timestamp": 1774538093.540884,
+      "inference.rollout_storage/cumulative_batch_count": 50,
+      "inference.rollout_storage/cumulative_write_time": 14.97693157196045,
+      "inference.rollout_storage/last_serialize_time": 0.024339675903320312,
+      "inference.rollout_storage/last_size_bytes": 6847556.0,
+      "inference.rollout_storage/last_total_time": 0.34920382499694824,
+      "inference.rollout_storage/last_write_time": 0.26438140869140625
+    },
+    {
+      "_step": 82,
+      "_timestamp": 1774538332.628878,
+      "inference.rollout_storage/cumulative_batch_count": 51,
+      "inference.rollout_storage/cumulative_write_time": 15.187497615814209,
+      "inference.rollout_storage/last_serialize_time": 0.024066925048828125,
+      "inference.rollout_storage/last_size_bytes": 7133432.0,
+      "inference.rollout_storage/last_total_time": 0.3078610897064209,
+      "inference.rollout_storage/last_write_time": 0.21056604385375977
+    },
+    {
+      "_step": 83,
+      "_timestamp": 1774538566.6963568,
+      "inference.rollout_storage/cumulative_batch_count": 52,
+      "inference.rollout_storage/cumulative_write_time": 15.55822229385376,
+      "inference.rollout_storage/last_serialize_time": 0.023876667022705078,
+      "inference.rollout_storage/last_size_bytes": 7797721.0,
+      "inference.rollout_storage/last_total_time": 0.45507216453552246,
+      "inference.rollout_storage/last_write_time": 0.3707246780395508
+    },
+    {
+      "_step": 85,
+      "_timestamp": 1774538808.0522919,
+      "inference.rollout_storage/cumulative_batch_count": 53,
+      "inference.rollout_storage/cumulative_write_time": 15.840281248092651,
+      "inference.rollout_storage/last_serialize_time": 0.027056217193603516,
+      "inference.rollout_storage/last_size_bytes": 7094642.0,
+      "inference.rollout_storage/last_total_time": 0.38007092475891113,
+      "inference.rollout_storage/last_write_time": 0.2820589542388916
+    },
+    {
+      "_step": 88,
+      "_timestamp": 1774539170.0030184,
+      "inference.rollout_storage/cumulative_batch_count": 55,
+      "inference.rollout_storage/cumulative_write_time": 16.36605978012085,
+      "inference.rollout_storage/last_serialize_time": 0.029632091522216797,
+      "inference.rollout_storage/last_size_bytes": 7663792.0,
+      "inference.rollout_storage/last_total_time": 0.3497776985168457,
+      "inference.rollout_storage/last_write_time": 0.26322364807128906
+    },
+    {
+      "_step": 90,
+      "_timestamp": 1774539446.9432366,
+      "inference.rollout_storage/cumulative_batch_count": 56,
+      "inference.rollout_storage/cumulative_write_time": 16.600489377975464,
+      "inference.rollout_storage/last_serialize_time": 0.021047353744506836,
+      "inference.rollout_storage/last_size_bytes": 7480315.0,
+      "inference.rollout_storage/last_total_time": 0.3112003803253174,
+      "inference.rollout_storage/last_write_time": 0.23442959785461426
+    },
+    {
+      "_step": 93,
+      "_timestamp": 1774539702.7269385,
+      "inference.rollout_storage/cumulative_batch_count": 57,
+      "inference.rollout_storage/cumulative_write_time": 16.833554983139038,
+      "inference.rollout_storage/last_serialize_time": 0.023049354553222656,
+      "inference.rollout_storage/last_size_bytes": 6833423.0,
+      "inference.rollout_storage/last_total_time": 0.31421542167663574,
+      "inference.rollout_storage/last_write_time": 0.23306560516357422
+    },
+    {
+      "_step": 94,
+      "_timestamp": 1774539884.6914313,
+      "inference.rollout_storage/cumulative_batch_count": 58,
+      "inference.rollout_storage/cumulative_write_time": 17.103891849517822,
+      "inference.rollout_storage/last_serialize_time": 0.023328065872192383,
+      "inference.rollout_storage/last_size_bytes": 6716617.0,
+      "inference.rollout_storage/last_total_time": 0.3538696765899658,
+      "inference.rollout_storage/last_write_time": 0.2703368663787842
+    },
+    {
+      "_step": 95,
+      "_timestamp": 1774540105.9660578,
+      "inference.rollout_storage/cumulative_batch_count": 59,
+      "inference.rollout_storage/cumulative_write_time": 17.3532977104187,
+      "inference.rollout_storage/last_serialize_time": 0.023903608322143555,
+      "inference.rollout_storage/last_size_bytes": 7150153.0,
+      "inference.rollout_storage/last_total_time": 0.3465120792388916,
+      "inference.rollout_storage/last_write_time": 0.2494058609008789
+    },
+    {
+      "_step": 97,
+      "_timestamp": 1774540336.6731427,
+      "inference.rollout_storage/cumulative_batch_count": 60,
+      "inference.rollout_storage/cumulative_write_time": 17.60724377632141,
+      "inference.rollout_storage/last_serialize_time": 0.02514052391052246,
+      "inference.rollout_storage/last_size_bytes": 7529093.0,
+      "inference.rollout_storage/last_total_time": 0.3312499523162842,
+      "inference.rollout_storage/last_write_time": 0.25394606590270996
+    },
+    {
+      "_step": 100,
+      "_timestamp": 1774540693.058638,
+      "inference.rollout_storage/cumulative_batch_count": 62,
+      "inference.rollout_storage/cumulative_write_time": 18.023736476898193,
+      "inference.rollout_storage/last_serialize_time": 0.026748180389404297,
+      "inference.rollout_storage/last_size_bytes": 7474907.0,
+      "inference.rollout_storage/last_total_time": 0.2674727439880371,
+      "inference.rollout_storage/last_write_time": 0.18454837799072266
+    },
+    {
+      "_step": 101,
+      "_timestamp": 1774540902.5309868,
+      "inference.rollout_storage/cumulative_batch_count": 63,
+      "inference.rollout_storage/cumulative_write_time": 18.226108074188232,
+      "inference.rollout_storage/last_serialize_time": 0.026301145553588867,
+      "inference.rollout_storage/last_size_bytes": 6960819.0,
+      "inference.rollout_storage/last_total_time": 0.2833247184753418,
+      "inference.rollout_storage/last_write_time": 0.20237159729003906
+    },
+    {
+      "_step": 103,
+      "_timestamp": 1774541130.7143316,
+      "inference.rollout_storage/cumulative_batch_count": 64,
+      "inference.rollout_storage/cumulative_write_time": 18.42098355293274,
+      "inference.rollout_storage/last_serialize_time": 0.023830413818359375,
+      "inference.rollout_storage/last_size_bytes": 6766077.0,
+      "inference.rollout_storage/last_total_time": 0.26822614669799805,
+      "inference.rollout_storage/last_write_time": 0.19487547874450684
+    },
+    {
+      "_step": 106,
+      "_timestamp": 1774541478.5981884,
+      "inference.rollout_storage/cumulative_batch_count": 66,
+      "inference.rollout_storage/cumulative_write_time": 18.860347509384155,
+      "inference.rollout_storage/last_serialize_time": 0.024502277374267578,
+      "inference.rollout_storage/last_size_bytes": 6217973.0,
+      "inference.rollout_storage/last_total_time": 0.2858266830444336,
+      "inference.rollout_storage/last_write_time": 0.20764636993408203
+    },
+    {
+      "_step": 108,
+      "_timestamp": 1774541743.9553335,
+      "inference.rollout_storage/cumulative_batch_count": 67,
+      "inference.rollout_storage/cumulative_write_time": 19.094961643218994,
+      "inference.rollout_storage/last_serialize_time": 0.02358698844909668,
+      "inference.rollout_storage/last_size_bytes": 7020438.0,
+      "inference.rollout_storage/last_total_time": 0.38810276985168457,
+      "inference.rollout_storage/last_write_time": 0.23461413383483887
+    },
+    {
+      "_step": 111,
+      "_timestamp": 1774541992.6102402,
+      "inference.rollout_storage/cumulative_batch_count": 68,
+      "inference.rollout_storage/cumulative_write_time": 19.311654090881348,
+      "inference.rollout_storage/last_serialize_time": 0.02390265464782715,
+      "inference.rollout_storage/last_size_bytes": 6549185.0,
+      "inference.rollout_storage/last_total_time": 0.299943208694458,
+      "inference.rollout_storage/last_write_time": 0.21669244766235352
+    },
+    {
+      "_step": 113,
+      "_timestamp": 1774542223.2918842,
+      "inference.rollout_storage/cumulative_batch_count": 69,
+      "inference.rollout_storage/cumulative_write_time": 19.537709951400757,
+      "inference.rollout_storage/last_serialize_time": 0.024616479873657227,
+      "inference.rollout_storage/last_size_bytes": 6663275.0,
+      "inference.rollout_storage/last_total_time": 0.3066692352294922,
+      "inference.rollout_storage/last_write_time": 0.22605586051940918
+    },
+    {
+      "_step": 114,
+      "_timestamp": 1774542446.3242583,
+      "inference.rollout_storage/cumulative_batch_count": 70,
+      "inference.rollout_storage/cumulative_write_time": 19.74861454963684,
+      "inference.rollout_storage/last_serialize_time": 0.022864818572998047,
+      "inference.rollout_storage/last_size_bytes": 6673581.0,
+      "inference.rollout_storage/last_total_time": 0.28908610343933105,
+      "inference.rollout_storage/last_write_time": 0.21090459823608398
+    },
+    {
+      "_step": 116,
+      "_timestamp": 1774542655.797847,
+      "inference.rollout_storage/cumulative_batch_count": 71,
+      "inference.rollout_storage/cumulative_write_time": 19.974831104278564,
+      "inference.rollout_storage/last_serialize_time": 0.024367332458496094,
+      "inference.rollout_storage/last_size_bytes": 7040783.0,
+      "inference.rollout_storage/last_total_time": 0.31379246711730957,
+      "inference.rollout_storage/last_write_time": 0.22621655464172363
+    },
+    {
+      "_step": 118,
+      "_timestamp": 1774542886.8673432,
+      "inference.rollout_storage/cumulative_batch_count": 72,
+      "inference.rollout_storage/cumulative_write_time": 20.300400257110596,
+      "inference.rollout_storage/last_serialize_time": 0.024655580520629883,
+      "inference.rollout_storage/last_size_bytes": 6785927.0,
+      "inference.rollout_storage/last_total_time": 0.41323113441467285,
+      "inference.rollout_storage/last_write_time": 0.32556915283203125
+    },
+    {
+      "_step": 119,
+      "_timestamp": 1774543086.3666773,
+      "inference.rollout_storage/cumulative_batch_count": 73,
+      "inference.rollout_storage/cumulative_write_time": 20.52559232711792,
+      "inference.rollout_storage/last_serialize_time": 0.023126840591430664,
+      "inference.rollout_storage/last_size_bytes": 6781315.0,
+      "inference.rollout_storage/last_total_time": 0.3075284957885742,
+      "inference.rollout_storage/last_write_time": 0.22519207000732422
+    },
+    {
+      "_step": 122,
+      "_timestamp": 1774543369.9183996,
+      "inference.rollout_storage/cumulative_batch_count": 74,
+      "inference.rollout_storage/cumulative_write_time": 20.737470149993896,
+      "inference.rollout_storage/last_serialize_time": 0.024085283279418945,
+      "inference.rollout_storage/last_size_bytes": 6742014.0,
+      "inference.rollout_storage/last_total_time": 0.28438234329223633,
+      "inference.rollout_storage/last_write_time": 0.21187782287597656
+    },
+    {
+      "_step": 124,
+      "_timestamp": 1774543613.7797015,
+      "inference.rollout_storage/cumulative_batch_count": 75,
+      "inference.rollout_storage/cumulative_write_time": 20.960188388824463,
+      "inference.rollout_storage/last_serialize_time": 0.024227380752563477,
+      "inference.rollout_storage/last_size_bytes": 7336225.0,
+      "inference.rollout_storage/last_total_time": 0.30567169189453125,
+      "inference.rollout_storage/last_write_time": 0.2227182388305664
+    },
+    {
+      "_step": 125,
+      "_timestamp": 1774543796.1253886,
+      "inference.rollout_storage/cumulative_batch_count": 76,
+      "inference.rollout_storage/cumulative_write_time": 21.222264528274536,
+      "inference.rollout_storage/last_serialize_time": 0.024762630462646484,
+      "inference.rollout_storage/last_size_bytes": 7420538.0,
+      "inference.rollout_storage/last_total_time": 0.3499641418457031,
+      "inference.rollout_storage/last_write_time": 0.26207613945007324
+    },
+    {
+      "_step": 128,
+      "_timestamp": 1774544049.329625,
+      "inference.rollout_storage/cumulative_batch_count": 77,
+      "inference.rollout_storage/cumulative_write_time": 21.446472883224487,
+      "inference.rollout_storage/last_serialize_time": 0.024046897888183594,
+      "inference.rollout_storage/last_size_bytes": 6493112.0,
+      "inference.rollout_storage/last_total_time": 0.2989938259124756,
+      "inference.rollout_storage/last_write_time": 0.22420835494995117
+    },
+    {
+      "_step": 130,
+      "_timestamp": 1774544295.2877755,
+      "inference.rollout_storage/cumulative_batch_count": 78,
+      "inference.rollout_storage/cumulative_write_time": 21.644460916519165,
+      "inference.rollout_storage/last_serialize_time": 0.03170418739318848,
+      "inference.rollout_storage/last_size_bytes": 7574828.0,
+      "inference.rollout_storage/last_total_time": 0.33982181549072266,
+      "inference.rollout_storage/last_write_time": 0.19798803329467773
+    },
+    {
+      "_step": 131,
+      "_timestamp": 1774544505.326572,
+      "inference.rollout_storage/cumulative_batch_count": 79,
+      "inference.rollout_storage/cumulative_write_time": 21.866097688674927,
+      "inference.rollout_storage/last_serialize_time": 0.024227619171142578,
+      "inference.rollout_storage/last_size_bytes": 6734382.0,
+      "inference.rollout_storage/last_total_time": 0.31583571434020996,
+      "inference.rollout_storage/last_write_time": 0.22163677215576172
+    },
+    {
+      "_step": 133,
+      "_timestamp": 1774544768.2904525,
+      "inference.rollout_storage/cumulative_batch_count": 80,
+      "inference.rollout_storage/cumulative_write_time": 22.071325302124023,
+      "inference.rollout_storage/last_serialize_time": 0.0245208740234375,
+      "inference.rollout_storage/last_size_bytes": 6537152.0,
+      "inference.rollout_storage/last_total_time": 0.29143571853637695,
+      "inference.rollout_storage/last_write_time": 0.20522761344909668
+    },
+    {
+      "_step": 136,
+      "_timestamp": 1774545019.6856272,
+      "inference.rollout_storage/cumulative_batch_count": 81,
+      "inference.rollout_storage/cumulative_write_time": 22.34176230430603,
+      "inference.rollout_storage/last_serialize_time": 0.025557279586791992,
+      "inference.rollout_storage/last_size_bytes": 7114130.0,
+      "inference.rollout_storage/last_total_time": 0.35445380210876465,
+      "inference.rollout_storage/last_write_time": 0.27043700218200684
+    },
+    {
+      "_step": 138,
+      "_timestamp": 1774545254.1010263,
+      "inference.rollout_storage/cumulative_batch_count": 82,
+      "inference.rollout_storage/cumulative_write_time": 22.574164628982544,
+      "inference.rollout_storage/last_serialize_time": 0.026536941528320312,
+      "inference.rollout_storage/last_size_bytes": 6671881.0,
+      "inference.rollout_storage/last_total_time": 0.3143289089202881,
+      "inference.rollout_storage/last_write_time": 0.23240232467651367
+    },
+    {
+      "_step": 139,
+      "_timestamp": 1774545475.7660062,
+      "inference.rollout_storage/cumulative_batch_count": 83,
+      "inference.rollout_storage/cumulative_write_time": 22.786597967147827,
+      "inference.rollout_storage/last_serialize_time": 0.023941755294799805,
+      "inference.rollout_storage/last_size_bytes": 6855871.0,
+      "inference.rollout_storage/last_total_time": 0.31349992752075195,
+      "inference.rollout_storage/last_write_time": 0.2124333381652832
+    },
+    {
+      "_step": 141,
+      "_timestamp": 1774545700.1743748,
+      "inference.rollout_storage/cumulative_batch_count": 84,
+      "inference.rollout_storage/cumulative_write_time": 23.018296480178833,
+      "inference.rollout_storage/last_serialize_time": 0.02374124526977539,
+      "inference.rollout_storage/last_size_bytes": 6370187.0,
+      "inference.rollout_storage/last_total_time": 0.3213489055633545,
+      "inference.rollout_storage/last_write_time": 0.23169851303100586
+    },
+    {
+      "_step": 144,
+      "_timestamp": 1774546035.2054358,
+      "inference.rollout_storage/cumulative_batch_count": 86,
+      "inference.rollout_storage/cumulative_write_time": 23.473703861236572,
+      "inference.rollout_storage/last_serialize_time": 0.023603200912475586,
+      "inference.rollout_storage/last_size_bytes": 6470502.0,
+      "inference.rollout_storage/last_total_time": 0.33954858779907227,
+      "inference.rollout_storage/last_write_time": 0.25005292892456055
+    },
+    {
+      "_step": 145,
+      "_timestamp": 1774546248.406657,
+      "inference.rollout_storage/cumulative_batch_count": 87,
+      "inference.rollout_storage/cumulative_write_time": 23.67186450958252,
+      "inference.rollout_storage/last_serialize_time": 0.026539087295532227,
+      "inference.rollout_storage/last_size_bytes": 6897277.0,
+      "inference.rollout_storage/last_total_time": 0.2847435474395752,
+      "inference.rollout_storage/last_write_time": 0.19816064834594727
+    },
+    {
+      "_step": 147,
+      "_timestamp": 1774546464.6599195,
+      "inference.rollout_storage/cumulative_batch_count": 88,
+      "inference.rollout_storage/cumulative_write_time": 23.951088905334473,
+      "inference.rollout_storage/last_serialize_time": 0.024200916290283203,
+      "inference.rollout_storage/last_size_bytes": 6457054.0,
+      "inference.rollout_storage/last_total_time": 0.3611316680908203,
+      "inference.rollout_storage/last_write_time": 0.2792243957519531
+    },
+    {
+      "_step": 150,
+      "_timestamp": 1774546811.7190402,
+      "inference.rollout_storage/cumulative_batch_count": 90,
+      "inference.rollout_storage/cumulative_write_time": 24.389642000198364,
+      "inference.rollout_storage/last_serialize_time": 0.026775121688842773,
+      "inference.rollout_storage/last_size_bytes": 7261029.0,
+      "inference.rollout_storage/last_total_time": 0.2946200370788574,
+      "inference.rollout_storage/last_write_time": 0.21263670921325684
+    },
+    {
+      "_step": 152,
+      "_timestamp": 1774547095.8903985,
+      "inference.rollout_storage/cumulative_batch_count": 91,
+      "inference.rollout_storage/cumulative_write_time": 26.407929182052612,
+      "inference.rollout_storage/last_serialize_time": 0.16533780097961426,
+      "inference.rollout_storage/last_size_bytes": 7419231.0,
+      "inference.rollout_storage/last_total_time": 2.837033987045288,
+      "inference.rollout_storage/last_write_time": 2.018287181854248
+    },
+    {
+      "_step": 154,
+      "_timestamp": 1774547334.2017024,
+      "inference.rollout_storage/cumulative_batch_count": 92,
+      "inference.rollout_storage/cumulative_write_time": 26.638872623443604,
+      "inference.rollout_storage/last_serialize_time": 0.025061368942260742,
+      "inference.rollout_storage/last_size_bytes": 7418186.0,
+      "inference.rollout_storage/last_total_time": 0.3188438415527344,
+      "inference.rollout_storage/last_write_time": 0.2309434413909912
+    },
+    {
+      "_step": 156,
+      "_timestamp": 1774547523.883286,
+      "inference.rollout_storage/cumulative_batch_count": 93,
+      "inference.rollout_storage/cumulative_write_time": 26.823806524276733,
+      "inference.rollout_storage/last_serialize_time": 0.025770902633666992,
+      "inference.rollout_storage/last_size_bytes": 6024828.0,
+      "inference.rollout_storage/last_total_time": 0.2720046043395996,
+      "inference.rollout_storage/last_write_time": 0.18493390083312988
+    },
+    {
+      "_step": 158,
+      "_timestamp": 1774547768.8409798,
+      "inference.rollout_storage/cumulative_batch_count": 94,
+      "inference.rollout_storage/cumulative_write_time": 29.141343355178833,
+      "inference.rollout_storage/last_serialize_time": 0.1175081729888916,
+      "inference.rollout_storage/last_size_bytes": 7046203.0,
+      "inference.rollout_storage/last_total_time": 2.758862257003784,
+      "inference.rollout_storage/last_write_time": 2.3175368309020996
+    },
+    {
+      "_step": 160,
+      "_timestamp": 1774548011.495248,
+      "inference.rollout_storage/cumulative_batch_count": 95,
+      "inference.rollout_storage/cumulative_write_time": 29.43604850769043,
+      "inference.rollout_storage/last_serialize_time": 0.02462935447692871,
+      "inference.rollout_storage/last_size_bytes": 7076181.0,
+      "inference.rollout_storage/last_total_time": 0.40164685249328613,
+      "inference.rollout_storage/last_write_time": 0.2947051525115967
+    },
+    {
+      "_step": 162,
+      "_timestamp": 1774548255.0805666,
+      "inference.rollout_storage/cumulative_batch_count": 96,
+      "inference.rollout_storage/cumulative_write_time": 29.633930206298828,
+      "inference.rollout_storage/last_serialize_time": 0.027426719665527344,
+      "inference.rollout_storage/last_size_bytes": 7177210.0,
+      "inference.rollout_storage/last_total_time": 0.3028442859649658,
+      "inference.rollout_storage/last_write_time": 0.19788169860839844
+    },
+    {
+      "_step": 163,
+      "_timestamp": 1774548492.4020195,
+      "inference.rollout_storage/cumulative_batch_count": 97,
+      "inference.rollout_storage/cumulative_write_time": 29.851600646972656,
+      "inference.rollout_storage/last_serialize_time": 0.024777889251708984,
+      "inference.rollout_storage/last_size_bytes": 6984776.0,
+      "inference.rollout_storage/last_total_time": 0.30291295051574707,
+      "inference.rollout_storage/last_write_time": 0.21767044067382812
+    },
+    {
+      "_step": 165,
+      "_timestamp": 1774548699.1703992,
+      "inference.rollout_storage/cumulative_batch_count": 98,
+      "inference.rollout_storage/cumulative_write_time": 30.133004665374756,
+      "inference.rollout_storage/last_serialize_time": 0.02399921417236328,
+      "inference.rollout_storage/last_size_bytes": 7170326.0,
+      "inference.rollout_storage/last_total_time": 0.35347914695739746,
+      "inference.rollout_storage/last_write_time": 0.2814040184020996
+    },
+    {
+      "_step": 167,
+      "_timestamp": 1774548969.3483646,
+      "inference.rollout_storage/cumulative_batch_count": 99,
+      "inference.rollout_storage/cumulative_write_time": 30.325587272644043,
+      "inference.rollout_storage/last_serialize_time": 0.02444314956665039,
+      "inference.rollout_storage/last_size_bytes": 7052996.0,
+      "inference.rollout_storage/last_total_time": 0.27992796897888184,
+      "inference.rollout_storage/last_write_time": 0.1925826072692871
+    },
+    {
+      "_step": 168,
+      "_timestamp": 1774549143.9150293,
+      "inference.rollout_storage/cumulative_batch_count": 100,
+      "inference.rollout_storage/cumulative_write_time": 30.58207941055298,
+      "inference.rollout_storage/last_serialize_time": 0.022678375244140625,
+      "inference.rollout_storage/last_size_bytes": 7089954.0,
+      "inference.rollout_storage/last_total_time": 0.34685850143432617,
+      "inference.rollout_storage/last_write_time": 0.25649213790893555
+    },
+    {
+      "_step": 170,
+      "_timestamp": 1774549416.7744732,
+      "inference.rollout_storage/cumulative_batch_count": 101,
+      "inference.rollout_storage/cumulative_write_time": 30.80069661140442,
+      "inference.rollout_storage/last_serialize_time": 0.023952007293701172,
+      "inference.rollout_storage/last_size_bytes": 7110413.0,
+      "inference.rollout_storage/last_total_time": 0.3063228130340576,
+      "inference.rollout_storage/last_write_time": 0.21861720085144043
+    },
+    {
+      "_step": 173,
+      "_timestamp": 1774549655.2927516,
+      "inference.rollout_storage/cumulative_batch_count": 102,
+      "inference.rollout_storage/cumulative_write_time": 31.024872541427612,
+      "inference.rollout_storage/last_serialize_time": 0.025795698165893555,
+      "inference.rollout_storage/last_size_bytes": 7176566.0,
+      "inference.rollout_storage/last_total_time": 0.3096449375152588,
+      "inference.rollout_storage/last_write_time": 0.22417593002319336
+    },
+    {
+      "_step": 175,
+      "_timestamp": 1774549893.3514502,
+      "inference.rollout_storage/cumulative_batch_count": 103,
+      "inference.rollout_storage/cumulative_write_time": 31.231475353240967,
+      "inference.rollout_storage/last_serialize_time": 0.026850461959838867,
+      "inference.rollout_storage/last_size_bytes": 7332486.0,
+      "inference.rollout_storage/last_total_time": 0.2973923683166504,
+      "inference.rollout_storage/last_write_time": 0.2066028118133545
+    },
+    {
+      "_step": 176,
+      "_timestamp": 1774550125.9111507,
+      "inference.rollout_storage/cumulative_batch_count": 104,
+      "inference.rollout_storage/cumulative_write_time": 31.457149982452393,
+      "inference.rollout_storage/last_serialize_time": 0.023319482803344727,
+      "inference.rollout_storage/last_size_bytes": 7183802.0,
+      "inference.rollout_storage/last_total_time": 0.3118400573730469,
+      "inference.rollout_storage/last_write_time": 0.22567462921142578
+    },
+    {
+      "_step": 179,
+      "_timestamp": 1774550368.6976564,
+      "inference.rollout_storage/cumulative_batch_count": 105,
+      "inference.rollout_storage/cumulative_write_time": 34.38809013366699,
+      "inference.rollout_storage/last_serialize_time": 0.26749277114868164,
+      "inference.rollout_storage/last_size_bytes": 6959718.0,
+      "inference.rollout_storage/last_total_time": 3.9907586574554443,
+      "inference.rollout_storage/last_write_time": 2.9309401512145996
+    },
+    {
+      "_step": 181,
+      "_timestamp": 1774550632.6527586,
+      "inference.rollout_storage/cumulative_batch_count": 106,
+      "inference.rollout_storage/cumulative_write_time": 35.048917293548584,
+      "inference.rollout_storage/last_serialize_time": 0.024342060089111328,
+      "inference.rollout_storage/last_size_bytes": 6665054.0,
+      "inference.rollout_storage/last_total_time": 0.743701696395874,
+      "inference.rollout_storage/last_write_time": 0.6608271598815918
+    },
+    {
+      "_step": 182,
+      "_timestamp": 1774550786.0106308,
+      "inference.rollout_storage/cumulative_batch_count": 107,
+      "inference.rollout_storage/cumulative_write_time": 35.25424671173096,
+      "inference.rollout_storage/last_serialize_time": 0.027604103088378906,
+      "inference.rollout_storage/last_size_bytes": 7149610.0,
+      "inference.rollout_storage/last_total_time": 0.28983521461486816,
+      "inference.rollout_storage/last_write_time": 0.20532941818237305
+    },
+    {
+      "_step": 184,
+      "_timestamp": 1774551057.9073865,
+      "inference.rollout_storage/cumulative_batch_count": 108,
+      "inference.rollout_storage/cumulative_write_time": 35.49180316925049,
+      "inference.rollout_storage/last_serialize_time": 0.024693965911865234,
+      "inference.rollout_storage/last_size_bytes": 7318732.0,
+      "inference.rollout_storage/last_total_time": 0.31075382232666016,
+      "inference.rollout_storage/last_write_time": 0.23755645751953125
+    },
+    {
+      "_step": 187,
+      "_timestamp": 1774551334.0501354,
+      "inference.rollout_storage/cumulative_batch_count": 109,
+      "inference.rollout_storage/cumulative_write_time": 35.70752954483032,
+      "inference.rollout_storage/last_serialize_time": 0.024716615676879883,
+      "inference.rollout_storage/last_size_bytes": 6864933.0,
+      "inference.rollout_storage/last_total_time": 0.2989940643310547,
+      "inference.rollout_storage/last_write_time": 0.21572637557983398
+    },
+    {
+      "_step": 189,
+      "_timestamp": 1774551536.1141734,
+      "inference.rollout_storage/cumulative_batch_count": 110,
+      "inference.rollout_storage/cumulative_write_time": 35.93442702293396,
+      "inference.rollout_storage/last_serialize_time": 0.02297496795654297,
+      "inference.rollout_storage/last_size_bytes": 6482894.0,
+      "inference.rollout_storage/last_total_time": 0.34321022033691406,
+      "inference.rollout_storage/last_write_time": 0.2268974781036377
+    },
+    {
+      "_step": 190,
+      "_timestamp": 1774551675.036966,
+      "inference.rollout_storage/cumulative_batch_count": 111,
+      "inference.rollout_storage/cumulative_write_time": 36.1573920249939,
+      "inference.rollout_storage/last_serialize_time": 0.0266726016998291,
+      "inference.rollout_storage/last_size_bytes": 7539533.0,
+      "inference.rollout_storage/last_total_time": 0.30759119987487793,
+      "inference.rollout_storage/last_write_time": 0.22296500205993652
+    },
+    {
+      "_step": 193,
+      "_timestamp": 1774552048.7625935,
+      "inference.rollout_storage/cumulative_batch_count": 112,
+      "inference.rollout_storage/cumulative_write_time": 36.366422176361084,
+      "inference.rollout_storage/last_serialize_time": 0.023111581802368164,
+      "inference.rollout_storage/last_size_bytes": 6652831.0,
+      "inference.rollout_storage/last_total_time": 0.2966005802154541,
+      "inference.rollout_storage/last_write_time": 0.2090301513671875
+    },
+    {
+      "_step": 195,
+      "_timestamp": 1774552259.7027166,
+      "inference.rollout_storage/cumulative_batch_count": 113,
+      "inference.rollout_storage/cumulative_write_time": 36.60907316207886,
+      "inference.rollout_storage/last_serialize_time": 0.02507472038269043,
+      "inference.rollout_storage/last_size_bytes": 6884379.0,
+      "inference.rollout_storage/last_total_time": 0.3198733329772949,
+      "inference.rollout_storage/last_write_time": 0.24265098571777344
+    },
+    {
+      "_step": 196,
+      "_timestamp": 1774552493.352216,
+      "inference.rollout_storage/cumulative_batch_count": 114,
+      "inference.rollout_storage/cumulative_write_time": 36.84459090232849,
+      "inference.rollout_storage/last_serialize_time": 0.024433135986328125,
+      "inference.rollout_storage/last_size_bytes": 7261094.0,
+      "inference.rollout_storage/last_total_time": 0.3168370723724365,
+      "inference.rollout_storage/last_write_time": 0.2355177402496338
+    },
+    {
+      "_step": 198,
+      "_timestamp": 1774552640.458791,
+      "inference.rollout_storage/cumulative_batch_count": 115,
+      "inference.rollout_storage/cumulative_write_time": 37.09747123718262,
+      "inference.rollout_storage/last_serialize_time": 0.027035951614379883,
+      "inference.rollout_storage/last_size_bytes": 6801194.0,
+      "inference.rollout_storage/last_total_time": 0.34371232986450195,
+      "inference.rollout_storage/last_write_time": 0.252880334854126
+    }
+  ]
+}
+
