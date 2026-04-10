@@ -565,6 +565,7 @@ class IrisClient:
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
+        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -680,6 +681,7 @@ class IrisClient:
                 preemption_policy=preemption_policy,
                 existing_job_policy=existing_job_policy,
                 task_image=task_image,
+                priority_band=priority_band,
             )
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:

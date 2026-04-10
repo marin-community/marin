@@ -92,6 +92,7 @@ class RemoteClusterClient:
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
+        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     ) -> JobName:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
@@ -116,6 +117,7 @@ class RemoteClusterClient:
             preemption_policy=preemption_policy,
             existing_job_policy=existing_job_policy,
             task_image=task_image or "",
+            priority_band=priority_band,
         )
         if self._bundle_id:
             request.bundle_id = self._bundle_id

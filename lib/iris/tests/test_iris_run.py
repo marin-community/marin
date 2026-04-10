@@ -209,6 +209,53 @@ def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
     assert zone_constraints[0].value == "us-central2-b"
 
 
+def test_run_iris_job_passes_priority_band(monkeypatch):
+    """run_iris_job converts a priority name to its proto value."""
+    from iris.rpc import job_pb2
+
+    captured: dict[str, object] = {}
+
+    def _fake_submit_and_wait_job(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", _fake_submit_and_wait_job)
+
+    exit_code = run_iris_job(
+        controller_url="http://controller:10000",
+        command=[sys.executable, "-c", "print('ok')"],
+        env_vars={},
+        wait=False,
+        priority="batch",
+    )
+
+    assert exit_code == 0
+    assert captured["priority_band"] == job_pb2.PRIORITY_BAND_BATCH
+
+
+def test_run_iris_job_default_priority_unspecified(monkeypatch):
+    """run_iris_job defaults to PRIORITY_BAND_UNSPECIFIED when --priority is omitted."""
+    from iris.rpc import job_pb2
+
+    captured: dict[str, object] = {}
+
+    def _fake_submit_and_wait_job(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", _fake_submit_and_wait_job)
+
+    exit_code = run_iris_job(
+        controller_url="http://controller:10000",
+        command=[sys.executable, "-c", "print('ok')"],
+        env_vars={},
+        wait=False,
+    )
+
+    assert exit_code == 0
+    assert captured["priority_band"] == job_pb2.PRIORITY_BAND_UNSPECIFIED
+
+
 def test_no_wait_prints_job_id(monkeypatch):
     """--no-wait prints the job ID to stdout."""
     from click.testing import CliRunner
