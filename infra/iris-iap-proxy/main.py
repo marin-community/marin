@@ -147,10 +147,11 @@ async def _proxy(request: Request) -> Response:
         content=body,
     )
 
-    # Forward the response, stripping hop-by-hop headers.
-    resp_headers = {
-        k: v for k, v in upstream_resp.headers.items() if k.lower() not in {"transfer-encoding", "connection"}
-    }
+    # Forward the response, stripping hop-by-hop and encoding headers.
+    # httpx already decompresses the body, so content-encoding and
+    # content-length from the upstream are stale.
+    _strip_resp = {"transfer-encoding", "connection", "content-encoding", "content-length"}
+    resp_headers = {k: v for k, v in upstream_resp.headers.items() if k.lower() not in _strip_resp}
     return Response(
         content=upstream_resp.content,
         status_code=upstream_resp.status_code,
