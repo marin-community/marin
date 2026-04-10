@@ -42,47 +42,43 @@ def generate_id(text: str) -> str:
 def _make_normalize_fn(
     text_field: str,
     id_field: str,
-    max_record_size: int | None = None,
-) -> Callable[[dict[str, Any]], Iterator[dict[str, Any]]]:
-    """Return a record-level transform that yields one or more normalized records.
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Return a record-level transform function.
 
     The returned function:
     1. Extracts ``text`` from *text_field* (raises on missing/empty).
-    2. If *max_record_size* is set and the text exceeds that size, splits
-       the text into chunks and yields one record per chunk.
-    3. Generates a deterministic ``id`` via xxh3_128.
-    4. If *id_field* exists in the record, preserves it as ``source_id``.
-    5. Keeps all other columns.
+    2. Generates a deterministic ``id`` via xxh3_128.
+    3. If *id_field* exists in the record, preserves it as ``source_id``.
+    4. Keeps all other columns.
     """
 
-    def _build_record(text: str, record: dict[str, Any], source_id: Any) -> dict[str, Any]:
+    def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
+        # --- text ---
+        text = record.get(text_field)
+        if text is None or not str(text).strip():
+            raise ValueError(f"Record missing or empty text in field {text_field!r}: {record!r:.200}")
+        text = str(text)
+
+        # --- source_id (skip silently if id_field absent) ---
+        source_id = record.get(id_field)
+
+        # --- build output ---
         out: dict[str, Any] = {}
+
+        # Copy all original columns except the ones we're replacing
         for k, v in record.items():
             if k == id_field:
                 continue
             if k == text_field and text_field != "text":
                 continue
             out[k] = v
+
         out["id"] = generate_id(text)
         out["text"] = text
         if source_id is not None:
             out["source_id"] = source_id
+
         return out
-
-    def normalize_record(record: dict[str, Any]) -> Iterator[dict[str, Any]]:
-        text = record.get(text_field)
-        if text is None or not str(text).strip():
-            raise ValueError(f"Record missing or empty text in field {text_field!r}: {record!r:.200}")
-        text = str(text)
-        source_id = record.get(id_field)
-
-        if max_record_size is None or len(text) <= max_record_size:
-            yield _build_record(text, record, source_id)
-        else:
-            for offset in range(0, len(text), max_record_size):
-                chunk = text[offset : offset + max_record_size]
-                if chunk.strip():
-                    yield _build_record(chunk, record, source_id)
 
     return normalize_record
 
@@ -151,10 +147,9 @@ def _build_pipeline(
     num_shards: int,
     text_field: str,
     id_field: str | None,
-    max_record_size: int | None = None,
 ) -> Dataset:
     """Build a single Zephyr pipeline for one subdirectory."""
-    normalize_record = _make_normalize_fn(text_field, id_field, max_record_size=max_record_size)
+    normalize_record = _make_normalize_fn(text_field, id_field)
 
     def dedup_and_sort(_key: int, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
         """Deduplicate by id. Items arrive sorted by id via sort_by."""
@@ -168,7 +163,7 @@ def _build_pipeline(
     return (
         Dataset.from_list(files)
         .flat_map(load_file)
-        .flat_map(normalize_record)
+        .map(normalize_record)
         .group_by(
             key=lambda r: int(r["id"], 16) % num_shards,
             reducer=dedup_and_sort,
@@ -191,7 +186,6 @@ def normalize_to_parquet(
     target_partition_bytes: int = 256 * 1024 * 1024,
     worker_resources: ResourceConfig | None = None,
     file_extensions: tuple[str, ...] | None = None,
-    max_record_size: int | None = None,
 ) -> None:
     """Normalize raw downloaded data to the datakit standard Parquet format.
 
@@ -217,9 +211,6 @@ def normalize_to_parquet(
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
-        max_record_size: Maximum text size in bytes per record. Records
-            exceeding this size are split into chunks. ``None`` disables
-            splitting.
     """
     resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="10g")
 
@@ -243,7 +234,7 @@ def normalize_to_parquet(
             num_shards,
         )
 
-        pipeline = _build_pipeline(files, output_dir, num_shards, text_field, id_field, max_record_size=max_record_size)
+        pipeline = _build_pipeline(files, output_dir, num_shards, text_field, id_field)
         ctx = ZephyrContext(
             name=f"normalize-{subdir.replace('/', '-') if subdir else 'all'}",
             resources=resources,
@@ -270,7 +261,6 @@ def normalize_step(
     override_output_path: str | None = None,
     input_path: str | None = None,
     file_extensions: tuple[str, ...] | None = None,
-    max_record_size: int | None = None,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
 
@@ -288,9 +278,6 @@ def normalize_step(
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
-        max_record_size: Maximum text size in bytes per record. Records
-            exceeding this size are split into chunks. ``None`` disables
-            splitting.
     """
     resolved_input = input_path or download.output_path
 
@@ -304,7 +291,6 @@ def normalize_step(
             target_partition_bytes=target_partition_bytes,
             worker_resources=worker_resources,
             file_extensions=file_extensions,
-            max_record_size=max_record_size,
         ),
         deps=[download],
         hash_attrs={
@@ -313,7 +299,6 @@ def normalize_step(
             "target_partition_bytes": target_partition_bytes,
             "input_path": resolved_input,
             "file_extensions": file_extensions,
-            "max_record_size": max_record_size,
         },
         override_output_path=override_output_path,
     )

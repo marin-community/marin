@@ -25,9 +25,6 @@ def tokenize_starcoder2_extras(*, tokenizer: str = marin_tokenizer) -> list[Toke
             download=download,
             text_field="content",
             file_extensions=(".parquet",),
-            # documentation contains very large records (e.g. full OpenJDK docs at 64MB);
-            # split them to avoid OOM during tokenization
-            max_record_size=10_000_000 if subset == "documentation" else None,
         )
         steps.append(
             default_tokenize(
