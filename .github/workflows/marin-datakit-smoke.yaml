@@ -1,0 +1,177 @@
+name: Marin - Datakit Smoke
+
+on:
+  schedule:
+    - cron: '30 6 * * *'  # Daily at 06:30 UTC, offset from canary
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write    # claude triage files issues
+  id-token: write  # claude-code-action OIDC
+
+jobs:
+  datakit-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    concurrency:
+      group: datakit-smoke
+      cancel-in-progress: true
+    env:
+      SMOKE_RUN_ID: datakit-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      # MARIN_PREFIX is defaulted by the ferry entrypoint to marin_temp_bucket(ttl_days=1).
+      WANDB_ENTITY: marin-community
+      WANDB_PROJECT: marin
+      IRIS_CONFIG: lib/iris/examples/marin-dev.yaml
+      IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Set up OS Login SSH key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q -C "gha-${{ github.run_id }}-${{ github.run_attempt }}"
+          chmod 600 ~/.ssh/google_compute_engine
+          gcloud compute os-login ssh-keys add \
+            --key-file ~/.ssh/google_compute_engine.pub \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --ttl=6h
+
+      - name: Submit datakit smoke ferry
+        id: submit
+        shell: bash -l {0}
+        run: |
+          JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+            job run --no-wait \
+            --memory=2G --disk=4G --cpu=1 --extra=cpu \
+            -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
+            -e WANDB_ENTITY "$WANDB_ENTITY" \
+            -e WANDB_PROJECT "$WANDB_PROJECT" \
+            -e WANDB_API_KEY "$WANDB_API_KEY" \
+            -e HF_TOKEN "$HF_TOKEN" \
+            -- python -m experiments.ferries.datakit_ferry)
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+          echo "Submitted job: $JOB_ID"
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      - name: Wait for datakit smoke ferry
+        shell: bash -l {0}
+        run: |
+          JOB_ID="${{ steps.submit.outputs.job_id }}"
+          echo "Polling job status: $JOB_ID"
+          while true; do
+            STATE=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+              job list --json --prefix "$JOB_ID" \
+              | jq -r --arg id "$JOB_ID" '[.[] | select(.job_id == $id)][0].state // empty')
+            case "$STATE" in
+              JOB_STATE_SUCCEEDED)
+                echo "Job succeeded"
+                exit 0
+                ;;
+              JOB_STATE_PENDING|JOB_STATE_BUILDING|JOB_STATE_RUNNING)
+                echo "$(date -u +%H:%M:%S) Job state: $STATE"
+                sleep 30
+                ;;
+              "")
+                echo "Job not found: $JOB_ID"
+                exit 1
+                ;;
+              *)
+                echo "Job finished with state: $STATE"
+                .venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+                  job list --json --prefix "$JOB_ID" \
+                  | jq --arg id "$JOB_ID" '.[] | {job_id, state, error}' || true
+                exit 1
+                ;;
+            esac
+          done
+
+      - name: Validate datakit smoke outputs
+        shell: bash -l {0}
+        env:
+          SMOKE_RUN_ID: ${{ env.SMOKE_RUN_ID }}
+          # MARIN_PREFIX intentionally unset — validate script defaults via marin_temp_bucket,
+          # matching the ferry entrypoint default.
+        run: .venv/bin/python scripts/datakit/validate_smoke_outputs.py
+
+      - name: Capture failure diagnostics
+        if: failure()
+        run: |
+          echo "=== Controller logs ==="
+          .venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+            process logs --max-lines=200 || true
+          echo "=== Job list ==="
+          .venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+            job list --json 2>/dev/null | jq '.[0:5]' || true
+
+      # The canary-triage skill handles both lanes; CANARY_LANE selects datakit-smoke vs tpu.
+      - name: Claude triage
+        id: claude_triage
+        if: failure() && github.event_name == 'schedule'
+        uses: anthropics/claude-code-action@v1
+        timeout-minutes: 30
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          prompt: |
+            Read .agents/skills/canary-triage/SKILL.md and follow it.
+          claude_args: |
+            --model opus
+            --max-turns 50
+            --allowedTools "Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*)"
+        env:
+          CANARY_LANE: datakit-smoke
+          CANARY_JOB_ID: ${{ steps.submit.outputs.job_id }}
+          CANARY_RUN_ID: ${{ env.SMOKE_RUN_ID }}
+          IRIS_CONFIG: ${{ env.IRIS_CONFIG }}
+          WANDB_ENTITY: ${{ env.WANDB_ENTITY }}
+          WANDB_PROJECT: ${{ env.WANDB_PROJECT }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Notify Slack on failure
+        if: failure() && github.event_name == 'schedule'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          FALLBACK_TEXT: ":red_circle: *Datakit Smoke failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          if [ -f slack_message.md ]; then
+            TEXT=$(cat slack_message.md)
+          else
+            TEXT="$FALLBACK_TEXT"
+          fi
+          PAYLOAD=$(python3 -c "import sys,json; print(json.dumps({'text': sys.stdin.read()}))" <<< "$TEXT")
+          curl -sf -X POST -H 'Content-Type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL"
+
+      - name: Remove OS Login SSH key
+        if: always()
+        run: |
+          gcloud compute os-login ssh-keys remove \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --key-file ~/.ssh/google_compute_engine.pub || true
