@@ -19,9 +19,7 @@ jobs:
       cancel-in-progress: true
     env:
       SMOKE_RUN_ID: datakit-smoke-${{ github.run_id }}-${{ github.run_attempt }}
-      # TEMP bucket; assumes a 1-day TTL lifecycle rule is configured on the bucket.
-      SMOKE_OUTPUT_BUCKET: gs://marin-us-central2-temp/datakit-smoke
-      MARIN_PREFIX: gs://marin-us-central2-temp/datakit-smoke
+      # MARIN_PREFIX is defaulted by the ferry entrypoint to marin_temp_bucket(ttl_days=1).
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/examples/marin-dev.yaml
@@ -70,9 +68,8 @@ jobs:
         run: |
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
-            --memory=128G --disk=200G --cpu=16 --extra=cpu \
+            --memory=2G --disk=4G --cpu=1 --extra=cpu \
             -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
-            -e MARIN_PREFIX "$MARIN_PREFIX" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
@@ -119,8 +116,9 @@ jobs:
       - name: Validate datakit smoke outputs
         shell: bash -l {0}
         env:
-          SMOKE_OUTPUT_PREFIX: ${{ env.SMOKE_OUTPUT_BUCKET }}
           SMOKE_RUN_ID: ${{ env.SMOKE_RUN_ID }}
+          # MARIN_PREFIX intentionally unset — validate script defaults via marin_temp_bucket,
+          # matching the ferry entrypoint default.
         run: .venv/bin/python scripts/datakit/validate_smoke_outputs.py
 
       - name: Capture failure diagnostics
