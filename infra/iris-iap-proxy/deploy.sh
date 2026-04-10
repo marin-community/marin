@@ -137,7 +137,7 @@ gcloud run deploy "${SERVICE}" \
   --network="${VPC_NETWORK}" \
   --subnet="${VPC_SUBNET}" \
   --vpc-egress=private-ranges-only \
-  --set-env-vars="GCP_PROJECT=${PROJECT},CONTROLLER_ZONE=us-central1-a,CONTROLLER_LABEL=iris-marin-controller,CONTROLLER_PORT=10000,PROXY_TOKEN_SECRET=iris-iap-proxy-token,REQUIRE_IAP=true" \
+  --set-env-vars="GCP_PROJECT=${PROJECT},CONTROLLER_ZONE=us-central1-a,CONTROLLER_LABEL=iris-marin-controller,CONTROLLER_PORT=10000,PROXY_TOKEN_SECRET=iris-iap-proxy-token" \
   --timeout=300 \
   --memory=512Mi \
   --cpu=1 \

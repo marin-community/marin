@@ -1,13 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cloud Run reverse proxy for the Iris controller.
+"""Cloud Run reverse proxy for the Iris controller, protected by GCP IAP.
 
 All requests are forwarded to the controller VM discovered via GCE labels.
-When IAP is enabled, the proxy validates the ``X-Goog-IAP-JWT-Assertion``
-header for defense-in-depth.  When ``REQUIRE_IAP=false`` (the default),
-IAP validation is skipped and all requests are forwarded without auth —
-useful for initial testing before the LB + IAP stack is configured.
+The proxy validates the ``X-Goog-IAP-JWT-Assertion`` header on every request
+for defense-in-depth and extracts the caller's email for audit logging.
 """
 
 import logging
@@ -21,10 +19,9 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from discovery import get_controller_url
+from iap import IapValidationError, validate_iap_jwt
 
 logger = logging.getLogger(__name__)
-
-REQUIRE_IAP = os.environ.get("REQUIRE_IAP", "false").lower() in ("true", "1", "yes")
 
 _IRIS_TOKEN_HEADER = "x-iris-token"
 
@@ -122,15 +119,11 @@ def _build_upstream_headers(request: Request, iap_email: str | None) -> dict[str
 async def _proxy(request: Request) -> Response:
     """Forward any request to the controller."""
     iap_email: str | None = None
-
-    if REQUIRE_IAP:
-        from iap import IapValidationError, validate_iap_jwt
-
-        try:
-            iap_email = validate_iap_jwt(dict(request.headers))
-        except IapValidationError as exc:
-            logger.warning("IAP validation failed: %s", exc)
-            return JSONResponse({"error": str(exc)}, status_code=401)
+    try:
+        iap_email = validate_iap_jwt(dict(request.headers))
+    except IapValidationError as exc:
+        logger.warning("IAP validation failed: %s", exc)
+        return JSONResponse({"error": str(exc)}, status_code=401)
 
     client = await _get_client()
     path = request.url.path
