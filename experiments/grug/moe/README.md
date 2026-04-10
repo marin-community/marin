@@ -104,6 +104,8 @@ Changes can be promoted to this recipe when they demonstrate:
 2. **Lower projected c4_en BPB at 1e21 and 1e23 FLOPs**, using the scaling-law
    fit above (L∞ pinned at 1.6 for Paloma macro). Re-fit the power law on the
    candidate's ladder and compare projections head-to-head.
+3. **Low curvature around the minimum of each isoflop curve** — stable
+   behavior across under- and over-trained regimes.
 
 Most promotable changes will land in one of three files:
 
