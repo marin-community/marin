@@ -353,7 +353,12 @@ class DistributedConfig:
         from iris.cluster.client.job_info import get_job_info
         from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
 
-        if not self._is_distributed() and get_job_info() is not None:
+        job_info = get_job_info()
+        tpu_runtime_managed = os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get(
+            "JAX_PLATFORMS", ""
+        ).lower().startswith("tpu")
+
+        if job_info is not None and (not self._is_distributed() or tpu_runtime_managed):
             logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
             initialize_iris_jax()
             return

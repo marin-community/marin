@@ -47,3 +47,24 @@ def test_distributed_config_initializes_via_iris_when_iris_job_present(
 
     mock_initialize_iris_jax.assert_called_once_with()
     mock_jax_initialize.assert_not_called()
+
+
+@patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.initialize_jax")
+@patch("iris.cluster.client.job_info.get_job_info")
+@patch("levanter.distributed.DistributedConfig._is_distributed", return_value=True)
+def test_distributed_config_skips_manual_init_for_iris_tpu_jobs(
+    mock_is_distributed,
+    mock_get_job_info,
+    mock_initialize_iris_jax,
+    mock_jax_initialize,
+    monkeypatch,
+):
+    """Iris TPU jobs should defer distributed init to the TPU runtime."""
+    monkeypatch.setenv("PJRT_DEVICE", "TPU")
+    mock_get_job_info.return_value = object()
+
+    DistributedConfig().initialize()
+
+    mock_initialize_iris_jax.assert_called_once_with()
+    mock_jax_initialize.assert_not_called()
