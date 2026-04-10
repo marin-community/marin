@@ -30,14 +30,13 @@ from iris.cluster.controller.db import (
     task_row_is_finished,
 )
 from iris.cluster.controller.schema import (
+    JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     TASK_DETAIL_PROJECTION,
     WORKER_DETAIL_PROJECTION,
     EndpointRow,
     JobDetailRow,
     WorkerDetailRow,
-    proto_cache,
-    proto_decoder,
 )
 from iris.cluster.types import (
     JobName,
@@ -339,6 +338,151 @@ def _constraints_to_json(constraints: Iterable[job_pb2.Constraint]) -> str | Non
     return json.dumps(constraint_list) if constraint_list else None
 
 
+def _entrypoint_to_json(ep: job_pb2.RuntimeEntrypoint) -> str:
+    d: dict = {}
+    if ep.setup_commands:
+        d["setup_commands"] = list(ep.setup_commands)
+    if ep.HasField("run_command"):
+        d["run_command"] = {"argv": list(ep.run_command.argv)}
+    if ep.workdir_file_refs:
+        d["workdir_file_refs"] = dict(ep.workdir_file_refs)
+    return json.dumps(d)
+
+
+def _environment_to_json(env: job_pb2.EnvironmentConfig) -> str:
+    d: dict = {}
+    if env.pip_packages:
+        d["pip_packages"] = list(env.pip_packages)
+    if env.env_vars:
+        d["env_vars"] = dict(env.env_vars)
+    if env.extras:
+        d["extras"] = list(env.extras)
+    if env.python_version:
+        d["python_version"] = env.python_version
+    if env.dockerfile:
+        d["dockerfile"] = env.dockerfile
+    return json.dumps(d)
+
+
+def _reservation_to_json(request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+    if not request.HasField("reservation"):
+        return None
+    res = request.reservation
+    entries = []
+    for entry in res.entries:
+        e: dict = {}
+        if entry.HasField("resources"):
+            r = entry.resources
+            e["resources"] = {
+                "cpu_millicores": r.cpu_millicores,
+                "memory_bytes": r.memory_bytes,
+                "disk_bytes": r.disk_bytes,
+            }
+            if r.HasField("device"):
+                e["resources"]["device"] = json.loads(_device_to_json(r.device) or "{}")
+        if entry.constraints:
+            e["constraints"] = [_constraint_to_dict(c) for c in entry.constraints]
+        entries.append(e)
+    return json.dumps({"entries": entries})
+
+
+def _entrypoint_from_json(json_str: str) -> job_pb2.RuntimeEntrypoint:
+    d = json.loads(json_str)
+    ep = job_pb2.RuntimeEntrypoint()
+    for cmd in d.get("setup_commands", []):
+        ep.setup_commands.append(cmd)
+    if "run_command" in d:
+        ep.run_command.CopyFrom(job_pb2.CommandEntrypoint(argv=d["run_command"].get("argv", [])))
+    for k, v in d.get("workdir_file_refs", {}).items():
+        ep.workdir_file_refs[k] = v
+    return ep
+
+
+def _environment_from_json(json_str: str) -> job_pb2.EnvironmentConfig:
+    d = json.loads(json_str)
+    env = job_pb2.EnvironmentConfig()
+    for pkg in d.get("pip_packages", []):
+        env.pip_packages.append(pkg)
+    for k, v in d.get("env_vars", {}).items():
+        env.env_vars[k] = v
+    for extra in d.get("extras", []):
+        env.extras.append(extra)
+    if "python_version" in d:
+        env.python_version = d["python_version"]
+    if "dockerfile" in d:
+        env.dockerfile = d["dockerfile"]
+    return env
+
+
+def _resource_spec_from_row(cpu: int, mem: int, disk: int, device_json: str | None) -> job_pb2.ResourceSpecProto:
+    from iris.cluster.controller.service import _device_config_from_json
+
+    res = job_pb2.ResourceSpecProto(cpu_millicores=cpu, memory_bytes=mem, disk_bytes=disk)
+    if device_json:
+        res.device.CopyFrom(_device_config_from_json(device_json))
+    return res
+
+
+def _constraints_from_json(constraints_json: str | None) -> list[job_pb2.Constraint]:
+    if not constraints_json:
+        return []
+    items = json.loads(constraints_json)
+    result = []
+    for item in items:
+        c = job_pb2.Constraint(key=item["key"], op=item.get("op", 0))
+        if "value" in item:
+            v = item["value"]
+            if "string_value" in v:
+                c.value.string_value = v["string_value"]
+            elif "int_value" in v:
+                c.value.int_value = v["int_value"]
+            elif "float_value" in v:
+                c.value.float_value = v["float_value"]
+        if "values" in item:
+            for v in item["values"]:
+                av = job_pb2.AttributeValue()
+                if "string_value" in v:
+                    av.string_value = v["string_value"]
+                elif "int_value" in v:
+                    av.int_value = v["int_value"]
+                elif "float_value" in v:
+                    av.float_value = v["float_value"]
+                c.values.append(av)
+        if "mode" in item:
+            c.mode = item["mode"]
+        result.append(c)
+    return result
+
+
+def _ports_from_json(ports_json: str) -> list[str]:
+    """Deserialize ports JSON back to a list of port name strings."""
+    return json.loads(ports_json)
+
+
+def _reservation_entries_from_json(reservation_json: str | None) -> list[job_pb2.ReservationEntry]:
+    """Deserialize reservation_json back to a list of ReservationEntry protos."""
+    if not reservation_json:
+        return []
+    from iris.cluster.controller.service import _device_config_from_json
+
+    data = json.loads(reservation_json)
+    entries = []
+    for entry_data in data.get("entries", []):
+        entry = job_pb2.ReservationEntry()
+        if "resources" in entry_data:
+            r = entry_data["resources"]
+            entry.resources.cpu_millicores = r.get("cpu_millicores", 0)
+            entry.resources.memory_bytes = r.get("memory_bytes", 0)
+            entry.resources.disk_bytes = r.get("disk_bytes", 0)
+            if "device" in r:
+                entry.resources.device.CopyFrom(_device_config_from_json(json.dumps(r["device"])))
+        if "constraints" in entry_data:
+            for c in _constraints_from_json(json.dumps(entry_data["constraints"])):
+                entry.constraints.append(c)
+        entries.append(entry)
+    return entries
+
+
 def delete_task_endpoints(cur: TransactionCursor, task_id: str) -> None:
     """Remove all registered endpoints for a task."""
     cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id,))
@@ -522,9 +666,6 @@ def _terminate_task(
         _decommit_worker_resources(cur, worker_id, resources)
 
 
-_LAUNCH_JOB_DECODER = proto_decoder(controller_pb2.Controller.LaunchJobRequest)
-
-
 def _kill_non_terminal_tasks(
     cur: Any,
     job_id_wire: str,
@@ -535,9 +676,11 @@ def _kill_non_terminal_tasks(
     terminal_states = tuple(sorted(TERMINAL_TASK_STATES))
     placeholders = ",".join("?" * len(terminal_states))
     rows = cur.execute(
-        "SELECT t.task_id, t.current_attempt_id, t.current_worker_id, j.request_proto "
+        "SELECT t.task_id, t.current_attempt_id, t.current_worker_id, "
+        "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json "
         "FROM tasks t "
         "JOIN jobs j ON j.job_id = t.job_id "
+        f"{JOB_CONFIG_JOIN} "
         f"WHERE t.job_id = ? AND t.state NOT IN ({placeholders})",
         (job_id_wire, *terminal_states),
     ).fetchall()
@@ -549,8 +692,12 @@ def _kill_non_terminal_tasks(
         task_name = JobName.from_wire(task_id)
         resources = None
         if worker_id is not None:
-            req = proto_cache.get_or_decode(row["request_proto"], _LAUNCH_JOB_DECODER)
-            resources = req.resources
+            resources = _resource_spec_from_row(
+                int(row["res_cpu_millicores"]),
+                int(row["res_memory_bytes"]),
+                int(row["res_disk_bytes"]),
+                row["res_device_json"],
+            )
             task_kill_workers[task_name] = WorkerId(str(worker_id))
         _terminate_task(
             cur,
@@ -649,10 +796,10 @@ def _find_coscheduled_siblings(
     cur: Any,
     job_id: JobName,
     exclude_task_id: JobName,
-    job_req: "controller_pb2.Controller.LaunchJobRequest",
+    has_coscheduling: bool,
 ) -> list[_CoscheduledSibling]:
     """Find active siblings in a coscheduled job (read-only)."""
-    if not job_req.HasField("coscheduling"):
+    if not has_coscheduling:
         return []
     rows = cur.execute(
         "SELECT t.task_id, t.current_attempt_id, t.max_retries_preemption, "
@@ -682,7 +829,7 @@ def _terminate_coscheduled_siblings(
     cur: Any,
     siblings: Iterable[_CoscheduledSibling],
     failed_task_id: JobName,
-    job_req: "controller_pb2.Controller.LaunchJobRequest",
+    resources: "job_pb2.ResourceSpecProto",
     now_ms: int,
 ) -> tuple[set[JobName], dict[JobName, WorkerId]]:
     """Terminate coscheduled siblings and decommit their resources.
@@ -703,7 +850,7 @@ def _terminate_coscheduled_siblings(
             error,
             now_ms,
             worker_id=sib.worker_id,
-            resources=job_req.resources if sib.worker_id is not None else None,
+            resources=resources if sib.worker_id is not None else None,
             preemption_count=sib.max_retries_preemption + 1,
         )
         if sib.worker_id is not None:
@@ -718,13 +865,16 @@ def _resolve_preemption_policy(cur: Any, job_id: JobName) -> int:
 
     Defaults: single-task jobs → TERMINATE_CHILDREN, multi-task → PRESERVE_CHILDREN.
     """
-    row = cur.execute("SELECT request_proto FROM jobs WHERE job_id = ?", (job_id.to_wire(),)).fetchone()
+    row = cur.execute(
+        f"SELECT jc.preemption_policy, j.num_tasks FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
+        (job_id.to_wire(),),
+    ).fetchone()
     if row is None:
         return job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
-    req = proto_cache.get_or_decode(row["request_proto"], _LAUNCH_JOB_DECODER)
-    if req.preemption_policy != job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED:
-        return req.preemption_policy
-    if req.replicas <= 1:
+    policy = int(row["preemption_policy"])
+    if policy != job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED:
+        return policy
+    if int(row["num_tasks"]) <= 1:
         return job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
     return job_pb2.JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN
 
@@ -931,7 +1081,8 @@ class ControllerTransitions:
 
     def _recompute_job_state(self, cur: Any, job_id: JobName) -> int | None:
         row = cur.execute(
-            "SELECT request_proto, state, started_at_ms FROM jobs WHERE job_id = ?",
+            f"SELECT j.state, j.started_at_ms, jc.max_task_failures "
+            f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
             (job_id.to_wire(),),
         ).fetchone()
         if row is None:
@@ -939,8 +1090,7 @@ class ControllerTransitions:
         current_state = int(row["state"])
         if current_state in TERMINAL_JOB_STATES:
             return current_state
-        req = controller_pb2.Controller.LaunchJobRequest()
-        req.ParseFromString(row["request_proto"])
+        max_task_failures = int(row["max_task_failures"])
         counts_rows = cur.execute(
             "SELECT state, COUNT(*) AS c FROM tasks WHERE job_id = ? GROUP BY state",
             (job_id.to_wire(),),
@@ -951,7 +1101,7 @@ class ControllerTransitions:
         now_ms = Timestamp.now().epoch_ms()
         if total > 0 and counts.get(job_pb2.TASK_STATE_SUCCEEDED, 0) == total:
             new_state = job_pb2.JOB_STATE_SUCCEEDED
-        elif counts.get(job_pb2.TASK_STATE_FAILED, 0) > int(req.max_task_failures):
+        elif counts.get(job_pb2.TASK_STATE_FAILED, 0) > max_task_failures:
             new_state = job_pb2.JOB_STATE_FAILED
         elif counts.get(job_pb2.TASK_STATE_UNSCHEDULABLE, 0) > 0:
             new_state = job_pb2.JOB_STATE_UNSCHEDULABLE
@@ -1124,23 +1274,25 @@ class ControllerTransitions:
                 else None
             )
             max_failures = int(request.max_task_failures)
+            # Serialize dispatch config fields for job_config.
+            entrypoint_json = _entrypoint_to_json(request.entrypoint)
+            environment_json = _environment_to_json(request.environment)
+            ports_json = json.dumps(list(request.ports)) if request.ports else "[]"
+            reservation_json = _reservation_to_json(request)
+            timeout_ms: int | None = int(request.timeout.milliseconds) if request.timeout.milliseconds > 0 else None
+
             cur.execute(
                 "INSERT INTO jobs("
-                "job_id, user_id, parent_job_id, root_job_id, depth, request_proto, state, submitted_at_ms, "
+                "job_id, user_id, parent_job_id, root_job_id, depth, state, submitted_at_ms, "
                 "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
-                "error, exit_code, num_tasks, is_reservation_holder, has_reservation, name, "
-                "res_cpu_millicores, res_memory_bytes, res_disk_bytes, res_device_json, "
-                "constraints_json, has_coscheduling, coscheduling_group_by, "
-                "scheduling_timeout_ms, max_task_failures"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0, ?, ?, "
-                "?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "error, exit_code, num_tasks, is_reservation_holder"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0)",
                 (
                     job_id.to_wire(),
                     job_id.user,
                     parent_job_id,
                     job_id.root_job.to_wire(),
                     job_id.depth,
-                    request.SerializeToString(),
                     state,
                     effective_submission_ms,
                     root_submitted_ms,
@@ -1148,8 +1300,23 @@ class ControllerTransitions:
                     deadline_epoch_ms,
                     validation_error,
                     replicas,
-                    has_reservation,
+                ),
+            )
+            cur.execute(
+                "INSERT INTO job_config("
+                "job_id, name, has_reservation, "
+                "res_cpu_millicores, res_memory_bytes, res_disk_bytes, res_device_json, "
+                "constraints_json, has_coscheduling, coscheduling_group_by, "
+                "scheduling_timeout_ms, max_task_failures, "
+                "entrypoint_json, environment_json, bundle_id, ports_json, "
+                "max_retries_failure, max_retries_preemption, timeout_ms, "
+                "preemption_policy, existing_job_policy, priority_band, "
+                "task_image, reservation_json, fail_if_exists"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    job_id.to_wire(),
                     request.name,
+                    has_reservation,
                     res_cpu,
                     res_mem,
                     res_disk,
@@ -1159,8 +1326,29 @@ class ControllerTransitions:
                     cosched_group,
                     sched_timeout,
                     max_failures,
+                    entrypoint_json,
+                    environment_json,
+                    request.bundle_id,
+                    ports_json,
+                    int(request.max_retries_failure),
+                    int(request.max_retries_preemption),
+                    timeout_ms,
+                    int(request.preemption_policy),
+                    int(request.existing_job_policy),
+                    int(request.priority_band),
+                    request.task_image,
+                    reservation_json,
+                    1 if request.fail_if_exists else 0,
                 ),
             )
+
+            # Store workdir files in separate table.
+            if request.entrypoint.workdir_files:
+                for filename, data in request.entrypoint.workdir_files.items():
+                    cur.execute(
+                        "INSERT INTO job_workdir_files(job_id, filename, data) VALUES (?, ?, ?)",
+                        (job_id.to_wire(), filename, data),
+                    )
 
             if validation_error is None:
                 insertion_base = self._db.next_sequence("task_priority_insertion", cur=cur)
@@ -1213,15 +1401,11 @@ class ControllerTransitions:
                     holder_constraints_json = _constraints_to_json(holder_request.constraints)
                     cur.execute(
                         "INSERT INTO jobs("
-                        "job_id, user_id, parent_job_id, root_job_id, depth, request_proto, state, submitted_at_ms, "
+                        "job_id, user_id, parent_job_id, root_job_id, depth, state, submitted_at_ms, "
                         "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
-                        "error, exit_code, num_tasks, is_reservation_holder, name, "
-                        "res_cpu_millicores, res_memory_bytes, res_disk_bytes, res_device_json, "
-                        "constraints_json, has_coscheduling, coscheduling_group_by, "
-                        "scheduling_timeout_ms, max_task_failures"
+                        "error, exit_code, num_tasks, is_reservation_holder"
                         ") VALUES ("
-                        "?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, 1, ?, "
-                        "?, ?, ?, ?, ?, 0, '', NULL, 0"
+                        "?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, 1"
                         ")",
                         (
                             holder_id.to_wire(),
@@ -1229,17 +1413,39 @@ class ControllerTransitions:
                             job_id.to_wire(),
                             holder_id.root_job.to_wire(),
                             holder_id.depth,
-                            holder_request.SerializeToString(),
                             job_pb2.JOB_STATE_PENDING,
                             effective_submission_ms,
                             root_submitted_ms,
                             len(request.reservation.entries),
+                        ),
+                    )
+                    holder_entrypoint_json = _entrypoint_to_json(holder_request.entrypoint)
+                    holder_environment_json = _environment_to_json(holder_request.environment)
+                    cur.execute(
+                        "INSERT INTO job_config("
+                        "job_id, name, has_reservation, "
+                        "res_cpu_millicores, res_memory_bytes, res_disk_bytes, res_device_json, "
+                        "constraints_json, has_coscheduling, coscheduling_group_by, "
+                        "scheduling_timeout_ms, max_task_failures, "
+                        "entrypoint_json, environment_json, bundle_id, ports_json, "
+                        "max_retries_failure, max_retries_preemption, timeout_ms, "
+                        "preemption_policy, existing_job_policy, priority_band, "
+                        "task_image, reservation_json"
+                        ") VALUES ("
+                        "?, ?, 0, ?, ?, ?, ?, ?, 0, '', NULL, 0, "
+                        "?, ?, '', '[]', 0, ?, NULL, 0, 0, 0, '', NULL"
+                        ")",
+                        (
+                            holder_id.to_wire(),
                             holder_request.name,
                             holder_res_cpu,
                             holder_res_mem,
                             holder_res_disk,
                             holder_res_device,
                             holder_constraints_json,
+                            holder_entrypoint_json,
+                            holder_environment_json,
+                            DEFAULT_MAX_RETRIES_PREEMPTION,
                         ),
                     )
                     holder_base = self._db.next_sequence("task_priority_insertion", cur=cur)
@@ -1288,10 +1494,12 @@ class ControllerTransitions:
             subtree_ids = [str(row["job_id"]) for row in subtree]
             placeholders = ",".join("?" for _ in subtree_ids)
             running_rows = cur.execute(
-                f"SELECT t.task_id, t.current_worker_id AS worker_id, j.request_proto, "
-                f"j.is_reservation_holder "
+                f"SELECT t.task_id, t.current_worker_id AS worker_id, "
+                f"j.is_reservation_holder, "
+                f"jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json "
                 f"FROM tasks t "
                 f"JOIN jobs j ON j.job_id = t.job_id "
+                f"{JOB_CONFIG_JOIN} "
                 f"WHERE t.job_id IN ({placeholders}) "
                 "AND t.state IN (?, ?, ?)",
                 (
@@ -1314,8 +1522,13 @@ class ControllerTransitions:
             # Direct-provider tasks have NULL worker_id — skip decommit for them.
             for row in running_rows:
                 if row["worker_id"] is not None and not int(row["is_reservation_holder"]):
-                    job_req = proto_cache.get_or_decode(row["request_proto"], _LAUNCH_JOB_DECODER)
-                    _decommit_worker_resources(cur, str(row["worker_id"]), job_req.resources)
+                    resources = _resource_spec_from_row(
+                        int(row["res_cpu_millicores"]),
+                        int(row["res_memory_bytes"]),
+                        int(row["res_disk_bytes"]),
+                        row["res_device_json"],
+                    )
+                    _decommit_worker_resources(cur, str(row["worker_id"]), resources)
             now_ms = Timestamp.now().epoch_ms()
             task_terminal_placeholders = ",".join("?" for _ in TERMINAL_TASK_STATES)
             cur.execute(
@@ -1511,7 +1724,10 @@ class ControllerTransitions:
                     continue
                 job_id_wire = task.job_id.to_wire()
                 if job_id_wire not in job_cache:
-                    job_row = cur.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id_wire,)).fetchone()
+                    job_row = cur.execute(
+                        f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
+                        (job_id_wire,),
+                    ).fetchone()
                     if job_row is None:
                         rejected.append(assignment)
                         continue
@@ -1531,7 +1747,12 @@ class ControllerTransitions:
                     now_ms,
                 )
                 if not job.is_reservation_holder:
-                    resources = job.request.resources
+                    resources = _resource_spec_from_row(
+                        job.res_cpu_millicores,
+                        job.res_memory_bytes,
+                        job.res_disk_bytes,
+                        job.res_device_json,
+                    )
                     cur.execute(
                         "UPDATE workers SET committed_cpu_millicores = committed_cpu_millicores + ?, "
                         "committed_mem_bytes = committed_mem_bytes + ?, committed_gpu = committed_gpu + ?, "
@@ -1547,14 +1768,14 @@ class ControllerTransitions:
                     run_request = job_pb2.RunTaskRequest(
                         task_id=assignment.task_id.to_wire(),
                         num_tasks=job.num_tasks,
-                        entrypoint=job.request.entrypoint,
-                        environment=job.request.environment,
-                        bundle_id=job.request.bundle_id,
+                        entrypoint=_entrypoint_from_json(job.entrypoint_json),
+                        environment=_environment_from_json(job.environment_json),
+                        bundle_id=job.bundle_id,
                         resources=resources,
-                        ports=list(job.request.ports),
+                        ports=_ports_from_json(job.ports_json),
                         attempt_id=attempt_id,
-                        constraints=list(job.request.constraints),
-                        task_image=job.request.task_image,
+                        constraints=_constraints_from_json(job.constraints_json),
+                        task_image=job.task_image,
                     )
                     enqueue_run_dispatch(cur, str(assignment.worker_id), run_request.SerializeToString(), now_ms)
                     has_real_dispatch = True
@@ -1601,7 +1822,8 @@ class ControllerTransitions:
         task_kill_workers: dict[JobName, WorkerId] = {}
         cascaded_jobs: set[JobName] = set()
         jobs_to_recompute: set[JobName] = set()
-        job_req_cache: dict[str, controller_pb2.Controller.LaunchJobRequest | None] = {}
+        # Cache job_config rows keyed by job_id wire format.
+        job_config_cache: dict[str, dict | None] = {}
 
         for update in req.updates:
             task_row = cur.execute("SELECT * FROM tasks WHERE task_id = ?", (update.task_id.to_wire(),)).fetchone()
@@ -1768,28 +1990,38 @@ class ControllerTransitions:
                     ),
                 )
 
-            # Fetch and cache job request proto (avoids re-parsing per task in same job).
+            # Fetch and cache job_config row (avoids re-querying per task in same job).
             job_id_wire = task.job_id.to_wire()
-            if job_id_wire not in job_req_cache:
-                job_row = cur.execute("SELECT request_proto FROM jobs WHERE job_id = ?", (job_id_wire,)).fetchone()
-                if job_row is not None:
-                    job_req_cache[job_id_wire] = proto_cache.get_or_decode(job_row["request_proto"], _LAUNCH_JOB_DECODER)
-                else:
-                    job_req_cache[job_id_wire] = None
-            job_req = job_req_cache[job_id_wire]
+            if job_id_wire not in job_config_cache:
+                jc_row = cur.execute("SELECT * FROM job_config WHERE job_id = ?", (job_id_wire,)).fetchone()
+                job_config_cache[job_id_wire] = dict(jc_row) if jc_row is not None else None
+            jc = job_config_cache[job_id_wire]
 
             if worker_id is not None and task_state not in ACTIVE_TASK_STATES:
-                if job_req is not None:
-                    _decommit_worker_resources(cur, str(worker_id), job_req.resources)
+                if jc is not None:
+                    resources = _resource_spec_from_row(
+                        int(jc["res_cpu_millicores"]),
+                        int(jc["res_memory_bytes"]),
+                        int(jc["res_disk_bytes"]),
+                        jc.get("res_device_json"),
+                    )
+                    _decommit_worker_resources(cur, str(worker_id), resources)
 
             if update.new_state in TERMINAL_TASK_STATES:
                 delete_task_endpoints(cur, update.task_id.to_wire())
 
             # Coscheduled jobs: a terminal host failure should cascade to siblings.
-            if job_req is not None and task_state in FAILURE_TASK_STATES:
-                siblings = _find_coscheduled_siblings(cur, task.job_id, update.task_id, job_req)
+            if jc is not None and task_state in FAILURE_TASK_STATES:
+                has_cosched = bool(int(jc.get("has_coscheduling", 0)))
+                siblings = _find_coscheduled_siblings(cur, task.job_id, update.task_id, has_cosched)
+                resources = _resource_spec_from_row(
+                    int(jc["res_cpu_millicores"]),
+                    int(jc["res_memory_bytes"]),
+                    int(jc["res_disk_bytes"]),
+                    jc.get("res_device_json"),
+                )
                 cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
-                    cur, siblings, update.task_id, job_req, now_ms
+                    cur, siblings, update.task_id, resources, now_ms
                 )
                 tasks_to_kill.update(cascade_kill)
                 task_kill_workers.update(cascade_workers)
@@ -2211,8 +2443,9 @@ class ControllerTransitions:
         with self._db.transaction() as cur:
             row = cur.execute(
                 "SELECT t.task_id, t.job_id, t.state, t.current_attempt_id, "
-                "t.preemption_count, t.max_retries_preemption, j.request_proto "
-                "FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
+                "t.preemption_count, t.max_retries_preemption, "
+                "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json "
+                f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id {JOB_CONFIG_JOIN} "
                 "WHERE t.task_id = ?",
                 (task_id.to_wire(),),
             ).fetchone()
@@ -2238,9 +2471,12 @@ class ControllerTransitions:
             attempt_worker_id = str(attempt_row["worker_id"]) if attempt_row and attempt_row["worker_id"] else None
             attempt_resources = None
             if attempt_worker_id is not None:
-                job_req = controller_pb2.Controller.LaunchJobRequest()
-                job_req.ParseFromString(row["request_proto"])
-                attempt_resources = job_req.resources
+                attempt_resources = _resource_spec_from_row(
+                    int(row["res_cpu_millicores"]),
+                    int(row["res_memory_bytes"]),
+                    int(row["res_disk_bytes"]),
+                    row["res_device_json"],
+                )
 
             _terminate_task(
                 cur,
@@ -2299,15 +2535,17 @@ class ControllerTransitions:
             placeholders = ",".join("?" for _ in wires)
             rows = cur.execute(
                 f"SELECT t.task_id, t.job_id, t.current_worker_id AS worker_id, t.current_attempt_id, "
-                f"t.failure_count, j.request_proto, j.is_reservation_holder "
-                f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
+                f"t.failure_count, j.is_reservation_holder, "
+                f"jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
+                f"jc.has_coscheduling "
+                f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id {JOB_CONFIG_JOIN} "
                 f"WHERE t.task_id IN ({placeholders}) AND t.state IN (?, ?)",
                 (*wires, *EXECUTING_TASK_STATES),
             ).fetchall()
 
             # -- Phase 1: read all state before any mutations. --
             now_ms = Timestamp.now().epoch_ms()
-            job_req_cache: dict[str, controller_pb2.Controller.LaunchJobRequest] = {}
+            job_row_cache: dict[str, dict] = {}
             # Collect directly-timed-out task wires for dedup against siblings.
             direct_task_wires: set[str] = set()
             # Per-job list of siblings to cascade (collected across all timed-out tasks).
@@ -2317,11 +2555,11 @@ class ControllerTransitions:
                 task_id_wire = str(row["task_id"])
                 direct_task_wires.add(task_id_wire)
                 job_id_wire = str(row["job_id"])
-                if job_id_wire not in job_req_cache:
-                    job_req_cache[job_id_wire] = proto_cache.get_or_decode(row["request_proto"], _LAUNCH_JOB_DECODER)
-                job_req = job_req_cache[job_id_wire]
+                if job_id_wire not in job_row_cache:
+                    job_row_cache[job_id_wire] = dict(row)
+                has_cosched = bool(int(row["has_coscheduling"]))
                 tid = JobName.from_wire(task_id_wire)
-                siblings = _find_coscheduled_siblings(cur, JobName.from_wire(job_id_wire), tid, job_req)
+                siblings = _find_coscheduled_siblings(cur, JobName.from_wire(job_id_wire), tid, has_cosched)
                 if siblings:
                     existing = siblings_by_job.get(job_id_wire, [])
                     existing.extend(siblings)
@@ -2349,7 +2587,6 @@ class ControllerTransitions:
                 tid = JobName.from_wire(task_id_wire)
                 job_id_wire = str(row["job_id"])
                 worker_id_str = row["worker_id"]
-                job_req = job_req_cache[job_id_wire]
                 tasks_to_kill.add(tid)
                 decommit_worker = None
                 decommit_resources = None
@@ -2357,7 +2594,12 @@ class ControllerTransitions:
                     task_kill_workers[tid] = WorkerId(str(worker_id_str))
                     if not int(row["is_reservation_holder"]):
                         decommit_worker = str(worker_id_str)
-                        decommit_resources = job_req.resources
+                        decommit_resources = _resource_spec_from_row(
+                            int(row["res_cpu_millicores"]),
+                            int(row["res_memory_bytes"]),
+                            int(row["res_disk_bytes"]),
+                            row["res_device_json"],
+                        )
                 attempt_id = row["current_attempt_id"]
                 _terminate_task(
                     cur,
@@ -2376,11 +2618,17 @@ class ControllerTransitions:
             for job_id_wire, siblings in siblings_by_job.items():
                 if not siblings:
                     continue
-                job_req = job_req_cache[job_id_wire]
+                jc_row = job_row_cache[job_id_wire]
+                job_resources = _resource_spec_from_row(
+                    int(jc_row["res_cpu_millicores"]),
+                    int(jc_row["res_memory_bytes"]),
+                    int(jc_row["res_disk_bytes"]),
+                    jc_row.get("res_device_json"),
+                )
                 # Pick the first direct-timeout task in this job as the "cause" for the error message.
                 cause_tid = next(JobName.from_wire(str(r["task_id"])) for r in rows if str(r["job_id"]) == job_id_wire)
                 cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
-                    cur, siblings, cause_tid, job_req, now_ms
+                    cur, siblings, cause_tid, job_resources, now_ms
                 )
                 tasks_to_kill.update(cascade_kill)
                 task_kill_workers.update(cascade_workers)
@@ -3107,8 +3355,11 @@ class ControllerTransitions:
                 pending_rows = []
             else:
                 pending_rows = cur.execute(
-                    "SELECT t.task_id, t.current_attempt_id, j.request_proto, j.num_tasks, j.is_reservation_holder "
-                    "FROM tasks t JOIN jobs j ON j.job_id = t.job_id "
+                    "SELECT t.task_id, t.current_attempt_id, j.num_tasks, j.is_reservation_holder, "
+                    "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
+                    "jc.entrypoint_json, jc.environment_json, jc.bundle_id, jc.ports_json, "
+                    "jc.constraints_json, jc.task_image, jc.timeout_ms "
+                    f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id {JOB_CONFIG_JOIN} "
                     "WHERE t.state = ? AND j.is_reservation_holder = 0 "
                     "LIMIT ?",
                     (job_pb2.TASK_STATE_PENDING, max_promotions),
@@ -3117,27 +3368,31 @@ class ControllerTransitions:
             for row in pending_rows:
                 task_id = str(row["task_id"])
                 attempt_id = int(row["current_attempt_id"]) + 1
-                job_req = controller_pb2.Controller.LaunchJobRequest()
-                job_req.ParseFromString(row["request_proto"])
-                resources = job_req.resources
+                resources = _resource_spec_from_row(
+                    int(row["res_cpu_millicores"]),
+                    int(row["res_memory_bytes"]),
+                    int(row["res_disk_bytes"]),
+                    row["res_device_json"],
+                )
 
                 _assign_task(cur, task_id, None, None, attempt_id, now_ms)
 
                 run_req = job_pb2.RunTaskRequest(
                     task_id=task_id,
                     num_tasks=int(row["num_tasks"]),
-                    entrypoint=job_req.entrypoint,
-                    environment=job_req.environment,
-                    bundle_id=job_req.bundle_id,
+                    entrypoint=_entrypoint_from_json(str(row["entrypoint_json"])),
+                    environment=_environment_from_json(str(row["environment_json"])),
+                    bundle_id=str(row["bundle_id"]),
                     resources=resources,
-                    ports=list(job_req.ports),
+                    ports=_ports_from_json(str(row["ports_json"])),
                     attempt_id=attempt_id,
-                    constraints=list(job_req.constraints),
-                    task_image=job_req.task_image,
+                    constraints=_constraints_from_json(row["constraints_json"]),
+                    task_image=str(row["task_image"]),
                 )
                 # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
-                if job_req.timeout.milliseconds > 0:
-                    run_req.timeout.CopyFrom(job_req.timeout)
+                timeout_ms = row["timeout_ms"]
+                if timeout_ms is not None and int(timeout_ms) > 0:
+                    run_req.timeout.milliseconds = int(timeout_ms)
                 tasks_to_run.append(run_req)
                 newly_promoted.add(task_id)
 
@@ -3355,22 +3610,23 @@ class ControllerTransitions:
                             update.task_id.to_wire(),
                         ),
                     )
-                job_row = cur.execute(
-                    "SELECT request_proto FROM jobs WHERE job_id = ?", (task.job_id.to_wire(),)
-                ).fetchone()
-                job_req = None
-                if job_row is not None:
-                    job_req = controller_pb2.Controller.LaunchJobRequest()
-                    job_req.ParseFromString(job_row["request_proto"])
+                jc_row = cur.execute("SELECT * FROM job_config WHERE job_id = ?", (task.job_id.to_wire(),)).fetchone()
 
                 if update.new_state in TERMINAL_TASK_STATES:
                     delete_task_endpoints(cur, update.task_id.to_wire())
 
                 # Coscheduled sibling cascade.
-                if job_req is not None and task_state in FAILURE_TASK_STATES:
-                    siblings = _find_coscheduled_siblings(cur, task.job_id, update.task_id, job_req)
+                if jc_row is not None and task_state in FAILURE_TASK_STATES:
+                    has_cosched = bool(int(jc_row["has_coscheduling"]))
+                    siblings = _find_coscheduled_siblings(cur, task.job_id, update.task_id, has_cosched)
+                    job_resources = _resource_spec_from_row(
+                        int(jc_row["res_cpu_millicores"]),
+                        int(jc_row["res_memory_bytes"]),
+                        int(jc_row["res_disk_bytes"]),
+                        jc_row["res_device_json"],
+                    )
                     cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
-                        cur, siblings, update.task_id, job_req, now_ms
+                        cur, siblings, update.task_id, job_resources, now_ms
                     )
                     tasks_to_kill.update(cascade_kill)
                     task_kill_workers.update(cascade_workers)

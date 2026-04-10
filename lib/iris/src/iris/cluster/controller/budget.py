@@ -76,11 +76,11 @@ def compute_user_spend(snapshot: QuerySnapshot) -> dict[str, int]:
     """
     placeholders = ",".join("?" for _ in _ACTIVE_TASK_STATES)
     rows = snapshot.raw(
-        f"SELECT j.job_id, j.res_cpu_millicores, j.res_memory_bytes, j.res_device_json, "
+        f"SELECT jc.job_id, jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_device_json, "
         f"COUNT(*) as task_count "
-        f"FROM tasks t JOIN jobs j ON t.job_id = j.job_id "
+        f"FROM tasks t JOIN job_config jc ON t.job_id = jc.job_id "
         f"WHERE t.state IN ({placeholders}) "
-        f"GROUP BY j.job_id",
+        f"GROUP BY jc.job_id",
         tuple(_ACTIVE_TASK_STATES),
         decoders={"job_id": JobName.from_wire},
     )

@@ -101,7 +101,7 @@ def test_worker_scheduling_columns_exist_after_migrations(db: ControllerDB) -> N
 
 
 def test_job_scheduling_columns_exist_after_migrations(db: ControllerDB) -> None:
-    columns = {row[1] for row in db._conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    columns = {row[1] for row in db._conn.execute("PRAGMA table_info(job_config)").fetchall()}
     assert "res_cpu_millicores" in columns
     assert "res_memory_bytes" in columns
     assert "res_disk_bytes" in columns

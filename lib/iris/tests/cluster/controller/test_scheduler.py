@@ -48,11 +48,14 @@ from .conftest import (
 
 
 def _job_requirements_from_job(job) -> JobRequirements:
+    from iris.cluster.controller.service import _resource_spec_from_job_row
+    from iris.cluster.controller.transitions import _constraints_from_json
+
     return JobRequirements(
-        resources=job.request.resources,
-        constraints=list(job.request.constraints),
-        is_coscheduled=job.request.HasField("coscheduling"),
-        coscheduling_group_by=job.request.coscheduling.group_by if job.request.HasField("coscheduling") else None,
+        resources=_resource_spec_from_job_row(job),
+        constraints=_constraints_from_json(job.constraints_json),
+        is_coscheduled=job.has_coscheduling,
+        coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
     )
 
 

@@ -55,7 +55,16 @@ RESOURCE_COLUMNS = (
 CONSTRAINT_COLUMNS = (("constraints_json", "TEXT"),)
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+    return row is not None
+
+
 def migrate(conn: sqlite3.Connection) -> None:
+    # On fresh DBs, job_config already has these columns; skip adding to jobs.
+    if _table_exists(conn, "job_config"):
+        return
+
     for column, ddl in (*RESOURCE_COLUMNS, *CONSTRAINT_COLUMNS):
         if not _has_column(conn, "jobs", column):
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {ddl}")

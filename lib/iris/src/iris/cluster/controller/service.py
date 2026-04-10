@@ -65,6 +65,7 @@ from iris.cluster.controller.schema import (
     API_KEY_PROJECTION,
     ATTEMPT_PROJECTION,
     ENDPOINT_PROJECTION,
+    JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     JOB_ROW_PROJECTION,
     TASK_DETAIL_PROJECTION,
@@ -301,7 +302,10 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 def _read_job(db: ControllerDB, job_id: JobName) -> JobDetailRow | None:
     with db.read_snapshot() as q:
         return JOB_DETAIL_PROJECTION.decode_one(
-            q.fetchall("SELECT * FROM jobs j WHERE j.job_id = ?", (job_id.to_wire(),))
+            q.fetchall(
+                f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
+                (job_id.to_wire(),),
+            )
         )
 
 
@@ -367,6 +371,59 @@ def _snapshot_row_to_proto(row: Any) -> job_pb2.WorkerResourceSnapshot:
     if ts is not None:
         snap.timestamp.epoch_ms = ts
     return snap
+
+
+def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Controller.LaunchJobRequest:
+    """Reconstruct a LaunchJobRequest proto from native JobDetailRow columns."""
+    from iris.cluster.controller.transitions import (
+        _entrypoint_from_json,
+        _environment_from_json,
+        _constraints_from_json,
+        _ports_from_json,
+    )
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name=job.name,
+        bundle_id=job.bundle_id,
+        max_task_failures=job.max_task_failures,
+        max_retries_failure=job.max_retries_failure,
+        max_retries_preemption=job.max_retries_preemption,
+        replicas=job.num_tasks,
+        preemption_policy=job.preemption_policy,
+        existing_job_policy=job.existing_job_policy,
+        priority_band=job.priority_band,
+        task_image=job.task_image,
+    )
+    req.entrypoint.CopyFrom(_entrypoint_from_json(job.entrypoint_json))
+    req.environment.CopyFrom(_environment_from_json(job.environment_json))
+    req.resources.CopyFrom(_resource_spec_from_job_row(job))
+
+    for c in _constraints_from_json(job.constraints_json):
+        req.constraints.append(c)
+    for port in _ports_from_json(job.ports_json):
+        req.ports.append(port)
+
+    if job.has_coscheduling:
+        req.coscheduling.CopyFrom(job_pb2.CoschedulingConfig(group_by=job.coscheduling_group_by))
+
+    if job.scheduling_timeout_ms is not None and job.scheduling_timeout_ms > 0:
+        req.scheduling_timeout.milliseconds = job.scheduling_timeout_ms
+
+    if job.timeout_ms is not None and job.timeout_ms > 0:
+        req.timeout.milliseconds = job.timeout_ms
+
+    if job.reservation_json:
+        _populate_reservation_from_json(req, job.reservation_json)
+
+    return req
+
+
+def _populate_reservation_from_json(req: controller_pb2.Controller.LaunchJobRequest, reservation_json: str) -> None:
+    """Populate the reservation field on a LaunchJobRequest from JSON."""
+    from iris.cluster.controller.transitions import _reservation_entries_from_json
+
+    for entry in _reservation_entries_from_json(reservation_json):
+        req.reservation.entries.append(entry)
 
 
 def _resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
@@ -523,7 +580,7 @@ _STATE_SORT_EXPR = (
 
 _SORT_FIELD_TO_SQL: dict[int, str] = {
     controller_pb2.Controller.JOB_SORT_FIELD_DATE: "j.submitted_at_ms",
-    controller_pb2.Controller.JOB_SORT_FIELD_NAME: "j.name",
+    controller_pb2.Controller.JOB_SORT_FIELD_NAME: "jc.name",
     controller_pb2.Controller.JOB_SORT_FIELD_STATE: _STATE_SORT_EXPR,
     controller_pb2.Controller.JOB_SORT_FIELD_FAILURES: "agg_failures",
     controller_pb2.Controller.JOB_SORT_FIELD_PREEMPTIONS: "agg_preemptions",
@@ -583,7 +640,7 @@ def _query_jobs(
     params.extend(state_ids)
 
     if query.name_filter:
-        conditions.append("LOWER(j.name) LIKE ?")
+        conditions.append("LOWER(jc.name) LIKE ?")
         params.append(f"%{query.name_filter.lower()}%")
 
     where_clause = " AND ".join(conditions)
@@ -599,7 +656,7 @@ def _query_jobs(
     direction = "DESC" if sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC else "ASC"
     order_expr = _SORT_FIELD_TO_SQL.get(sort_field, "j.submitted_at_ms")
 
-    count_sql = f"SELECT COUNT(*) FROM jobs j WHERE {where_clause}"
+    count_sql = f"SELECT COUNT(*) FROM jobs j {JOB_CONFIG_JOIN} WHERE {where_clause}"
 
     # Only join tasks when sorting by failure/preemption aggregates.
     # The common case (sort by date, name, state) skips the expensive LEFT JOIN + GROUP BY.
@@ -613,7 +670,7 @@ def _query_jobs(
             SELECT {JOB_ROW_PROJECTION.select_clause()},
                    COALESCE(SUM(t.failure_count), 0) AS agg_failures,
                    COALESCE(SUM(t.preemption_count), 0) AS agg_preemptions
-            FROM jobs j
+            FROM jobs j {JOB_CONFIG_JOIN}
             LEFT JOIN tasks t ON j.job_id = t.job_id
             WHERE {where_clause}
             GROUP BY j.job_id
@@ -622,7 +679,7 @@ def _query_jobs(
     else:
         select_sql = f"""
             SELECT {JOB_ROW_PROJECTION.select_clause()}
-            FROM jobs j
+            FROM jobs j {JOB_CONFIG_JOIN}
             WHERE {where_clause}
             ORDER BY {order_expr} {direction}
         """
@@ -778,7 +835,8 @@ def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetailRow]:
     with db.read_snapshot() as q:
         return JOB_DETAIL_PROJECTION.decode(
             q.fetchall(
-                "SELECT * FROM jobs j WHERE j.job_id >= ? AND j.job_id < ?",
+                f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} FROM jobs j {JOB_CONFIG_JOIN} "
+                f"WHERE j.job_id >= ? AND j.job_id < ?",
                 (prefix, upper),
             ),
         )
@@ -1159,6 +1217,8 @@ class ControllerServiceImpl:
                 scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
                 pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
+        resources = _resource_spec_from_job_row(job)
+
         proto_job_status = job_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
             state=job.state,
@@ -1166,14 +1226,13 @@ class ControllerServiceImpl:
             exit_code=job.exit_code or 0,
             failure_count=summary.failure_count if summary else 0,
             preemption_count=summary.preemption_count if summary else 0,
-            name=job.request.name if job.request else "",
+            name=job.name,
             pending_reason=pending_reason,
             task_state_counts=task_state_counts,
             task_count=summary.task_count if summary else 0,
             completed_count=summary.completed_count if summary else 0,
+            resources=resources,
         )
-        if job.request:
-            proto_job_status.resources.CopyFrom(job.request.resources)
         if job.started_at:
             proto_job_status.started_at.CopyFrom(timestamp_to_proto(job.started_at))
         if job.finished_at:
@@ -1211,9 +1270,10 @@ class ControllerServiceImpl:
                 memory_peak_mb=row.max_peak_mem,
             )
 
+        reconstructed_request = _reconstruct_launch_job_request(job)
         return controller_pb2.Controller.GetJobStatusResponse(
             job=proto_job_status,
-            request=redact_request_env_vars(job.request) if job.request else None,
+            request=redact_request_env_vars(reconstructed_request),
             resource_min=resource_min,
             resource_max=resource_max,
         )
@@ -2354,22 +2414,22 @@ class ControllerServiceImpl:
                 ),
             )
         pending_tasks = [t for t in task_rows if task_row_can_be_scheduled(t)]
-        # Batch-fetch request protos for resource values
+        # Batch-fetch resource spec columns for resource values
         job_ids = {t.job_id for t in pending_tasks}
-        job_requests: dict[JobName, controller_pb2.Controller.LaunchJobRequest] = {}
+        job_resources: dict[JobName, job_pb2.ResourceSpecProto] = {}
         if job_ids:
             wires = [jid.to_wire() for jid in job_ids]
             placeholders = ",".join("?" for _ in wires)
             with self._db.read_snapshot() as snap:
                 rows = snap.raw(
-                    f"SELECT job_id, request_proto FROM jobs WHERE job_id IN ({placeholders})",
+                    f"SELECT jc.job_id, jc.res_cpu_millicores, jc.res_memory_bytes, "
+                    f"jc.res_disk_bytes, jc.res_device_json "
+                    f"FROM job_config jc WHERE jc.job_id IN ({placeholders})",
                     tuple(wires),
                     decoders={"job_id": JobName.from_wire},
                 )
             for row in rows:
-                req = controller_pb2.Controller.LaunchJobRequest()
-                req.ParseFromString(row.request_proto)
-                job_requests[row.job_id] = req
+                job_resources[row.job_id] = _resource_spec_from_job_row(row)
 
         # Group by effective band, interleaving by user within each band
         BAND_ORDER = [
@@ -2399,10 +2459,9 @@ class ControllerServiceImpl:
             entries: list[controller_pb2.Controller.SchedulerTaskEntry] = []
             for task_and_band in interleaved[:MAX_TASKS_PER_BAND]:
                 task, eff_band = task_and_band
-                req = job_requests.get(task.job_id)
+                res = job_resources.get(task.job_id)
                 rv = 0
-                if req is not None:
-                    res = req.resources
+                if res is not None:
                     accel = get_gpu_count(res.device) + get_tpu_count(res.device)
                     rv = resource_value(res.cpu_millicores, res.memory_bytes, accel)
                 entries.append(
@@ -2449,9 +2508,11 @@ class ControllerServiceImpl:
         # Inline _get_running_tasks_with_band_and_value logic to avoid circular import
         with self._db.read_snapshot() as snap:
             running_rows = snap.raw(
-                "SELECT t.task_id, t.priority_band, t.current_worker_id AS worker_id, j.request_proto "
+                "SELECT t.task_id, t.priority_band, t.current_worker_id AS worker_id, "
+                "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, "
+                "jc.res_device_json, jc.has_coscheduling "
                 "FROM tasks t "
-                "JOIN jobs j ON j.job_id = t.job_id "
+                "JOIN job_config jc ON jc.job_id = t.job_id "
                 "WHERE t.state = ? AND t.current_worker_id IS NOT NULL",
                 (job_pb2.TASK_STATE_RUNNING,),
                 decoders={
@@ -2462,13 +2523,11 @@ class ControllerServiceImpl:
             )
         running_protos: list[controller_pb2.Controller.SchedulerRunningTask] = []
         for row in running_rows:
-            request = controller_pb2.Controller.LaunchJobRequest()
-            request.ParseFromString(row.request_proto)
+            res = _resource_spec_from_job_row(row)
             eff_band = compute_effective_band(row.priority_band, row.task_id.user, user_spend, budget_limits)
-            res = request.resources
             accel = get_gpu_count(res.device) + get_tpu_count(res.device)
             rv = resource_value(res.cpu_millicores, res.memory_bytes, accel)
-            is_cosched = request.HasField("coscheduling")
+            is_cosched = bool(row.has_coscheduling)
             preemptible_by: list[int] = []
             preemptible = False
             if not is_cosched:

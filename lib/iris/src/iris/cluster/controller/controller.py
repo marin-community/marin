@@ -48,6 +48,7 @@ from iris.cluster.controller.db import (
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
+    JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     JOB_SCHEDULING_PROJECTION,
     TASK_DETAIL_PROJECTION,
@@ -95,6 +96,7 @@ from iris.cluster.controller.transitions import (
     HeartbeatAction,
     ReservationClaim,
     SchedulingEvent,
+    _reservation_entries_from_json,
 )
 from iris.cluster.log_store import CONTROLLER_LOG_KEY, LogStoreHandler
 from iris.log_server.server import LogServiceImpl
@@ -470,7 +472,7 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
     with queries.read_snapshot() as snapshot:
         jobs = JOB_SCHEDULING_PROJECTION.decode(
             snapshot.fetchall(
-                f"SELECT {JOB_SCHEDULING_PROJECTION.select_clause()} FROM jobs j WHERE j.job_id IN ({placeholders})",
+                f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id IN ({placeholders})",
                 tuple(wires),
             ),
         )
@@ -480,13 +482,13 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
 def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobDetailRow]:
     """Fetch only jobs that have reservations, filtering at the SQL level.
 
-    Uses the denormalized has_reservation column to avoid deserializing
-    request_proto for all active jobs.
+    Uses the has_reservation column in job_config to filter efficiently.
     """
     placeholders = ",".join("?" for _ in states)
     with queries.read_snapshot() as snapshot:
         rows = snapshot._fetchall(
-            f"SELECT * FROM jobs WHERE state IN ({placeholders}) AND has_reservation = 1",
+            f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} "
+            f"WHERE j.state IN ({placeholders}) AND jc.has_reservation = 1",
             list(states),
         )
     return JOB_DETAIL_PROJECTION.decode(rows)
@@ -507,10 +509,10 @@ def _get_running_tasks_with_band_and_value(
     with db.read_snapshot() as q:
         rows = q.raw(
             "SELECT t.task_id, t.priority_band, t.current_worker_id AS worker_id, "
-            "j.res_cpu_millicores, j.res_memory_bytes, j.res_disk_bytes, j.res_device_json, "
-            "j.has_coscheduling "
+            "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
+            "jc.has_coscheduling "
             "FROM tasks t "
-            "JOIN jobs j ON j.job_id = t.job_id "
+            "JOIN job_config jc ON jc.job_id = t.job_id "
             "WHERE t.state = ? AND t.current_worker_id IS NOT NULL",
             (job_pb2.TASK_STATE_RUNNING,),
             decoders={
@@ -804,13 +806,13 @@ def _find_reservation_ancestor(queries: ControllerDB, job_id: JobName) -> JobNam
     """Walk up the job hierarchy to find the nearest ancestor with a reservation.
 
     Returns the ancestor's JobName, or None if no ancestor has a reservation.
-    Uses the denormalized has_reservation column to avoid decoding request_proto.
+    Uses the has_reservation column in job_config.
     """
     current = job_id.parent
     with queries.read_snapshot() as q:
         while current is not None:
             row = q.execute_sql(
-                "SELECT has_reservation FROM jobs WHERE job_id = ?",
+                "SELECT jc.has_reservation FROM job_config jc WHERE jc.job_id = ?",
                 (current.to_wire(),),
             ).fetchone()
             if row is not None and row[0]:
@@ -1571,18 +1573,18 @@ class Controller:
         return sum(1 for c in claims.values() if c.job_id == job_id_wire)
 
     def _reservation_entry_count(self, job_id: JobName) -> int:
-        """Get the number of reservation entries for a job by decoding request_proto.
+        """Get the number of reservation entries for a job from job_config.
 
-        Only called for the rare jobs that have reservations; the proto decode
-        cost is negligible compared to the worker claim logic.
+        Only called for the rare jobs that have reservations.
         """
         with self._db.read_snapshot() as q:
-            row = q.fetchone("SELECT request_proto FROM jobs WHERE job_id = ?", (job_id.to_wire(),))
-        if row is None:
+            row = q.fetchone("SELECT reservation_json FROM job_config WHERE job_id = ?", (job_id.to_wire(),))
+        if row is None or row[0] is None:
             return 0
-        req = controller_pb2.Controller.LaunchJobRequest()
-        req.ParseFromString(row[0])
-        return len(req.reservation.entries) if req.HasField("reservation") else 0
+        import json
+
+        data = json.loads(row[0])
+        return len(data.get("entries", []))
 
     def _cleanup_stale_claims(self, claims: dict[WorkerId, ReservationClaim] | None = None) -> bool:
         """Remove claims for workers that disappeared or jobs that finished."""
@@ -1635,7 +1637,7 @@ class Controller:
         reservation_jobs = _jobs_with_reservations(self._db, reservable_states)
         for job in reservation_jobs:
             job_wire = job.job_id.to_wire()
-            for idx, res_entry in enumerate(job.request.reservation.entries):
+            for idx, res_entry in enumerate(_reservation_entries_from_json(job.reservation_json)):
                 if (job_wire, idx) in claimed_entries:
                     continue
 

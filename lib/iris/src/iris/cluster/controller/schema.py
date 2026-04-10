@@ -19,7 +19,6 @@ from typing import Any, Generic, TypeVar
 
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
 from rigging.timing import Timestamp
 
 T = TypeVar("T")
@@ -336,6 +335,7 @@ class Projection(Generic[T]):
         *,
         extra_fields: tuple[ExtraField, ...] = (),
         row_cls: type | None = None,
+        column_aliases: tuple[str, ...] | None = None,
     ):
         self.table = table
         self.columns = columns
@@ -378,7 +378,14 @@ class Projection(Generic[T]):
             self._row_cls = _make_row_class(f"{table.name}_projection", columns, extra_fields)
 
         # Pre-compute SELECT column strings (aliased and bare).
-        self._select_aliased: str = ", ".join(f"{table.alias}.{c.name}" for c in columns)
+        # When column_aliases is provided, each column uses its own table alias
+        # (needed for cross-table projections like jobs JOIN job_config).
+        if column_aliases is not None:
+            self._select_aliased: str = ", ".join(
+                f"{alias}.{c.name}" for alias, c in zip(column_aliases, columns, strict=True)
+            )
+        else:
+            self._select_aliased: str = ", ".join(f"{table.alias}.{c.name}" for c in columns)
         self._select_bare: str = ", ".join(c.name for c in columns)
 
         # Pre-compute effective decoders: wrap cached fields through the global proto cache.
@@ -553,16 +560,6 @@ JOBS = Table(
         ),
         Column("root_job_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
         Column("depth", "INTEGER", "NOT NULL", python_type=int, decoder=int, default=0),
-        Column(
-            "request_proto",
-            "BLOB",
-            "NOT NULL",
-            python_name="request",
-            python_type=controller_pb2.Controller.LaunchJobRequest,
-            decoder=proto_decoder(controller_pb2.Controller.LaunchJobRequest),
-            expensive=True,
-            cached=True,
-        ),
         Column("state", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column(
             "submitted_at_ms",
@@ -607,19 +604,43 @@ JOBS = Table(
             python_type=bool,
             decoder=_decode_bool_int,
         ),
-        # Migration 0008
+    ),
+    indexes=(
+        "CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_job_id)",
+        # Migration 0007
+        "CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state, submitted_at_ms DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_depth_state ON jobs(depth, state, submitted_at_ms DESC)",
+        # Migration 0009
+        "CREATE INDEX IF NOT EXISTS idx_jobs_user_state ON jobs(user_id, state)",
+        # Migration 0010_dashboard
+        "CREATE INDEX IF NOT EXISTS idx_jobs_root_depth ON jobs(root_job_id, depth)",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_depth_submitted ON jobs(depth, submitted_at_ms DESC)",
+    ),
+)
+
+JOB_CONFIG = Table(
+    "job_config",
+    "jc",
+    columns=(
+        Column(
+            "job_id",
+            "TEXT",
+            "PRIMARY KEY REFERENCES jobs(job_id) ON DELETE CASCADE",
+            python_type=JobName,
+            decoder=JobName.from_wire,
+        ),
         Column("name", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
-        # Migration 0013
         Column(
             "has_reservation", "INTEGER", "NOT NULL DEFAULT 0", python_type=bool, decoder=_decode_bool_int, default=False
         ),
-        # Migration 0027 (was resources_proto BLOB in 0017)
+        # Resource spec (was resources_proto)
         Column("res_cpu_millicores", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("res_memory_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("res_disk_bytes", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("res_device_json", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
-        # Migration 0027 (was constraints_proto BLOB in 0017)
+        # Constraints (was constraints_proto)
         Column("constraints_json", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
+        # Coscheduling
         Column(
             "has_coscheduling",
             "INTEGER",
@@ -629,24 +650,53 @@ JOBS = Table(
             default=False,
         ),
         Column("coscheduling_group_by", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        # Scheduling config
         Column("scheduling_timeout_ms", "INTEGER", "", python_type=int | None, decoder=_nullable(int), default=None),
         Column("max_task_failures", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        # Dispatch config (was in request_proto)
+        Column("entrypoint_json", "TEXT", "NOT NULL DEFAULT '{}'", python_type=str, decoder=str, default="{}"),
+        Column("environment_json", "TEXT", "NOT NULL DEFAULT '{}'", python_type=str, decoder=str, default="{}"),
+        Column("bundle_id", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("ports_json", "TEXT", "NOT NULL DEFAULT '[]'", python_type=str, decoder=str, default="[]"),
+        Column("max_retries_failure", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("max_retries_preemption", "INTEGER", "NOT NULL DEFAULT 100", python_type=int, decoder=int, default=100),
+        Column("timeout_ms", "INTEGER", "", python_type=int | None, decoder=_nullable(int), default=None),
+        Column("preemption_policy", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("existing_job_policy", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("priority_band", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
+        Column("task_image", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column("reservation_json", "TEXT", "", python_type=str | None, decoder=_nullable(str), default=None),
+        Column(
+            "fail_if_exists",
+            "INTEGER",
+            "NOT NULL DEFAULT 0",
+            python_type=bool,
+            decoder=_decode_bool_int,
+            default=False,
+        ),
     ),
     indexes=(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_job_id)",
-        # Migration 0007
-        "CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state, submitted_at_ms DESC)",
-        "CREATE INDEX IF NOT EXISTS idx_jobs_depth_state ON jobs(depth, state, submitted_at_ms DESC)",
-        # Migration 0008
-        "CREATE INDEX IF NOT EXISTS idx_jobs_name ON jobs(name)",
-        # Migration 0009
-        "CREATE INDEX IF NOT EXISTS idx_jobs_user_state ON jobs(user_id, state)",
-        # Migration 0010_dashboard
-        "CREATE INDEX IF NOT EXISTS idx_jobs_root_depth ON jobs(root_job_id, depth)",
-        "CREATE INDEX IF NOT EXISTS idx_jobs_depth_submitted ON jobs(depth, submitted_at_ms DESC)",
-        # Migration 0013
-        "CREATE INDEX IF NOT EXISTS idx_jobs_has_reservation ON jobs(has_reservation, state) WHERE has_reservation = 1",
+        "CREATE INDEX IF NOT EXISTS idx_job_config_name ON job_config(name)",
+        "CREATE INDEX IF NOT EXISTS idx_job_config_has_reservation"
+        " ON job_config(has_reservation, job_id) WHERE has_reservation = 1",
     ),
+)
+
+JOB_WORKDIR_FILES = Table(
+    "job_workdir_files",
+    "jwf",
+    columns=(
+        Column(
+            "job_id",
+            "TEXT",
+            "NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE",
+            python_type=JobName,
+            decoder=JobName.from_wire,
+        ),
+        Column("filename", "TEXT", "NOT NULL", python_type=str, decoder=str),
+        Column("data", "BLOB", "NOT NULL", expensive=True),
+    ),
+    table_constraints=("PRIMARY KEY (job_id, filename)",),
 )
 
 TASKS = Table(
@@ -1356,6 +1406,8 @@ MAIN_TABLES: tuple[Table, ...] = (
     META,
     USERS,
     JOBS,
+    JOB_CONFIG,
+    JOB_WORKDIR_FILES,
     TASKS,
     TASK_ATTEMPTS,
     WORKERS,
@@ -1393,7 +1445,7 @@ PROFILES_TABLES: tuple[Table, ...] = (TASK_PROFILES,)
 
 @dataclass(frozen=True, slots=True)
 class JobRow:
-    """Lightweight job row for listings."""
+    """Lightweight job row for listings (jobs JOIN job_config, excludes constraints)."""
 
     job_id: JobName
     state: int
@@ -1421,7 +1473,7 @@ class JobRow:
 
 @dataclass(frozen=True, slots=True)
 class JobSchedulingRow:
-    """Full job row for scheduling — adds constraints_json over JobRow."""
+    """Full job row for scheduling — adds constraints over JobRow."""
 
     job_id: JobName
     state: int
@@ -1450,7 +1502,7 @@ class JobSchedulingRow:
 
 @dataclass(frozen=True, slots=True)
 class JobDetailRow:
-    """Full job detail — superset of JobSchedulingRow, adds request_proto."""
+    """Full job detail — superset of JobSchedulingRow, adds dispatch config from job_config."""
 
     job_id: JobName
     state: int
@@ -1475,7 +1527,18 @@ class JobDetailRow:
     coscheduling_group_by: str
     scheduling_timeout_ms: int | None
     max_task_failures: int
-    request: controller_pb2.Controller.LaunchJobRequest
+    entrypoint_json: str
+    environment_json: str
+    bundle_id: str
+    ports_json: str
+    max_retries_failure: int
+    max_retries_preemption: int
+    timeout_ms: int | None
+    preemption_policy: int
+    existing_job_policy: int
+    priority_band: int
+    task_image: str
+    reservation_json: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1659,8 +1722,33 @@ class UserBudgetRow:
 # Projections -- typed column subsets that replace hand-maintained column strings
 # ---------------------------------------------------------------------------
 
-# Lightweight job row for listings (excludes constraints_proto blob).
-JOB_ROW_PROJECTION = JOBS.projection(
+
+def _job_columns(*names: str) -> tuple[tuple[Column, ...], tuple[str, ...]]:
+    """Look up Column objects from JOBS or JOB_CONFIG by name.
+
+    Returns ``(columns, aliases)`` where each alias is the table alias
+    (``j`` or ``jc``) that the column belongs to.  This lets Projection
+    generate correct ``alias.col`` qualifiers for cross-table queries.
+    """
+    cols: list[Column] = []
+    aliases: list[str] = []
+    for n in names:
+        if n in JOBS._column_map:
+            cols.append(JOBS._column_map[n])
+            aliases.append(JOBS.alias)
+        elif n in JOB_CONFIG._column_map:
+            cols.append(JOB_CONFIG._column_map[n])
+            aliases.append(JOB_CONFIG.alias)
+        else:
+            raise KeyError(f"Unknown job column: {n!r}")
+    return tuple(cols), tuple(aliases)
+
+
+# SQL for job queries that need config: JOIN job_config jc ON jc.job_id = j.job_id
+JOB_CONFIG_JOIN = "JOIN job_config jc ON jc.job_id = j.job_id"
+
+# Lightweight job row for listings (excludes constraints).
+_job_row_cols, _job_row_aliases = _job_columns(
     "job_id",
     "state",
     "submitted_at_ms",
@@ -1683,11 +1771,16 @@ JOB_ROW_PROJECTION = JOBS.projection(
     "coscheduling_group_by",
     "scheduling_timeout_ms",
     "max_task_failures",
+)
+JOB_ROW_PROJECTION = Projection(
+    JOBS,
+    _job_row_cols,
     row_cls=JobRow,
+    column_aliases=_job_row_aliases,
 )
 
 # Full job row for scheduling (includes constraints).
-JOB_SCHEDULING_PROJECTION = JOBS.projection(
+_job_sched_cols, _job_sched_aliases = _job_columns(
     "job_id",
     "state",
     "submitted_at_ms",
@@ -1711,7 +1804,12 @@ JOB_SCHEDULING_PROJECTION = JOBS.projection(
     "coscheduling_group_by",
     "scheduling_timeout_ms",
     "max_task_failures",
+)
+JOB_SCHEDULING_PROJECTION = Projection(
+    JOBS,
+    _job_sched_cols,
     row_cls=JobSchedulingRow,
+    column_aliases=_job_sched_aliases,
 )
 
 # Worker row for scheduling and health checks.
@@ -1761,8 +1859,8 @@ TASK_ROW_PROJECTION = TASKS.projection(
 # Detail / full-entity projections
 # ---------------------------------------------------------------------------
 
-# Full job detail — superset of JobSchedulingRow, adds request_proto.
-JOB_DETAIL_PROJECTION = JOBS.projection(
+# Full job detail — superset of JobSchedulingRow, adds dispatch config.
+_job_detail_cols, _job_detail_aliases = _job_columns(
     "job_id",
     "state",
     "submitted_at_ms",
@@ -1786,8 +1884,24 @@ JOB_DETAIL_PROJECTION = JOBS.projection(
     "coscheduling_group_by",
     "scheduling_timeout_ms",
     "max_task_failures",
-    "request_proto",
+    "entrypoint_json",
+    "environment_json",
+    "bundle_id",
+    "ports_json",
+    "max_retries_failure",
+    "max_retries_preemption",
+    "timeout_ms",
+    "preemption_policy",
+    "existing_job_policy",
+    "priority_band",
+    "task_image",
+    "reservation_json",
+)
+JOB_DETAIL_PROJECTION = Projection(
+    JOBS,
+    _job_detail_cols,
     row_cls=JobDetailRow,
+    column_aliases=_job_detail_aliases,
 )
 
 # Full task detail — superset of TaskRow, adds diagnostics and attempts.

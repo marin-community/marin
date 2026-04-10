@@ -9,7 +9,16 @@ def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return column in columns
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+    return row is not None
+
+
 def migrate(conn: sqlite3.Connection) -> None:
+    # On fresh DBs, job_config already has these columns; skip adding to jobs.
+    if _table_exists(conn, "job_config"):
+        return
+
     columns_to_add = (
         ("resources_proto", "BLOB"),
         ("constraints_proto", "BLOB"),
@@ -24,6 +33,8 @@ def migrate(conn: sqlite3.Connection) -> None:
 
     if not _has_column(conn, "jobs", "resources_proto"):
         return  # Column already removed by later migration; backfill not needed.
+    if not _has_column(conn, "jobs", "request_proto"):
+        return  # Column already removed by 0028; backfill not needed.
 
     from iris.rpc import job_pb2
     from iris.rpc import controller_pb2

@@ -1166,7 +1166,7 @@ def test_taint_exemption_for_children_of_reservation_job():
         job_detail = _query_job(ctrl.state, task.job_id)
         if job_row and not job_is_finished(job_row.state):
             jobs[task.job_id] = job_requirements_from_job(job_row)
-            if job_detail and job_detail.request.HasField("reservation"):
+            if job_detail and job_detail.reservation_json is not None:
                 has_reservation.add(task.job_id)
             elif _find_reservation_ancestor(ctrl._db, task.job_id) is not None:
                 has_reservation.add(task.job_id)
@@ -1177,7 +1177,7 @@ def test_taint_exemption_for_children_of_reservation_job():
     has_direct_reservation: set[JobName] = set()
     for task in pending:
         job_detail = _query_job(ctrl.state, task.job_id)
-        if job_detail and not job_is_finished(job_detail.state) and job_detail.request.HasField("reservation"):
+        if job_detail and not job_is_finished(job_detail.state) and job_detail.reservation_json is not None:
             has_direct_reservation.add(task.job_id)
 
     # Child does NOT get NOT_EXISTS constraint (descendant, no constraint at all)
@@ -1276,7 +1276,7 @@ def test_grandchildren_inherit_reservation_from_ancestor():
         job_detail = _query_job(ctrl.state, task.job_id)
         if job_row and not job_is_finished(job_row.state):
             jobs[task.job_id] = job_requirements_from_job(job_row)
-            if job_detail and job_detail.request.HasField("reservation"):
+            if job_detail and job_detail.reservation_json is not None:
                 has_reservation.add(task.job_id)
             elif _find_reservation_ancestor(ctrl._db, task.job_id) is not None:
                 has_reservation.add(task.job_id)
@@ -1289,7 +1289,7 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     has_direct_reservation: set[JobName] = set()
     for task in pending:
         job_detail = _query_job(ctrl.state, task.job_id)
-        if job_detail and not job_is_finished(job_detail.state) and job_detail.request.HasField("reservation"):
+        if job_detail and not job_is_finished(job_detail.state) and job_detail.reservation_json is not None:
             has_direct_reservation.add(task.job_id)
 
     # Neither grandchild gets any taint constraint (descendants)
@@ -1599,7 +1599,9 @@ def test_holder_task_gets_device_constraints_from_tpu_entry(state):
 
     holder_job = _query_job(state, holder_job_id)
     assert holder_job is not None
-    constraint_keys = [c.key for c in holder_job.request.constraints]
+    from iris.cluster.controller.transitions import _constraints_from_json
+
+    constraint_keys = [c.key for c in _constraints_from_json(holder_job.constraints_json)]
 
     assert (
         WellKnownAttribute.DEVICE_TYPE in constraint_keys
