@@ -127,10 +127,6 @@ disable-search-path-heuristics = true
 # which would auto-detect workspace members as site packages and exclude them
 skip-interpreter-query = true
 use-ignore-files = false
-# Worktrees often live under hidden parent directories (e.g. `.codex/worktrees/*`).
-# Disable pyrefly's built-in exclude heuristics so hidden ancestors do not exclude
-# the entire project when running from those paths.
-disable-project-excludes-heuristics = true
 
 # Exclude non-production code from type checking
 project-excludes = [
