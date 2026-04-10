@@ -206,6 +206,7 @@ def default_tokenize(
     *,
     sample_count: int | VersionedValue[int] | None = None,
     is_validation: bool = False,
+    levanter_batch_size: int | None = None,
 ) -> ExecutorStep:
     """
     Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
@@ -237,6 +238,7 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            levanter_batch_size=levanter_batch_size,
         )
     elif (
         isinstance(dataset, str)
@@ -250,6 +252,7 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            levanter_batch_size=levanter_batch_size,
         )
     else:
         config = TokenizeConfig(
@@ -259,6 +262,7 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            levanter_batch_size=levanter_batch_size,
         )
 
     return ExecutorStep(

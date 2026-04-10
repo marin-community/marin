@@ -5,37 +5,37 @@
 
 from experiments.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
-from fray.v2 import ResourceConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from marin.datakit.download.starcoder2_extras import (
     SUBSETS,
     download_starcoder2_extras_step,
-    reshard_starcoder2_extras_step,
 )
+from marin.datakit.normalize import normalize_step
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-WORKER_RAM = {"ir_low_resource": "80g"}
-DEFAULT_WORKER_RAM = "40g"
-
 
 def tokenize_starcoder2_extras(*, tokenizer: str = marin_tokenizer) -> list[TokenizerStep]:
-    """Download and tokenize all selected starcoder2data-extras subsets."""
+    """Download, normalize, and tokenize all selected starcoder2data-extras subsets."""
     steps = []
-    RESHARD_SUBSETS = {"ir_low_resource"}
     for subset in SUBSETS:
-        if subset in RESHARD_SUBSETS:
-            download = reshard_starcoder2_extras_step(subset)
-        else:
-            download = download_starcoder2_extras_step(subset)
-        ram = WORKER_RAM.get(subset, DEFAULT_WORKER_RAM)
+        download = download_starcoder2_extras_step(subset)
+        normalized = normalize_step(
+            name=f"normalized/starcoder2_extras/{subset}",
+            download=download,
+            text_field="content",
+            file_extensions=(".parquet",),
+            # documentation contains very large records (e.g. full OpenJDK docs at 64MB);
+            # split them to avoid OOM during tokenization
+            max_record_size=10_000_000 if subset == "documentation" else None,
+        )
         steps.append(
             default_tokenize(
                 name=f"starcoder2_extras/{subset}",
-                dataset=download.as_executor_step(),
+                dataset=normalized.as_executor_step(),
                 tokenizer=tokenizer,
-                format=TextLmDatasetFormat(text_key="content"),
-                worker_resources=ResourceConfig(ram=ram, disk="10g"),
+                format=TextLmDatasetFormat(text_key="text"),
+                levanter_batch_size=128,
             )
         )
     return steps

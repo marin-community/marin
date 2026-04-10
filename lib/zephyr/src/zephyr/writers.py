@@ -373,6 +373,7 @@ def write_levanter_cache(
     output_path: str,
     *,
     metadata: dict[str, Any],
+    batch_size: int = _LEVANTER_BATCH_SIZE,
 ) -> dict:
     """Write tokenized records to Levanter cache format.
 
@@ -392,7 +393,7 @@ def write_levanter_cache(
         return {"path": output_path, "count": 0}
 
     count = 0
-    logger.info("write_levanter_cache: starting write to %s (batch_size=%d)", output_path, _LEVANTER_BATCH_SIZE)
+    logger.info("write_levanter_cache: starting write to %s (batch_size=%d)", output_path, batch_size)
 
     with atomic_rename(output_path) as tmp_path:
         with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
@@ -405,7 +406,7 @@ def write_levanter_cache(
                 threaded.submit([exemplar])
                 count += 1
                 counters.increment("zephyr/records_out")
-                for batch in batchify(record_iter, n=_LEVANTER_BATCH_SIZE):
+                for batch in batchify(record_iter, n=batch_size):
                     threaded.submit(batch)
                     count += len(batch)
                     counters.increment("zephyr/records_out", len(batch))
