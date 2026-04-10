@@ -13,7 +13,7 @@ import os
 from rigging.filesystem import marin_temp_bucket
 from rigging.log_setup import configure_logging
 
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_runner import StepRunner
@@ -80,10 +80,11 @@ def build_steps(run_id: str) -> list[StepSpec]:
                         type=FilterType.REMOVE_DOC,
                         attribute_path=f"{deduped.output_path}/data",
                         name="dup_doc",
-                        attribute_filetype="vortex",
+                        attribute_filetype="parquet",
                         keep_if_missing=True,
                     ),
                 ],
+                worker_resources=ResourceConfig(cpu=1, ram="8g"),
             )
         ),
         override_output_path=f"{base}/consolidate",
