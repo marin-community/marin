@@ -11,14 +11,14 @@ the rollout generation runs against it.
 Usage:
     # Submit to Iris cluster (Steps 5+6 combined):
     uv run python experiments/swe_zero/run_swe_zero_mvp.py \
-        --model google/gemma-4-E2B-it \
+        --model ricdomolm/mini-coder-1.7b \
         --step 5 \
         --output_dir gs://marin-us-central2/experiments/swe_zero_mvp
 
     # Direct usage with an already-running vLLM server:
     uv run python experiments/swe_zero/run_swe_zero_mvp.py \
         --api_base http://localhost:8000/v1 \
-        --model google/gemma-4-E2B-it \
+        --model ricdomolm/mini-coder-1.7b \
         --step 4 \
         --output_dir /tmp/swe_zero_mvp
 """
@@ -177,7 +177,7 @@ def _print_ray_run_command(model_name: str, step: int, output_dir: str, tpu_type
 def main():
     parser = argparse.ArgumentParser(description="SWE-ZERO MVP rollout generation")
     parser.add_argument("--api_base", default=None, help="vLLM API base URL (if server already running)")
-    parser.add_argument("--model", default="google/gemma-4-E2B-it", help="Model name")
+    parser.add_argument("--model", default="ricdomolm/mini-coder-1.7b", help="Model name")
     parser.add_argument("--model_path", default=None, help="Model path (defaults to --model)")
     parser.add_argument("--api_key", default="EMPTY", help="API key")
     parser.add_argument("--step", type=int, required=True, choices=[3, 4, 5, 6], help="Which step to run")

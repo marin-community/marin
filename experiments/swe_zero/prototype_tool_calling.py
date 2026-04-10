@@ -2,19 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Step 1: Quick prototype to test if Gemma 4 E2B/E4B can produce mini-swe-agent v2
+Step 1: Quick prototype to test if a code model can produce mini-swe-agent v1
 style bash commands on a sample SWE-bench-style task.
 
+Default model is `ricdomolm/mini-coder-1.7b` (Qwen3-1.7B fine-tuned on 400k
+mini-swe-agent trajectories).
+
 Usage:
-    # Against a local vLLM server (e.g. on a TPU VM):
     python experiments/swe_zero/prototype_tool_calling.py \
         --api_base http://localhost:8000/v1 \
-        --model google/gemma-4-E2B-it
-
-    # Against any OpenAI-compatible endpoint:
-    python experiments/swe_zero/prototype_tool_calling.py \
-        --api_base http://<host>:<port>/v1 \
-        --model google/gemma-4-E4B-it
+        --model ricdomolm/mini-coder-1.7b
 """
 
 import argparse
@@ -135,7 +132,7 @@ def run_prototype(api_base: str, model: str, api_key: str = "EMPTY") -> bool:
     logger.info("  Finished cleanly: %s", finished)
 
     if bash_count > 0:
-        logger.info("SUCCESS: Model produces bash commands in mini-swe-agent v2 format.")
+        logger.info("SUCCESS: Model produces bash commands in mini-swe-agent v1 format.")
         return True
     else:
         logger.info("FAILURE: Model did not produce any bash commands.")
@@ -143,9 +140,9 @@ def run_prototype(api_base: str, model: str, api_key: str = "EMPTY") -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Test Gemma 4 mini-swe-agent v2 style")
+    parser = argparse.ArgumentParser(description="Test mini-coder model with mini-swe-agent v1 style")
     parser.add_argument("--api_base", required=True, help="API base URL")
-    parser.add_argument("--model", default="google/gemma-4-E2B-it", help="Model name")
+    parser.add_argument("--model", default="ricdomolm/mini-coder-1.7b", help="Model name")
     parser.add_argument("--api_key", default="EMPTY", help="API key")
     args = parser.parse_args()
 

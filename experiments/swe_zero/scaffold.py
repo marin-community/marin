@@ -2,11 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-SWE-ZERO execution-free agent scaffold using mini-swe-agent v2 format.
+SWE-ZERO execution-free agent scaffold using mini-swe-agent v1 format.
 
-mini-swe-agent v2 uses bash-only interaction: the model outputs THOUGHT
-reasoning followed by a single bash command in a ```mswea_bash_command block.
-The environment executes the command and returns stdout/stderr.
+mini-swe-agent v1 (https://github.com/SWE-agent/mini-SWE-agent/tree/v1.17.5)
+uses bash-only interaction: the model outputs reasoning followed by a single
+bash command in a ```bash block. The environment executes the command and
+returns observations like "Observation: <output>".
+
+Submission signal: the first line of the bash command output must be
+"COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" (typically via `echo` or after a
+successful command).
 
 For SWE-ZERO (execution-free), we simulate bash command outputs from a
 patch-derived repo snapshot instead of actually executing them.
@@ -24,31 +29,39 @@ from experiments.swe_zero.data_loader import PRRecord
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# System prompt (mini-swe-agent v2 style)
+# System prompt (mini-swe-agent v1 style)
+#
+# This matches the default system_template from mini-swe-agent v1.17.5
+# (src/minisweagent/config/default.yaml).
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """\
-You are a software engineering agent tasked with resolving a GitHub issue.
-You can interact with a sandboxed environment by executing bash commands.
+You are a helpful assistant that can interact with a computer to solve tasks.
 
-RESPONSE FORMAT:
-You must ALWAYS respond with EXACTLY ONE bash code block with ONE command.
-Before the bash block, include a THOUGHT section explaining your reasoning.
+You will be given a task and you will need to interact with the computer to solve it.
+Every response must contain EXACTLY ONE bash code block (in triple backticks) with EXACTLY ONE command.
+Include a THOUGHT section explaining your reasoning before the bash block.
 
-```mswea_bash_command
-<your bash command here>
+Format:
+THOUGHT: <your reasoning here>
+
+```bash
+<your bash command>
 ```
 
-IMPORTANT:
-- Directory or environment variable changes are not persistent. Every action is executed in a new subshell.
-- When you are done, submit your solution with: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+Notes:
+- Directory or environment variable changes are NOT persistent. Every command runs in a new subshell.
+- Commands can be chained with `&&` or `||`.
+- To finish, the FIRST LINE of the output of your bash command must be exactly:
+  COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+  e.g. `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`
 
-WORKFLOW:
-1. Analyze the codebase by finding and reading relevant files
+Workflow:
+1. Analyze the codebase by finding and reading relevant files (use `find`, `grep`, `cat`)
 2. Understand the issue and identify the root cause
-3. Edit source code to fix the issue
+3. Edit source code to fix the issue (use `sed`, `cat <<EOF >`, etc.)
 4. Verify your changes by reading the modified files
-5. Submit with echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\
+5. Submit with `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\
 """
 
 
@@ -120,17 +133,15 @@ class RepoSnapshot:
 
 
 def extract_bash_command(response: str) -> str | None:
-    """Extract the bash command from a mini-swe-agent v2 response."""
-    # Look for ```mswea_bash_command blocks
-    pattern = r"```mswea_bash_command\s*\n(.*?)```"
-    match = re.search(pattern, response, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    # Fallback: look for ```bash blocks
-    pattern = r"```bash\s*\n(.*?)```"
-    match = re.search(pattern, response, re.DOTALL)
-    if match:
-        return match.group(1).strip()
+    """Extract the bash command from a mini-swe-agent v1 response.
+
+    v1 uses the regex `r"```bash\\s*\\n(.*?)\\n```"` to find exactly one
+    triple-backtick bash block.
+    """
+    pattern = r"```bash\s*\n(.*?)\n```"
+    matches = re.findall(pattern, response, re.DOTALL)
+    if len(matches) >= 1:
+        return matches[0].strip()
     return None
 
 
@@ -144,9 +155,10 @@ def simulate_bash(command: str, snapshot: RepoSnapshot) -> str:
     """
     command = command.strip()
 
-    # Submit signal
+    # Submit signal: simulate `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` so
+    # the first line of the observation triggers the v1 has_finished check.
     if "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in command:
-        return "Submission successful."
+        return "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n"
 
     # cat with heredoc: write file (cat <<EOF > file or cat << 'EOF' > file)
     if "<<" in command and (">" in command or "cat" in command):

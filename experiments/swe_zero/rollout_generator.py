@@ -154,28 +154,32 @@ def generate_rollout(
         messages.append({"role": "assistant", "content": assistant_text})
 
         if bash_cmd is None:
-            # Model didn't produce a bash block — it may have finished or errored
+            # Model didn't produce a bash block — v1 would raise FormatError
+            # and prompt for a single action. We send a format error message.
+            err = "Please always provide EXACTLY ONE action in triple backticks."
+            rollout.steps.append(RolloutStep(role="user", content=err))
+            messages.append({"role": "user", "content": err})
             if choice.finish_reason == "stop":
-                rollout.finished = True
+                # Likely the model is done responding entirely
                 break
             continue
-
-        # Check for submission
-        if "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in bash_cmd:
-            observation = "Submission successful."
-            rollout.steps.append(RolloutStep(role="user", content=observation))
-            messages.append({"role": "user", "content": observation})
-            rollout.finished = True
-            break
 
         # Simulate the bash command
         observation = simulate_bash(bash_cmd, snapshot)
 
-        # Format as mini-swe-agent v2 observation
+        # v1 submission detection: first line of the bash output must be
+        # COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT (or MINI_SWE_AGENT_FINAL_OUTPUT)
+        first_line = observation.lstrip().splitlines()[0].strip() if observation.strip() else ""
+        if first_line in ("COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT", "MINI_SWE_AGENT_FINAL_OUTPUT"):
+            rollout.finished = True
+            break
+
+        # v1 truncates long outputs in the timeout_template; do similar here.
         if len(observation) > 10000:
             observation = observation[:5000] + "\n\n... (output truncated) ...\n\n" + observation[-2000:]
 
-        obs_text = f"OBSERVATION:\n{observation}" if observation else "OBSERVATION:\n(no output)"
+        # v1 observation format: "Observation: {{output}}"
+        obs_text = f"Observation: {observation}" if observation else "Observation: "
         rollout.steps.append(RolloutStep(role="user", content=obs_text))
         messages.append({"role": "user", "content": obs_text})
 
