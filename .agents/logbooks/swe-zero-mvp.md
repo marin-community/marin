@@ -173,3 +173,24 @@ Parent issue: https://github.com/marin-community/marin/issues/4435
   - Higher concurrency (32+) likely causes KV cache thrashing on v6e-1 and yields diminishing returns since the model is small and forward passes are fast.
   - On a larger TPU (v6e-4 / v6e-8) we could push concurrency=32 or 64 and get better throughput.
 - **Bug found during benchmarking attempts**: when Iris's multi-TPU alternatives placed the bench job on a v5p-8 worker, vLLM startup hung indefinitely (>18 min with no log output). Bench placed on v6e family (1/4/8) is currently blocked by capacity. Suspect v5p needs different vLLM settings or hits a slow XLA compile path.
+
+### 2026-04-10 — SZ-013: Step 6 complete (1000 rollouts in 62 min, 5.4x speedup)
+- **Job**: `/kevin/swe-zero-step6-eager` on v6e-1, async concurrency=16, vLLM max_num_seqs=32, --enforce-eager
+- **Wall time**: 62 min total (queued 28 min before placement, ran for 62 min)
+  - vLLM startup ~9 min, rollouts ~53 min
+  - Per-rollout: 53 min / 1000 = **3.18 s/rollout** sustained
+  - **5.4x faster than Step 5 sync** (which was 20 s/rollout on the same v6e-1)
+- **Diversity**:
+  - n_rollouts: 1000
+  - unique (Jaccard < 0.5): **874 (87.4%)**
+  - Mean pairwise Jaccard: **0.0668** (Step 5 was 0.1004, Step 4 was 0.2102 — gets better at scale because more PRs/repos = more spread)
+  - Median: 0.0547
+  - Min/Max: 0 / 0.9531
+  - Std: 0.0487
+- **Blocklist hits**: 884/12,662 = 7.0% (consistent with Step 5's 6.8%)
+  - Rollouts with >=1 block: 477/1000 (47.7%)
+  - Reasons: 862 "running code", 15 "direct file execution", 7 "network access"
+- **Outputs**:
+  - gs://marin-us-central2/experiments/swe_zero_mvp/step6/rollouts.json (~35 MB)
+  - gs://marin-us-central2/experiments/swe_zero_mvp/step6/diversity_report.json
+- **MVP plan complete**. All 6 steps done.
