@@ -871,6 +871,111 @@ class Worker:
                 health_error=health.error,
             )
 
+    def handle_ping(self, request: worker_pb2.Worker.PingRequest) -> worker_pb2.Worker.PingResponse:
+        """Liveness check. Resets heartbeat deadline, returns resource snapshot and health."""
+        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
+
+        resource_snapshot = self._host_metrics.collect()
+        running_count = 0
+        total_processes = 0
+        with self._lock:
+            for task in self._tasks.values():
+                if task.status == job_pb2.TASK_STATE_RUNNING:
+                    running_count += 1
+                    total_processes += task.process_count
+        resource_snapshot.running_task_count = running_count
+        resource_snapshot.total_process_count = total_processes
+
+        health = check_worker_health(disk_path=str(self._cache_dir))
+        if not health.healthy:
+            logger.warning("Worker health check failed: %s", health.error)
+
+        return worker_pb2.Worker.PingResponse(
+            resource_snapshot=resource_snapshot,
+            healthy=health.healthy,
+            health_error=health.error,
+        )
+
+    def handle_start_tasks(self, request: worker_pb2.Worker.StartTasksRequest) -> worker_pb2.Worker.StartTasksResponse:
+        """Start task attempts on this worker. Returns per-task ack."""
+        acks = []
+        for run_req in request.tasks:
+            try:
+                self.submit_task(run_req)
+                logger.info("StartTasks: submitted task %s", run_req.task_id)
+                acks.append(worker_pb2.Worker.TaskAck(task_id=run_req.task_id, accepted=True))
+            except Exception as e:
+                logger.warning("StartTasks: failed to submit task %s: %s", run_req.task_id, e)
+                acks.append(worker_pb2.Worker.TaskAck(task_id=run_req.task_id, accepted=False, error=str(e)))
+        return worker_pb2.Worker.StartTasksResponse(acks=acks)
+
+    def handle_stop_tasks(self, request: worker_pb2.Worker.StopTasksRequest) -> worker_pb2.Worker.StopTasksResponse:
+        """Stop given tasks on this worker."""
+        for task_id in request.task_ids:
+            try:
+                current = self._get_current_attempt(task_id)
+                if current:
+                    self._kill_task_attempt(task_id, current.attempt_id, async_kill=True)
+                    logger.info("StopTasks: initiated async kill for task %s", task_id)
+            except Exception as e:
+                logger.warning("StopTasks: failed to kill task %s: %s", task_id, e)
+        return worker_pb2.Worker.StopTasksResponse()
+
+    def handle_poll_tasks(self, request: worker_pb2.Worker.PollTasksRequest) -> worker_pb2.Worker.PollTasksResponse:
+        """Report status of expected tasks and kill unexpected tasks."""
+        tasks: list[job_pb2.WorkerTaskStatus] = []
+
+        with self._lock:
+            expected_keys: set[tuple[str, int]] = set()
+            for expected_entry in request.expected_tasks:
+                task_id = expected_entry.task_id
+                expected_attempt_id = expected_entry.attempt_id
+                key = (task_id, expected_attempt_id)
+                expected_keys.add(key)
+                task = self._tasks.get(key)
+
+                if task is None:
+                    tasks.append(
+                        job_pb2.WorkerTaskStatus(
+                            task_id=task_id,
+                            attempt_id=expected_attempt_id,
+                            state=job_pb2.TASK_STATE_WORKER_FAILED,
+                            exit_code=0,
+                            error="Task not found on worker",
+                            finished_at=timestamp_to_proto(Timestamp.now()),
+                        )
+                    )
+                else:
+                    task_proto = task.to_proto()
+                    reported_state = task.status
+                    if reported_state == job_pb2.TASK_STATE_PENDING:
+                        reported_state = job_pb2.TASK_STATE_BUILDING
+
+                    entry = job_pb2.WorkerTaskStatus(
+                        task_id=task_id,
+                        attempt_id=task_proto.current_attempt_id,
+                        state=reported_state,
+                        exit_code=task_proto.exit_code,
+                        error=task_proto.error or "",
+                        container_id=task_proto.container_id or "",
+                    )
+                    if task.status in self._TERMINAL_STATES:
+                        entry.finished_at.CopyFrom(task_proto.finished_at)
+                    if task_proto.resource_usage.ByteSize() > 0:
+                        entry.resource_usage.CopyFrom(task_proto.resource_usage)
+                    tasks.append(entry)
+
+            tasks_to_kill: list[tuple[str, int]] = []
+            for key, task in self._tasks.items():
+                if key not in expected_keys and task.status not in self._TERMINAL_STATES:
+                    tasks_to_kill.append(key)
+
+        for task_id, attempt_id in tasks_to_kill:
+            logger.warning("PollTasks: killing task %s attempt %d (unexpected)", task_id, attempt_id)
+            self._kill_task_attempt(task_id, attempt_id, async_kill=True)
+
+        return worker_pb2.Worker.PollTasksResponse(tasks=tasks)
+
     def _kill_task_attempt(
         self,
         task_id: str,
