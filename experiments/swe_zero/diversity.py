@@ -60,6 +60,60 @@ def jaccard_from_minhash(sig1: np.ndarray, sig2: np.ndarray) -> float:
 
 
 @dataclass
+class BlockedCommandStats:
+    """How often the SWE-ZERO sandbox blocklist fired across a rollout set."""
+
+    total_observations: int
+    total_blocked: int
+    rollouts_with_blocked: int
+    by_reason: dict[str, int]
+    max_blocked_per_rollout: int
+
+
+def count_blocked_commands(rollouts: list[Rollout]) -> BlockedCommandStats:
+    """Count blocklist hits in a list of rollouts.
+
+    Reads the ``Observation:`` user messages and matches the
+    ``command blocked: <reason>`` prefix produced by ``safe_exec``.
+    """
+    by_reason: dict[str, int] = {}
+    total_observations = 0
+    total_blocked = 0
+    rollouts_with_blocked = 0
+    max_per_rollout = 0
+
+    for r in rollouts:
+        per_rollout = 0
+        for step in r.steps:
+            if step.role != "user":
+                continue
+            content = step.content or ""
+            if not content.startswith("Observation:"):
+                continue
+            total_observations += 1
+            marker = "command blocked: "
+            idx = content.find(marker)
+            if idx < 0:
+                continue
+            total_blocked += 1
+            per_rollout += 1
+            tail = content[idx + len(marker) :]
+            reason = tail.split(":", 1)[0].strip()
+            by_reason[reason] = by_reason.get(reason, 0) + 1
+        if per_rollout > 0:
+            rollouts_with_blocked += 1
+            max_per_rollout = max(max_per_rollout, per_rollout)
+
+    return BlockedCommandStats(
+        total_observations=total_observations,
+        total_blocked=total_blocked,
+        rollouts_with_blocked=rollouts_with_blocked,
+        by_reason=by_reason,
+        max_blocked_per_rollout=max_per_rollout,
+    )
+
+
+@dataclass
 class DiversityReport:
     """Summary of rollout diversity."""
 
@@ -71,18 +125,36 @@ class DiversityReport:
     max_pairwise_jaccard: float
     std_pairwise_jaccard: float
     pairwise_similarities: list[float]
+    blocked: BlockedCommandStats | None = None
 
     def summary(self) -> str:
-        return (
-            f"Diversity Report:\n"
-            f"  Total rollouts: {self.n_rollouts}\n"
-            f"  Unique (Jaccard < {JACCARD_THRESHOLD}): {self.n_unique}\n"
-            f"  Mean pairwise Jaccard: {self.mean_pairwise_jaccard:.4f}\n"
-            f"  Median pairwise Jaccard: {self.median_pairwise_jaccard:.4f}\n"
-            f"  Min pairwise Jaccard: {self.min_pairwise_jaccard:.4f}\n"
-            f"  Max pairwise Jaccard: {self.max_pairwise_jaccard:.4f}\n"
-            f"  Std pairwise Jaccard: {self.std_pairwise_jaccard:.4f}"
-        )
+        lines = [
+            "Diversity Report:",
+            f"  Total rollouts: {self.n_rollouts}",
+            f"  Unique (Jaccard < {JACCARD_THRESHOLD}): {self.n_unique}",
+            f"  Mean pairwise Jaccard: {self.mean_pairwise_jaccard:.4f}",
+            f"  Median pairwise Jaccard: {self.median_pairwise_jaccard:.4f}",
+            f"  Min pairwise Jaccard: {self.min_pairwise_jaccard:.4f}",
+            f"  Max pairwise Jaccard: {self.max_pairwise_jaccard:.4f}",
+            f"  Std pairwise Jaccard: {self.std_pairwise_jaccard:.4f}",
+        ]
+        if self.blocked is not None:
+            b = self.blocked
+            blocked_rate = b.total_blocked / b.total_observations if b.total_observations else 0.0
+            lines.extend(
+                [
+                    "Blocklist hits:",
+                    f"  Observations: {b.total_observations}",
+                    f"  Blocked commands: {b.total_blocked} ({blocked_rate:.1%})",
+                    f"  Rollouts with >=1 block: {b.rollouts_with_blocked}/{self.n_rollouts}",
+                    f"  Max blocks in a single rollout: {b.max_blocked_per_rollout}",
+                ]
+            )
+            if b.by_reason:
+                lines.append("  Block reasons:")
+                for reason, n in sorted(b.by_reason.items(), key=lambda kv: -kv[1]):
+                    lines.append(f"    {reason}: {n}")
+        return "\n".join(lines)
 
 
 def measure_diversity(rollouts: list[Rollout]) -> DiversityReport:
@@ -93,7 +165,12 @@ def measure_diversity(rollouts: list[Rollout]) -> DiversityReport:
       - Represent trajectory by concatenation of actions
       - Encode with MinHash
       - Compute pairwise Jaccard similarity
+
+    Also counts how often the SWE-ZERO sandbox blocklist fired across the
+    rollout set, so we can spot rollouts that wasted turns trying to run
+    blocked commands.
     """
+    blocked = count_blocked_commands(rollouts)
     n = len(rollouts)
     if n < 2:
         return DiversityReport(
@@ -105,6 +182,7 @@ def measure_diversity(rollouts: list[Rollout]) -> DiversityReport:
             max_pairwise_jaccard=0.0,
             std_pairwise_jaccard=0.0,
             pairwise_similarities=[],
+            blocked=blocked,
         )
 
     # Step 1: Extract action text from each rollout
@@ -148,6 +226,7 @@ def measure_diversity(rollouts: list[Rollout]) -> DiversityReport:
         max_pairwise_jaccard=float(np.max(sims_arr)),
         std_pairwise_jaccard=float(np.std(sims_arr)),
         pairwise_similarities=similarities,
+        blocked=blocked,
     )
 
 

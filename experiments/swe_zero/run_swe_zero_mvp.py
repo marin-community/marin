@@ -48,15 +48,26 @@ def save_json(data, output_path: str) -> None:
 
 
 def _save_diversity(report, step_dir: str) -> None:
-    save_json(
-        {
-            "n_rollouts": report.n_rollouts,
-            "n_unique": report.n_unique,
-            "mean_pairwise_jaccard": report.mean_pairwise_jaccard,
-            "median_pairwise_jaccard": report.median_pairwise_jaccard,
-        },
-        os.path.join(step_dir, "diversity_report.json"),
-    )
+    payload: dict = {
+        "n_rollouts": report.n_rollouts,
+        "n_unique": report.n_unique,
+        "mean_pairwise_jaccard": report.mean_pairwise_jaccard,
+        "median_pairwise_jaccard": report.median_pairwise_jaccard,
+        "min_pairwise_jaccard": report.min_pairwise_jaccard,
+        "max_pairwise_jaccard": report.max_pairwise_jaccard,
+        "std_pairwise_jaccard": report.std_pairwise_jaccard,
+    }
+    if report.blocked is not None:
+        b = report.blocked
+        payload["blocked"] = {
+            "total_observations": b.total_observations,
+            "total_blocked": b.total_blocked,
+            "blocked_rate": (b.total_blocked / b.total_observations) if b.total_observations else 0.0,
+            "rollouts_with_blocked": b.rollouts_with_blocked,
+            "max_blocked_per_rollout": b.max_blocked_per_rollout,
+            "by_reason": b.by_reason,
+        }
+    save_json(payload, os.path.join(step_dir, "diversity_report.json"))
 
 
 def _run_steps(api_base: str, model: str, step: int, output_dir: str) -> None:
