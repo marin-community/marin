@@ -22,9 +22,9 @@
 #   ResourceConfig(image="<registry>/iris-task-swetrace:<tag>")
 # which routes through Iris's per-task task_image override.
 
-# Pin runsc to a known-good release. Update by checking
-# https://github.com/google/gvisor/releases.
-ARG RUNSC_VERSION=release-20240916.0
+# Pin runsc to a known-good point release. gVisor serves point releases at
+# `release/${yyyymmdd}.${rc}/${ARCH}`.
+ARG RUNSC_VERSION=20240916.0
 
 # Use the existing iris-task base so we inherit uv, python 3.12, rust, node,
 # and the standard Marin tooling. The base lives at lib/iris/Dockerfile.
