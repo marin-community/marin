@@ -18,7 +18,7 @@ from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 
 from levanter.tracker import Tracker
 from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_root
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tracker import TrackerConfig
 from levanter.utils import jax_utils
 
@@ -77,21 +77,11 @@ class WandbTracker(Tracker):
         step = int(step)
 
         # wandb histograms are pretty limited: they log only the counts and the bin edges.
-        # Our histograms have the same set of things Tensorboard. we log those as separate values.
+        # Our summary stats have the same scalar fields Tensorboard understands. We log those as separate values.
         to_log = {}
         for k, v in metrics.items():
-            if isinstance(v, Histogram):
-                # if the value is a Histogram, convert it to a wandb Histogram
-                # this will log the histogram counts and bin edges
-                import wandb
-
-                counts, limits = v.to_numpy_histogram()
-                wandb_hist = wandb.Histogram(np_histogram=(counts.tolist(), limits.tolist()))
-                to_log[f"{k}/histogram"] = wandb_hist
-                to_log[f"{k}/min"] = v.min
-                to_log[f"{k}/max"] = v.max
-                to_log[f"{k}/mean"] = v.mean
-                to_log[f"{k}/variance"] = v.variance
+            if isinstance(v, SummaryStats):
+                to_log.update(_convert_summary_stats_to_loggable(k, v))
             else:
                 # otherwise, just log the value normally
                 to_log[k] = _convert_value_to_loggable_rec(v)
@@ -187,14 +177,30 @@ def _convert_value_to_loggable_rec(value: Any):
             return value.tolist()
     elif isinstance(value, np.generic):
         return value.item()
-    elif isinstance(value, Histogram):
-        import wandb
-
-        counts, limits = value.to_numpy_histogram()
-
-        return wandb.Histogram(np_histogram=(counts.tolist(), limits.tolist()))
+    elif isinstance(value, SummaryStats):
+        return _convert_summary_stats_to_loggable("", value, include_prefix=False)
     else:
         return value
+
+
+def _convert_summary_stats_to_loggable(prefix: str, value: SummaryStats, *, include_prefix: bool = True):
+    import wandb
+
+    out: dict[str, Any] = {}
+    base = f"{prefix}/" if include_prefix and prefix else ""
+    out[f"{base}min"] = _convert_value_to_loggable_rec(value.min)
+    out[f"{base}max"] = _convert_value_to_loggable_rec(value.max)
+    out[f"{base}num"] = _convert_value_to_loggable_rec(value.num)
+    out[f"{base}nonzero_count"] = _convert_value_to_loggable_rec(value.nonzero_count)
+    out[f"{base}sum"] = _convert_value_to_loggable_rec(value.sum)
+    out[f"{base}sum_squares"] = _convert_value_to_loggable_rec(value.sum_squares)
+    out[f"{base}mean"] = _convert_value_to_loggable_rec(value.mean)
+    out[f"{base}variance"] = _convert_value_to_loggable_rec(value.variance)
+    out[f"{base}rms"] = _convert_value_to_loggable_rec(value.rms)
+    if value.histogram is not None:
+        counts, limits = value.histogram.to_numpy_histogram()
+        out[f"{base}histogram"] = wandb.Histogram(np_histogram=(counts.tolist(), limits.tolist()))
+    return out
 
 
 def is_wandb_available():

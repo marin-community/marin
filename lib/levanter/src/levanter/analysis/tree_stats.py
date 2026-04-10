@@ -10,7 +10,7 @@ import haliax.nn
 from haliax import NamedArray, is_named_array
 from haliax.jax_utils import is_jax_array_like
 
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import SummaryStats
 from levanter.utils import jax_utils
 
 
@@ -22,7 +22,7 @@ def summary_statistics_for_tree(
     include_histogram: bool = False,
     include_norms: bool = True,
     include_per_parameter_norms: bool = True,
-) -> dict[str, jax.Array | Histogram]:
+) -> dict[str, jax.Array | SummaryStats]:
     """
     Computes the summary statistics for a tree of (named) arrays.
 
@@ -70,7 +70,7 @@ def summary_statistics_for_tree(
                 if include_norms:
                     norms[key_path] = optax.global_norm(g)
                 if include_histogram:
-                    hist = Histogram.from_named_array(g)
+                    hist = SummaryStats.from_named_array(g, include_histogram=include_histogram)
                     hists[key_path] = hist
             elif is_jax_array_like(g):
                 if include_norms:
@@ -78,17 +78,17 @@ def summary_statistics_for_tree(
 
                 if include_histogram:
                     with jax.named_scope(f"histogram({prefix}/{key_path})"):
-                        hist = Histogram.from_array(g)
+                        hist = SummaryStats.from_array(g, include_histogram=include_histogram)
                         hists[key_path] = hist
 
         return norms, hists
 
     norms_to_log: dict[str, jax.Array] = {}
-    hists_to_log: dict[str, Histogram] = {}
+    hists_to_log: dict[str, SummaryStats] = {}
 
     _rec_log_magnitudes(norms_to_log, hists_to_log, None, tree)
 
-    to_log: dict[str, jax.Array | Histogram] = {}
+    to_log: dict[str, jax.Array | SummaryStats] = {}
 
     for key, value in norms_to_log.items():
         if include_per_parameter_norms:

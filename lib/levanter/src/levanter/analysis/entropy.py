@@ -19,7 +19,7 @@ import levanter.tracker
 from levanter.callbacks import StepInfo
 
 from ..data import DataLoader
-from ..tracker.histogram import Histogram
+from ..tracker.histogram import SummaryStats
 
 
 B = TypeVar("B")
@@ -70,12 +70,12 @@ def compute_entropy_histogram(
     test_data,
     max_tokens: int = 1024 * 1024,
     num_bins: int = 64,
-) -> Histogram:
+) -> SummaryStats:
     """
     Compute entropy histograms for a given model and dataset.
 
     Returns:
-        Histogram: A Histogram object containing the entropy values.
+        SummaryStats: A SummaryStats object containing the entropy values.
     """
 
     entropies_list: list[jnp.ndarray] = []
@@ -94,7 +94,7 @@ def compute_entropy_histogram(
     if not entropies.size:
         raise ValueError("No tokens processed")
 
-    return Histogram.from_array(entropies, num_bins=num_bins)
+    return SummaryStats.from_array(entropies, num_bins=num_bins)
 
 
 # Top level to avoid recompilation
@@ -164,7 +164,7 @@ def compute_top2_gap_histogram(
     test_data,
     max_tokens: int = 1024 * 1024,
     num_bins: int = 64,
-) -> Histogram:
+) -> SummaryStats:
     gaps = []
     total_tokens = 0
     for batch in test_data:
@@ -176,7 +176,7 @@ def compute_top2_gap_histogram(
     gaps_array = jnp.concatenate(gaps)
     if not gaps_array.size:
         raise ValueError("No tokens processed")
-    return Histogram.from_array(gaps_array, num_bins=num_bins)
+    return SummaryStats.from_array(gaps_array, num_bins=num_bins)
 
 
 @eqx.filter_jit
