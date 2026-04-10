@@ -97,9 +97,14 @@ class Rollout:
         return "\n".join(step.bash_command for step in self.steps if step.bash_command)
 
 
-def _estimate_tokens(messages: list[dict]) -> int:
-    """Rough token count estimate (4 chars ≈ 1 token)."""
-    return len(json.dumps(messages)) // 4
+def _estimate_tokens_from_chars(messages: list[dict]) -> int:
+    """Conservative cold-start estimate (3 chars ~ 1 token).
+
+    Used only on the very first turn before vLLM has reported a real
+    ``prompt_tokens`` count. We deliberately overshoot rather than undershoot
+    so the first ``max_tokens`` ceiling is safe.
+    """
+    return len(json.dumps(messages)) // 3
 
 
 def generate_rollout(
@@ -134,8 +139,21 @@ def generate_rollout(
         rollout.steps.append(RolloutStep(role="user", content=user_msg["content"]))
         messages: list[dict] = [system_msg, user_msg]
 
+        # Track the most recent vLLM-reported prompt size so we can predict
+        # the next turn's prompt size accurately. Cold start uses a
+        # conservative char-based estimate.
+        last_prompt_tokens: int | None = None
+        last_messages_len: int | None = None
+
         for turn in range(max_turns):
-            input_tokens_estimate = _estimate_tokens(messages)
+            if last_prompt_tokens is None:
+                input_tokens_estimate = _estimate_tokens_from_chars(messages)
+            else:
+                # We appended (assistant, observation) since the last call;
+                # estimate their size and add to the previous prompt count.
+                appended = messages[last_messages_len:]
+                input_tokens_estimate = last_prompt_tokens + _estimate_tokens_from_chars(appended)
+
             budget_remaining = max_total_tokens - input_tokens_estimate - RESERVE_TOKENS
             if budget_remaining <= 64:
                 logger.info(
@@ -164,6 +182,8 @@ def generate_rollout(
             if response.usage:
                 rollout.total_prompt_tokens += response.usage.prompt_tokens
                 rollout.total_completion_tokens += response.usage.completion_tokens
+                last_prompt_tokens = response.usage.prompt_tokens
+                last_messages_len = len(messages)
 
             bash_cmd = extract_bash_command(assistant_text)
             rollout.steps.append(RolloutStep(role="assistant", content=assistant_text, bash_command=bash_cmd))

@@ -167,25 +167,32 @@ def safe_exec(
     if extra_env:
         env.update(extra_env)
 
+    # Capture as bytes and decode with errors="replace" so non-UTF-8 output
+    # (e.g. binaries the agent accidentally cats) does not crash the rollout.
     try:
         proc = subprocess.run(
             ["/bin/bash", "-c", command],
             cwd=cwd,
             env=env,
             capture_output=True,
-            text=True,
+            text=False,
             timeout=timeout_seconds,
             check=False,
         )
         return ExecResult(
-            stdout=proc.stdout,
-            stderr=proc.stderr,
+            stdout=proc.stdout.decode("utf-8", errors="replace"),
+            stderr=proc.stderr.decode("utf-8", errors="replace"),
             returncode=proc.returncode,
             timed_out=False,
         )
     except subprocess.TimeoutExpired as e:
-        stdout = e.stdout.decode("utf-8", errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-        stderr = e.stderr.decode("utf-8", errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
-        return ExecResult(stdout=stdout, stderr=stderr, returncode=124, timed_out=True)
+        stdout_bytes = e.stdout if isinstance(e.stdout, bytes) else b""
+        stderr_bytes = e.stderr if isinstance(e.stderr, bytes) else b""
+        return ExecResult(
+            stdout=stdout_bytes.decode("utf-8", errors="replace"),
+            stderr=stderr_bytes.decode("utf-8", errors="replace"),
+            returncode=124,
+            timed_out=True,
+        )
     except (FileNotFoundError, PermissionError) as e:
         return ExecResult(stdout="", stderr=f"sandbox error: {e}", returncode=127, timed_out=False)
