@@ -89,7 +89,7 @@ jobs:
         run: |
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
-            --memory=2G --disk=16G --cpu=1 --extra=cpu \
+            --memory=2G --disk=4G --cpu=1 --extra=cpu \
             -e MARIN_PREFIX s3://marin-na/marin/ \
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
