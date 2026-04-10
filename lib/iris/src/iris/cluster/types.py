@@ -764,11 +764,13 @@ class Entrypoint:
         *,
         command: list[str],
         workdir_files: dict[str, bytes] | None = None,
+        workdir_file_refs: dict[str, str] | None = None,
     ):
         if not command:
             raise ValueError("Command must have at least one argument")
         self.command = command
         self.workdir_files: dict[str, bytes] = workdir_files or {}
+        self.workdir_file_refs: dict[str, str] = workdir_file_refs or {}
 
     def resolve(self) -> tuple[Callable[..., Any], tuple, dict[str, Any]]:
         """Deserialize the callable, args, kwargs from pickle bytes.
@@ -826,6 +828,8 @@ class Entrypoint:
         proto.run_command.argv[:] = self.command
         for name, data in self.workdir_files.items():
             proto.workdir_files[name] = data
+        for name, blob_id in self.workdir_file_refs.items():
+            proto.workdir_file_refs[name] = blob_id
         return proto
 
     @classmethod
@@ -833,4 +837,5 @@ class Entrypoint:
         """Create from protobuf representation."""
         command = list(proto.run_command.argv)
         workdir_files = dict(proto.workdir_files) if proto.workdir_files else None
-        return cls(command=command, workdir_files=workdir_files)
+        workdir_file_refs = dict(proto.workdir_file_refs) if proto.workdir_file_refs else None
+        return cls(command=command, workdir_files=workdir_files, workdir_file_refs=workdir_file_refs)

@@ -86,6 +86,16 @@ def test_runtime_entrypoint_to_bash_script_structure():
     assert "exec python train.py --lr 0.001" in script
 
 
+def test_build_runtime_entrypoint_propagates_workdir_file_refs():
+    refs = {"_callable.pkl": "sha256abc", "weights.bin": "sha256def"}
+    ep = Entrypoint(command=["python", "run.py"], workdir_files={"small.txt": b"hi"}, workdir_file_refs=refs)
+    env = _make_env_config()
+    rt = build_runtime_entrypoint(ep, env)
+
+    assert dict(rt.workdir_files) == {"small.txt": b"hi"}
+    assert dict(rt.workdir_file_refs) == refs
+
+
 @pytest.mark.parametrize(
     "extras,expected_fragments",
     [

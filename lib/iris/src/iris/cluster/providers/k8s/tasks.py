@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import concurrent.futures
 import hashlib
+import json
 import logging
 import re
 import shlex
@@ -255,7 +256,9 @@ def _build_init_container_spec(
     """
     has_bundle = bool(run_req.bundle_id) and bool(controller_address)
     workdir_files = dict(run_req.entrypoint.workdir_files)
-    if not has_bundle and not workdir_files:
+    workdir_file_refs = dict(run_req.entrypoint.workdir_file_refs)
+    has_blob_refs = bool(workdir_file_refs) and bool(controller_address)
+    if not has_bundle and not workdir_files and not has_blob_refs:
         return [], [], None
 
     script_path = Path(__file__).parent / "bundle_fetch.py"
@@ -266,13 +269,14 @@ def _build_init_container_spec(
     extra_volumes: list[dict] = []
     configmap_name: str | None = None
 
+    if has_bundle or has_blob_refs:
+        init_env.append({"name": "IRIS_CONTROLLER_URL", "value": controller_address})
+
     if has_bundle:
-        init_env.extend(
-            [
-                {"name": "IRIS_BUNDLE_ID", "value": run_req.bundle_id},
-                {"name": "IRIS_CONTROLLER_URL", "value": controller_address},
-            ]
-        )
+        init_env.append({"name": "IRIS_BUNDLE_ID", "value": run_req.bundle_id})
+
+    if has_blob_refs:
+        init_env.append({"name": "IRIS_WORKDIR_BLOB_REFS", "value": json.dumps(workdir_file_refs)})
 
     if workdir_files:
         configmap_name = f"{pod_name}-wf"
