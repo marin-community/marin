@@ -6,8 +6,14 @@
 Run after the iris job for the datakit smoke ferry has completed. Resolves
 the output prefix via ``MARIN_PREFIX`` (falling back to
 ``marin_temp_bucket(ttl_days=1, prefix="datakit-smoke")`` — same default as
-the ferry entrypoint) and asserts that each pipeline stage produced non-empty
-output with correct schemas and plausible row counts.
+the ferry entrypoint).
+
+Checks the full pipeline chain:
+  download (14 files, ~9.7M rows)
+  → normalize (106 files, ~9.3M rows, some rows filtered)
+  → dedup (106 attribute files, ~286K flagged dups)
+  → consolidate (106 files, normalize - dedup rows)
+  → tokenize (cache ledger rows == consolidate rows)
 """
 
 import logging
@@ -22,27 +28,33 @@ from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
-STAGES = ("normalize", "dedup", "consolidate", "tokens")
+# --- Download: fineweb-edu sample/10BT has exactly 14 parquet shards ---
+DOWNLOAD_EXPECTED_FILES = 14
+DOWNLOAD_MIN_ROWS = 9_000_000  # observed: 9,672,101
 
-# fineweb-edu sample/10BT has 14 shards, normalize produces 106 output files
-MIN_NORMALIZE_FILES = 100
-MIN_NORMALIZE_ROWS = 5_000_000  # ~9.2M expected
-NORMALIZE_REQUIRED_COLUMNS = {"id", "text", "url", "source_id"}
+# --- Normalize: scatter produces 106 output files ---
+NORMALIZE_EXPECTED_FILES = 106
+NORMALIZE_MIN_ROWS = 8_000_000  # observed: 9,268,156
+NORMALIZE_REQUIRED_COLUMNS = {"id", "text", "url", "source_id", "token_count"}
 
+# --- Dedup: one attribute file per normalize shard ---
+DEDUP_EXPECTED_FILES = 106
 DEDUP_REQUIRED_COLUMNS = {"id", "attributes"}
-MIN_CONSOLIDATE_FILES = 1
+# Dedup should flag a non-trivial fraction but not everything.
+# Observed: 286,263 / 9,268,156 = 3.1%.
+DEDUP_MIN_FRACTION = 0.005  # at least 0.5% flagged
+DEDUP_MAX_FRACTION = 0.50  # at most 50% flagged
+
+# --- Consolidate: same file count, strictly fewer rows than normalize ---
+CONSOLIDATE_REQUIRED_COLUMNS = NORMALIZE_REQUIRED_COLUMNS
 
 
-def _assert_non_empty(path: str) -> int:
-    """Assert path exists and is non-empty. Returns entry count."""
-    fs, fs_path = url_to_fs(path)
-    if not fs.exists(fs_path):
-        raise SystemExit(f"Missing output directory: {path}")
-    entries = fs.find(fs_path)
-    if not entries:
-        raise SystemExit(f"Output directory is empty: {path}")
-    logger.info("OK %s (%d entries)", path, len(entries))
-    return len(entries)
+def _list_parquet(path: str) -> list[str]:
+    """Glob for parquet files under path; raise if none found."""
+    files = fsspec_glob(f"{path}/*.parquet")
+    if not files:
+        raise SystemExit(f"No parquet files found under {path}")
+    return files
 
 
 def _count_parquet_rows(files: list[str]) -> int:
@@ -55,85 +67,133 @@ def _count_parquet_rows(files: list[str]) -> int:
     return total
 
 
-def _check_parquet_schema(path: str, required_columns: set[str]) -> None:
-    """Verify a parquet file contains the required columns."""
+def _check_schema(path: str, required: set[str]) -> list[str]:
+    """Verify a parquet file contains the required columns. Returns actual column names."""
     fs, _ = url_to_fs(path)
     with fs.open(path, "rb") as f:
-        schema = pq.ParquetFile(f).schema_arrow
-    actual = set(schema.names)
-    missing = required_columns - actual
+        names = pq.ParquetFile(f).schema_arrow.names
+    missing = required - set(names)
     if missing:
-        raise SystemExit(f"Schema mismatch in {path}: missing columns {missing}")
+        raise SystemExit(f"Schema mismatch in {path}: missing {missing}")
+    return names
 
 
-def _validate_normalize(base: str) -> int:
-    """Validate normalize output. Returns total row count."""
-    norm_path = f"{base}/normalize"
-    _assert_non_empty(norm_path)
+def _validate_download(base: str) -> int:
+    dl_path = f"{base}/download"
+    files = fsspec_glob(f"{dl_path}/**/*.parquet")
+    if not files:
+        raise SystemExit(f"No download parquet files under {dl_path}")
+    if len(files) != DOWNLOAD_EXPECTED_FILES:
+        raise SystemExit(f"Download: expected {DOWNLOAD_EXPECTED_FILES} files, got {len(files)}")
 
-    files = fsspec_glob(f"{norm_path}/*.parquet")
-    if len(files) < MIN_NORMALIZE_FILES:
-        raise SystemExit(f"Normalize: expected >= {MIN_NORMALIZE_FILES} files, got {len(files)}")
+    rows = _count_parquet_rows(files)
+    if rows < DOWNLOAD_MIN_ROWS:
+        raise SystemExit(f"Download: expected >= {DOWNLOAD_MIN_ROWS} rows, got {rows}")
 
-    _check_parquet_schema(files[0], NORMALIZE_REQUIRED_COLUMNS)
+    logger.info("Download OK: %d files, %d rows", len(files), rows)
+    return rows
 
-    total_rows = _count_parquet_rows(files)
-    if total_rows < MIN_NORMALIZE_ROWS:
-        raise SystemExit(f"Normalize: expected >= {MIN_NORMALIZE_ROWS} rows, got {total_rows}")
 
-    logger.info("Normalize OK: %d files, %d rows", len(files), total_rows)
-    return total_rows
+def _validate_normalize(base: str, download_rows: int) -> int:
+    files = _list_parquet(f"{base}/normalize")
+    if len(files) != NORMALIZE_EXPECTED_FILES:
+        raise SystemExit(f"Normalize: expected {NORMALIZE_EXPECTED_FILES} files, got {len(files)}")
+
+    _check_schema(files[0], NORMALIZE_REQUIRED_COLUMNS)
+
+    rows = _count_parquet_rows(files)
+    if rows < NORMALIZE_MIN_ROWS:
+        raise SystemExit(f"Normalize: expected >= {NORMALIZE_MIN_ROWS} rows, got {rows}")
+    if rows > download_rows:
+        raise SystemExit(
+            f"Normalize: {rows} rows > download {download_rows} rows — "
+            "normalize cannot produce more rows than download"
+        )
+
+    logger.info("Normalize OK: %d files, %d rows (%.1f%% of download)", len(files), rows, 100 * rows / download_rows)
+    return rows
 
 
 def _validate_dedup(base: str, normalize_rows: int) -> int:
-    """Validate dedup output. Returns number of flagged duplicates."""
-    dedup_data_path = f"{base}/dedup/data"
-    _assert_non_empty(dedup_data_path)
+    files = _list_parquet(f"{base}/dedup/data")
+    if len(files) != DEDUP_EXPECTED_FILES:
+        raise SystemExit(f"Dedup: expected {DEDUP_EXPECTED_FILES} files, got {len(files)}")
 
-    files = fsspec_glob(f"{dedup_data_path}/*.parquet")
-    _check_parquet_schema(files[0], DEDUP_REQUIRED_COLUMNS)
+    _check_schema(files[0], DEDUP_REQUIRED_COLUMNS)
 
-    dedup_rows = _count_parquet_rows(files)
-    if dedup_rows <= 0:
-        raise SystemExit("Dedup: no duplicate documents flagged")
-    if dedup_rows >= normalize_rows:
+    flagged = _count_parquet_rows(files)
+    fraction = flagged / normalize_rows if normalize_rows > 0 else 0
+
+    if fraction < DEDUP_MIN_FRACTION:
         raise SystemExit(
-            f"Dedup: flagged {dedup_rows} dups >= {normalize_rows} total docs — "
-            "something is wrong"
+            f"Dedup: only {flagged} dups flagged ({fraction:.1%} of {normalize_rows}) — "
+            f"expected >= {DEDUP_MIN_FRACTION:.1%}"
+        )
+    if fraction > DEDUP_MAX_FRACTION:
+        raise SystemExit(
+            f"Dedup: {flagged} dups flagged ({fraction:.1%} of {normalize_rows}) — "
+            f"expected <= {DEDUP_MAX_FRACTION:.0%}, something is wrong"
         )
 
-    logger.info("Dedup OK: %d files, %d flagged duplicates (%.1f%% of %d docs)",
-                len(files), dedup_rows, 100 * dedup_rows / normalize_rows, normalize_rows)
-    return dedup_rows
+    logger.info(
+        "Dedup OK: %d files, %d flagged duplicates (%.1f%% of %d docs)",
+        len(files),
+        flagged,
+        100 * fraction,
+        normalize_rows,
+    )
+    return flagged
 
 
 def _validate_consolidate(base: str, normalize_rows: int, dedup_rows: int) -> int:
-    """Validate consolidate output. Returns consolidated row count."""
-    consol_path = f"{base}/consolidate"
-    _assert_non_empty(consol_path)
+    files = _list_parquet(f"{base}/consolidate")
 
-    files = fsspec_glob(f"{consol_path}/*.parquet")
-    if len(files) < MIN_CONSOLIDATE_FILES:
-        raise SystemExit(f"Consolidate: expected >= {MIN_CONSOLIDATE_FILES} files, got {len(files)}")
+    _check_schema(files[0], CONSOLIDATE_REQUIRED_COLUMNS)
 
-    consol_rows = _count_parquet_rows(files)
-    expected_max = normalize_rows
-    expected_min = normalize_rows - dedup_rows
-    # Allow some tolerance — consolidate may drop a few extra docs
-    if consol_rows > expected_max:
+    rows = _count_parquet_rows(files)
+
+    # Core invariant: consolidate must have strictly fewer rows than normalize
+    if rows >= normalize_rows:
         raise SystemExit(
-            f"Consolidate: {consol_rows} rows > {expected_max} normalize rows — "
-            "more rows after dedup removal is impossible"
-        )
-    if consol_rows < expected_min * 0.9:
-        raise SystemExit(
-            f"Consolidate: {consol_rows} rows much less than expected ~{expected_min} — "
-            "too many docs removed"
+            f"Consolidate: {rows} rows >= normalize {normalize_rows} rows — " "dedup removal did not reduce row count"
         )
 
-    logger.info("Consolidate OK: %d files, %d rows (removed %d docs)",
-                len(files), consol_rows, normalize_rows - consol_rows)
-    return consol_rows
+    # The expected count is exactly normalize - dedup
+    expected = normalize_rows - dedup_rows
+    if rows != expected:
+        raise SystemExit(
+            f"Consolidate: {rows} rows, expected exactly {expected} "
+            f"(normalize {normalize_rows} - dedup {dedup_rows})"
+        )
+
+    removed = normalize_rows - rows
+    logger.info(
+        "Consolidate OK: %d files, %d rows (removed %d, %.1f%%)",
+        len(files),
+        rows,
+        removed,
+        100 * removed / normalize_rows,
+    )
+    return rows
+
+
+def _validate_tokens(base: str, consolidate_rows: int) -> int:
+    train_dir = f"{base}/tokens/train"
+    ledger = CacheLedger.load(train_dir)
+    if not ledger.is_finished:
+        raise SystemExit(f"Tokenizer cache ledger not finished: {train_dir}")
+    if ledger.total_num_rows <= 0:
+        raise SystemExit(f"Tokenizer cache ledger has 0 rows: {train_dir}")
+
+    # Token rows should match consolidate rows exactly
+    if ledger.total_num_rows != consolidate_rows:
+        raise SystemExit(
+            f"Tokens: {ledger.total_num_rows} rows != consolidate {consolidate_rows} rows — "
+            "tokenizer should process every consolidated document"
+        )
+
+    logger.info("Tokens OK: %d rows (matches consolidate)", ledger.total_num_rows)
+    return ledger.total_num_rows
 
 
 def main() -> None:
@@ -143,23 +203,19 @@ def main() -> None:
     run_id = os.environ["SMOKE_RUN_ID"]
     base = f"{prefix}/datakit-smoke/{run_id}"
 
-    normalize_rows = _validate_normalize(base)
+    download_rows = _validate_download(base)
+    normalize_rows = _validate_normalize(base, download_rows)
     dedup_rows = _validate_dedup(base, normalize_rows)
-    consol_rows = _validate_consolidate(base, normalize_rows, dedup_rows)
-
-    # Tokens
-    _assert_non_empty(f"{base}/tokens")
-    train_dir = f"{base}/tokens/train"
-    ledger = CacheLedger.load(train_dir)
-    if not ledger.is_finished:
-        raise SystemExit(f"Tokenizer cache ledger not finished: {train_dir}")
-    if ledger.total_num_rows <= 0:
-        raise SystemExit(f"Tokenizer cache ledger has 0 rows: {train_dir}")
-    logger.info("Tokenizer cache OK: %d rows at %s", ledger.total_num_rows, train_dir)
+    consolidate_rows = _validate_consolidate(base, normalize_rows, dedup_rows)
+    token_rows = _validate_tokens(base, consolidate_rows)
 
     logger.info(
-        "All checks passed: normalize=%d, dedup_flagged=%d, consolidate=%d, tokens=%d",
-        normalize_rows, dedup_rows, consol_rows, ledger.total_num_rows,
+        "All checks passed: download=%d → normalize=%d → dedup_flagged=%d → consolidate=%d → tokens=%d",
+        download_rows,
+        normalize_rows,
+        dedup_rows,
+        consolidate_rows,
+        token_rows,
     )
 
 
