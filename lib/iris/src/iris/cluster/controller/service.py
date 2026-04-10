@@ -90,7 +90,12 @@ from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.query import execute_raw_query
 from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
-from iris.cluster.controller.transitions import ControllerTransitions, TASK_RESOURCE_HISTORY_RETENTION
+from iris.cluster.controller.transitions import (
+    TASK_RESOURCE_HISTORY_RETENTION,
+    ControllerTransitions,
+    HeartbeatApplyRequest,
+    TaskUpdate,
+)
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.log_store import build_log_source, worker_log_key
 from iris.cluster.process_status import get_process_status
@@ -2602,15 +2607,51 @@ class ControllerServiceImpl:
             total_running=len(running_protos),
         )
 
+    # --- Worker Push ---
+
     def update_task_status(
         self,
         request: controller_pb2.Controller.UpdateTaskStatusRequest,
         _ctx: Any,
     ) -> controller_pb2.Controller.UpdateTaskStatusResponse:
-        """Worker pushes task state transitions. Phase 0: no-op stub."""
-        logger.debug(
-            "UpdateTaskStatus from worker %s: %d updates (not yet active)",
-            request.worker_id,
-            len(request.updates),
+        """Worker pushes task state transitions to controller.
+
+        Converts the proto updates into TaskUpdate dataclasses and applies
+        them through the same ControllerTransitions.apply_heartbeat() path
+        used by the poll-based heartbeat. Returns any tasks the controller
+        wants the worker to stop.
+        """
+        updates: list[TaskUpdate] = []
+        for entry in request.updates:
+            if entry.state in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING):
+                continue
+            updates.append(
+                TaskUpdate(
+                    task_id=JobName.from_wire(entry.task_id),
+                    attempt_id=entry.attempt_id,
+                    new_state=entry.state,
+                    error=entry.error or None,
+                    exit_code=entry.exit_code if entry.exit_code != 0 else None,
+                    resource_usage=entry.resource_usage if entry.resource_usage.ByteSize() > 0 else None,
+                    container_id=entry.container_id or None,
+                )
+            )
+
+        tasks_to_stop: list[str] = []
+        if updates:
+            worker_id = WorkerId(request.worker_id)
+            result = self._transitions.apply_heartbeat(
+                HeartbeatApplyRequest(
+                    worker_id=worker_id,
+                    worker_resource_snapshot=None,
+                    updates=updates,
+                )
+            )
+            if result.tasks_to_kill:
+                tasks_to_stop = [tid.to_wire() for tid in result.tasks_to_kill]
+            # Wake the controller so it can act on any state changes promptly
+            self._controller.wake()
+
+        return controller_pb2.Controller.UpdateTaskStatusResponse(
+            tasks_to_stop=tasks_to_stop,
         )
-        return controller_pb2.Controller.UpdateTaskStatusResponse()

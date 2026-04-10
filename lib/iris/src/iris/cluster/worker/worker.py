@@ -4,6 +4,7 @@
 """Unified worker managing all components and lifecycle."""
 
 import logging
+import queue
 import threading
 import time
 from collections.abc import Callable
@@ -122,6 +123,93 @@ def worker_config_from_proto(
     )
 
 
+# Maximum queued updates before we start dropping the oldest entries.
+# The poll heartbeat acts as a safety net, so bounded loss is acceptable.
+_MAX_PENDING_UPDATES = 1000
+
+
+def _drain_queue(q: queue.Queue[job_pb2.WorkerTaskStatus], timeout: float) -> list[job_pb2.WorkerTaskStatus]:
+    """Block up to *timeout* for the first item, then drain all remaining items without blocking."""
+    items: list[job_pb2.WorkerTaskStatus] = []
+    try:
+        items.append(q.get(timeout=timeout))
+    except queue.Empty:
+        return items
+    # Drain everything else that's already queued
+    while True:
+        try:
+            items.append(q.get_nowait())
+        except queue.Empty:
+            break
+    return items
+
+
+class TaskStateReporter:
+    """Batches task state transitions and pushes them to the controller via UpdateTaskStatus.
+
+    Runs as a background thread. The worker enqueues WorkerTaskStatus protos on
+    every state transition (via TaskAttempt.on_state_change). The reporter drains
+    the queue in batches and sends them to the controller. On transient failure,
+    items are re-enqueued for retry with exponential backoff.
+    """
+
+    def __init__(
+        self,
+        controller_client: ControllerServiceClientSync,
+        worker_id: str,
+        batch_interval: float = 0.5,
+    ):
+        self._queue: queue.Queue[job_pb2.WorkerTaskStatus] = queue.Queue(maxsize=_MAX_PENDING_UPDATES)
+        self._controller_client = controller_client
+        self._worker_id = worker_id
+        self._batch_interval = batch_interval
+        self._stop_callback: Callable[[str], None] | None = None
+
+    def report(self, status: job_pb2.WorkerTaskStatus) -> None:
+        """Enqueue a task status update. Drops oldest if queue is full."""
+        try:
+            self._queue.put_nowait(status)
+        except queue.Full:
+            # Drop the oldest entry to make room; the poll loop will catch up.
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._queue.put_nowait(status)
+            except queue.Full:
+                pass
+
+    def run(self, stop_event: threading.Event) -> None:
+        """Main loop: drain queue, batch, push to controller."""
+        backoff = ExponentialBackoff(initial=0.5, maximum=30.0)
+        while not stop_event.is_set():
+            items = _drain_queue(self._queue, timeout=self._batch_interval)
+            if not items:
+                continue
+
+            request = controller_pb2.Controller.UpdateTaskStatusRequest(
+                worker_id=self._worker_id,
+                updates=items,
+            )
+            try:
+                response = self._controller_client.update_task_status(request)
+                backoff.reset()
+                if response.tasks_to_stop and self._stop_callback:
+                    for task_id in response.tasks_to_stop:
+                        self._stop_callback(task_id)
+            except Exception as e:
+                logger.warning("Failed to push task status to controller: %s", e)
+                # Re-enqueue items for retry (drop if queue is full)
+                for item in items:
+                    try:
+                        self._queue.put_nowait(item)
+                    except queue.Full:
+                        break
+                wait_time = backoff.next_interval()
+                stop_event.wait(wait_time)
+
+
 class Worker:
     """Unified worker managing all components and lifecycle."""
 
@@ -210,6 +298,7 @@ class Worker:
             worker_id = infer_worker_id(hardware)
         self._worker_id: str | None = worker_id
         self._controller_client: ControllerServiceClientSync | None = None
+        self._state_reporter: TaskStateReporter | None = None
 
         # Heartbeat tracking for timeout detection
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
@@ -313,6 +402,7 @@ class Worker:
                 port_allocator=self._port_allocator,
                 poll_interval_seconds=self._config.poll_interval.to_seconds(),
             )
+            attempt.on_state_change = self._make_state_change_callback(attempt)
 
             key = (container.task_id, container.attempt_id)
             with self._lock:
@@ -419,7 +509,11 @@ class Worker:
                 if worker_id != self._worker_id:
                     self._worker_id = worker_id
                     self._attach_log_handler()
-                self._serve(stop_event)
+                self._start_state_reporter(stop_event)
+                try:
+                    self._serve(stop_event)
+                finally:
+                    self._stop_state_reporter()
         except Exception:
             logger.exception("Worker lifecycle crashed")
             raise
@@ -498,6 +592,66 @@ class Worker:
         if self._log_pusher is not None:
             self._log_pusher.close()
             self._log_pusher = None
+
+    def _start_state_reporter(self, stop_event: threading.Event) -> None:
+        """Start the background TaskStateReporter thread after registration."""
+        if not self._controller_client or not self._worker_id:
+            return
+        reporter = TaskStateReporter(
+            controller_client=self._controller_client,
+            worker_id=self._worker_id,
+        )
+        reporter._stop_callback = self._kill_task_by_id
+        self._state_reporter = reporter
+        self._threads.spawn(
+            target=reporter.run,
+            name="task-state-reporter",
+        )
+
+    def _stop_state_reporter(self) -> None:
+        """Stop the TaskStateReporter thread."""
+        self._state_reporter = None
+
+    def _kill_task_by_id(self, task_id: str) -> None:
+        """Kill a task by ID. Used as callback from TaskStateReporter."""
+        current = self._get_current_attempt(task_id)
+        if current and current.status not in self._TERMINAL_STATES:
+            self._kill_task_attempt(task_id, current.attempt_id, async_kill=True)
+
+    def _make_state_change_callback(self, attempt: TaskAttempt) -> Callable[[job_pb2.TaskState], None]:
+        """Build a closure that enqueues a WorkerTaskStatus when a task transitions state."""
+
+        def _on_state_change(new_state: job_pb2.TaskState) -> None:
+            reporter = self._state_reporter
+            if reporter is None:
+                return
+            # Map PENDING to BUILDING for controller's benefit (same as heartbeat path)
+            reported_state = new_state
+            if reported_state == job_pb2.TASK_STATE_PENDING:
+                reported_state = job_pb2.TASK_STATE_BUILDING
+
+            entry = job_pb2.WorkerTaskStatus(
+                task_id=attempt.task_id.to_wire(),
+                attempt_id=attempt.attempt_id,
+                state=reported_state,
+                exit_code=attempt.exit_code or 0,
+                error=attempt.error or "",
+                container_id=attempt.platform_container_id or "",
+            )
+            if attempt.finished_at is not None:
+                entry.finished_at.CopyFrom(timestamp_to_proto(attempt.finished_at))
+            usage = job_pb2.ResourceUsage(
+                memory_mb=attempt.current_memory_mb,
+                memory_peak_mb=attempt.peak_memory_mb,
+                disk_mb=attempt.disk_mb,
+                cpu_millicores=attempt.current_cpu_millicores,
+                process_count=attempt.process_count,
+            )
+            if usage.ByteSize() > 0:
+                entry.resource_usage.CopyFrom(usage)
+            reporter.report(entry)
+
+        return _on_state_change
 
     def _resolve_address(self) -> str:
         """Resolve the address to advertise to the controller."""
@@ -651,6 +805,7 @@ class Worker:
             log_pusher=self._log_pusher,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
+        attempt.on_state_change = self._make_state_change_callback(attempt)
 
         with self._lock:
             self._tasks[key] = attempt
