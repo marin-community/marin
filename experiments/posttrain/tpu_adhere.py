@@ -159,8 +159,13 @@ TRAIN_LOSS_KEY = "train/loss"
 
 
 def load_metric_history(history_path: Path, metric_key: str) -> list[tuple[int, float]]:
-    """Load non-null metric points from an archived W&B history file."""
-    points: list[tuple[int, float]] = []
+    """Load non-null metric points from an archived W&B history file.
+
+    W&B history exports can contain restart segments where global_step resets
+    and previously logged points are replayed. For plotting, collapse duplicate
+    steps by keeping the last observed value and then sort by step.
+    """
+    points_by_step: dict[int, float] = {}
     with gzip.open(history_path, "rt", encoding="utf-8") as f:
         for line in f:
             row = json.loads(line)
@@ -168,8 +173,8 @@ def load_metric_history(history_path: Path, metric_key: str) -> list[tuple[int, 
             global_step = row.get("global_step")
             if metric_value is None or global_step is None:
                 continue
-            points.append((int(global_step), float(metric_value)))
-    return points
+            points_by_step[int(global_step)] = float(metric_value)
+    return sorted(points_by_step.items())
 
 
 def final_metric_value(history_path: Path, metric_key: str) -> float:
