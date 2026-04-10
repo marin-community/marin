@@ -100,6 +100,11 @@ SETUP
     exit 0
 fi
 
+echo "==> Resolving project number for IAP audience..."
+PROJECT_NUMBER=$(gcloud projects describe "${PROJECT}" --format='value(projectNumber)')
+IAP_AUDIENCE="/projects/${PROJECT_NUMBER}/locations/${REGION}/services/${SERVICE}"
+echo "    IAP_AUDIENCE=${IAP_AUDIENCE}"
+
 echo "==> Building and deploying ${SERVICE} to Cloud Run..."
 
 gcloud run deploy "${SERVICE}" \
@@ -112,7 +117,7 @@ gcloud run deploy "${SERVICE}" \
   --network="${VPC_NETWORK}" \
   --subnet="${VPC_SUBNET}" \
   --vpc-egress=private-ranges-only \
-  --set-env-vars="GCP_PROJECT=${PROJECT},CONTROLLER_ZONE=us-central1-a,CONTROLLER_LABEL=iris-marin-controller,CONTROLLER_PORT=10000,PROXY_TOKEN_SECRET=iris-iap-proxy-token" \
+  --set-env-vars="GCP_PROJECT=${PROJECT},CONTROLLER_ZONE=us-central1-a,CONTROLLER_LABEL=iris-marin-controller,CONTROLLER_PORT=10000,PROXY_TOKEN_SECRET=iris-iap-proxy-token,IAP_AUDIENCE=${IAP_AUDIENCE}" \
   --timeout=300 \
   --memory=512Mi \
   --cpu=1 \
