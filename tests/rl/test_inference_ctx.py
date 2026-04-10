@@ -3,6 +3,7 @@
 
 """Tests for InferenceContext utilities and chat template handling."""
 
+import json
 import sys
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -15,17 +16,21 @@ from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
 from transformers import AutoTokenizer
 
+import marin.rl.environments.inference_ctx.vllm as vllm_module
 from marin.rl.environments.inference_ctx import (
     LevanterInferenceContext,
     LevanterInferenceContextConfig,
     MODEL_MAPPINGS,
     MODEL_TRANSPOSE_KEYS,
+    ToolCall,
+    ToolSpec,
     VLLMSamplingConfig,
     vLLMInferenceContext,
     vLLMInferenceContextConfig,
 )
 from marin.rl.environments.inference_ctx.vllm import InferenceMode
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
+from marin.rl.environments.inference_ctx.render import Qwen3Renderer
 
 _LLAMA3_MODEL_ID = "NousResearch/Meta-Llama-3-8B-Instruct"
 
@@ -47,6 +52,37 @@ class DummyInferenceServer:
             model_name: str = "test-model"
 
         return Config()
+
+
+class RendererTestTokenizer:
+    """Tokenizer stub that preserves text and treats <|im_end|> as one token."""
+
+    _END_MESSAGE_TOKEN = 99999
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        del add_special_tokens
+        tokens = []
+        cursor = 0
+        while cursor < len(text):
+            if text.startswith("<|im_end|>", cursor):
+                tokens.append(self._END_MESSAGE_TOKEN)
+                cursor += len("<|im_end|>")
+                continue
+            tokens.append(ord(text[cursor]))
+            cursor += 1
+        return tokens
+
+    def decode(self, tokens: list[int]) -> str:
+        parts = []
+        for token in tokens:
+            if token == self._END_MESSAGE_TOKEN:
+                parts.append("<|im_end|>")
+            else:
+                parts.append(chr(token))
+        return "".join(parts)
+
+    def get_vocab(self) -> dict[str, int]:
+        return {"<|im_end|>": self._END_MESSAGE_TOKEN}
 
 
 @pytest.fixture(scope="session")
@@ -279,6 +315,314 @@ def test_vllm_inference_context_uses_canonical_model_name(monkeypatch):
     assert ctx.model_name == "gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f"
     assert ctx.canonical_model_name == "meta-llama/Llama-3.1-8B-Instruct"
     assert ctx.renderer == "meta-llama/Llama-3.1-8B-Instruct"
+
+
+def test_qwen_renderer_renders_tool_schema_and_openreward_tool_payload():
+    tokenizer = RendererTestTokenizer()
+    renderer = Qwen3Renderer(tokenizer)
+    tool_call = ToolCall(
+        id="call_submit",
+        function=ToolCall.FunctionBody(
+            name="submit_answer",
+            arguments='{"confidence":1,"answer":"42"}',
+        ),
+    )
+    tool_spec = ToolSpec(
+        function=ToolSpec.FunctionBody(
+            name="submit_answer",
+            description="Submit the final answer.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "answer": {"type": "string"},
+                    "confidence": {"type": "number"},
+                },
+                "required": ["answer"],
+            },
+        )
+    )
+
+    rendered = tokenizer.decode(
+        renderer.build_generation_prompt(
+            [
+                {
+                    "role": "assistant",
+                    "content": "Solved it.",
+                    "tool_calls": [tool_call],
+                }
+            ],
+            tools=[tool_spec],
+        )
+    )
+
+    assert "<tools>" in rendered
+    assert (
+        '{"type":"function","function":{"name":"submit_answer","description":"Submit the final answer.",'
+        '"parameters":{"type":"object","properties":{"answer":{"type":"string"},"confidence":{"type":"number"}},'
+        '"required":["answer"]}}}'
+    ) in rendered
+    assert (
+        '<tool_call>\n{"name":"submit_answer","arguments":{"confidence":1,"answer":"42"},"id":"call_submit"}\n</tool_call>'
+        in rendered
+    )
+
+
+def test_qwen_renderer_parses_newline_wrapped_canonical_tool_call():
+    tokenizer = RendererTestTokenizer()
+    renderer = Qwen3Renderer(tokenizer)
+    response = tokenizer.encode(
+        '<tool_call>\n{"name":"submit_answer","arguments":{"answer":"42"},"id":"call_submit"}\n</tool_call><|im_end|>'
+    )
+
+    parse_result = renderer.parse_response(response)
+
+    assert parse_result.parse_success is True
+    assert parse_result.assistant_turn.content == ""
+    assert parse_result.assistant_turn.tool_calls[0].function.name == "submit_answer"
+    assert json.loads(parse_result.assistant_turn.tool_calls[0].function.arguments) == {"answer": "42"}
+    assert parse_result.assistant_turn.tool_calls[0].id == "call_submit"
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_id"),
+    [
+        ('{"name":"submit_answer","arguments":{"answer":"42"},"id":"call_submit"}', "call_submit"),
+        ('{"name":"submit_answer","args":{"answer":"42"}}', None),
+    ],
+)
+def test_qwen_renderer_parses_openreward_and_legacy_tool_calls(payload: str, expected_id: str | None):
+    tokenizer = RendererTestTokenizer()
+    renderer = Qwen3Renderer(tokenizer)
+
+    response = tokenizer.encode(f"<tool_call>{payload}</tool_call><|im_end|>")
+    parse_result = renderer.parse_response(response)
+
+    assert parse_result.parse_success is True
+    assert parse_result.assistant_turn.content == ""
+    assert parse_result.assistant_turn.tool_calls[0].function.name == "submit_answer"
+    assert json.loads(parse_result.assistant_turn.tool_calls[0].function.arguments) == {"answer": "42"}
+    assert parse_result.assistant_turn.tool_calls[0].id == expected_id
+
+
+def test_qwen_renderer_strips_raw_tool_call_xml_from_assistant_content():
+    tokenizer = RendererTestTokenizer()
+    renderer = Qwen3Renderer(tokenizer)
+    response = tokenizer.encode(
+        "I should submit the final answer now.\n"
+        '<tool_call>{"name":"submit_answer","arguments":{"answer":"42"}}</tool_call>'
+        "<|im_end|>"
+    )
+
+    parse_result = renderer.parse_response(response)
+
+    assert parse_result.parse_success is True
+    assert parse_result.assistant_turn.content == "I should submit the final answer now."
+    assert "<tool_call>" not in parse_result.assistant_turn.content
+    assert len(parse_result.assistant_turn.tool_calls) == 1
+
+
+def test_qwen_renderer_strips_tool_calls_and_keeps_non_tool_text_with_multiple_calls():
+    tokenizer = RendererTestTokenizer()
+    renderer = Qwen3Renderer(tokenizer)
+    response = tokenizer.encode(
+        "Need two lookups before I answer.\n"
+        '<tool_call>{"name":"search","arguments":{"query":"cats"}}</tool_call>\n'
+        '<tool_call>{"name":"search","arguments":{"query":"dogs"}}</tool_call>\n'
+        "Done."
+        "<|im_end|>"
+    )
+
+    parse_result = renderer.parse_response(response)
+
+    assert parse_result.parse_success is True
+    assert parse_result.assistant_turn.content == "Need two lookups before I answer.\n\nDone."
+    assert [tool_call.function.name for tool_call in parse_result.assistant_turn.tool_calls] == ["search", "search"]
+    assert json.loads(parse_result.assistant_turn.tool_calls[0].function.arguments) == {"query": "cats"}
+    assert json.loads(parse_result.assistant_turn.tool_calls[1].function.arguments) == {"query": "dogs"}
+
+
+def test_vllm_batch_completions_passes_tools_to_renderer_and_stop_sequence(monkeypatch):
+    calls = {}
+    tool_spec = ToolSpec(
+        function=ToolSpec.FunctionBody(
+            name="submit_answer",
+            description="Submit the final answer.",
+            parameters={"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]},
+        )
+    )
+
+    class FakeSamplingParams:
+        def __init__(self, **kwargs):
+            calls["sampling_kwargs"] = kwargs
+            self.max_tokens = kwargs["max_tokens"]
+
+    class FakeTokensPrompt:
+        def __init__(self, *, prompt_token_ids):
+            self.prompt_token_ids = prompt_token_ids
+
+    class FakeRenderer:
+        def build_generation_prompt(self, messages, role="assistant", prefill=None, tools=None):
+            del role, prefill
+            calls["render_messages"] = messages
+            calls["render_tools"] = tools
+            return [11, 22, 33]
+
+    class FakeLLM:
+        def generate(self, prompts, sampling_params):
+            calls["prompts"] = prompts
+            calls["sampling_params"] = sampling_params
+            return []
+
+    monkeypatch.setattr(vllm_module, "SamplingParams", FakeSamplingParams)
+    monkeypatch.setattr(vllm_module, "TokensPrompt", FakeTokensPrompt)
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_llm_engine",
+        staticmethod(lambda _config: FakeLLM()),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: SimpleNamespace(get_vocab=lambda: {}),
+    )
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_renderer",
+        staticmethod(lambda _model_name, _tokenizer: FakeRenderer()),
+    )
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="Qwen/Qwen3-8B",
+            canonical_model_name="Qwen/Qwen3-8B",
+            max_model_len=1024,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(),
+        )
+    )
+
+    completions = ctx.batch_completions(
+        prompts=["Solve the problem and call submit_answer."],
+        temperature=0.7,
+        n=1,
+        stop=["</tool_call>"],
+        tools=[tool_spec],
+    )
+
+    assert completions == []
+    assert calls["sampling_kwargs"]["stop"] == ["</tool_call>"]
+    assert calls["render_messages"] == [{"role": "user", "content": "Solve the problem and call submit_answer."}]
+    assert calls["render_tools"] == [tool_spec]
+
+
+def test_vllm_assistant_turn_from_choice_parses_tool_calls(monkeypatch):
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_llm_engine",
+        staticmethod(lambda _config: object()),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: RendererTestTokenizer(),
+    )
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="Qwen/Qwen3-8B",
+            canonical_model_name="Qwen/Qwen3-8B",
+            max_model_len=1024,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(),
+        )
+    )
+
+    choice = Choice(
+        finish_reason="stop",
+        index=0,
+        message=ChatCompletionMessage(
+            role="assistant",
+            content='<tool_call>{"name":"submit_answer","arguments":{"answer":"42"}}</tool_call>',
+        ),
+        logprobs=ChoiceLogprobs(content=[]),
+    )
+    choice.response_token_ids = RendererTestTokenizer().encode(
+        '<tool_call>{"name":"submit_answer","arguments":{"answer":"42"}}</tool_call><|im_end|>'
+    )
+
+    parse_result = ctx.assistant_turn_from_choice(choice)
+
+    assert parse_result.parse_success is True
+    assert parse_result.assistant_turn.content == ""
+    assert parse_result.assistant_turn.tool_calls[0].function.name == "submit_answer"
+    assert json.loads(parse_result.assistant_turn.tool_calls[0].function.arguments) == {"answer": "42"}
+
+
+def test_vllm_convert_preserves_tool_call_token_ids_and_logprobs(monkeypatch):
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_llm_engine",
+        staticmethod(lambda _config: object()),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: SimpleNamespace(
+            get_vocab=lambda: {"<tool_call>": 101, '{"answer":"42"}': 102, "</tool_call>": 103}
+        ),
+    )
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_renderer",
+        staticmethod(lambda _model_name, _tokenizer: object()),
+    )
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="Qwen/Qwen3-8B",
+            canonical_model_name="Qwen/Qwen3-8B",
+            max_model_len=1024,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(),
+        )
+    )
+
+    request_output = SimpleNamespace(
+        request_id="req-1",
+        prompt_token_ids=[1, 2, 3],
+        outputs=[
+            SimpleNamespace(
+                finish_reason="stop",
+                text='<tool_call>{"name":"submit_answer","arguments":{"answer":"42"}}</tool_call>',
+                token_ids=[101, 102, 103],
+                logprobs=[
+                    {
+                        101: SimpleNamespace(rank=1, logprob=-0.1),
+                        999: SimpleNamespace(rank=2, logprob=-1.5),
+                    },
+                    {102: SimpleNamespace(rank=1, logprob=-0.2)},
+                    {103: SimpleNamespace(rank=1, logprob=-0.3)},
+                ],
+            )
+        ],
+    )
+
+    completion = ctx._convert_vllm_to_openai(request_output)
+    choice = completion.choices[0]
+
+    assert choice.message.content == '<tool_call>{"name":"submit_answer","arguments":{"answer":"42"}}</tool_call>'
+    assert choice.prompt_token_ids == [1, 2, 3]
+    assert choice.response_token_ids == [101, 102, 103]
+    np.testing.assert_array_equal(
+        ctx.response_tokens_from_choice(choice),
+        np.array([101, 102, 103], dtype=np.int32),
+    )
+    np.testing.assert_allclose(
+        ctx.logprobs_from_choice(choice),
+        np.array([-0.1, -0.2, -0.3], dtype=np.float32),
+    )
+    assert choice.logprobs.content[0].token == "<tool_call>"
+    assert choice.logprobs.content[0].top_logprobs[1].token == "<id_999>"
 
 
 def test_vllm_sync_engine_receives_kv_cache_metrics_flag(monkeypatch):
