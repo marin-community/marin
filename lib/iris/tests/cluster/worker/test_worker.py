@@ -425,76 +425,6 @@ def test_duplicate_attempt_rejected(mock_worker, mock_runtime):
     task.thread.join(timeout=15.0)
 
 
-def test_heartbeat_kill_blocks_until_stopped(mock_worker, mock_runtime):
-    """Heartbeat blocks on tasks_to_kill so the old task releases resources before returning."""
-    mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
-
-    def slow_stop(force=False):
-        time.sleep(0.3)
-
-    mock_handle.stop_hook = slow_stop
-    mock_runtime.create_container = Mock(return_value=mock_handle)
-
-    task_id_wire = JobName.root("test-user", "hb-kill-task").task(0).to_wire()
-    request = create_run_task_request(task_id=task_id_wire)
-    mock_worker.submit_task(request)
-
-    # Wait for task to reach RUNNING
-    task = mock_worker.get_task(task_id_wire)
-    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
-
-    # Build a heartbeat that requests this task be killed.
-    # Include the task in expected_tasks so the reconciliation path doesn't
-    # also try to kill it -- we only want to exercise the tasks_to_kill path.
-    heartbeat_req = job_pb2.HeartbeatRequest(
-        tasks_to_kill=[task_id_wire],
-        expected_tasks=[
-            job_pb2.WorkerTaskStatus(task_id=task_id_wire, attempt_id=0),
-        ],
-    )
-
-    response = mock_worker.handle_heartbeat(heartbeat_req)
-
-    assert task.should_stop is True
-    # The task is KILLED by the time handle_heartbeat returns — kill is blocking
-    assert task.status == job_pb2.TASK_STATE_KILLED
-
-    # The response should still include the task's current state
-    assert len(response.tasks) >= 1
-
-
-def test_heartbeat_reconciliation_kill_is_non_blocking(mock_worker, mock_runtime):
-    """Tasks not in expected_tasks are killed asynchronously during heartbeat reconciliation."""
-    mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
-
-    def slow_stop(force=False):
-        time.sleep(0.5)
-
-    mock_handle.stop_hook = slow_stop
-    mock_runtime.create_container = Mock(return_value=mock_handle)
-
-    task_id_wire = JobName.root("test-user", "reconcile-kill").task(0).to_wire()
-    request = create_run_task_request(task_id=task_id_wire)
-    mock_worker.submit_task(request)
-
-    task = mock_worker.get_task(task_id_wire)
-    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
-
-    # Send heartbeat with empty expected_tasks -- the worker should kill
-    # the running task because it's no longer expected
-    heartbeat_req = job_pb2.HeartbeatRequest(expected_tasks=[])
-
-    mock_worker.handle_heartbeat(heartbeat_req)
-
-    # should_stop is set synchronously by the heartbeat before the async stop() runs
-    assert task.should_stop is True
-    # The task is not yet KILLED because slow_stop is async — confirms kill is non-blocking
-    assert task.status != job_pb2.TASK_STATE_KILLED
-
-    task.thread.join(timeout=15.0)
-    assert task.status == job_pb2.TASK_STATE_KILLED
-
-
 def test_kill_nonexistent_task(mock_worker):
     """Test killing a nonexistent task returns False."""
     result = mock_worker.kill_task(JobName.root("test-user", "nonexistent-task").task(0).to_wire())
@@ -990,46 +920,6 @@ def test_adopt_accepts_matching_worker_id(mock_worker, mock_runtime):
     adopted = mock_worker.adopt_running_containers()
 
     assert adopted == 1
-
-
-def test_heartbeat_after_adoption_reports_running(mock_worker, mock_runtime):
-    """After adoption, heartbeat reconciliation should report the task as RUNNING."""
-    container = _make_discovered_container()
-    mock_runtime.discover_containers = Mock(return_value=[container])
-    mock_worker.adopt_running_containers()
-
-    heartbeat_req = job_pb2.HeartbeatRequest(
-        expected_tasks=[
-            job_pb2.WorkerTaskStatus(
-                task_id=container.task_id,
-                attempt_id=container.attempt_id,
-            )
-        ],
-    )
-    response = mock_worker.handle_heartbeat(heartbeat_req)
-
-    assert len(response.tasks) == 1
-    task_status = response.tasks[0]
-    assert task_status.task_id == container.task_id
-    assert task_status.state == job_pb2.TASK_STATE_RUNNING
-
-
-def test_heartbeat_without_adoption_reports_worker_failed(mock_worker, mock_runtime):
-    """Without adoption, expected tasks should report WORKER_FAILED."""
-    mock_runtime.discover_containers = Mock(return_value=[])
-
-    heartbeat_req = job_pb2.HeartbeatRequest(
-        expected_tasks=[
-            job_pb2.WorkerTaskStatus(
-                task_id=JobName.root("test-user", "test-job").task(0).to_wire(),
-                attempt_id=0,
-            )
-        ],
-    )
-    response = mock_worker.handle_heartbeat(heartbeat_req)
-
-    assert len(response.tasks) == 1
-    assert response.tasks[0].state == job_pb2.TASK_STATE_WORKER_FAILED
 
 
 def test_stop_preserve_containers_does_not_kill_tasks(mock_worker, mock_runtime):

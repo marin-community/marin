@@ -54,8 +54,6 @@ from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
-    DispatchBatch,
-    HEARTBEAT_FAILURE_THRESHOLD,
     HeartbeatApplyRequest,
     TaskUpdate,
 )
@@ -82,12 +80,6 @@ def check_is_job_finished(j: JobDetailRow) -> bool:
 
 class FakeProvider:
     """Minimal TaskProvider for tests that only exercise transitions, not RPCs."""
-
-    def sync(
-        self,
-        batches: list[DispatchBatch],
-    ) -> list[tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]]:
-        return [(b, None, "no stub") for b in batches]
 
     def get_process_status(
         self,
@@ -570,11 +562,7 @@ def transition_task(
 
 
 def fail_worker(state: ControllerTransitions, worker_id: WorkerId, error: str) -> None:
-    batch = state.drain_dispatch(worker_id)
-    if batch is None:
-        return
-    for _ in range(HEARTBEAT_FAILURE_THRESHOLD):
-        state.record_heartbeat_failure(worker_id, error, batch)
+    state.fail_workers_batch([str(worker_id)], reason=error)
 
 
 # =============================================================================

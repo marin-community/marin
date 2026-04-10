@@ -5,7 +5,6 @@
 
 from typing import Protocol
 
-from iris.cluster.controller.transitions import DispatchBatch, HeartbeatApplyRequest
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2
 
@@ -21,29 +20,13 @@ class ProviderUnsupportedError(ProviderError):
 class TaskProvider(Protocol):
     """Abstraction over a task execution backend.
 
-    The controller calls sync() in a loop. The provider is responsible for
-    submitting/cancelling tasks and collecting their state. It returns
-    HeartbeatApplyRequest batches which the controller applies via
-    ControllerTransitions.apply_heartbeat().
+    The WorkerProvider communicates with workers via focused RPCs (Ping,
+    StartTasks, StopTasks, PollTasks). The controller orchestrates these
+    calls through dedicated loops.
 
     Logs are pushed directly to the LogService by workers/tasks, not carried
     via heartbeats or fetched from the provider.
     """
-
-    def sync(
-        self,
-        batches: list[DispatchBatch],
-    ) -> list[tuple[DispatchBatch, HeartbeatApplyRequest | None, str | None]]:
-        """Sync task state with the execution backend.
-
-        Args:
-            batches: One DispatchBatch per active execution unit, drained from the DB.
-
-        Returns:
-            For each batch: (batch, apply_request | None, error_str | None).
-            apply_request is None on communication failure (caller uses fail_heartbeat).
-        """
-        ...
 
     def get_process_status(
         self,

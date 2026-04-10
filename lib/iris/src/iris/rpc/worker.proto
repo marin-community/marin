@@ -15,8 +15,8 @@
 edition = "2023";
 
 // Worker-specific request/response messages and the WorkerService RPC.
-// Shared types (including RunTaskRequest and the heartbeat protocol) live in
-// job.proto; controller-specific types live in controller.proto.
+// Shared types (including RunTaskRequest) live in job.proto;
+// controller-specific types live in controller.proto.
 //
 // Package deliberately kept as iris.cluster to preserve the wire-protocol URL
 // /iris.cluster.WorkerService/... for all existing workers and the controller.
@@ -108,7 +108,6 @@ service WorkerService {
   rpc GetTaskStatus(Worker.GetTaskStatusRequest) returns (iris.job.TaskStatus);
   rpc ListTasks(Worker.ListTasksRequest) returns (Worker.ListTasksResponse);
   rpc HealthCheck(iris.job.Empty) returns (Worker.HealthResponse);
-  rpc Heartbeat(iris.job.HeartbeatRequest) returns (iris.job.HeartbeatResponse);
   rpc ProfileTask(iris.job.ProfileTaskRequest) returns (iris.job.ProfileTaskResponse);
 
   // Process status (local process info + recent logs)
@@ -117,7 +116,7 @@ service WorkerService {
   // Exec in container
   rpc ExecInContainer(Worker.ExecInContainerRequest) returns (Worker.ExecInContainerResponse);
 
-  // --- Heartbeat Refactor: New focused RPCs ---
+  // Focused RPCs for task lifecycle management
   rpc Ping(Worker.PingRequest) returns (Worker.PingResponse);
   rpc StartTasks(Worker.StartTasksRequest) returns (Worker.StartTasksResponse);
   rpc StopTasks(Worker.StopTasksRequest) returns (Worker.StopTasksResponse);
