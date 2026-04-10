@@ -891,9 +891,6 @@ class ZephyrCoordinator:
             for items in materialized:
                 flat_result.extend(items)
 
-            # Signal workers to shut down now that all stages are complete.
-            self.shutdown()
-
             return flat_result
         finally:
             with self._lock:
