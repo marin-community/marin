@@ -133,3 +133,13 @@ Parent issue: https://github.com/marin-community/marin/issues/4435
   - `/kevin/swe-zero-step5-multi`: running on v6e-1 (started 04:30:24Z)
   - `/kevin/swe-zero-step6-multi`: running on v6e-1 (started 04:30:40Z)
 - **Negative**: Stale Gemma Ray jobs are stuck PENDING — Ray's stop API on PENDING jobs is a no-op (`stopped: true` returns but state stays PENDING; DELETE refuses for non-terminal state). They'll only clear when supervisor start timeout fires (and they're submitted to Iris-managed Ray clusters not Iris itself, so `iris job kill` can't see them).
+
+### 2026-04-10 — SZ-009: Real cloned worktree + sandboxed bash, trajectories grounded
+- **Change**: Replaced `RepoSnapshot.from_pr` (in-memory, patch-derived) with `WorkTree` (real shallow git clone at `base_commit` + `test_patch` applied) and `simulate_bash` with `safe_exec` (real subprocess against the worktree, sandboxed via regex blocklist).
+- **New modules**:
+  - `safe_exec.py` — bash subprocess sandbox with blocklist for python/pytest/pip/npm/etc., shell -c smuggling, network, git history mutation. Read-only commands pass through.
+  - `worktree.py` — per-rollout WorkTree manager. Tries GCS pre-built cache (`gs://marin-us-central2/swe_zero/repo_cache/`), falls back to lazy shallow git clone. Each rollout gets a unique tempdir with auto-cleanup.
+  - `clone_repos.py` — Zephyr pipeline that bulk-clones unique `(repo, base_commit)` pairs and uploads tarballs to GCS. Idempotent, parallelized, writes JSONL manifest.
+- **Also fixed**: `MAX_TOKENS_PER_TURN=4096` was causing HTTP 400 mid-rollout with the 8K-context model. Replaced with dynamic per-turn cap: `min(MAX_OUTPUT_TOKENS=1024, max_total_tokens - input_estimate - RESERVE_TOKENS)`.
+- **Trajectory quality**: Real grounded `find`/`grep`/`cat` against the actual repo at base_commit. Agent can discover that a file does not exist, pivot to a different lookup, and explore the real directory tree. See SZ-009 issue comment for before/after example.
+- **Resubmitted Step 5**: `/kevin/swe-zero-step5-worktree` running on v6e-1, ~10–20s/rollout, lazy clone is ~0.3s for serpent-tools.
