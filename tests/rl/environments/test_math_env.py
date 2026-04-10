@@ -55,8 +55,10 @@ class DummyInferenceContext(LevanterInferenceContext):
         n,
         decoding,
         system_prompt=None,
+        tools=None,
     ):
         """Return mock completions for each prompt."""
+        del n, decoding, system_prompt, tools
         return [create_mock_chat_completion(self.tokenizer) for prompt in prompts]
 
 
