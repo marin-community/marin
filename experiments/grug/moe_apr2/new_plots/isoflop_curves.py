@@ -175,8 +175,8 @@ def main():
             continue
         by_budget.setdefault(r["budget"], []).append(r)
 
-    target_budgets = [1e18, 3e18, 1e19, 3e19, 1e20]
-    colors = {1e18: "C0", 3e18: "C1", 1e19: "C2", 3e19: "C3", 1e20: "C4"}
+    target_budgets = [1e18, 3e18, 1e19, 3e19, 1e20, 3e20]
+    colors = {1e18: "C0", 3e18: "C1", 1e19: "C2", 3e19: "C3", 1e20: "C4", 3e20: "C5"}
 
     # ---- Plot 1: IsoFLOP curves (BPB vs active params) ----
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -359,7 +359,9 @@ def main():
         best_dim = dims_sorted[np.argmin(macros_sorted)]
         opt_tokens = budget / (3 * compute_fpt(best_dim))
 
-        macro_optima.append({"budget": budget, "opt_params": opt_params, "opt_macro": opt_macro, "opt_tokens": opt_tokens})
+        macro_optima.append(
+            {"budget": budget, "opt_params": opt_params, "opt_macro": opt_macro, "opt_tokens": opt_tokens}
+        )
 
     # ---- Plot 2: Optimal macro_loss vs Compute (scaling law) ----
     if len(macro_optima) >= 2:
@@ -387,7 +389,11 @@ def main():
 
         for o in macro_optima:
             ax2.annotate(
-                f"{o['budget']:.0e}", (o["budget"], o["opt_macro"]), textcoords="offset points", xytext=(5, 5), fontsize=8
+                f"{o['budget']:.0e}",
+                (o["budget"], o["opt_macro"]),
+                textcoords="offset points",
+                xytext=(5, 5),
+                fontsize=8,
             )
 
         ax2.set_xscale("log")
@@ -415,11 +421,22 @@ def main():
 
         # Left: N*(C)
         ax3a.plot(C_arr, N_arr, "s", color="C0", markersize=10)
-        ax3a.plot(C_grid, 10 ** (a_n * np.log10(C_grid) + b_n), "--", color="C0", alpha=0.5,
-                  label=f"N* = {10**b_n:.2e}·C^{{{a_n:.3f}}}")
+        ax3a.plot(
+            C_grid,
+            10 ** (a_n * np.log10(C_grid) + b_n),
+            "--",
+            color="C0",
+            alpha=0.5,
+            label=f"N* = {10**b_n:.2e}·C^{{{a_n:.3f}}}",
+        )
         for o in optima:
-            ax3a.annotate(f"{o['budget']:.0e}", (o["budget"], o["opt_params_no_lm"]),
-                          textcoords="offset points", xytext=(5, 5), fontsize=8)
+            ax3a.annotate(
+                f"{o['budget']:.0e}",
+                (o["budget"], o["opt_params_no_lm"]),
+                textcoords="offset points",
+                xytext=(5, 5),
+                fontsize=8,
+            )
         ax3a.set_xscale("log")
         ax3a.set_yscale("log")
         ax3a.set_xlabel("Compute (FLOPs, excl lm_head)")
@@ -430,11 +447,22 @@ def main():
 
         # Right: T*(C)
         ax3b.plot(C_arr, T_arr, "o", color="C1", markersize=10)
-        ax3b.plot(C_grid, 10 ** (a_t * np.log10(C_grid) + b_t), "--", color="C1", alpha=0.5,
-                  label=f"T* = {10**b_t:.2e}·C^{{{a_t:.3f}}}")
+        ax3b.plot(
+            C_grid,
+            10 ** (a_t * np.log10(C_grid) + b_t),
+            "--",
+            color="C1",
+            alpha=0.5,
+            label=f"T* = {10**b_t:.2e}·C^{{{a_t:.3f}}}",
+        )
         for o in optima:
-            ax3b.annotate(f"{o['budget']:.0e}", (o["budget"], o["opt_tokens"]),
-                          textcoords="offset points", xytext=(5, 5), fontsize=8)
+            ax3b.annotate(
+                f"{o['budget']:.0e}",
+                (o["budget"], o["opt_tokens"]),
+                textcoords="offset points",
+                xytext=(5, 5),
+                fontsize=8,
+            )
         ax3b.set_xscale("log")
         ax3b.set_yscale("log")
         ax3b.set_xlabel("Compute (FLOPs, excl lm_head)")
@@ -455,8 +483,12 @@ def main():
     print("\nOptima:")
     print(f"{'Budget':>10s}  {'Opt Params':>12s}  {'Opt BPB':>10s}  {'Opt Tokens':>12s}  {'Opt Macro':>10s}")
     print("-" * 60)
-    for o, m in zip(optima, macro_optima):
-        print(f"{o['budget']:>10.0e}  {o['opt_params']:>12.2e}  {o['opt_bpb']:>10.4f}  {o['opt_tokens']:>12.2e}  {m['opt_macro']:>10.4f}")
+    for o, m in zip(optima, macro_optima, strict=True):
+        row = (
+            f"{o['budget']:>10.0e}  {o['opt_params']:>12.2e}  "
+            f"{o['opt_bpb']:>10.4f}  {o['opt_tokens']:>12.2e}  {m['opt_macro']:>10.4f}"
+        )
+        print(row)
 
 
 if __name__ == "__main__":
