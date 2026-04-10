@@ -334,7 +334,10 @@ class HfMarinTokenizer:
     def as_hf_tokenizer(self) -> Any:
         from transformers import AutoTokenizer
 
-        return AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+        if self._chat_template is not None and getattr(tokenizer, "chat_template", None) != self._chat_template:
+            tokenizer.chat_template = self._chat_template
+        return tokenizer
 
 
 @dataclasses.dataclass(frozen=True)
@@ -473,7 +476,10 @@ class KitokenMarinTokenizer:
     def as_hf_tokenizer(self) -> Any:
         from transformers import AutoTokenizer
 
-        return AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+        if self._chat_template is not None and getattr(tokenizer, "chat_template", None) != self._chat_template:
+            tokenizer.chat_template = self._chat_template
+        return tokenizer
 
 
 class TokenizerBackend(StrEnum):
