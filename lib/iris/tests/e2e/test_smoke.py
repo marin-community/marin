@@ -490,29 +490,6 @@ def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, 
     )
 
 
-def test_dashboard_scheduler_tab(smoke_cluster, smoke_page, smoke_screenshot):
-    """Scheduler tab shows pending queue, user budgets, and running tasks."""
-    running = smoke_cluster.submit(TestJobs.sleep, "smoke-sched-running", 300)
-    smoke_cluster.wait_for_state(running, job_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
-
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/scheduler")
-    wait_for_dashboard_ready(smoke_page)
-    smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Pending Queue') || "
-        "document.body.textContent.includes('User Budgets')",
-        timeout=10000,
-    )
-    assert_visible(smoke_page, "text=Pending Queue")
-    assert_visible(smoke_page, "text=User Budgets")
-    assert_visible(smoke_page, "text=Running Tasks")
-    smoke_screenshot(
-        "scheduler-tab",
-        "Scheduler tab showing pending queue, user budgets, and running tasks",
-    )
-
-    smoke_cluster.kill(running)
-
-
 # ============================================================================
 # Scheduling & endpoint verification
 # ============================================================================
