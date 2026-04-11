@@ -18,6 +18,7 @@ import logging
 import os
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from typing import Any
 
 import dupekit
@@ -28,6 +29,34 @@ from zephyr import Dataset, ZephyrContext
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class NormalizeSubdirResult:
+    """Per-subdirectory outcome of :func:`normalize_to_parquet`.
+
+    Attributes:
+        subdir: Relative subdirectory under the input root (``""`` for root).
+        output_files: Absolute paths of the Parquet partitions written.
+        counters: Aggregated zephyr counters from the subdirectory's pipeline
+            run (builtin ``zephyr/records_in``/``records_out`` plus any user
+            counters).
+    """
+
+    subdir: str
+    output_files: list[str]
+    counters: dict[str, int]
+
+
+@dataclass
+class NormalizeResult:
+    """Full outcome of :func:`normalize_to_parquet`, one entry per subdir.
+
+    Persisted as the step's ``.artifact`` so counters and output paths are
+    available to downstream consumers without re-running the pipeline.
+    """
+
+    subdirs: list[NormalizeSubdirResult] = field(default_factory=list)
 
 
 def generate_id(text: str) -> str:
@@ -186,7 +215,7 @@ def normalize_to_parquet(
     target_partition_bytes: int = 256 * 1024 * 1024,
     worker_resources: ResourceConfig | None = None,
     file_extensions: tuple[str, ...] | None = None,
-) -> None:
+) -> NormalizeResult:
     """Normalize raw downloaded data to the datakit standard Parquet format.
 
     Discovers all data files under *input_path*, groups them by subdirectory,
@@ -211,6 +240,10 @@ def normalize_to_parquet(
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
+
+    Returns:
+        A :class:`NormalizeResult` describing the output files and zephyr
+        counters for each subdirectory that was processed.
     """
     resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="10g")
 
@@ -220,7 +253,7 @@ def normalize_to_parquet(
 
     logger.info("Discovered %d subdirectories under %s", len(file_groups), input_path)
 
-    def _run_subdir(subdir: str, files: list[str]) -> None:
+    def _run_subdir(subdir: str, files: list[str]) -> NormalizeSubdirResult:
         total_bytes = _compute_total_bytes(files)
         num_shards = max(1, total_bytes // target_partition_bytes)
         output_dir = os.path.join(output_path, subdir) if subdir else output_path
@@ -239,15 +272,25 @@ def normalize_to_parquet(
             name=f"normalize-{subdir.replace('/', '-') if subdir else 'all'}",
             resources=resources,
         )
-        ctx.execute(pipeline)
+        outcome = ctx.execute(pipeline)
+        return NormalizeSubdirResult(
+            subdir=subdir,
+            output_files=list(outcome.results),
+            counters=dict(outcome.counters),
+        )
 
     # Launch all subdirectory pipelines concurrently
+    subdir_results: list[NormalizeSubdirResult] = []
     with ThreadPoolExecutor(max_workers=len(file_groups)) as pool:
         futures = {pool.submit(_run_subdir, subdir, files): subdir for subdir, files in file_groups.items()}
         for future in as_completed(futures):
             subdir = futures[future]
-            future.result()  # Propagate exceptions
+            subdir_results.append(future.result())  # Propagate exceptions
             logger.info("Completed normalization for %s", os.path.join(output_path, subdir) if subdir else output_path)
+
+    # Sort for deterministic output so re-runs produce stable .artifact contents
+    subdir_results.sort(key=lambda r: r.subdir)
+    return NormalizeResult(subdirs=subdir_results)
 
 
 def normalize_step(

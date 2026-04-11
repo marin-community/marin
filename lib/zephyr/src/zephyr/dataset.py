@@ -310,7 +310,7 @@ class Dataset(Generic[T]):
         ...     .filter(lambda x: x % 2 == 0)
         ...     .map(lambda x: x * 2)
         ... )
-        >>> results = ctx.execute(ds)
+        >>> results = ctx.execute(ds).results
         [4, 8]
     """
 
@@ -360,7 +360,7 @@ class Dataset(Generic[T]):
             ...     .map(lambda path: process_file(path))
             ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         # Normalize double slashes while preserving protocol (e.g., gs://, s3://, http://)
         pattern = re.sub(r"(?<!:)//+", "/", pattern)
@@ -527,7 +527,7 @@ class Dataset(Generic[T]):
             ...     .filter(lambda r: r["score"] > 0.5)
             ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         return Dataset(self.source, [*self.operations, FlatMapOp(fn)])
 
@@ -547,7 +547,7 @@ class Dataset(Generic[T]):
             ...     .filter(lambda r: r["score"] > 0.5)
             ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         return Dataset(self.source, [*self.operations, LoadFileOp("auto", columns)])
 
@@ -598,7 +598,7 @@ class Dataset(Generic[T]):
             ...     .map_shard(deduplicate_shard)
             ...     .write_jsonl("output/deduped-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         return Dataset(self.source, [*self.operations, MapShardOp(fn)])
 
@@ -625,7 +625,7 @@ class Dataset(Generic[T]):
             ...     .reshard(num_shards=20)              # Redistribute to 20 shards
             ...     .map(expensive_transform)            # Now uses up to 20 workers
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         if num_shards is not None and num_shards <= 0:
             raise ValueError(f"num_shards must be positive, got {num_shards}")
@@ -880,7 +880,7 @@ class Dataset(Generic[T]):
 
         Example:
             >>> ds = Dataset.from_list(range(100)).reduce(sum)
-            >>> result = list(ctx.execute(ds))[0]
+            >>> result = ctx.execute(ds).results[0]
             4950
         """
         if global_reducer is None:
@@ -896,7 +896,7 @@ class Dataset(Generic[T]):
 
         Example:
             >>> ds = Dataset.from_list(range(100)).filter(lambda x: x % 2 == 0)
-            >>> count = list(ctx.execute(ds.count()))[0]
+            >>> count = ctx.execute(ds.count()).results[0]
             50
         """
         return self.reduce(

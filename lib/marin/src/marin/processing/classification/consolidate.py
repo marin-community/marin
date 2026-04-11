@@ -200,7 +200,7 @@ def _compute_percentile_threshold(
         .load_file()
         .select("attributes")
         .reduce(local_reducer=local_reducer, global_reducer=global_reducer)
-    )
+    ).results
 
     combined_sketch = next(iter(result))
     threshold = combined_sketch.get_quantile_value(1 - keep_fraction)
@@ -347,6 +347,6 @@ def consolidate(config: ConsolidateConfig):
             )
         )
         .write_parquet(output_pattern)
-    )
+    ).results
 
     logger.info(f"Consolidation complete. Wrote {len(results)} output files")
