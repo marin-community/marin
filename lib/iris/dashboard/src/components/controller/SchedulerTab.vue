@@ -3,11 +3,8 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName } from '@/types/status'
 import type {
   GetSchedulerStateResponse,
-  SchedulerBandGroup,
-  SchedulerTaskEntry,
   SchedulerUserBudget,
   ListUsersResponse,
   UserSummary,
@@ -47,7 +44,7 @@ async function fetchUnscheduledJobs() {
   try {
     const query: JobQuery = {
       scope: 'JOB_QUERY_SCOPE_ROOTS',
-      stateFilter: 'JOB_STATE_PENDING',
+      stateFilter: 'pending',
       offset: unscheduledPage.value * UNSCHEDULED_PAGE_SIZE,
       limit: UNSCHEDULED_PAGE_SIZE,
       sortField: 'SORT_FIELD_SUBMITTED_AT',
@@ -92,9 +89,7 @@ onMounted(refreshAll)
 
 const TERMINAL_JOB_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'preempted'])
 
-const pendingQueue = computed<SchedulerBandGroup[]>(() => schedulerData.value?.pendingQueue ?? [])
 const userBudgets = computed<SchedulerUserBudget[]>(() => schedulerData.value?.userBudgets ?? [])
-const totalPending = computed(() => schedulerData.value?.totalPending ?? 0)
 
 const users = computed<UserSummary[]>(() => usersData.value?.users ?? [])
 
@@ -167,10 +162,6 @@ function bandDisplayName(band: string | undefined): string {
   if (!band) return 'Unknown'
   const name = band.replace(/^PRIORITY_BAND_/, '')
   return name.charAt(0) + name.slice(1).toLowerCase()
-}
-
-function isDowngraded(entry: SchedulerTaskEntry): boolean {
-  return entry.originalBand !== entry.effectiveBand
 }
 
 function bandColor(band: string | undefined): string {
@@ -280,65 +271,7 @@ const hasData = computed(() => schedulerData.value || usersData.value)
       </div>
     </section>
 
-    <!-- Pending Queue -->
-    <section>
-      <h2 class="text-lg font-semibold mb-3">Pending Queue ({{ totalPending }})</h2>
-      <EmptyState v-if="pendingQueue.length === 0" message="No pending tasks" />
-      <div v-else class="space-y-4">
-        <div v-for="group in pendingQueue" :key="group.band">
-          <h3 class="text-sm font-semibold mb-1" :class="bandColor(group.band)">
-            {{ bandDisplayName(group.band) }}
-            <span class="text-text-muted font-normal">({{ group.totalInBand }} task{{ group.totalInBand !== 1 ? 's' : '' }})</span>
-          </h3>
-          <div class="overflow-x-auto">
-            <table class="w-full border-collapse">
-              <thead>
-                <tr class="border-b border-surface-border">
-                  <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">#</th>
-                  <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Task</th>
-                  <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Job</th>
-                  <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">User</th>
-                  <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Band</th>
-                  <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Resource Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="task in group.tasks"
-                  :key="task.taskId"
-                  class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
-                >
-                  <td class="px-3 py-2 text-[13px] tabular-nums text-text-muted">{{ task.queuePosition }}</td>
-                  <td class="px-3 py-2 text-[13px] font-mono">{{ task.taskId }}</td>
-                  <td class="px-3 py-2 text-[13px] font-mono">
-                    <RouterLink :to="`/job/${encodeURIComponent(task.jobId)}`" class="text-accent hover:underline">
-                      {{ task.jobId }}
-                    </RouterLink>
-                  </td>
-                  <td class="px-3 py-2 text-[13px]">{{ task.userId }}</td>
-                  <td class="px-3 py-2 text-[13px]">
-                    <span :class="bandColor(task.effectiveBand)">{{ bandDisplayName(task.effectiveBand) }}</span>
-                    <span
-                      v-if="isDowngraded(task)"
-                      class="ml-1 text-xs text-status-warning"
-                      :title="'Originally ' + bandDisplayName(task.originalBand)"
-                    >
-                      (was {{ bandDisplayName(task.originalBand) }})
-                    </span>
-                  </td>
-                  <td class="px-3 py-2 text-[13px] text-right tabular-nums">{{ task.resourceValue }}</td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-if="group.totalInBand > group.tasks.length" class="px-3 py-2 text-xs text-text-secondary border-t border-surface-border">
-              Showing {{ group.tasks.length }} of {{ group.totalInBand }} tasks
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Unscheduled Jobs -->
+    <!-- Pending Jobs -->
     <section>
       <h2 class="text-lg font-semibold mb-3">Pending Jobs ({{ unscheduledTotal }})</h2>
       <div class="flex items-center gap-3 mb-3">
