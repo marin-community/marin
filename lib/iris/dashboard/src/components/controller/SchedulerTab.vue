@@ -47,7 +47,7 @@ async function fetchUnscheduledJobs() {
       stateFilter: 'pending',
       offset: unscheduledPage.value * UNSCHEDULED_PAGE_SIZE,
       limit: UNSCHEDULED_PAGE_SIZE,
-      sortField: 'SORT_FIELD_SUBMITTED_AT',
+      sortField: 'JOB_SORT_FIELD_DATE',
       sortDirection: 'SORT_DIRECTION_DESC',
     }
     if (unscheduledSearch.value.trim()) {
