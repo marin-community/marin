@@ -39,6 +39,7 @@ from iris.cluster.controller.db import (
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
+    JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     JOB_SCHEDULING_PROJECTION,
     TASK_DETAIL_PROJECTION,
@@ -237,7 +238,10 @@ def query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: in
 def query_job(state: ControllerTransitions, job_id: JobName) -> JobDetailRow | None:
     with state._db.snapshot() as q:
         return JOB_DETAIL_PROJECTION.decode_one(
-            q.fetchall("SELECT * FROM jobs WHERE job_id = ? LIMIT 1", (job_id.to_wire(),))
+            q.fetchall(
+                f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ? LIMIT 1",
+                (job_id.to_wire(),),
+            )
         )
 
 
@@ -245,7 +249,10 @@ def query_job_row(state: ControllerTransitions, job_id: JobName):
     """Query a job as a JobSchedulingRow (scheduling projection with resources/constraints)."""
     with state._db.snapshot() as q:
         return JOB_SCHEDULING_PROJECTION.decode_one(
-            q.fetchall("SELECT * FROM jobs WHERE job_id = ? LIMIT 1", (job_id.to_wire(),))
+            q.fetchall(
+                f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ? LIMIT 1",
+                (job_id.to_wire(),),
+            )
         )
 
 

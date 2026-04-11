@@ -14,12 +14,14 @@ import pytest
 from starlette.testclient import TestClient
 
 from iris.cluster.bundle import BundleStore
+from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.db import (
     healthy_active_workers_with_attributes,
 )
 from iris.cluster.controller.schema import (
+    JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     EndpointRow,
 )
@@ -126,17 +128,24 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     def _get_job_scheduling_diagnostics(job_wire_id):
         """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
         with state._db.snapshot() as q:
-            rows = JOB_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire_id,)))
+            rows = JOB_DETAIL_PROJECTION.decode(
+                q.fetchall(
+                    f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
+                    (job_wire_id,),
+                )
+            )
         if not rows:
             return None
         job = rows[0]
         if job.state != job_pb2.JOB_STATE_PENDING:
             return None
         req = JobRequirements(
-            resources=job.request.resources,
-            constraints=list(job.request.constraints),
-            is_coscheduled=job.request.HasField("coscheduling"),
-            coscheduling_group_by=job.request.coscheduling.group_by if job.request.HasField("coscheduling") else None,
+            resources=resource_spec_from_scalars(
+                job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
+            ),
+            constraints=constraints_from_json(job.constraints_json),
+            is_coscheduled=job.has_coscheduling,
+            coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
         )
         tasks = _query_tasks_with_attempts(state, job.job_id)
         schedulable_task_id = next((t.task_id for t in tasks if check_task_can_be_scheduled(t)), None)

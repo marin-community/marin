@@ -13,6 +13,7 @@ They focus on:
 import threading
 
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
+from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import (
@@ -109,13 +110,17 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions
         if job_id and job_id not in jobs:
             job = _query_job(state, job_id)
             if job:
+                resources = resource_spec_from_scalars(
+                    job.res_cpu_millicores,
+                    job.res_memory_bytes,
+                    job.res_disk_bytes,
+                    job.res_device_json,
+                )
                 jobs[job_id] = JobRequirements(
-                    resources=job.request.resources,
-                    constraints=list(job.request.constraints),
-                    is_coscheduled=job.request.HasField("coscheduling"),
-                    coscheduling_group_by=(
-                        job.request.coscheduling.group_by if job.request.HasField("coscheduling") else None
-                    ),
+                    resources=resources,
+                    constraints=constraints_from_json(job.constraints_json),
+                    is_coscheduled=job.has_coscheduling,
+                    coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
                 )
     return scheduler.create_scheduling_context(
         workers,
@@ -1045,7 +1050,7 @@ def test_coscheduled_task_failure_kills_siblings(state):
     tasks = submit_job(state, "j1", req)
 
     job = _query_job(state, JobName.root("test-user", "j1"))
-    assert job.request.HasField("coscheduling")
+    assert job.has_coscheduling
 
     # Dispatch all tasks
     for i, task in enumerate(tasks):
@@ -1207,7 +1212,7 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(state):
     tasks = submit_job(state, "j1", req)
 
     job = _query_job(state, JobName.root("test-user", "j1"))
-    assert not job.request.HasField("coscheduling")
+    assert not job.has_coscheduling
 
     for i, task in enumerate(tasks):
         dispatch_task(state, task, WorkerId(f"w{i}"))

@@ -665,7 +665,7 @@ class CoschedulingConfig(_message.Message):
     def __init__(self, group_by: _Optional[str] = ...) -> None: ...
 
 class WorkerMetadata(_message.Message):
-    __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "disk_bytes", "device", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone", "attributes", "vm_address", "git_hash")
+    __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "disk_bytes", "device", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone", "attributes", "git_hash")
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -689,7 +689,6 @@ class WorkerMetadata(_message.Message):
     GCE_INSTANCE_NAME_FIELD_NUMBER: _ClassVar[int]
     GCE_ZONE_FIELD_NUMBER: _ClassVar[int]
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
-    VM_ADDRESS_FIELD_NUMBER: _ClassVar[int]
     GIT_HASH_FIELD_NUMBER: _ClassVar[int]
     hostname: str
     ip_address: str
@@ -707,9 +706,8 @@ class WorkerMetadata(_message.Message):
     gce_instance_name: str
     gce_zone: str
     attributes: _containers.MessageMap[str, AttributeValue]
-    vm_address: str
     git_hash: str
-    def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ..., vm_address: _Optional[str] = ..., git_hash: _Optional[str] = ...) -> None: ...
+    def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ..., git_hash: _Optional[str] = ...) -> None: ...
 
 class RunTaskRequest(_message.Message):
     __slots__ = ("task_id", "num_tasks", "entrypoint", "environment", "bundle_id", "resources", "timeout", "ports", "attempt_id", "constraints", "task_image")

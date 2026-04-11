@@ -260,8 +260,7 @@ message Controller {
     string address = 1;
     iris.job.WorkerMetadata metadata = 2;
     // Worker ID assigned by the autoscaler via WorkerConfig.
-    // When set, the controller uses this as the canonical worker identity
-    // instead of deriving it from vm_address.
+    // The controller uses this as the canonical worker identity.
     string worker_id = 3;
     // Infrastructure identity from WorkerConfig, set by the autoscaler at
     // bootstrap. Stored in the workers table so restart_worker() can look

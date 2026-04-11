@@ -11,6 +11,7 @@ modify state, or run threads.
 import pytest
 
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.db import (
     _decode_attribute_rows,
 )
@@ -49,10 +50,12 @@ from .conftest import (
 
 def _job_requirements_from_job(job) -> JobRequirements:
     return JobRequirements(
-        resources=job.request.resources,
-        constraints=list(job.request.constraints),
-        is_coscheduled=job.request.HasField("coscheduling"),
-        coscheduling_group_by=job.request.coscheduling.group_by if job.request.HasField("coscheduling") else None,
+        resources=resource_spec_from_scalars(
+            job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
+        ),
+        constraints=constraints_from_json(job.constraints_json),
+        is_coscheduled=job.has_coscheduling,
+        coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
     )
 
 

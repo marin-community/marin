@@ -531,10 +531,7 @@ message WorkerMetadata {
   // using format: key1=value1,key2=value2 (e.g., taint:maintenance=true,pool=large-jobs)
   map<string, AttributeValue> attributes = 40;
 
-  // DEPRECATED: No longer used for worker identification.
-  // Worker identity is now set via RegisterRequest.worker_id.
-  // Field kept for proto wire compatibility but ignored by the controller.
-  string vm_address = 41;
+  reserved 41;  // was vm_address, removed
 
   // Git commit hash baked into the worker image at build time (IRIS_GIT_HASH).
   // Allows the controller to surface per-worker version info for debugging.
