@@ -21,21 +21,38 @@ from __future__ import annotations
 import numpy as np
 from scipy.optimize import minimize
 
-
 EPS = 1e-8
 
 CC_TOPICS = [
-    "art_and_design", "crime_and_law", "education_and_jobs",
-    "electronics_and_hardware", "entertainment", "finance_and_business",
-    "food_and_dining", "games", "health", "history_and_geography",
-    "industrial", "literature", "science_math_and_technology",
+    "art_and_design",
+    "crime_and_law",
+    "education_and_jobs",
+    "electronics_and_hardware",
+    "entertainment",
+    "finance_and_business",
+    "food_and_dining",
+    "games",
+    "health",
+    "history_and_geography",
+    "industrial",
+    "literature",
+    "science_math_and_technology",
 ]
 
 # Group IDs: 0=CC-high, 1=CC-low, 2=dolma3-other, 3=dolmino-curated, 4=dolmino-synth
-DOLMINO_SYNTH = {"dolmino_synth_code", "dolmino_synth_instruction",
-                 "dolmino_synth_math", "dolmino_synth_qa", "dolmino_synth_thinking"}
-DOLMINO_CURATED = {"dolmino_common_crawl_hq", "dolmino_olmocr_pdfs_hq",
-                   "dolmino_stack_edu_fim", "dolmino_stem_heavy_crawl"}
+DOLMINO_SYNTH = {
+    "dolmino_synth_code",
+    "dolmino_synth_instruction",
+    "dolmino_synth_math",
+    "dolmino_synth_qa",
+    "dolmino_synth_thinking",
+}
+DOLMINO_CURATED = {
+    "dolmino_common_crawl_hq",
+    "dolmino_olmocr_pdfs_hq",
+    "dolmino_stack_edu_fim",
+    "dolmino_stem_heavy_crawl",
+}
 N_GROUPS = 5
 
 
@@ -47,7 +64,7 @@ def _domain_group_ids(domain_names: list[str]) -> tuple[np.ndarray, np.ndarray, 
     cc_topic_id = np.full(M, -1, dtype=int)
     for d, name in enumerate(domain_names):
         if name.startswith("dolma3_cc/"):
-            suffix = name[len("dolma3_cc/"):]
+            suffix = name[len("dolma3_cc/") :]
             is_high = suffix.endswith("_high")
             topic = suffix.rsplit("_", 1)[0]
             if topic in topic_map:
@@ -132,19 +149,25 @@ def fit_lean_dsre(spec, *, n_restarts=32, seed=0, maxiter=800, reg=1e-4, **kwarg
 
     def unpack(p):
         idx = 0
-        c0, logA, logB = p[0], p[1], p[2]; idx = 3
+        c0, logA, logB = p[0], p[1], p[2]
+        idx = 3
         ces_logits = np.zeros(M)
-        ces_logits[:M-1] = p[idx:idx+M-1]; idx += M-1
+        ces_logits[: M - 1] = p[idx : idx + M - 1]
+        idx += M - 1
         a = _softmax(ces_logits)
-        rho = float(np.clip(5 * np.tanh(p[idx]), -10, 0.99)); idx += 1
+        rho = float(np.clip(5 * np.tanh(p[idx]), -10, 0.99))
+        idx += 1
         if N > 1:
             alpha_logits = np.zeros(N)
-            alpha_logits[:N-1] = p[idx:idx+N-1]; idx += N-1
+            alpha_logits[: N - 1] = p[idx : idx + N - 1]
+            idx += N - 1
             alpha = _softmax(alpha_logits)
         else:
             alpha = np.ones(1)
-        log_gamma = p[idx]; idx += 1
-        beta_raw = p[idx]; idx += 1
+        log_gamma = p[idx]
+        idx += 1
+        beta_raw = p[idx]
+        idx += 1
         return c0, logA, logB, a, rho, alpha, log_gamma, beta_raw
 
     def forward(p, W_in):
@@ -154,7 +177,7 @@ def fit_lean_dsre(spec, *, n_restarts=32, seed=0, maxiter=800, reg=1e-4, **kwarg
         beta = float(_sigmoid(beta_raw))  # in (0, 1) — sublinear overfit
         E = W_in * C[None, :, :]  # (R', N, M)
         # Phase-weighted total exposure
-        wE = np.einsum('rnm,n->rm', E, alpha)  # (R', M)
+        wE = np.einsum("rnm,n->rm", E, alpha)  # (R', M)
         # Signal extraction: log(1 + E)
         z = np.log1p(wE)  # (R', M)
         U = _ces(z, a, rho)
@@ -185,14 +208,19 @@ def fit_lean_dsre(spec, *, n_restarts=32, seed=0, maxiter=800, reg=1e-4, **kwarg
         p0[1] = rng.normal(0, 1)
         p0[2] = rng.normal(-3, 1)
         idx = 3
-        p0[idx:idx+M-1] = rng.normal(0, 0.3, M-1); idx += M-1
-        p0[idx] = rng.normal(0, 0.5); idx += 1  # rho
+        p0[idx : idx + M - 1] = rng.normal(0, 0.3, M - 1)
+        idx += M - 1
+        p0[idx] = rng.normal(0, 0.5)
+        idx += 1  # rho
         if N > 1:
-            p0[idx:idx+N-1] = rng.normal(0.3, 0.5, N-1); idx += N-1
-        p0[idx] = rng.normal(-4, 1); idx += 1  # log_gamma
-        p0[idx] = rng.normal(0, 0.5); idx += 1  # beta_raw
+            p0[idx : idx + N - 1] = rng.normal(0.3, 0.5, N - 1)
+            idx += N - 1
+        p0[idx] = rng.normal(-4, 1)
+        idx += 1  # log_gamma
+        p0[idx] = rng.normal(0, 0.5)
+        idx += 1  # beta_raw
         try:
-            res = minimize(obj, p0, method='L-BFGS-B', options={'maxiter': maxiter, 'ftol': 1e-12})
+            res = minimize(obj, p0, method="L-BFGS-B", options={"maxiter": maxiter, "ftol": 1e-12})
             if np.isfinite(res.fun) and res.fun < best_val:
                 best_val, best_p = float(res.fun), res.x.copy()
         except Exception:
@@ -237,12 +265,17 @@ def fit_lean_dsre_v2(spec, *, n_restarts=32, seed=0, maxiter=800, reg=1e-4, **kw
 
     def unpack(p):
         idx = 0
-        c0 = p[idx]; logA = p[idx+1]; idx += 2
+        c0 = p[idx]
+        logA = p[idx + 1]
+        idx += 2
         topic_logits = np.zeros(n_cc)
         if n_cc > 1:
-            topic_logits[:n_cc-1] = p[idx:idx+n_cc-1]; idx += n_cc-1
-        quality_offset = p[idx]; idx += 1
-        noncc_logits = p[idx:idx+n_noncc]; idx += n_noncc
+            topic_logits[: n_cc - 1] = p[idx : idx + n_cc - 1]
+            idx += n_cc - 1
+        quality_offset = p[idx]
+        idx += 1
+        noncc_logits = p[idx : idx + n_noncc]
+        idx += n_noncc
         # Assemble CES weight logits
         full_logits = np.zeros(M)
         ni = 0
@@ -252,17 +285,22 @@ def fit_lean_dsre_v2(spec, *, n_restarts=32, seed=0, maxiter=800, reg=1e-4, **kw
                 is_high = 1.0 if spec.domain_names[d].endswith("_high") else 0.0
                 full_logits[d] = topic_logits[tid] + quality_offset * is_high
             else:
-                full_logits[d] = noncc_logits[ni]; ni += 1
+                full_logits[d] = noncc_logits[ni]
+                ni += 1
         a = _softmax(full_logits)
-        rho = float(np.clip(5 * np.tanh(p[idx]), -10, 0.99)); idx += 1
+        rho = float(np.clip(5 * np.tanh(p[idx]), -10, 0.99))
+        idx += 1
         if N > 1:
             alpha_logits = np.zeros(N)
-            alpha_logits[:N-1] = p[idx:idx+N-1]; idx += N-1
+            alpha_logits[: N - 1] = p[idx : idx + N - 1]
+            idx += N - 1
             alpha = _softmax(alpha_logits)
         else:
             alpha = np.ones(1)
-        log_gammas = p[idx:idx+N_GROUPS]; idx += N_GROUPS
-        beta_raws = p[idx:idx+N_GROUPS]; idx += N_GROUPS
+        log_gammas = p[idx : idx + N_GROUPS]
+        idx += N_GROUPS
+        beta_raws = p[idx : idx + N_GROUPS]
+        idx += N_GROUPS
         return c0, logA, a, rho, alpha, log_gammas, beta_raws
 
     def forward(p, W_in):
@@ -272,7 +310,7 @@ def fit_lean_dsre_v2(spec, *, n_restarts=32, seed=0, maxiter=800, reg=1e-4, **kw
         betas = _sigmoid(beta_raws)  # each in (0, 1)
         R_in = W_in.shape[0]
         E = W_in * C[None, :, :]
-        wE = np.einsum('rnm,n->rm', E, alpha)
+        wE = np.einsum("rnm,n->rm", E, alpha)
         z = np.log1p(wE)
         U = _ces(z, a, rho)
         # Per-group overfit
@@ -294,18 +332,27 @@ def fit_lean_dsre_v2(spec, *, n_restarts=32, seed=0, maxiter=800, reg=1e-4, **kw
     for _ in range(n_restarts):
         p0 = np.zeros(n_params)
         idx = 0
-        p0[0] = float(np.median(y)); p0[1] = rng.normal(0, 1); idx = 2
+        p0[0] = float(np.median(y))
+        p0[1] = rng.normal(0, 1)
+        idx = 2
         if n_cc > 1:
-            p0[idx:idx+n_cc-1] = rng.normal(0, 0.3, n_cc-1); idx += n_cc-1
-        p0[idx] = rng.normal(0.3, 0.3); idx += 1
-        p0[idx:idx+n_noncc] = rng.normal(0, 0.5, n_noncc); idx += n_noncc
-        p0[idx] = rng.normal(0, 0.5); idx += 1
+            p0[idx : idx + n_cc - 1] = rng.normal(0, 0.3, n_cc - 1)
+            idx += n_cc - 1
+        p0[idx] = rng.normal(0.3, 0.3)
+        idx += 1
+        p0[idx : idx + n_noncc] = rng.normal(0, 0.5, n_noncc)
+        idx += n_noncc
+        p0[idx] = rng.normal(0, 0.5)
+        idx += 1
         if N > 1:
-            p0[idx:idx+N-1] = rng.normal(0.3, 0.5, N-1); idx += N-1
-        p0[idx:idx+N_GROUPS] = rng.normal(-4, 1, N_GROUPS); idx += N_GROUPS
-        p0[idx:idx+N_GROUPS] = rng.normal(0, 0.5, N_GROUPS); idx += N_GROUPS
+            p0[idx : idx + N - 1] = rng.normal(0.3, 0.5, N - 1)
+            idx += N - 1
+        p0[idx : idx + N_GROUPS] = rng.normal(-4, 1, N_GROUPS)
+        idx += N_GROUPS
+        p0[idx : idx + N_GROUPS] = rng.normal(0, 0.5, N_GROUPS)
+        idx += N_GROUPS
         try:
-            res = minimize(obj, p0, method='L-BFGS-B', options={'maxiter': maxiter, 'ftol': 1e-12})
+            res = minimize(obj, p0, method="L-BFGS-B", options={"maxiter": maxiter, "ftol": 1e-12})
             if np.isfinite(res.fun) and res.fun < best_val:
                 best_val, best_p = float(res.fun), res.x.copy()
         except Exception:
@@ -345,10 +392,14 @@ def fit_ridge_plus_overfit(spec, *, n_restarts=32, seed=0, maxiter=800, reg=1e-4
 
     def unpack(p):
         idx = 0
-        c0 = p[idx]; idx += 1
-        beta = p[idx:idx+M]; idx += M
-        log_gammas = p[idx:idx+N_GROUPS]; idx += N_GROUPS
-        beta_raws = p[idx:idx+N_GROUPS]; idx += N_GROUPS
+        c0 = p[idx]
+        idx += 1
+        beta = p[idx : idx + M]
+        idx += M
+        log_gammas = p[idx : idx + N_GROUPS]
+        idx += N_GROUPS
+        beta_raws = p[idx : idx + N_GROUPS]
+        idx += N_GROUPS
         return c0, beta, log_gammas, beta_raws
 
     def forward_precomputed(p, W_mix_in, E_total_in):
@@ -381,11 +432,11 @@ def fit_ridge_plus_overfit(spec, *, n_restarts=32, seed=0, maxiter=800, reg=1e-4
     for _ in range(n_restarts):
         p0 = np.zeros(n_params)
         p0[0] = float(np.median(y))
-        p0[1:1+M] = rng.normal(0, 0.01, M)
-        p0[1+M:1+M+N_GROUPS] = rng.normal(-5, 1, N_GROUPS)
-        p0[1+M+N_GROUPS:] = rng.normal(0, 0.5, N_GROUPS)
+        p0[1 : 1 + M] = rng.normal(0, 0.01, M)
+        p0[1 + M : 1 + M + N_GROUPS] = rng.normal(-5, 1, N_GROUPS)
+        p0[1 + M + N_GROUPS :] = rng.normal(0, 0.5, N_GROUPS)
         try:
-            res = minimize(obj, p0, method='L-BFGS-B', options={'maxiter': maxiter, 'ftol': 1e-12})
+            res = minimize(obj, p0, method="L-BFGS-B", options={"maxiter": maxiter, "ftol": 1e-12})
             if np.isfinite(res.fun) and res.fun < best_val:
                 best_val, best_p = float(res.fun), res.x.copy()
         except Exception:
@@ -396,6 +447,7 @@ def fit_ridge_plus_overfit(spec, *, n_restarts=32, seed=0, maxiter=800, reg=1e-4
 
     final_p = best_p.copy()
     C_stored = C.copy()
+
     def predict(W_new):
         W_new = np.asarray(W_new, float).reshape(-1, N, M)
         E_new = W_new * C_stored[None, :, :]

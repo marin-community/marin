@@ -74,11 +74,11 @@ def _cross_validate(spec: DatasetSpec, fit_fn, *, label: str, start: float) -> d
         _log(f"  {label} fold {fi}: regret={regrets[-1]:.4f} ({perf_counter()-t0:.1f}s)", start)
 
     residuals = spec.y - preds
-    ss_res = float(np.sum(residuals ** 2))
+    ss_res = float(np.sum(residuals**2))
     ss_tot = float(np.sum((spec.y - np.mean(spec.y)) ** 2))
     return {
         "r2": float(1 - ss_res / ss_tot) if ss_tot > 0 else float("nan"),
-        "rmse": float(np.sqrt(np.mean(residuals ** 2))),
+        "rmse": float(np.sqrt(np.mean(residuals**2))),
         "spearman": float(spearmanr(spec.y, preds)[0]),
         "regret_at_1": float(np.mean(regrets)),
         "n_params": n_params,
@@ -99,12 +99,18 @@ def _load_many_spec() -> DatasetSpec:
     phase_fracs = tuple(p.end_fraction - p.start_fraction for p in experiment.phase_schedule.phases)
     dtc = {d.name: int(d.total_weight) for d in experiment.domains}
     loop = LoopConfig(
-        name="bench", objective_metric="lm_eval/mmlu_5shot/bpb",
-        model_names=(), domain_token_counts=dtc,
-        phase_fractions=phase_fracs, target_budget=experiment.target_budget,
+        name="bench",
+        objective_metric="lm_eval/mmlu_5shot/bpb",
+        model_names=(),
+        domain_token_counts=dtc,
+        phase_fractions=phase_fracs,
+        target_budget=experiment.target_budget,
     )
     return build_dataset_spec_from_frame(
-        df, objective_metric="lm_eval/mmlu_5shot/bpb", name="two_phase_many", loop=loop,
+        df,
+        objective_metric="lm_eval/mmlu_5shot/bpb",
+        name="two_phase_many",
+        loop=loop,
     )
 
 
@@ -117,7 +123,8 @@ def _load_starcoder_spec() -> DatasetSpec | None:
     if "status" in df.columns:
         df = df[df["status"] == "completed"].reset_index(drop=True)
     return build_dataset_spec_from_frame(
-        df, objective_metric="eval/paloma/dolma_100_programing_languages/bpb",
+        df,
+        objective_metric="eval/paloma/dolma_100_programing_languages/bpb",
         name="starcoder_2phase",
     )
 
@@ -134,8 +141,11 @@ def main() -> None:
     # DS-RE-CEQ baseline (from existing benchmark)
     _log("DS-RE-CEQ baseline (from benchmark_dsre_ceq.py):", start)
     dsre = DSRE_BASELINE["two_phase_many"]
-    _log(f"  R2={dsre['r2']:.4f}  Sp={dsre['spearman']:.4f}  RMSE={dsre['rmse']:.4f}  "
-         f"Reg@1={dsre['regret_at_1']:.4f}  P={dsre['n_params']}", start)
+    _log(
+        f"  R2={dsre['r2']:.4f}  Sp={dsre['spearman']:.4f}  RMSE={dsre['rmse']:.4f}  "
+        f"Reg@1={dsre['regret_at_1']:.4f}  P={dsre['n_params']}",
+        start,
+    )
     results["many_dsre_ceq"] = dsre
 
     # CLR-Ridge variants
@@ -154,13 +164,16 @@ def main() -> None:
             start=start,
         )
         results[f"many_{name}"] = cv
-        _log(f"  {name}: R2={cv['r2']:.4f}  Sp={cv['spearman']:.4f}  RMSE={cv['rmse']:.4f}  "
-             f"Reg@1={cv['regret_at_1']:.4f}  P={cv['n_params']}", start)
+        _log(
+            f"  {name}: R2={cv['r2']:.4f}  Sp={cv['spearman']:.4f}  RMSE={cv['rmse']:.4f}  "
+            f"Reg@1={cv['regret_at_1']:.4f}  P={cv['n_params']}",
+            start,
+        )
 
     # ===== StarCoder dataset =====
     sc_spec = _load_starcoder_spec()
     if sc_spec is not None:
-        _log(f"\nLoading StarCoder dataset", start)
+        _log("\nLoading StarCoder dataset", start)
         _log(f"  R={sc_spec.R}, N={sc_spec.N}, M={sc_spec.M}, y=[{sc_spec.y.min():.4f}, {sc_spec.y.max():.4f}]", start)
 
         for name, alpha in [("CLR-Ridge(a=0.50)", 0.50), ("CLR-Ridge(a=0.80)", 0.80), ("CLR-Ridge(a=0.95)", 0.95)]:
@@ -172,20 +185,24 @@ def main() -> None:
                 start=start,
             )
             results[f"sc_{name}"] = cv
-            _log(f"  {name}: R2={cv['r2']:.4f}  Sp={cv['spearman']:.4f}  RMSE={cv['rmse']:.4f}  "
-                 f"Reg@1={cv['regret_at_1']:.4f}  P={cv['n_params']}", start)
+            _log(
+                f"  {name}: R2={cv['r2']:.4f}  Sp={cv['spearman']:.4f}  RMSE={cv['rmse']:.4f}  "
+                f"Reg@1={cv['regret_at_1']:.4f}  P={cv['n_params']}",
+                start,
+            )
 
     # ===== Summary =====
     print("\n" + "=" * 110)
-    print(f"{'Model':<30s} {'Dataset':<18s} {'R²':>8s} {'RMSE':>8s} {'Spearman':>10s} "
-          f"{'Regret@1':>10s} {'P':>5s}")
+    print(f"{'Model':<30s} {'Dataset':<18s} {'R²':>8s} {'RMSE':>8s} {'Spearman':>10s} " f"{'Regret@1':>10s} {'P':>5s}")
     print("-" * 110)
     for key, cv in sorted(results.items()):
         parts = key.split("_", 1)
         ds = parts[0]
         model = parts[1] if len(parts) > 1 else key
-        print(f"{model:<30s} {ds:<18s} {cv['r2']:>8.4f} {cv['rmse']:>8.4f} "
-              f"{cv['spearman']:>10.4f} {cv['regret_at_1']:>10.4f} {cv['n_params']:>5d}")
+        print(
+            f"{model:<30s} {ds:<18s} {cv['r2']:>8.4f} {cv['rmse']:>8.4f} "
+            f"{cv['spearman']:>10.4f} {cv['regret_at_1']:>10.4f} {cv['n_params']:>5d}"
+        )
     print("=" * 110)
 
     RESULTS_JSON.write_text(json.dumps(results, indent=2))

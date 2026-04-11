@@ -39,9 +39,7 @@ from dataclasses import dataclass
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.linear_model import RidgeCV
-from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-
 
 EPS = 1e-10
 RIDGE_ALPHAS = np.logspace(-3, 5, 50)

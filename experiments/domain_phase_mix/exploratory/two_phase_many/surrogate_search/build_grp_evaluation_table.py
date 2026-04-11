@@ -39,6 +39,7 @@ import pandas as pd
 import wandb
 from sklearn.model_selection import KFold
 
+import experiments.domain_phase_mix.two_phase_many_genericfamily_penalty_raw_optima_baselines as gf_penalty_raw
 from experiments.domain_phase_mix.exploratory.dsre_ceq_tools import fit_dsre_ceq_artifacts
 from experiments.domain_phase_mix.exploratory.general_scaling_models import DatasetSpec as GeneralDatasetSpec
 from experiments.domain_phase_mix.exploratory.scaling_models import fit_ces as stable_fit_ces
@@ -56,6 +57,11 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.ge
     flexible_signal_params_from_metrics,
     tune_flexible_signal_params_observed_only,
 )
+from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_penalty_calibration import (
+    build_penalty_calibration_surrogate,
+    penalty_calibration_params_from_metrics,
+    penalty_calibration_variant_parameter_counts,
+)
 from experiments.domain_phase_mix.two_phase_many_genericfamily_observed_only_trustblend_subset_optima import (
     DEFAULT_TUNING_METHOD as OBSERVED_ONLY_TUNING_METHOD,
     tune_genericfamily_subset_params_observed_only,
@@ -70,6 +76,10 @@ FULL_OUTPUT_CSV = SCRIPT_DIR / "grp_evaluation_table_full.csv"
 SLIDE_OUTPUT_CSV = SCRIPT_DIR / "grp_evaluation_table_slide.csv"
 LATEX_OUTPUT = SCRIPT_DIR / "grp_evaluation_table_rows.tex"
 EXISTING_FULL_OUTPUT_CSV = SCRIPT_DIR / "grp_evaluation_table_full.csv"
+PENALTY_CALIBRATION_BEST_CSV = SCRIPT_DIR.parent / "grp_penalty_calibration_variants_best.csv"
+PENALTY_RAW_OPTIMUM_CHECKPOINT_ROOT = (
+    "marin-us-east5/checkpoints/" + gf_penalty_raw.GENERICFAMILY_PENALTY_RAW_OPTIMA_SOURCE_EXPERIMENT
+)
 
 DEFAULT_PACKET_ROOT = Path("/Users/calvinxu/Downloads/chatgpt_5_4_packet_real_epochs_uncheatable_bpb")
 DEFAULT_CACHED_CV_CSV = Path(
@@ -83,6 +93,9 @@ MODEL_ORDER = (
     "GRP w/ power family curvature",
     "GRP w/ Box-Cox family curvature",
     "GRP w/ mixed power/Box-Cox family curvature",
+    "GRP w/ power family penalty",
+    "GRP w/ power family penalty + pair-CES",
+    "GRP w/ power/Box-Cox family penalty",
     "GRP w/o family signals",
     "GRP w/o retention",
     "GRP w/o overexposure penalty",
@@ -106,6 +119,7 @@ class ValidatedRunSpec:
     model_name: str
     wandb_run_id: str | None = None
     eval_metrics_jsonl: str | None = None
+    eval_metrics_glob: str | None = None
 
 
 VALIDATED_RUN_SPECS: tuple[ValidatedRunSpec, ...] = (
@@ -128,6 +142,30 @@ VALIDATED_RUN_SPECS: tuple[ValidatedRunSpec, ...] = (
     ValidatedRunSpec(
         model_name="GRP w/ mixed power/Box-Cox family curvature",
         wandb_run_id="baseline_genericfamily_power_boxcox_family_observed_only_trustblend_top8actual_cap-25f5fc",
+    ),
+    ValidatedRunSpec(
+        model_name="GRP w/ power family penalty",
+        eval_metrics_glob=(
+            PENALTY_RAW_OPTIMUM_CHECKPOINT_ROOT
+            + "/baseline_genericfamily_power_family_penalty_raw_optimum-*/checkpoints/eval_metrics.jsonl"
+        ),
+    ),
+    ValidatedRunSpec(
+        model_name="GRP w/ power family penalty + pair-CES",
+        eval_metrics_glob=(
+            PENALTY_RAW_OPTIMUM_CHECKPOINT_ROOT
+            + (
+                "/baseline_genericfamily_power_family_penalty_global_ftotal_pairces_raw_optimum-*/"
+                "checkpoints/eval_metrics.jsonl"
+            )
+        ),
+    ),
+    ValidatedRunSpec(
+        model_name="GRP w/ power/Box-Cox family penalty",
+        eval_metrics_glob=(
+            PENALTY_RAW_OPTIMUM_CHECKPOINT_ROOT
+            + "/baseline_genericfamily_power_boxcox_family_penalty_raw_optimum-*/checkpoints/eval_metrics.jsonl"
+        ),
     ),
     ValidatedRunSpec(
         model_name="GRP w/o family signals",
@@ -388,6 +426,70 @@ def compute_family_curvature_grp_metrics(
     }
 
 
+def _penalty_calibration_best_row(variant_name: str) -> dict[str, Any]:
+    frame = pd.read_csv(PENALTY_CALIBRATION_BEST_CSV)
+    matches = frame.loc[(frame["variant"] == variant_name) & (frame["stage"] == "refine")]
+    if matches.empty:
+        raise ValueError(
+            f"Missing refined penalty-calibration row for {variant_name!r} in {PENALTY_CALIBRATION_BEST_CSV}"
+        )
+    return dict(matches.iloc[0])
+
+
+def compute_penalty_calibration_grp_metrics(
+    *,
+    cv_seed: int,
+    variant_name: str,
+    model_name: str,
+) -> dict[str, Any]:
+    """Compute local GRP metrics for one penalty-calibration variant."""
+    packet = load_generic_family_packet(target=MANY_DOMAIN_TARGET)
+    params = penalty_calibration_params_from_metrics(_penalty_calibration_best_row(variant_name), variant_name)
+    model = build_penalty_calibration_surrogate(packet, params=params, variant_name=variant_name).fit(
+        packet.base.w,
+        packet.base.y,
+    )
+    train_pred = model.predict(packet.base.w)
+    train = regression_metrics(packet.base.frame, packet.base.name_col, packet.base.y, train_pred)
+    counts = penalty_calibration_variant_parameter_counts(packet, variant_name)
+
+    kf = KFold(n_splits=5, shuffle=True, random_state=cv_seed)
+    oof = np.zeros_like(packet.base.y, dtype=float)
+    fold_regrets: list[float] = []
+    for tr, te in kf.split(packet.base.w):
+        fold_model = build_penalty_calibration_surrogate(packet, params=params, variant_name=variant_name).fit(
+            packet.base.w[tr],
+            packet.base.y[tr],
+        )
+        pred = fold_model.predict(packet.base.w[te])
+        oof[te] = pred
+        chosen = int(np.argmin(pred))
+        fold_regrets.append(float(packet.base.y[te][chosen] - np.min(packet.base.y[te])))
+
+    cv = regression_metrics(packet.base.frame, packet.base.name_col, packet.base.y, oof)
+    tuned_keys = ", ".join(f"{key}={float(value):.4f}" for key, value in params.items())
+    return {
+        "model": model_name,
+        "status": "ok",
+        "n_params": int(counts["total_param_count"]),
+        "train_r2": float(train["r2"]),
+        "train_rmse": float(train["rmse"]),
+        "train_spearman": float(train["spearman"]),
+        "train_regret_at_1": float(train["regret_at_1"]),
+        "cv_r2": float(cv["r2"]),
+        "cv_rmse": float(cv["rmse"]),
+        "cv_spearman": float(cv["spearman"]),
+        "cv_regret_at_1": float(cv["regret_at_1"]),
+        "cv_foldmean_regret_at_1": float(np.mean(fold_regrets)),
+        "source_train": str(PENALTY_CALIBRATION_BEST_CSV),
+        "source_cv": str(PENALTY_CALIBRATION_BEST_CSV),
+        "notes": (
+            "Computed from the full-retune penalty-calibration benchmark parameters with a local "
+            f"full-data fit plus 5-fold OOF evaluation. Tuned parameters: {tuned_keys}."
+        ),
+    }
+
+
 def _load_train_cache(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path)
     if "model" not in df.columns:
@@ -610,6 +712,7 @@ def _slide_frame(full: pd.DataFrame) -> pd.DataFrame:
 
 def _fetch_validated_optima() -> dict[str, dict[str, Any]]:
     api = wandb.Api(timeout=60)
+    gs = fsspec.filesystem("gs")
     out: dict[str, dict[str, Any]] = {}
     for spec in VALIDATED_RUN_SPECS:
         if spec.wandb_run_id is not None:
@@ -623,6 +726,27 @@ def _fetch_validated_optima() -> dict[str, dict[str, Any]]:
                 "validated_wandb_url": str(run.url),
                 "validated_wandb_name": str(run.name),
                 "validated_wandb_state": str(run.state),
+            }
+            continue
+
+        if spec.eval_metrics_glob is not None:
+            matches = sorted(gs.glob(spec.eval_metrics_glob.removeprefix("gs://")))
+            if not matches:
+                raise ValueError(f"No eval artifacts matched {spec.eval_metrics_glob}")
+            path = matches[-1]
+            with gs.open(path, "r") as f:
+                rows = [json.loads(line) for line in f if line.strip()]
+            if not rows:
+                raise ValueError(f"No eval rows found in {path}")
+            actual = rows[-1].get(VALIDATED_METRIC)
+            if actual is None:
+                raise ValueError(f"Missing {VALIDATED_METRIC} in {path}")
+            out[spec.model_name] = {
+                "validated_bpb": float(actual),
+                "validated_wandb_run_id": "",
+                "validated_wandb_url": "",
+                "validated_wandb_name": f"gs://{path}",
+                "validated_wandb_state": "artifact",
             }
             continue
 
@@ -739,6 +863,21 @@ def main() -> None:
         variant_name="power_boxcox_family",
         model_name="GRP w/ mixed power/Box-Cox family curvature",
     )
+    grp_power_family_penalty_row = compute_penalty_calibration_grp_metrics(
+        cv_seed=args.cv_seed,
+        variant_name="power_family_penalty",
+        model_name="GRP w/ power family penalty",
+    )
+    grp_power_family_penalty_pairces_row = compute_penalty_calibration_grp_metrics(
+        cv_seed=args.cv_seed,
+        variant_name="power_family_penalty_global_ftotal_pairces",
+        model_name="GRP w/ power family penalty + pair-CES",
+    )
+    grp_power_boxcox_family_penalty_row = compute_penalty_calibration_grp_metrics(
+        cv_seed=args.cv_seed,
+        variant_name="power_boxcox_family_penalty",
+        model_name="GRP w/ power/Box-Cox family penalty",
+    )
     grp_ablation_row = compute_grp_metrics(
         cv_seed=args.cv_seed,
         model_name="GRP w/o family signals",
@@ -825,6 +964,9 @@ def main() -> None:
             grp_power_family_row,
             grp_boxcox_family_row,
             grp_power_boxcox_family_row,
+            grp_power_family_penalty_row,
+            grp_power_family_penalty_pairces_row,
+            grp_power_boxcox_family_penalty_row,
             grp_ablation_row,
             grp_no_retention_row,
             grp_no_penalty_row,

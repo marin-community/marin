@@ -1,0 +1,144 @@
+{
+  "added_run_names": [
+    "baseline_clr_ridge_balanced",
+    "baseline_dsre_ceq_st_lite",
+    "baseline_dsre_ensemble",
+    "baseline_dsre_observed_consensus",
+    "baseline_power_ridge_single_constant_mix",
+    "baseline_dsre_ceq_predicted",
+    "baseline_dsre_ceq_predicted_quality_collapsed",
+    "baseline_dsre_ceq_predicted_topic_collapsed",
+    "baseline_olmix_loglinear_uncheatable_bpb",
+    "baseline_olmix_loglinear_sl_verb_choice_logprob_norm",
+    "baseline_olmix_loglinear_sl_verb_choice_logprob_norm_seedpanel_n3",
+    "baseline_thresholdtotal_overfit_uncheatable_bpb",
+    "baseline_ccglobalpremium_threshold_uncheatable_bpb",
+    "baseline_ccglobalpremium_retainedtotal_uncheatable_bpb",
+    "baseline_ccpairtotal_retainedtotal_uncheatable_bpb",
+    "baseline_genericfamily_retainedtotal_tuned_uncheatable_bpb",
+    "baseline_genericfamily_no_retention_uncheatable_bpb",
+    "baseline_genericfamily_no_quality_splits_no_groups_uncheatable_bpb",
+    "baseline_genericfamily_no_groups_uncheatable_bpb",
+    "baseline_genericfamily_no_penalty_uncheatable_bpb",
+    "baseline_phasecomp_sparse_pls_uncheatable_bpb",
+    "baseline_genericfamily_observed_only_trustblend_top8actual_cap",
+    "baseline_genericfamily_power_observed_only_trustblend_top8actual_cap",
+    "baseline_genericfamily_power_family_observed_only_trustblend_top8actual_cap",
+    "baseline_genericfamily_boxcox_family_observed_only_trustblend_top8actual_cap",
+    "baseline_genericfamily_power_boxcox_family_observed_only_trustblend_top8actual_cap",
+    "baseline_genericfamily_power_family_penalty_raw_optimum",
+    "baseline_genericfamily_power_family_penalty_global_ftotal_pairces_raw_optimum",
+    "baseline_genericfamily_power_boxcox_family_penalty_raw_optimum",
+    "baseline_genericfamily_k040_uncheatable_bpb",
+    "baseline_genericfamily_top8actual_hull_k040_uncheatable_bpb",
+    "baseline_genericfamily_k100_uncheatable_bpb",
+    "baseline_genericfamily_top8actual_hull_k100_uncheatable_bpb",
+    "baseline_genericfamily_k180_uncheatable_bpb",
+    "baseline_genericfamily_top8actual_hull_k180_uncheatable_bpb",
+    "baseline_genericfamily_top8actual_hull_k220_uncheatable_bpb",
+    "baseline_genericfamily_trustblend_top8actual_cap_k020_uncheatable_bpb",
+    "baseline_genericfamily_trustblend_top8actual_cap_k040_uncheatable_bpb",
+    "baseline_genericfamily_trustblend_top8actual_cap_k060_uncheatable_bpb",
+    "baseline_genericfamily_trustblend_top8actual_cap_k080_uncheatable_bpb",
+    "baseline_genericfamily_trustblend_top8actual_cap_k100_uncheatable_bpb",
+    "baseline_genericfamily_trustblend_top8actual_cap_k140_uncheatable_bpb",
+    "baseline_genericfamily_trustblend_top8actual_cap_k180_uncheatable_bpb",
+    "baseline_genericfamily_trustblend_top8actual_cap_k220_uncheatable_bpb"
+  ],
+  "base_rows": 241,
+  "counts_by_collection": {
+    "core_baseline": 2,
+    "historical_baseline": 1,
+    "original_swarm": 238,
+    "subset_validation": 15,
+    "validated_baseline": 29
+  },
+  "extra_completed_rows": 44,
+  "missing_specs": [
+    {
+      "collection": "validated_baseline",
+      "run_name": "baseline_genericfamily_lbfgsb_uncheatable_bpb",
+      "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_lbfgsb_uncheatable_bpb",
+      "subset_size": null,
+      "variant": "genericfamily_lbfgsb"
+    },
+    {
+      "collection": "validated_baseline",
+      "run_name": "baseline_genericfamily_powell_uncheatable_bpb",
+      "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_powell_uncheatable_bpb",
+      "subset_size": null,
+      "variant": "genericfamily_powell"
+    },
+    {
+      "collection": "validated_baseline",
+      "run_name": "baseline_genericfamily_recovered_hull_uncheatable_bpb",
+      "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_recovered_hull_uncheatable_bpb",
+      "subset_size": null,
+      "variant": "genericfamily_recovered_hull"
+    },
+    {
+      "collection": "subset_validation",
+      "run_name": "baseline_genericfamily_retuned_k040_uncheatable_bpb",
+      "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_retuned_subset_optima_rep_uncheatable_bpb",
+      "subset_size": 40,
+      "variant": "genericfamily_retuned_subset_optimum"
+    },
+    {
+      "collection": "subset_validation",
+      "run_name": "baseline_genericfamily_recovered_hull_k040_uncheatable_bpb",
+      "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_recovered_hull_subset_optima_uncheatable_bpb",
+      "subset_size": 40,
+      "variant": "genericfamily_recovered_hull_subset_optimum"
+    },
+    {
+      "collection": "subset_validation",
+      "run_name": "baseline_genericfamily_retuned_k100_uncheatable_bpb",
+      "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_retuned_subset_optima_rep_uncheatable_bpb",
+      "subset_size": 100,
+      "variant": "genericfamily_retuned_subset_optimum"
+    },
+    {
+      "collection": "subset_validation",
+      "run_name": "baseline_genericfamily_recovered_hull_k100_uncheatable_bpb",
+      "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_recovered_hull_subset_optima_uncheatable_bpb",
+      "subset_size": 100,
+      "variant": "genericfamily_recovered_hull_subset_optimum"
+    },
+    {
+      "collection": "subset_validation",
+      "run_name": "baseline_genericfamily_retuned_k180_uncheatable_bpb",
+      "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_retuned_subset_optima_rep_uncheatable_bpb",
+      "subset_size": 180,
+      "variant": "genericfamily_retuned_subset_optimum"
+    },
+    {
+      "collection": "subset_validation",
+      "run_name": "baseline_genericfamily_recovered_hull_k180_uncheatable_bpb",
+      "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_recovered_hull_subset_optima_uncheatable_bpb",
+      "subset_size": 180,
+      "variant": "genericfamily_recovered_hull_subset_optimum"
+    },
+    {
+      "collection": "subset_validation",
+      "run_name": "baseline_genericfamily_k220_uncheatable_bpb",
+      "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_subset_optima_uncheatable_bpb",
+      "subset_size": 220,
+      "variant": "genericfamily_subset_optimum"
+    },
+    {
+      "collection": "subset_validation",
+      "run_name": "baseline_genericfamily_retuned_k220_uncheatable_bpb",
+      "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_retuned_subset_optima_rep_uncheatable_bpb",
+      "subset_size": 220,
+      "variant": "genericfamily_retuned_subset_optimum"
+    },
+    {
+      "collection": "subset_validation",
+      "run_name": "baseline_genericfamily_recovered_hull_k220_uncheatable_bpb",
+      "source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_recovered_hull_subset_optima_uncheatable_bpb",
+      "subset_size": 220,
+      "variant": "genericfamily_recovered_hull_subset_optimum"
+    }
+  ],
+  "total_rows": 285
+}

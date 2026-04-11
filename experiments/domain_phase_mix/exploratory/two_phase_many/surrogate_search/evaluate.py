@@ -54,9 +54,7 @@ def _kfold_indices(n_rows: int, *, n_folds: int = N_FOLDS, seed: int = CV_SEED) 
     return [np.asarray(idx, dtype=int) for idx in np.array_split(permuted, n_folds)]
 
 
-def cross_validate(
-    spec: DatasetSpec, model_name: str, fit_fn, *, n_folds: int = N_FOLDS
-) -> CvResult:
+def cross_validate(spec: DatasetSpec, model_name: str, fit_fn, *, n_folds: int = N_FOLDS) -> CvResult:
     """Run pooled k-fold CV and return metrics."""
     start = perf_counter()
     folds = _kfold_indices(spec.R, n_folds=n_folds)
@@ -73,9 +71,13 @@ def cross_validate(
             predict_fn, info = fit_fn(train_spec, seed=fold_idx)
         except Exception as e:
             return CvResult(
-                model_name=model_name, dataset_name=spec.name,
-                r2=float("nan"), rmse=float("nan"), spearman=float("nan"),
-                regret_at_1=float("nan"), n_params=0,
+                model_name=model_name,
+                dataset_name=spec.name,
+                r2=float("nan"),
+                rmse=float("nan"),
+                spearman=float("nan"),
+                regret_at_1=float("nan"),
+                n_params=0,
                 duration_s=perf_counter() - start,
                 error=f"Fold {fold_idx}: {e}",
             )
@@ -88,17 +90,22 @@ def cross_validate(
         fold_regrets.append(float(y_test[chosen] - np.min(y_test)))
 
     residuals = spec.y - all_preds
-    ss_res = float(np.sum(residuals ** 2))
+    ss_res = float(np.sum(residuals**2))
     ss_tot = float(np.sum((spec.y - np.mean(spec.y)) ** 2))
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
-    rmse = float(np.sqrt(np.mean(residuals ** 2)))
+    rmse = float(np.sqrt(np.mean(residuals**2)))
     sp = float(spearmanr(spec.y, all_preds)[0])
     regret = float(np.mean(fold_regrets))
 
     return CvResult(
-        model_name=model_name, dataset_name=spec.name,
-        r2=r2, rmse=rmse, spearman=sp, regret_at_1=regret,
-        n_params=n_params, duration_s=perf_counter() - start,
+        model_name=model_name,
+        dataset_name=spec.name,
+        r2=r2,
+        rmse=rmse,
+        spearman=sp,
+        regret_at_1=regret,
+        n_params=n_params,
+        duration_s=perf_counter() - start,
     )
 
 
@@ -126,7 +133,10 @@ def load_many_domain_spec() -> DatasetSpec:
         target_budget=experiment.target_budget,
     )
     return build_dataset_spec_from_frame(
-        df, objective_metric="lm_eval/mmlu_5shot/bpb", name="two_phase_many", loop=loop,
+        df,
+        objective_metric="lm_eval/mmlu_5shot/bpb",
+        name="two_phase_many",
+        loop=loop,
     )
 
 
@@ -142,7 +152,8 @@ def load_starcoder_spec() -> DatasetSpec:
         df = df[df["status"] == "completed"].reset_index(drop=True)
 
     return build_dataset_spec_from_frame(
-        df, objective_metric="eval/paloma/dolma_100_programing_languages/bpb",
+        df,
+        objective_metric="eval/paloma/dolma_100_programing_languages/bpb",
         name="starcoder_2phase",
     )
 
@@ -186,12 +197,19 @@ def run_all(model_names: list[str] | None = None, dataset_names: list[str] | Non
                 )
             except Exception:
                 traceback.print_exc()
-                results.append(CvResult(
-                    model_name=mname, dataset_name=dataset_name,
-                    r2=float("nan"), rmse=float("nan"), spearman=float("nan"),
-                    regret_at_1=float("nan"), n_params=0, duration_s=0.0,
-                    error=traceback.format_exc(),
-                ))
+                results.append(
+                    CvResult(
+                        model_name=mname,
+                        dataset_name=dataset_name,
+                        r2=float("nan"),
+                        rmse=float("nan"),
+                        spearman=float("nan"),
+                        regret_at_1=float("nan"),
+                        n_params=0,
+                        duration_s=0.0,
+                        error=traceback.format_exc(),
+                    )
+                )
 
     return results
 
@@ -219,8 +237,10 @@ def save_results(results: list[CvResult]) -> None:
 def print_summary(results: list[CvResult]) -> None:
     """Print a formatted summary table."""
     print("\n" + "=" * 100)
-    print(f"{'Model':<25s} {'Dataset':<20s} {'R2':>8s} {'RMSE':>8s} {'Spearman':>10s} "
-          f"{'Regret@1':>10s} {'P':>5s} {'Time':>8s}")
+    print(
+        f"{'Model':<25s} {'Dataset':<20s} {'R2':>8s} {'RMSE':>8s} {'Spearman':>10s} "
+        f"{'Regret@1':>10s} {'P':>5s} {'Time':>8s}"
+    )
     print("-" * 100)
     for r in sorted(results, key=lambda x: (x.dataset_name, -x.r2 if np.isfinite(x.r2) else -999)):
         print(

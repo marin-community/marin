@@ -1,0 +1,22 @@
+{
+  "best_300m_6b_60m_bpb": 1.0571987628936768,
+  "best_300m_6b_60m_rank_within_completed": 1,
+  "best_300m_6b_bpb": 0.9554399251937866,
+  "best_300m_6b_run_name": "run_00125",
+  "best_60m_within_completed_300m_6b_bpb": 0.9554399251937866,
+  "best_60m_within_completed_300m_6b_rank": 1,
+  "best_60m_within_completed_bpb": 1.0571987628936768,
+  "best_60m_within_completed_run_name": "run_00125",
+  "kendall_pvalue": 8.548318632833722e-19,
+  "kendall_tau": 0.5537872089596227,
+  "n_completed": 117,
+  "n_core_baselines_completed": 2,
+  "n_sampled_runs_completed": 114,
+  "n_stratified_baselines_completed": 1,
+  "objective_metric": "eval/uncheatable_eval/bpb",
+  "pearson_pvalue": 6.036165130178879e-24,
+  "pearson_r": 0.7674439491276569,
+  "pending_reference_runs": [],
+  "spearman_pvalue": 4.228134346698915e-22,
+  "spearman_rho": 0.7467592800731315
+}
