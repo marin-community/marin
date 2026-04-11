@@ -3,7 +3,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName, stateDisplayName } from '@/types/status'
+import { SEGMENT_COLORS, stateToName, stateDisplayName } from '@/types/status'
 import type { JobState } from '@/types/status'
 import type { JobStatus, JobQuery, ListJobsResponse } from '@/types/rpc'
 import { timestampMs, formatDuration, formatRelativeTime } from '@/utils/formatting'
@@ -237,17 +237,8 @@ interface ProgressSegment {
   label: string
 }
 
-const SEGMENT_COLORS: Record<string, string> = {
-  succeeded: 'bg-status-success',
-  running: 'bg-accent',
-  building: 'bg-status-purple',
-  assigned: 'bg-status-orange',
-  failed: 'bg-status-danger',
-  worker_failed: 'bg-status-danger',
-  preempted: 'bg-status-warning',
-  killed: 'bg-text-muted',
-  pending: 'bg-surface-border',
-}
+// SEGMENT_COLORS lives in @/types/status so the dashboard legend can stay in
+// sync with a single canonical definition.
 
 function progressSegments(job: JobStatus): ProgressSegment[] {
   const counts = job.taskStateCounts ?? {}

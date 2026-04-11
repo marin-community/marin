@@ -164,6 +164,129 @@ export function statusColors(state: string): StatusColorClasses {
   return STATUS_COLORS[state] ?? DEFAULT_COLORS
 }
 
+/** Ordered list of job/task states that have explicit color mappings. */
+export const STATUS_COLOR_ORDER: readonly string[] = [
+  'running',
+  'succeeded',
+  'failed',
+  'worker_failed',
+  'preempted',
+  'pending',
+  'unschedulable',
+  'building',
+  'assigned',
+  'killed',
+] as const
+
+// -- Slice lifecycle badge styling (Autoscaler tab) --
+
+/**
+ * Visual style for a single-letter slice badge rendered in the Autoscaler tab.
+ *
+ * Letters:
+ *   - R = ready and available (fully provisioned, no tasks assigned)
+ *   - U = in-use (ready with at least one VM running a task)
+ *   - Q = requesting (scale-up in flight)
+ *   - B = booting (VMs coming up)
+ *   - I = initializing (runtime setup)
+ *   - F = failed
+ */
+export interface SliceBadgeStyle {
+  letter: string
+  label: string
+  bg: string
+  text: string
+  border: string
+}
+
+export const SLICE_STATE_STYLES: Record<string, SliceBadgeStyle> = {
+  ready: {
+    letter: 'R',
+    label: 'Ready and available (no tasks assigned)',
+    bg: 'bg-status-success-bg',
+    text: 'text-status-success',
+    border: 'border-status-success-border',
+  },
+  in_use: {
+    letter: 'U',
+    label: 'In use (ready with tasks actively running)',
+    bg: 'bg-status-orange-bg',
+    text: 'text-status-orange',
+    border: 'border-status-orange-border',
+  },
+  requesting: {
+    letter: 'Q',
+    label: 'Requesting (scale-up in flight)',
+    bg: 'bg-accent-subtle',
+    text: 'text-accent',
+    border: 'border-accent-border',
+  },
+  booting: {
+    letter: 'B',
+    label: 'Booting (VMs starting)',
+    bg: 'bg-status-purple-bg',
+    text: 'text-status-purple',
+    border: 'border-status-purple-border',
+  },
+  initializing: {
+    letter: 'I',
+    label: 'Initializing (runtime setup)',
+    bg: 'bg-status-warning-bg',
+    text: 'text-status-warning',
+    border: 'border-status-warning-border',
+  },
+  failed: {
+    letter: 'F',
+    label: 'Failed',
+    bg: 'bg-status-danger-bg',
+    text: 'text-status-danger',
+    border: 'border-status-danger-border',
+  },
+}
+
+/** Order in which slice badges should be rendered in the Autoscaler tab. */
+export const SLICE_BADGE_ORDER: readonly string[] = [
+  'ready',
+  'in_use',
+  'requesting',
+  'booting',
+  'initializing',
+  'failed',
+] as const
+
+// -- Progress bar segment colors (Jobs tab) --
+
+/**
+ * Tailwind background color for a task-state segment in the Jobs tab progress bar.
+ * Kept as a single Tailwind class because only the fill color matters for a stacked
+ * bar; text/border colors come from the state-level STATUS_COLORS when rendered
+ * as a badge elsewhere.
+ */
+export const SEGMENT_COLORS: Record<string, string> = {
+  succeeded: 'bg-status-success',
+  running: 'bg-accent',
+  building: 'bg-status-purple',
+  assigned: 'bg-status-orange',
+  failed: 'bg-status-danger',
+  worker_failed: 'bg-status-danger',
+  preempted: 'bg-status-warning',
+  killed: 'bg-text-muted',
+  pending: 'bg-surface-border',
+}
+
+/** Order to render segments in the Jobs tab progress bar. */
+export const SEGMENT_ORDER: readonly string[] = [
+  'succeeded',
+  'running',
+  'building',
+  'assigned',
+  'failed',
+  'worker_failed',
+  'preempted',
+  'killed',
+  'pending',
+] as const
+
 // -- VM state helpers --
 
 /** Strip the VM_STATE_ prefix and lowercase. */

@@ -257,6 +257,8 @@ export interface VmInfo {
   initPhase?: string
   initLogTail?: string
   initError?: string
+  /** Number of tasks currently assigned to this VM by the scheduler. */
+  runningTaskCount?: number
   labels?: Record<string, string>
 }
 

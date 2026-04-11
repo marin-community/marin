@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { vmStateToName } from '@/types/status'
+import { SLICE_STATE_STYLES, SLICE_BADGE_ORDER, vmStateToName } from '@/types/status'
 import type {
   GetAutoscalerStatusResponse,
   AutoscalerStatus,
@@ -87,24 +87,8 @@ function formatIdleThreshold(ms: number): string {
   return ms >= 60000 ? `${Math.floor(ms / 60000)}m` : `${Math.floor(ms / 1000)}s`
 }
 
-// -- Slice state badge styling --
-
-interface SliceBadgeStyle {
-  letter: string
-  bg: string
-  text: string
-  border: string
-}
-
-const SLICE_STATE_STYLES: Record<string, SliceBadgeStyle> = {
-  ready: { letter: 'R', bg: 'bg-status-success-bg', text: 'text-status-success', border: 'border-status-success-border' },
-  requesting: { letter: 'Q', bg: 'bg-accent-subtle', text: 'text-accent', border: 'border-accent-border' },
-  booting: { letter: 'B', bg: 'bg-status-purple-bg', text: 'text-status-purple', border: 'border-status-purple-border' },
-  initializing: { letter: 'I', bg: 'bg-status-warning-bg', text: 'text-status-warning', border: 'border-status-warning-border' },
-  failed: { letter: 'F', bg: 'bg-status-danger-bg', text: 'text-status-danger', border: 'border-status-danger-border' },
-}
-
-const SLICE_BADGE_ORDER = ['ready', 'requesting', 'booting', 'initializing', 'failed'] as const
+// Slice state badge styling and order are imported from @/types/status so the
+// dashboard legend can stay in sync with a single canonical definition.
 
 // -- Group availability status --
 
@@ -322,6 +306,42 @@ function groupSliceCounts(groupName: string): Record<string, number> {
 function groupIdleCount(groupName: string): number {
   const slices = groupIndex.value[groupName]?.slices ?? []
   return slices.filter(s => s.idle).length
+}
+
+/** True if any VM in the slice is currently running at least one task. */
+function sliceInUse(slice: SliceInfo): boolean {
+  return (slice.vms ?? []).some(vm => (vm.runningTaskCount ?? 0) > 0)
+}
+
+/**
+ * Count slices in a group that are currently in use (ready + have at least one
+ * task assigned). The backend's sliceStateCounts only tracks lifecycle states —
+ * "in-use" is orthogonal and computed from the per-VM runningTaskCount.
+ */
+function groupInUseCount(groupName: string): number {
+  const slices = groupIndex.value[groupName]?.slices ?? []
+  return slices.filter(sliceInUse).length
+}
+
+/**
+ * Synthetic slice counts for badge rendering. Splits the `ready` bucket from
+ * the backend's lifecycle counts into available ready (R) and in-use (U) so
+ * operators can tell at a glance which slices are occupied vs. free.
+ *
+ * The backend tracks lifecycle (REQUESTING/BOOTING/INITIALIZING/READY/FAILED)
+ * but "in use" is orthogonal — it's computed here by summing per-VM
+ * runningTaskCount across the group's slices. R + U == the backend's ready
+ * count (when all ready slices have lifecycle state information).
+ */
+function groupBadgeCounts(groupName: string): Record<string, number> {
+  const counts = { ...groupSliceCounts(groupName) }
+  const inUse = groupInUseCount(groupName)
+  if (inUse > 0) {
+    counts.in_use = inUse
+    const ready = counts.ready ?? 0
+    counts.ready = Math.max(0, ready - inUse)
+  }
+  return counts
 }
 
 function groupSlices(groupName: string): SliceInfo[] {
@@ -640,15 +660,16 @@ function idleThresholdMs(groupName: string): number {
                     <span class="inline-flex items-center gap-1">
                       <template v-for="state in SLICE_BADGE_ORDER" :key="state">
                         <span
-                          v-if="(groupSliceCounts(gs.group)[state] ?? 0) > 0"
+                          v-if="(groupBadgeCounts(gs.group)[state] ?? 0) > 0"
                           :class="[
                             'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold border',
                             SLICE_STATE_STYLES[state].bg,
                             SLICE_STATE_STYLES[state].text,
                             SLICE_STATE_STYLES[state].border,
                           ]"
+                          :title="SLICE_STATE_STYLES[state].label"
                         >
-                          {{ groupSliceCounts(gs.group)[state] }}{{ SLICE_STATE_STYLES[state].letter }}
+                          {{ groupBadgeCounts(gs.group)[state] }}{{ SLICE_STATE_STYLES[state].letter }}
                         </span>
                       </template>
                       <span
@@ -719,6 +740,18 @@ function idleThresholdMs(groupName: string): number {
                       </span>
                       <span v-if="slice.idle" class="inline-flex items-center px-1.5 py-0.5 rounded border text-xs font-semibold bg-status-warning-bg text-status-warning border-status-warning-border" :title="`Idle for ${formatIdleSince(slice.lastActive)}, threshold ${formatIdleThreshold(idleThresholdMs(gs.group))}`">
                         idle {{ formatIdleSince(slice.lastActive) }}
+                      </span>
+                      <span
+                        v-else-if="sliceInUse(slice)"
+                        :class="[
+                          'inline-flex items-center px-1.5 py-0.5 rounded border text-xs font-semibold',
+                          SLICE_STATE_STYLES.in_use.bg,
+                          SLICE_STATE_STYLES.in_use.text,
+                          SLICE_STATE_STYLES.in_use.border,
+                        ]"
+                        :title="SLICE_STATE_STYLES.in_use.label"
+                      >
+                        in use
                       </span>
                       <StatusBadge
                         v-else-if="(slice.vms ?? []).length > 0"
