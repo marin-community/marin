@@ -94,10 +94,15 @@ export interface JobStateCount {
   count: number;
 }
 
-export interface JobsSnapshot {
+export interface JobBucket {
   total: number;
-  windowMs: number;
   byState: JobStateCount[];
+}
+
+export interface JobsSnapshot {
+  inflight: JobBucket;
+  last24h: JobBucket;
+  windowMs: number;
   fetchedAt: string;
   error?: string;
 }

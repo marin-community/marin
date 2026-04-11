@@ -1,4 +1,4 @@
-import type { JobStateCount } from "../api";
+import type { JobBucket, JobStateCount } from "../api";
 import { useJobs } from "../hooks/useJobs";
 
 // Emerald = success, rose = broken, amber = in-flight, slate = cancelled
@@ -41,6 +41,39 @@ function StateRow({ row, total }: { row: JobStateCount; total: number }) {
   );
 }
 
+function Section({
+  label,
+  bucket,
+  emptyMessage,
+}: {
+  label: string;
+  bucket: JobBucket;
+  emptyMessage: string;
+}) {
+  return (
+    <section>
+      <div className="mb-2 flex items-baseline gap-2">
+        <h4 className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+          {label}
+        </h4>
+      </div>
+      <div className="flex items-baseline gap-3">
+        <span className="text-3xl font-bold text-slate-100">{bucket.total}</span>
+        <span className="text-slate-400">total</span>
+      </div>
+      {bucket.byState.length === 0 ? (
+        <div className="mt-3 text-sm text-slate-500">{emptyMessage}</div>
+      ) : (
+        <div className="mt-3 space-y-2">
+          {bucket.byState.map((row) => (
+            <StateRow key={row.state} row={row} total={bucket.total} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function JobsPanel() {
   const { data, isLoading, error } = useJobs();
 
@@ -50,7 +83,7 @@ export function JobsPanel() {
         <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
           Jobs
         </h3>
-        <span className="text-xs text-slate-500">submitted in the last 24h</span>
+        <span className="text-xs text-slate-500">root jobs only</span>
       </div>
       <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
         {isLoading && <div className="text-slate-400">loading…</div>}
@@ -59,21 +92,19 @@ export function JobsPanel() {
         )}
         {data?.error && <div className="text-sm text-rose-400">{data.error}</div>}
         {data && !data.error && (
-          <>
-            <div className="flex items-baseline gap-3">
-              <span className="text-4xl font-bold text-slate-100">{data.total}</span>
-              <span className="text-slate-400">total</span>
-            </div>
-            {data.byState.length === 0 ? (
-              <div className="mt-4 text-sm text-slate-500">no jobs in the last 24h</div>
-            ) : (
-              <div className="mt-4 space-y-2">
-                {data.byState.map((row) => (
-                  <StateRow key={row.state} row={row} total={data.total} />
-                ))}
-              </div>
-            )}
-          </>
+          <div className="space-y-5">
+            <Section
+              label="Right now"
+              bucket={data.inflight}
+              emptyMessage="no jobs in flight"
+            />
+            <div className="border-t border-slate-800" />
+            <Section
+              label="Last 24h"
+              bucket={data.last24h}
+              emptyMessage="no jobs finished in the last 24h"
+            />
+          </div>
         )}
       </div>
     </div>
