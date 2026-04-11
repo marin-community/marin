@@ -303,6 +303,14 @@ export const DIVERGING_COLORS = [
   '#CBF9D7', '#A3E6B5', '#45BD62', '#2A9142', '#1D632E',
 ] as const
 
+/** Diverging hot-to-cold palette (index 0 = hottest, 10 = coldest).
+ *  Use for temperature-style scales from hot (red/orange) → neutral → cold (blue). */
+export const DIVERGING_HOT_TO_COLD = [
+  '#AA2312', '#D4311C', '#EB630E', '#FFB973', '#FFF2A6',
+  '#F0F2F5',
+  '#CDE5FF', '#76B6FF', '#1877F2', '#083E89', '#07316D',
+] as const
+
 // -- VM state helpers --
 
 /** Strip the VM_STATE_ prefix and lowercase. */
