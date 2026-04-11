@@ -302,6 +302,7 @@ def endpoint_query_sql(query: EndpointQuery) -> tuple[str, list[object]]:
     sql = from_clause
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
+    sql += " ORDER BY e.registered_at_ms DESC, e.endpoint_id ASC"
     if query.limit is not None:
         sql += " LIMIT ?"
         params.append(query.limit)
