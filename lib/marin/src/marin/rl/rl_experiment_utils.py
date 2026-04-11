@@ -30,6 +30,7 @@ from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
+from marin.training.run_environment import resolve_required_env_vars
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,9 @@ class RLExperimentConfig:
     train_ram: str | None = None
     inference_ram: str | None = None
     zone: str | None = None
+
+    runtime_env_vars: list[str] = dataclasses.field(default_factory=list)
+    """Env var names to forward into the executor step and all RL child jobs."""
 
 
 def launcher_region_for_rl_experiment(config: RLExperimentConfig) -> str:
@@ -328,6 +332,7 @@ def _build_rl_job_config(
         pip_dependency_groups=(
             config.model_config.pip_dependency_groups if config.model_config.pip_dependency_groups else ["vllm", "math"]
         ),
+        runtime_env_vars=list(config.runtime_env_vars),
     )
 
     return job_config
@@ -356,7 +361,10 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
     return ExecutorStep(
         name=f"rl_testing/{name}",
         description=f"Async RL training: {name}",
-        fn=remote(resources=executor_step_resources_for_rl_experiment(config))(_run_rl_experiment_step),
+        fn=remote(
+            resources=executor_step_resources_for_rl_experiment(config),
+            env_vars=resolve_required_env_vars(config.runtime_env_vars),
+        )(_run_rl_experiment_step),
         config=RLStepConfig(
             name=name,
             experiment_config=runtime_config,

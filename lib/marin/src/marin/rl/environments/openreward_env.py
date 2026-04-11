@@ -17,11 +17,11 @@ from marin.rl.openreward import (
     OpenRewardTaskManifest,
     OpenRewardTaskManifestEntry,
     OpenRewardToolSpec,
-    SecretsMapping,
     load_openreward_client,
     load_openreward_task_manifest,
 )
 from marin.rl.types import RolloutGroup
+from marin.training.run_environment import resolve_required_env_vars
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +142,18 @@ def _merge_stop_sequences(stop: list[str] | None, tool_call_stop: str) -> list[s
     return merged
 
 
+def _resolve_optional_env_var(env_var_name: str | None) -> str | None:
+    if env_var_name is None:
+        return None
+    return resolve_required_env_vars([env_var_name])[env_var_name]
+
+
+def _resolve_optional_secrets(secret_env_vars: list[str] | None) -> dict[str, str] | None:
+    if not secret_env_vars:
+        return None
+    return resolve_required_env_vars(secret_env_vars)
+
+
 class OpenRewardEnv(MarinEnv):
     """Manifest-backed single-turn OpenReward environment adapter."""
 
@@ -151,9 +163,9 @@ class OpenRewardEnv(MarinEnv):
         train_manifest_path: str | None = None,
         eval_manifest_path: str | None = None,
         base_url: str | None = None,
-        api_key: str | None = None,
+        api_key_env_var: str | None = None,
         variant: str | None = None,
-        secrets: SecretsMapping | None = None,
+        secret_env_vars: list[str] | None = None,
         invalid_tool_call_reward: float = 0.0,
         tool_call_stop: str = "</tool_call>",
     ) -> None:
@@ -162,9 +174,9 @@ class OpenRewardEnv(MarinEnv):
         self.deployment_name, self.environment_name = _validate_manifest_pair(self.train_manifest, self.eval_manifest)
 
         self.base_url = base_url
-        self.api_key = api_key
+        self.api_key_env_var = api_key_env_var
         self.variant = variant
-        self.secrets = secrets
+        self.secret_env_vars = list(secret_env_vars) if secret_env_vars is not None else None
         self.invalid_tool_call_reward = invalid_tool_call_reward
         self.tool_call_stop = tool_call_stop
 
@@ -198,9 +210,11 @@ class OpenRewardEnv(MarinEnv):
         tool_execution_failures = 0
         finished_count = 0
         rollout_groups: list[RolloutGroup] = []
+        api_key = _resolve_optional_env_var(self.api_key_env_var)
+        secrets = _resolve_optional_secrets(self.secret_env_vars)
 
         openreward_client = load_openreward_client()
-        with openreward_client(api_key=self.api_key, base_url=self.base_url) as client:
+        with openreward_client(api_key=api_key, base_url=self.base_url) as client:
             environment = client.environments.get(self.deployment_name, variant=self.variant)
 
             for entry in sampled_entries:
@@ -236,7 +250,7 @@ class OpenRewardEnv(MarinEnv):
                             invalid_tool_call_count += 1
                         else:
                             arguments = json.loads(tool_call.function.arguments)
-                            with environment.session(task=task, secrets=self.secrets) as session:
+                            with environment.session(task=task, secrets=secrets) as session:
                                 try:
                                     tool_result = session.call_tool(
                                         tool_call.function.name,
