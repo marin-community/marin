@@ -132,6 +132,7 @@ class InputFileSpec:
 
     path: str
     format: Literal["parquet", "jsonl", "vortex", "auto"] = "auto"
+    size: int | None = None
     columns: list[str] | None = None
     row_start: int | None = None
     row_end: int | None = None

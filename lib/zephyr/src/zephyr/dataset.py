@@ -21,6 +21,51 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class GlobSource:
+    """Lazy file source resolved at plan time via a bulk list-objects call.
+
+    Stores the glob pattern and defers expansion to compute_plan(), where
+    fsspec glob(detail=True) returns paths and sizes in a single RPC.
+    """
+
+    pattern: str
+    empty_glob_ok: bool = False
+
+
+@dataclass(frozen=True)
+class FileEntry:
+    """A file path with its size from the bulk listing."""
+
+    path: str
+    size: int
+
+
+def resolve_glob(source: GlobSource) -> list[FileEntry]:
+    """Expand a GlobSource into FileEntry objects with sizes.
+
+    Uses fsspec glob(detail=True) which returns file metadata from the same
+    list-objects API call — no extra per-file stat RPCs.
+    """
+    pattern = re.sub(r"(?<!:)//+", "/", source.pattern)
+
+    fs, _ = url_to_fs(pattern)
+    protocol = fsspec.core.split_protocol(pattern)[0]
+
+    entries: list[FileEntry] = []
+    for expanded in braceexpand(pattern):
+        detail = fs.glob(expanded, detail=True)
+        for path, info in detail.items():
+            full = f"{protocol}://{path}" if protocol else path
+            entries.append(FileEntry(path=full, size=info.get("size", 0)))
+    entries.sort(key=lambda e: e.path)
+
+    if not entries and not source.empty_glob_ok:
+        raise FileNotFoundError(f"No files found matching pattern: {source.pattern}")
+
+    return entries
+
+
+@dataclass(frozen=True)
 class ShardInfo:
     """Metadata about the current shard passed to map_shard functions.
 
@@ -362,25 +407,7 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = ctx.execute(ds).results
         """
-        # Normalize double slashes while preserving protocol (e.g., gs://, s3://, http://)
-        pattern = re.sub(r"(?<!:)//+", "/", pattern)
-
-        fs, _ = url_to_fs(pattern)
-        protocol = fsspec.core.split_protocol(pattern)[0]
-
-        files = []
-        for expanded in braceexpand(pattern):
-            for f in fs.glob(expanded):
-                if protocol:
-                    files.append(f"{protocol}://{f}")
-                else:
-                    files.append(f)
-        files = sorted(files)
-
-        if len(files) == 0 and not empty_glob_ok:
-            raise FileNotFoundError(f"No files found matching pattern: {pattern}")
-
-        return Dataset.from_list(files)
+        return Dataset(GlobSource(pattern, empty_glob_ok))
 
     def map(self, fn: Callable[[T], R]) -> Dataset[R]:
         """Map a function over the dataset.
