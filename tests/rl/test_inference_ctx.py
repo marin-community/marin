@@ -557,6 +557,91 @@ def test_vllm_assistant_turn_from_choice_parses_tool_calls(monkeypatch):
     assert json.loads(parse_result.assistant_turn.tool_calls[0].function.arguments) == {"answer": "42"}
 
 
+def test_vllm_assistant_turn_from_choice_parses_tool_calls_without_im_end(monkeypatch):
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_llm_engine",
+        staticmethod(lambda _config: object()),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: RendererTestTokenizer(),
+    )
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="Qwen/Qwen3-8B",
+            canonical_model_name="Qwen/Qwen3-8B",
+            max_model_len=1024,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(),
+        )
+    )
+
+    choice = Choice(
+        finish_reason="stop",
+        index=0,
+        message=ChatCompletionMessage(
+            role="assistant",
+            content='<tool_call>{"name":"submit_answer","arguments":{"answer":"42"}}</tool_call>',
+        ),
+        logprobs=ChoiceLogprobs(content=[]),
+    )
+    choice.response_token_ids = RendererTestTokenizer().encode(
+        '<tool_call>{"name":"submit_answer","arguments":{"answer":"42"}}</tool_call>'
+    )
+
+    parse_result = ctx.assistant_turn_from_choice(choice)
+
+    assert parse_result.parse_success is True
+    assert parse_result.assistant_turn.content == ""
+    assert parse_result.assistant_turn.tool_calls[0].function.name == "submit_answer"
+    assert json.loads(parse_result.assistant_turn.tool_calls[0].function.arguments) == {"answer": "42"}
+
+
+def test_vllm_assistant_turn_from_choice_rejects_trailing_text_without_im_end(monkeypatch):
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_llm_engine",
+        staticmethod(lambda _config: object()),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: RendererTestTokenizer(),
+    )
+
+    ctx = vLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            model_name="Qwen/Qwen3-8B",
+            canonical_model_name="Qwen/Qwen3-8B",
+            max_model_len=1024,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.9,
+            sampling_params=VLLMSamplingConfig(),
+        )
+    )
+
+    choice = Choice(
+        finish_reason="stop",
+        index=0,
+        message=ChatCompletionMessage(
+            role="assistant",
+            content='<tool_call>{"name":"submit_answer","arguments":{"answer":"42"}}</tool_call> trailing',
+        ),
+        logprobs=ChoiceLogprobs(content=[]),
+    )
+    choice.response_token_ids = RendererTestTokenizer().encode(
+        '<tool_call>{"name":"submit_answer","arguments":{"answer":"42"}}</tool_call> trailing'
+    )
+
+    parse_result = ctx.assistant_turn_from_choice(choice)
+
+    assert parse_result.parse_success is False
+    assert parse_result.assistant_turn.content.endswith("trailing")
+    assert parse_result.assistant_turn.tool_calls == ()
+
+
 def test_vllm_convert_preserves_tool_call_token_ids_and_logprobs(monkeypatch):
     monkeypatch.setattr(
         vLLMInferenceContext,
