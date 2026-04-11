@@ -575,7 +575,7 @@ def test_ocdbt_merges_files():
             # Check that manifest.ocdbt exists
             # The manifest should be in one of the checkpoint subdirectories
             checkpoint_dir = pathlib.Path(tmpdir)
-            checkpoint_files = list(checkpoint_dir.rglob("*"))
+            checkpoint_files = [path for path in checkpoint_dir.rglob("*") if path.is_file()]
             assert (
                 len(checkpoint_files) <= 25
             ), f"There should be fewer than 25 files in the checkpoint directory: {checkpoint_files}"
