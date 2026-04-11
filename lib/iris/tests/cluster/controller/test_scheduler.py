@@ -11,6 +11,7 @@ modify state, or run threads.
 import pytest
 
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.db import (
     _decode_attribute_rows,
 )
@@ -48,8 +49,6 @@ from .conftest import (
 
 
 def _job_requirements_from_job(job) -> JobRequirements:
-    from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
-
     return JobRequirements(
         resources=resource_spec_from_scalars(
             job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json

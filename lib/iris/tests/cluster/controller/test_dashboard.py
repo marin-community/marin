@@ -14,6 +14,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from iris.cluster.bundle import BundleStore
+from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.db import (
@@ -138,8 +139,6 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         job = rows[0]
         if job.state != job_pb2.JOB_STATE_PENDING:
             return None
-        from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
-
         req = JobRequirements(
             resources=resource_spec_from_scalars(
                 job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json

@@ -12,6 +12,7 @@ Tests cover:
   and non-reservation jobs get NOT_EXISTS constraint.
 """
 
+from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.controller import (
     RESERVATION_TAINT_KEY,
     Controller,
@@ -1599,8 +1600,6 @@ def test_holder_task_gets_device_constraints_from_tpu_entry(state):
 
     holder_job = _query_job(state, holder_job_id)
     assert holder_job is not None
-    from iris.cluster.controller.codec import constraints_from_json
-
     constraint_keys = [c.key for c in constraints_from_json(holder_job.constraints_json)]
 
     assert (

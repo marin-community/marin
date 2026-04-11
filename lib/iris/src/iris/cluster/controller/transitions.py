@@ -21,6 +21,7 @@ from iris.cluster.controller.budget import UserBudgetDefaults
 from iris.cluster.controller.codec import (
     constraints_from_json,
     constraints_to_json,
+    entrypoint_to_json,
     proto_from_json,
     proto_to_json,
     reservation_to_json,
@@ -1095,7 +1096,7 @@ class ControllerTransitions:
             )
             max_failures = int(request.max_task_failures)
             # Serialize dispatch config fields for job_config.
-            entrypoint_json = proto_to_json(request.entrypoint)
+            entrypoint_json = entrypoint_to_json(request.entrypoint)
             environment_json = proto_to_json(request.environment)
             ports_json = json.dumps(list(request.ports)) if request.ports else "[]"
             reservation_json = reservation_to_json(request)
@@ -1244,7 +1245,7 @@ class ControllerTransitions:
                             holder_name_lower,
                         ),
                     )
-                    holder_entrypoint_json = proto_to_json(holder_request.entrypoint)
+                    holder_entrypoint_json = entrypoint_to_json(holder_request.entrypoint)
                     holder_environment_json = proto_to_json(holder_request.environment)
                     cur.execute(
                         "INSERT INTO job_config("

@@ -432,7 +432,7 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
 def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobDetailRow]:
     """Fetch only jobs that have reservations, filtering at the SQL level.
 
-    Uses the has_reservation column in job_config to filter efficiently.
+    Uses the has_reservation column on the jobs table to filter without a JOIN.
     """
     placeholders = ",".join("?" for _ in states)
     with queries.read_snapshot() as snapshot:
@@ -1538,10 +1538,7 @@ class Controller:
             row = q.fetchone("SELECT reservation_json FROM job_config WHERE job_id = ?", (job_id.to_wire(),))
         if row is None or row[0] is None:
             return 0
-        import json
-
-        data = json.loads(row[0])
-        return len(data.get("entries", []))
+        return len(reservation_entries_from_json(row[0]))
 
     def _cleanup_stale_claims(self, claims: dict[WorkerId, ReservationClaim] | None = None) -> bool:
         """Remove claims for workers that disappeared or jobs that finished."""

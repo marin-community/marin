@@ -68,6 +68,13 @@ def reservation_to_json(request: controller_pb2.Controller.LaunchJobRequest) -> 
     return json.dumps(json_format.MessageToDict(request.reservation, **_TO_DICT_OPTS))
 
 
+def entrypoint_to_json(ep: job_pb2.RuntimeEntrypoint) -> str:
+    """Serialize a RuntimeEntrypoint, excluding inline workdir_files (stored separately)."""
+    d = json_format.MessageToDict(ep, **_TO_DICT_OPTS)
+    d.pop("workdir_files", None)
+    return json.dumps(d)
+
+
 def reservation_entries_from_json(reservation_json: str | None) -> list[job_pb2.ReservationEntry]:
     """Deserialize reservation JSON back to a list of ReservationEntry protos."""
     if not reservation_json:

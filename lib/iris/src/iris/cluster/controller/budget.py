@@ -12,13 +12,10 @@ from typing import Generic, TypeVar
 import json
 
 from iris.cluster.controller.db import ACTIVE_TASK_STATES, QuerySnapshot
-from iris.cluster.controller.schema import proto_decoder
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
 T = TypeVar("T")
-
-_RESOURCE_SPEC_DECODER = proto_decoder(job_pb2.ResourceSpecProto)
 
 
 def _accel_from_device_json(device_json: str | None) -> int:
@@ -68,9 +65,8 @@ def resource_value(cpu_millicores: int, memory_bytes: int, accelerator_count: in
 def compute_user_spend(snapshot: QuerySnapshot) -> dict[str, int]:
     """Compute per-user budget spend from active tasks.
 
-    Joins tasks (in ASSIGNED/BUILDING/RUNNING states) with jobs to get user_id
-    and the resource spec proto.  Uses GROUP BY to count tasks per job and
-    Reads native resource columns (not proto BLOBs) and computes spend per user.
+    Joins tasks (in ASSIGNED/BUILDING/RUNNING states) with job_config to get
+    resource columns.  Groups by job, then sums resource_value * task_count per user.
 
     Returns ``{user_id: total_resource_value}`` for users with active tasks.
     """

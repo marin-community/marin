@@ -13,6 +13,7 @@ They focus on:
 import threading
 
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
+from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import (
@@ -100,8 +101,6 @@ def _endpoints(state: ControllerTransitions, query: EndpointQuery = EndpointQuer
 
 
 def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions):
-    from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
-
     pending = _schedulable_tasks(state)
     workers = healthy_active_workers(state)
     task_ids = [t.task_id for t in pending]
