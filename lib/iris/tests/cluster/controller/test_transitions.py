@@ -729,7 +729,7 @@ def test_retry_assignment_deletes_stale_endpoints_before_next_attempt(state):
     )
 
     fail_worker(state, worker_1, "Connection lost")
-    assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_PENDING
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING
 
     # Simulate the overlap window where a stale coordinator endpoint is still
     # visible just before the retry is launched.
@@ -752,7 +752,7 @@ def test_retry_assignment_deletes_stale_endpoints_before_next_attempt(state):
 
     retried_task = _query_task(state, task.task_id)
     assert retried_task is not None
-    assert retried_task.state == cluster_pb2.TASK_STATE_ASSIGNED
+    assert retried_task.state == job_pb2.TASK_STATE_ASSIGNED
     assert _endpoints(state, EndpointQuery(exact_name="ns-1/jax_coordinator")) == []
 
 
