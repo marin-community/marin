@@ -9,7 +9,7 @@ import type {
   GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
   ResourceUsage,
 } from '@/types/rpc'
-import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig } from '@/utils/formatting'
+import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
 import { getLeafJobName } from '@/utils/jobTree'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -481,29 +481,29 @@ const taskPage = ref(0)
 const totalTaskPages = computed(() => Math.max(1, Math.ceil(filteredTasks.value.length / TASK_PAGE_SIZE)))
 
 const paginatedTasks = computed(() => {
-  const start = taskPage.value * TASK_PAGE_SIZE
+  // Clamp the effective page against the current filtered length so a shrink
+  // during auto-refresh never yields an empty slice on a stale page. The
+  // watcher below mirrors this into `taskPage` so the paginator footer stays
+  // in sync.
+  const effectivePage = Math.min(taskPage.value, totalTaskPages.value - 1)
+  const start = Math.max(0, effectivePage) * TASK_PAGE_SIZE
   return filteredTasks.value.slice(start, start + TASK_PAGE_SIZE)
 })
 
 // Reset page when filters or sort change
 watch([taskSearch, stateFilter, sortColumn, sortDir], () => { taskPage.value = 0 })
 
-// -- Priority Band --
-
-function bandDisplayName(band: string | undefined): string {
-  if (!band) return 'Unknown'
-  const name = band.replace(/^PRIORITY_BAND_/, '')
-  return name.charAt(0) + name.slice(1).toLowerCase()
-}
-
-function bandColor(band: string | undefined): string {
-  if (!band) return 'text-text-muted'
-  const name = band.replace(/^PRIORITY_BAND_/, '')
-  if (name === 'PRODUCTION') return 'text-status-danger'
-  if (name === 'INTERACTIVE') return 'text-accent'
-  if (name === 'BATCH') return 'text-text-muted'
-  return 'text-text-muted'
-}
+// Clamp taskPage when the filtered task list shrinks underneath us. This
+// happens during the 10s auto-refresh when task state transitions change
+// which tasks match the active state filter — without clamping, a user on
+// a later page can be left with an empty table body and a stale footer
+// range (e.g. "251-240 of 240"). The computed runs eagerly so the page is
+// corrected before `paginatedTasks` slices against the new length.
+watch(totalTaskPages, (pages) => {
+  if (taskPage.value >= pages) {
+    taskPage.value = Math.max(0, pages - 1)
+  }
+})
 
 // -- Profiling --
 

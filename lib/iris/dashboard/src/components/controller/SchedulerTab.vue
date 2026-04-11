@@ -12,7 +12,7 @@ import type {
   JobStatus,
   JobQuery,
 } from '@/types/rpc'
-import { timestampMs, formatRelativeTime } from '@/utils/formatting'
+import { timestampMs, formatRelativeTime, bandDisplayName, bandColor } from '@/utils/formatting'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 
@@ -34,7 +34,6 @@ const unscheduledSearch = ref('')
 const unscheduledSearchInput = ref('')
 const unscheduledJobs = ref<JobStatus[]>([])
 const unscheduledTotal = ref(0)
-const unscheduledHasMore = ref(false)
 const unscheduledLoading = ref(false)
 const unscheduledError = ref<string | null>(null)
 
@@ -56,7 +55,13 @@ async function fetchUnscheduledJobs() {
     const resp = await controllerRpcCall<ListJobsResponse>('ListJobs', { query })
     unscheduledJobs.value = resp.jobs ?? []
     unscheduledTotal.value = resp.totalCount ?? 0
-    unscheduledHasMore.value = resp.hasMore ?? false
+    // Clamp the current page if the pending queue shrank underneath us
+    // (e.g. during a 15s auto-refresh). The watcher on unscheduledPage will
+    // re-fetch with the corrected offset.
+    const maxPage = Math.max(0, Math.ceil(unscheduledTotal.value / UNSCHEDULED_PAGE_SIZE) - 1)
+    if (unscheduledPage.value > maxPage) {
+      unscheduledPage.value = maxPage
+    }
   } catch (e) {
     unscheduledError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -157,21 +162,6 @@ const mergedUsers = computed<MergedUser[]>(() => {
 })
 
 // -- Helpers --
-
-function bandDisplayName(band: string | undefined): string {
-  if (!band) return 'Unknown'
-  const name = band.replace(/^PRIORITY_BAND_/, '')
-  return name.charAt(0) + name.slice(1).toLowerCase()
-}
-
-function bandColor(band: string | undefined): string {
-  if (!band) return 'text-text-muted'
-  const name = band.replace(/^PRIORITY_BAND_/, '')
-  if (name === 'PRODUCTION') return 'text-status-danger'
-  if (name === 'INTERACTIVE') return 'text-accent'
-  if (name === 'BATCH') return 'text-text-muted'
-  return 'text-text-muted'
-}
 
 function utilizationColor(pct: number): string {
   if (pct >= 100) return 'text-status-danger font-semibold'
