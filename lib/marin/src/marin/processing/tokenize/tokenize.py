@@ -352,14 +352,12 @@ def tokenize(config: TokenizeConfigBase):
             resources=ResourceConfig(cpu=1, ram="1g"),
             name="tokenize-filescan",
         )
-        file_stats = list(
-            scan_ctx.execute(
-                Dataset.from_list(batched_paths).flat_map(
-                    lambda batch: [{"filename": p, "size": fsspec_size(p)} for p in batch]
-                ),
-                verbose=False,
-            )
-        )
+        file_stats = scan_ctx.execute(
+            Dataset.from_list(batched_paths).flat_map(
+                lambda batch: [{"filename": p, "size": fsspec_size(p)} for p in batch]
+            ),
+            verbose=False,
+        ).results
         total_input_bytes = sum(f["size"] for f in file_stats)
         if config.num_shards is not None:
             target_group_bytes = _compute_target_group_bytes(total_input_bytes, config.num_shards)
@@ -412,7 +410,7 @@ def tokenize(config: TokenizeConfigBase):
         ctx.put("tokenizer_backend", config.tokenizer_backend)
 
         tokenize_start = time.monotonic()
-        shard_paths = ctx.execute(temp_shards)
+        shard_paths = ctx.execute(temp_shards).results
         tokenize_elapsed = time.monotonic() - tokenize_start
 
         logger.info("Computing exemplar for cache consolidation")
@@ -422,7 +420,7 @@ def tokenize(config: TokenizeConfigBase):
             .take_per_shard(1)
             .map_shard(lambda example, _: _tokenize_batches(config=config, batches=[example])),
             verbose=False,
-        )[0]
+        ).results[0]
 
         consolidate_start = time.monotonic()
         logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")

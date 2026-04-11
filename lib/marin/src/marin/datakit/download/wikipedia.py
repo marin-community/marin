@@ -86,18 +86,18 @@ def download_wikipedia(input_urls: list[str], revision: str, output_path: str) -
         Dataset.from_list(input_urls)
         .map(lambda url: download_tar(url, output_base))
         .write_jsonl(f"{output_base}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True),
-    )
+    ).results
 
     # load all of the output filenames to process
-    downloads = ctx.execute(Dataset.from_list(download_metrics).flat_map(load_jsonl))
+    downloads = ctx.execute(Dataset.from_list(download_metrics).flat_map(load_jsonl)).results
 
     extracted = ctx.execute(
         Dataset.from_list(downloads)
         .flat_map(lambda file: process_file(file, output_base))
         .write_jsonl(f"{output_base}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True),
-    )
+    ).results
 
-    logger.info("Wikipedia dump transfer complete, wrote: %s", list(extracted))
+    logger.info("Wikipedia dump transfer complete, wrote: %s", extracted)
 
 
 def download_wikipedia_step(
