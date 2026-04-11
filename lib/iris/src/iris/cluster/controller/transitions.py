@@ -3161,7 +3161,7 @@ class ControllerTransitions:
                 pending_rows = []
             else:
                 pending_rows = cur.execute(
-                    "SELECT t.task_id, t.current_attempt_id, j.num_tasks, j.is_reservation_holder, "
+                    "SELECT t.task_id, t.job_id, t.current_attempt_id, j.num_tasks, j.is_reservation_holder, "
                     "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
                     "jc.entrypoint_json, jc.environment_json, jc.bundle_id, jc.ports_json, "
                     "jc.constraints_json, jc.task_image, jc.timeout_ms "
@@ -3183,10 +3183,20 @@ class ControllerTransitions:
 
                 _assign_task(cur, task_id, None, None, attempt_id, now_ms)
 
+                entrypoint = proto_from_json(str(row["entrypoint_json"]), job_pb2.RuntimeEntrypoint)
+                # Load inline workdir files from the job_workdir_files table.
+                job_id_wire = str(row["job_id"])
+                wf_rows = cur.execute(
+                    "SELECT filename, data FROM job_workdir_files WHERE job_id = ?",
+                    (job_id_wire,),
+                ).fetchall()
+                for wf_row in wf_rows:
+                    entrypoint.workdir_files[wf_row["filename"]] = bytes(wf_row["data"])
+
                 run_req = job_pb2.RunTaskRequest(
                     task_id=task_id,
                     num_tasks=int(row["num_tasks"]),
-                    entrypoint=proto_from_json(str(row["entrypoint_json"]), job_pb2.RuntimeEntrypoint),
+                    entrypoint=entrypoint,
                     environment=proto_from_json(str(row["environment_json"]), job_pb2.EnvironmentConfig),
                     bundle_id=str(row["bundle_id"]),
                     resources=resources,
