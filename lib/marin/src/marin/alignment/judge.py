@@ -134,8 +134,8 @@ def parse_compliance_result(content: str) -> ComplianceResult:
     except (json.JSONDecodeError, KeyError) as exc:
         logger.warning("Failed to parse judge response: %s", exc)
         return ComplianceResult(
-            score=0,
-            compliant=False,
+            score=None,
+            compliant=None,
             confidence=0.0,
             explanation=f"Parse failure: {exc}",
             raw_response=content,
@@ -310,10 +310,12 @@ def _judgment_record(
     chosen_candidates: list[dict[str, Any]],
     rejected_candidates: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    best_chosen = max(chosen_candidates, key=lambda item: item["judgment"]["score"]) if chosen_candidates else None
-    worst_rejected = (
-        min(rejected_candidates, key=lambda item: item["judgment"]["score"]) if rejected_candidates else None
-    )
+    # Candidates with score=None failed to parse; excluding them from
+    # best/worst selection prevents max/min from comparing None to ints.
+    scored_chosen = [c for c in chosen_candidates if c["judgment"]["score"] is not None]
+    scored_rejected = [c for c in rejected_candidates if c["judgment"]["score"] is not None]
+    best_chosen = max(scored_chosen, key=lambda item: item["judgment"]["score"]) if scored_chosen else None
+    worst_rejected = min(scored_rejected, key=lambda item: item["judgment"]["score"]) if scored_rejected else None
     gap = None
     if best_chosen is not None and worst_rejected is not None:
         gap = best_chosen["judgment"]["score"] - worst_rejected["judgment"]["score"]

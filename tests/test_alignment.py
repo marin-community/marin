@@ -50,6 +50,7 @@ from marin.alignment.inference_config import OpenAIConfig, VLLMConfig
 from marin.alignment.judge import (
     PreferencePairFilterConfig,
     JudgeConfig,
+    parse_compliance_result,
     parse_judge_response,
     build_preference_pairs,
     judge_responses,
@@ -1072,6 +1073,29 @@ class TestJudgeParsing:
     def test_parse_invalid_json_raises(self):
         with pytest.raises((json.JSONDecodeError, ValueError)):
             parse_judge_response("not json at all")
+
+    def test_parse_compliance_result_returns_none_on_parse_failure(self):
+        """Parse failures must surface as score=None, not a coerced default.
+
+        Coercing to 0 or 5 biases downstream mean-score and compliance-rate
+        aggregates — parse failures mean 'unknown', not 'zero' or 'midpoint'.
+        """
+        result = parse_compliance_result("not json at all")
+        assert result.score is None
+        assert result.compliant is None
+        assert "Parse failure" in result.explanation
+
+    def test_parse_compliance_result_returns_none_when_score_missing(self):
+        """Valid JSON without a 'score' field is also a parse failure."""
+        result = parse_compliance_result('{"confidence": 0.9, "explanation": "missing score key"}')
+        assert result.score is None
+        assert result.compliant is None
+
+    def test_compliance_result_from_judge_output_missing_score(self):
+        """from_judge_output maps a missing 'score' key to None rather than a default."""
+        result = ComplianceResult.from_judge_output({"confidence": 0.8, "explanation": "no score"})
+        assert result.score is None
+        assert result.compliant is None
 
 
 class TestAlignResponseOrchestration:

@@ -87,10 +87,16 @@ class Statement:
 
 @dataclass
 class ComplianceResult:
-    """Result of a compliance judgment."""
+    """Result of a compliance judgment.
 
-    score: int
-    compliant: bool
+    score and compliant are None when the judge response could not be parsed
+    into a valid score. Downstream aggregation must skip None-scored results
+    rather than coerce them to a default — conflating parse failures with
+    low/high scores biases mean score and compliance rate.
+    """
+
+    score: int | None
+    compliant: bool | None
     confidence: float
     explanation: str
     highlights: list[str] = field(default_factory=list)
@@ -98,10 +104,18 @@ class ComplianceResult:
 
     @classmethod
     def from_judge_output(cls, output: dict, raw_response: str | None = None) -> "ComplianceResult":
-        score = output.get("score", 5)
+        raw_score = output.get("score")
+        score: int | None
+        compliant: bool | None
+        if raw_score is None:
+            score = None
+            compliant = None
+        else:
+            score = int(raw_score)
+            compliant = score >= 7
         return cls(
             score=score,
-            compliant=score >= 7,
+            compliant=compliant,
             confidence=output.get("confidence", 0.5),
             explanation=output.get("explanation", ""),
             highlights=output.get("highlights", []),

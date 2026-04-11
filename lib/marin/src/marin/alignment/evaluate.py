@@ -279,7 +279,11 @@ def _compute_compliance_summary(
     results: list[dict[str, Any]],
     model_name: str,
 ) -> dict[str, Any]:
-    """Compute per-statement and overall compliance statistics."""
+    """Compute per-statement and overall compliance statistics.
+
+    Judgments with score=None (parse failures) are excluded from all
+    aggregates — they represent "unknown", not "zero".
+    """
     per_statement: dict[str, dict[str, Any]] = {}
     all_scores: list[float] = []
     all_compliant: list[bool] = []
@@ -288,9 +292,11 @@ def _compute_compliance_summary(
         judgment = result.get("judgment")
         if judgment is None:
             continue
+        score = judgment.get("score")
+        compliant = judgment.get("compliant")
+        if score is None or compliant is None:
+            continue
         behavior_id = result.get("behavior_id", "unknown")
-        score = judgment.get("score", 0)
-        compliant = judgment.get("compliant", False)
         all_scores.append(score)
         all_compliant.append(compliant)
 
@@ -379,7 +385,7 @@ def run_eval_judge(config: EvalJudgeConfig) -> None:
     judged_results: list[dict[str, Any]] = []
     failure_count = 0
     for request, compliance_result in zip(requests, all_compliance_results, strict=True):
-        if compliance_result.score == 0 and "Parse failure" in compliance_result.explanation:
+        if compliance_result.score is None:
             failure_count += 1
         judged_results.append(
             {
