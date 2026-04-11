@@ -195,10 +195,10 @@ export function BuildPanel() {
               </span>
             </div>
 
-            {/* Thin dots (w-1.5) so 100 commits fit a sparkline-style
-                strip without dominating the card. Each dot links to
-                its commit page on GitHub. */}
-            <div className="mt-3 flex flex-wrap gap-[3px]">
+            {/* Each dot uses flex-1 so the strip stretches to fill the
+                full card width, giving equal space to every commit
+                regardless of how wide the card is. */}
+            <div className="mt-3 flex gap-[3px]">
               {data.commits.map((c) => (
                 <a
                   key={c.oid}
@@ -206,7 +206,7 @@ export function BuildPanel() {
                   target="_blank"
                   rel="noreferrer"
                   title={`${c.shortOid} · ${stateLabel(c.state)} · ${formatRelative(c.committedAt)}\n${c.headline}`}
-                  className={`h-5 w-1.5 rounded-sm ${stateColor(c.state)} hover:ring-2 hover:ring-slate-400`}
+                  className={`h-5 flex-1 rounded-sm ${stateColor(c.state)} hover:ring-2 hover:ring-slate-400`}
                 />
               ))}
             </div>

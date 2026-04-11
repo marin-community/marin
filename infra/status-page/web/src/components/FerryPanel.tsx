@@ -105,7 +105,7 @@ export function FerryPanel() {
   return (
     <section>
       <div className="mb-3 flex items-baseline justify-between">
-        <h2 className="text-xl font-semibold text-slate-200">Ferry workflows</h2>
+        <h2 className="text-xl font-semibold text-slate-200">Ferries</h2>
         <span className="text-xs text-slate-500">
           {dataUpdatedAt ? `updated ${formatRelative(new Date(dataUpdatedAt).toISOString())}` : ""}
         </span>
