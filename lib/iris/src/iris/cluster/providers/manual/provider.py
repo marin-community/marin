@@ -428,7 +428,7 @@ class ManualControllerProvider:
         port = manual.port or 10000
         return f"{manual.host}:{port}"
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
         address, _vm = vm_start_controller(
             self.worker_provider,
             config,
