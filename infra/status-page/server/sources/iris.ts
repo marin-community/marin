@@ -1,20 +1,21 @@
-// Iris controller (orch) status.
+// Iris controller reachability.
 //
 // In v1, the controller's only easily-callable JSON endpoint is /health
 // (see lib/iris/src/iris/cluster/controller/dashboard.py:396). Everything
-// else is HTML dashboard or Connect RPC which would need generated TS
-// stubs. So this source reports reachability + round-trip latency and
-// leaves room in the response shape for richer data later.
+// else is HTML dashboard or Connect RPC. This source reports reachability
+// + round-trip latency and leaves room in the response shape for richer
+// data later (which is increasingly supplied by the workers and jobs
+// sources reading the controller's SQLite directly via ExecuteRawQuery).
 //
-// Set ORCH_FIXTURE=1 to short-circuit with canned data for UI dev without
+// Set IRIS_FIXTURE=1 to short-circuit with canned data for UI dev without
 // a VPC tunnel.
 
 import { getControllerUrl } from "./discovery.js";
 
 const CLUSTER = process.env.CLUSTER_NAME ?? "marin";
-const FIXTURE_MODE = process.env.ORCH_FIXTURE === "1";
+const FIXTURE_MODE = process.env.IRIS_FIXTURE === "1";
 
-export interface OrchStatus {
+export interface IrisStatus {
   cluster: string;
   reachable: boolean;
   latencyMs: number | null;
@@ -24,7 +25,7 @@ export interface OrchStatus {
   raw?: unknown;
 }
 
-function fixtureStatus(): OrchStatus {
+function fixtureStatus(): IrisStatus {
   return {
     cluster: CLUSTER,
     reachable: true,
@@ -35,7 +36,7 @@ function fixtureStatus(): OrchStatus {
   };
 }
 
-export async function clusterStatus(): Promise<OrchStatus> {
+export async function irisStatus(): Promise<IrisStatus> {
   const fetchedAt = new Date().toISOString();
   if (FIXTURE_MODE) {
     return fixtureStatus();

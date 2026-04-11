@@ -1,11 +1,13 @@
-// Ferry workflow status from the GitHub Actions REST API.
+// GitHub Actions workflow-run status for the Ferry panel (canary/smoke
+// workflows). The Build panel uses a different source
+// (server/sources/githubCommits.ts) because it needs per-commit rollup
+// state, not per-workflow run history.
 //
 // The repo is public, so GITHUB_TOKEN is only used to lift the rate limit
 // from 60/hr (unauth, per egress IP) to 5000/hr (authenticated). It grants
 // no extra access.
 
-export const REPO = "marin-community/marin";
-export const HISTORY_WINDOW = 30;
+import { githubAuthHeaders, REPO } from "./github.js";
 
 export const FERRY_WORKFLOWS = [
   { name: "Canary ferry", file: "marin-canary-ferry.yaml" },
@@ -55,19 +57,6 @@ interface GhRunsResponse {
   workflow_runs: GhRun[];
 }
 
-function authHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {
-    accept: "application/vnd.github+json",
-    "x-github-api-version": "2022-11-28",
-    "user-agent": "marin-status-page",
-  };
-  const token = process.env.GITHUB_TOKEN;
-  if (token) {
-    headers.authorization = `Bearer ${token}`;
-  }
-  return headers;
-}
-
 function toFerryRun(run: GhRun): FerryRun {
   const startedMs = Date.parse(run.run_started_at);
   const updatedMs = Date.parse(run.updated_at);
@@ -96,12 +85,15 @@ function computeSuccessRate(runs: FerryRun[]): number | null {
   return successes / completed.length;
 }
 
-export async function fetchWorkflowStatus(workflow: WorkflowConfig): Promise<FerryWorkflowStatus> {
+export async function fetchWorkflowStatus(
+  workflow: WorkflowConfig,
+  historyWindow: number,
+): Promise<FerryWorkflowStatus> {
   const url =
     `https://api.github.com/repos/${REPO}/actions/workflows/${workflow.file}` +
-    `/runs?per_page=${HISTORY_WINDOW}&branch=main`;
+    `/runs?per_page=${historyWindow}&branch=main`;
 
-  const res = await fetch(url, { headers: authHeaders() });
+  const res = await fetch(url, { headers: githubAuthHeaders() });
   const fetchedAt = new Date().toISOString();
   if (!res.ok) {
     const body = await res.text().catch(() => "");

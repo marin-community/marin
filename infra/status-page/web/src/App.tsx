@@ -1,6 +1,7 @@
 import { useAtom } from "jotai";
+import { BuildPanel } from "./components/BuildPanel";
 import { FerryPanel } from "./components/FerryPanel";
-import { OrchPanel } from "./components/OrchPanel";
+import { IrisPanel } from "./components/IrisPanel";
 import { autoRefreshAtom } from "./state";
 
 export function App() {
@@ -9,7 +10,7 @@ export function App() {
   return (
     <div className="mx-auto max-w-5xl px-6 py-8">
       <header className="mb-8 flex items-baseline justify-between">
-        <h1 className="text-3xl font-bold tracking-tight">Marin status</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Marin Infra Status</h1>
         <label className="flex items-center gap-2 text-sm text-slate-400">
           <input
             type="checkbox"
@@ -23,7 +24,8 @@ export function App() {
 
       <div className="space-y-8">
         <FerryPanel />
-        <OrchPanel />
+        <BuildPanel />
+        <IrisPanel />
       </div>
     </div>
   );

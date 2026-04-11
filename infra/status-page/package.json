@@ -20,7 +20,8 @@
     "hono": "^4.6.12",
     "jotai": "^2.10.3",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "recharts": "^3.8.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.0",

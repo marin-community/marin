@@ -32,7 +32,35 @@ export interface FerryResponse {
   workflows: FerryWorkflowStatus[];
 }
 
-export interface OrchStatus {
+// Per-commit aggregate check-run status for the last N commits on main.
+// Shape mirrors GitHub's GraphQL `statusCheckRollup.state` — NONE means
+// the commit had no checks configured.
+export type CommitState =
+  | "SUCCESS"
+  | "FAILURE"
+  | "ERROR"
+  | "PENDING"
+  | "EXPECTED"
+  | "NONE";
+
+export interface CommitStatus {
+  oid: string;
+  shortOid: string;
+  headline: string;
+  committedAt: string;
+  author: string;
+  url: string;
+  state: CommitState;
+}
+
+export interface BuildsResponse {
+  commits: CommitStatus[];
+  successRate: number | null;
+  fetchedAt: string;
+  error?: string;
+}
+
+export interface IrisStatus {
   cluster: string;
   reachable: boolean;
   latencyMs: number | null;
@@ -40,6 +68,37 @@ export interface OrchStatus {
   fetchedAt: string;
   error?: string;
   raw?: unknown;
+}
+
+export interface WorkersSnapshot {
+  available: number;
+  total: number;
+  fetchedAt: string;
+  error?: string;
+}
+
+export interface WorkerSample {
+  t: number; // epoch millis
+  available: number;
+  total: number;
+}
+
+export interface WorkersHistoryResponse {
+  samples: WorkerSample[];
+}
+
+export interface JobStateCount {
+  state: number;
+  name: string;
+  count: number;
+}
+
+export interface JobsSnapshot {
+  total: number;
+  windowMs: number;
+  byState: JobStateCount[];
+  fetchedAt: string;
+  error?: string;
 }
 
 async function getJson<T>(path: string): Promise<T> {
@@ -51,4 +110,8 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 export const fetchFerry = () => getJson<FerryResponse>("/api/ferry");
-export const fetchOrch = () => getJson<OrchStatus>("/api/orch");
+export const fetchBuilds = () => getJson<BuildsResponse>("/api/builds");
+export const fetchIris = () => getJson<IrisStatus>("/api/iris");
+export const fetchWorkers = () => getJson<WorkersSnapshot>("/api/workers");
+export const fetchWorkersHistory = () => getJson<WorkersHistoryResponse>("/api/workers/history");
+export const fetchJobs = () => getJson<JobsSnapshot>("/api/jobs");
