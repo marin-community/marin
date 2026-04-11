@@ -6,7 +6,12 @@ import os
 import fsspec
 import pytest
 
-from rigging.filesystem import MirrorFileSystem, TransferBudget, TransferBudgetExceeded
+from rigging.filesystem import (
+    MirrorFileSystem,
+    TransferBudget,
+    TransferBudgetExceeded,
+    _mirror_remote_prefixes,
+)
 
 
 @pytest.fixture()
@@ -189,3 +194,45 @@ def test_mirror_budget_context_manager_blocks_over_budget(mirror_fs, mirror_env)
     with mirror_budget(budget_gb=0.000001):  # ~1KB — too small
         with pytest.raises(TransferBudgetExceeded):
             mirror_fs.cat_file("data/big.bin")
+
+
+# ---------------------------------------------------------------------------
+# Remote-prefix gating tests (GCS fallback must not fire on non-GCS prefixes)
+# ---------------------------------------------------------------------------
+
+
+def test_mirror_remote_prefixes_empty_for_s3():
+    """Non-GCS local prefix must not list GCS buckets as mirror fallbacks.
+
+    Regression test for marin-community/marin#4656: CoreWeave CI runs with
+    ``MARIN_PREFIX=s3://...`` but the mirror filesystem unconditionally fell
+    back to ``gs://marin-*`` buckets, causing noisy gcsfs 401s.
+    """
+    assert _mirror_remote_prefixes("s3://marin-na/marin") == []
+
+
+def test_mirror_remote_prefixes_empty_for_local_path():
+    assert _mirror_remote_prefixes("/tmp/marin") == []
+    assert _mirror_remote_prefixes("file:///tmp/marin") == []
+
+
+def test_mirror_remote_prefixes_populated_for_gcs():
+    prefixes = _mirror_remote_prefixes("gs://marin-us-central1")
+    assert prefixes
+    assert all(p.startswith("gs://") for p in prefixes)
+    # The local prefix itself must not appear in the remote list.
+    assert "gs://marin-us-central1" not in prefixes
+    # Other marin data buckets should still be present.
+    assert "gs://marin-us-central2" in prefixes
+
+
+def test_mirror_filesystem_init_skips_gcs_on_s3_prefix(monkeypatch):
+    """Full __init__ path: no GCS remote prefixes when MARIN_PREFIX is s3://.
+
+    Without the fix, this instance would attempt to contact GCS on every
+    ``exists``/``ls`` call and spam anonymous-caller 401 errors.
+    """
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-na/marin")
+    fs = MirrorFileSystem()
+    assert fs._local_prefix == "s3://marin-na/marin"
+    assert fs._remote_prefixes == []
