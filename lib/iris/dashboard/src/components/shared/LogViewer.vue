@@ -113,7 +113,7 @@ const filteredLogs = computed(() => {
   })
 })
 
-
+defineExpose({ selectedAttemptId })
 </script>
 
 <template>

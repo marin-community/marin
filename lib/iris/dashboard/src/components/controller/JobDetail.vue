@@ -9,7 +9,7 @@ import type {
   GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
   ResourceUsage,
 } from '@/types/rpc'
-import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig } from '@/utils/formatting'
+import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
 import { getLeafJobName } from '@/utils/jobTree'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -473,6 +473,38 @@ const filteredTasks = computed(() => {
   return result
 })
 
+// -- Task Pagination --
+
+const TASK_PAGE_SIZE = 50
+const taskPage = ref(0)
+
+const totalTaskPages = computed(() => Math.max(1, Math.ceil(filteredTasks.value.length / TASK_PAGE_SIZE)))
+
+const paginatedTasks = computed(() => {
+  // Clamp the effective page against the current filtered length so a shrink
+  // during auto-refresh never yields an empty slice on a stale page. The
+  // watcher below mirrors this into `taskPage` so the paginator footer stays
+  // in sync.
+  const effectivePage = Math.min(taskPage.value, totalTaskPages.value - 1)
+  const start = Math.max(0, effectivePage) * TASK_PAGE_SIZE
+  return filteredTasks.value.slice(start, start + TASK_PAGE_SIZE)
+})
+
+// Reset page when filters or sort change
+watch([taskSearch, stateFilter, sortColumn, sortDir], () => { taskPage.value = 0 })
+
+// Clamp taskPage when the filtered task list shrinks underneath us. This
+// happens during the 10s auto-refresh when task state transitions change
+// which tasks match the active state filter — without clamping, a user on
+// a later page can be left with an empty table body and a stale footer
+// range (e.g. "251-240 of 240"). The computed runs eagerly so the page is
+// corrected before `paginatedTasks` slices against the new length.
+watch(totalTaskPages, (pages) => {
+  if (taskPage.value >= pages) {
+    taskPage.value = Math.max(0, pages - 1)
+  }
+})
+
 // -- Profiling --
 
 function buildProfileType(profilerType: string, format: string | null): Record<string, unknown> {
@@ -662,6 +694,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </InfoRow>
           <InfoRow label="Failures">
             {{ job.failureCount ?? 0 }}
+          </InfoRow>
+          <InfoRow v-if="jobRequest?.priorityBand" label="Priority">
+            <span :class="bandColor(jobRequest.priorityBand)" class="font-semibold">
+              {{ bandDisplayName(jobRequest.priorityBand) }}
+            </span>
           </InfoRow>
         </InfoCard>
 
@@ -882,7 +919,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </thead>
           <tbody>
             <tr
-              v-for="task in filteredTasks"
+              v-for="task in paginatedTasks"
               :key="task.taskId"
               class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
             >
@@ -903,7 +940,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               <td class="px-3 py-2 text-[13px] truncate" :title="task.workerId ?? ''">
                 <RouterLink
                   v-if="task.workerId"
-                  :to="'/worker/' + encodeURIComponent(task.workerId)"
+                  :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}`"
                   class="text-accent hover:underline font-mono text-xs"
                 >
                   {{ task.workerId }}
@@ -959,6 +996,30 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             </tr>
           </tbody>
         </table>
+        <!-- Task pagination -->
+        <div v-if="totalTaskPages > 1" class="flex items-center justify-between px-3 py-2 text-xs text-text-secondary border-t border-surface-border">
+          <span>
+            {{ taskPage * TASK_PAGE_SIZE + 1 }}&ndash;{{ Math.min((taskPage + 1) * TASK_PAGE_SIZE, filteredTasks.length) }}
+            of {{ filteredTasks.length }} tasks
+          </span>
+          <div class="flex items-center gap-1">
+            <button
+              :disabled="taskPage === 0"
+              class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+              @click="taskPage--"
+            >
+              &larr; Prev
+            </button>
+            <span class="px-2 font-mono">{{ taskPage + 1 }} / {{ totalTaskPages }}</span>
+            <button
+              :disabled="taskPage >= totalTaskPages - 1"
+              class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+              @click="taskPage++"
+            >
+              Next &rarr;
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Job logs -->

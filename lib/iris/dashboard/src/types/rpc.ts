@@ -154,6 +154,7 @@ export interface LaunchJobRequest {
   resources?: ResourceSpecProto
   constraints?: Constraint[]
   replicas?: number
+  priorityBand?: string
 }
 
 export interface GetTaskStatusResponse {
