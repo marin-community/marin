@@ -78,6 +78,7 @@ class GcpControllerProvider:
             self.worker_provider,
             config,
             resolve_image=self.worker_provider.resolve_image,
+            fresh=fresh,
         )
         return address
 

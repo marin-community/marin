@@ -11,6 +11,7 @@ serve`` subcommand in the main CLI.
 
 import logging
 import os
+import shutil
 import signal
 import tempfile
 import threading
@@ -80,6 +81,12 @@ def run_controller_serve(
     db_path = db_dir / ControllerDB.DB_FILENAME
     auth_db_path = db_dir / ControllerDB.AUTH_DB_FILENAME
     if fresh:
+        # Wipe any pre-existing db_dir so we're guaranteed to start with an
+        # empty database. Otherwise a stale or corrupt local SQLite file would
+        # be silently reused, defeating the purpose of --fresh.
+        if db_dir.exists():
+            logger.info("--fresh: removing existing db_dir %s", db_dir)
+            shutil.rmtree(db_dir)
         logger.info("--fresh: starting with empty database, skipping checkpoint restore")
         db_dir.mkdir(parents=True, exist_ok=True)
     elif db_path.exists() and auth_db_path.exists():
