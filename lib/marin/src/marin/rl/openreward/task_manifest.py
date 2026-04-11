@@ -277,7 +277,7 @@ def load_openreward_task_manifest(input_path: str) -> OpenRewardTaskManifest:
         return OpenRewardTaskManifest.model_validate_json(fd.read())
 
 
-def _load_openreward_client() -> type:
+def load_openreward_client() -> type:
     try:
         from openreward import OpenReward
     except ImportError as exc:
@@ -301,7 +301,7 @@ def prepare_openreward_task_manifest(
 ) -> OpenRewardTaskManifest:
     """Build a task manifest from a live OpenReward environment."""
 
-    openreward_client = _load_openreward_client()
+    openreward_client = load_openreward_client()
     with openreward_client(api_key=api_key, base_url=base_url) as client:
         environment = client.environments.get(environment_name, variant=variant)
         return build_openreward_task_manifest(

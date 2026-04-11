@@ -262,6 +262,11 @@ def _assistant_content_without_tool_calls(content: str) -> str:
     return MULTI_NEWLINE_RE.sub("\n\n", without_tool_calls)
 
 
+def _ends_at_tool_call_boundary(content: str) -> bool:
+    """Return True when a stop-truncated response ends exactly at a tool call."""
+    return content.rstrip().endswith("</tool_call>")
+
+
 def parse_response_for_stop_token(
     response: list[int], tokenizer: MarinTokenizer, stop_token: int
 ) -> AssistantTurnParseResult:
@@ -466,15 +471,16 @@ class Qwen3Renderer(Renderer):
 
     def parse_response(self, response: list[int]) -> AssistantTurnParseResult:
         parse_result = parse_response_for_stop_token(response, self.tokenizer, self._end_message_token)
+        assistant_message = _assistant_message_from_turn(parse_result.assistant_turn)
+        matches = TOOL_CALL_BLOCK_RE.findall(assistant_message["content"])
         if not parse_result.parse_success:
-            return parse_result
+            if not matches or not _ends_at_tool_call_boundary(assistant_message["content"]):
+                return parse_result
 
         # Follow Qwen docs and Qwen-Agent's tool calling prompt to use
         # <tool_call>...</tool_call> tags to wrap the tool call.
         # - https://qwen.readthedocs.io/en/latest/getting_started/concepts.html#tool-calling
         # - https://github.com/QwenLM/Qwen-Agent/blob/main/qwen_agent/llm/fncall_prompts/nous_fncall_prompt.py#L279-L282
-        assistant_message = _assistant_message_from_turn(parse_result.assistant_turn)
-        matches = TOOL_CALL_BLOCK_RE.findall(assistant_message["content"])
         if not matches:
             return parse_result
 
