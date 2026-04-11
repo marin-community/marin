@@ -5,8 +5,8 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
-        mono: ['"JetBrains Mono"', '"SF Mono"', 'Menlo', 'monospace'],
+        sans: ['"Noto Sans Variable"', 'system-ui', 'sans-serif'],
+        mono: ['"Noto Sans Mono Variable"', '"SF Mono"', 'Menlo', 'monospace'],
       },
       colors: {
         surface: {

@@ -2,9 +2,11 @@
 import { ref, computed, onMounted } from 'vue'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { SLICE_STATE_STYLES, SLICE_BADGE_ORDER, vmStateToName } from '@/types/status'
+import { SLICE_STATE_STYLES, SLICE_BADGE_ORDER, CATEGORICAL_COLORS, vmStateToName } from '@/types/status'
 import type {
   GetAutoscalerStatusResponse,
+  GetSchedulerStateResponse,
+  SchedulerRunningTask,
   AutoscalerStatus,
   ScaleGroupStatus,
   SliceInfo,
@@ -13,7 +15,7 @@ import type {
   AutoscalerAction,
   ProtoTimestamp,
 } from '@/types/rpc'
-import { timestampMs, formatRelativeTime } from '@/utils/formatting'
+import { timestampMs, formatRelativeTime, formatDuration } from '@/utils/formatting'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import MetricCard from '@/components/shared/MetricCard.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -21,7 +23,12 @@ import LogViewer from '@/components/shared/LogViewer.vue'
 
 // -- RPC + auto-refresh --
 
-const { data, loading, error, refresh } = useControllerRpc<GetAutoscalerStatusResponse>('GetAutoscalerStatus')
+const { data, loading, error, refresh: refreshAutoscaler } = useControllerRpc<GetAutoscalerStatusResponse>('GetAutoscalerStatus')
+const { data: schedulerData, refresh: refreshScheduler } = useControllerRpc<GetSchedulerStateResponse>('GetSchedulerState')
+
+async function refresh() {
+  await Promise.all([refreshAutoscaler(), refreshScheduler()])
+}
 useAutoRefresh(refresh, 30_000)
 onMounted(refresh)
 
@@ -467,6 +474,236 @@ function sliceIdShort(sliceId?: string): string {
 function idleThresholdMs(groupName: string): number {
   return parseInt(groupIndex.value[groupName]?.idleThresholdMs ?? '0', 10)
 }
+
+// -- Fleet overview --
+
+interface RegionCount {
+  region: string
+  count: number
+}
+
+interface BandCount {
+  band: string
+  count: number
+}
+
+interface RegionCapacity {
+  region: string
+  status: 'available' | 'limited' | 'blocked'
+  detail: string
+}
+
+interface FleetChipSummary {
+  chip: string
+  total: number
+  inUse: number
+  avgUptimeMs: number | null
+  regions: RegionCount[]
+  bands: BandCount[]
+  capacity: RegionCapacity[]
+}
+
+/** Map workerId → list of bands consuming that worker. */
+const workerBands = computed<Map<string, Map<string, number>>>(() => {
+  const map = new Map<string, Map<string, number>>()
+  for (const task of (schedulerData.value?.runningTasks ?? []) as SchedulerRunningTask[]) {
+    if (!task.workerId || !task.effectiveBand) continue
+    const band = task.effectiveBand.replace(/^PRIORITY_BAND_/, '').toLowerCase()
+    if (!map.has(task.workerId)) map.set(task.workerId, new Map())
+    const bands = map.get(task.workerId)!
+    bands.set(band, (bands.get(band) ?? 0) + 1)
+  }
+  return map
+})
+
+/** Extract chip type + size from scale group name.
+ *  e.g. "TPU_V5E_PREEMPTIBLE_16_US_EAST" → "v5e-16"
+ *       "TPU_V5P_SERVING_64_US_CENTRAL"  → "v5p-64"
+ *       "CPU_VM_E2_HIGHMEM_2_ON..."      → "cpu-e2"
+ *       "GPU_A100_8_US_CENTRAL"          → "A100-8"
+ */
+function chipFromGroupName(name: string): string | null {
+  // Normalize separators so hyphens and underscores are interchangeable
+  const norm = name.toUpperCase().replace(/-/g, '_')
+  // TPU: extract chip and size (first number after class)
+  const tpuMatch = norm.match(/TPU_(V\d+[A-Z]?)_(?:PREEMPTIBLE|SERVING|ON_DEMAND|RESERVED)_(\d+)/)
+  if (tpuMatch) return `${tpuMatch[1].toLowerCase()}-${tpuMatch[2]}`
+  // TPU without recognized class — try chip + first number
+  const tpuFallback = norm.match(/TPU_(V\d+[A-Z]?)_\w+_(\d+)/)
+  if (tpuFallback) return `${tpuFallback[1].toLowerCase()}-${tpuFallback[2]}`
+  // GPU: variant + count
+  const gpuMatch = norm.match(/(A100|H100|H200|L4|L40S?|B200)_(\d+)/)
+  if (gpuMatch) return `${gpuMatch[1]}-${gpuMatch[2]}`
+  // CPU — skip
+  if (norm.startsWith('CPU')) return null
+  return name
+}
+
+/** Extract region from scale group name.
+ *  e.g. "TPU_V5E_PREEMPTIBLE_16_US_WEST4_A" → "us-west4"
+ *       "TPU_V5P-PREEMPTIBLE_64-US-EASTS-A"  → "us-easts"
+ *       "CPU_VM_E2_HIGHMEM_2_ON_DEMAND"       → "on-demand"
+ */
+function regionFromGroupName(name: string): string {
+  const norm = name.toUpperCase().replace(/-/g, '_')
+  // TPU: everything after the size number, drop trailing zone letter (e.g. _A, _B)
+  const tpuMatch = norm.match(/TPU_V\d+[A-Z]?_(?:PREEMPTIBLE|SERVING|ON_DEMAND|RESERVED)_\d+_(.+)/)
+  if (tpuMatch) {
+    let region = tpuMatch[1]
+    // Strip trailing single-letter zone suffix (e.g. _A, _B, _C)
+    region = region.replace(/_[A-Z]$/, '')
+    return region.toLowerCase().replace(/_/g, '-')
+  }
+  // Fallback: try to grab region-like suffix after the last number
+  const fallback = norm.match(/_\d+_(.+)/)
+  if (fallback) return fallback[1].toLowerCase().replace(/_/g, '-')
+  return 'unknown'
+}
+
+// CATEGORICAL_COLORS imported from @/types/status
+
+const fleetSummary = computed<FleetChipSummary[]>(() => {
+  const now = Date.now()
+  const chips = new Map<string, { total: number; inUse: number; uptimes: number[]; regions: Map<string, number> }>()
+
+  for (const g of groups.value) {
+    const chip = chipFromGroupName(g.name)
+    if (chip == null) continue
+    const region = regionFromGroupName(g.name)
+    const entry = chips.get(chip) ?? { total: 0, inUse: 0, uptimes: [], regions: new Map(), bands: new Map<string, number>(), capacityByRegion: new Map<string, { statuses: string[]; failures: number }>() }
+
+    const readyCount = g.sliceStateCounts?.['ready'] ?? 0
+    const readySlices = (g.slices ?? []).filter(s => {
+      const state = s.state ?? (s.vms?.length ? 'ready' : '')
+      return state === 'ready' || state === 'SLICE_STATE_READY'
+    })
+
+    // Count slices (logical machines), not individual VMs.
+    const sliceCount = readySlices.length > 0 ? readySlices.length : readyCount
+    entry.total += sliceCount
+    entry.inUse += readySlices.filter(s => sliceInUse(s)).length
+    entry.regions.set(region, (entry.regions.get(region) ?? 0) + sliceCount)
+
+    // Track capacity/availability per region
+    const capEntry = entry.capacityByRegion.get(region) ?? { statuses: [], failures: 0 }
+    if (g.availabilityStatus) capEntry.statuses.push(g.availabilityStatus)
+    capEntry.failures += g.consecutiveFailures ?? 0
+    entry.capacityByRegion.set(region, capEntry)
+
+    // Collect band usage from scheduler running tasks via workerId join.
+    // Count each slice once per band (a slice is "used by" a band if any of
+    // its VMs has a running task in that band).
+    for (const slice of readySlices) {
+      const sliceBands = new Set<string>()
+      for (const vm of slice.vms ?? []) {
+        if (!vm.workerId) continue
+        const bands = workerBands.value.get(vm.workerId)
+        if (bands) {
+          for (const band of bands.keys()) sliceBands.add(band)
+        }
+      }
+      for (const band of sliceBands) {
+        entry.bands.set(band, (entry.bands.get(band) ?? 0) + 1)
+      }
+    }
+
+    // Average uptime: use the earliest VM createdAt per slice as the slice uptime
+    for (const slice of readySlices) {
+      const vmTimes = (slice.vms ?? [])
+        .map(vm => timestampMs(vm.createdAt))
+        .filter((ms): ms is number => ms != null && ms > 0)
+      if (vmTimes.length > 0) {
+        const earliest = Math.min(...vmTimes)
+        entry.uptimes.push(now - earliest)
+      }
+    }
+    chips.set(chip, entry)
+  }
+
+  return Array.from(chips.entries())
+    .filter(([, c]) => c.total > 0)
+    .map(([chip, c]) => ({
+      chip,
+      total: c.total,
+      inUse: c.inUse,
+      avgUptimeMs: c.uptimes.length > 0
+        ? c.uptimes.reduce((a, b) => a + b, 0) / c.uptimes.length
+        : null,
+      regions: Array.from(c.regions.entries())
+        .map(([region, count]) => ({ region, count }))
+        .sort((a, b) => b.count - a.count),
+      bands: Array.from(c.bands.entries())
+        .map(([band, count]) => ({ band, count }))
+        .sort((a, b) => b.count - a.count),
+      capacity: Array.from(c.capacityByRegion.entries()).map(([region, cap]) => {
+        const hasQuotaExceeded = cap.statuses.includes('quota_exceeded')
+        const hasBackoff = cap.statuses.includes('backoff')
+        const hasAtCapacity = cap.statuses.includes('at_capacity')
+        if (hasQuotaExceeded) {
+          return { region, status: 'blocked' as const, detail: 'At Region Quota' }
+        }
+        if (hasAtCapacity || hasBackoff) {
+          return { region, status: 'limited' as const, detail: 'At TRC Capacity' }
+        }
+        return { region, status: 'available' as const, detail: 'Compute Potentially Available' }
+      }).sort((a, b) => {
+        const order = { blocked: 0, limited: 1, available: 2 }
+        return order[a.status] - order[b.status]
+      }),
+    }))
+    .sort((a, b) => b.total - a.total)
+})
+
+const BAND_COLORS: Record<string, string> = {
+  production: 'bg-status-danger',
+  interactive: 'bg-accent',
+  batch: 'bg-text-muted',
+}
+
+function bandColor(band: string): string {
+  return BAND_COLORS[band] ?? 'bg-status-purple'
+}
+
+function capacityTooltip(capacity: RegionCapacity[]): string {
+  if (capacity.length === 0) return ''
+  return 'Capacity:\n' + capacity
+    .map(c => {
+      const icon = c.status === 'available' ? '✓' : c.status === 'limited' ? '~' : '✗'
+      return `  ${icon} ${c.region}: ${c.detail}`
+    })
+    .join('\n')
+}
+
+/** Get a stable color index for a region across all chip types. */
+const allRegions = computed<Map<string, number>>(() => {
+  const seen = new Map<string, number>()
+  // Collect all regions sorted by total count descending for stable ordering
+  const regionTotals = new Map<string, number>()
+  for (const c of fleetSummary.value) {
+    for (const r of c.regions) {
+      regionTotals.set(r.region, (regionTotals.get(r.region) ?? 0) + r.count)
+    }
+  }
+  const sorted = Array.from(regionTotals.entries()).sort((a, b) => b[1] - a[1])
+  for (const [region] of sorted) {
+    seen.set(region, seen.size)
+  }
+  return seen
+})
+
+function regionColor(region: string): string {
+  const idx = allRegions.value.get(region) ?? 0
+  return CATEGORICAL_COLORS[idx % CATEGORICAL_COLORS.length]
+}
+
+function formatUptimeShort(ms: number | null): string {
+  if (ms == null) return '-'
+  const secs = Math.floor(ms / 1000)
+  if (secs < 3600) return `${Math.floor(secs / 60)}m`
+  const hours = Math.floor(secs / 3600)
+  if (hours < 24) return `${hours}h ${Math.floor((secs % 3600) / 60)}m`
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`
+}
 </script>
 
 <template>
@@ -540,6 +777,58 @@ function idleThresholdMs(groupName: string): number {
         <span class="font-semibold font-mono ml-1">{{ formatRelativeTime(lastEvalMs) }}</span>
       </div>
     </div>
+
+    <!-- ===== Fleet Overview ===== -->
+    <section v-if="fleetSummary.length > 0">
+      <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">
+        Fleet Overview
+      </h3>
+      <div class="grid grid-cols-4 gap-2">
+        <div
+          v-for="c in fleetSummary"
+          :key="c.chip"
+          class="rounded-lg border border-surface-border bg-surface px-4 py-2"
+          :title="capacityTooltip(c.capacity)"
+        >
+          <div class="flex items-baseline gap-[0.4vw] mb-1" style="font-size: clamp(10px, 0.75vw, 14px)">
+            <span class="font-semibold font-mono tabular-nums text-text" style="font-size: clamp(14px, 1.1vw, 22px)">{{ c.total }}</span>
+            <span class="font-medium text-text-secondary uppercase whitespace-nowrap">{{ c.chip }}</span>
+            <span class="tabular-nums" :class="c.total > 0 && c.inUse === c.total ? 'text-status-warning' : 'text-text-muted'">
+              {{ c.total > 0 ? Math.round(c.inUse / c.total * 100) : 0 }}% in use
+            </span>
+            <span class="text-text-muted tabular-nums whitespace-nowrap">
+              avg uptime {{ formatUptimeShort(c.avgUptimeMs) }}
+            </span>
+          </div>
+          <!-- Region bar -->
+          <div class="flex rounded-full overflow-hidden bg-surface-sunken" style="height: clamp(4px, 0.4vw, 8px)">
+            <div
+              v-for="r in c.regions"
+              :key="r.region"
+              class="transition-all"
+              :style="{ width: (r.count / c.total * 100) + '%', backgroundColor: regionColor(r.region) }"
+            />
+          </div>
+          <div class="flex flex-wrap gap-x-[0.5vw] gap-y-0.5 mt-0.5" style="font-size: clamp(8px, 0.6vw, 11px)">
+            <span
+              v-for="r in c.regions"
+              :key="r.region"
+              class="text-text-muted flex items-center gap-0.5"
+            >
+              <span class="rounded-full inline-block" :style="{ backgroundColor: regionColor(r.region), width: 'clamp(4px, 0.4vw, 8px)', height: 'clamp(4px, 0.4vw, 8px)' }" />
+              {{ r.region }} ({{ r.count }})
+            </span>
+          </div>
+          <!-- Priority band breakdown -->
+          <div v-if="c.bands.length > 0" class="mt-0.5 text-text-muted" style="font-size: clamp(8px, 0.6vw, 11px)">
+            <span v-for="(b, i) in c.bands" :key="b.band">
+              <span v-if="i > 0">, </span>
+              {{ c.total > 0 ? Math.round(b.count / c.total * 100) : 0 }}% {{ b.band }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <!-- ===== Waterfall Routing ===== -->
     <section>

@@ -287,6 +287,22 @@ export const SEGMENT_ORDER: readonly string[] = [
   'pending',
 ] as const
 
+// -- Categorical color palette --
+
+/** Shared categorical palette for charts, bars, and legends. */
+export const CATEGORICAL_COLORS = [
+  '#1877F2', '#F0701A', '#5A24C7', '#E42C97', '#00487C', '#0EAC96',
+  '#AB76FF', '#B50550', '#0099E6', '#22085F', '#783301',
+] as const
+
+/** Diverging positive-to-negative palette (index 0 = most negative, 10 = most positive).
+ *  Use for heatmaps, utilization gauges, or any scale from bad → neutral → good. */
+export const DIVERGING_COLORS = [
+  '#B50550', '#BF0F76', '#FC7BC6', '#FFADE4', '#FFD9F2',
+  '#F0F2F5',
+  '#CBF9D7', '#A3E6B5', '#45BD62', '#2A9142', '#1D632E',
+] as const
+
 // -- VM state helpers --
 
 /** Strip the VM_STATE_ prefix and lowercase. */

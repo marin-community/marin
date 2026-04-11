@@ -148,7 +148,7 @@ const ACTION_GLYPHS: GlyphExample[] = [
                   SLICE_STATE_STYLES[state].border,
                 ]"
               >
-                N{{ SLICE_STATE_STYLES[state].letter }}
+                {n}{{ SLICE_STATE_STYLES[state].letter }}
               </span>
               <span class="text-text">{{ SLICE_STATE_STYLES[state].label }}</span>
             </li>
@@ -157,7 +157,7 @@ const ACTION_GLYPHS: GlyphExample[] = [
                 class="inline-flex items-center justify-center px-1.5 py-0.5 rounded border text-xs font-semibold
                        bg-status-warning-bg text-status-warning border-status-warning-border"
               >
-                N idle
+                {n} idle
               </span>
               <span class="text-text">
                 Ready slice that has been idle past its idle threshold and is

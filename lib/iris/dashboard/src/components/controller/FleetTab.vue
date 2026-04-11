@@ -17,6 +17,40 @@ onMounted(refresh)
 
 const workers = computed<WorkerHealthStatus[]>(() => data.value?.workers ?? [])
 
+/** Device type label used for grouping (e.g. "TPU v5p", "GPU A100", "CPU"). */
+function deviceType(w: WorkerHealthStatus): string {
+  const m = w.metadata
+  if (!m) return 'Unknown'
+  if (m.device?.tpu?.variant) return `TPU ${m.device.tpu.variant}`
+  if (m.device?.gpu?.variant) return `GPU ${m.device.gpu.variant}`
+  if (m.gpuCount && m.gpuCount > 0) return `GPU ${m.gpuName ?? 'unknown'}`
+  return 'CPU'
+}
+
+interface DeviceSummary {
+  type: string
+  total: number
+  healthy: number
+  unhealthy: number
+  inUse: number
+}
+
+const deviceSummary = computed<DeviceSummary[]>(() => {
+  const counts = new Map<string, { total: number; healthy: number; unhealthy: number; inUse: number }>()
+  for (const w of workers.value) {
+    const t = deviceType(w)
+    const entry = counts.get(t) ?? { total: 0, healthy: 0, unhealthy: 0, inUse: 0 }
+    entry.total++
+    if (w.healthy) entry.healthy++
+    else entry.unhealthy++
+    if ((w.runningJobIds?.length ?? 0) > 0) entry.inUse++
+    counts.set(t, entry)
+  }
+  return Array.from(counts.entries())
+    .map(([type, c]) => ({ type, ...c }))
+    .sort((a, b) => b.total - a.total)
+})
+
 const columns: Column[] = [
   { key: 'workerId', label: 'Worker ID', mono: true },
   { key: 'address', label: 'Address', mono: true },
@@ -39,6 +73,28 @@ const columns: Column[] = [
       <span class="text-xs text-text-muted font-mono">
         {{ workers.length }} worker{{ workers.length !== 1 ? 's' : '' }}
       </span>
+    </div>
+
+    <!-- Device type summary -->
+    <div v-if="deviceSummary.length > 0" class="grid gap-3 mb-6" :style="{ gridTemplateColumns: `repeat(${Math.min(deviceSummary.length, 6)}, minmax(0, 1fr))` }">
+      <div
+        v-for="d in deviceSummary"
+        :key="d.type"
+        class="rounded-lg border border-surface-border bg-surface px-4 py-3"
+      >
+        <div class="text-2xl font-semibold font-mono tabular-nums text-text">
+          {{ d.total }}
+        </div>
+        <div class="text-xs font-medium text-text-secondary mt-1 uppercase tracking-wider">
+          {{ d.type }}
+        </div>
+        <div class="text-xs mt-0.5" :class="d.total > 0 && d.inUse === d.total ? 'text-status-warning' : 'text-text-muted'">
+          {{ d.total > 0 ? Math.round(d.inUse / d.total * 100) : 0 }}% in use ({{ d.inUse }}/{{ d.total }})
+        </div>
+        <div v-if="d.unhealthy > 0" class="text-xs text-status-danger mt-0.5">
+          {{ d.unhealthy }} unhealthy
+        </div>
+      </div>
     </div>
 
     <div
