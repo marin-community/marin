@@ -35,6 +35,7 @@ from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
+from marin.training.run_environment import resolve_required_env_vars
 from marin.training.training import LevanterCheckpoint
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,9 @@ class RLExperimentConfig:
     train_ram: str | None = None
     inference_ram: str | None = None
     zone: str | None = None
+
+    runtime_env_vars: list[str] = dataclasses.field(default_factory=list)
+    """Env var names to forward into the executor step and all RL child jobs."""
 
 
 def launcher_region_for_rl_experiment(config: RLExperimentConfig) -> str:
@@ -348,6 +352,7 @@ def _build_rl_job_config(
         pip_dependency_groups=(
             config.model_config.pip_dependency_groups if config.model_config.pip_dependency_groups else ["vllm", "math"]
         ),
+        runtime_env_vars=list(config.runtime_env_vars),
     )
 
     return job_config
@@ -381,7 +386,11 @@ def _dispatch_rl_experiment_step(config: RLStepConfig) -> None:
     ``config.resources``. Compute rides with the function, never on the step node,
     so the resources stay out of the artifact fingerprint.
     """
-    remote(_run_rl_experiment_step, resources=config.resources)(config)
+    remote(
+        _run_rl_experiment_step,
+        resources=config.resources,
+        env_vars=resolve_required_env_vars(config.experiment_config.runtime_env_vars),
+    )(config)
 
 
 def make_rl_step(

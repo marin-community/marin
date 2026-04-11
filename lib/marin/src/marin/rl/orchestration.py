@@ -88,7 +88,8 @@ def submit_rl_job(config: RLJobConfig) -> JobHandle:
     client = current_client()
 
     env = {"EQX_ON_ERROR": "nan"}
-    env = add_run_env_variables(env)
+    runtime_env_vars = getattr(config, "runtime_env_vars", ())
+    env = add_run_env_variables(env, passthrough_env_vars=runtime_env_vars)
     coordinator_extras = _coordinator_extras(config)
 
     # Use extras so uv source rules in lib/marin/pyproject.toml apply.
@@ -120,6 +121,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
     client = current_client()
     train_config, rollout_config = build_worker_configs(config)
     run_config = config.run_config
+    runtime_env_vars = getattr(config, "runtime_env_vars", ())
     hosted_runtime: _HostedRuntime | None = None
 
     try:
@@ -146,7 +148,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         if train_config.weight_transfer.debug_weight_transfer:
             env["JAX_TRACEBACK_FILTERING"] = "off"
             env["TF_CPP_MIN_LOG_LEVEL"] = "0"
-        env = add_run_env_variables(env)
+        env = add_run_env_variables(env, passthrough_env_vars=runtime_env_vars)
         # Resource configs
         inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type
         # All Iris compute is preemptible — never set preemptible=False.

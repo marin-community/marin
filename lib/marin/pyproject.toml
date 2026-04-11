@@ -156,6 +156,7 @@ cpu = [
 ]
 
 rl = [
+    "openreward",
     # Provides the Prime Intellect CLI invoked via subprocess in
     # prime_intellect_env.py (`prime env install ...`); not a Python import.
     "prime",

@@ -248,6 +248,8 @@ def test_openreward_env_sample_executes_single_terminal_tool(monkeypatch, tmp_pa
     calls = {}
     environment = FakeEnvironment(tool_results={"submit_answer": FakeToolResult(reward=1.0, finished=True)})
     inference_ctx = FakeInferenceContext(['<tool_call>{"name":"submit_answer","arguments":{"answer":"4"}}</tool_call>'])
+    monkeypatch.setenv("OPENREWARD_API_KEY", "api-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
 
     monkeypatch.setattr(
         "marin.rl.environments.openreward_env.load_openreward_client",
@@ -257,9 +259,9 @@ def test_openreward_env_sample_executes_single_terminal_tool(monkeypatch, tmp_pa
     env = OpenRewardEnv(
         train_manifest_path=_manifest(tmp_path),
         base_url="https://openreward.example",
-        api_key="api-key",
+        api_key_env_var="OPENREWARD_API_KEY",
         variant="math",
-        secrets={"OPENAI_API_KEY": "secret"},
+        secret_env_vars=["OPENAI_API_KEY"],
     )
 
     rollout_groups, metrics = env.sample(
