@@ -49,6 +49,13 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.ge
     GenericFamilyRetainedTotalSurrogate,
     load_generic_family_packet,
 )
+from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_flexible_signal import (
+    build_flexible_signal_surrogate,
+    compute_flexible_surrogate_metrics,
+    flexible_signal_param_keys,
+    flexible_signal_params_from_metrics,
+    tune_flexible_signal_params_observed_only,
+)
 from experiments.domain_phase_mix.two_phase_many_genericfamily_observed_only_trustblend_subset_optima import (
     DEFAULT_TUNING_METHOD as OBSERVED_ONLY_TUNING_METHOD,
     tune_genericfamily_subset_params_observed_only,
@@ -73,6 +80,9 @@ DEFAULT_DSRE_CV_SOURCE = SCRIPT_DIR / "power_ridge_single.md"
 MODEL_ORDER = (
     "GRP",
     "GRP w/ power-law satiety",
+    "GRP w/ power family curvature",
+    "GRP w/ Box-Cox family curvature",
+    "GRP w/ mixed power/Box-Cox family curvature",
     "GRP w/o family signals",
     "GRP w/o retention",
     "GRP w/o overexposure penalty",
@@ -106,6 +116,18 @@ VALIDATED_RUN_SPECS: tuple[ValidatedRunSpec, ...] = (
     ValidatedRunSpec(
         model_name="GRP w/ power-law satiety",
         wandb_run_id="baseline_genericfamily_power_observed_only_trustblend_top8actual_cap-3fe2f4",
+    ),
+    ValidatedRunSpec(
+        model_name="GRP w/ power family curvature",
+        wandb_run_id="baseline_genericfamily_power_family_observed_only_trustblend_top8actual_cap-3c6271",
+    ),
+    ValidatedRunSpec(
+        model_name="GRP w/ Box-Cox family curvature",
+        wandb_run_id="baseline_genericfamily_boxcox_family_observed_only_trustblend_top8actual_cap-41527e",
+    ),
+    ValidatedRunSpec(
+        model_name="GRP w/ mixed power/Box-Cox family curvature",
+        wandb_run_id="baseline_genericfamily_power_boxcox_family_observed_only_trustblend_top8actual_cap-25f5fc",
     ),
     ValidatedRunSpec(
         model_name="GRP w/o family signals",
@@ -306,6 +328,64 @@ def compute_power_signal_grp_metrics(
         f"tau={params['tau']:.4f}, reg={params['reg']:.6f}, beta={params['beta']:.4f}."
     )
     return row
+
+
+def _flexible_grp_param_count(model: Any, *, variant_name: str) -> dict[str, int]:
+    if model.coef_ is None:
+        raise RuntimeError("Flexible GRP model must be fit before counting parameters")
+    linear = len(model.coef_)
+    shape_parameters = len(flexible_signal_param_keys(variant_name))
+    return {
+        "n_params": linear + 1 + shape_parameters,
+        "linear_coefficients": linear,
+        "intercept_params": 1,
+        "shape_parameters": shape_parameters,
+    }
+
+
+def compute_family_curvature_grp_metrics(
+    *,
+    cv_seed: int,
+    variant_name: str,
+    model_name: str,
+) -> dict[str, Any]:
+    """Compute local GRP metrics for one family-curvature flexible-signal variant."""
+    packet = load_generic_family_packet(target=MANY_DOMAIN_TARGET)
+    _, _, tuning_metrics, _ = tune_flexible_signal_params_observed_only(
+        packet,
+        variant_name=variant_name,
+        method=OBSERVED_ONLY_TUNING_METHOD,
+        seed=cv_seed,
+    )
+    params = flexible_signal_params_from_metrics(tuning_metrics, variant_name)
+    model = build_flexible_signal_surrogate(packet, params=params, variant_name=variant_name).fit(
+        packet.base.w, packet.base.y
+    )
+    metrics = compute_flexible_surrogate_metrics(packet, model, seed=cv_seed)
+    train_pred = model.predict(packet.base.w)
+    train_regret_at_1 = float(packet.base.y[int(np.argmin(train_pred))] - np.min(packet.base.y))
+    counts = _flexible_grp_param_count(model, variant_name=variant_name)
+    tuned_keys = ", ".join(f"{key}={float(params[key]):.4f}" for key in flexible_signal_param_keys(variant_name))
+    return {
+        "model": model_name,
+        "status": "ok",
+        "n_params": counts["n_params"],
+        "train_r2": float(metrics["train_r2"]),
+        "train_rmse": float(metrics["train_rmse"]),
+        "train_spearman": float(metrics["train_spearman"]),
+        "train_regret_at_1": train_regret_at_1,
+        "cv_r2": float(metrics["cv_r2"]),
+        "cv_rmse": float(metrics["cv_rmse"]),
+        "cv_spearman": float(metrics["cv_spearman"]),
+        "cv_regret_at_1": float(metrics["cv_regret_at_1"]),
+        "cv_foldmean_regret_at_1": float(metrics["cv_foldmean_regret_at_1"]),
+        "source_train": f"in_repo_generic_family_flexible_signal_{variant_name}",
+        "source_cv": f"in_repo_generic_family_flexible_signal_{variant_name}",
+        "notes": (
+            "Computed from a full observed-only tail-aware retune of the flexible-signal GRP nonlinear "
+            f"parameters using the {OBSERVED_ONLY_TUNING_METHOD} optimizer. Tuned parameters: {tuned_keys}."
+        ),
+    }
 
 
 def _load_train_cache(path: Path) -> pd.DataFrame:
@@ -644,6 +724,21 @@ def main() -> None:
         cv_seed=args.cv_seed,
         model_name="GRP w/ power-law satiety",
     )
+    grp_power_family_row = compute_family_curvature_grp_metrics(
+        cv_seed=args.cv_seed,
+        variant_name="power_family",
+        model_name="GRP w/ power family curvature",
+    )
+    grp_boxcox_family_row = compute_family_curvature_grp_metrics(
+        cv_seed=args.cv_seed,
+        variant_name="boxcox_family",
+        model_name="GRP w/ Box-Cox family curvature",
+    )
+    grp_power_boxcox_family_row = compute_family_curvature_grp_metrics(
+        cv_seed=args.cv_seed,
+        variant_name="power_boxcox_family",
+        model_name="GRP w/ mixed power/Box-Cox family curvature",
+    )
     grp_ablation_row = compute_grp_metrics(
         cv_seed=args.cv_seed,
         model_name="GRP w/o family signals",
@@ -727,6 +822,9 @@ def main() -> None:
         [
             grp_row,
             grp_power_signal_row,
+            grp_power_family_row,
+            grp_boxcox_family_row,
+            grp_power_boxcox_family_row,
             grp_ablation_row,
             grp_no_retention_row,
             grp_no_penalty_row,
