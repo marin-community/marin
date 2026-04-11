@@ -2,12 +2,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Deploy the Marin status page to Cloud Run with native IAP integration.
+# Deploy the Marin infra dashboard to Cloud Run with native IAP integration.
 #
 # Mirrors infra/iris-iap-proxy/deploy.sh: one Cloud Run service
-# (`marin-status-page`) in hai-gcp-models/us-central1, Direct VPC egress
-# so the service can reach the iris controller at its internal IP,
-# native IAP for auth, min/max-instances=1 to keep the TTL cache warm.
+# (`marin-infra-dashboard`) in hai-gcp-models/us-central1, Direct VPC
+# egress so the service can reach the iris controller at its internal
+# IP, native IAP for auth, min/max-instances=1 to keep the TTL cache
+# warm.
+#
+# The service account and GitHub-token secret still use the historical
+# `marin-status-page*` names — GCP does not support renaming either
+# resource in place, and the working resources (IAM bindings, secret
+# versions, IAP policies already scoped to the old names) are not worth
+# rebuilding for a cosmetic rename. The names are functional as-is.
+# If you later want full consistency, create new resources under the new
+# name, re-grant IAM + IAP, switch this script's variables, deploy, then
+# delete the old resources.
 #
 # Usage:
 #   ./deploy.sh             # deploy
@@ -19,7 +29,8 @@ cd "$(dirname "$0")"
 PROJECT="hai-gcp-models"
 REGION="us-central1"
 ZONE="us-central1-a"
-SERVICE="marin-status-page"
+SERVICE="marin-infra-dashboard"
+# SA and secret names kept at their original values — see note above.
 SA_NAME="marin-status-page"
 SA_EMAIL="${SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 VPC_NETWORK="default"
@@ -35,7 +46,7 @@ if [[ "${1:-}" == "--setup" ]]; then
 # 1. Create the service account
 gcloud iam service-accounts create ${SA_NAME} \\
   --project=${PROJECT} \\
-  --display-name="Marin Status Page"
+  --display-name="Marin Infra Dashboard"
 
 gcloud projects add-iam-policy-binding ${PROJECT} \\
   --member="serviceAccount:${SA_EMAIL}" \\

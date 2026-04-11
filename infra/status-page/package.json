@@ -1,5 +1,5 @@
 {
-  "name": "marin-status-page",
+  "name": "marin-infra-dashboard",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -11,6 +11,7 @@
     "build:web": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "lint": "eslint .",
     "start": "node server/dist/main.js"
   },
   "dependencies": {
@@ -24,6 +25,7 @@
     "recharts": "^3.8.1"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
@@ -31,10 +33,15 @@
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.0",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.26",
+    "globals": "^15.15.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^4.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
+    "typescript-eslint": "^8.58.1",
     "vite": "^6.0.3"
   }
 }

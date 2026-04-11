@@ -70,12 +70,10 @@ async function sampleWorkers(): Promise<void> {
 // Kick off immediately, then on a fixed cadence. unref() lets the process
 // exit cleanly during tests without waiting on the timer.
 void sampleWorkers().catch((err) => {
-  // eslint-disable-next-line no-console
   console.error("worker sampler error", err);
 });
 setInterval(() => {
   void sampleWorkers().catch((err) => {
-    // eslint-disable-next-line no-console
     console.error("worker sampler error", err);
   });
 }, SAMPLE_INTERVAL_MS).unref();
@@ -133,6 +131,5 @@ app.use(
 
 const port = Number(process.env.PORT ?? "8080");
 serve({ fetch: app.fetch, port }, (info) => {
-  // eslint-disable-next-line no-console
-  console.log(`marin-status-page listening on :${info.port}`);
+  console.log(`marin-infra-dashboard listening on :${info.port}`);
 });

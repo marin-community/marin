@@ -9,7 +9,7 @@ export function githubAuthHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
     accept: "application/vnd.github+json",
     "x-github-api-version": "2022-11-28",
-    "user-agent": "marin-status-page",
+    "user-agent": "marin-infra-dashboard",
   };
   const token = process.env.GITHUB_TOKEN;
   if (token) {

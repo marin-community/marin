@@ -1,4 +1,4 @@
-# marin-status-page
+# marin-infra-dashboard
 
 Internal dashboard for Marin: ferry workflow status from GitHub Actions,
 a GitHub Build panel showing aggregate CI status for the last 100
@@ -62,7 +62,7 @@ deploy.sh           Cloud Run + IAP deploy
 ## Local dev
 
 ```bash
-cd infra/status_page
+cd infra/status-page
 npm install
 npm run dev
 ```
@@ -72,6 +72,14 @@ npm run dev
 - Vite on `http://localhost:5173` (HMR for React/Tailwind).
 - Hono on `http://localhost:8080` via `tsx watch` (auto-restart on server
   edits).
+
+Before committing, run the same checks CI enforces:
+
+```bash
+npm run lint       # ESLint 9 flat config (server + web)
+npm run typecheck  # tsc against tsconfig.server.json + tsconfig.web.json
+npm run build      # vite bundle + tsc server compile
+```
 
 Vite proxies `/api/*` to the Hono server, so the browser sees a
 same-origin app.
