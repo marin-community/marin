@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["pandas", "numpy", "scipy", "scikit-learn", "plotly"]
@@ -18,10 +21,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from scipy.optimize import minimize  # noqa: E402
+from scipy.optimize import minimize
 
-from general_scaling_models import _fit_dsre_ceq  # noqa: E402
-from three_phase_visualization import load_spec  # noqa: E402
+from general_scaling_models import _fit_dsre_ceq
+from three_phase_visualization import load_spec
 
 DEFAULT_TARGET = "eval/paloma/dolma_100_programing_languages/bpb"
 DOMAIN_NAMES = ["nemotron_full", "starcoder"]
@@ -230,8 +233,7 @@ def main():
         for _ in range(n_restarts):
             x0 = opt_rng.uniform(0.0, 1.0, N)
             try:
-                res = minimize(obj, x0, method="L-BFGS-B", bounds=bounds,
-                               options={"maxiter": 500, "ftol": 1e-12})
+                res = minimize(obj, x0, method="L-BFGS-B", bounds=bounds, options={"maxiter": 500, "ftol": 1e-12})
                 if np.isfinite(res.fun) and res.fun < best_val:
                     best_val, best_x = float(res.fun), res.x.copy()
             except Exception:

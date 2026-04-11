@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
@@ -113,15 +113,15 @@ N_JOBS = int(os.environ.get("N_JOBS", "-1"))
 
 # Low-param models suitable for R=62, M=18 (all have <= 25 params)
 LOW_PARAM_MODELS = {
-    "Linear",        # 19p
-    "LogLinear",     # 19p
-    "CES",           # 21p
+    "Linear",  # 19p
+    "LogLinear",  # 19p
+    "CES",  # 21p
     "CEQ-SUM soft",  # 23p
-    "CEQ-SUM hinge", # 23p
-    "CEQ-SUM(k)",    # 24p
-    "NCEQ",          # 24p
-    "NCEQ(k)",       # 25p
-    "FM-CEQ",        # 23p
+    "CEQ-SUM hinge",  # 23p
+    "CEQ-SUM(k)",  # 24p
+    "NCEQ",  # 24p
+    "NCEQ(k)",  # 25p
+    "FM-CEQ",  # 23p
 }
 
 # =========================================================================
@@ -202,9 +202,7 @@ def huber_loss(y_true, y_pred, delta):
     """Element-wise Huber loss, averaged."""
     r = y_true - y_pred
     abs_r = np.abs(r)
-    return float(
-        np.mean(np.where(abs_r <= delta, 0.5 * r**2, delta * (abs_r - 0.5 * delta)))
-    )
+    return float(np.mean(np.where(abs_r <= delta, 0.5 * r**2, delta * (abs_r - 0.5 * delta))))
 
 
 # =========================================================================
@@ -377,20 +375,16 @@ def _plot_overfitting_gap(metric_id, all_results, model_names_list, train_sizes,
 
     shared_ylim, outlier_idxs = _adaptive_ylim(y_maxes)
 
-    fig, axes = plt.subplots(
-        nrows, ncols, figsize=(3.5 * ncols, 3.5 * nrows), squeeze=False, sharex=True
-    )
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.5 * ncols, 3.5 * nrows), squeeze=False, sharex=True)
 
     for idx, name in enumerate(ranked_names):
         r, c = divmod(idx, ncols)
         ax = axes[r][c]
         train_meds, test_meds, train_q25, train_q75, test_q25, test_q75 = all_stats[idx]
 
-        ax.plot(train_sizes, train_meds, "s--", color="royalblue", lw=1.5, ms=3,
-                label="Train" if idx == 0 else None)
+        ax.plot(train_sizes, train_meds, "s--", color="royalblue", lw=1.5, ms=3, label="Train" if idx == 0 else None)
         ax.fill_between(train_sizes, train_q25, train_q75, color="royalblue", alpha=0.12)
-        ax.plot(train_sizes, test_meds, "o-", color="crimson", lw=1.5, ms=3,
-                label="Test" if idx == 0 else None)
+        ax.plot(train_sizes, test_meds, "o-", color="crimson", lw=1.5, ms=3, label="Test" if idx == 0 else None)
         ax.fill_between(train_sizes, test_q25, test_q75, color="crimson", alpha=0.12)
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
@@ -437,7 +431,9 @@ def _plot_weight_comparison(natural_w, optimal_w, optimal_bpb, domain_names, out
 
     fig, ax = plt.subplots(figsize=(14, 6))
     ax.bar(x - width / 2, natural_w, width, label="Natural", color="#3b5a6e", edgecolor="white", linewidth=0.5)
-    ax.bar(x + width / 2, optimal_w, width, label="Ours (CEQ-SUM Soft)", color="#d4738a", edgecolor="white", linewidth=0.5)
+    ax.bar(
+        x + width / 2, optimal_w, width, label="Ours (CEQ-SUM Soft)", color="#d4738a", edgecolor="white", linewidth=0.5
+    )
 
     ax.set_ylabel("Weight")
     ax.set_xlabel("Domain")
@@ -470,7 +466,8 @@ def find_optimal_weights(pred_fn, n_restarts=200, seed=42):
             return float(pred_fn(W)[0])
 
         res = minimize(
-            obj, w0,
+            obj,
+            w0,
             method="SLSQP",
             bounds=[(1e-4, 1.0)] * M,
             constraints={"type": "eq", "fun": lambda w: w.sum() - 1.0},
@@ -599,9 +596,17 @@ def run_analysis(
 
             iter_results = Parallel(n_jobs=N_JOBS, backend="loky")(
                 delayed(_run_one_iter)(
-                    n_train, seed, needed_names,
-                    _w, _y, _em, _dn, _pn, _sd,
-                    huber_delta, max_pred,
+                    n_train,
+                    seed,
+                    needed_names,
+                    _w,
+                    _y,
+                    _em,
+                    _dn,
+                    _pn,
+                    _sd,
+                    huber_delta,
+                    max_pred,
                 )
                 for seed in seeds
             )
@@ -654,9 +659,7 @@ def run_analysis(
     # Generate overfitting gap plots
     print("\n  Generating overfitting gap plots...")
     for metric_id, suffix in [("rmse", "rmse"), ("huber", "huber")]:
-        _plot_overfitting_gap(
-            metric_id, all_results, model_names, TRAIN_SIZES, n_params_map, out_dir, suffix
-        )
+        _plot_overfitting_gap(metric_id, all_results, model_names, TRAIN_SIZES, n_params_map, out_dir, suffix)
 
     # Print summary table
     print(f"\n  {'Model':30s} {'RMSE(test)':>12s} {'RMSE(train)':>12s} {'n_params':>9s} {'Conv%':>6s}")
@@ -680,7 +683,7 @@ def run_analysis(
     for name, med_te, med_tr, np_val, conv in rows:
         te_s = f"{med_te:.6f}" if np.isfinite(med_te) else "N/A"
         tr_s = f"{med_tr:.6f}" if np.isfinite(med_tr) else "N/A"
-        print(f"  {name:30s} {te_s:>12s} {tr_s:>12s} {str(np_val):>9s} {conv:>5.0f}%")
+        print(f"  {name:30s} {te_s:>12s} {tr_s:>12s} {np_val!s:>9s} {conv:>5.0f}%")
 
     # Find optimal weights for CEQ-SUM soft
     ceq_name = "CEQ-SUM soft"
@@ -720,10 +723,7 @@ def main():
 
     # Filter models by name if CLI args provided
     if cli_args:
-        run_models = [
-            m for m in GENERAL_MODELS
-            if any(f.lower() in m.name.lower() for f in cli_args)
-        ]
+        run_models = [m for m in GENERAL_MODELS if any(f.lower() in m.name.lower() for f in cli_args)]
         if not run_models:
             print(f"No models match filters: {cli_args}")
             print("Available:", [m.name for m in GENERAL_MODELS if m.name in LOW_PARAM_MODELS])

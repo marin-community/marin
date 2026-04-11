@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
@@ -702,9 +702,7 @@ def _refine_optimum(pred_fn, feature_kind, p0_init, p1_init):
         X = build_features(feature_kind, np.array([x[0]]), np.array([x[1]]))
         return float(pred_fn(X)[0])
 
-    result = sp_minimize(
-        _obj, [p0_init, p1_init], method="L-BFGS-B", bounds=[(0.001, 0.999), (0.001, 0.999)]
-    )
+    result = sp_minimize(_obj, [p0_init, p1_init], method="L-BFGS-B", bounds=[(0.001, 0.999), (0.001, 0.999)])
     if result.success:
         return float(result.x[0]), float(result.x[1]), float(result.fun)
     return p0_init, p1_init, _obj([p0_init, p1_init])
@@ -1406,8 +1404,17 @@ for mi, (_, m) in enumerate(ranked_model_info):
 
     # Training data scatter with transparent edges
     last_scatter_6 = ax.scatter(
-        p0_sc, p1_sc, c=y, cmap="RdYlGn_r", vmin=vmin_global, vmax=vmax_global,
-        s=30, marker="o", edgecolors=(0, 0, 0, 0.25), linewidths=0.6, zorder=3,
+        p0_sc,
+        p1_sc,
+        c=y,
+        cmap="RdYlGn_r",
+        vmin=vmin_global,
+        vmax=vmax_global,
+        s=30,
+        marker="o",
+        edgecolors=(0, 0, 0, 0.25),
+        linewidths=0.6,
+        zorder=3,
     )
 
     # Draw arrows between consecutive valid optima
@@ -1415,7 +1422,8 @@ for mi, (_, m) in enumerate(ranked_model_info):
         if np.isnan(optima[i][0]) or np.isnan(optima[i + 1][0]):
             continue
         ax.annotate(
-            "", xy=(optima[i + 1][0], optima[i + 1][1]),
+            "",
+            xy=(optima[i + 1][0], optima[i + 1][1]),
             xytext=(optima[i][0], optima[i][1]),
             arrowprops=dict(arrowstyle="->", color="black", lw=1.2, alpha=0.7),
             zorder=7,
@@ -1433,8 +1441,14 @@ for mi, (_, m) in enumerate(ranked_model_info):
     # Star on final (full-data) optimum
     if not np.isnan(optima[-1][0]):
         ax.plot(
-            optima[-1][0], optima[-1][1], marker="*", ms=16,
-            color="gold", markeredgecolor="black", markeredgewidth=1.2, zorder=10,
+            optima[-1][0],
+            optima[-1][1],
+            marker="*",
+            ms=16,
+            color="gold",
+            markeredgecolor="black",
+            markeredgewidth=1.2,
+            zorder=10,
         )
 
     n_params_6 = None

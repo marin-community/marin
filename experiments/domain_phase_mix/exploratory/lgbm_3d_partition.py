@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["lightgbm", "pandas", "numpy", "plotly", "kaleido", "scikit-learn"]
@@ -18,7 +21,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from sklearn.model_selection import KFold
-
 
 FEATURE_COLS = ["phase_0_starcoder", "phase_1_starcoder", "phase_2_starcoder"]
 TARGET = "eval/paloma/dolma_100_programing_languages/bpb"
@@ -45,7 +47,8 @@ def fit_lgbm_ensemble(X, y, n_splits=5):
             seed=42,
         )
         gbm.fit(
-            X[train_idx], y[train_idx],
+            X[train_idx],
+            y[train_idx],
             eval_set=[(X[val_idx], y[val_idx])],
             eval_metric="l2",
             callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)],
@@ -72,9 +75,7 @@ def extract_boundary_faces(pred_vol, edges, threshold=0.005):
                     x = edges[i + 1]
                     y0, y1 = edges[j], edges[j + 1] if j + 1 < len(edges) else 1.0
                     z0, z1 = edges[k], edges[k + 1] if k + 1 < len(edges) else 1.0
-                    faces_verts.append(np.array([
-                        [x, y0, z0], [x, y1, z0], [x, y1, z1], [x, y0, z1]
-                    ]))
+                    faces_verts.append(np.array([[x, y0, z0], [x, y1, z0], [x, y1, z1], [x, y0, z1]]))
                     faces_color.append((pred_vol[i, j, k] + pred_vol[i + 1, j, k]) / 2)
 
     # Check y-boundaries
@@ -86,9 +87,7 @@ def extract_boundary_faces(pred_vol, edges, threshold=0.005):
                     y = edges[j + 1]
                     x0, x1 = edges[i], edges[i + 1] if i + 1 < len(edges) else 1.0
                     z0, z1 = edges[k], edges[k + 1] if k + 1 < len(edges) else 1.0
-                    faces_verts.append(np.array([
-                        [x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1]
-                    ]))
+                    faces_verts.append(np.array([[x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1]]))
                     faces_color.append((pred_vol[i, j, k] + pred_vol[i, j + 1, k]) / 2)
 
     # Check z-boundaries
@@ -100,9 +99,7 @@ def extract_boundary_faces(pred_vol, edges, threshold=0.005):
                     z = edges[k + 1]
                     x0, x1 = edges[i], edges[i + 1] if i + 1 < len(edges) else 1.0
                     y0, y1 = edges[j], edges[j + 1] if j + 1 < len(edges) else 1.0
-                    faces_verts.append(np.array([
-                        [x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]
-                    ]))
+                    faces_verts.append(np.array([[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]]))
                     faces_color.append((pred_vol[i, j, k] + pred_vol[i, j, k + 1]) / 2)
 
     # Also add the 6 outer faces of the unit cube so it's enclosed
@@ -114,34 +111,22 @@ def extract_boundary_faces(pred_vol, edges, threshold=0.005):
                 z0, z1 = edges[k], edges[k + 1] if k + 1 < len(edges) else 1.0
                 val = pred_vol[i, j, k]
                 if i == 0:
-                    faces_verts.append(np.array([
-                        [x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1]
-                    ]))
+                    faces_verts.append(np.array([[x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1]]))
                     faces_color.append(val)
                 if i == nx - 1:
-                    faces_verts.append(np.array([
-                        [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]
-                    ]))
+                    faces_verts.append(np.array([[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]]))
                     faces_color.append(val)
                 if j == 0:
-                    faces_verts.append(np.array([
-                        [x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]
-                    ]))
+                    faces_verts.append(np.array([[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]]))
                     faces_color.append(val)
                 if j == ny - 1:
-                    faces_verts.append(np.array([
-                        [x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]
-                    ]))
+                    faces_verts.append(np.array([[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]]))
                     faces_color.append(val)
                 if k == 0:
-                    faces_verts.append(np.array([
-                        [x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]
-                    ]))
+                    faces_verts.append(np.array([[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]]))
                     faces_color.append(val)
                 if k == nz - 1:
-                    faces_verts.append(np.array([
-                        [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]
-                    ]))
+                    faces_verts.append(np.array([[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]]))
                     faces_color.append(val)
 
     return faces_verts, faces_color
@@ -197,47 +182,57 @@ def main():
 
     fig = go.Figure()
 
-    fig.add_trace(go.Mesh3d(
-        x=all_x, y=all_y, z=all_z,
-        i=all_i, j=all_j, k=all_k,
-        intensity=all_intensity,
-        intensitymode="vertex",
-        colorscale="RdYlGn_r",
-        cmin=vmin, cmax=vmax,
-        flatshading=True,
-        lighting=dict(ambient=0.9, diffuse=0.1, specular=0.0),
-        lightposition=dict(x=0, y=0, z=1000),
-        colorbar=dict(title=dict(text="Code BPB", font=dict(size=12)), len=0.7),
-        opacity=0.25,
-        hoverinfo="skip",
-        name="LightGBM partition boundaries",
-    ))
+    fig.add_trace(
+        go.Mesh3d(
+            x=all_x,
+            y=all_y,
+            z=all_z,
+            i=all_i,
+            j=all_j,
+            k=all_k,
+            intensity=all_intensity,
+            intensitymode="vertex",
+            colorscale="RdYlGn_r",
+            cmin=vmin,
+            cmax=vmax,
+            flatshading=True,
+            lighting=dict(ambient=0.9, diffuse=0.1, specular=0.0),
+            lightposition=dict(x=0, y=0, z=1000),
+            colorbar=dict(title=dict(text="Code BPB", font=dict(size=12)), len=0.7),
+            opacity=0.25,
+            hoverinfo="skip",
+            name="LightGBM partition boundaries",
+        )
+    )
 
     # Overlay training runs
-    fig.add_trace(go.Scatter3d(
-        x=X[:, 0], y=X[:, 1], z=X[:, 2],
-        mode="markers",
-        marker=dict(
-            size=4,
-            color=y,
-            colorscale="RdYlGn_r",
-            cmin=vmin, cmax=vmax,
-            line=dict(width=0.8, color="black"),
-            showscale=False,
-        ),
-        text=[
-            f"p0_sc={x[0]:.2f}, p1_sc={x[1]:.2f}, p2_sc={x[2]:.2f}<br>BPB={v:.4f}"
-            for x, v in zip(X, y)
-        ],
-        hoverinfo="text",
-        name="Training runs",
-    ))
+    fig.add_trace(
+        go.Scatter3d(
+            x=X[:, 0],
+            y=X[:, 1],
+            z=X[:, 2],
+            mode="markers",
+            marker=dict(
+                size=4,
+                color=y,
+                colorscale="RdYlGn_r",
+                cmin=vmin,
+                cmax=vmax,
+                line=dict(width=0.8, color="black"),
+                showscale=False,
+            ),
+            text=[f"p0_sc={x[0]:.2f}, p1_sc={x[1]:.2f}, p2_sc={x[2]:.2f}<br>BPB={v:.4f}" for x, v in zip(X, y)],
+            hoverinfo="text",
+            name="Training runs",
+        )
+    )
 
     fig.update_layout(
         title=dict(
             text="LightGBM Predicted Landscape (3-Phase StarCoder → Code BPB)",
             font=dict(size=14),
-            x=0.5, xanchor="center",
+            x=0.5,
+            xanchor="center",
         ),
         scene=dict(
             xaxis=dict(title="Phase 0 StarCoder", range=[0, 1]),
@@ -245,7 +240,8 @@ def main():
             zaxis=dict(title="Phase 2 StarCoder", range=[0, 1]),
             camera=dict(eye=dict(x=1.5, y=1.5, z=1.0)),
         ),
-        width=900, height=750,
+        width=900,
+        height=750,
         margin=dict(l=10, r=10, t=50, b=10),
     )
 
@@ -275,42 +271,51 @@ def main():
     )
 
     fig_iso = go.Figure()
-    fig_iso.add_trace(go.Isosurface(
-        x=IG0.ravel(), y=IG1.ravel(), z=IG2.ravel(),
-        value=iso_preds,
-        isomin=float(iso_values[0]),
-        isomax=float(iso_values[-1]),
-        surface_count=n_levels,
-        colorscale="RdYlGn_r",
-        cmin=vmin, cmax=vmax,
-        caps=dict(x_show=False, y_show=False, z_show=False),
-        opacity=0.3,
-        colorbar=dict(title=dict(text="Code BPB", font=dict(size=12)), len=0.7),
-    ))
-
-    fig_iso.add_trace(go.Scatter3d(
-        x=X[:, 0], y=X[:, 1], z=X[:, 2],
-        mode="markers",
-        marker=dict(
-            size=4, color=y,
+    fig_iso.add_trace(
+        go.Isosurface(
+            x=IG0.ravel(),
+            y=IG1.ravel(),
+            z=IG2.ravel(),
+            value=iso_preds,
+            isomin=float(iso_values[0]),
+            isomax=float(iso_values[-1]),
+            surface_count=n_levels,
             colorscale="RdYlGn_r",
-            cmin=vmin, cmax=vmax,
-            line=dict(width=0.8, color="black"),
-            showscale=False,
-        ),
-        text=[
-            f"p0_sc={x[0]:.2f}, p1_sc={x[1]:.2f}, p2_sc={x[2]:.2f}<br>BPB={v:.4f}"
-            for x, v in zip(X, y)
-        ],
-        hoverinfo="text",
-        name="Training runs",
-    ))
+            cmin=vmin,
+            cmax=vmax,
+            caps=dict(x_show=False, y_show=False, z_show=False),
+            opacity=0.3,
+            colorbar=dict(title=dict(text="Code BPB", font=dict(size=12)), len=0.7),
+        )
+    )
+
+    fig_iso.add_trace(
+        go.Scatter3d(
+            x=X[:, 0],
+            y=X[:, 1],
+            z=X[:, 2],
+            mode="markers",
+            marker=dict(
+                size=4,
+                color=y,
+                colorscale="RdYlGn_r",
+                cmin=vmin,
+                cmax=vmax,
+                line=dict(width=0.8, color="black"),
+                showscale=False,
+            ),
+            text=[f"p0_sc={x[0]:.2f}, p1_sc={x[1]:.2f}, p2_sc={x[2]:.2f}<br>BPB={v:.4f}" for x, v in zip(X, y)],
+            hoverinfo="text",
+            name="Training runs",
+        )
+    )
 
     fig_iso.update_layout(
         title=dict(
             text="LightGBM Predicted Landscape — Isosurfaces (3-Phase StarCoder → Code BPB)",
             font=dict(size=14),
-            x=0.5, xanchor="center",
+            x=0.5,
+            xanchor="center",
         ),
         scene=dict(
             xaxis=dict(title="Phase 0 StarCoder", range=[0, 1]),
@@ -318,7 +323,8 @@ def main():
             zaxis=dict(title="Phase 2 StarCoder", range=[0, 1]),
             camera=dict(eye=dict(x=1.5, y=1.5, z=1.0)),
         ),
-        width=900, height=750,
+        width=900,
+        height=750,
         margin=dict(l=10, r=10, t=50, b=10),
     )
 

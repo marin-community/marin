@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["lightgbm", "pandas", "numpy", "plotly", "kaleido", "scikit-learn"]
@@ -17,7 +20,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from sklearn.model_selection import KFold
-
 
 FEATURE_COLS = ["phase_0_starcoder", "phase_1_starcoder"]
 TARGET = "eval/paloma/dolma_100_programing_languages/bpb"
@@ -52,7 +54,8 @@ def main():
             seed=42,
         )
         gbm.fit(
-            X[train_idx], y[train_idx],
+            X[train_idx],
+            y[train_idx],
             eval_set=[(X[val_idx], y[val_idx])],
             eval_metric="l2",
             callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)],
@@ -90,73 +93,91 @@ def main():
     fig = go.Figure()
 
     # Heatmap
-    fig.add_trace(go.Heatmap(
-        z=pred_grid,
-        x=g0,
-        y=g1,
-        colorscale="RdYlGn_r",
-        zmin=vmin,
-        zmax=vmax,
-        colorbar=dict(
-            title=dict(
-                text="eval/<br>paloma/<br>dolma_100_programing_languages/<br>bpb",
-                font=dict(size=10),
+    fig.add_trace(
+        go.Heatmap(
+            z=pred_grid,
+            x=g0,
+            y=g1,
+            colorscale="RdYlGn_r",
+            zmin=vmin,
+            zmax=vmax,
+            colorbar=dict(
+                title=dict(
+                    text="eval/<br>paloma/<br>dolma_100_programing_languages/<br>bpb",
+                    font=dict(size=10),
+                ),
             ),
-        ),
-        hovertemplate="p0_sc=%{x:.3f}<br>p1_sc=%{y:.3f}<br>pred=%{z:.4f}<extra></extra>",
-    ))
+            hovertemplate="p0_sc=%{x:.3f}<br>p1_sc=%{y:.3f}<br>pred=%{z:.4f}<extra></extra>",
+        )
+    )
 
     # Training runs
-    fig.add_trace(go.Scatter(
-        x=p0, y=p1,
-        mode="markers",
-        marker=dict(
-            size=8,
-            color=y,
-            colorscale="RdYlGn_r",
-            cmin=vmin,
-            cmax=vmax,
-            line=dict(width=1.5, color="white"),
-            showscale=False,
-        ),
-        text=[
-            f"run_id={int(rid)}<br>p0_sc={x:.3f}<br>p1_sc={y_:.3f}<br>actual={v:.4f}"
-            for rid, x, y_, v in zip(run_ids, p0, p1, y)
-        ],
-        hoverinfo="text",
-        name="Training runs",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=p0,
+            y=p1,
+            mode="markers",
+            marker=dict(
+                size=8,
+                color=y,
+                colorscale="RdYlGn_r",
+                cmin=vmin,
+                cmax=vmax,
+                line=dict(width=1.5, color="white"),
+                showscale=False,
+            ),
+            text=[
+                f"run_id={int(rid)}<br>p0_sc={x:.3f}<br>p1_sc={y_:.3f}<br>actual={v:.4f}"
+                for rid, x, y_, v in zip(run_ids, p0, p1, y)
+            ],
+            hoverinfo="text",
+            name="Training runs",
+        )
+    )
 
     # Predicted optimum
-    fig.add_trace(go.Scatter(
-        x=[opt_p0], y=[opt_p1],
-        mode="markers",
-        marker=dict(size=14, symbol="star", color="red", line=dict(width=1, color="darkred")),
-        name=f"Predicted opt: ({opt_p0:.3f}, {opt_p1:.3f}) = {opt_val:.4f}",
-        hoverinfo="name",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=[opt_p0],
+            y=[opt_p1],
+            mode="markers",
+            marker=dict(size=14, symbol="star", color="red", line=dict(width=1, color="darkred")),
+            name=f"Predicted opt: ({opt_p0:.3f}, {opt_p1:.3f}) = {opt_val:.4f}",
+            hoverinfo="name",
+        )
+    )
 
     # Best observed
-    fig.add_trace(go.Scatter(
-        x=[X[best_idx, 0]], y=[X[best_idx, 1]],
-        mode="markers",
-        marker=dict(size=10, color="rgba(0,0,0,0)", line=dict(width=2.5, color="red")),
-        name=f"Best observed: {y[best_idx]:.4f}",
-        hoverinfo="name",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=[X[best_idx, 0]],
+            y=[X[best_idx, 1]],
+            mode="markers",
+            marker=dict(size=10, color="rgba(0,0,0,0)", line=dict(width=2.5, color="red")),
+            name=f"Best observed: {y[best_idx]:.4f}",
+            hoverinfo="name",
+        )
+    )
 
     fig.update_layout(
         title=dict(
             text=f"{TARGET} (predicted)",
-            font=dict(size=16), x=0.5, xanchor="center",
+            font=dict(size=16),
+            x=0.5,
+            xanchor="center",
         ),
         xaxis=dict(title="Phase 0 StarCoder weight", range=[0, 1], constrain="domain"),
         yaxis=dict(title="Phase 1 StarCoder weight", range=[0, 1], scaleanchor="x", scaleratio=1),
         legend=dict(
-            yanchor="top", y=0.99, xanchor="right", x=0.99,
-            font=dict(size=10), bgcolor="rgba(255,255,255,0.8)",
+            yanchor="top",
+            y=0.99,
+            xanchor="right",
+            x=0.99,
+            font=dict(size=10),
+            bgcolor="rgba(255,255,255,0.8)",
         ),
-        width=800, height=700,
+        width=800,
+        height=700,
         margin=dict(l=60, r=20, t=50, b=60),
     )
 

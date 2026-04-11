@@ -1,9 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Two-phase StarCoder determinism + seed-jitter sweep with WSD-aligned schedule."""
 
 from __future__ import annotations

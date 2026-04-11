@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """General scaling models for arbitrary M domains and N phases.
@@ -936,6 +936,8 @@ def _fit_scheffe_log(spec: DatasetSpec):
         return intercept + _scheffe_log_features(Vn) @ coef
 
     return predict, {"n_params": n_params}
+
+
 def _epoch_entropy_features(spec: DatasetSpec) -> np.ndarray:
     """(R, N) epoch-entropy per phase: H_k = sum_d q_{k,d} * ln(q_{k,d})."""
     C = _broadcast_epoch_mult(spec.epoch_multipliers, spec.N, spec.M)
@@ -991,6 +993,8 @@ def _fit_scheffe_log_epoch_entropy(spec: DatasetSpec):
         return intercept + Zn @ coef
 
     return predict, {"n_params": n_params}
+
+
 def _scheffe_tied_entropy_features(V: np.ndarray, N: int, M: int) -> np.ndarray:
     """Scheffé design with phase-tied entropy: linear + pairwise + N phase-tied entropy terms."""
     d = V.shape[1]
@@ -1083,6 +1087,8 @@ def _fit_scheffe_tied_entropy(spec: DatasetSpec):
         return intercept + Zn @ coef
 
     return predict, {"n_params": n_params}
+
+
 def _epoch_overfit_quadratic_raw(
     W: np.ndarray,
     epoch_multipliers: np.ndarray,
@@ -1182,6 +1188,8 @@ def _fit_sheq(spec: DatasetSpec):
         return intercept + Zn @ coef
 
     return predict, {"n_params": n_params}
+
+
 def _fit_ces(spec: DatasetSpec, n_restarts: int = 40, seed: int = 42):
     V = _vdom_features(spec)
     y = spec.y
@@ -1338,10 +1346,10 @@ def _applicable_ces_overfit(spec: DatasetSpec) -> bool:
     return spec.R > n_params
 
 
-
 # ---------------------------------------------------------------------------
 # CEQ family: low-parameter CES-like models with explicit overtraining penalty
 # ---------------------------------------------------------------------------
+
 
 def _mad_sigma(x: np.ndarray) -> float:
     """Robust scale estimate via MAD."""
@@ -1450,12 +1458,12 @@ def _init_pi(p0: np.ndarray, idx: int, rng: np.random.Generator, pi_type: str) -
         p0[idx] = float(rng.normal(0.0, 1.0))
         return idx + 1
     elif pi_type == "quad":
-        p0[idx] = float(rng.normal(0.0, 1.0))      # beta1
-        p0[idx + 1] = float(rng.normal(0.0, 0.5))   # beta2
+        p0[idx] = float(rng.normal(0.0, 1.0))  # beta1
+        p0[idx + 1] = float(rng.normal(0.0, 0.5))  # beta2
         return idx + 2
     elif pi_type == "beta":
-        p0[idx] = float(rng.normal(0.0, 0.5))       # log_alpha
-        p0[idx + 1] = float(rng.normal(0.0, 0.5))   # log_beta
+        p0[idx] = float(rng.normal(0.0, 0.5))  # log_alpha
+        p0[idx + 1] = float(rng.normal(0.0, 0.5))  # log_beta
         return idx + 2
     else:
         raise ValueError(f"Unknown pi_type: {pi_type}")
@@ -1582,7 +1590,7 @@ def _fit_ceq_sum(
         p0 = np.zeros(n_params)
         idx = 0
         p0[idx] = float(np.median(y))
-        p0[idx + 1] = float(rng.normal(0.0, 1.0))   # logA
+        p0[idx + 1] = float(rng.normal(0.0, 1.0))  # logA
         p0[idx + 2] = float(rng.normal(-2.0, 1.0))  # logB
         idx += 3
 
@@ -1685,6 +1693,7 @@ def _fit_nceq_learnk(spec: DatasetSpec):
         maxiter=700,
         reg=1e-4,
     )
+
 
 # ---------------------------------------------------------------------------
 # Model: FM-CEQ (Forgetting Marginal CEQ)
@@ -1800,7 +1809,7 @@ def _fit_fmceq(
         p0 = np.zeros(n_params)
         idx = 0
         p0[idx] = float(np.median(y))
-        p0[idx + 1] = float(rng.normal(0.0, 1.0))   # logA
+        p0[idx + 1] = float(rng.normal(0.0, 1.0))  # logA
         p0[idx + 2] = float(rng.normal(-2.0, 1.0))  # logB
         idx += 3
 
@@ -1951,8 +1960,8 @@ def _fit_ceq_washpen(
         p0 = np.zeros(n_params)
         idx = 0
         p0[idx] = float(np.median(y))
-        p0[idx + 1] = float(rng.normal(0.0, 1.0))   # logA
-        p0[idx + 2] = float(rng.normal(-2.0, 1.0))   # logB
+        p0[idx + 1] = float(rng.normal(0.0, 1.0))  # logA
+        p0[idx + 2] = float(rng.normal(-2.0, 1.0))  # logB
         idx += 3
 
         if M > 1:
@@ -2250,8 +2259,8 @@ def _fit_isceq(
         p0 = np.zeros(n_params)
         idx = 0
         p0[idx] = float(np.median(y))
-        p0[idx + 1] = float(rng.normal(0.0, 1.0))   # logA
-        p0[idx + 2] = float(rng.normal(-2.0, 1.0))   # logB
+        p0[idx + 1] = float(rng.normal(0.0, 1.0))  # logA
+        p0[idx + 2] = float(rng.normal(-2.0, 1.0))  # logB
         idx += 3
 
         if M > 1:
@@ -2390,10 +2399,10 @@ def _fit_isceq_toxic(
         # Sequential state with source-toxicity asymmetric interference
         S = np.zeros((R_in, M))
         for k in range(N):
-            src = W_in[:, k, :] * tox[None, :]            # (R_in, M)
-            src_tot = np.sum(src, axis=1, keepdims=True)   # (R_in, 1)
+            src = W_in[:, k, :] * tox[None, :]  # (R_in, M)
+            src_tot = np.sum(src, axis=1, keepdims=True)  # (R_in, 1)
             # Decay for domain d: exp(-lam * sum_{j!=d} tox_j * W_{k,j})
-            decay = np.exp(-lam_learn * (src_tot - src))   # (R_in, M)
+            decay = np.exp(-lam_learn * (src_tot - src))  # (R_in, M)
             S = S * decay + pi[k] * sat[:, k, :]
 
         U = _ces_mean_stable(np.maximum(S, 1e-12), a[None, :], rho)
@@ -2424,8 +2433,8 @@ def _fit_isceq_toxic(
         p0 = np.zeros(n_params)
         idx = 0
         p0[idx] = float(np.median(y))
-        p0[idx + 1] = float(rng.normal(0.0, 1.0))   # logA
-        p0[idx + 2] = float(rng.normal(-2.0, 1.0))   # logB
+        p0[idx + 1] = float(rng.normal(0.0, 1.0))  # logA
+        p0[idx + 2] = float(rng.normal(-2.0, 1.0))  # logB
         idx += 3
         if M > 1:
             p0[idx : idx + (M - 1)] = rng.normal(0.0, 0.5, M - 1)
@@ -2668,8 +2677,8 @@ def _fit_dsre_ceq(
         p0 = np.zeros(n_params)
         idx = 0
         p0[idx] = float(np.median(y))
-        p0[idx + 1] = float(rng.normal(0.0, 1.0))   # logA
-        p0[idx + 2] = float(rng.normal(-2.0, 1.0))   # logB
+        p0[idx + 1] = float(rng.normal(0.0, 1.0))  # logA
+        p0[idx + 2] = float(rng.normal(-2.0, 1.0))  # logB
         idx += 3
         if M > 1:
             p0[idx : idx + (M - 1)] = rng.normal(0.0, 0.5, M - 1)
@@ -2700,7 +2709,9 @@ def _fit_dsre_ceq(
 
         try:
             res = minimize(
-                obj, p0, method="L-BFGS-B",
+                obj,
+                p0,
+                method="L-BFGS-B",
                 options={"maxiter": maxiter, "ftol": 1e-10},
             )
             if np.isfinite(res.fun) and res.fun < best_val:
@@ -2958,7 +2969,9 @@ def _fit_dsre_ceq_st(
 
         try:
             res = minimize(
-                obj, p0, method="L-BFGS-B",
+                obj,
+                p0,
+                method="L-BFGS-B",
                 options={"maxiter": maxiter, "ftol": 1e-10},
             )
             if np.isfinite(res.fun) and res.fun < best_val:
@@ -3207,34 +3220,20 @@ GENERAL_MODELS: list[GeneralModelSpec] = [
     GeneralModelSpec("IS-CEQ(beta)", _fit_isceq_beta, lambda _: True, "IS-CEQ + beta-distribution phase weights"),
     GeneralModelSpec("IS-CEQ-Toxic", _fit_isceq_toxic, lambda _: True, "IS-CEQ + source-toxicity asymmetric forgetting"),
     GeneralModelSpec("DS-RE-CEQ", _fit_dsre_ceq, lambda _: True, "Satiety-memory + conflict-gated interference"),
+    GeneralModelSpec("DS-RE-CEQ(ng)", _fit_dsre_ceq_nogate, lambda _: True, "DS-RE-CEQ without conflict gate"),
+    GeneralModelSpec("DS-RE-CEQ(ns)", _fit_dsre_ceq_nosat, lambda _: True, "DS-RE-CEQ without satiety memory"),
+    GeneralModelSpec("DS-RE-CEQ(sp)", _fit_dsre_ceq_shared_pi, lambda _: True, "DS-RE-CEQ with shared phase weights"),
+    GeneralModelSpec("DS-RE-CEQ(ni)", _fit_dsre_ceq_no_interference, lambda _: True, "DS-RE-CEQ without interference"),
+    GeneralModelSpec("DS-RE-CEQ-ST", _fit_dsre_ceq_st, lambda _: True, "DS-RE-CEQ with size-tied per-domain tau"),
     GeneralModelSpec(
-        "DS-RE-CEQ(ng)", _fit_dsre_ceq_nogate, lambda _: True, "DS-RE-CEQ without conflict gate"
+        "DS-RE-CEQ-ST(lite)", _fit_dsre_ceq_st_lite, lambda _: True, "DS-RE-CEQ-ST lite: shared pi, no satiety, no gate"
     ),
+    GeneralModelSpec("DS-RE-CEQ-ST(lng)", _fit_dsre_ceq_st_lite_nogate, lambda _: True, "DS-RE-CEQ-ST lite-nogate"),
     GeneralModelSpec(
-        "DS-RE-CEQ(ns)", _fit_dsre_ceq_nosat, lambda _: True, "DS-RE-CEQ without satiety memory"
-    ),
-    GeneralModelSpec(
-        "DS-RE-CEQ(sp)", _fit_dsre_ceq_shared_pi, lambda _: True, "DS-RE-CEQ with shared phase weights"
-    ),
-    GeneralModelSpec(
-        "DS-RE-CEQ(ni)", _fit_dsre_ceq_no_interference, lambda _: True,
-        "DS-RE-CEQ without interference"
-    ),
-    GeneralModelSpec(
-        "DS-RE-CEQ-ST", _fit_dsre_ceq_st, lambda _: True,
-        "DS-RE-CEQ with size-tied per-domain tau"
-    ),
-    GeneralModelSpec(
-        "DS-RE-CEQ-ST(lite)", _fit_dsre_ceq_st_lite, lambda _: True,
-        "DS-RE-CEQ-ST lite: shared pi, no satiety, no gate"
-    ),
-    GeneralModelSpec(
-        "DS-RE-CEQ-ST(lng)", _fit_dsre_ceq_st_lite_nogate, lambda _: True,
-        "DS-RE-CEQ-ST lite-nogate"
-    ),
-    GeneralModelSpec(
-        "CR-CEQ-ST", _fit_dsre_ceq_st_no_interference, lambda _: True,
-        "CR-CEQ baseline with size-tied tau (no interference)"
+        "CR-CEQ-ST",
+        _fit_dsre_ceq_st_no_interference,
+        lambda _: True,
+        "CR-CEQ baseline with size-tied tau (no interference)",
     ),
     # Hybrid models: mixture design + economics utility + information theory
     GeneralModelSpec("SHEQ", _fit_sheq, lambda _: True, "Scheffé+log + epoch-entropy + epoch-overfit quadratic"),

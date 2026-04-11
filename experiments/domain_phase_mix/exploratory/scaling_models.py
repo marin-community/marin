@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
@@ -1117,31 +1117,43 @@ def fit_ces_overfit(X, y, n_restarts=15, seed=0):
 # (2-phase specialisation of the general_scaling_models implementation)
 # =========================================================================
 
+
 def _ceq_sum_core(X, p, nested=False):
     """Forward pass shared by CEQ-SUM soft and NCEQ (2-phase, 2-domain)."""
     e_sc0, e_sc1, e_nem0, e_nem1 = _epochs_from_weights(X)
     # Stack into (R, N=2, M=2) epoch tensor: domains = [SC, Nem]
-    E = np.stack([
-        np.column_stack([e_sc0, e_nem0]),
-        np.column_stack([e_sc1, e_nem1]),
-    ], axis=1)  # (R, 2, 2)
+    E = np.stack(
+        [
+            np.column_stack([e_sc0, e_nem0]),
+            np.column_stack([e_sc1, e_nem1]),
+        ],
+        axis=1,
+    )  # (R, 2, 2)
 
     idx = 0
-    c0 = p[idx]; idx += 1
-    logA = p[idx]; idx += 1
-    logB = p[idx]; idx += 1
+    c0 = p[idx]
+    idx += 1
+    logA = p[idx]
+    idx += 1
+    logB = p[idx]
+    idx += 1
     # Domain weight: 1 logit for M=2
-    logit_a = p[idx]; idx += 1
+    logit_a = p[idx]
+    idx += 1
     a_sc = 1.0 / (1.0 + np.exp(-logit_a))
     a = np.array([a_sc, 1.0 - a_sc])
     # rho via tanh
-    rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99)); idx += 1
-    gamma = p[idx]; idx += 1
-    tau = float(np.exp(np.clip(p[idx], -5.0, 8.0))); idx += 1
+    rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99))
+    idx += 1
+    gamma = p[idx]
+    idx += 1
+    tau = float(np.exp(np.clip(p[idx], -5.0, 8.0)))
+    idx += 1
 
     rho_p = None
     if nested:
-        rho_p = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99)); idx += 1
+        rho_p = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99))
+        idx += 1
 
     A = np.exp(np.clip(logA, -10.0, 10.0))
     B = np.exp(np.clip(logB, -10.0, 10.0))
@@ -1164,11 +1176,11 @@ def _ceq_sum_core(X, p, nested=False):
 
     if nested and rho_p is not None:
         if abs(rho_p) < 1e-4:
-            U = np.exp(pi[0] * np.log(np.maximum(U_k[:, 0], 1e-12))
-                       + pi[1] * np.log(np.maximum(U_k[:, 1], 1e-12)))
+            U = np.exp(pi[0] * np.log(np.maximum(U_k[:, 0], 1e-12)) + pi[1] * np.log(np.maximum(U_k[:, 1], 1e-12)))
         else:
-            inner_p = pi[0] * np.power(np.maximum(U_k[:, 0], 1e-12), rho_p) \
-                    + pi[1] * np.power(np.maximum(U_k[:, 1], 1e-12), rho_p)
+            inner_p = pi[0] * np.power(np.maximum(U_k[:, 0], 1e-12), rho_p) + pi[1] * np.power(
+                np.maximum(U_k[:, 1], 1e-12), rho_p
+            )
             U = np.power(np.maximum(inner_p, 1e-12), 1.0 / rho_p)
     else:
         U = U_k @ pi
@@ -1197,15 +1209,17 @@ def fit_ceq_sum_soft(X, y, n_restarts=15, seed=0):
 
     best_l, best_p = np.inf, None
     for _ in range(n_restarts):
-        p0 = np.array([
-            y.max() + rng.normal(0, 0.05),
-            rng.normal(0, 1),           # logA
-            rng.normal(-2, 1),          # logB
-            rng.normal(0, 1),           # logit_a (domain weight)
-            rng.normal(0, 0.7),         # rho_raw
-            rng.normal(0, 1),           # gamma
-            np.log(E_sc_med) + rng.normal(0, 0.3),  # logtau
-        ])
+        p0 = np.array(
+            [
+                y.max() + rng.normal(0, 0.05),
+                rng.normal(0, 1),  # logA
+                rng.normal(-2, 1),  # logB
+                rng.normal(0, 1),  # logit_a (domain weight)
+                rng.normal(0, 0.7),  # rho_raw
+                rng.normal(0, 1),  # gamma
+                np.log(E_sc_med) + rng.normal(0, 0.3),  # logtau
+            ]
+        )
         try:
             res = minimize(loss, p0, method="L-BFGS-B", options={"maxiter": 800, "ftol": 1e-10})
             if np.isfinite(res.fun) and res.fun < best_l:
@@ -1236,16 +1250,18 @@ def fit_nceq(X, y, n_restarts=15, seed=0):
 
     best_l, best_p = np.inf, None
     for _ in range(n_restarts):
-        p0 = np.array([
-            y.max() + rng.normal(0, 0.05),
-            rng.normal(0, 1),           # logA
-            rng.normal(-2, 1),          # logB
-            rng.normal(0, 1),           # logit_a (domain weight)
-            rng.normal(0, 0.7),         # rho_raw
-            rng.normal(0, 1),           # gamma
-            np.log(E_sc_med) + rng.normal(0, 0.3),  # logtau
-            rng.normal(0, 0.7),         # rho_p_raw
-        ])
+        p0 = np.array(
+            [
+                y.max() + rng.normal(0, 0.05),
+                rng.normal(0, 1),  # logA
+                rng.normal(-2, 1),  # logB
+                rng.normal(0, 1),  # logit_a (domain weight)
+                rng.normal(0, 0.7),  # rho_raw
+                rng.normal(0, 1),  # gamma
+                np.log(E_sc_med) + rng.normal(0, 0.3),  # logtau
+                rng.normal(0, 0.7),  # rho_p_raw
+            ]
+        )
         try:
             res = minimize(loss, p0, method="L-BFGS-B", options={"maxiter": 800, "ftol": 1e-10})
             if np.isfinite(res.fun) and res.fun < best_l:
@@ -1279,6 +1295,7 @@ def label_nceq(params):
 # FM-CEQ: Forgetting Marginal CEQ (sequential + retention)
 # =========================================================================
 
+
 def _fm_ceq_core(X, p):
     """Forward pass for FM-CEQ (2-phase, 2-domain)."""
     e_sc0, e_sc1, e_nem0, e_nem1 = _epochs_from_weights(X)
@@ -1287,16 +1304,23 @@ def _fm_ceq_core(X, p):
     E1 = np.column_stack([e_sc1, e_nem1])
 
     idx = 0
-    c0 = p[idx]; idx += 1
-    logA = p[idx]; idx += 1
-    logB = p[idx]; idx += 1
-    logit_a = p[idx]; idx += 1
+    c0 = p[idx]
+    idx += 1
+    logA = p[idx]
+    idx += 1
+    logB = p[idx]
+    idx += 1
+    logit_a = p[idx]
+    idx += 1
     a_sc = 1.0 / (1.0 + np.exp(-logit_a))
     a = np.array([a_sc, 1.0 - a_sc])
-    rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99)); idx += 1
+    rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99))
+    idx += 1
     # Retention factor delta in [0, 1] via sigmoid
-    delta = float(1.0 / (1.0 + np.exp(-np.clip(p[idx], -10.0, 10.0)))); idx += 1
-    tau = float(np.exp(np.clip(p[idx], -5.0, 8.0))); idx += 1
+    delta = float(1.0 / (1.0 + np.exp(-np.clip(p[idx], -10.0, 10.0))))
+    idx += 1
+    tau = float(np.exp(np.clip(p[idx], -5.0, 8.0)))
+    idx += 1
 
     A = np.exp(np.clip(logA, -10.0, 10.0))
     B = np.exp(np.clip(logB, -10.0, 10.0))
@@ -1343,15 +1367,17 @@ def fit_fm_ceq(X, y, n_restarts=15, seed=0):
 
     best_l, best_p = np.inf, None
     for _ in range(n_restarts):
-        p0 = np.array([
-            y.max() + rng.normal(0, 0.05),
-            rng.normal(0, 1),           # logA
-            rng.normal(-2, 1),          # logB
-            rng.normal(0, 1),           # logit_a (domain weight)
-            rng.normal(0, 0.7),         # rho_raw
-            rng.normal(0, 1.5),         # delta_raw (sigmoid -> [0,1])
-            np.log(E_sc_med) + rng.normal(0, 0.3),  # logtau
-        ])
+        p0 = np.array(
+            [
+                y.max() + rng.normal(0, 0.05),
+                rng.normal(0, 1),  # logA
+                rng.normal(-2, 1),  # logB
+                rng.normal(0, 1),  # logit_a (domain weight)
+                rng.normal(0, 0.7),  # rho_raw
+                rng.normal(0, 1.5),  # delta_raw (sigmoid -> [0,1])
+                np.log(E_sc_med) + rng.normal(0, 0.3),  # logtau
+            ]
+        )
         try:
             res = minimize(loss, p0, method="L-BFGS-B", options={"maxiter": 800, "ftol": 1e-10})
             if np.isfinite(res.fun) and res.fun < best_l:
@@ -1378,6 +1404,7 @@ def label_fm_ceq(params):
 # CEQ-Washpen: CEQ-SUM soft utility + washout-weighted overfit penalty
 # =========================================================================
 
+
 def _ceq_washpen_core(X, p):
     """Forward pass for CEQ-Washpen (2-phase, 2-domain).
 
@@ -1388,25 +1415,36 @@ def _ceq_washpen_core(X, p):
     e_sc0, e_sc1, e_nem0, e_nem1 = _epochs_from_weights(X)
 
     idx = 0
-    c0 = p[idx]; idx += 1
-    logA = p[idx]; idx += 1
-    logB = p[idx]; idx += 1
-    logit_a = p[idx]; idx += 1
+    c0 = p[idx]
+    idx += 1
+    logA = p[idx]
+    idx += 1
+    logB = p[idx]
+    idx += 1
+    logit_a = p[idx]
+    idx += 1
     a_sc = 1.0 / (1.0 + np.exp(-logit_a))
     a = np.array([a_sc, 1.0 - a_sc])
-    rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99)); idx += 1
-    gamma = p[idx]; idx += 1
-    tau = float(np.exp(np.clip(p[idx], -5.0, 8.0))); idx += 1
-    lam = float(np.exp(np.clip(p[idx], -8.0, 8.0))); idx += 1
+    rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99))
+    idx += 1
+    gamma = p[idx]
+    idx += 1
+    tau = float(np.exp(np.clip(p[idx], -5.0, 8.0)))
+    idx += 1
+    lam = float(np.exp(np.clip(p[idx], -8.0, 8.0)))
+    idx += 1
 
     A = np.exp(np.clip(logA, -10.0, 10.0))
     B = np.exp(np.clip(logB, -10.0, 10.0))
 
     # Satiety + per-phase CES (same as CEQ-SUM soft)
-    E = np.stack([
-        np.column_stack([e_sc0, e_nem0]),
-        np.column_stack([e_sc1, e_nem1]),
-    ], axis=1)
+    E = np.stack(
+        [
+            np.column_stack([e_sc0, e_nem0]),
+            np.column_stack([e_sc1, e_nem1]),
+        ],
+        axis=1,
+    )
     sat = np.maximum(np.log1p(E), 1e-12)
 
     U_k = np.zeros((len(X), 2))
@@ -1424,7 +1462,7 @@ def _ceq_washpen_core(X, p):
     # Washout-weighted overfit penalty
     # Phase 0: broad training after = e_nem1; Phase 1: nothing after
     omega_0 = np.exp(-lam * e_nem1)  # discounted if lots of Nemotron in phase 1
-    omega_1 = np.ones_like(e_sc1)    # last phase, full penalty
+    omega_1 = np.ones_like(e_sc1)  # last phase, full penalty
 
     h0 = _softplus(e_sc0 - tau)
     h1 = _softplus(e_sc1 - tau)
@@ -1449,16 +1487,18 @@ def fit_ceq_washpen(X, y, n_restarts=15, seed=0):
 
     best_l, best_p = np.inf, None
     for _ in range(n_restarts):
-        p0 = np.array([
-            y.max() + rng.normal(0, 0.05),
-            rng.normal(0, 1),           # logA
-            rng.normal(-2, 1),          # logB
-            rng.normal(0, 1),           # logit_a
-            rng.normal(0, 0.7),         # rho_raw
-            rng.normal(0, 1),           # gamma
-            np.log(E_sc_med) + rng.normal(0, 0.3),  # logtau
-            rng.normal(-1, 1),          # loglambda
-        ])
+        p0 = np.array(
+            [
+                y.max() + rng.normal(0, 0.05),
+                rng.normal(0, 1),  # logA
+                rng.normal(-2, 1),  # logB
+                rng.normal(0, 1),  # logit_a
+                rng.normal(0, 0.7),  # rho_raw
+                rng.normal(0, 1),  # gamma
+                np.log(E_sc_med) + rng.normal(0, 0.3),  # logtau
+                rng.normal(-1, 1),  # loglambda
+            ]
+        )
         try:
             res = minimize(loss, p0, method="L-BFGS-B", options={"maxiter": 800, "ftol": 1e-10})
             if np.isfinite(res.fun) and res.fun < best_l:
@@ -1486,6 +1526,7 @@ def label_ceq_washpen(params):
 # DS-RE-CEQ: Satiety memory + conflict-gated interference (2-phase)
 # =========================================================================
 
+
 def _dsre_ceq_core(X, p):
     """Forward pass for DS-RE-CEQ (2-phase, 2-domain).
 
@@ -1505,49 +1546,68 @@ def _dsre_ceq_core(X, p):
     M = 2
 
     idx = 0
-    c0 = p[idx]; idx += 1
-    logA = p[idx]; idx += 1
-    logB = p[idx]; idx += 1
+    c0 = p[idx]
+    idx += 1
+    logA = p[idx]
+    idx += 1
+    logB = p[idx]
+    idx += 1
 
     # Domain weights via sigmoid
-    a_sc = 1.0 / (1.0 + np.exp(-p[idx])); idx += 1
+    a_sc = 1.0 / (1.0 + np.exp(-p[idx]))
+    idx += 1
     a = np.array([a_sc, 1.0 - a_sc])
 
-    rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99)); idx += 1
+    rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99))
+    idx += 1
 
     # Per-domain phase importance: softmax over 2 phases (1 logit each)
     # pi_d = softmax([0, logit]) → [1/(1+e^l), e^l/(1+e^l)]
-    pi_sc_logit = p[idx]; idx += 1
-    pi_nem_logit = p[idx]; idx += 1
+    pi_sc_logit = p[idx]
+    idx += 1
+    pi_nem_logit = p[idx]
+    idx += 1
     pi_sc = np.array([1.0, np.exp(pi_sc_logit)]) / (1.0 + np.exp(pi_sc_logit))
     pi_nem = np.array([1.0, np.exp(pi_nem_logit)]) / (1.0 + np.exp(pi_nem_logit))
 
     # Per-domain interference lambda (phase 1 only; phase 0 has lam=0)
-    lam_sc = float(np.exp(np.clip(p[idx], -8.0, 8.0))); idx += 1
-    lam_nem = float(np.exp(np.clip(p[idx], -8.0, 8.0))); idx += 1
+    lam_sc = float(np.exp(np.clip(p[idx], -8.0, 8.0)))
+    idx += 1
+    lam_nem = float(np.exp(np.clip(p[idx], -8.0, 8.0)))
+    idx += 1
 
     # Satiety memory phi_d in (0, 1)
-    phi_sc = 1.0 / (1.0 + np.exp(-np.clip(p[idx], -50, 50))); idx += 1
-    phi_nem = 1.0 / (1.0 + np.exp(-np.clip(p[idx], -50, 50))); idx += 1
+    phi_sc = 1.0 / (1.0 + np.exp(-np.clip(p[idx], -50, 50)))
+    idx += 1
+    phi_nem = 1.0 / (1.0 + np.exp(-np.clip(p[idx], -50, 50)))
+    idx += 1
 
     # Conflict gate for phase 1 (g_0 = 0 always)
-    g1 = 1.0 / (1.0 + np.exp(-np.clip(p[idx], -50, 50))); idx += 1
+    g1 = 1.0 / (1.0 + np.exp(-np.clip(p[idx], -50, 50)))
+    idx += 1
 
-    tau = float(np.exp(np.clip(p[idx], -8.0, 8.0))); idx += 1
+    tau = float(np.exp(np.clip(p[idx], -8.0, 8.0)))
+    idx += 1
 
     A = np.exp(np.clip(logA, -10.0, 10.0))
     B = np.exp(np.clip(logB, -10.0, 10.0))
 
     # Build (R, N=2, M=2) arrays: M=0 is StarCoder, M=1 is Nemotron
-    E = np.stack([
-        np.column_stack([e_sc0, e_nem0]),
-        np.column_stack([e_sc1, e_nem1]),
-    ], axis=1)  # (R, 2, 2)
+    E = np.stack(
+        [
+            np.column_stack([e_sc0, e_nem0]),
+            np.column_stack([e_sc1, e_nem1]),
+        ],
+        axis=1,
+    )  # (R, 2, 2)
 
-    W = np.stack([
-        np.column_stack([X[:, 0], 1.0 - X[:, 0]]),
-        np.column_stack([X[:, 1], 1.0 - X[:, 1]]),
-    ], axis=1)  # (R, 2, 2)
+    W = np.stack(
+        [
+            np.column_stack([X[:, 0], 1.0 - X[:, 0]]),
+            np.column_stack([X[:, 1], 1.0 - X[:, 1]]),
+        ],
+        axis=1,
+    )  # (R, 2, 2)
 
     # Cumulative prior exposure: Cum[:, 0, :] = 0, Cum[:, 1, :] = E[:, 0, :]
     Cum = np.zeros_like(E)
@@ -1576,8 +1636,7 @@ def _dsre_ceq_core(X, p):
         X_ret[:, d] = np.sum(pi * r[:, :, d] * E[:, :, d], axis=1)
 
     # CES aggregation
-    inner = a[0] * np.power(np.maximum(S[:, 0], 1e-12), rho) + \
-            a[1] * np.power(np.maximum(S[:, 1], 1e-12), rho)
+    inner = a[0] * np.power(np.maximum(S[:, 0], 1e-12), rho) + a[1] * np.power(np.maximum(S[:, 1], 1e-12), rho)
     U = np.power(np.maximum(inner, 1e-12), 1.0 / rho)
 
     # Integrated state penalty on retained StarCoder exposure
@@ -1603,24 +1662,25 @@ def fit_dsre_ceq(X, y, n_restarts=12, seed=0):
 
     best_l, best_p = np.inf, None
     for _ in range(n_restarts):
-        p0 = np.array([
-            y.max() + rng.normal(0, 0.05),                # c0
-            rng.normal(0, 1),                               # logA
-            rng.normal(-2, 1),                              # logB
-            rng.normal(0, 1),                               # logit_a
-            rng.normal(0, 0.7),                             # rho_raw
-            rng.normal(0, 0.5),                             # pi_sc_logit
-            rng.normal(0, 0.5),                             # pi_nem_logit
-            rng.normal(-1, 0.5),                            # lam_sc_raw
-            rng.normal(-1, 0.5),                            # lam_nem_raw
-            rng.normal(2.0, 0.6),                           # phi_sc_raw
-            rng.normal(2.0, 0.6),                           # phi_nem_raw
-            rng.normal(0.0, 1.0),                           # gate_raw
-            np.log(E_sc_med) + rng.normal(0, 0.3),         # logtau
-        ])
+        p0 = np.array(
+            [
+                y.max() + rng.normal(0, 0.05),  # c0
+                rng.normal(0, 1),  # logA
+                rng.normal(-2, 1),  # logB
+                rng.normal(0, 1),  # logit_a
+                rng.normal(0, 0.7),  # rho_raw
+                rng.normal(0, 0.5),  # pi_sc_logit
+                rng.normal(0, 0.5),  # pi_nem_logit
+                rng.normal(-1, 0.5),  # lam_sc_raw
+                rng.normal(-1, 0.5),  # lam_nem_raw
+                rng.normal(2.0, 0.6),  # phi_sc_raw
+                rng.normal(2.0, 0.6),  # phi_nem_raw
+                rng.normal(0.0, 1.0),  # gate_raw
+                np.log(E_sc_med) + rng.normal(0, 0.3),  # logtau
+            ]
+        )
         try:
-            res = minimize(loss, p0, method="L-BFGS-B",
-                           options={"maxiter": 800, "ftol": 1e-10})
+            res = minimize(loss, p0, method="L-BFGS-B", options={"maxiter": 800, "ftol": 1e-10})
             if np.isfinite(res.fun) and res.fun < best_l:
                 best_l, best_p = res.fun, res.x
         except Exception:
@@ -1640,8 +1700,10 @@ def label_dsre_ceq(params):
     phi_nem = 1.0 / (1.0 + np.exp(-params[10]))
     g1 = 1.0 / (1.0 + np.exp(-params[11]))
     tau = np.exp(np.clip(params[12], -8, 8))
-    return (rf"$\rho$={rho:.2f}, $a_{{sc}}$={a_sc:.2f}, "
-            rf"$\phi$=({phi_sc:.2f},{phi_nem:.2f}), $g_1$={g1:.2f}, $\tau$={tau:.1f}")
+    return (
+        rf"$\rho$={rho:.2f}, $a_{{sc}}$={a_sc:.2f}, "
+        rf"$\phi$=({phi_sc:.2f},{phi_nem:.2f}), $g_1$={g1:.2f}, $\tau$={tau:.1f}"
+    )
 
 
 # =========================================================================

@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["pandas", "numpy", "scipy", "scikit-learn", "cloudpickle"]
@@ -33,11 +36,24 @@ sys.stdout.reconfigure(line_buffering=True)
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 COMMON_CRAWL_TOPICS = [
-    "adult_content", "art_and_design", "crime_and_law", "education_and_jobs",
-    "electronics_and_hardware", "entertainment", "fashion_and_beauty",
-    "finance_and_business", "food_and_dining", "games", "health",
-    "history_and_geography", "home_and_hobbies", "industrial", "literature",
-    "politics", "religion", "science_math_and_technology",
+    "adult_content",
+    "art_and_design",
+    "crime_and_law",
+    "education_and_jobs",
+    "electronics_and_hardware",
+    "entertainment",
+    "fashion_and_beauty",
+    "finance_and_business",
+    "food_and_dining",
+    "games",
+    "health",
+    "history_and_geography",
+    "home_and_hobbies",
+    "industrial",
+    "literature",
+    "politics",
+    "religion",
+    "science_math_and_technology",
 ]
 DOMAIN_NAMES = list(COMMON_CRAWL_TOPICS)
 M = len(DOMAIN_NAMES)
@@ -50,10 +66,13 @@ def _domain_sizes_b() -> np.ndarray:
         DOLMA3_POOL_TOKEN_COUNTS_B,
         get_common_crawl_partitions_by_topic,
     )
-    return np.array([
-        sum(DOLMA3_POOL_TOKEN_COUNTS_B[p] for p in get_common_crawl_partitions_by_topic(topic))
-        for topic in COMMON_CRAWL_TOPICS
-    ])
+
+    return np.array(
+        [
+            sum(DOLMA3_POOL_TOKEN_COUNTS_B[p] for p in get_common_crawl_partitions_by_topic(topic))
+            for topic in COMMON_CRAWL_TOPICS
+        ]
+    )
 
 
 def load_spec(csv_path: Path, target: str, epoch: bool) -> DatasetSpec:
@@ -74,15 +93,21 @@ def load_spec(csv_path: Path, target: str, epoch: bool) -> DatasetSpec:
 
     label = "epoch" if epoch else "no_epoch"
     return DatasetSpec(
-        weights=W, y=y, epoch_multipliers=C,
-        domain_names=DOMAIN_NAMES, phase_names=["phase_0"],
-        small_domains=None, name=f"single_phase_{label}",
+        weights=W,
+        y=y,
+        epoch_multipliers=C,
+        domain_names=DOMAIN_NAMES,
+        phase_names=["phase_0"],
+        small_domains=None,
+        name=f"single_phase_{label}",
     )
 
 
-
 def cross_validate_with_regret(
-    spec: DatasetSpec, model, k: int = 5, seed: int = 42,
+    spec: DatasetSpec,
+    model,
+    k: int = 5,
+    seed: int = 42,
 ) -> dict[str, float]:
     """k-fold CV returning R², RMSE, Spearman, regret@1, regret@5."""
     rng = np.random.default_rng(seed)
@@ -90,8 +115,11 @@ def cross_validate_with_regret(
     folds = np.array_split(idx, k)
 
     nan_result = {
-        "R²": float("nan"), "RMSE": float("nan"), "Spearman": float("nan"),
-        "regret@1": float("nan"), "regret@5": float("nan"),
+        "R²": float("nan"),
+        "RMSE": float("nan"),
+        "Spearman": float("nan"),
+        "regret@1": float("nan"),
+        "regret@5": float("nan"),
     }
 
     all_preds = np.full(spec.R, np.nan)
@@ -143,9 +171,15 @@ def main():
     model_map = {m.name: m for m in GENERAL_MODELS}
 
     model_names = [
-        "Linear", "LogLinear", "CES", "CES-Overfit",
+        "Linear",
+        "LogLinear",
+        "CES",
+        "CES-Overfit",
         "DS-RE-CEQ(ni)",
-        "DS-RE-CEQ-ST", "DS-RE-CEQ-ST(lite)", "DS-RE-CEQ-ST(lng)", "CR-CEQ-ST",
+        "DS-RE-CEQ-ST",
+        "DS-RE-CEQ-ST(lite)",
+        "DS-RE-CEQ-ST(lng)",
+        "CR-CEQ-ST",
     ]
 
     # Load CSVs

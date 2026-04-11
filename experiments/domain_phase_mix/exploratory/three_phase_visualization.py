@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
@@ -55,9 +55,18 @@ N_TOP_MODELS = 8
 COLORSCALE = "RdYlGn_r"
 
 MARKER_COLORS = [
-    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
-    "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
-    "#bcbd22", "#17becf", "#aec7e8", "#ffbb78",
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+    "#17becf",
+    "#aec7e8",
+    "#ffbb78",
 ]
 
 sys.stdout.reconfigure(line_buffering=True)
@@ -227,21 +236,32 @@ def plot_3d_scatter(spec, df, out_dir):
     fig = go.Figure()
     fig.add_trace(
         go.Scatter3d(
-            x=p[0], y=p[1], z=p[2],
+            x=p[0],
+            y=p[1],
+            z=p[2],
             mode="markers",
             marker=dict(
-                size=5, color=spec.y, colorscale=COLORSCALE,
-                colorbar=dict(title="BPB"), line=dict(width=0.5, color="black"),
+                size=5,
+                color=spec.y,
+                colorscale=COLORSCALE,
+                colorbar=dict(title="BPB"),
+                line=dict(width=0.5, color="black"),
             ),
-            text=hover, hoverinfo="text", name="Data",
+            text=hover,
+            hoverinfo="text",
+            name="Data",
         )
     )
     fig.add_trace(
         go.Scatter3d(
-            x=[p[0][best_idx]], y=[p[1][best_idx]], z=[p[2][best_idx]],
+            x=[p[0][best_idx]],
+            y=[p[1][best_idx]],
+            z=[p[2][best_idx]],
             mode="markers",
             marker=dict(
-                size=12, color="gold", symbol="diamond",
+                size=12,
+                color="gold",
+                symbol="diamond",
                 line=dict(width=2, color="black"),
             ),
             text=[
@@ -249,7 +269,8 @@ def plot_3d_scatter(spec, df, out_dir):
                 f"p0={p[0][best_idx]:.3f}, p1={p[1][best_idx]:.3f}, "
                 f"p2={p[2][best_idx]:.3f}<br>BPB={spec.y[best_idx]:.4f}"
             ],
-            hoverinfo="text", name="Best observed",
+            hoverinfo="text",
+            name="Best observed",
         )
     )
 
@@ -263,7 +284,9 @@ def plot_3d_scatter(spec, df, out_dir):
             yaxis=dict(range=[0, 1]),
             zaxis=dict(range=[0, 1]),
         ),
-        width=1600, height=1100, margin=dict(l=0, r=0, b=0, t=50),
+        width=1600,
+        height=1100,
+        margin=dict(l=0, r=0, b=0, t=50),
     )
     out = out_dir / "scatter_3d.html"
     fig.write_html(str(out))
@@ -277,40 +300,49 @@ def plot_model_optima_3d(spec, fitted, out_dir):
     """3D scatter showing predicted optimum per model + data overlay."""
     p = [spec.weights[:, k, 1] for k in range(3)]
     best_idx = int(np.argmin(spec.y))
-    hover = [
-        f"BPB={spec.y[i]:.4f}<br>"
-        f"w=({p[0][i]:.3f}, {p[1][i]:.3f}, {p[2][i]:.3f})"
-        for i in range(spec.R)
-    ]
+    hover = [f"BPB={spec.y[i]:.4f}<br>" f"w=({p[0][i]:.3f}, {p[1][i]:.3f}, {p[2][i]:.3f})" for i in range(spec.R)]
 
     fig = go.Figure()
 
     # Data points (semi-transparent) — colorbar on the left to avoid legend overlap
     fig.add_trace(
         go.Scatter3d(
-            x=p[0], y=p[1], z=p[2],
+            x=p[0],
+            y=p[1],
+            z=p[2],
             mode="markers",
             marker=dict(
-                size=3, color=spec.y, colorscale=COLORSCALE, opacity=0.4,
+                size=3,
+                color=spec.y,
+                colorscale=COLORSCALE,
+                opacity=0.4,
                 colorbar=dict(title="BPB", x=-0.05, len=0.6),
                 line=dict(width=0.3, color="black"),
             ),
-            hovertext=hover, hoverinfo="text", name="Data",
+            hovertext=hover,
+            hoverinfo="text",
+            name="Data",
         )
     )
 
     # Best observed
     fig.add_trace(
         go.Scatter3d(
-            x=[p[0][best_idx]], y=[p[1][best_idx]], z=[p[2][best_idx]],
+            x=[p[0][best_idx]],
+            y=[p[1][best_idx]],
+            z=[p[2][best_idx]],
             mode="markers+text",
             marker=dict(
-                size=10, color="gold", symbol="diamond",
+                size=10,
+                color="gold",
+                symbol="diamond",
                 line=dict(width=2, color="black"),
             ),
             text=[f"Best obs (BPB={spec.y[best_idx]:.4f})"],
-            textposition="top center", textfont=dict(size=9),
-            hoverinfo="text", name="Best observed",
+            textposition="top center",
+            textfont=dict(size=9),
+            hoverinfo="text",
+            name="Best observed",
         )
     )
 
@@ -324,16 +356,21 @@ def plot_model_optima_3d(spec, fitted, out_dir):
             color = MARKER_COLORS[i % len(MARKER_COLORS)]
             fig.add_trace(
                 go.Scatter3d(
-                    x=[opt[0]], y=[opt[1]], z=[opt[2]],
+                    x=[opt[0]],
+                    y=[opt[1]],
+                    z=[opt[2]],
                     mode="markers+text",
                     marker=dict(
-                        size=8, color=color, symbol="cross",
+                        size=8,
+                        color=color,
+                        symbol="cross",
                         line=dict(width=1.5, color="black"),
                     ),
                     text=[f"{label}<br>pred={opt[3]:.4f}"],
                     textposition="top center",
                     textfont=dict(size=8, color=color),
-                    hoverinfo="text", name=label,
+                    hoverinfo="text",
+                    name=label,
                 )
             )
             print(f"    {label}: opt=({opt[0]:.3f}, {opt[1]:.3f}, {opt[2]:.3f}), BPB={opt[3]:.4f}")
@@ -350,7 +387,9 @@ def plot_model_optima_3d(spec, fitted, out_dir):
             yaxis=dict(range=[0, 1]),
             zaxis=dict(range=[0, 1]),
         ),
-        width=1600, height=1100, margin=dict(l=0, r=0, b=0, t=50),
+        width=1600,
+        height=1100,
+        margin=dict(l=0, r=0, b=0, t=50),
     )
     out = out_dir / "model_optima_3d.html"
     fig.write_html(str(out))
@@ -388,14 +427,17 @@ def plot_isosurface_3d(spec, fitted, out_dir):
             print(f"    {label}: prediction failed ({e})")
             continue
 
-        visible = (len(valid_models) == 0)  # first valid model visible
+        visible = len(valid_models) == 0  # first valid model visible
 
         # Isosurface trace
         fig.add_trace(
             go.Isosurface(
-                x=p0_g.ravel(), y=p1_g.ravel(), z=p2_g.ravel(),
+                x=p0_g.ravel(),
+                y=p1_g.ravel(),
+                z=p2_g.ravel(),
                 value=Z,
-                isomin=iso_min, isomax=iso_max,
+                isomin=iso_min,
+                isomax=iso_max,
                 surface_count=5,
                 colorscale=COLORSCALE,
                 opacity=0.3,
@@ -416,10 +458,14 @@ def plot_isosurface_3d(spec, fitted, out_dir):
 
         fig.add_trace(
             go.Scatter3d(
-                x=[opt_p0], y=[opt_p1], z=[opt_p2],
+                x=[opt_p0],
+                y=[opt_p1],
+                z=[opt_p2],
                 mode="markers",
                 marker=dict(
-                    size=10, color="gold", symbol="diamond",
+                    size=10,
+                    color="gold",
+                    symbol="diamond",
                     line=dict(width=2, color="black"),
                 ),
                 text=[f"{label} optimum<br>({opt_p0:.3f}, {opt_p1:.3f}, {opt_p2:.3f})<br>BPB={opt_bpb:.4f}"],
@@ -437,35 +483,45 @@ def plot_isosurface_3d(spec, fitted, out_dir):
 
     # Data scatter (always visible)
     best_idx = int(np.argmin(spec.y))
-    hover = [
-        f"BPB={spec.y[i]:.4f}<br>"
-        f"w=({p[0][i]:.3f}, {p[1][i]:.3f}, {p[2][i]:.3f})"
-        for i in range(spec.R)
-    ]
+    hover = [f"BPB={spec.y[i]:.4f}<br>" f"w=({p[0][i]:.3f}, {p[1][i]:.3f}, {p[2][i]:.3f})" for i in range(spec.R)]
     fig.add_trace(
         go.Scatter3d(
-            x=p[0], y=p[1], z=p[2],
+            x=p[0],
+            y=p[1],
+            z=p[2],
             mode="markers",
             marker=dict(
-                size=3, color=spec.y, colorscale=COLORSCALE, opacity=0.5,
-                line=dict(width=0.3, color="black"), showscale=False,
+                size=3,
+                color=spec.y,
+                colorscale=COLORSCALE,
+                opacity=0.5,
+                line=dict(width=0.3, color="black"),
+                showscale=False,
             ),
-            hovertext=hover, hoverinfo="text", name="Data",
+            hovertext=hover,
+            hoverinfo="text",
+            name="Data",
         )
     )
 
     # Best observed (always visible)
     fig.add_trace(
         go.Scatter3d(
-            x=[p[0][best_idx]], y=[p[1][best_idx]], z=[p[2][best_idx]],
+            x=[p[0][best_idx]],
+            y=[p[1][best_idx]],
+            z=[p[2][best_idx]],
             mode="markers+text",
             marker=dict(
-                size=10, color="gold", symbol="diamond",
+                size=10,
+                color="gold",
+                symbol="diamond",
                 line=dict(width=2, color="black"),
             ),
             text=[f"Best obs (BPB={spec.y[best_idx]:.4f})"],
-            textposition="top center", textfont=dict(size=9),
-            hoverinfo="text", name="Best observed",
+            textposition="top center",
+            textfont=dict(size=9),
+            hoverinfo="text",
+            name="Best observed",
         )
     )
 
@@ -474,15 +530,22 @@ def plot_isosurface_3d(spec, fitted, out_dir):
     buttons = []
     for mi, (name, label) in enumerate(valid_models):
         vis = [False] * n_iso_traces + [True, True]  # data + best observed always visible
-        vis[mi * 2] = True      # isosurface
+        vis[mi * 2] = True  # isosurface
         vis[mi * 2 + 1] = True  # optimum
         buttons.append(dict(label=label, method="update", args=[{"visible": vis}]))
 
     fig.update_layout(
-        updatemenus=[dict(
-            buttons=buttons, direction="down", showactive=True,
-            x=0.02, xanchor="left", y=0.98, yanchor="top",
-        )],
+        updatemenus=[
+            dict(
+                buttons=buttons,
+                direction="down",
+                showactive=True,
+                x=0.02,
+                xanchor="left",
+                y=0.98,
+                yanchor="top",
+            )
+        ],
         title="Model Predictions: 3D Isosurface (select model from dropdown)",
         scene=dict(
             xaxis_title="Phase 0 StarCoder",
@@ -492,7 +555,9 @@ def plot_isosurface_3d(spec, fitted, out_dir):
             yaxis=dict(range=[0, 1]),
             zaxis=dict(range=[0, 1]),
         ),
-        width=1600, height=1100, margin=dict(l=0, r=0, b=0, t=50),
+        width=1600,
+        height=1100,
+        margin=dict(l=0, r=0, b=0, t=50),
     )
     out = out_dir / "isosurface_3d.html"
     fig.write_html(str(out))
@@ -530,9 +595,11 @@ def plot_slice_panel(spec, fitted, fixed_phase, out_dir):
         subplot_titles.append(f"{n} ({n_p}p)")
 
     fig = make_subplots(
-        rows=nrows, cols=ncols,
+        rows=nrows,
+        cols=ncols,
         subplot_titles=subplot_titles,
-        horizontal_spacing=0.08, vertical_spacing=0.10,
+        horizontal_spacing=0.08,
+        vertical_spacing=0.10,
     )
 
     # Traces are added in this order for each slider step:
@@ -540,7 +607,7 @@ def plot_slice_panel(spec, fitted, fixed_phase, out_dir):
     # Total: N_SLIDER_STEPS * n_models * 2
     print(f"  Computing slices (fix phase {fixed_phase})...")
     for si, sv in enumerate(slider_vals):
-        visible = (si == mid_si)
+        visible = si == mid_si
         W_grid = build_2d_slice_weights(fixed_phase, sv, g)
 
         # Contour traces
@@ -557,14 +624,20 @@ def plot_slice_panel(spec, fitted, fixed_phase, out_dir):
 
             fig.add_trace(
                 go.Contour(
-                    x=g, y=g, z=Z, visible=visible,
-                    colorscale=COLORSCALE, zmin=zmin, zmax=zmax,
+                    x=g,
+                    y=g,
+                    z=Z,
+                    visible=visible,
+                    colorscale=COLORSCALE,
+                    zmin=zmin,
+                    zmax=zmax,
                     contours=dict(showlabels=True, labelfont=dict(size=7)),
                     showscale=(mi == 0 and si == mid_si),
                     colorbar=dict(title="BPB", x=1.02) if (mi == 0 and si == mid_si) else None,
                     hovertemplate="p_free0=%{x:.3f}<br>p_free1=%{y:.3f}<br>BPB=%{z:.4f}<extra></extra>",
                 ),
-                row=row, col=col,
+                row=row,
+                col=col,
             )
 
         # Scatter traces (data near this slice)
@@ -575,21 +648,28 @@ def plot_slice_panel(spec, fitted, fixed_phase, out_dir):
             scatter_x = dp_free0[mask] if mask.any() else np.array([])
             scatter_y = dp_free1[mask] if mask.any() else np.array([])
             scatter_c = spec.y[mask] if mask.any() else np.array([])
-            hover_texts = (
-                [f"BPB={spec.y[j]:.4f}" for j in np.where(mask)[0]]
-                if mask.any() else []
-            )
+            hover_texts = [f"BPB={spec.y[j]:.4f}" for j in np.where(mask)[0]] if mask.any() else []
             fig.add_trace(
                 go.Scatter(
-                    x=scatter_x, y=scatter_y, mode="markers", visible=visible,
+                    x=scatter_x,
+                    y=scatter_y,
+                    mode="markers",
+                    visible=visible,
                     marker=dict(
-                        size=7, color=scatter_c, colorscale=COLORSCALE,
-                        cmin=zmin, cmax=zmax, showscale=False,
+                        size=7,
+                        color=scatter_c,
+                        colorscale=COLORSCALE,
+                        cmin=zmin,
+                        cmax=zmax,
+                        showscale=False,
                         line=dict(width=1, color="black"),
                     ),
-                    text=hover_texts, hoverinfo="text", showlegend=False,
+                    text=hover_texts,
+                    hoverinfo="text",
+                    showlegend=False,
                 ),
-                row=row, col=col,
+                row=row,
+                col=col,
             )
 
     # Build slider steps
@@ -601,19 +681,23 @@ def plot_slice_panel(spec, fitted, fixed_phase, out_dir):
         start = si * traces_per_step
         for j in range(traces_per_step):
             vis[start + j] = True
-        steps.append(dict(
-            method="update",
-            args=[{"visible": vis}],
-            label=f"{sv:.2f}",
-        ))
+        steps.append(
+            dict(
+                method="update",
+                args=[{"visible": vis}],
+                label=f"{sv:.2f}",
+            )
+        )
 
     fig.update_layout(
-        sliders=[dict(
-            active=mid_si,
-            currentvalue=dict(prefix=f"Phase {fixed_phase} SC weight = "),
-            steps=steps,
-            pad=dict(t=50),
-        )],
+        sliders=[
+            dict(
+                active=mid_si,
+                currentvalue=dict(prefix=f"Phase {fixed_phase} SC weight = "),
+                steps=steps,
+                pad=dict(t=50),
+            )
+        ],
         title=f"Model Predictions: 2D Slices (fixing Phase {fixed_phase} StarCoder weight)",
         height=500 * nrows + 150,
         width=500 * ncols + 70,
@@ -661,11 +745,7 @@ def plot_optimum_trajectory_3d(spec, fitted, out_dir):
 
     p = [spec.weights[:, k, 1] for k in range(3)]
     best_idx = int(np.argmin(spec.y))
-    hover_texts = [
-        f"BPB={spec.y[i]:.4f}<br>"
-        f"w=({p[0][i]:.3f}, {p[1][i]:.3f}, {p[2][i]:.3f})"
-        for i in range(R)
-    ]
+    hover_texts = [f"BPB={spec.y[i]:.4f}<br>" f"w=({p[0][i]:.3f}, {p[1][i]:.3f}, {p[2][i]:.3f})" for i in range(R)]
 
     # ------------------------------------------------------------------
     # Phase 1: Pre-compute all optima and training indices
@@ -698,11 +778,7 @@ def plot_optimum_trajectory_3d(spec, fitted, out_dir):
                 sub_pred_fn, _ = model_obj.fit_fn(train_spec)
                 opt = find_3d_optimum(sub_pred_fn, resolution=TRAJ_GRID_RES)
                 optima.append(opt)
-                print(
-                    f"      {name} n={n_train}: "
-                    f"({opt[0]:.3f}, {opt[1]:.3f}, {opt[2]:.3f}) "
-                    f"BPB={opt[3]:.4f}"
-                )
+                print(f"      {name} n={n_train}: " f"({opt[0]:.3f}, {opt[1]:.3f}, {opt[2]:.3f}) " f"BPB={opt[3]:.4f}")
             except Exception as e:
                 print(f"      {name} n={n_train}: fit failed ({e})")
                 optima.append((np.nan, np.nan, np.nan, np.nan))
@@ -745,27 +821,40 @@ def plot_optimum_trajectory_3d(spec, fitted, out_dir):
     # --- Always-visible background traces (2) ---
     fig.add_trace(
         go.Scatter3d(
-            x=p[0], y=p[1], z=p[2],
+            x=p[0],
+            y=p[1],
+            z=p[2],
             mode="markers",
             marker=dict(
-                size=3, color=spec.y, colorscale=COLORSCALE, opacity=0.2,
+                size=3,
+                color=spec.y,
+                colorscale=COLORSCALE,
+                opacity=0.2,
                 colorbar=dict(title="BPB", x=-0.05, len=0.5),
                 line=dict(width=0.3, color="black"),
             ),
-            hovertext=hover_texts, hoverinfo="text", name="Data",
+            hovertext=hover_texts,
+            hoverinfo="text",
+            name="Data",
         )
     )
     fig.add_trace(
         go.Scatter3d(
-            x=[p[0][best_idx]], y=[p[1][best_idx]], z=[p[2][best_idx]],
+            x=[p[0][best_idx]],
+            y=[p[1][best_idx]],
+            z=[p[2][best_idx]],
             mode="markers+text",
             marker=dict(
-                size=10, color="gold", symbol="diamond",
+                size=10,
+                color="gold",
+                symbol="diamond",
                 line=dict(width=2, color="black"),
             ),
             text=[f"Best obs (BPB={spec.y[best_idx]:.4f})"],
-            textposition="top center", textfont=dict(size=9),
-            hoverinfo="text", name="Best observed",
+            textposition="top center",
+            textfont=dict(size=9),
+            hoverinfo="text",
+            name="Best observed",
         )
     )
     n_bg = 2
@@ -776,7 +865,7 @@ def plot_optimum_trajectory_3d(spec, fitted, out_dir):
     traces_per_step = 2 + n_models * 3
 
     for s in range(n_steps):
-        is_full = (s == n_steps - 1)
+        is_full = s == n_steps - 1
         initial_visible = is_full  # start slider at full-data step
         tidx = train_indices[s]
         n_tr = R if is_full else train_sizes[s]
@@ -785,13 +874,17 @@ def plot_optimum_trajectory_3d(spec, fitted, out_dir):
         train_hover = [hover_texts[i] for i in tidx]
         fig.add_trace(
             go.Scatter3d(
-                x=p[0][tidx], y=p[1][tidx], z=p[2][tidx],
+                x=p[0][tidx],
+                y=p[1][tidx],
+                z=p[2][tidx],
                 mode="markers",
                 marker=dict(
-                    size=5, color="rgba(255,165,0,0.7)",
+                    size=5,
+                    color="rgba(255,165,0,0.7)",
                     line=dict(width=0.5, color="black"),
                 ),
-                hovertext=train_hover, hoverinfo="text",
+                hovertext=train_hover,
+                hoverinfo="text",
                 visible=initial_visible,
                 name=f"Train pts (n={n_tr})",
                 showlegend=True,
@@ -811,7 +904,9 @@ def plot_optimum_trajectory_3d(spec, fitted, out_dir):
                 z=[p[2][best_train_global]],
                 mode="markers+text",
                 marker=dict(
-                    size=10, color="orange", symbol="diamond",
+                    size=10,
+                    color="orange",
+                    symbol="diamond",
                     line=dict(width=2, color="black"),
                 ),
                 text=[f"Best train (BPB={best_train_bpb:.4f})"],
@@ -852,8 +947,8 @@ def plot_optimum_trajectory_3d(spec, fitted, out_dir):
             mx, my, mz = [], [], []
             mt, mh, msz, msym = [], [], [], []
             for vi, (oi, opt) in enumerate(valid_pts):
-                is_newest = (vi == len(valid_pts) - 1)
-                oi_full = (oi == len(optima) - 1)
+                is_newest = vi == len(valid_pts) - 1
+                oi_full = oi == len(optima) - 1
                 pt_lbl = "F" if oi_full else str(oi + 1)
                 oi_n = "full" if oi_full else str(train_sizes[oi])
                 mx.append(opt[0])
@@ -892,10 +987,13 @@ def plot_optimum_trajectory_3d(spec, fitted, out_dir):
             # Line trace
             fig.add_trace(
                 go.Scatter3d(
-                    x=lx, y=ly, z=lz,
+                    x=lx,
+                    y=ly,
+                    z=lz,
                     mode="lines",
                     line=dict(color=color, width=4, dash=dash),
-                    hoverinfo="skip", showlegend=False,
+                    hoverinfo="skip",
+                    showlegend=False,
                     legendgroup=name,
                     visible=initial_visible,
                 )
@@ -904,11 +1002,18 @@ def plot_optimum_trajectory_3d(spec, fitted, out_dir):
             if cx:
                 fig.add_trace(
                     go.Cone(
-                        x=cx, y=cy, z=cz, u=cu, v=cv, w=cw,
-                        sizemode="absolute", sizeref=0.03,
+                        x=cx,
+                        y=cy,
+                        z=cz,
+                        u=cu,
+                        v=cv,
+                        w=cw,
+                        sizemode="absolute",
+                        sizeref=0.03,
                         colorscale=[[0, color], [1, color]],
                         showscale=False,
-                        hoverinfo="skip", showlegend=False,
+                        hoverinfo="skip",
+                        showlegend=False,
                         legendgroup=name,
                         visible=initial_visible,
                     )
@@ -917,9 +1022,12 @@ def plot_optimum_trajectory_3d(spec, fitted, out_dir):
                 # Placeholder empty trace to keep trace count consistent
                 fig.add_trace(
                     go.Scatter3d(
-                        x=[], y=[], z=[],
+                        x=[],
+                        y=[],
+                        z=[],
                         mode="markers",
-                        hoverinfo="skip", showlegend=False,
+                        hoverinfo="skip",
+                        showlegend=False,
                         legendgroup=name,
                         visible=initial_visible,
                     )
@@ -927,16 +1035,21 @@ def plot_optimum_trajectory_3d(spec, fitted, out_dir):
             # Markers
             fig.add_trace(
                 go.Scatter3d(
-                    x=mx, y=my, z=mz,
+                    x=mx,
+                    y=my,
+                    z=mz,
                     mode="markers+text",
                     marker=dict(
-                        size=msz, color=color, symbol=msym,
+                        size=msz,
+                        color=color,
+                        symbol=msym,
                         line=dict(width=1.5, color="black"),
                     ),
                     text=mt,
                     textposition="top center",
                     textfont=dict(size=8, color=color),
-                    hovertext=mh, hoverinfo="text",
+                    hovertext=mh,
+                    hoverinfo="text",
                     showlegend=True,
                     legendgroup=name,
                     name=label,
@@ -950,23 +1063,29 @@ def plot_optimum_trajectory_3d(spec, fitted, out_dir):
     total_step_traces = n_steps * traces_per_step
     slider_steps = []
     for s in range(n_steps):
-        is_full = (s == n_steps - 1)
+        is_full = s == n_steps - 1
         vis = [True] * n_bg + [False] * total_step_traces
         start = n_bg + s * traces_per_step
         for j in range(traces_per_step):
             vis[start + j] = True
         lbl = f"full (n={R})" if is_full else f"n={train_sizes[s]}"
-        slider_steps.append(dict(
-            method="update", args=[{"visible": vis}], label=lbl,
-        ))
+        slider_steps.append(
+            dict(
+                method="update",
+                args=[{"visible": vis}],
+                label=lbl,
+            )
+        )
 
     fig.update_layout(
-        sliders=[dict(
-            active=n_steps - 1,
-            currentvalue=dict(prefix="Training size: "),
-            steps=slider_steps,
-            pad=dict(t=50),
-        )],
+        sliders=[
+            dict(
+                active=n_steps - 1,
+                currentvalue=dict(prefix="Training size: "),
+                steps=slider_steps,
+                pad=dict(t=50),
+            )
+        ],
         title="Predicted Optimum Trajectory over Training Size",
         scene=dict(
             xaxis_title="Phase 0 StarCoder weight",
@@ -976,7 +1095,9 @@ def plot_optimum_trajectory_3d(spec, fitted, out_dir):
             yaxis=dict(range=[0, 1]),
             zaxis=dict(range=[0, 1]),
         ),
-        width=1600, height=1100, margin=dict(l=0, r=0, b=0, t=50),
+        width=1600,
+        height=1100,
+        margin=dict(l=0, r=0, b=0, t=50),
     )
     out = out_dir / "optimum_trajectory_3d.html"
     fig.write_html(str(out))
@@ -991,8 +1112,12 @@ def main():
     parser.add_argument("--target", default=DEFAULT_TARGET, help="Target metric column")
     parser.add_argument("--n_top", type=int, default=N_TOP_MODELS, help="Number of top models to show")
     parser.add_argument("--quick", action="store_true", help="Skip CV, rank by train R²")
-    parser.add_argument("--models", nargs="+", default=None,
-                        help="Exact model names to fit (skip ranking). E.g. --models CES 'CEQ-SUM soft' 'NCEQ(k)'")
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=None,
+        help="Exact model names to fit (skip ranking). E.g. --models CES 'CEQ-SUM soft' 'NCEQ(k)'",
+    )
     args = parser.parse_args()
 
     out_dir = SCRIPT_DIR / "three_phase_plots"

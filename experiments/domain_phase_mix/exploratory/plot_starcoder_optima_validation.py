@@ -506,7 +506,9 @@ def main() -> None:
     output_path = args.output_path
     if output_path is None:
         suffix = "_logx" if args.x_scale == "log" else ""
-        output_path = benchmark_output_dir / "plots" / f"{args.dataset}_{args.policy}_predicted_vs_actual_bpb{suffix}.png"
+        output_path = (
+            benchmark_output_dir / "plots" / f"{args.dataset}_{args.policy}_predicted_vs_actual_bpb{suffix}.png"
+        )
     csv_output = args.csv_output
     if csv_output is None:
         csv_output = benchmark_output_dir / f"{args.dataset}_{args.policy}_predicted_vs_actual_bpb.csv"

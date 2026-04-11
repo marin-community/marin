@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Interactive 3D scatter plot of all 2-phase StarCoder data.
 
 Loads all two_phase_starcoder*.csv files, deduplicates by weight config
@@ -48,9 +51,7 @@ def load_and_merge() -> pd.DataFrame:
 
     # Deduplicate by (phase_0_starcoder, phase_1_starcoder), keep first
     merged["_key"] = (
-        merged["phase_0_starcoder"].round(6).astype(str)
-        + "|"
-        + merged["phase_1_starcoder"].round(6).astype(str)
+        merged["phase_0_starcoder"].round(6).astype(str) + "|" + merged["phase_1_starcoder"].round(6).astype(str)
     )
     merged = merged.drop_duplicates(subset="_key", keep="first")
 
@@ -121,10 +122,7 @@ def main():
 
     # Scatter points with wandb links
     wandb_ids = df["wandb_run_id"].values
-    hover_text = [
-        f"p0_sc={xi:.4f}<br>p1_sc={yi:.4f}<br>BPB={zi:.4f}"
-        for xi, yi, zi in zip(x, y, z)
-    ]
+    hover_text = [f"p0_sc={xi:.4f}<br>p1_sc={yi:.4f}<br>BPB={zi:.4f}" for xi, yi, zi in zip(x, y, z)]
     # customdata carries the wandb run id for the click-to-open JS
     fig.add_trace(
         go.Scatter3d(

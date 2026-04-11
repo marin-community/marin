@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
@@ -90,9 +90,7 @@ def build_starcoder_spec(csv_path: Path, target: str) -> DatasetSpec:
         y = y[valid]
 
     domain_tokens = np.array([NEMOTRON_TOKENS, STARCODER_TOKENS])
-    epoch_mults = np.array(
-        [[pf * TARGET_BUDGET / dt for dt in domain_tokens] for pf in PHASE_FRACS]
-    )
+    epoch_mults = np.array([[pf * TARGET_BUDGET / dt for dt in domain_tokens] for pf in PHASE_FRACS])
 
     return DatasetSpec(
         weights=weights,
@@ -169,11 +167,7 @@ plots_only = "--plots-only" in sys.argv
 cli_filters = [a for a in sys.argv[1:] if not a.startswith("--")]
 
 if cli_filters:
-    selected = [
-        m
-        for m in GENERAL_MODELS
-        if any(f.lower() in m.name.lower() for f in cli_filters)
-    ]
+    selected = [m for m in GENERAL_MODELS if any(f.lower() in m.name.lower() for f in cli_filters)]
     if not selected:
         print(f"No models match filters: {cli_filters}")
         print("Available:", [m.name for m in GENERAL_MODELS])
@@ -194,9 +188,7 @@ def huber_loss(y_true, y_pred, delta):
     """Element-wise Huber loss, averaged."""
     r = y_true - y_pred
     abs_r = np.abs(r)
-    return float(
-        np.mean(np.where(abs_r <= delta, 0.5 * r**2, delta * (abs_r - 0.5 * delta)))
-    )
+    return float(np.mean(np.where(abs_r <= delta, 0.5 * r**2, delta * (abs_r - 0.5 * delta))))
 
 
 # Compute Huber delta from Linear model residuals on full data
@@ -314,9 +306,7 @@ def _run_one_iter(
 
             results[name] = {
                 "test_rmse": float(np.sqrt(np.mean((y_test - test_pred) ** 2))),
-                "train_rmse": float(
-                    np.sqrt(np.mean((train_spec.y - train_pred) ** 2))
-                ),
+                "train_rmse": float(np.sqrt(np.mean((train_spec.y - train_pred) ** 2))),
                 "test_huber": huber_loss(y_test, test_pred, delta),
                 "train_huber": huber_loss(train_spec.y, train_pred, delta),
                 "n_params": info.get("n_params", 0),
@@ -359,9 +349,7 @@ config_matches = cached_config == BOOTSTRAP_CONFIG
 if config_matches:
     cached_names = set(cached_models.keys())
     needed_names = [n for n in model_names if n not in cached_names]
-    print(
-        f"\nCache: {len(cached_names)} models cached, {len(needed_names)} to compute"
-    )
+    print(f"\nCache: {len(cached_names)} models cached, {len(needed_names)} to compute")
 else:
     if cached_config is not None:
         print("\nCache: config mismatch, recomputing all models")
@@ -373,9 +361,7 @@ else:
 if needed_names and not plots_only:
     needed_model_names = [n for n in needed_names]
 
-    print(
-        f"Running bootstrap: {len(TRAIN_SIZES)} sizes x {B} iters x {len(needed_model_names)} models"
-    )
+    print(f"Running bootstrap: {len(TRAIN_SIZES)} sizes x {B} iters x {len(needed_model_names)} models")
     t0 = time.time()
 
     new_model_results: dict[str, dict] = {name: {} for name in needed_model_names}
@@ -410,24 +396,12 @@ if needed_names and not plots_only:
 
         for name in needed_model_names:
             new_model_results[name][n_train] = {
-                "test_rmse": np.array(
-                    [r[name]["test_rmse"] for r in iter_results]
-                ),
-                "train_rmse": np.array(
-                    [r[name]["train_rmse"] for r in iter_results]
-                ),
-                "test_huber": np.array(
-                    [r[name]["test_huber"] for r in iter_results]
-                ),
-                "train_huber": np.array(
-                    [r[name]["train_huber"] for r in iter_results]
-                ),
-                "n_params": np.array(
-                    [r[name]["n_params"] for r in iter_results]
-                ),
-                "success": np.array(
-                    [r[name]["success"] for r in iter_results]
-                ),
+                "test_rmse": np.array([r[name]["test_rmse"] for r in iter_results]),
+                "train_rmse": np.array([r[name]["train_rmse"] for r in iter_results]),
+                "test_huber": np.array([r[name]["test_huber"] for r in iter_results]),
+                "train_huber": np.array([r[name]["train_huber"] for r in iter_results]),
+                "n_params": np.array([r[name]["n_params"] for r in iter_results]),
+                "success": np.array([r[name]["success"] for r in iter_results]),
             }
 
         elapsed = time.time() - t0
@@ -441,16 +415,12 @@ if needed_names and not plots_only:
     print(f"Cache saved ({len(cached_models)} models total)")
 
 elif plots_only and not config_matches:
-    print(
-        "ERROR: --plots-only but no valid cache exists. Run without --plots-only first."
-    )
+    print("ERROR: --plots-only but no valid cache exists. Run without --plots-only first.")
     sys.exit(1)
 
 elif needed_names and plots_only:
     missing = needed_names
-    print(
-        f"Warning: --plots-only but {len(missing)} models are not cached: {missing}"
-    )
+    print(f"Warning: --plots-only but {len(missing)} models are not cached: {missing}")
     print("  These models will be skipped in plots.")
     model_names = [n for n in model_names if n not in needed_names]
     RUN_MODELS = [m for m in RUN_MODELS if m.name not in needed_names]
@@ -533,20 +503,16 @@ def _plot_overfitting_gap(metric_id, all_results, model_names_list, train_sizes,
 
     shared_ylim, outlier_idxs = _adaptive_ylim(y_maxes)
 
-    fig, axes = plt.subplots(
-        nrows, ncols, figsize=(3.5 * ncols, 3.5 * nrows), squeeze=False, sharex=True
-    )
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.5 * ncols, 3.5 * nrows), squeeze=False, sharex=True)
 
     for idx, name in enumerate(ranked_names):
         r, c = divmod(idx, ncols)
         ax = axes[r][c]
         train_meds, test_meds, train_q25, train_q75, test_q25, test_q75 = all_stats[idx]
 
-        ax.plot(train_sizes, train_meds, "s--", color="royalblue", lw=1.5, ms=3,
-                label="Train" if idx == 0 else None)
+        ax.plot(train_sizes, train_meds, "s--", color="royalblue", lw=1.5, ms=3, label="Train" if idx == 0 else None)
         ax.fill_between(train_sizes, train_q25, train_q75, color="royalblue", alpha=0.12)
-        ax.plot(train_sizes, test_meds, "o-", color="crimson", lw=1.5, ms=3,
-                label="Test" if idx == 0 else None)
+        ax.plot(train_sizes, test_meds, "o-", color="crimson", lw=1.5, ms=3, label="Test" if idx == 0 else None)
         ax.fill_between(train_sizes, test_q25, test_q75, color="crimson", alpha=0.12)
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
@@ -590,9 +556,7 @@ def _plot_overfitting_gap(metric_id, all_results, model_names_list, train_sizes,
 print("\nGenerating overfitting gap plots...")
 
 for metric_id, suffix in [("rmse", "rmse"), ("huber", "huber")]:
-    _plot_overfitting_gap(
-        metric_id, all_results, model_names, TRAIN_SIZES, n_params_map, OUT_DIR, suffix
-    )
+    _plot_overfitting_gap(metric_id, all_results, model_names, TRAIN_SIZES, n_params_map, OUT_DIR, suffix)
 
 # Print summary table at n_train=20
 print(f"\n{'='*80}")
@@ -619,7 +583,7 @@ rows.sort(key=lambda x: x[1])
 for name, med_te, med_tr, np_val, conv in rows:
     te_s = f"{med_te:.6f}" if np.isfinite(med_te) else "N/A"
     tr_s = f"{med_tr:.6f}" if np.isfinite(med_tr) else "N/A"
-    print(f"{name:30s} {te_s:>12s} {tr_s:>12s} {str(np_val):>9s} {conv:>5.0f}%")
+    print(f"{name:30s} {te_s:>12s} {tr_s:>12s} {np_val!s:>9s} {conv:>5.0f}%")
 
 print(f"\nAll outputs saved to {OUT_DIR}/")
 print("Done.")

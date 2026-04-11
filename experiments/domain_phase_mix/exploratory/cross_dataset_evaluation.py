@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
@@ -262,8 +262,12 @@ def cross_validate(
     test_regret = float(np.mean(fold_regrets)) if fold_regrets else float("nan")
 
     result = {
-        "R²": r2, "RMSE": rmse, "MAE": mae, "Spearman": float(sp_corr),
-        "Huber": huber_mean, "TestRegret": test_regret,
+        "R²": r2,
+        "RMSE": rmse,
+        "MAE": mae,
+        "Spearman": float(sp_corr),
+        "Huber": huber_mean,
+        "TestRegret": test_regret,
     }
 
     # Top-K metrics on full CV predictions
