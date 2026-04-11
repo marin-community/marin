@@ -178,7 +178,7 @@ def test_prepare_openreward_task_manifest_uses_client_factory(monkeypatch):
             del exc_type, exc, traceback
 
     monkeypatch.setattr(
-        "marin.rl.openreward.task_manifest._load_openreward_client",
+        "marin.rl.openreward.task_manifest.load_openreward_client",
         lambda: FakeOpenReward,
     )
 
