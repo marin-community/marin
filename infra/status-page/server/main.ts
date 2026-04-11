@@ -51,10 +51,13 @@ async function sampleWorkers(): Promise<void> {
     // Don't pollute history with zeros when the controller is unreachable.
     return;
   }
+  const regions: Record<string, number> = {};
+  for (const r of snapshot.byRegion) {
+    regions[r.region] = r.healthy;
+  }
   workerHistory.push({
     t: Date.parse(snapshot.fetchedAt),
-    available: snapshot.available,
-    total: snapshot.total,
+    regions,
   });
 }
 

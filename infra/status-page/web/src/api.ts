@@ -71,17 +71,28 @@ export interface IrisStatus {
   raw?: unknown;
 }
 
+export interface WorkerResourceTotals {
+  cpuAvailableMillicores: number;
+  memoryAvailableBytes: number;
+  chipsTotal: number;
+}
+
+export interface WorkerRegionCount {
+  region: string;
+  healthy: number;
+}
+
 export interface WorkersSnapshot {
-  available: number;
-  total: number;
+  healthy: number;
+  resources: WorkerResourceTotals;
+  byRegion: WorkerRegionCount[];
   fetchedAt: string;
   error?: string;
 }
 
 export interface WorkerSample {
   t: number; // epoch millis
-  available: number;
-  total: number;
+  regions: Record<string, number>;
 }
 
 export interface WorkersHistoryResponse {

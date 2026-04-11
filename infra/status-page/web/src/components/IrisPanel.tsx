@@ -16,9 +16,26 @@ export function IrisPanel() {
 
   return (
     <section>
-      <div className="mb-3 flex items-baseline justify-between">
+      <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 className="text-xl font-semibold text-slate-200">Iris</h2>
-        <span className="text-xs text-slate-500">
+        {data && (
+          <>
+            <span
+              className={`h-3 w-3 shrink-0 translate-y-0.5 rounded-full ${data.reachable ? "bg-emerald-500" : "bg-rose-500"}`}
+            />
+            <span className="text-sm text-slate-300">{data.cluster}</span>
+            <span className="text-sm text-slate-400">
+              {data.reachable ? "reachable" : "unreachable"}
+            </span>
+            {data.latencyMs !== null && (
+              <span className="text-sm text-slate-500">· {data.latencyMs}ms</span>
+            )}
+            {data.controllerUrl && (
+              <span className="font-mono text-xs text-slate-500">· {data.controllerUrl}</span>
+            )}
+          </>
+        )}
+        <span className="ml-auto text-xs text-slate-500">
           {dataUpdatedAt ? `updated ${formatRelative(new Date(dataUpdatedAt).toISOString())}` : ""}
         </span>
       </div>
@@ -27,26 +44,7 @@ export function IrisPanel() {
         {error && (
           <div className="text-rose-400">failed to load: {(error as Error).message}</div>
         )}
-        {data && (
-          <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <span
-                className={`h-3 w-3 rounded-full ${data.reachable ? "bg-emerald-500" : "bg-rose-500"}`}
-              />
-              <span className="text-lg font-semibold">{data.cluster}</span>
-              <span className="text-slate-400">
-                {data.reachable ? "reachable" : "unreachable"}
-              </span>
-              {data.latencyMs !== null && (
-                <span className="text-slate-500">· {data.latencyMs}ms</span>
-              )}
-              {data.controllerUrl && (
-                <span className="font-mono text-xs text-slate-500">· {data.controllerUrl}</span>
-              )}
-            </div>
-            {data.error && <div className="mt-2 text-sm text-rose-400">{data.error}</div>}
-          </div>
-        )}
+        {data?.error && <div className="text-sm text-rose-400">{data.error}</div>}
         <WorkersPanel />
         <JobsPanel />
       </div>
