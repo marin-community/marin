@@ -49,6 +49,7 @@ export interface CommitStatus {
   headline: string;
   committedAt: string;
   author: string;
+  authorAvatarUrl: string | null;
   url: string;
   state: CommitState;
 }

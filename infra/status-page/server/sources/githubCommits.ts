@@ -31,6 +31,7 @@ export interface CommitStatus {
   headline: string;
   committedAt: string;
   author: string;
+  authorAvatarUrl: string | null;
   url: string;
   state: CommitState;
 }
@@ -52,7 +53,7 @@ interface GqlCommitNode {
   committedDate: string;
   url: string;
   author: {
-    user: { login: string } | null;
+    user: { login: string; avatarUrl: string } | null;
     name: string | null;
   } | null;
   statusCheckRollup: { state: CommitState } | null;
@@ -87,7 +88,10 @@ const QUERY = `
                 committedDate
                 url
                 author {
-                  user { login }
+                  user {
+                    login
+                    avatarUrl(size: 80)
+                  }
                   name
                 }
                 statusCheckRollup {
@@ -121,6 +125,7 @@ function toCommitStatus(node: GqlCommitNode): CommitStatus {
     headline: node.messageHeadline,
     committedAt: node.committedDate,
     author: node.author?.user?.login ?? node.author?.name ?? "unknown",
+    authorAvatarUrl: node.author?.user?.avatarUrl ?? null,
     url: node.url,
     state: node.statusCheckRollup?.state ?? "NONE",
   };
