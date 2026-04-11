@@ -167,7 +167,7 @@ def build_filter(
         .select(config.text_field)
         .map_shard(build_shard_bloom)
         .write_binary(f"{bloom_path}-{{shard:05d}}-of-{{total:05d}}.bin", skip_existing=True),
-    )
+    ).results
 
     if len(shard_blooms_data) == 1:
         return shard_blooms_data[0]
@@ -178,7 +178,7 @@ def build_filter(
         .reshard(num_shards=1)
         .map_shard(_merge_bloom)
         .write_binary(bloom_path, skip_existing=True),
-    )
+    ).results
 
     return merged_bloom[0]
 
@@ -249,24 +249,21 @@ def mark_duplicates_bloom(
 
     # Use write_jsonl with callable output pattern
     zephyr_ctx = ZephyrContext(name="decon-mark")
-    result = list(
-        zephyr_ctx.execute(
-            Dataset.from_iterable(all_files)
-            .flat_map(load_file)
-            .map_shard(process_shard_with_bloom)
-            .write_jsonl(
-                output_pattern=lambda shard_idx, total: rebase_file_path(
-                    base_path,
-                    all_files[shard_idx],
-                    output_path,
-                    new_extension=_get_extension(all_files[shard_idx]),
-                    old_extension=_get_extension(all_files[shard_idx]),
-                ),
-                skip_existing=True,
+    return zephyr_ctx.execute(
+        Dataset.from_iterable(all_files)
+        .flat_map(load_file)
+        .map_shard(process_shard_with_bloom)
+        .write_jsonl(
+            output_pattern=lambda shard_idx, total: rebase_file_path(
+                base_path,
+                all_files[shard_idx],
+                output_path,
+                new_extension=_get_extension(all_files[shard_idx]),
+                old_extension=_get_extension(all_files[shard_idx]),
             ),
-        )
-    )
-    return result
+            skip_existing=True,
+        ),
+    ).results
 
 
 def _run_decontamination(config: DeconConfig):

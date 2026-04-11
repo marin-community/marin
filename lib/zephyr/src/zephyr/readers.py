@@ -205,12 +205,12 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
         ...     .filter(lambda r: r["score"] > 0.5)
         ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
         >>>
         >>> # Load from HuggingFace Hub (requires HF_TOKEN env var)
         >>> hf_url = "hf://datasets/username/dataset@main/data/train.jsonl.gz"
         >>> ds = Dataset.from_list([hf_url]).flat_map(load_jsonl)
-        >>> records = list(ctx.execute(ds))
+        >>> records = ctx.execute(ds).results
     """
     spec = _as_spec(source)
     decoder = msgspec.json.Decoder()
@@ -245,7 +245,7 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
         ...     .map(lambda r: transform_record(r))
         ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
     """
     spec = _as_spec(source)
     logger.info("Loading: %s", spec.path)
@@ -302,7 +302,7 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
         ...     .filter(lambda r: r["score"] > 0.5)
         ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
     """
     import vortex
 
@@ -375,7 +375,7 @@ def load_file(source: str | InputFileSpec) -> Iterator[dict]:
         ...     .filter(lambda r: r["score"] > 0.5)
         ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
     """
     spec = _as_spec(source)
     logger.info("Loading file: %s", spec.path)
@@ -418,7 +418,7 @@ def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterato
         ...     .flat_map(lambda p: load_zip_members(p, pattern="test.jsonl"))
         ...     .map(lambda m: process_file(m["filename"], m["content"]))
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
     """
     spec = _as_spec(source)
     with open_url(spec.path, "rb") as f:

@@ -19,7 +19,7 @@ jobs:
       cancel-in-progress: true
     env:
       SMOKE_RUN_ID: datakit-smoke-${{ github.run_id }}-${{ github.run_attempt }}
-      # MARIN_PREFIX is defaulted by the ferry entrypoint to marin_temp_bucket(ttl_days=1).
+      FERRY_STATUS_PATH: gs://marin-tmp-us-central1/ttl=1d/ci/datakit-smoke-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/examples/marin-dev.yaml
@@ -70,6 +70,7 @@ jobs:
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
+            -e FERRY_STATUS_PATH "$FERRY_STATUS_PATH" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
@@ -113,12 +114,24 @@ jobs:
             esac
           done
 
+      - name: Read ferry status
+        id: ferry_status
+        shell: bash -l {0}
+        run: |
+          PREFIX=$(.venv/bin/python -c "
+          import json
+          from rigging.filesystem import url_to_fs
+          fs, _ = url_to_fs('$FERRY_STATUS_PATH')
+          with fs.open('$FERRY_STATUS_PATH') as f:
+              print(json.load(f)['marin_prefix'])
+          ")
+          echo "marin_prefix=$PREFIX" >> "$GITHUB_OUTPUT"
+          echo "Ferry output prefix: $PREFIX"
+
       - name: Validate datakit smoke outputs
         shell: bash -l {0}
         env:
-          SMOKE_RUN_ID: ${{ env.SMOKE_RUN_ID }}
-          # MARIN_PREFIX intentionally unset — validate script defaults via marin_temp_bucket,
-          # matching the ferry entrypoint default.
+          MARIN_PREFIX: ${{ steps.ferry_status.outputs.marin_prefix }}
         run: .venv/bin/python scripts/datakit/validate_ferry_outputs.py
 
       - name: Capture failure diagnostics
@@ -143,7 +156,7 @@ jobs:
             Read .agents/skills/canary-triage/SKILL.md and follow it.
           claude_args: |
             --model opus
-            --max-turns 50
+            --max-turns 500
             --allowedTools "Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*)"
         env:
           CANARY_LANE: datakit-smoke

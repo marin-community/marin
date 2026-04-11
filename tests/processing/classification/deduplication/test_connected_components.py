@@ -21,7 +21,7 @@ def test_connected_components_happy_path(tmp_path):
     ctx = ZephyrContext(name="test-cc")
     converged, output_path = connected_components(ds, ctx, output_dir=tmp_path.as_posix(), max_iterations=5)
     assert converged
-    results = ctx.execute(Dataset.from_list(output_path).load_parquet())
+    results = ctx.execute(Dataset.from_list(output_path).load_parquet()).results
     assert len(results) == len(set(r["id"] for r in input_data))
 
     components = defaultdict(list)
@@ -43,6 +43,6 @@ def test_connected_components_already_converged(tmp_path):
     converged, output_path = connected_components(ds, ctx, output_dir=tmp_path.as_posix(), max_iterations=5)
     assert converged
 
-    results = ctx.execute(Dataset.from_list(output_path).load_parquet())
+    results = ctx.execute(Dataset.from_list(output_path).load_parquet()).results
     assert len(results) == 1
     assert results[0]["record_id"] == "doc_1"

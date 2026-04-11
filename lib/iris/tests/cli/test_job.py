@@ -138,56 +138,33 @@ def test_executor_heuristic_with_region_constraint():
     assert preemptible.value == "false"
 
 
-# --tpu multi-variant parsing tests
+# --tpu multi-variant parsing
 # ---------------------------------------------------------------------------
 
 
-def test_parse_tpu_single_variant():
-    primary, alternatives = _parse_tpu_alternatives("v6e-4")
-    assert primary == "v6e-4"
-    assert alternatives == []
+def test_tpu_multi_variant_parsing():
+    # Single variant
+    primary, alts = _parse_tpu_alternatives("v6e-4")
+    assert (primary, alts) == ("v6e-4", [])
 
+    # Comma-separated list: first is primary, rest are alternatives; whitespace stripped
+    primary, alts = _parse_tpu_alternatives(" v6e-4 , v5litepod-4 , v5p-8 ")
+    assert (primary, alts) == ("v6e-4", ["v5litepod-4", "v5p-8"])
 
-def test_parse_tpu_multiple_variants():
-    primary, alternatives = _parse_tpu_alternatives("v6e-4,v5litepod-4,v5p-8")
-    assert primary == "v6e-4"
-    assert alternatives == ["v5litepod-4", "v5p-8"]
-
-
-def test_parse_tpu_strips_whitespace():
-    primary, alternatives = _parse_tpu_alternatives(" v6e-4 , v5litepod-4 ")
-    assert primary == "v6e-4"
-    assert alternatives == ["v5litepod-4"]
-
-
-def test_parse_tpu_empty_raises():
-    with pytest.raises(click.BadParameter, match="at least one"):
-        _parse_tpu_alternatives("")
-
-
-def test_parse_tpu_only_commas_raises():
+    # Empty / garbage input rejected
     with pytest.raises(click.BadParameter, match="at least one"):
         _parse_tpu_alternatives(", ,")
 
-
-def test_parse_tpu_mismatched_vm_count_raises():
-    # v5p-8 has vm_count=1 but v5p-16 has vm_count=2 — multinode mismatch.
+    # Mismatched vm_count across variants rejected
     with pytest.raises(click.BadParameter, match="vm_count"):
         _parse_tpu_alternatives("v5p-8,v5p-16")
 
-
-def test_build_tpu_alternatives_none():
+    # build_tpu_alternatives: None → [], multi-variant → flat list
     assert build_tpu_alternatives(None) == []
-
-
-def test_build_tpu_alternatives_returns_full_list():
     assert build_tpu_alternatives("v6e-4,v5litepod-4,v5p-8") == ["v6e-4", "v5litepod-4", "v5p-8"]
 
-
-def test_build_resources_uses_first_variant_as_primary():
+    # build_resources picks the first variant as the canonical TPU type
     spec = build_resources(tpu="v6e-4,v5litepod-4,v5p-8", gpu=None, cpu=8.0, memory="32GB", disk="50GB")
-    assert spec.device is not None
-    assert spec.device.HasField("tpu")
     assert spec.device.tpu.variant == "v6e-4"
 
 
