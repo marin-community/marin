@@ -250,15 +250,13 @@ def migrate(conn: sqlite3.Connection) -> None:
         """
         )
 
-    # 3. Drop old indexes that reference columns we're about to drop.
-    conn.execute("DROP INDEX IF EXISTS idx_jobs_name")
-    conn.execute("DROP INDEX IF EXISTS idx_jobs_has_reservation")
+    # 3. Lowercase all job names (Iris names are case-insensitive).
+    conn.execute("UPDATE jobs SET name = LOWER(name) WHERE name != LOWER(name)")
 
     # 4. Drop moved columns from jobs (and request_proto).
+    # Keep name and has_reservation on jobs for fast listing without JOIN.
     columns_to_drop = [
         "request_proto",
-        "name",
-        "has_reservation",
         "res_cpu_millicores",
         "res_memory_bytes",
         "res_disk_bytes",

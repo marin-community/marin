@@ -216,7 +216,14 @@ def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> job_pb2.Task
         proto.started_at.CopyFrom(timestamp_to_proto(current_attempt.started_at))
     if current_attempt and current_attempt.finished_at:
         proto.finished_at.CopyFrom(timestamp_to_proto(current_attempt.finished_at))
-    if task.resource_usage_memory_mb is not None or task.resource_usage_cpu_millicores is not None:
+    has_resource_usage = (
+        task.resource_usage_memory_mb is not None
+        or task.resource_usage_cpu_millicores is not None
+        or task.resource_usage_disk_mb is not None
+        or task.resource_usage_memory_peak_mb is not None
+        or task.resource_usage_process_count is not None
+    )
+    if has_resource_usage:
         proto.resource_usage.CopyFrom(
             job_pb2.ResourceUsage(
                 memory_mb=task.resource_usage_memory_mb or 0,
@@ -303,7 +310,7 @@ def _read_job(db: ControllerDB, job_id: JobName) -> JobDetailRow | None:
     with db.read_snapshot() as q:
         return JOB_DETAIL_PROJECTION.decode_one(
             q.fetchall(
-                f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
+                f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} " f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
                 (job_id.to_wire(),),
             )
         )
@@ -312,12 +319,18 @@ def _read_job(db: ControllerDB, job_id: JobName) -> JobDetailRow | None:
 def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskDetailRow | None:
     task_wire = task_id.to_wire()
     with db.read_snapshot() as q:
-        task = TASK_DETAIL_PROJECTION.decode_one(q.fetchall("SELECT * FROM tasks t WHERE t.task_id = ?", (task_wire,)))
+        task = TASK_DETAIL_PROJECTION.decode_one(
+            q.fetchall(
+                f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} FROM tasks t WHERE t.task_id = ?",
+                (task_wire,),
+            )
+        )
         if task is None:
             return None
         attempts = ATTEMPT_PROJECTION.decode(
             q.fetchall(
-                "SELECT * FROM task_attempts a WHERE a.task_id = ? ORDER BY a.attempt_id ASC",
+                f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
+                "WHERE ta.task_id = ? ORDER BY ta.attempt_id ASC",
                 (task_wire,),
             ),
         )
@@ -327,7 +340,10 @@ def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskDetailRo
 def _read_worker(db: ControllerDB, worker_id: WorkerId) -> WorkerDetailRow | None:
     with db.read_snapshot() as q:
         return WORKER_DETAIL_PROJECTION.decode_one(
-            q.fetchall("SELECT * FROM workers w WHERE w.worker_id = ?", (str(worker_id),))
+            q.fetchall(
+                f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} FROM workers w WHERE w.worker_id = ?",
+                (str(worker_id),),
+            )
         )
 
 
@@ -393,6 +409,7 @@ def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Control
         existing_job_policy=job.existing_job_policy,
         priority_band=job.priority_band,
         task_image=job.task_image,
+        fail_if_exists=job.fail_if_exists,
     )
     req.entrypoint.CopyFrom(_entrypoint_from_json(job.entrypoint_json))
     req.environment.CopyFrom(_environment_from_json(job.environment_json))
@@ -498,10 +515,28 @@ def _read_worker_detail(
 ) -> _WorkerDetail | None:
     with db.read_snapshot() as q:
         worker = WORKER_DETAIL_PROJECTION.decode_one(
-            q.fetchall("SELECT * FROM workers w WHERE w.worker_id = ?", (str(worker_id),)),
+            q.fetchall(
+                f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} FROM workers w WHERE w.worker_id = ?",
+                (str(worker_id),),
+            ),
         )
         if worker is None:
             return None
+        attr_rows = q.fetchall(
+            "SELECT key, value_type, str_value, int_value, float_value " "FROM worker_attributes WHERE worker_id = ?",
+            (str(worker_id),),
+        )
+        attrs: dict[str, str | int | float] = {}
+        for row in attr_rows:
+            vtype = str(row["value_type"])
+            if vtype == "str":
+                attrs[str(row["key"])] = str(row["str_value"])
+            elif vtype == "int":
+                attrs[str(row["key"])] = int(row["int_value"])
+            elif vtype == "float":
+                attrs[str(row["key"])] = float(row["float_value"])
+        if attrs:
+            worker = dataclasses.replace(worker, attributes=attrs)
         running_rows = q.raw(
             "SELECT t.task_id FROM tasks t "
             "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
@@ -531,7 +566,8 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetailR
     with db.read_snapshot() as q:
         tasks = TASK_DETAIL_PROJECTION.decode(
             q.fetchall(
-                "SELECT * FROM tasks t WHERE t.job_id = ? ORDER BY t.job_id ASC, t.task_index ASC",
+                f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} "
+                "FROM tasks t WHERE t.job_id = ? ORDER BY t.job_id ASC, t.task_index ASC",
                 (job_id.to_wire(),),
             ),
         )
@@ -541,8 +577,9 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetailR
         placeholders = ",".join("?" for _ in task_wires)
         attempts = ATTEMPT_PROJECTION.decode(
             q.fetchall(
-                f"SELECT * FROM task_attempts a WHERE a.task_id IN ({placeholders}) "
-                "ORDER BY a.task_id ASC, a.attempt_id ASC",
+                f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
+                f"WHERE ta.task_id IN ({placeholders}) "
+                "ORDER BY ta.task_id ASC, ta.attempt_id ASC",
                 tuple(task_wires),
             ),
         )
@@ -580,7 +617,7 @@ _STATE_SORT_EXPR = (
 
 _SORT_FIELD_TO_SQL: dict[int, str] = {
     controller_pb2.Controller.JOB_SORT_FIELD_DATE: "j.submitted_at_ms",
-    controller_pb2.Controller.JOB_SORT_FIELD_NAME: "jc.name",
+    controller_pb2.Controller.JOB_SORT_FIELD_NAME: "j.name",
     controller_pb2.Controller.JOB_SORT_FIELD_STATE: _STATE_SORT_EXPR,
     controller_pb2.Controller.JOB_SORT_FIELD_FAILURES: "agg_failures",
     controller_pb2.Controller.JOB_SORT_FIELD_PREEMPTIONS: "agg_preemptions",
@@ -640,7 +677,7 @@ def _query_jobs(
     params.extend(state_ids)
 
     if query.name_filter:
-        conditions.append("LOWER(jc.name) LIKE ?")
+        conditions.append("j.name LIKE ?")
         params.append(f"%{query.name_filter.lower()}%")
 
     where_clause = " AND ".join(conditions)
@@ -796,7 +833,9 @@ def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = No
 
 def _worker_roster(db: ControllerDB) -> list[WorkerDetailRow]:
     with db.read_snapshot() as q:
-        workers = WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers w"))
+        workers = WORKER_DETAIL_PROJECTION.decode(
+            q.fetchall(f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} FROM workers w")
+        )
         # Populate attributes from worker_attributes table.
         if workers:
             worker_ids = tuple(str(w.worker_id) for w in workers)
@@ -846,7 +885,7 @@ def _transaction_actions(db: ControllerDB, limit: int = 100) -> list[Transaction
     with db.read_snapshot() as q:
         actions = TXN_ACTION_PROJECTION.decode(
             q.fetchall(
-                "SELECT * FROM txn_actions ta ORDER BY ta.id DESC LIMIT ?",
+                f"SELECT {TXN_ACTION_PROJECTION.select_clause()} " "FROM txn_actions ta2 ORDER BY ta2.id DESC LIMIT ?",
                 (limit,),
             ),
         )
@@ -900,14 +939,16 @@ def _tasks_for_worker(db: ControllerDB, worker_id: WorkerId, limit: int = 50) ->
     with db.read_snapshot() as q:
         tasks = TASK_DETAIL_PROJECTION.decode(
             q.fetchall(
-                f"SELECT * FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
+                f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} "
+                f"FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
                 tuple(task_wires),
             ),
         )
         attempts = ATTEMPT_PROJECTION.decode(
             q.fetchall(
-                f"SELECT * FROM task_attempts a WHERE a.task_id IN ({placeholders}) "
-                "ORDER BY a.task_id ASC, a.attempt_id ASC",
+                f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
+                f"WHERE ta.task_id IN ({placeholders}) "
+                "ORDER BY ta.task_id ASC, ta.attempt_id ASC",
                 tuple(task_wires),
             ),
         )

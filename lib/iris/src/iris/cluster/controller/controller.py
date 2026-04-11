@@ -472,7 +472,8 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
     with queries.read_snapshot() as snapshot:
         jobs = JOB_SCHEDULING_PROJECTION.decode(
             snapshot.fetchall(
-                f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id IN ({placeholders})",
+                f"SELECT {JOB_SCHEDULING_PROJECTION.select_clause()} "
+                f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id IN ({placeholders})",
                 tuple(wires),
             ),
         )
@@ -487,8 +488,9 @@ def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> l
     placeholders = ",".join("?" for _ in states)
     with queries.read_snapshot() as snapshot:
         rows = snapshot._fetchall(
-            f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} "
-            f"WHERE j.state IN ({placeholders}) AND jc.has_reservation = 1",
+            f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} "
+            f"FROM jobs j {JOB_CONFIG_JOIN} "
+            f"WHERE j.state IN ({placeholders}) AND j.has_reservation = 1",
             list(states),
         )
     return JOB_DETAIL_PROJECTION.decode(rows)
@@ -638,14 +640,16 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
     with queries.read_snapshot() as snapshot:
         tasks = TASK_DETAIL_PROJECTION.decode(
             snapshot.fetchall(
-                f"SELECT * FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
+                f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} "
+                f"FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
                 tuple(task_wires),
             ),
         )
         attempts = ATTEMPT_PROJECTION.decode(
             snapshot.fetchall(
-                f"SELECT * FROM task_attempts a WHERE a.task_id IN ({placeholders}) "
-                "ORDER BY a.task_id ASC, a.attempt_id ASC",
+                f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
+                f"WHERE ta.task_id IN ({placeholders}) "
+                "ORDER BY ta.task_id ASC, ta.attempt_id ASC",
                 tuple(task_wires),
             ),
         )
@@ -682,7 +686,11 @@ def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[Wor
     placeholders = ",".join("?" for _ in wires)
     with queries.read_snapshot() as snapshot:
         workers = WORKER_DETAIL_PROJECTION.decode(
-            snapshot.fetchall(f"SELECT * FROM workers w WHERE w.worker_id IN ({placeholders})", tuple(wires)),
+            snapshot.fetchall(
+                f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} "
+                f"FROM workers w WHERE w.worker_id IN ({placeholders})",
+                tuple(wires),
+            ),
         )
     return {worker.worker_id: worker for worker in workers}
 
@@ -806,13 +814,13 @@ def _find_reservation_ancestor(queries: ControllerDB, job_id: JobName) -> JobNam
     """Walk up the job hierarchy to find the nearest ancestor with a reservation.
 
     Returns the ancestor's JobName, or None if no ancestor has a reservation.
-    Uses the has_reservation column in job_config.
+    Uses the has_reservation column on the jobs table.
     """
     current = job_id.parent
     with queries.read_snapshot() as q:
         while current is not None:
             row = q.execute_sql(
-                "SELECT jc.has_reservation FROM job_config jc WHERE jc.job_id = ?",
+                "SELECT has_reservation FROM jobs WHERE job_id = ?",
                 (current.to_wire(),),
             ).fetchone()
             if row is not None and row[0]:

@@ -604,6 +604,11 @@ JOBS = Table(
             python_type=bool,
             decoder=_decode_bool_int,
         ),
+        # Kept on jobs (not just job_config) for fast listing/filtering without JOIN.
+        Column("name", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
+        Column(
+            "has_reservation", "INTEGER", "NOT NULL DEFAULT 0", python_type=bool, decoder=_decode_bool_int, default=False
+        ),
     ),
     indexes=(
         "CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_job_id)",
@@ -615,6 +620,10 @@ JOBS = Table(
         # Migration 0010_dashboard
         "CREATE INDEX IF NOT EXISTS idx_jobs_root_depth ON jobs(root_job_id, depth)",
         "CREATE INDEX IF NOT EXISTS idx_jobs_depth_submitted ON jobs(depth, submitted_at_ms DESC)",
+        # Migration 0013 (kept across 0028)
+        "CREATE INDEX IF NOT EXISTS idx_jobs_name ON jobs(name)",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_has_reservation"
+        " ON jobs(has_reservation, state) WHERE has_reservation = 1",
     ),
 )
 
@@ -1539,6 +1548,7 @@ class JobDetailRow:
     priority_band: int
     task_image: str
     reservation_json: str | None
+    fail_if_exists: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -1896,6 +1906,7 @@ _job_detail_cols, _job_detail_aliases = _job_columns(
     "priority_band",
     "task_image",
     "reservation_json",
+    "fail_if_exists",
 )
 JOB_DETAIL_PROJECTION = Projection(
     JOBS,

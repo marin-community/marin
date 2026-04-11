@@ -1281,12 +1281,13 @@ class ControllerTransitions:
             reservation_json = _reservation_to_json(request)
             timeout_ms: int | None = int(request.timeout.milliseconds) if request.timeout.milliseconds > 0 else None
 
+            job_name_lower = request.name.lower()
             cur.execute(
                 "INSERT INTO jobs("
                 "job_id, user_id, parent_job_id, root_job_id, depth, state, submitted_at_ms, "
                 "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
-                "error, exit_code, num_tasks, is_reservation_holder"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0)",
+                "error, exit_code, num_tasks, is_reservation_holder, name, has_reservation"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 0, ?, ?)",
                 (
                     job_id.to_wire(),
                     job_id.user,
@@ -1300,6 +1301,8 @@ class ControllerTransitions:
                     deadline_epoch_ms,
                     validation_error,
                     replicas,
+                    job_name_lower,
+                    has_reservation,
                 ),
             )
             cur.execute(
@@ -1315,7 +1318,7 @@ class ControllerTransitions:
                 ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job_id.to_wire(),
-                    request.name,
+                    job_name_lower,
                     has_reservation,
                     res_cpu,
                     res_mem,
@@ -1399,13 +1402,14 @@ class ControllerTransitions:
                     holder_res_disk = int(holder_res.disk_bytes) if holder_res else 0
                     holder_res_device = _device_to_json(holder_res.device) if holder_res else None
                     holder_constraints_json = _constraints_to_json(holder_request.constraints)
+                    holder_name_lower = holder_request.name.lower()
                     cur.execute(
                         "INSERT INTO jobs("
                         "job_id, user_id, parent_job_id, root_job_id, depth, state, submitted_at_ms, "
                         "root_submitted_at_ms, started_at_ms, finished_at_ms, scheduling_deadline_epoch_ms, "
-                        "error, exit_code, num_tasks, is_reservation_holder"
+                        "error, exit_code, num_tasks, is_reservation_holder, name, has_reservation"
                         ") VALUES ("
-                        "?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, 1"
+                        "?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, 1, ?, 0"
                         ")",
                         (
                             holder_id.to_wire(),
@@ -1417,6 +1421,7 @@ class ControllerTransitions:
                             effective_submission_ms,
                             root_submitted_ms,
                             len(request.reservation.entries),
+                            holder_name_lower,
                         ),
                     )
                     holder_entrypoint_json = _entrypoint_to_json(holder_request.entrypoint)
@@ -1437,7 +1442,7 @@ class ControllerTransitions:
                         ")",
                         (
                             holder_id.to_wire(),
-                            holder_request.name,
+                            holder_name_lower,
                             holder_res_cpu,
                             holder_res_mem,
                             holder_res_disk,
@@ -1709,10 +1714,12 @@ class ControllerTransitions:
             jobs_to_update: set[str] = set()
             for assignment in assignments:
                 task_row = cur.execute(
-                    "SELECT * FROM tasks WHERE task_id = ?", (assignment.task_id.to_wire(),)
+                    f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} " "FROM tasks t WHERE t.task_id = ?",
+                    (assignment.task_id.to_wire(),),
                 ).fetchone()
                 worker_row = cur.execute(
-                    "SELECT * FROM workers WHERE worker_id = ? AND active = 1 AND healthy = 1",
+                    "SELECT worker_id, address, active, healthy "
+                    "FROM workers WHERE worker_id = ? AND active = 1 AND healthy = 1",
                     (str(assignment.worker_id),),
                 ).fetchone()
                 if task_row is None or worker_row is None:
@@ -1725,7 +1732,8 @@ class ControllerTransitions:
                 job_id_wire = task.job_id.to_wire()
                 if job_id_wire not in job_cache:
                     job_row = cur.execute(
-                        f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
+                        f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} "
+                        f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
                         (job_id_wire,),
                     ).fetchone()
                     if job_row is None:
@@ -1765,10 +1773,18 @@ class ControllerTransitions:
                             str(assignment.worker_id),
                         ),
                     )
+                    entrypoint = _entrypoint_from_json(job.entrypoint_json)
+                    # Load inline workdir files from the job_workdir_files table.
+                    wf_rows = cur.execute(
+                        "SELECT filename, data FROM job_workdir_files WHERE job_id = ?",
+                        (job_id_wire,),
+                    ).fetchall()
+                    for wf_row in wf_rows:
+                        entrypoint.workdir_files[wf_row["filename"]] = bytes(wf_row["data"])
                     run_request = job_pb2.RunTaskRequest(
                         task_id=assignment.task_id.to_wire(),
                         num_tasks=job.num_tasks,
-                        entrypoint=_entrypoint_from_json(job.entrypoint_json),
+                        entrypoint=entrypoint,
                         environment=_environment_from_json(job.environment_json),
                         bundle_id=job.bundle_id,
                         resources=resources,
