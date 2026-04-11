@@ -9,12 +9,10 @@
 // through the 5000/hr rate limit under any reasonable refresh cadence.
 //
 // GraphQL requires authentication even for public repositories — if
-// GITHUB_TOKEN is not set, the call returns 401. Set BUILDS_FIXTURE=1
-// to bypass with canned data during local UI dev.
+// GITHUB_TOKEN is not set, the call returns 401.
 
 import { GH_OWNER, GH_REPO, githubAuthHeaders } from "./github.js";
 
-const FIXTURE_MODE = process.env.BUILDS_FIXTURE === "1";
 const GRAPHQL_URL = "https://api.github.com/graphql";
 
 // StatusCheckRollupState enum from GitHub's GraphQL schema.
@@ -128,70 +126,56 @@ function toCommitStatus(node: GqlCommitNode): CommitStatus {
   };
 }
 
-function fixtureSnapshot(count: number): BuildsResponse {
-  const states: CommitState[] = ["SUCCESS", "SUCCESS", "SUCCESS", "FAILURE", "SUCCESS", "PENDING"];
-  const now = Date.now();
-  const commits: CommitStatus[] = Array.from({ length: count }, (_, i) => {
-    const state = states[i % states.length];
-    const shortOid = (0xa000000 + i).toString(16).slice(0, 7);
-    return {
-      oid: `${shortOid}${"0".repeat(33)}`,
-      shortOid,
-      headline: `fixture commit ${i + 1}`,
-      committedAt: new Date(now - i * 60 * 60 * 1000).toISOString(),
-      author: "fixture",
-      url: `https://github.com/${GH_OWNER}/${GH_REPO}/commit/${shortOid}`,
-      state,
-    };
-  });
-  return {
-    commits,
-    successRate: computeSuccessRate(commits),
-    fetchedAt: new Date().toISOString(),
-  };
-}
-
 export async function fetchBuildsOnMain(count: number): Promise<BuildsResponse> {
   const fetchedAt = new Date().toISOString();
-  if (FIXTURE_MODE) {
-    return fixtureSnapshot(count);
-  }
 
-  const res = await fetch(GRAPHQL_URL, {
-    method: "POST",
-    headers: {
-      ...githubAuthHeaders(),
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      query: QUERY,
-      variables: { owner: GH_OWNER, repo: GH_REPO, count },
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
+  // Network-level throws from fetch (DNS, connection refused, TLS) are
+  // caught here so the route handler returns a snapshot with `error`
+  // set instead of 500-ing the whole panel.
+  try {
+    const res = await fetch(GRAPHQL_URL, {
+      method: "POST",
+      headers: {
+        ...githubAuthHeaders(),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        query: QUERY,
+        variables: { owner: GH_OWNER, repo: GH_REPO, count },
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return {
+        commits: [],
+        successRate: null,
+        fetchedAt,
+        error: `GitHub GraphQL ${res.status}: ${body.slice(0, 200)}`,
+      };
+    }
+
+    const payload = (await res.json()) as GqlResponse;
+    if (payload.errors && payload.errors.length > 0) {
+      return {
+        commits: [],
+        successRate: null,
+        fetchedAt,
+        error: `GitHub GraphQL errors: ${payload.errors.map((e) => e.message).join("; ").slice(0, 200)}`,
+      };
+    }
+    const nodes = payload.data?.repository?.ref?.target?.history?.nodes ?? [];
+    const commits = nodes.map(toCommitStatus);
+    return {
+      commits,
+      successRate: computeSuccessRate(commits),
+      fetchedAt,
+    };
+  } catch (err) {
     return {
       commits: [],
       successRate: null,
       fetchedAt,
-      error: `GitHub GraphQL ${res.status}: ${body.slice(0, 200)}`,
+      error: `GitHub GraphQL fetch failed: ${(err as Error).message}`,
     };
   }
-
-  const payload = (await res.json()) as GqlResponse;
-  if (payload.errors && payload.errors.length > 0) {
-    return {
-      commits: [],
-      successRate: null,
-      fetchedAt,
-      error: `GitHub GraphQL errors: ${payload.errors.map((e) => e.message).join("; ").slice(0, 200)}`,
-    };
-  }
-  const nodes = payload.data?.repository?.ref?.target?.history?.nodes ?? [];
-  const commits = nodes.map(toCommitStatus);
-  return {
-    commits,
-    successRate: computeSuccessRate(commits),
-    fetchedAt,
-  };
 }

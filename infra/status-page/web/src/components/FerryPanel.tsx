@@ -41,6 +41,12 @@ function formatRelative(iso: string): string {
 function WorkflowCard({ wf }: { wf: FerryWorkflowStatus }) {
   const latest = wf.latest;
   const successRate = wf.successRate;
+  // Match the denominator the server uses for `successRate`
+  // (githubActions.ts:computeSuccessRate) — completed runs only, not
+  // the raw history length which can include queued/in-progress runs.
+  const completedCount = wf.history.filter(
+    (r) => r.status === "completed" && r.conclusion !== null,
+  ).length;
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
       <div className="flex items-baseline justify-between gap-4">
@@ -71,7 +77,7 @@ function WorkflowCard({ wf }: { wf: FerryWorkflowStatus }) {
             <span className="ml-auto text-slate-400">
               {successRate === null
                 ? "—"
-                : `${Math.round(successRate * 100)}% success over ${wf.history.length}`}
+                : `${Math.round(successRate * 100)}% success over ${completedCount}`}
             </span>
           </div>
 

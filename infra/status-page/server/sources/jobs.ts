@@ -8,8 +8,6 @@
 
 import { executeRawQuery } from "./controllerQuery.js";
 
-const FIXTURE_MODE = process.env.JOBS_FIXTURE === "1" || process.env.IRIS_FIXTURE === "1";
-
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const BREAKDOWN_SQL = `
@@ -52,27 +50,8 @@ function stateName(state: number): string {
   return JOB_STATE_NAMES[state] ?? `state_${state}`;
 }
 
-function fixtureSnapshot(): JobsSnapshot {
-  const byState: JobStateCount[] = [
-    { state: 6, name: "killed", count: 525 },
-    { state: 3, name: "running", count: 423 },
-    { state: 4, name: "succeeded", count: 345 },
-    { state: 5, name: "failed", count: 61 },
-    { state: 1, name: "pending", count: 54 },
-  ];
-  return {
-    total: byState.reduce((s, r) => s + r.count, 0),
-    windowMs: WINDOW_MS,
-    byState,
-    fetchedAt: new Date().toISOString(),
-  };
-}
-
 export async function jobsSnapshot(): Promise<JobsSnapshot> {
   const fetchedAt = new Date().toISOString();
-  if (FIXTURE_MODE) {
-    return fixtureSnapshot();
-  }
   try {
     const { rows } = await executeRawQuery(BREAKDOWN_SQL);
     const byState: JobStateCount[] = rows

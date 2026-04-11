@@ -92,11 +92,38 @@ export async function fetchWorkflowStatus(
   const url =
     `https://api.github.com/repos/${REPO}/actions/workflows/${workflow.file}` +
     `/runs?per_page=${historyWindow}&branch=main`;
-
-  const res = await fetch(url, { headers: githubAuthHeaders() });
   const fetchedAt = new Date().toISOString();
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
+
+  // Every failure path returns a snapshot with `error` set instead of
+  // throwing, so callers that aggregate multiple workflows with
+  // Promise.all can surface one-workflow failures in the UI without
+  // turning /api/ferry into a 500.
+  try {
+    const res = await fetch(url, { headers: githubAuthHeaders() });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return {
+        name: workflow.name,
+        file: workflow.file,
+        latest: null,
+        history: [],
+        successRate: null,
+        fetchedAt,
+        error: `GitHub API ${res.status}: ${body.slice(0, 200)}`,
+      };
+    }
+
+    const data = (await res.json()) as GhRunsResponse;
+    const history = (data.workflow_runs ?? []).map(toFerryRun);
+    return {
+      name: workflow.name,
+      file: workflow.file,
+      latest: history[0] ?? null,
+      history,
+      successRate: computeSuccessRate(history),
+      fetchedAt,
+    };
+  } catch (err) {
     return {
       name: workflow.name,
       file: workflow.file,
@@ -104,18 +131,7 @@ export async function fetchWorkflowStatus(
       history: [],
       successRate: null,
       fetchedAt,
-      error: `GitHub API ${res.status}: ${body.slice(0, 200)}`,
+      error: `GitHub API fetch failed: ${(err as Error).message}`,
     };
   }
-
-  const data = (await res.json()) as GhRunsResponse;
-  const history = (data.workflow_runs ?? []).map(toFerryRun);
-  return {
-    name: workflow.name,
-    file: workflow.file,
-    latest: history[0] ?? null,
-    history,
-    successRate: computeSuccessRate(history),
-    fetchedAt,
-  };
 }

@@ -90,10 +90,6 @@ same-origin app.
 |---------------------|-----------------------------------------------------------------------|
 | `GITHUB_TOKEN`      | Required for the Build panel (GraphQL needs auth even for public repos). Also lifts Ferry's REST rate limit from 60/hr to 5000/hr. |
 | `CONTROLLER_URL`    | Override controller discovery. Set for local dev (see below).        |
-| `IRIS_FIXTURE=1`    | Short-circuit iris reachability + workers + jobs with canned data.    |
-| `WORKERS_FIXTURE=1` | Short-circuit only workers.                                          |
-| `JOBS_FIXTURE=1`    | Short-circuit only jobs.                                             |
-| `BUILDS_FIXTURE=1`  | Short-circuit only the build panel (skip GitHub GraphQL).            |
 | `GCP_PROJECT`       | Defaults to `hai-gcp-models`.                                         |
 | `CONTROLLER_ZONE`   | Defaults to `us-central1-a`.                                          |
 | `CONTROLLER_LABEL`  | GCE label for controller discovery. Defaults to `iris-marin-controller`. |
@@ -122,11 +118,9 @@ gcloud compute start-iap-tunnel <instance-name> 10000 \
 CONTROLLER_URL=http://localhost:10000 npm run dev
 ```
 
-Or skip the tunnel entirely and use fixtures:
-
-```bash
-IRIS_FIXTURE=1 npm run dev
-```
+A reachable controller is a hard requirement — there is no offline
+mode, and panels that depend on the controller will surface an error
+if it's unreachable.
 
 ## Configuration
 
@@ -156,8 +150,7 @@ field; see `server/sources/githubCommits.ts`.
 
 **Requires `GITHUB_TOKEN`** — GitHub's GraphQL API needs authentication
 even for public repositories. Without a token the panel renders an
-error. During UI dev, set `BUILDS_FIXTURE=1` to skip the GraphQL call
-entirely.
+error.
 
 Success rate is computed over **finalized** commits only — excluding
 pending, expected, and commits with no checks configured — so the

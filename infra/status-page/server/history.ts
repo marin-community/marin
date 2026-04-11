@@ -28,16 +28,6 @@ export class WorkerHistory {
     }
   }
 
-  /** Replace buffer contents with the given samples, chronologically ordered. */
-  seed(samples: readonly WorkerSample[]): void {
-    const start = Math.max(0, samples.length - this.capacity);
-    this.head = 0;
-    this.size = 0;
-    for (let i = start; i < samples.length; i++) {
-      this.push(samples[i]);
-    }
-  }
-
   /** Snapshot of samples in chronological order. */
   samples(): WorkerSample[] {
     const out: WorkerSample[] = [];
@@ -49,9 +39,5 @@ export class WorkerHistory {
       }
     }
     return out;
-  }
-
-  get length(): number {
-    return this.size;
   }
 }

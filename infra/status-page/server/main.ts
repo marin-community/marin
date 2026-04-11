@@ -26,12 +26,7 @@ import {
 import { fetchBuildsOnMain, type BuildsResponse } from "./sources/githubCommits.js";
 import { irisStatus, type IrisStatus } from "./sources/iris.js";
 import { jobsSnapshot, type JobsSnapshot } from "./sources/jobs.js";
-import {
-  fixtureEnabled,
-  fixtureHistory,
-  workerSnapshot,
-  type WorkersSnapshot,
-} from "./sources/workers.js";
+import { workerSnapshot, type WorkersSnapshot } from "./sources/workers.js";
 
 const FERRY_HISTORY = 30;
 const BUILD_HISTORY = 100;
@@ -49,10 +44,6 @@ const jobsCache = new TTLCache<JobsSnapshot>(60_000);
 const SAMPLE_INTERVAL_MS = 30_000;
 const HISTORY_CAPACITY = Math.ceil((24 * 60 * 60 * 1000) / SAMPLE_INTERVAL_MS);
 const workerHistory = new WorkerHistory(HISTORY_CAPACITY);
-
-if (fixtureEnabled()) {
-  workerHistory.seed(fixtureHistory(HISTORY_CAPACITY, SAMPLE_INTERVAL_MS));
-}
 
 async function sampleWorkers(): Promise<void> {
   const snapshot = await workersCache.get("workers", () => workerSnapshot());

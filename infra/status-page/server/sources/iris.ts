@@ -6,14 +6,10 @@
 // + round-trip latency and leaves room in the response shape for richer
 // data later (which is increasingly supplied by the workers and jobs
 // sources reading the controller's SQLite directly via ExecuteRawQuery).
-//
-// Set IRIS_FIXTURE=1 to short-circuit with canned data for UI dev without
-// a VPC tunnel.
 
 import { getControllerUrl } from "./discovery.js";
 
 const CLUSTER = process.env.CLUSTER_NAME ?? "marin";
-const FIXTURE_MODE = process.env.IRIS_FIXTURE === "1";
 
 export interface IrisStatus {
   cluster: string;
@@ -25,22 +21,8 @@ export interface IrisStatus {
   raw?: unknown;
 }
 
-function fixtureStatus(): IrisStatus {
-  return {
-    cluster: CLUSTER,
-    reachable: true,
-    latencyMs: 12,
-    controllerUrl: "http://fixture.local:10000",
-    fetchedAt: new Date().toISOString(),
-    raw: { status: "ok" },
-  };
-}
-
 export async function irisStatus(): Promise<IrisStatus> {
   const fetchedAt = new Date().toISOString();
-  if (FIXTURE_MODE) {
-    return fixtureStatus();
-  }
 
   let base: string;
   try {
