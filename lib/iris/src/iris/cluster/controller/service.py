@@ -22,6 +22,12 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
+from iris.cluster.controller.codec import (
+    constraints_from_json,
+    proto_from_json,
+    reservation_entries_from_json,
+    resource_spec_from_scalars,
+)
 from iris.cluster.controller.budget import (
     UserTask,
     compute_effective_band,
@@ -361,6 +367,13 @@ def _worker_address(db: ControllerDB, worker_id: WorkerId) -> str | None:
         return str(row[0]) if row else None
 
 
+def _resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
+    """Reconstruct a ResourceSpecProto from native job columns."""
+    return resource_spec_from_scalars(
+        job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
+    )
+
+
 def _snapshot_row_to_proto(row: Any) -> job_pb2.WorkerResourceSnapshot:
     """Reconstruct a WorkerResourceSnapshot proto from scalar columns."""
     snap = job_pb2.WorkerResourceSnapshot()
@@ -391,13 +404,6 @@ def _snapshot_row_to_proto(row: Any) -> job_pb2.WorkerResourceSnapshot:
 
 def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Controller.LaunchJobRequest:
     """Reconstruct a LaunchJobRequest proto from native JobDetailRow columns."""
-    from iris.cluster.controller.transitions import (
-        _entrypoint_from_json,
-        _environment_from_json,
-        _constraints_from_json,
-        _ports_from_json,
-    )
-
     req = controller_pb2.Controller.LaunchJobRequest(
         name=job.name,
         bundle_id=job.bundle_id,
@@ -411,13 +417,15 @@ def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Control
         task_image=job.task_image,
         fail_if_exists=job.fail_if_exists,
     )
-    req.entrypoint.CopyFrom(_entrypoint_from_json(job.entrypoint_json))
-    req.environment.CopyFrom(_environment_from_json(job.environment_json))
-    req.resources.CopyFrom(_resource_spec_from_job_row(job))
+    req.entrypoint.CopyFrom(proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint))
+    req.environment.CopyFrom(proto_from_json(job.environment_json, job_pb2.EnvironmentConfig))
+    req.resources.CopyFrom(
+        resource_spec_from_scalars(job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json)
+    )
 
-    for c in _constraints_from_json(job.constraints_json):
+    for c in constraints_from_json(job.constraints_json):
         req.constraints.append(c)
-    for port in _ports_from_json(job.ports_json):
+    for port in json.loads(job.ports_json):
         req.ports.append(port)
 
     if job.has_coscheduling:
@@ -430,43 +438,10 @@ def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Control
         req.timeout.milliseconds = job.timeout_ms
 
     if job.reservation_json:
-        _populate_reservation_from_json(req, job.reservation_json)
+        for entry in reservation_entries_from_json(job.reservation_json):
+            req.reservation.entries.append(entry)
 
     return req
-
-
-def _populate_reservation_from_json(req: controller_pb2.Controller.LaunchJobRequest, reservation_json: str) -> None:
-    """Populate the reservation field on a LaunchJobRequest from JSON."""
-    from iris.cluster.controller.transitions import _reservation_entries_from_json
-
-    for entry in _reservation_entries_from_json(reservation_json):
-        req.reservation.entries.append(entry)
-
-
-def _resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
-    """Reconstruct a ResourceSpecProto from native job columns."""
-    res = job_pb2.ResourceSpecProto(
-        cpu_millicores=job.res_cpu_millicores,
-        memory_bytes=job.res_memory_bytes,
-        disk_bytes=job.res_disk_bytes,
-    )
-    if job.res_device_json:
-        res.device.CopyFrom(_device_config_from_json(job.res_device_json))
-    return res
-
-
-def _device_config_from_json(device_json: str) -> job_pb2.DeviceConfig:
-    """Reconstruct a DeviceConfig proto from JSON."""
-    device = job_pb2.DeviceConfig()
-    data = json.loads(device_json)
-    if "gpu" in data:
-        device.gpu.variant = data["gpu"].get("variant", "")
-        device.gpu.count = data["gpu"].get("count", 0)
-    elif "tpu" in data:
-        device.tpu.variant = data["tpu"].get("variant", "")
-        device.tpu.topology = data["tpu"].get("topology", "")
-        device.tpu.count = data["tpu"].get("count", 0)
-    return device
 
 
 def _worker_metadata_to_proto(worker: WorkerDetailRow) -> job_pb2.WorkerMetadata:
@@ -489,7 +464,7 @@ def _worker_metadata_to_proto(worker: WorkerDetailRow) -> job_pb2.WorkerMetadata
         git_hash=worker.md_git_hash,
     )
     if worker.md_device_json and worker.md_device_json != "{}":
-        md.device.CopyFrom(_device_config_from_json(worker.md_device_json))
+        md.device.CopyFrom(proto_from_json(worker.md_device_json, job_pb2.DeviceConfig))
     # Populate attributes from the worker_attributes table data stored on the row.
     for key, value in worker.attributes.items():
         av = job_pb2.AttributeValue()

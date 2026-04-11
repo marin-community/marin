@@ -100,7 +100,7 @@ def _endpoints(state: ControllerTransitions, query: EndpointQuery = EndpointQuer
 
 
 def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions):
-    from iris.cluster.controller.transitions import _resource_spec_from_row, _constraints_from_json
+    from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 
     pending = _schedulable_tasks(state)
     workers = healthy_active_workers(state)
@@ -111,7 +111,7 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions
         if job_id and job_id not in jobs:
             job = _query_job(state, job_id)
             if job:
-                resources = _resource_spec_from_row(
+                resources = resource_spec_from_scalars(
                     job.res_cpu_millicores,
                     job.res_memory_bytes,
                     job.res_disk_bytes,
@@ -119,7 +119,7 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions
                 )
                 jobs[job_id] = JobRequirements(
                     resources=resources,
-                    constraints=_constraints_from_json(job.constraints_json),
+                    constraints=constraints_from_json(job.constraints_json),
                     is_coscheduled=job.has_coscheduling,
                     coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
                 )

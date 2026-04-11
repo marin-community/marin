@@ -138,12 +138,13 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         job = rows[0]
         if job.state != job_pb2.JOB_STATE_PENDING:
             return None
-        from iris.cluster.controller.service import _resource_spec_from_job_row
-        from iris.cluster.controller.transitions import _constraints_from_json
+        from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 
         req = JobRequirements(
-            resources=_resource_spec_from_job_row(job),
-            constraints=_constraints_from_json(job.constraints_json),
+            resources=resource_spec_from_scalars(
+                job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
+            ),
+            constraints=constraints_from_json(job.constraints_json),
             is_coscheduled=job.has_coscheduling,
             coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
         )

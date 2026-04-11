@@ -346,20 +346,6 @@ class Projection(Generic[T]):
         self._decoders: tuple[Callable, ...] = tuple(c.decoder for c in columns)
         self._cached_flags: tuple[bool, ...] = tuple(c.cached for c in columns)
 
-        # Pre-compute effective decoders: wrap cached fields through the global proto cache
-        # so that both fast and slow decode paths share the same logic.
-        if any(self._cached_flags):
-            self._effective_decoders: tuple[Callable, ...] = tuple(
-                (
-                    (lambda d: lambda v: proto_cache.get_or_decode(v, d) if v is not None else d(v))(dec)
-                    if is_cached
-                    else dec
-                )
-                for dec, is_cached in zip(self._decoders, self._cached_flags, strict=True)
-            )
-        else:
-            self._effective_decoders = self._decoders
-
         # Pre-compute defaults for fields that have them (keyed by column name).
         defaults: dict[str, tuple[str, Any | Callable[[], Any], bool]] = {}
         for c in columns:
@@ -627,6 +613,9 @@ JOBS = Table(
     ),
 )
 
+# INVARIANT: job_config.name and job_config.has_reservation are denormalized copies
+# kept on the jobs table (jobs.name, jobs.has_reservation) for fast listing queries
+# without JOIN.  Both copies are written together at job submission time.
 JOB_CONFIG = Table(
     "job_config",
     "jc",

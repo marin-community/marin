@@ -29,6 +29,11 @@ from iris.cluster.constraints import (
     merge_constraints,
 )
 from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.codec import (
+    constraints_from_json,
+    reservation_entries_from_json,
+    resource_spec_from_scalars,
+)
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.checkpoint import (
     CheckpointResult,
@@ -96,7 +101,6 @@ from iris.cluster.controller.transitions import (
     HeartbeatAction,
     ReservationClaim,
     SchedulingEvent,
-    _reservation_entries_from_json,
 )
 from iris.cluster.log_store import CONTROLLER_LOG_KEY, LogStoreHandler
 from iris.log_server.server import LogServiceImpl
@@ -226,73 +230,18 @@ class _SchedulingOrder:
     user_budget_limits: dict[str, int]
 
 
-def _resource_spec_from_row_raw(
-    cpu: int,
-    mem: int,
-    disk: int,
-    device_json: str | None,
-) -> job_pb2.ResourceSpecProto:
-    """Reconstruct a ResourceSpecProto from raw scalar values (for raw SQL queries)."""
-    from iris.cluster.controller.service import _device_config_from_json
-
-    res = job_pb2.ResourceSpecProto(cpu_millicores=cpu, memory_bytes=mem, disk_bytes=disk)
-    if device_json:
-        res.device.CopyFrom(_device_config_from_json(device_json))
-    return res
-
-
 def _resource_spec_from_row(job: JobRow | JobSchedulingRow) -> job_pb2.ResourceSpecProto:
     """Reconstruct a ResourceSpecProto from native job columns."""
-    from iris.cluster.controller.service import _device_config_from_json
-
-    res = job_pb2.ResourceSpecProto(
-        cpu_millicores=job.res_cpu_millicores,
-        memory_bytes=job.res_memory_bytes,
-        disk_bytes=job.res_disk_bytes,
+    return resource_spec_from_scalars(
+        job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
     )
-    if job.res_device_json:
-        res.device.CopyFrom(_device_config_from_json(job.res_device_json))
-    return res
-
-
-def _constraints_from_json(constraints_json: str | None) -> list[job_pb2.Constraint]:
-    """Reconstruct Constraint protos from JSON."""
-    import json
-
-    if not constraints_json:
-        return []
-    items = json.loads(constraints_json)
-    result = []
-    for item in items:
-        c = job_pb2.Constraint(key=item["key"], op=item.get("op", 0))
-        if "value" in item:
-            v = item["value"]
-            if "string_value" in v:
-                c.value.string_value = v["string_value"]
-            elif "int_value" in v:
-                c.value.int_value = v["int_value"]
-            elif "float_value" in v:
-                c.value.float_value = v["float_value"]
-        for v in item.get("values", []):
-            av = job_pb2.AttributeValue()
-            if "string_value" in v:
-                av.string_value = v["string_value"]
-            elif "int_value" in v:
-                av.int_value = v["int_value"]
-            elif "float_value" in v:
-                av.float_value = v["float_value"]
-            c.values.append(av)
-        if item.get("mode"):
-            c.mode = item["mode"]
-        result.append(c)
-    return result
 
 
 def job_requirements_from_job(job: JobSchedulingRow) -> JobRequirements:
     """Convert a job row to scheduler-compatible JobRequirements."""
     return JobRequirements(
         resources=_resource_spec_from_row(job),
-        constraints=_constraints_from_json(job.constraints_json),
+        constraints=constraints_from_json(job.constraints_json),
         is_coscheduled=job.has_coscheduling,
         coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
     )
@@ -396,7 +345,7 @@ def compute_demand_entries(
         if job_is_finished(job.state):
             continue
 
-        job_constraints = _constraints_from_json(job.constraints_json)
+        job_constraints = constraints_from_json(job.constraints_json)
         job_resources = _resource_spec_from_row(job)
 
         invalid_reason: str | None = None
@@ -530,7 +479,7 @@ def _get_running_tasks_with_band_and_value(
         wid = row.worker_id
         if wid in claimed_workers:
             continue
-        resources = _resource_spec_from_row_raw(
+        resources = resource_spec_from_scalars(
             int(row.res_cpu_millicores or 0),
             int(row.res_memory_bytes or 0),
             int(row.res_disk_bytes or 0),
@@ -1645,7 +1594,7 @@ class Controller:
         reservation_jobs = _jobs_with_reservations(self._db, reservable_states)
         for job in reservation_jobs:
             job_wire = job.job_id.to_wire()
-            for idx, res_entry in enumerate(_reservation_entries_from_json(job.reservation_json)):
+            for idx, res_entry in enumerate(reservation_entries_from_json(job.reservation_json)):
                 if (job_wire, idx) in claimed_entries:
                     continue
 

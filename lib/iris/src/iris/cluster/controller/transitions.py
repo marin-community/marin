@@ -18,6 +18,14 @@ from typing import Any, NamedTuple
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
 from iris.cluster.controller.budget import UserBudgetDefaults
+from iris.cluster.controller.codec import (
+    constraints_from_json,
+    constraints_to_json,
+    proto_from_json,
+    proto_to_json,
+    reservation_to_json,
+    resource_spec_from_scalars,
+)
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
@@ -295,194 +303,6 @@ def _has_reservation_flag(request: controller_pb2.Controller.LaunchJobRequest) -
     return 1 if request.HasField("reservation") and request.reservation.entries else 0
 
 
-def _device_to_json(device: job_pb2.DeviceConfig) -> str:
-    """Serialize a DeviceConfig proto to JSON."""
-    if device.HasField("gpu"):
-        return json.dumps({"gpu": {"variant": device.gpu.variant, "count": device.gpu.count}})
-    elif device.HasField("tpu"):
-        return json.dumps(
-            {"tpu": {"variant": device.tpu.variant, "topology": device.tpu.topology, "count": device.tpu.count}}
-        )
-    return "{}"
-
-
-def _constraint_to_dict(c: job_pb2.Constraint) -> dict:
-    """Serialize a single Constraint proto to a JSON-friendly dict."""
-    d: dict = {"key": c.key, "op": int(c.op)}
-    if c.HasField("value"):
-        v = c.value
-        if v.HasField("string_value"):
-            d["value"] = {"string_value": v.string_value}
-        elif v.HasField("int_value"):
-            d["value"] = {"int_value": v.int_value}
-        elif v.HasField("float_value"):
-            d["value"] = {"float_value": v.float_value}
-    if c.values:
-        vals = []
-        for v in c.values:
-            if v.HasField("string_value"):
-                vals.append({"string_value": v.string_value})
-            elif v.HasField("int_value"):
-                vals.append({"int_value": v.int_value})
-            elif v.HasField("float_value"):
-                vals.append({"float_value": v.float_value})
-        d["values"] = vals
-    if c.mode:
-        d["mode"] = int(c.mode)
-    return d
-
-
-def _constraints_to_json(constraints: Iterable[job_pb2.Constraint]) -> str | None:
-    """Serialize a list of Constraint protos to JSON. Returns None if empty."""
-    constraint_list = [_constraint_to_dict(c) for c in constraints]
-    return json.dumps(constraint_list) if constraint_list else None
-
-
-def _entrypoint_to_json(ep: job_pb2.RuntimeEntrypoint) -> str:
-    d: dict = {}
-    if ep.setup_commands:
-        d["setup_commands"] = list(ep.setup_commands)
-    if ep.HasField("run_command"):
-        d["run_command"] = {"argv": list(ep.run_command.argv)}
-    if ep.workdir_file_refs:
-        d["workdir_file_refs"] = dict(ep.workdir_file_refs)
-    return json.dumps(d)
-
-
-def _environment_to_json(env: job_pb2.EnvironmentConfig) -> str:
-    d: dict = {}
-    if env.pip_packages:
-        d["pip_packages"] = list(env.pip_packages)
-    if env.env_vars:
-        d["env_vars"] = dict(env.env_vars)
-    if env.extras:
-        d["extras"] = list(env.extras)
-    if env.python_version:
-        d["python_version"] = env.python_version
-    if env.dockerfile:
-        d["dockerfile"] = env.dockerfile
-    return json.dumps(d)
-
-
-def _reservation_to_json(request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
-    if not request.HasField("reservation"):
-        return None
-    res = request.reservation
-    entries = []
-    for entry in res.entries:
-        e: dict = {}
-        if entry.HasField("resources"):
-            r = entry.resources
-            e["resources"] = {
-                "cpu_millicores": r.cpu_millicores,
-                "memory_bytes": r.memory_bytes,
-                "disk_bytes": r.disk_bytes,
-            }
-            if r.HasField("device"):
-                e["resources"]["device"] = json.loads(_device_to_json(r.device) or "{}")
-        if entry.constraints:
-            e["constraints"] = [_constraint_to_dict(c) for c in entry.constraints]
-        entries.append(e)
-    return json.dumps({"entries": entries})
-
-
-def _entrypoint_from_json(json_str: str) -> job_pb2.RuntimeEntrypoint:
-    d = json.loads(json_str)
-    ep = job_pb2.RuntimeEntrypoint()
-    for cmd in d.get("setup_commands", []):
-        ep.setup_commands.append(cmd)
-    if "run_command" in d:
-        ep.run_command.CopyFrom(job_pb2.CommandEntrypoint(argv=d["run_command"].get("argv", [])))
-    for k, v in d.get("workdir_file_refs", {}).items():
-        ep.workdir_file_refs[k] = v
-    return ep
-
-
-def _environment_from_json(json_str: str) -> job_pb2.EnvironmentConfig:
-    d = json.loads(json_str)
-    env = job_pb2.EnvironmentConfig()
-    for pkg in d.get("pip_packages", []):
-        env.pip_packages.append(pkg)
-    for k, v in d.get("env_vars", {}).items():
-        env.env_vars[k] = v
-    for extra in d.get("extras", []):
-        env.extras.append(extra)
-    if "python_version" in d:
-        env.python_version = d["python_version"]
-    if "dockerfile" in d:
-        env.dockerfile = d["dockerfile"]
-    return env
-
-
-def _resource_spec_from_row(cpu: int, mem: int, disk: int, device_json: str | None) -> job_pb2.ResourceSpecProto:
-    from iris.cluster.controller.service import _device_config_from_json
-
-    res = job_pb2.ResourceSpecProto(cpu_millicores=cpu, memory_bytes=mem, disk_bytes=disk)
-    if device_json:
-        res.device.CopyFrom(_device_config_from_json(device_json))
-    return res
-
-
-def _constraints_from_json(constraints_json: str | None) -> list[job_pb2.Constraint]:
-    if not constraints_json:
-        return []
-    items = json.loads(constraints_json)
-    result = []
-    for item in items:
-        c = job_pb2.Constraint(key=item["key"], op=item.get("op", 0))
-        if "value" in item:
-            v = item["value"]
-            if "string_value" in v:
-                c.value.string_value = v["string_value"]
-            elif "int_value" in v:
-                c.value.int_value = v["int_value"]
-            elif "float_value" in v:
-                c.value.float_value = v["float_value"]
-        if "values" in item:
-            for v in item["values"]:
-                av = job_pb2.AttributeValue()
-                if "string_value" in v:
-                    av.string_value = v["string_value"]
-                elif "int_value" in v:
-                    av.int_value = v["int_value"]
-                elif "float_value" in v:
-                    av.float_value = v["float_value"]
-                c.values.append(av)
-        if "mode" in item:
-            c.mode = item["mode"]
-        result.append(c)
-    return result
-
-
-def _ports_from_json(ports_json: str) -> list[str]:
-    """Deserialize ports JSON back to a list of port name strings."""
-    return json.loads(ports_json)
-
-
-def _reservation_entries_from_json(reservation_json: str | None) -> list[job_pb2.ReservationEntry]:
-    """Deserialize reservation_json back to a list of ReservationEntry protos."""
-    if not reservation_json:
-        return []
-    from iris.cluster.controller.service import _device_config_from_json
-
-    data = json.loads(reservation_json)
-    entries = []
-    for entry_data in data.get("entries", []):
-        entry = job_pb2.ReservationEntry()
-        if "resources" in entry_data:
-            r = entry_data["resources"]
-            entry.resources.cpu_millicores = r.get("cpu_millicores", 0)
-            entry.resources.memory_bytes = r.get("memory_bytes", 0)
-            entry.resources.disk_bytes = r.get("disk_bytes", 0)
-            if "device" in r:
-                entry.resources.device.CopyFrom(_device_config_from_json(json.dumps(r["device"])))
-        if "constraints" in entry_data:
-            for c in _constraints_from_json(json.dumps(entry_data["constraints"])):
-                entry.constraints.append(c)
-        entries.append(entry)
-    return entries
-
-
 def delete_task_endpoints(cur: TransactionCursor, task_id: str) -> None:
     """Remove all registered endpoints for a task."""
     cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id,))
@@ -692,7 +512,7 @@ def _kill_non_terminal_tasks(
         task_name = JobName.from_wire(task_id)
         resources = None
         if worker_id is not None:
-            resources = _resource_spec_from_row(
+            resources = resource_spec_from_scalars(
                 int(row["res_cpu_millicores"]),
                 int(row["res_memory_bytes"]),
                 int(row["res_disk_bytes"]),
@@ -1264,8 +1084,8 @@ class ControllerTransitions:
             res_cpu = int(res.cpu_millicores) if res else 0
             res_mem = int(res.memory_bytes) if res else 0
             res_disk = int(res.disk_bytes) if res else 0
-            res_device = _device_to_json(res.device) if res else None
-            constraints_json = _constraints_to_json(request.constraints)
+            res_device = proto_to_json(res.device) if res else None
+            constraints_json = constraints_to_json(request.constraints)
             has_cosched = 1 if request.HasField("coscheduling") else 0
             cosched_group = request.coscheduling.group_by if has_cosched else ""
             sched_timeout: int | None = (
@@ -1275,10 +1095,10 @@ class ControllerTransitions:
             )
             max_failures = int(request.max_task_failures)
             # Serialize dispatch config fields for job_config.
-            entrypoint_json = _entrypoint_to_json(request.entrypoint)
-            environment_json = _environment_to_json(request.environment)
+            entrypoint_json = proto_to_json(request.entrypoint)
+            environment_json = proto_to_json(request.environment)
             ports_json = json.dumps(list(request.ports)) if request.ports else "[]"
-            reservation_json = _reservation_to_json(request)
+            reservation_json = reservation_to_json(request)
             timeout_ms: int | None = int(request.timeout.milliseconds) if request.timeout.milliseconds > 0 else None
 
             job_name_lower = request.name.lower()
@@ -1400,8 +1220,8 @@ class ControllerTransitions:
                     holder_res_cpu = int(holder_res.cpu_millicores) if holder_res else 0
                     holder_res_mem = int(holder_res.memory_bytes) if holder_res else 0
                     holder_res_disk = int(holder_res.disk_bytes) if holder_res else 0
-                    holder_res_device = _device_to_json(holder_res.device) if holder_res else None
-                    holder_constraints_json = _constraints_to_json(holder_request.constraints)
+                    holder_res_device = proto_to_json(holder_res.device) if holder_res else None
+                    holder_constraints_json = constraints_to_json(holder_request.constraints)
                     holder_name_lower = holder_request.name.lower()
                     cur.execute(
                         "INSERT INTO jobs("
@@ -1424,8 +1244,8 @@ class ControllerTransitions:
                             holder_name_lower,
                         ),
                     )
-                    holder_entrypoint_json = _entrypoint_to_json(holder_request.entrypoint)
-                    holder_environment_json = _environment_to_json(holder_request.environment)
+                    holder_entrypoint_json = proto_to_json(holder_request.entrypoint)
+                    holder_environment_json = proto_to_json(holder_request.environment)
                     cur.execute(
                         "INSERT INTO job_config("
                         "job_id, name, has_reservation, "
@@ -1527,7 +1347,7 @@ class ControllerTransitions:
             # Direct-provider tasks have NULL worker_id — skip decommit for them.
             for row in running_rows:
                 if row["worker_id"] is not None and not int(row["is_reservation_holder"]):
-                    resources = _resource_spec_from_row(
+                    resources = resource_spec_from_scalars(
                         int(row["res_cpu_millicores"]),
                         int(row["res_memory_bytes"]),
                         int(row["res_disk_bytes"]),
@@ -1602,7 +1422,7 @@ class ControllerTransitions:
             device_type = ""
             device_variant = ""
         with self._db.transaction() as cur:
-            md_device_json = _device_to_json(metadata.device)
+            md_device_json = proto_to_json(metadata.device)
             cur.execute(
                 "INSERT INTO workers("
                 "worker_id, address, healthy, active, consecutive_failures, last_heartbeat_ms, "
@@ -1755,7 +1575,7 @@ class ControllerTransitions:
                     now_ms,
                 )
                 if not job.is_reservation_holder:
-                    resources = _resource_spec_from_row(
+                    resources = resource_spec_from_scalars(
                         job.res_cpu_millicores,
                         job.res_memory_bytes,
                         job.res_disk_bytes,
@@ -1773,7 +1593,7 @@ class ControllerTransitions:
                             str(assignment.worker_id),
                         ),
                     )
-                    entrypoint = _entrypoint_from_json(job.entrypoint_json)
+                    entrypoint = proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint)
                     # Load inline workdir files from the job_workdir_files table.
                     wf_rows = cur.execute(
                         "SELECT filename, data FROM job_workdir_files WHERE job_id = ?",
@@ -1785,12 +1605,12 @@ class ControllerTransitions:
                         task_id=assignment.task_id.to_wire(),
                         num_tasks=job.num_tasks,
                         entrypoint=entrypoint,
-                        environment=_environment_from_json(job.environment_json),
+                        environment=proto_from_json(job.environment_json, job_pb2.EnvironmentConfig),
                         bundle_id=job.bundle_id,
                         resources=resources,
-                        ports=_ports_from_json(job.ports_json),
+                        ports=json.loads(job.ports_json),
                         attempt_id=attempt_id,
-                        constraints=_constraints_from_json(job.constraints_json),
+                        constraints=constraints_from_json(job.constraints_json),
                         task_image=job.task_image,
                     )
                     enqueue_run_dispatch(cur, str(assignment.worker_id), run_request.SerializeToString(), now_ms)
@@ -2015,7 +1835,7 @@ class ControllerTransitions:
 
             if worker_id is not None and task_state not in ACTIVE_TASK_STATES:
                 if jc is not None:
-                    resources = _resource_spec_from_row(
+                    resources = resource_spec_from_scalars(
                         int(jc["res_cpu_millicores"]),
                         int(jc["res_memory_bytes"]),
                         int(jc["res_disk_bytes"]),
@@ -2030,7 +1850,7 @@ class ControllerTransitions:
             if jc is not None and task_state in FAILURE_TASK_STATES:
                 has_cosched = bool(int(jc.get("has_coscheduling", 0)))
                 siblings = _find_coscheduled_siblings(cur, task.job_id, update.task_id, has_cosched)
-                resources = _resource_spec_from_row(
+                resources = resource_spec_from_scalars(
                     int(jc["res_cpu_millicores"]),
                     int(jc["res_memory_bytes"]),
                     int(jc["res_disk_bytes"]),
@@ -2487,7 +2307,7 @@ class ControllerTransitions:
             attempt_worker_id = str(attempt_row["worker_id"]) if attempt_row and attempt_row["worker_id"] else None
             attempt_resources = None
             if attempt_worker_id is not None:
-                attempt_resources = _resource_spec_from_row(
+                attempt_resources = resource_spec_from_scalars(
                     int(row["res_cpu_millicores"]),
                     int(row["res_memory_bytes"]),
                     int(row["res_disk_bytes"]),
@@ -2610,7 +2430,7 @@ class ControllerTransitions:
                     task_kill_workers[tid] = WorkerId(str(worker_id_str))
                     if not int(row["is_reservation_holder"]):
                         decommit_worker = str(worker_id_str)
-                        decommit_resources = _resource_spec_from_row(
+                        decommit_resources = resource_spec_from_scalars(
                             int(row["res_cpu_millicores"]),
                             int(row["res_memory_bytes"]),
                             int(row["res_disk_bytes"]),
@@ -2635,7 +2455,7 @@ class ControllerTransitions:
                 if not siblings:
                     continue
                 jc_row = job_row_cache[job_id_wire]
-                job_resources = _resource_spec_from_row(
+                job_resources = resource_spec_from_scalars(
                     int(jc_row["res_cpu_millicores"]),
                     int(jc_row["res_memory_bytes"]),
                     int(jc_row["res_disk_bytes"]),
@@ -3384,7 +3204,7 @@ class ControllerTransitions:
             for row in pending_rows:
                 task_id = str(row["task_id"])
                 attempt_id = int(row["current_attempt_id"]) + 1
-                resources = _resource_spec_from_row(
+                resources = resource_spec_from_scalars(
                     int(row["res_cpu_millicores"]),
                     int(row["res_memory_bytes"]),
                     int(row["res_disk_bytes"]),
@@ -3396,13 +3216,13 @@ class ControllerTransitions:
                 run_req = job_pb2.RunTaskRequest(
                     task_id=task_id,
                     num_tasks=int(row["num_tasks"]),
-                    entrypoint=_entrypoint_from_json(str(row["entrypoint_json"])),
-                    environment=_environment_from_json(str(row["environment_json"])),
+                    entrypoint=proto_from_json(str(row["entrypoint_json"]), job_pb2.RuntimeEntrypoint),
+                    environment=proto_from_json(str(row["environment_json"]), job_pb2.EnvironmentConfig),
                     bundle_id=str(row["bundle_id"]),
                     resources=resources,
-                    ports=_ports_from_json(str(row["ports_json"])),
+                    ports=json.loads(str(row["ports_json"])),
                     attempt_id=attempt_id,
-                    constraints=_constraints_from_json(row["constraints_json"]),
+                    constraints=constraints_from_json(row["constraints_json"]),
                     task_image=str(row["task_image"]),
                 )
                 # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
@@ -3635,7 +3455,7 @@ class ControllerTransitions:
                 if jc_row is not None and task_state in FAILURE_TASK_STATES:
                     has_cosched = bool(int(jc_row["has_coscheduling"]))
                     siblings = _find_coscheduled_siblings(cur, task.job_id, update.task_id, has_cosched)
-                    job_resources = _resource_spec_from_row(
+                    job_resources = resource_spec_from_scalars(
                         int(jc_row["res_cpu_millicores"]),
                         int(jc_row["res_memory_bytes"]),
                         int(jc_row["res_disk_bytes"]),

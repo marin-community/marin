@@ -252,6 +252,7 @@ def migrate(conn: sqlite3.Connection) -> None:
 
     # 3. Lowercase all job names (Iris names are case-insensitive).
     conn.execute("UPDATE jobs SET name = LOWER(name) WHERE name != LOWER(name)")
+    conn.execute("UPDATE job_config SET name = LOWER(name) WHERE name != LOWER(name)")
 
     # 4. Drop moved columns from jobs (and request_proto).
     # Keep name and has_reservation on jobs for fast listing without JOIN.

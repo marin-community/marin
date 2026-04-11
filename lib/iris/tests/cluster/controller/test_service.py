@@ -14,12 +14,12 @@ from connectrpc.errors import ConnectError
 from iris.cluster.constraints import WellKnownAttribute, device_variant_constraint
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.log_server.server import LogServiceImpl
+from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
     TaskUpdate,
-    _constraints_from_json,
 )
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import job_pb2
@@ -953,7 +953,7 @@ def test_launch_job_injects_device_constraints_from_tpu_resource(service, state)
     service.launch_job(request, None)
 
     job = _query_job(state, JobName.root("test-user", "tpu-job"))
-    stored_constraints = _constraints_from_json(job.constraints_json)
+    stored_constraints = constraints_from_json(job.constraints_json)
     keys = {c.key for c in stored_constraints}
     assert WellKnownAttribute.DEVICE_TYPE in keys
     assert WellKnownAttribute.DEVICE_VARIANT in keys
@@ -980,7 +980,7 @@ def test_launch_job_user_constraints_override_auto(service, state):
     service.launch_job(request, None)
 
     job = _query_job(state, JobName.root("test-user", "multi-variant-job"))
-    stored_constraints = _constraints_from_json(job.constraints_json)
+    stored_constraints = constraints_from_json(job.constraints_json)
 
     # device-variant should be the user's IN constraint, not the auto EQ
     dv_constraints = [c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_VARIANT]
@@ -1005,7 +1005,7 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
     service.launch_job(request, None)
 
     job = _query_job(state, JobName.root("test-user", "cpu-job"))
-    assert len(_constraints_from_json(job.constraints_json)) == 0
+    assert len(constraints_from_json(job.constraints_json)) == 0
 
 
 # =============================================================================
