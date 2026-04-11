@@ -360,9 +360,7 @@ class RayClient:
             packages = pip_spec.get("packages")
             if isinstance(packages, str) and os.path.isfile(packages):
                 with open(packages) as f:
-                    pip_spec["packages"] = [
-                        line.strip() for line in f if line.strip() and not line.startswith("#")
-                    ]
+                    pip_spec["packages"] = [line.strip() for line in f if line.strip() and not line.startswith("#")]
             tpu_runtime_env["pip"] = pip_spec
         if "pip_check" in runtime_env:
             tpu_runtime_env["pip_check"] = runtime_env["pip_check"]
