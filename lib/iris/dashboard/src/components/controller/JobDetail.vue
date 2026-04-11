@@ -473,6 +473,38 @@ const filteredTasks = computed(() => {
   return result
 })
 
+// -- Task Pagination --
+
+const TASK_PAGE_SIZE = 50
+const taskPage = ref(0)
+
+const totalTaskPages = computed(() => Math.max(1, Math.ceil(filteredTasks.value.length / TASK_PAGE_SIZE)))
+
+const paginatedTasks = computed(() => {
+  const start = taskPage.value * TASK_PAGE_SIZE
+  return filteredTasks.value.slice(start, start + TASK_PAGE_SIZE)
+})
+
+// Reset page when filters or sort change
+watch([taskSearch, stateFilter, sortColumn, sortDir], () => { taskPage.value = 0 })
+
+// -- Priority Band --
+
+function bandDisplayName(band: string | undefined): string {
+  if (!band) return 'Unknown'
+  const name = band.replace(/^PRIORITY_BAND_/, '')
+  return name.charAt(0) + name.slice(1).toLowerCase()
+}
+
+function bandColor(band: string | undefined): string {
+  if (!band) return 'text-text-muted'
+  const name = band.replace(/^PRIORITY_BAND_/, '')
+  if (name === 'PRODUCTION') return 'text-status-danger'
+  if (name === 'INTERACTIVE') return 'text-accent'
+  if (name === 'BATCH') return 'text-text-muted'
+  return 'text-text-muted'
+}
+
 // -- Profiling --
 
 function buildProfileType(profilerType: string, format: string | null): Record<string, unknown> {
@@ -662,6 +694,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </InfoRow>
           <InfoRow label="Failures">
             {{ job.failureCount ?? 0 }}
+          </InfoRow>
+          <InfoRow v-if="jobRequest?.priorityBand" label="Priority">
+            <span :class="bandColor(jobRequest.priorityBand)" class="font-semibold">
+              {{ bandDisplayName(jobRequest.priorityBand) }}
+            </span>
           </InfoRow>
         </InfoCard>
 
@@ -882,7 +919,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </thead>
           <tbody>
             <tr
-              v-for="task in filteredTasks"
+              v-for="task in paginatedTasks"
               :key="task.taskId"
               class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
             >
@@ -903,7 +940,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               <td class="px-3 py-2 text-[13px] truncate" :title="task.workerId ?? ''">
                 <RouterLink
                   v-if="task.workerId"
-                  :to="'/worker/' + encodeURIComponent(task.workerId)"
+                  :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}`"
                   class="text-accent hover:underline font-mono text-xs"
                 >
                   {{ task.workerId }}
@@ -959,6 +996,30 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             </tr>
           </tbody>
         </table>
+        <!-- Task pagination -->
+        <div v-if="totalTaskPages > 1" class="flex items-center justify-between px-3 py-2 text-xs text-text-secondary border-t border-surface-border">
+          <span>
+            {{ taskPage * TASK_PAGE_SIZE + 1 }}&ndash;{{ Math.min((taskPage + 1) * TASK_PAGE_SIZE, filteredTasks.length) }}
+            of {{ filteredTasks.length }} tasks
+          </span>
+          <div class="flex items-center gap-1">
+            <button
+              :disabled="taskPage === 0"
+              class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+              @click="taskPage--"
+            >
+              &larr; Prev
+            </button>
+            <span class="px-2 font-mono">{{ taskPage + 1 }} / {{ totalTaskPages }}</span>
+            <button
+              :disabled="taskPage >= totalTaskPages - 1"
+              class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+              @click="taskPage++"
+            >
+              Next &rarr;
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Job logs -->
