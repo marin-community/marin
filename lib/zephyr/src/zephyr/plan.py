@@ -748,6 +748,7 @@ def run_stage(
 
     configure_logging(level=logging.INFO)
 
+    from zephyr import counters
     from zephyr.writers import write_binary_file, write_jsonl_file, write_levanter_cache, write_parquet_file
 
     stream: Iterator = iter(ctx.shard)
@@ -774,6 +775,7 @@ def run_stage(
 
                 if fs.exists(test_path):
                     logger.info(f"Skipping write, output exists: {output_path}")
+                    counters.increment("zephyr/partitions_skipped")
                     yield output_path
                     return
 
