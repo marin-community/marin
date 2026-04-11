@@ -194,6 +194,42 @@ def test_task_config():
     assert len(q) == 3
 
 
+@skip_if_module_missing("lm_eval")
+def test_get_task_and_rename_retries_with_fresh_task_dict(monkeypatch):
+    import lm_eval.tasks as tasks
+    import levanter.eval_harness as eval_harness
+
+    marker = object()
+    attempts = 0
+    original_task = {"task": "mmlu", "task_alias": "mmlu_5shot", "num_fewshot": 5}
+    config = LmEvalHarnessConfig(task_spec=[])
+
+    def fake_get_task_dict(task_name_list, manager):
+        nonlocal attempts
+        [task_config] = task_name_list
+        assert isinstance(task_config, dict)
+        attempts += 1
+        task_config.pop("task", None)
+        if attempts == 1:
+            raise RuntimeError("transient load failure")
+        return {"mmlu": marker}
+
+    monkeypatch.setattr(tasks, "get_task_dict", fake_get_task_dict)
+    monkeypatch.setattr(eval_harness.time, "sleep", lambda _: None)
+    monkeypatch.setattr(eval_harness.random, "uniform", lambda *_: 0.0)
+    monkeypatch.setattr(
+        LmEvalHarnessConfig,
+        "_rename_tasks_for_eval_harness",
+        lambda self, this_task, lm_eval_task_name, our_name: {our_name: marker},
+    )
+
+    renamed = config._get_task_and_rename(object(), "mmlu_5shot", original_task)
+
+    assert renamed == {"mmlu_5shot": marker}
+    assert attempts == 2
+    assert original_task == {"task": "mmlu", "task_alias": "mmlu_5shot", "num_fewshot": 5}
+
+
 @pytest.mark.parametrize("method_name", ["_send_payload", "_receive_payload"])
 def test_payload_broadcast_uses_worker_axis_resources(monkeypatch, method_name):
     worker = object.__new__(_LmEvalHarnessWorker)
