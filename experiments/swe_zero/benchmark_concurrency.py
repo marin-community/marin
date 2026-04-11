@@ -51,6 +51,18 @@ def main():
     parser.add_argument("--max-num-seqs", type=int, default=32)
     parser.add_argument("--max-model-len", type=int, default=8192)
     parser.add_argument(
+        "--tensor-parallel-size",
+        type=int,
+        default=1,
+        help="vLLM --tensor-parallel-size; chip count per replica.",
+    )
+    parser.add_argument(
+        "--data-parallel-size",
+        type=int,
+        default=1,
+        help="vLLM --data-parallel-size; number of replicas to run on the same worker.",
+    )
+    parser.add_argument(
         "--concurrencies",
         default="1,4,8,16,32",
         help="Comma-separated list of client concurrency levels to benchmark",
@@ -81,6 +93,10 @@ def main():
     extra_args = [
         "--max-num-seqs",
         str(args.max_num_seqs),
+        "--tensor-parallel-size",
+        str(args.tensor_parallel_size),
+        "--data-parallel-size",
+        str(args.data_parallel_size),
         # --enforce-eager skips torch.compile / CUDA graphs which on TPU
         # avoids the slow precompile step, at the cost of some steady-state
         # inference throughput.

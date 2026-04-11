@@ -70,7 +70,15 @@ def _save_diversity(report, step_dir: str) -> None:
     save_json(payload, os.path.join(step_dir, "diversity_report.json"))
 
 
-def _run_steps(api_base: str, model: str, step: int, output_dir: str, concurrency: int) -> None:
+def _run_steps(
+    api_base: str,
+    model: str,
+    step: int,
+    output_dir: str,
+    concurrency: int,
+    *,
+    max_total_tokens: int = 8192,
+) -> None:
     """Run rollout generation against a running vLLM server."""
     from openai import OpenAI
 
@@ -149,6 +157,7 @@ def _run_steps(api_base: str, model: str, step: int, output_dir: str, concurrenc
         batches=batches,
         concurrency=concurrency,
         temperature=1.0,
+        max_total_tokens=max_total_tokens,
         progress_callback=_on_rollout_done,
     )
 
@@ -169,12 +178,16 @@ def _run_with_vllm(
     concurrency: int,
     max_num_seqs: int,
     max_model_len: int,
+    tensor_parallel_size: int,
+    max_total_tokens: int,
 ) -> None:
     """Start a VllmEnvironment and run rollout generation against it.
 
     ``max_num_seqs`` caps how many sequences vLLM keeps in flight at once.
-    For a 1.7B model on v6e-1 with seq_len=8192, ~16-32 fits comfortably in
-    HBM; bumping it past the client's concurrency setting is wasted work.
+    ``tensor_parallel_size`` is the number of TPU chips to shard the model
+    across (matches the v6e chip count of the worker for full utilization).
+    ``max_total_tokens`` is the client-side context budget per rollout
+    (must be ≤ ``max_model_len``).
     """
     from marin.evaluation.evaluators.evaluator import ModelConfig
     from marin.inference.vllm_server import VllmEnvironment
@@ -193,21 +206,33 @@ def _run_with_vllm(
     extra_args = [
         "--max-num-seqs",
         str(max_num_seqs),
+        "--tensor-parallel-size",
+        str(tensor_parallel_size),
         # Skip torch.compile / CUDA graphs. On TPU this avoids the slow
         # precompile step that otherwise dominates startup time, at the
         # cost of some steady-state inference throughput.
         "--enforce-eager",
     ]
     logger.info(
-        "vLLM config: max_model_len=%d, max_num_seqs=%d, client_concurrency=%d, enforce_eager=True",
+        "vLLM config: max_model_len=%d, max_num_seqs=%d, TP=%d, client_concurrency=%d, "
+        "max_total_tokens=%d, enforce_eager=True",
         max_model_len,
         max_num_seqs,
+        tensor_parallel_size,
         concurrency,
+        max_total_tokens,
     )
 
     with remove_tpu_lockfile_on_exit(), VllmEnvironment(model_config, extra_args=extra_args) as env:
         logger.info("vLLM server ready at %s", env.server_url)
-        _run_steps(env.server_url, model_name, step, output_dir, concurrency)
+        _run_steps(
+            env.server_url,
+            model_name,
+            step,
+            output_dir,
+            concurrency,
+            max_total_tokens=max_total_tokens,
+        )
 
 
 def _print_ray_run_command(model_name: str, step: int, output_dir: str, tpu_type: str) -> None:
@@ -262,13 +287,32 @@ def main():
         default=8192,
         help="vLLM max_model_len (per-sequence context window in tokens).",
     )
+    parser.add_argument(
+        "--max-total-tokens",
+        type=int,
+        default=8192,
+        help="Client-side per-rollout context budget. Must be ≤ --max-model-len.",
+    )
+    parser.add_argument(
+        "--tensor-parallel-size",
+        type=int,
+        default=1,
+        help="vLLM --tensor-parallel-size; should match the v6e chip count of the worker.",
+    )
     args = parser.parse_args()
 
     model_path = args.model_path or args.model
 
     if args.api_base:
         # Direct mode: server already running
-        _run_steps(args.api_base, args.model, args.step, args.output_dir, args.concurrency)
+        _run_steps(
+            args.api_base,
+            args.model,
+            args.step,
+            args.output_dir,
+            args.concurrency,
+            max_total_tokens=args.max_total_tokens,
+        )
     elif args.local:
         # Local/on-worker mode: start VllmEnvironment in this process
         _run_with_vllm(
@@ -279,6 +323,8 @@ def main():
             args.concurrency,
             args.max_num_seqs,
             args.max_model_len,
+            args.tensor_parallel_size,
+            args.max_total_tokens,
         )
     else:
         # Print the ray_run.py command for cluster submission
