@@ -29,6 +29,7 @@ export default defineConfig({
       '/bundles': 'http://localhost:8080',
       '/blobs': 'http://localhost:8080',
       '/health': 'http://localhost:8080',
+      '/auth': 'http://localhost:8080',
       '/api': 'http://localhost:8080',
     },
   },

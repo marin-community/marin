@@ -33,13 +33,15 @@
   --c-status-success-bg:     #CBF9D7;
   --c-status-success-border: #A3E6B5;
 
-  /* Hot→cold warm end — warning is milder, danger is hotter */
+  /* Hot→cold warm end for warning */
   --c-status-warning:        #EB630E;
   --c-status-warning-bg:     #FFF2A6;
   --c-status-warning-border: #FFB973;
-  --c-status-danger:         #AA2312;
-  --c-status-danger-bg:      #FFF2A6;
-  --c-status-danger-border:  #FFB973;
+
+  /* True red for danger */
+  --c-status-danger:         #D31E3C;
+  --c-status-danger-bg:      #FDE8EC;
+  --c-status-danger-border:  #F9B3BF;
 
   /* Categorical[2] #5A24C7, border from categorical[6] #AB76FF */
   --c-status-purple:         #5A24C7;
@@ -79,9 +81,9 @@
   --c-status-warning:        #FFB973;
   --c-status-warning-bg:     #783301;
   --c-status-warning-border: #EB630E;
-  --c-status-danger:         #D4311C;
-  --c-status-danger-bg:      #783301;
-  --c-status-danger-border:  #AA2312;
+  --c-status-danger:         #F87171;
+  --c-status-danger-bg:      #450a0a;
+  --c-status-danger-border:  #991b1b;
 
   /* Categorical purple (lighter text, darker bg) */
   --c-status-purple:         #AB76FF;
