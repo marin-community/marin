@@ -9,6 +9,12 @@ Samples K PRs per language across all 20 languages in SWE-rebench V2 (default
 the same v6e-4 TP=4 + 32K-context recipe that the Python MVP landed on. Saves
 the rollouts and a per-language report so we can see how the recipe transfers
 beyond Python.
+
+Important: this script intentionally avoids importing
+``marin.evaluation.evaluators.evaluator`` and ``marin.inference.vllm_server``
+because their import chain pulls in ``transformers → torch`` which on some
+worker images is the CUDA build and crashes at module init on TPU. We start
+the vLLM server directly via ``subprocess.Popen(["vllm", "serve", ...])``.
 """
 
 from __future__ import annotations
@@ -18,6 +24,12 @@ import json
 import logging
 import os
 import random
+import shutil
+import subprocess
+import tempfile
+import time
+import urllib.error
+import urllib.request
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -69,15 +81,77 @@ def _sample_prs_per_language(
     return sampled_prs, summary
 
 
-def _per_language_metrics(rollouts) -> dict:
-    """Aggregate per-language stats from a list of Rollout objects."""
-    by_lang: dict[str, list] = defaultdict(list)
-    for r in rollouts:
-        # We attached the language to the PRRecord; look it up via the worktree
-        # info we stored as `extra` (see `Rollout.steps`)... actually we don't
-        # store language on the rollout, so we look it up via instance_id later.
-        by_lang.setdefault(r.instance_id, []).append(r)
-    return {}  # filled below by the caller that has the language map
+def _start_vllm_server(
+    *,
+    model_name_or_path: str,
+    max_num_seqs: int,
+    max_model_len: int,
+    tensor_parallel_size: int,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    timeout_seconds: int = 1800,
+) -> tuple[subprocess.Popen, str, str]:
+    """Spawn `vllm serve` as a subprocess and wait until it answers /v1/models.
+
+    Replicates ``marin.inference.vllm_server._start_vllm_native_server`` but
+    in a way that doesn't transitively import ``transformers`` / ``torch``
+    into THIS Python process. Returns ``(process, server_url, log_dir)``.
+    """
+    vllm_bin = shutil.which("vllm") or "vllm"
+    cmd = [
+        vllm_bin,
+        "serve",
+        model_name_or_path,
+        "--trust-remote-code",
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--max-model-len",
+        str(max_model_len),
+        "--max-num-seqs",
+        str(max_num_seqs),
+        "--tensor-parallel-size",
+        str(tensor_parallel_size),
+        "--enforce-eager",
+    ]
+
+    log_dir = tempfile.mkdtemp(prefix="vllm_server_")
+    stdout_path = os.path.join(log_dir, "stdout.log")
+    stderr_path = os.path.join(log_dir, "stderr.log")
+    logger.info("Starting vLLM: %s", " ".join(cmd))
+    logger.info("vLLM logs: %s", log_dir)
+
+    env = dict(os.environ)
+    env.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+    stdout_f = open(stdout_path, "w")
+    stderr_f = open(stderr_path, "w")
+    process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, env=env)
+    server_url = f"http://{host}:{port}/v1"
+    models_url = f"{server_url}/models"
+
+    start = time.monotonic()
+    while True:
+        if process.poll() is not None:
+            stdout_f.close()
+            stderr_f.close()
+            with open(stderr_path) as f:
+                stderr_tail = "".join(f.readlines()[-50:])
+            raise RuntimeError(
+                f"vLLM exited before becoming ready (rc={process.returncode}).\n" f"stderr tail:\n{stderr_tail}"
+            )
+        try:
+            with urllib.request.urlopen(models_url, timeout=5) as resp:
+                if resp.status == 200:
+                    logger.info("vLLM ready at %s after %.1fs", server_url, time.monotonic() - start)
+                    return process, server_url, log_dir
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
+            pass
+        if time.monotonic() - start > timeout_seconds:
+            process.kill()
+            raise TimeoutError(f"vLLM did not become ready within {timeout_seconds}s")
+        time.sleep(5)
 
 
 def _run_with_vllm(
@@ -93,10 +167,8 @@ def _run_with_vllm(
     tensor_parallel_size: int,
     max_total_tokens: int,
 ) -> None:
-    from marin.evaluation.evaluators.evaluator import ModelConfig
-    from marin.inference.vllm_server import VllmEnvironment
-    from marin.utils import remove_tpu_lockfile_on_exit
-
+    # Local imports of swe_zero modules only — no marin.evaluation /
+    # marin.inference imports, to avoid pulling in transformers / torch.
     from experiments.swe_zero.data_loader import SWERebenchV2Loader
     from experiments.swe_zero.diversity import measure_diversity
     from experiments.swe_zero.rollout_generator import (
@@ -133,19 +205,6 @@ def _run_with_vllm(
     batches = [RolloutBatch(pr=pr, n_rollouts=n_rollouts_per_pr) for pr in sampled_prs]
     total = sum(b.n_rollouts for b in batches)
     logger.info("Will run %d total rollouts (concurrency=%d)", total, concurrency)
-
-    model_config = ModelConfig(
-        name=model_name,
-        path=model_path,
-        engine_kwargs={"max_model_len": max_model_len},
-    )
-    extra_args = [
-        "--max-num-seqs",
-        str(max_num_seqs),
-        "--tensor-parallel-size",
-        str(tensor_parallel_size),
-        "--enforce-eager",
-    ]
     logger.info(
         "vLLM config: max_model_len=%d, max_num_seqs=%d, TP=%d, max_total_tokens=%d, concurrency=%d",
         max_model_len,
@@ -167,10 +226,15 @@ def _run_with_vllm(
             )
             logger.info("Checkpoint: saved %d/%d rollouts", done, total_n)
 
-    with remove_tpu_lockfile_on_exit(), VllmEnvironment(model_config, extra_args=extra_args) as env:
-        logger.info("vLLM server ready at %s", env.server_url)
+    process, server_url, log_dir = _start_vllm_server(
+        model_name_or_path=model_path,
+        max_num_seqs=max_num_seqs,
+        max_model_len=max_model_len,
+        tensor_parallel_size=tensor_parallel_size,
+    )
+    try:
         rollouts = run_rollouts_concurrently(
-            api_base=env.server_url,
+            api_base=server_url,
             api_key="EMPTY",
             model=model_name,
             batches=batches,
@@ -179,6 +243,13 @@ def _run_with_vllm(
             max_total_tokens=max_total_tokens,
             progress_callback=_on_rollout_done,
         )
+    finally:
+        logger.info("Stopping vLLM (logs at %s)", log_dir)
+        process.terminate()
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
 
     save_json([r.to_dict() for r in rollouts], os.path.join(output_dir, "rollouts.json"))
 
