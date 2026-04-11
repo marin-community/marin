@@ -124,13 +124,15 @@ function AvatarDecoration({ state }: { state: CommitState }) {
 }
 
 // Static avatar beside the commit line with a state-driven decoration
-// on top (crown / loading bar / poop).
+// on top (crown / loading bar / poop). `shrink-0` is critical here:
+// without it, flex layout will compress the avatar wrapper when the
+// row is too narrow, distorting the 24px image.
 function CommitAvatar({ commit }: { commit: CommitStatus }) {
   if (!commit.authorAvatarUrl) {
     return null;
   }
   return (
-    <span className="relative inline-block">
+    <span className="relative inline-block shrink-0">
       <img
         src={commit.authorAvatarUrl}
         alt={commit.author}
@@ -147,13 +149,21 @@ function LatestLine({ commit }: { commit: CommitStatus }) {
       href={commit.url}
       target="_blank"
       rel="noreferrer"
-      className="inline-flex items-center gap-2 text-slate-200 hover:text-emerald-300"
+      // `flex min-w-0 flex-1` lets the link shrink below its natural
+      // content width so the headline `truncate` actually kicks in. The
+      // SHA / status dot / timestamp are pinned with `shrink-0` so only
+      // the headline gives way when the row gets narrow.
+      className="flex min-w-0 flex-1 items-center gap-2 text-slate-200 hover:text-emerald-300"
     >
       <CommitAvatar commit={commit} />
       <span className={`h-3 w-3 shrink-0 rounded-full ${stateColor(commit.state)}`} />
-      <span className="font-mono text-xs">{commit.shortOid}</span>
-      <span className="truncate">{commit.headline}</span>
-      <span className="text-slate-500">· {formatRelative(commit.committedAt)}</span>
+      <span className="shrink-0 font-mono text-xs">{commit.shortOid}</span>
+      {/* Hidden when the @container row is below 28rem (~448px), shown
+          and truncated above that. Container query rather than viewport
+          breakpoint so the cutoff tracks the actual card width, not the
+          window. */}
+      <span className="hidden min-w-0 truncate @md:block">{commit.headline}</span>
+      <span className="shrink-0 text-slate-500">· {formatRelative(commit.committedAt)}</span>
     </a>
   );
 }
@@ -182,13 +192,13 @@ export function BuildPanel() {
         {data?.error && <div className="text-sm text-rose-400">{data.error}</div>}
         {data && !data.error && (
           <>
-            <div className="flex flex-wrap items-center gap-3 text-sm">
+            <div className="@container flex items-center gap-3 text-sm">
               {latest ? (
                 <LatestLine commit={latest} />
               ) : (
                 <span className="text-slate-400">no commits</span>
               )}
-              <span className="ml-auto shrink-0 text-slate-400">
+              <span className="shrink-0 text-slate-400">
                 {successRate === null
                   ? "—"
                   : `${Math.round(successRate * 100)}% success over ${finalized}`}
