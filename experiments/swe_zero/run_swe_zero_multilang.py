@@ -154,6 +154,27 @@ def _start_vllm_server(
         time.sleep(5)
 
 
+def _load_existing_rollouts(resume_from: str) -> dict[str, int]:
+    """Load a partial rollouts.json and return ``{instance_id: count}``.
+
+    Used when resuming from a previous (preempted) run — we look up how many
+    rollouts each PR already has and only run the shortfall.
+    """
+    if resume_from.startswith("gs://"):
+        import fsspec
+
+        with fsspec.open(resume_from, "r") as f:
+            data = json.load(f)
+    else:
+        with open(resume_from) as f:
+            data = json.load(f)
+    counts: dict[str, int] = defaultdict(int)
+    for r in data:
+        counts[r["instance_id"]] += 1
+    logger.info("Resume: loaded %d existing rollouts across %d PRs from %s", len(data), len(counts), resume_from)
+    return dict(counts)
+
+
 def _run_with_vllm(
     model_name: str,
     model_path: str,
@@ -166,6 +187,7 @@ def _run_with_vllm(
     max_model_len: int,
     tensor_parallel_size: int,
     max_total_tokens: int,
+    resume_from: str | None = None,
 ) -> None:
     # Local imports of swe_zero modules only — no marin.evaluation /
     # marin.inference imports, to avoid pulling in transformers / torch.
@@ -202,9 +224,24 @@ def _run_with_vllm(
     )
 
     pr_to_language = {pr.instance_id: pr.language for pr in sampled_prs}
-    batches = [RolloutBatch(pr=pr, n_rollouts=n_rollouts_per_pr) for pr in sampled_prs]
+
+    # Resume mode: subtract already-completed rollouts per PR. Only PRs with
+    # shortfall vs n_rollouts_per_pr get a batch in the new run.
+    existing_counts: dict[str, int] = {}
+    if resume_from:
+        existing_counts = _load_existing_rollouts(resume_from)
+
+    batches = []
+    for pr in sampled_prs:
+        already = existing_counts.get(pr.instance_id, 0)
+        remaining = max(0, n_rollouts_per_pr - already)
+        if remaining > 0:
+            batches.append(RolloutBatch(pr=pr, n_rollouts=remaining))
     total = sum(b.n_rollouts for b in batches)
-    logger.info("Will run %d total rollouts (concurrency=%d)", total, concurrency)
+    logger.info("Will run %d total rollouts (concurrency=%d, %d PRs need work)", total, concurrency, len(batches))
+    if resume_from:
+        skipped = sum(1 for pr in sampled_prs if existing_counts.get(pr.instance_id, 0) >= n_rollouts_per_pr)
+        logger.info("Resume: skipping %d PRs that are already complete", skipped)
     logger.info(
         "vLLM config: max_model_len=%d, max_num_seqs=%d, TP=%d, max_total_tokens=%d, concurrency=%d",
         max_model_len,
@@ -215,14 +252,17 @@ def _run_with_vllm(
     )
 
     completed_rollouts: list[Rollout] = []
-    save_interval = max(10, min(50, total // 20))
+    save_interval = max(10, min(50, total // 20)) if total else 1
+    # In resume mode write the new rollouts to a separate file so we don't
+    # clobber the partial we're resuming from.
+    output_filename = "rollouts_resume.json" if resume_from else "rollouts.json"
 
     def _on_rollout_done(done: int, total_n: int, rollout: Rollout) -> None:
         completed_rollouts.append(rollout)
         if done % save_interval == 0 or done == total_n:
             save_json(
                 [r.to_dict() for r in completed_rollouts],
-                os.path.join(output_dir, "rollouts.json"),
+                os.path.join(output_dir, output_filename),
             )
             logger.info("Checkpoint: saved %d/%d rollouts", done, total_n)
 
@@ -251,7 +291,7 @@ def _run_with_vllm(
         except subprocess.TimeoutExpired:
             process.kill()
 
-    save_json([r.to_dict() for r in rollouts], os.path.join(output_dir, "rollouts.json"))
+    save_json([r.to_dict() for r in rollouts], os.path.join(output_dir, output_filename))
 
     # Per-language report
     by_lang_rollouts: dict[str, list] = defaultdict(list)
@@ -350,6 +390,12 @@ def main():
     parser.add_argument("--tensor-parallel-size", type=int, default=4)
     parser.add_argument("--output_dir", default="gs://marin-us-central2/experiments/swe_zero_multilang")
     parser.add_argument("--local", action="store_true", help="Run locally with VllmEnvironment")
+    parser.add_argument(
+        "--resume-from",
+        default=None,
+        help="Path (local or gs://) to a partial rollouts.json from a previous run. "
+        "Per-PR shortfalls will be filled in; PRs already at n-rollouts are skipped.",
+    )
     args = parser.parse_args()
 
     model_path = args.model_path or args.model
@@ -369,6 +415,7 @@ def main():
         max_model_len=args.max_model_len,
         tensor_parallel_size=args.tensor_parallel_size,
         max_total_tokens=args.max_total_tokens,
+        resume_from=args.resume_from,
     )
 
 
