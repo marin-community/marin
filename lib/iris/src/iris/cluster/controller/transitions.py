@@ -794,15 +794,15 @@ def _batch_worker_health(
         snap = req.worker_resource_snapshot
         if snap is not None:
             snap_fields = (
-                snap.host_cpu_percent or None,
-                snap.memory_used_bytes or None,
-                snap.memory_total_bytes or None,
-                snap.disk_used_bytes or None,
-                snap.disk_total_bytes or None,
-                snap.running_task_count or None,
-                snap.total_process_count or None,
-                snap.net_recv_bps or None,
-                snap.net_sent_bps or None,
+                snap.host_cpu_percent,
+                snap.memory_used_bytes,
+                snap.memory_total_bytes,
+                snap.disk_used_bytes,
+                snap.disk_total_bytes,
+                snap.running_task_count,
+                snap.total_process_count,
+                snap.net_recv_bps,
+                snap.net_sent_bps,
             )
             health_params_with_snap.append((now_ms, *snap_fields, wid))
             history_params.append((wid, *snap_fields, now_ms))
@@ -1702,19 +1702,6 @@ class ControllerTransitions:
                 continue
             worker_id = attempt_row["worker_id"]
             if update.resource_usage is not None:
-                cur.execute(
-                    "UPDATE tasks SET resource_usage_memory_mb = ?, resource_usage_disk_mb = ?, "
-                    "resource_usage_cpu_millicores = ?, resource_usage_memory_peak_mb = ?, "
-                    "resource_usage_process_count = ? WHERE task_id = ?",
-                    (
-                        update.resource_usage.memory_mb or None,
-                        update.resource_usage.disk_mb or None,
-                        update.resource_usage.cpu_millicores or None,
-                        update.resource_usage.memory_peak_mb or None,
-                        update.resource_usage.process_count or None,
-                        update.task_id.to_wire(),
-                    ),
-                )
                 ru = update.resource_usage
                 cur.execute(
                     "INSERT INTO task_resource_history"
@@ -1840,7 +1827,7 @@ class ControllerTransitions:
                         int(jc["res_cpu_millicores"]),
                         int(jc["res_memory_bytes"]),
                         int(jc["res_disk_bytes"]),
-                        jc.get("res_device_json"),
+                        jc["res_device_json"],
                     )
                     _decommit_worker_resources(cur, str(worker_id), resources)
 
@@ -1849,13 +1836,13 @@ class ControllerTransitions:
 
             # Coscheduled jobs: a terminal host failure should cascade to siblings.
             if jc is not None and task_state in FAILURE_TASK_STATES:
-                has_cosched = bool(int(jc.get("has_coscheduling", 0)))
+                has_cosched = bool(int(jc["has_coscheduling"]))
                 siblings = _find_coscheduled_siblings(cur, task.job_id, update.task_id, has_cosched)
                 resources = resource_spec_from_scalars(
                     int(jc["res_cpu_millicores"]),
                     int(jc["res_memory_bytes"]),
                     int(jc["res_disk_bytes"]),
-                    jc.get("res_device_json"),
+                    jc["res_device_json"],
                 )
                 cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
                     cur, siblings, update.task_id, resources, now_ms
@@ -1932,7 +1919,6 @@ class ControllerTransitions:
             task_row_map = _bulk_fetch_tasks(cur, all_task_ids)
 
             # ── Classify and split ────────────────────────────────────────
-            resource_usage_params: list[tuple[int | None, int | None, int | None, int | None, int | None, str]] = []
             task_history_params: list[tuple[str, int, int, int, int, int, int]] = []
             # (request_index, transition_request) pairs so results stay aligned.
             transition_entries: list[tuple[int, HeartbeatApplyRequest]] = []
@@ -1963,16 +1949,6 @@ class ControllerTransitions:
                             continue
                         if update.resource_usage is not None:
                             u = update.resource_usage
-                            resource_usage_params.append(
-                                (
-                                    u.memory_mb or None,
-                                    u.disk_mb or None,
-                                    u.cpu_millicores or None,
-                                    u.memory_peak_mb or None,
-                                    u.process_count or None,
-                                    task_id_wire,
-                                )
-                            )
                             task_history_params.append(
                                 (
                                     task_id_wire,
@@ -1997,14 +1973,7 @@ class ControllerTransitions:
                         )
                     )
 
-            # ── Pass 2a: batch resource_usage writes ──────────────────────
-            if resource_usage_params:
-                cur.executemany(
-                    "UPDATE tasks SET resource_usage_memory_mb = ?, resource_usage_disk_mb = ?, "
-                    "resource_usage_cpu_millicores = ?, resource_usage_memory_peak_mb = ?, "
-                    "resource_usage_process_count = ? WHERE task_id = ?",
-                    resource_usage_params,
-                )
+            # ── Pass 2a: batch task resource history writes ─────────────────
             if task_history_params:
                 cur.executemany(
                     "INSERT INTO task_resource_history"
@@ -2460,7 +2429,7 @@ class ControllerTransitions:
                     int(jc_row["res_cpu_millicores"]),
                     int(jc_row["res_memory_bytes"]),
                     int(jc_row["res_disk_bytes"]),
-                    jc_row.get("res_device_json"),
+                    jc_row["res_device_json"],
                 )
                 # Pick the first direct-timeout task in this job as the "cause" for the error message.
                 cause_tid = next(JobName.from_wire(str(r["task_id"])) for r in rows if str(r["job_id"]) == job_id_wire)
@@ -3311,19 +3280,6 @@ class ControllerTransitions:
                     continue
 
                 if update.resource_usage is not None:
-                    cur.execute(
-                        "UPDATE tasks SET resource_usage_memory_mb = ?, resource_usage_disk_mb = ?, "
-                        "resource_usage_cpu_millicores = ?, resource_usage_memory_peak_mb = ?, "
-                        "resource_usage_process_count = ? WHERE task_id = ?",
-                        (
-                            update.resource_usage.memory_mb or None,
-                            update.resource_usage.disk_mb or None,
-                            update.resource_usage.cpu_millicores or None,
-                            update.resource_usage.memory_peak_mb or None,
-                            update.resource_usage.process_count or None,
-                            update.task_id.to_wire(),
-                        ),
-                    )
                     ru = update.resource_usage
                     cur.execute(
                         "INSERT INTO task_resource_history"

@@ -222,23 +222,6 @@ def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> job_pb2.Task
         proto.started_at.CopyFrom(timestamp_to_proto(current_attempt.started_at))
     if current_attempt and current_attempt.finished_at:
         proto.finished_at.CopyFrom(timestamp_to_proto(current_attempt.finished_at))
-    has_resource_usage = (
-        task.resource_usage_memory_mb is not None
-        or task.resource_usage_cpu_millicores is not None
-        or task.resource_usage_disk_mb is not None
-        or task.resource_usage_memory_peak_mb is not None
-        or task.resource_usage_process_count is not None
-    )
-    if has_resource_usage:
-        proto.resource_usage.CopyFrom(
-            job_pb2.ResourceUsage(
-                memory_mb=task.resource_usage_memory_mb or 0,
-                disk_mb=task.resource_usage_disk_mb or 0,
-                cpu_millicores=task.resource_usage_cpu_millicores or 0,
-                memory_peak_mb=task.resource_usage_memory_peak_mb or 0,
-                process_count=task.resource_usage_process_count or 0,
-            )
-        )
     if task.container_id:
         proto.container_id = task.container_id
     # For pending tasks with prior terminal attempts, surface retry context.
@@ -374,31 +357,28 @@ def _resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
     )
 
 
-def _snapshot_row_to_proto(row: Any) -> job_pb2.WorkerResourceSnapshot:
+_SNAPSHOT_FIELD_MAP = (
+    ("snapshot_host_cpu_percent", "host_cpu_percent"),
+    ("snapshot_memory_used_bytes", "memory_used_bytes"),
+    ("snapshot_memory_total_bytes", "memory_total_bytes"),
+    ("snapshot_disk_used_bytes", "disk_used_bytes"),
+    ("snapshot_disk_total_bytes", "disk_total_bytes"),
+    ("snapshot_running_task_count", "running_task_count"),
+    ("snapshot_total_process_count", "total_process_count"),
+    ("snapshot_net_recv_bps", "net_recv_bps"),
+    ("snapshot_net_sent_bps", "net_sent_bps"),
+)
+
+
+def _snapshot_row_to_proto(row: Any, timestamp_ms: int | None = None) -> job_pb2.WorkerResourceSnapshot:
     """Reconstruct a WorkerResourceSnapshot proto from scalar columns."""
     snap = job_pb2.WorkerResourceSnapshot()
-    if row.snapshot_host_cpu_percent is not None:
-        snap.host_cpu_percent = row.snapshot_host_cpu_percent
-    if row.snapshot_memory_used_bytes is not None:
-        snap.memory_used_bytes = row.snapshot_memory_used_bytes
-    if row.snapshot_memory_total_bytes is not None:
-        snap.memory_total_bytes = row.snapshot_memory_total_bytes
-    if row.snapshot_disk_used_bytes is not None:
-        snap.disk_used_bytes = row.snapshot_disk_used_bytes
-    if row.snapshot_disk_total_bytes is not None:
-        snap.disk_total_bytes = row.snapshot_disk_total_bytes
-    if row.snapshot_running_task_count is not None:
-        snap.running_task_count = row.snapshot_running_task_count
-    if row.snapshot_total_process_count is not None:
-        snap.total_process_count = row.snapshot_total_process_count
-    if row.snapshot_net_recv_bps is not None:
-        snap.net_recv_bps = row.snapshot_net_recv_bps
-    if row.snapshot_net_sent_bps is not None:
-        snap.net_sent_bps = row.snapshot_net_sent_bps
-    # timestamp_ms is present when reading from worker_resource_history.
-    ts = getattr(row, "timestamp_ms", None)
-    if ts is not None:
-        snap.timestamp.epoch_ms = ts
+    for col, proto_field in _SNAPSHOT_FIELD_MAP:
+        val = getattr(row, col)
+        if val is not None:
+            setattr(snap, proto_field, val)
+    if timestamp_ms is not None:
+        snap.timestamp.epoch_ms = timestamp_ms
     return snap
 
 
@@ -529,7 +509,7 @@ def _read_worker_detail(
             "WHERE wrh.worker_id = ? ORDER BY wrh.id DESC LIMIT ?",
             (str(worker_id), max(resource_history_limit, 0)),
         )
-    resource_history = tuple(reversed([_snapshot_row_to_proto(r) for r in resource_rows]))
+    resource_history = tuple(reversed([_snapshot_row_to_proto(r, timestamp_ms=r.timestamp_ms) for r in resource_rows]))
     return _WorkerDetail(
         worker=worker,
         running_tasks=frozenset(r.task_id for r in running_rows),
@@ -1468,10 +1448,10 @@ class ControllerServiceImpl:
                 "WHERE trh.task_id = ? AND trh.attempt_id = ? ORDER BY trh.id DESC LIMIT ?",
                 (task_id.to_wire(), task.current_attempt_id, TASK_RESOURCE_HISTORY_RETENTION),
             )
-            job_row = q.raw(
-                "SELECT j.request_proto FROM jobs j WHERE j.job_id = ?",
+            jc_row = q.raw(
+                "SELECT jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json "
+                "FROM job_config jc WHERE jc.job_id = ?",
                 (task.job_id.to_wire(),),
-                decoders={"request_proto": lambda b: controller_pb2.Controller.LaunchJobRequest.FromString(b)},
             )
         # Reverse to oldest-first for the API contract.
         for r in reversed(history_rows):
@@ -1483,8 +1463,23 @@ class ControllerServiceImpl:
                     memory_peak_mb=r.memory_peak_mb,
                 )
             )
-        if job_row and job_row[0].request_proto.HasField("resources"):
-            job_resources = job_row[0].request_proto.resources
+        # Populate resource_usage from the latest history entry (newest is first before reversal).
+        if history_rows:
+            latest = history_rows[0]
+            proto.resource_usage.CopyFrom(
+                job_pb2.ResourceUsage(
+                    cpu_millicores=latest.cpu_millicores,
+                    memory_mb=latest.memory_mb,
+                    disk_mb=latest.disk_mb,
+                    memory_peak_mb=latest.memory_peak_mb,
+                )
+            )
+        if jc_row:
+            row = jc_row[0]
+            if row.res_cpu_millicores or row.res_memory_bytes or row.res_disk_bytes or row.res_device_json:
+                job_resources = resource_spec_from_scalars(
+                    row.res_cpu_millicores, row.res_memory_bytes, row.res_disk_bytes, row.res_device_json
+                )
 
         return controller_pb2.Controller.GetTaskStatusResponse(task=proto, job_resources=job_resources)
 

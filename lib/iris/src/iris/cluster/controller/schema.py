@@ -741,41 +741,6 @@ TASKS = Table(
         Column("max_retries_preemption", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column("failure_count", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column("preemption_count", "INTEGER", "NOT NULL", python_type=int, decoder=int),
-        Column(
-            "resource_usage_memory_mb",
-            "INTEGER",
-            "",
-            python_type=int | None,
-            decoder=_nullable(int),
-        ),
-        Column(
-            "resource_usage_disk_mb",
-            "INTEGER",
-            "",
-            python_type=int | None,
-            decoder=_nullable(int),
-        ),
-        Column(
-            "resource_usage_cpu_millicores",
-            "INTEGER",
-            "",
-            python_type=int | None,
-            decoder=_nullable(int),
-        ),
-        Column(
-            "resource_usage_memory_peak_mb",
-            "INTEGER",
-            "",
-            python_type=int | None,
-            decoder=_nullable(int),
-        ),
-        Column(
-            "resource_usage_process_count",
-            "INTEGER",
-            "",
-            python_type=int | None,
-            decoder=_nullable(int),
-        ),
         Column("current_attempt_id", "INTEGER", "NOT NULL DEFAULT -1", python_type=int, decoder=int),
         Column("priority_neg_depth", "INTEGER", "NOT NULL", python_type=int, decoder=int),
         Column("priority_root_submitted_ms", "INTEGER", "NOT NULL", python_type=int, decoder=int),
@@ -1574,11 +1539,6 @@ class TaskDetailRow:
     exit_code: int | None
     started_at: Timestamp | None
     finished_at: Timestamp | None
-    resource_usage_memory_mb: int | None
-    resource_usage_disk_mb: int | None
-    resource_usage_cpu_millicores: int | None
-    resource_usage_memory_peak_mb: int | None
-    resource_usage_process_count: int | None
     current_worker_id: WorkerId | None
     current_worker_address: str | None
     container_id: str | None = None
@@ -1920,11 +1880,6 @@ TASK_DETAIL_PROJECTION = TASKS.projection(
     "exit_code",
     "started_at_ms",
     "finished_at_ms",
-    "resource_usage_memory_mb",
-    "resource_usage_disk_mb",
-    "resource_usage_cpu_millicores",
-    "resource_usage_memory_peak_mb",
-    "resource_usage_process_count",
     "current_worker_id",
     "current_worker_address",
     "container_id",

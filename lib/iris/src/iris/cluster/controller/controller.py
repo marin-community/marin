@@ -480,9 +480,9 @@ def _get_running_tasks_with_band_and_value(
         if wid in claimed_workers:
             continue
         resources = resource_spec_from_scalars(
-            int(row.res_cpu_millicores or 0),
-            int(row.res_memory_bytes or 0),
-            int(row.res_disk_bytes or 0),
+            row.res_cpu_millicores,
+            row.res_memory_bytes,
+            row.res_disk_bytes,
             row.res_device_json,
         )
         band = compute_effective_band(row.priority_band, row.task_id.user, _spend, _limits)

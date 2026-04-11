@@ -84,8 +84,8 @@ def compute_user_spend(snapshot: QuerySnapshot) -> dict[str, int]:
     spend: dict[str, int] = defaultdict(int)
     for row in rows:
         user_id = row.job_id.user
-        cpu = int(row.res_cpu_millicores or 0)
-        mem = int(row.res_memory_bytes or 0)
+        cpu = row.res_cpu_millicores
+        mem = row.res_memory_bytes
         accel = _accel_from_device_json(row.res_device_json)
         value = resource_value(cpu, mem, accel)
         spend[user_id] += value * int(row.task_count)
