@@ -343,7 +343,7 @@ sudo docker run -d --name {{ container_name }} \\
     {{ config_volume }} \\
     {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.controller.main serve \\
-        --host 0.0.0.0 --port {{ port }} {{ config_flag }}
+        --host 0.0.0.0 --port {{ port }} {{ config_flag }} {{ fresh_flag }}
 
 echo "[iris-controller] [5/5] Controller container started"
 
@@ -413,6 +413,7 @@ def build_controller_bootstrap_script(
     docker_image: str,
     port: int,
     config_yaml: str = "",
+    fresh: bool = False,
 ) -> str:
     """Build bootstrap script for controller VM.
 
@@ -420,6 +421,8 @@ def build_controller_bootstrap_script(
         docker_image: Docker image to run
         port: Controller port
         config_yaml: Optional YAML config to write to /etc/iris/config.yaml
+        fresh: When True, pass ``--fresh`` to the controller serve command so
+            it starts with an empty local database and skips checkpoint restore.
     """
     if config_yaml:
         config_setup = _build_config_setup(config_yaml, log_prefix="[iris-controller]")
@@ -438,18 +441,22 @@ def build_controller_bootstrap_script(
         config_setup=config_setup,
         config_volume=config_volume,
         config_flag=config_flag,
+        fresh_flag="--fresh" if fresh else "",
     )
 
 
 def build_controller_bootstrap_script_from_config(
     config: config_pb2.IrisClusterConfig,
     resolve_image: Callable[[str, str | None], str],
+    fresh: bool = False,
 ) -> str:
     """Build controller bootstrap script from the full cluster config.
 
     Args:
         config: Full cluster configuration.
         resolve_image: Resolves a container image tag for the target registry.
+        fresh: When True, pass ``--fresh`` to the controller serve command so
+            it starts with an empty local database and skips checkpoint restore.
     """
     # Local import to avoid circular dependency (config.py imports from bootstrap)
     from iris.cluster.config import config_to_dict
@@ -465,4 +472,4 @@ def build_controller_bootstrap_script_from_config(
 
     image = resolve_image(image, zone)
 
-    return build_controller_bootstrap_script(image, port, config_yaml)
+    return build_controller_bootstrap_script(image, port, config_yaml, fresh=fresh)

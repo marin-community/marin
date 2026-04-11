@@ -225,8 +225,11 @@ def cluster_list():
 
 @cluster.command("start")
 @click.option("--local", is_flag=True, help="Create a local cluster for testing that mimics the original config")
+@click.option(
+    "--fresh", is_flag=True, default=False, help="Start with an empty database, ignoring any remote checkpoint"
+)
 @click.pass_context
-def cluster_start(ctx, local: bool):
+def cluster_start(ctx, local: bool, fresh: bool):
     """Start controller and wait for health.
 
     Each platform handles its own controller lifecycle:
@@ -272,7 +275,7 @@ def cluster_start(ctx, local: bool):
         else:
             iris_config = IrisConfig(config)
             bundle = iris_config.provider_bundle()
-            address = bundle.controller.start_controller(config)
+            address = bundle.controller.start_controller(config, fresh=fresh)
             click.echo(f"Controller started at {address}")
             click.echo("\nController is running with integrated autoscaler.")
             click.echo("Use 'iris --config=... cluster status' to check cluster state.")
@@ -604,8 +607,14 @@ def controller(ctx):
     default=False,
     help="Start in dry-run mode: compute scheduling but suppress all side effects",
 )
+@click.option(
+    "--fresh",
+    is_flag=True,
+    default=False,
+    help="Start with an empty database, ignoring any remote checkpoint",
+)
 @click.pass_context
-def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_run):
+def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_run, fresh):
     """Start a local controller process.
 
     Loads the cluster config, restores from checkpoint, and runs the full
@@ -631,6 +640,7 @@ def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_
         checkpoint_path=checkpoint_path,
         checkpoint_interval=checkpoint_interval,
         dry_run=dry_run,
+        fresh=fresh,
     )
 
 

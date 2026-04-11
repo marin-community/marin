@@ -11,6 +11,7 @@ serve`` subcommand in the main CLI.
 
 import logging
 import os
+import shutil
 import signal
 import tempfile
 import threading
@@ -39,6 +40,7 @@ def run_controller_serve(
     checkpoint_path: str | None = None,
     checkpoint_interval: float | None = None,
     dry_run: bool = False,
+    fresh: bool = False,
 ) -> None:
     """Start the Iris controller, block until SIGTERM/SIGINT.
 
@@ -78,7 +80,16 @@ def run_controller_serve(
     db_dir = local_state_dir / "db"
     db_path = db_dir / ControllerDB.DB_FILENAME
     auth_db_path = db_dir / ControllerDB.AUTH_DB_FILENAME
-    if db_path.exists() and auth_db_path.exists():
+    if fresh:
+        # Wipe any pre-existing db_dir so we're guaranteed to start with an
+        # empty database. Otherwise a stale or corrupt local SQLite file would
+        # be silently reused, defeating the purpose of --fresh.
+        if db_dir.exists():
+            logger.info("--fresh: removing existing db_dir %s", db_dir)
+            shutil.rmtree(db_dir)
+        logger.info("--fresh: starting with empty database, skipping checkpoint restore")
+        db_dir.mkdir(parents=True, exist_ok=True)
+    elif db_path.exists() and auth_db_path.exists():
         logger.info("Local DB exists at %s, skipping remote restore", db_dir)
     else:
         if db_path.exists() and not auth_db_path.exists():
@@ -244,6 +255,12 @@ def cli():
     default=False,
     help="Start in dry-run mode: compute scheduling but suppress all side effects",
 )
+@click.option(
+    "--fresh",
+    is_flag=True,
+    default=False,
+    help="Start with an empty database, ignoring any remote checkpoint",
+)
 def serve(
     host: str,
     port: int,
@@ -252,6 +269,7 @@ def serve(
     checkpoint_path: str | None,
     checkpoint_interval: float | None,
     dry_run: bool,
+    fresh: bool,
 ):
     """Start the Iris controller service."""
     from iris.cluster.config import load_config
@@ -269,6 +287,7 @@ def serve(
         checkpoint_path=checkpoint_path,
         checkpoint_interval=checkpoint_interval,
         dry_run=dry_run,
+        fresh=fresh,
     )
 
 
