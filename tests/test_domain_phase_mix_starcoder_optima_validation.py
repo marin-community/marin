@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -54,13 +54,15 @@ def test_launch_starcoder_optima_validation_dry_run(tmp_path: Path):
                 "subset_size": subset_size,
                 "selector_seed": 0,
                 "evaluation_model": "DS-RE-CEQ",
-                "weight_config": WeightConfig(
-                    run_id=run_id,
-                    phase_weights={
-                        "phase_0": {"nemotron_full": 0.9, "starcoder": 0.1},
-                        "phase_1": {"nemotron_full": 0.4, "starcoder": 0.6},
-                    },
-                ).to_dict(),
+                "weight_config": (
+                    WeightConfig(
+                        run_id=run_id,
+                        phase_weights={
+                            "phase_0": {"nemotron_full": 0.9, "starcoder": 0.1},
+                            "phase_1": {"nemotron_full": 0.4, "starcoder": 0.6},
+                        },
+                    ).to_dict()
+                ),
                 "predicted_objective": 0.1 * subset_size,
                 "nearest_observed_idx": 0,
                 "nearest_observed_distance": 0.0,
@@ -112,27 +114,31 @@ def test_launch_starcoder_optima_validation_from_inline_plan(tmp_path: Path):
                 "subset_size": 4,
                 "selector_seed": 0,
                 "run_name": "feature_bayes_linear_k004_optimum",
-                "weight_config": WeightConfig(
-                    run_id=98104,
-                    phase_weights={
-                        "phase_0": {"nemotron_full": 1.0, "starcoder": 0.0},
-                        "phase_1": {"nemotron_full": 0.7, "starcoder": 0.3},
-                        "phase_2": {"nemotron_full": 0.4, "starcoder": 0.6},
-                    },
-                ).to_dict(),
+                "weight_config": (
+                    WeightConfig(
+                        run_id=98104,
+                        phase_weights={
+                            "phase_0": {"nemotron_full": 1.0, "starcoder": 0.0},
+                            "phase_1": {"nemotron_full": 0.7, "starcoder": 0.3},
+                            "phase_2": {"nemotron_full": 0.4, "starcoder": 0.6},
+                        },
+                    ).to_dict()
+                ),
             },
             {
                 "subset_size": 16,
                 "selector_seed": 0,
                 "run_name": "feature_bayes_linear_k016_optimum",
-                "weight_config": WeightConfig(
-                    run_id=98116,
-                    phase_weights={
-                        "phase_0": {"nemotron_full": 0.9, "starcoder": 0.1},
-                        "phase_1": {"nemotron_full": 0.5, "starcoder": 0.5},
-                        "phase_2": {"nemotron_full": 0.2, "starcoder": 0.8},
-                    },
-                ).to_dict(),
+                "weight_config": (
+                    WeightConfig(
+                        run_id=98116,
+                        phase_weights={
+                            "phase_0": {"nemotron_full": 0.9, "starcoder": 0.1},
+                            "phase_1": {"nemotron_full": 0.5, "starcoder": 0.5},
+                            "phase_2": {"nemotron_full": 0.2, "starcoder": 0.8},
+                        },
+                    ).to_dict()
+                ),
             },
         ],
     }
@@ -180,13 +186,15 @@ def test_launch_starcoder_optima_validation_from_inline_plan_missing_benchmark_d
                 "subset_size": 4,
                 "selector_seed": 0,
                 "run_name": "feature_bayes_linear_k004_optimum",
-                "weight_config": WeightConfig(
-                    run_id=97104,
-                    phase_weights={
-                        "phase_0": {"nemotron_full": 1.0, "starcoder": 0.0},
-                        "phase_1": {"nemotron_full": 0.7, "starcoder": 0.3},
-                    },
-                ).to_dict(),
+                "weight_config": (
+                    WeightConfig(
+                        run_id=97104,
+                        phase_weights={
+                            "phase_0": {"nemotron_full": 1.0, "starcoder": 0.0},
+                            "phase_1": {"nemotron_full": 0.7, "starcoder": 0.3},
+                        },
+                    ).to_dict()
+                ),
             },
         ],
     }
@@ -219,9 +227,7 @@ def test_launch_starcoder_optima_validation_from_inline_plan_missing_benchmark_d
 
 
 def test_safe_name_prefix_respects_wandb_limit():
-    name_prefix = (
-        "pinlin_calvin_xu/data_mixture/three_phase_starcoder_selector_validation/full_20260308_rerun2"
-    )
+    name_prefix = "pinlin_calvin_xu/data_mixture/three_phase_starcoder_selector_validation/full_20260308_rerun2"
     run_names = ["feature_bayes_linear_k128_optimum"]
     truncated = launch_validation._safe_name_prefix(name_prefix, run_names=run_names)
     assert len(truncated) + 1 + len(run_names[0]) <= 64

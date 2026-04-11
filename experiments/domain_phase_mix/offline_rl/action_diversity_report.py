@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Generate action-diversity diagnostics for an offline-RL policy."""
@@ -290,16 +290,22 @@ def _plot_histograms(predictions: pd.DataFrame, artifact: PolicyArtifactV1, outp
     fig, axes = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
     panels = [("all", predictions), *list(predictions.groupby("phase"))]
     bins = 40
-    x_min = min(
-        float(predictions["behavior_action"].min()),
-        float(predictions["policy_action_raw"].min()),
-        artifact.action_low,
-    ) - 0.05
-    x_max = max(
-        float(predictions["behavior_action"].max()),
-        float(predictions["policy_action_raw"].max()),
-        artifact.action_high,
-    ) + 0.05
+    x_min = (
+        min(
+            float(predictions["behavior_action"].min()),
+            float(predictions["policy_action_raw"].min()),
+            artifact.action_low,
+        )
+        - 0.05
+    )
+    x_max = (
+        max(
+            float(predictions["behavior_action"].max()),
+            float(predictions["policy_action_raw"].max()),
+            artifact.action_high,
+        )
+        + 0.05
+    )
 
     for axis, (label, frame) in zip(axes.ravel(), panels, strict=True):
         axis.hist(frame["behavior_action"], bins=bins, range=(x_min, x_max), alpha=0.35, label="behavior")

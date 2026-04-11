@@ -1,9 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import pandas as pd
 
 from experiments.domain_phase_mix.exploratory.plot_starcoder_optima_validation import (

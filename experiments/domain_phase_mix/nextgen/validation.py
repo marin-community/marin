@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Validation planning, slot execution, and state finalization."""
@@ -43,8 +43,7 @@ VALIDATION_RESULTS_CSV = "validation_results.csv"
 class ValidationExecutionAdapter(Protocol):
     """Adapter interface for executing validation candidates."""
 
-    def execute(self, *, model_name: str, candidate: Candidate, output_path: str) -> ValidationRecord:
-        ...
+    def execute(self, *, model_name: str, candidate: Candidate, output_path: str) -> ValidationRecord: ...
 
 
 def register_validation_execution_adapter(adapter: ValidationExecutionAdapter | None) -> None:
@@ -197,7 +196,6 @@ def plan_validation(config: PlanValidationConfig) -> None:
         json.dump(slot_assignments, f, indent=2, sort_keys=True)
 
 
-
 def run_validation_slot(config: ValidationSlotConfig) -> None:
     """Static slot that executes or records candidate validation handling."""
     plan_dir = str(config.plan_output_path)
@@ -261,7 +259,6 @@ def run_validation_slot(config: ValidationSlotConfig) -> None:
         json.dump(dataclasses.asdict(result), f, indent=2, sort_keys=True)
 
 
-
 def collect_validation_results(config: CollectValidationConfig) -> None:
     """Collect slot outputs into one validation results artifact."""
     slot_model_names = json.loads(config.slot_model_names_json)
@@ -297,7 +294,6 @@ def collect_validation_results(config: CollectValidationConfig) -> None:
         df.to_csv(f, index=False)
 
 
-
 def finalize_state(config: FinalizeStateConfig) -> None:
     """Update persistent state with validation outcomes and run registry snapshot."""
     state_dir = str(config.state_output_path)
@@ -310,9 +306,11 @@ def finalize_state(config: FinalizeStateConfig) -> None:
             loop_name=merged_snapshot["loop_name"],
             objective_metric=merged_snapshot["objective_metric"],
             next_local_run_id=int(merged_snapshot.get("next_local_run_id", state.next_local_run_id)),
-            runs=state.runs if not merged_snapshot.get("runs") else [
-                _decode_run_record(row) for row in merged_snapshot.get("runs", [])
-            ],
+            runs=(
+                state.runs
+                if not merged_snapshot.get("runs")
+                else [_decode_run_record(row) for row in merged_snapshot.get("runs", [])]
+            ),
             validated_candidates=state.validated_candidates,
         )
     validation_rows = _load_json(os.path.join(validation_dir, VALIDATION_RESULTS_JSON), default=[])
@@ -350,7 +348,6 @@ def finalize_state(config: FinalizeStateConfig) -> None:
             indent=2,
             sort_keys=True,
         )
-
 
 
 def create_plan_validation_step(

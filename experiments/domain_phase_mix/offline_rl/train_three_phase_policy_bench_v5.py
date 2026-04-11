@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Train and compare pooled-auxiliary direct planners against the legacy outcome planner."""
@@ -147,15 +147,20 @@ class HybridQDirectPlannerV5(ActionPolicy):
                 behavior_policy=self.behavior_policy,
             )
             candidate_actions = np.tile(self.action_grid, len(stage_frame)).astype(np.float32)
-            q_values = self.q_models[int(decision_index)].predict(
-                np.concatenate(
-                    [
-                        repeated.loc[:, list(self.feature_keys)].to_numpy(dtype=np.float32),
-                        candidate_actions.reshape(-1, 1),
-                    ],
-                    axis=1,
+            q_values = (
+                self.q_models[int(decision_index)]
+                .predict(
+                    np.concatenate(
+                        [
+                            repeated.loc[:, list(self.feature_keys)].to_numpy(dtype=np.float32),
+                            candidate_actions.reshape(-1, 1),
+                        ],
+                        axis=1,
+                    )
                 )
-            ).astype(np.float32).reshape(len(stage_frame), len(self.action_grid))
+                .astype(np.float32)
+                .reshape(len(stage_frame), len(self.action_grid))
+            )
             direct_utility = -self.reward_models.blended_stage_scores(repeated, candidate_actions).reshape(
                 len(stage_frame), len(self.action_grid)
             )
@@ -430,9 +435,9 @@ def run_three_phase_policy_bench_v5(config: ThreePhasePolicyBenchV5Config) -> di
         "feature_keys": list(feature_keys),
         "best_method_by_summary": best_method,
         "candidate_methods": candidate_methods,
-        "rollout_eligible_methods": comparison_df.loc[
-            comparison_df["passed_rollout_gate"].astype(bool), "method"
-        ].tolist(),
+        "rollout_eligible_methods": (
+            comparison_df.loc[comparison_df["passed_rollout_gate"].astype(bool), "method"].tolist()
+        ),
     }
     with (output_dir / "offline_policy_report.json").open("w") as f:
         json.dump(report, f, indent=2, sort_keys=True)

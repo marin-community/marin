@@ -5,7 +5,12 @@ import numpy as np
 import pandas as pd
 
 from experiments.domain_phase_mix.exploratory.general_scaling_models import DatasetSpec
-from experiments.domain_phase_mix.exploratory.two_phase_many.dataset_metadata import build_two_phase_many_loop_config
+from experiments.domain_phase_mix.exploratory.two_phase_many.dataset_metadata import (
+    KNOWN_STRATIFIED_60M_METRICS,
+    append_two_phase_many_stratified_baseline,
+    build_two_phase_many_loop_config,
+)
+from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import STRATIFIED_RUN_NAME
 from experiments.domain_phase_mix.nextgen.contracts import LoopConfig, LoopState, RunRecord
 from experiments.domain_phase_mix.nextgen.design import plan_new_runs
 from experiments.domain_phase_mix.nextgen.model_registry import _build_dataset_spec
@@ -133,6 +138,41 @@ def test_two_phase_loader_uses_real_epoch_multipliers():
             ]
         ),
     )
+
+
+def test_append_two_phase_many_stratified_baseline_adds_known_metric_row():
+    frame = pd.DataFrame(
+        [
+            {
+                "run_id": 0,
+                "run_name": "baseline_proportional",
+                "status": "completed",
+                "phase_0_dolma3_cc/adult_content_high": 1.0,
+                "phase_1_dolma3_cc/adult_content_high": 1.0,
+                "eval/uncheatable_eval/bpb": 1.1,
+            }
+        ]
+    )
+
+    augmented = append_two_phase_many_stratified_baseline(frame, objective_metric="eval/uncheatable_eval/bpb")
+
+    assert len(augmented) == 2
+    appended = augmented.loc[augmented["run_name"] == STRATIFIED_RUN_NAME].iloc[0]
+    assert float(appended["eval/uncheatable_eval/bpb"]) == KNOWN_STRATIFIED_60M_METRICS["eval/uncheatable_eval/bpb"]
+    phase0_cols = [col for col in augmented.columns if col.startswith("phase_0_")]
+    phase1_cols = [col for col in augmented.columns if col.startswith("phase_1_")]
+    assert int(appended[phase0_cols].notna().sum()) == 39
+    assert int(appended[phase1_cols].notna().sum()) == 39
+    assert np.isclose(appended[phase0_cols].dropna().astype(float).sum(), 1.0)
+    assert np.isclose(appended[phase1_cols].dropna().astype(float).sum(), 1.0)
+
+
+def test_append_two_phase_many_stratified_baseline_skips_unknown_metric():
+    frame = pd.DataFrame([{"run_name": "baseline_proportional", "status": "completed"}])
+
+    augmented = append_two_phase_many_stratified_baseline(frame, objective_metric="choice_logprob_norm_mean")
+
+    pd.testing.assert_frame_equal(augmented, frame)
 
 
 def test_three_phase_loader_uses_real_epoch_multipliers():

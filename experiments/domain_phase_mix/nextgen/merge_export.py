@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Merge, dedupe, and export steps for next-gen mixture loops."""
@@ -219,7 +219,6 @@ def merge_dataset(config: MergeDatasetConfig) -> None:
     write_json(os.path.join(config.output_path, "state_snapshot.json"), dataclasses.asdict(updated_state))
 
 
-
 def export_dataset(config: ExportDatasetConfig) -> None:
     """Export merged run and trajectory data to CSV and parquet."""
     merged_dir = str(config.merged_output_path)
@@ -242,7 +241,6 @@ def export_dataset(config: ExportDatasetConfig) -> None:
 
     with fsspec.open(os.path.join(config.output_path, TRAJ_PARQUET), "wb") as f:
         traj_df.to_parquet(f, index=False)
-
 
 
 def create_merge_step(

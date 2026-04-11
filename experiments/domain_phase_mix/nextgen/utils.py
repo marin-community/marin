@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Utilities for next-gen mixture loop artifacts and IDs."""
@@ -14,7 +14,6 @@ from collections.abc import Mapping
 from typing import Any
 
 import fsspec
-
 
 _NON_ALNUM = re.compile(r"[^a-zA-Z0-9._-]+")
 

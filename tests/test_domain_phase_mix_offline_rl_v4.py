@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -128,10 +128,9 @@ def _small_pooled_dense_inputs(tmp_path: Path) -> Path:
                     "grad/norm/total": 0.8 * scale + 0.4 * progress,
                     "params/norm/total": 10.0 * scale + 0.8 * progress,
                     "eval/loss": 4.7 * scale - 1.3 * progress,
-                    "eval/paloma/dolma_100_programing_languages/bpb": float(
-                        run["eval/paloma/dolma_100_programing_languages/bpb"]
-                    )
-                    + (1.0 - progress) * 0.5,
+                    "eval/paloma/dolma_100_programing_languages/bpb": (
+                        float(run["eval/paloma/dolma_100_programing_languages/bpb"]) + (1.0 - progress) * 0.5
+                    ),
                 }
             )
     pd.DataFrame(history_rows).to_parquet(input_dir / "history_dense_wide.parquet", index=False)

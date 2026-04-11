@@ -1,9 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Evaluate a trained offline policy with chained 3-phase training runs."""
 
 from __future__ import annotations

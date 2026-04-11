@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Build pooled decision-time datasets for offline-control StarCoder baselines."""
@@ -199,9 +199,7 @@ def _decision_feature_row(
     )
 
     budget_frac_consumed = float(decision_step) / float(total_steps)
-    reward_dense_raw = (
-        float(last_obj_bpb - next_obj_bpb) if last_obj_bpb is not None else float(-next_obj_bpb)
-    )
+    reward_dense_raw = float(last_obj_bpb - next_obj_bpb) if last_obj_bpb is not None else float(-next_obj_bpb)
     action_starcoder = actions[decision_index]
     action_idx, action_grid_value = discretize_action(action_starcoder, action_grid)
 
@@ -415,8 +413,7 @@ def build_pooled_transition_dataset(
         "selected_feature_keys": list(selected_features),
         "n_cv_folds": int(dataset_config.n_cv_folds),
         "run_family_counts": {
-            key: int(value)
-            for key, value in decisions_imputed.groupby("run_family")["wandb_run_id"].nunique().items()
+            key: int(value) for key, value in decisions_imputed.groupby("run_family")["wandb_run_id"].nunique().items()
         },
         "decision_index_counts": {
             str(int(key)): int(value)

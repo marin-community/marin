@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -49,8 +49,6 @@ def test_run_three_phase_policy_bench_v5_smoke(tmp_path: Path):
         "discrete_bc",
     }
     policy_summary = pd.read_csv(output_dir / "policy_summary.csv")
-    assert {"legacy_outcome_planner", "dense_direct_v5", "hybrid_q_direct_v5"}.issubset(
-        set(policy_summary["method"])
-    )
+    assert {"legacy_outcome_planner", "dense_direct_v5", "hybrid_q_direct_v5"}.issubset(set(policy_summary["method"]))
     comparison = pd.read_csv(output_dir / "comparison_report.csv")
     assert {"dense_direct_v5", "hybrid_q_direct_v5"} == set(comparison["method"])

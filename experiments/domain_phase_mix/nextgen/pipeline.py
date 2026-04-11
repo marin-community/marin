@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Executor DAG constructor for the next-gen mixture loop."""
@@ -169,7 +169,6 @@ def create_nextgen_steps(
         finalize_state_step,
     ]
     return steps
-
 
 
 def summarize_step_names(steps: Sequence[ExecutorStep]) -> list[str]:

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Collect a pooled dense StarCoder telemetry dataset for offline-control v4."""
@@ -184,9 +184,7 @@ def collect_pooled_starcoder_dense_dataset(
         )
 
     runs_df = (
-        pd.concat(runs_frames, ignore_index=True)
-        .sort_values(["run_family", "wandb_run_id"])
-        .reset_index(drop=True)
+        pd.concat(runs_frames, ignore_index=True).sort_values(["run_family", "wandb_run_id"]).reset_index(drop=True)
     )
     history_df = (
         pd.concat(history_frames, ignore_index=True).sort_values(["wandb_run_id", "step"]).reset_index(drop=True)

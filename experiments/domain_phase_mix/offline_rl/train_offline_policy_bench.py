@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Train and compare pooled offline-control baselines for StarCoder mixture policies."""
@@ -411,8 +411,7 @@ def _decision_state_defaults(frame: pd.DataFrame, feature_keys: tuple[str, ...])
     defaults: dict[str, dict[str, float]] = {}
     for decision_index, stage_frame in frame.groupby("decision_index", sort=True):
         defaults[str(int(decision_index))] = {
-            feature_name: float(stage_frame[feature_name].median())
-            for feature_name in feature_keys
+            feature_name: float(stage_frame[feature_name].median()) for feature_name in feature_keys
         }
     return defaults
 
@@ -951,9 +950,7 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
 
     gate_rows: list[dict[str, Any]] = []
     candidate_methods = [
-        method
-        for method in summary_df["method"].tolist()
-        if method not in {"fixed_best_schedule", "discrete_bc"}
+        method for method in summary_df["method"].tolist() if method not in {"fixed_best_schedule", "discrete_bc"}
     ]
     passing_candidates: list[str] = []
     for method in candidate_methods:

@@ -196,6 +196,7 @@ def log_configuration(hparams: Any):
     hparams_dict = hparams_to_dict(hparams)
     _global_tracker.log_hyperparameters(hparams_dict)
 
+
 def set_global_tracker(tracker: Tracker):
     """
     Set the global tracker. Note that setting the global tracker is not thread-safe,

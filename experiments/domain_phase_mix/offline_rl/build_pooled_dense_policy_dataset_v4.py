@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Build pooled dense policy datasets for three-phase-target offline-control v4."""
@@ -191,12 +191,16 @@ def build_pooled_dense_policy_dataset_v4(
         "action_starcoder": np.asarray([row["action_starcoder"] for row in pretrain_meta], dtype=np.float32),
         "next_train_loss": np.asarray([row["next_train_loss"] for row in pretrain_meta], dtype=np.float32),
         "next_eval_bpb": np.asarray([row["next_eval_bpb"] for row in pretrain_meta], dtype=np.float32),
-        "sequences": np.stack(pretrain_windows, axis=0).astype(np.float32)
-        if pretrain_windows
-        else np.zeros((0, config.window_bins, len(SEQUENCE_CHANNELS)), dtype=np.float32),
-        "masks": np.stack(pretrain_masks, axis=0).astype(np.float32)
-        if pretrain_masks
-        else np.zeros((0, config.window_bins), dtype=np.float32),
+        "sequences": (
+            np.stack(pretrain_windows, axis=0).astype(np.float32)
+            if pretrain_windows
+            else np.zeros((0, config.window_bins, len(SEQUENCE_CHANNELS)), dtype=np.float32)
+        ),
+        "masks": (
+            np.stack(pretrain_masks, axis=0).astype(np.float32)
+            if pretrain_masks
+            else np.zeros((0, config.window_bins), dtype=np.float32)
+        ),
     }
     np.savez_compressed(output_dir / "pretrain_sequences.npz", **pretrain_payload)
 

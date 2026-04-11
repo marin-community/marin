@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Build three-phase dense policy datasets for offline-control v3."""
@@ -192,9 +192,7 @@ def _prepare_run_history_cache(history: pd.DataFrame, *, total_steps: int, objec
             valid_steps_by_metric[metric_name] = np.zeros(0, dtype=np.int32)
             valid_values_by_metric[metric_name] = np.zeros(0, dtype=np.float32)
         raw_by_metric[metric_name] = raw
-        carryforward_by_metric[metric_name] = (
-            pd.Series(raw, copy=False).ffill().to_numpy(dtype=np.float32, copy=False)
-        )
+        carryforward_by_metric[metric_name] = pd.Series(raw, copy=False).ffill().to_numpy(dtype=np.float32, copy=False)
 
     eval_mask = np.zeros(length, dtype=np.float32)
     if "eval/loss" in history.columns:
@@ -508,9 +506,9 @@ def _feature_row(
         "last_train_loss": 0.0 if last_train_loss is None else float(last_train_loss),
         "last_eval_loss": 0.0 if last_eval_loss is None else float(last_eval_loss),
         "last_obj_bpb": 0.0 if last_obj_bpb is None else float(last_obj_bpb),
-        "train_eval_gap": 0.0
-        if last_train_loss is None or last_eval_loss is None
-        else float(last_eval_loss - last_train_loss),
+        "train_eval_gap": (
+            0.0 if last_train_loss is None or last_eval_loss is None else float(last_eval_loss - last_train_loss)
+        ),
         "steps_since_last_eval_frac": float(steps_since_last_eval_frac),
         "optim/learning_rate": 0.0 if last_lr is None else float(last_lr),
         "optim/adam_lr": 0.0 if last_adam_lr is None else float(last_adam_lr),
@@ -518,9 +516,11 @@ def _feature_row(
         "avg_lr_remaining": _mean_metric_between(history, "optim/learning_rate", decision_step, total_steps) or 0.0,
         "grad/norm/total": 0.0 if last_grad_norm is None else float(last_grad_norm),
         "params/norm/total": 0.0 if last_param_norm is None else float(last_param_norm),
-        "grad_to_param_norm": 0.0
-        if last_grad_norm is None or last_param_norm in (None, 0.0)
-        else float(last_grad_norm / max(last_param_norm, 1e-6)),
+        "grad_to_param_norm": (
+            0.0
+            if last_grad_norm is None or last_param_norm in (None, 0.0)
+            else float(last_grad_norm / max(last_param_norm, 1e-6))
+        ),
         "phase_train_loss_mean": _phase_metric_mean(history, "train/loss", phase_start, decision_step),
         "phase_train_loss_delta": _phase_metric_delta(history, "train/loss", phase_start, decision_step),
         "phase_eval_loss_delta": _phase_metric_delta(history, "eval/loss", phase_start, decision_step),
@@ -642,17 +642,21 @@ def _build_pretrain_windows(
                     "cursor_step": int(cursor),
                     "action_starcoder": float(actions[phase_index]),
                     "next_train_loss": (
-                        _first_metric_after_from_cache(history_cache, "train/loss", cursor)
-                        if history_cache is not None
-                        else _first_metric_after(history, "train/loss", cursor)
-                    )
-                    or 0.0,
+                        (
+                            _first_metric_after_from_cache(history_cache, "train/loss", cursor)
+                            if history_cache is not None
+                            else _first_metric_after(history, "train/loss", cursor)
+                        )
+                        or 0.0
+                    ),
                     "next_eval_bpb": (
-                        _first_metric_after_from_cache(history_cache, objective_metric, cursor)
-                        if history_cache is not None
-                        else _first_metric_after(history, objective_metric, cursor)
-                    )
-                    or float(run_row[objective_metric]),
+                        (
+                            _first_metric_after_from_cache(history_cache, objective_metric, cursor)
+                            if history_cache is not None
+                            else _first_metric_after(history, objective_metric, cursor)
+                        )
+                        or float(run_row[objective_metric])
+                    ),
                     "window": window,
                     "mask": mask,
                 }
@@ -820,12 +824,16 @@ def build_three_phase_dense_policy_dataset(
         "action_starcoder": np.asarray([row["action_starcoder"] for row in pretrain_meta], dtype=np.float32),
         "next_train_loss": np.asarray([row["next_train_loss"] for row in pretrain_meta], dtype=np.float32),
         "next_eval_bpb": np.asarray([row["next_eval_bpb"] for row in pretrain_meta], dtype=np.float32),
-        "sequences": np.stack(pretrain_windows, axis=0).astype(np.float32)
-        if pretrain_windows
-        else np.zeros((0, config.window_bins, len(SEQUENCE_CHANNELS)), dtype=np.float32),
-        "masks": np.stack(pretrain_masks, axis=0).astype(np.float32)
-        if pretrain_masks
-        else np.zeros((0, config.window_bins), dtype=np.float32),
+        "sequences": (
+            np.stack(pretrain_windows, axis=0).astype(np.float32)
+            if pretrain_windows
+            else np.zeros((0, config.window_bins, len(SEQUENCE_CHANNELS)), dtype=np.float32)
+        ),
+        "masks": (
+            np.stack(pretrain_masks, axis=0).astype(np.float32)
+            if pretrain_masks
+            else np.zeros((0, config.window_bins), dtype=np.float32)
+        ),
     }
     np.savez_compressed(output_dir / "pretrain_sequences.npz", **pretrain_payload)
 
