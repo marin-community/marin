@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/layout/AppHeader.vue'
+import DashboardLegend from '@/components/shared/DashboardLegend.vue'
 import TabNav, { type Tab } from '@/components/layout/TabNav.vue'
 
 const route = useRoute()
@@ -9,6 +10,7 @@ const router = useRouter()
 
 const authEnabled = ref(false)
 const providerKind = ref<'worker' | 'kubernetes'>('worker')
+const legendOpen = ref(false)
 
 const WORKER_TABS: Tab[] = [
   { key: 'jobs', label: 'Jobs', to: '/' },
@@ -106,6 +108,15 @@ onUnmounted(() => {
   <div v-else class="min-h-screen bg-surface-raised">
     <AppHeader title="Iris Controller Dashboard">
       <button
+        class="flex items-center justify-center w-7 h-7 rounded-full border border-surface-border
+               text-text-secondary hover:text-text hover:bg-surface-raised transition-colors text-sm font-semibold"
+        aria-label="Show dashboard legend"
+        title="Dashboard legend"
+        @click="legendOpen = true"
+      >
+        ?
+      </button>
+      <button
         v-if="authEnabled"
         class="text-sm text-text-muted hover:text-text transition-colors"
         @click="logout"
@@ -113,6 +124,7 @@ onUnmounted(() => {
         Logout
       </button>
     </AppHeader>
+    <DashboardLegend v-if="legendOpen" @close="legendOpen = false" />
     <TabNav
       v-if="!isDetailPage"
       :tabs="TABS"

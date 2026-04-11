@@ -2,9 +2,11 @@
 import { ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import AppHeader from '@/components/layout/AppHeader.vue'
+import DashboardLegend from '@/components/shared/DashboardLegend.vue'
 
 const router = useRouter()
 const refreshKey = ref(0)
+const legendOpen = ref(false)
 
 function refresh() {
   refreshKey.value++
@@ -21,6 +23,15 @@ function refresh() {
         Status
       </RouterLink>
       <button
+        class="flex items-center justify-center w-7 h-7 rounded-full border border-surface-border
+               text-text-secondary hover:text-text hover:bg-surface-raised transition-colors text-sm font-semibold"
+        aria-label="Show dashboard legend"
+        title="Dashboard legend"
+        @click="legendOpen = true"
+      >
+        ?
+      </button>
+      <button
         class="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-surface-border rounded
                hover:bg-surface-raised text-text-secondary"
         @click="refresh"
@@ -34,6 +45,7 @@ function refresh() {
         Refresh
       </button>
     </AppHeader>
+    <DashboardLegend v-if="legendOpen" @close="legendOpen = false" />
     <main class="max-w-7xl mx-auto px-6 py-6">
       <router-view :key="refreshKey" />
     </main>
