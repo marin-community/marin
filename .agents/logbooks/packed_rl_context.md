@@ -208,6 +208,156 @@ eval were completely isolated, a single packed worker would still be
    packed inference at 6,223 tok/s beats `e4ms2`'s per-worker 3,336 tok/s
    by ~1.9× — exactly the 2×TP=2 speedup the design predicted.
 
+## 2026-04-10 (third correction): the rollout main loop is single-threaded
+
+Everything below about work division and eval gating is still true, but
+the *mechanical* reason packed can't imitate the 2-worker setup — even
+though it has two physically idle replicas — is one more layer deeper.
+
+### The rollout worker main loop is single-threaded Python
+
+Look at `rollout_worker.py:943-1080`:
+
+```python
+while self._running:
+    ...
+    if _should_run_micro_eval(...):          # (worker 0 only)
+        self._evaluate_lesson(...)           # BLOCKS the main thread
+    if _should_run_curriculum_eval(...):     # (worker 0 only)
+        self._evaluate_curriculum(...)       # BLOCKS the main thread
+    ...
+    rollout_batch, env_metrics = self._sample_batch(
+        lesson_id=lesson_id, ..., mode="train", ...
+    )                                        # BLOCKS the main thread
+    self._rollout_writer.write_batch(rollout_batch)
+    self._curriculum_actor.update_lesson_stats.remote(...).result()
+    step += 1
+```
+
+Everything in this loop is sequential. Each `env.sample()` call goes all
+the way down to `inference_ctx.batch_completions(...)`, which (for the
+packed context) reserves replicas, dispatches, does `future.result()` on
+every submitted replica, and only then returns to the caller. The main
+thread is stuck inside one call at a time.
+
+That means the path I drew in the previous correction — "r0 does train
+while r1 does eval in parallel" — **never actually happens in this
+architecture**, even though the packed parent has the plumbing for it.
+
+A single iteration of the packed loop looks like:
+
+```
+t=0     main thread calls env.sample(mode="eval")
+        ├─ _reserve_replicas(EVAL) → reserves r1 only
+        ├─ dispatches 1 generate request to r1
+        ├─ future.result() BLOCKS main thread
+        │
+        │       r0 is physically idle, nothing dispatched to it,
+        │       because no other Python thread is going to call
+        │       batch_completions() — main thread is stuck here
+        │
+t≈45s   eval on r1 finishes
+        └─ _release_replicas → returns
+
+        main thread calls env.sample(mode="train")
+        ├─ _reserve_replicas(TRAIN) → reserves r0 AND r1 (both free)
+        ├─ dispatches 2 generate requests in parallel via _executor
+        ├─ future.result() on both
+        │   (these do run in parallel — that's the 2xTP=2 win)
+        │
+t≈45+70 both replicas finish
+        └─ returns
+```
+
+So the packed context's parallelism is at the **inference layer** (two
+TP=2 vLLM engines can run simultaneously when both are handed work),
+but the **orchestration layer** above it (the rollout worker's Python
+main loop) still serializes eval and train. The "dedicate r0 to train,
+r1 to eval" split that the dispatch table in
+`choose_packed_target_replica_indices` *hints at* only works if two
+different threads call `batch_completions` concurrently — which this
+codebase never does.
+
+The `eval_waiters` counter and the condition-variable dance in
+`_reserve_replicas` were clearly built for a world where eval and
+train would be fired from different threads (that's the only reason
+any of that machinery exists). The actual calling code doesn't fire
+them concurrently.
+
+### Why `e4ms2` naturally does what packed can't
+
+`e4ms2` doesn't need any intra-process concurrency. It runs **two
+separate OS processes**, each with its own single-threaded main loop:
+
+- Worker 0 process: `[eval 45s] → [train 70s] → [eval 45s] → [train 70s] → ...`
+- Worker 1 process: `[train 70s] → [train 70s] → [train 70s] → [train 70s] → ...`
+
+The OS scheduler runs both processes concurrently on different TPU
+pods. Worker 1 just keeps producing train batches; it never stops for
+eval because `worker_index != 0` short-circuits both `_should_run_*`
+gates. Worker 0 sits out every time it's on an eval step, but the
+trainer doesn't care because worker 1 is feeding the replay buffer.
+
+So "two OS processes running sequential main loops" gives you the
+concurrency for free, without any threading inside the rollout worker.
+
+### Why packed fails this test on one `v5p-8`
+
+Packed puts two replicas in one process to save a TPU. The inference
+parallelism works (PKR-001's 6,223 tok/s proves it). What doesn't
+carry over is the *orchestration* parallelism: one rollout worker
+process = one main loop = one env.sample() in flight at a time.
+
+- While the loop is in the eval `env.sample()`, r0 is idle for the
+  full ~45-60 s of eval.
+- While the loop is in the train `env.sample()`, both replicas are
+  busy, but only because there is a single caller waiting on both
+  futures at once — that caller cannot simultaneously fire another
+  request into r0.
+
+So the packed `v5p-8` effectively runs eval and train **back to
+back**, exactly as a single worker would. The 2× replica parallelism
+only kicks in *within* a train batch (splitting 64 prompts into 32+32
+for ~2× speedup), not *across* train-vs-eval.
+
+### What this means for "why is a replica ever waiting"
+
+**Replica 0 is waiting during every eval run.** Not because the
+dispatcher chose to exclude it — it would happily accept work — but
+because the single Python main thread is stuck inside
+`batch_completions(EVAL)` waiting on replica 1's future. No other
+Python code exists to dispatch a train request to r0 while that
+future is pending.
+
+### The real minimal fix
+
+To make packed behave like two-worker `e4ms2`, the packed setup needs
+to fire train and eval `env.sample()` calls **concurrently** from the
+same process. Options:
+
+1. **Run eval in a background thread inside the rollout worker.**
+   Spawn a separate thread whose loop does nothing but eval; the main
+   loop keeps doing train. Both threads call `batch_completions()`
+   against the same packed context. The existing `_reserve_replicas`
+   /`eval_waiters` machinery already supports this — that's why it's
+   there. This is probably a small code change (~30–60 lines) with a
+   big payoff.
+
+2. **Move eval to a separate Fray actor.** More invasive but cleaner.
+   Eliminates the question entirely by taking eval off the rollout
+   worker's timeline.
+
+3. **Do not run full curriculum eval on this worker at all.** Run it
+   from the trainer between steps, or on a separate small TPU, so the
+   packed worker's main loop is effectively train-only and matches
+   `e4ms2` worker-1's cadence across both replicas.
+
+Any of these three would let r0 actually serve train while r1 serves
+eval, which is the whole point of the 2-replica packed design.
+
+The first option is the cheapest test and directly validates whether
+the `_reserve_replicas` design choices were worth making.
+
 ## 2026-04-10 (second correction): work division, eval gating, and the real math
 
 My earlier "corrected" story was still incomplete. After re-reading
