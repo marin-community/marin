@@ -61,6 +61,8 @@ DOMAIN_NAMES = tuple(all_top_level_domain_names())
 EVAL_TASKS = (MMLU_5_SHOT, MMLU_SL_VERB_5_SHOT, MMLU_PRO_5_SHOT)
 EVAL_DATASETS_CACHE_PATH: str | None = None
 INITIAL_BASELINE_RUNS = 3
+STRATIFIED_RUN_ID = 3
+STRATIFIED_RUN_NAME = "baseline_stratified"
 MIN_RECOMMENDED_SWARM_RUNS = 6 * len(DOMAIN_NAMES)
 MIN_RECOMMENDED_SAMPLED_RUNS = MIN_RECOMMENDED_SWARM_RUNS - INITIAL_BASELINE_RUNS
 DEFAULT_RUNTIME_CACHE_REGION = "us-east5"
@@ -71,12 +73,20 @@ PREFERRED_MERGED_RUNTIME_DOMAIN_NAMES = (
     "dolmino_stem_heavy_crawl",
 )
 PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION = {
+    "us-central1": {
+        "dolma3_stack_edu": (
+            "gs://marin-us-central1/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_stack_edu-a7297b"
+        ),
+        "dolmino_stem_heavy_crawl": (
+            "gs://marin-us-central1/tokenized/merged/dolma3_dolmino_top_level/" "dolmino_stem_heavy_crawl-e1ec3b"
+        ),
+    },
     "us-east5": {
         "dolma3_stack_edu": "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_stack_edu-a7297b",
         "dolmino_stem_heavy_crawl": (
             "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolmino_stem_heavy_crawl-e1ec3b"
         ),
-    }
+    },
 }
 
 SAMPLING_PARAMS = DirichletSamplingParams(
@@ -263,6 +273,17 @@ def build_top_level_domain_steps(*, runtime_cache_region: str = DEFAULT_RUNTIME_
 
 def _constant_phase_weights(domain_weights: dict[str, float]) -> dict[str, dict[str, float]]:
     return {phase_name: dict(domain_weights) for phase_name in PHASE_NAMES}
+
+
+def create_stratified_domain_weights() -> dict[str, float]:
+    """Return a static equal-weight allocation across the top-level domains."""
+    uniform_weight = 1.0 / len(DOMAIN_NAMES)
+    return {domain_name: uniform_weight for domain_name in DOMAIN_NAMES}
+
+
+def create_stratified_weight_config(run_id: int = STRATIFIED_RUN_ID) -> WeightConfig:
+    """Return the explicit stratified baseline used in the Olmix paper."""
+    return WeightConfig(run_id=run_id, phase_weights=_constant_phase_weights(create_stratified_domain_weights()))
 
 
 def create_initial_fixed_weight_configs() -> tuple[InitialFixedWeightConfig, ...]:

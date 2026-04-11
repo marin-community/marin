@@ -25,7 +25,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.olmo3 import Olmo3Config
 from levanter.optim import MuonHConfig
 
-from experiments.llama import llama3_tokenizer_vocab_size, llama_300m
+from experiments.llama import llama3_tokenizer_vocab_size, llama_1_4b, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
@@ -225,6 +225,58 @@ regmix_300m_muonh_base = MuonHConfig(
     max_grad_norm=1,
     warmup=1000,
 )
+
+
+regmix_520m_proxy = replace(
+    llama_600m,
+    max_seq_len=2048,
+    tie_word_embeddings=True,
+    scan_layers=True,
+    gradient_checkpointing=True,
+)
+
+
+regmix_520m_muonh_base = MuonHConfig(
+    learning_rate=0.01,
+    adam_lr=0.002,
+    min_lr_ratio=0,
+    momentum=0.98,
+    beta1=0.9,
+    beta2=0.98,
+    epsilon=1e-15,
+    muon_epsilon=1e-5,
+    max_grad_norm=1,
+    warmup=1000,
+)
+
+
+REGMIX_520M_CHINCHILLA_BUDGET = 10_400_000_000
+
+
+regmix_1_2b_proxy = replace(
+    llama_1_4b,
+    max_seq_len=2048,
+    tie_word_embeddings=True,
+    scan_layers=True,
+    gradient_checkpointing=True,
+)
+
+
+regmix_1_2b_muonh_base = MuonHConfig(
+    learning_rate=0.01,
+    adam_lr=0.0015,
+    min_lr_ratio=0,
+    momentum=0.98,
+    beta1=0.9,
+    beta2=0.98,
+    epsilon=1e-15,
+    muon_epsilon=1e-5,
+    max_grad_norm=2,
+    warmup=1000,
+)
+
+
+REGMIX_1_2B_CHINCHILLA_BUDGET = 24_000_000_000
 
 
 def compute_llama_non_embedding_params(config: LlamaConfig) -> int:

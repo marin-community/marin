@@ -32,10 +32,14 @@ from experiments.domain_phase_mix import (
     launch_two_phase_many_genericfamily_no_penalty_baseline as genericfamily_no_penalty_launch,
 )
 import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3 as qsplit240_seedpanel
+import experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline as stratified_baseline_launch
 import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b as qsplit240_300m
+import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot as qsplit240_1_2b_pilot
+import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot as qsplit240_520m_pilot
 from experiments.domain_phase_mix import (
     launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3_mmlu_sl_verb_rerun as qsplit240_seedpanel_slverb_rerun,
 )
+import experiments.domain_phase_mix.exploratory.two_phase_many.analyze_qsplit240_520m_pilot as qsplit240_520m_analysis
 from experiments.domain_phase_mix.determinism_analysis import (
     CollectManifestResultsConfig,
     CONTROL_RUNS_CSV,
@@ -67,7 +71,6 @@ from experiments.domain_phase_mix.determinism_analysis import (
 from experiments.defaults import default_train
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.domain_phase_mix.config import WeightConfig
-from marin.execution.executor import InputName, collect_dependencies_and_version
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_seed_study import (
     EXACT_CONTROL_DATA_SEED,
     EXACT_CONTROL_NAMES,
@@ -101,6 +104,28 @@ from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import
     create_experiment as create_qsplit240_300m_experiment,
     select_run_specs_for_shard,
     shard_execution_name_prefix,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot import (
+    BATCH_SIZE as QSPLIT240_1_2B_BATCH_SIZE,
+    DEFAULT_PANEL as QSPLIT240_1_2B_DEFAULT_PANEL,
+    DEFAULT_TPU_REGION as QSPLIT240_1_2B_DEFAULT_TPU_REGION,
+    DEFAULT_TPU_ZONE as QSPLIT240_1_2B_DEFAULT_TPU_ZONE,
+    EXPERIMENT_BUDGET as QSPLIT240_1_2B_BUDGET,
+    MODEL_FAMILY as QSPLIT240_1_2B_MODEL_FAMILY,
+    NUM_TRAIN_STEPS as QSPLIT240_1_2B_NUM_TRAIN_STEPS,
+    build_run_specs as build_qsplit240_1_2b_pilot_run_specs,
+    create_experiment as create_qsplit240_1_2b_pilot_experiment,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot import (
+    BATCH_SIZE as QSPLIT240_520M_BATCH_SIZE,
+    DEFAULT_PANEL as QSPLIT240_520M_DEFAULT_PANEL,
+    DEFAULT_TPU_REGION as QSPLIT240_520M_DEFAULT_TPU_REGION,
+    DEFAULT_TPU_ZONE as QSPLIT240_520M_DEFAULT_TPU_ZONE,
+    EXPERIMENT_BUDGET as QSPLIT240_520M_BUDGET,
+    MODEL_FAMILY as QSPLIT240_520M_MODEL_FAMILY,
+    NUM_TRAIN_STEPS as QSPLIT240_520M_NUM_TRAIN_STEPS,
+    build_run_specs as build_qsplit240_520m_pilot_run_specs,
+    create_experiment as create_qsplit240_520m_pilot_experiment,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_mmlu_sl_verb_rerun import (
     build_run_specs as build_qsplit240_mmlu_sl_verb_rerun_specs,
@@ -139,6 +164,9 @@ from experiments.domain_phase_mix.launch_two_phase_many_run_00097_fixed_subset_m
     build_run_specs as build_run_00097_fixed_subset_mmlu_sl_verb_rerun_specs,
 )
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
+    STRATIFIED_RUN_NAME,
+    create_stratified_domain_weights,
+    create_stratified_weight_config,
     create_two_phase_dolma3_dolmino_top_level_experiment,
 )
 from experiments.domain_phase_mix.two_phase_starcoder_determinism_wsd import (
@@ -148,7 +176,15 @@ from experiments.domain_phase_mix.two_phase_starcoder_determinism_wsd import (
     default_sweep_config,
     resolve_wsd_schedule,
 )
-from experiments.domain_phase_mix.proxy_sweep import regmix_300m_muonh_base, regmix_300m_proxy
+from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy, regmix_300m_muonh_base, regmix_300m_proxy
+from experiments.domain_phase_mix.proxy_sweep import (
+    REGMIX_1_2B_CHINCHILLA_BUDGET,
+    regmix_1_2b_muonh_base,
+    regmix_1_2b_proxy,
+    REGMIX_520M_CHINCHILLA_BUDGET,
+    regmix_520m_muonh_base,
+    regmix_520m_proxy,
+)
 from experiments.domain_phase_mix.two_phase_many_olmix_loglinear import (
     OLMIX_LOGLINEAR_PHASE_WEIGHTS,
     OLMIX_LOGLINEAR_RUN_NAME,
@@ -254,9 +290,14 @@ from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_sl_verb import 
 from experiments.domain_phase_mix.two_phase_many_observed_runs import (
     CORE_BASELINE_RUN_NAMES,
     ORIGINAL_QSPLIT240_SOURCE_EXPERIMENT,
+    REPRESENTATIVE12_PANEL_RUN_NAMES,
+    load_original_qsplit240_named_panel,
     load_original_qsplit240_runs,
     load_original_qsplit240_with_core_baselines,
 )
+from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
+from marin.execution.executor import Executor, InputName, collect_dependencies_and_version
+from rigging.filesystem import marin_prefix
 
 
 def test_build_run_specs_has_expected_seed_and_control_cohorts():
@@ -571,8 +612,18 @@ def test_qsplit240_300m_6b_builds_expected_manifest_and_weights():
     assert all(spec.phase_weights == observed_by_name[spec.run_name].phase_weights for spec in run_specs)
 
 
+def test_load_original_qsplit240_named_panel_returns_expected_runs():
+    panel_runs = load_original_qsplit240_named_panel(REPRESENTATIVE12_PANEL_RUN_NAMES)
+
+    assert [run.run_name for run in panel_runs] == list(REPRESENTATIVE12_PANEL_RUN_NAMES)
+    assert len(panel_runs) == 12
+    assert all(abs(sum(run.phase_weights["phase_0"].values()) - 1.0) < 1e-12 for run in panel_runs)
+    assert all(abs(sum(run.phase_weights["phase_1"].values()) - 1.0) < 1e-12 for run in panel_runs)
+
+
 def test_qsplit240_300m_6b_experiment_uses_expected_model_resources_and_tasks():
     experiment = create_qsplit240_300m_experiment(name=qsplit240_300m.NAME, tpu_type="v5p-8")
+    stack_edu_domain = next(domain for domain in experiment.domains if domain.name == "dolma3_stack_edu")
 
     assert experiment.name == qsplit240_300m.NAME
     assert experiment.model_config is regmix_300m_proxy
@@ -583,6 +634,7 @@ def test_qsplit240_300m_6b_experiment_uses_expected_model_resources_and_tasks():
     assert experiment.optimizer_config.momentum == pytest.approx(regmix_300m_muonh_base.momentum)
     assert list(experiment.resources.regions or []) == ["us-east5"]
     assert experiment.resources.zone == "us-east5-a"
+    assert "existing finished us-east5 merged cache" in stack_edu_domain.description
     assert tuple(task.task_alias for task in experiment.eval_harness_tasks) == tuple(
         task.task_alias for task in QSPLIT240_300M_EVAL_TASKS
     )
@@ -612,7 +664,7 @@ def test_qsplit240_300m_6b_sharding_uses_contiguous_prefixes_and_keeps_training_
 def test_qsplit240_300m_6b_training_step_blocks_on_eval_dataset_cache():
     experiment = create_qsplit240_300m_experiment(name=qsplit240_300m.NAME, tpu_type="v5p-8")
     run_spec = build_qsplit240_300m_run_specs()[0]
-    cache_step = qsplit240_300m.create_cache_eval_datasets_step(
+    cache_step = create_cache_eval_datasets_step(
         eval_tasks=QSPLIT240_300M_EVAL_TASKS,
         gcs_path=qsplit240_300m.EVAL_DATASETS_CACHE_PATH,
         name_prefix=qsplit240_300m.NAME,
@@ -623,9 +675,9 @@ def test_qsplit240_300m_6b_training_step_blocks_on_eval_dataset_cache():
         run_name=run_spec.run_name,
         data_seed=run_spec.data_seed,
     )
-    base_step_executor = qsplit240_300m.Executor(
-        prefix=qsplit240_300m.marin_prefix(),
-        executor_info_base_path=f"{qsplit240_300m.marin_prefix()}/experiments",
+    base_step_executor = Executor(
+        prefix=marin_prefix(),
+        executor_info_base_path=f"{marin_prefix()}/experiments",
     )
     base_step_executor.compute_version(training_step, is_pseudo_dep=False)
     original_output_path = base_step_executor.output_paths[training_step]
@@ -639,6 +691,156 @@ def test_qsplit240_300m_6b_training_step_blocks_on_eval_dataset_cache():
 
     deps = collect_dependencies_and_version(dependent_step.config)
     assert cache_step in deps.dependencies
+
+
+def test_qsplit240_520m_pilot_builds_expected_manifest_and_weights():
+    run_specs = build_qsplit240_520m_pilot_run_specs()
+    panel_runs = load_original_qsplit240_named_panel(REPRESENTATIVE12_PANEL_RUN_NAMES)
+    panel_by_name = {run.run_name: run for run in panel_runs}
+
+    assert len(run_specs) == 12
+    assert [spec.run_name for spec in run_specs] == list(REPRESENTATIVE12_PANEL_RUN_NAMES)
+    assert [spec.run_id for spec in run_specs] == [run.run_id for run in panel_runs]
+    assert {spec.cohort for spec in run_specs} == {"original_swarm_520m_chinchilla_pilot"}
+    assert {spec.model_family for spec in run_specs} == {QSPLIT240_520M_MODEL_FAMILY}
+    assert {spec.experiment_budget for spec in run_specs} == {QSPLIT240_520M_BUDGET}
+    assert {spec.num_train_steps for spec in run_specs} == {QSPLIT240_520M_NUM_TRAIN_STEPS}
+    assert QSPLIT240_520M_NUM_TRAIN_STEPS == REGMIX_520M_CHINCHILLA_BUDGET // (QSPLIT240_520M_BATCH_SIZE * 2048)
+    assert all(spec.candidate_run_name == spec.run_name for spec in run_specs)
+    assert all(spec.phase_weights == panel_by_name[spec.run_name].phase_weights for spec in run_specs)
+    assert QSPLIT240_520M_DEFAULT_PANEL == "representative12"
+
+
+def test_qsplit240_520m_pilot_experiment_uses_expected_model_resources_region_and_tasks():
+    experiment = create_qsplit240_520m_pilot_experiment(
+        name=qsplit240_520m_pilot.NAME,
+        tpu_type="v5p-32",
+        tpu_region="us-central1",
+        tpu_zone="us-central1-a",
+    )
+    stack_edu_domain = next(domain for domain in experiment.domains if domain.name == "dolma3_stack_edu")
+
+    assert experiment.name == qsplit240_520m_pilot.NAME
+    assert experiment.model_config is regmix_520m_proxy
+    assert experiment.batch_size == QSPLIT240_520M_BATCH_SIZE
+    assert experiment.seq_len == qsplit240_520m_pilot.SEQ_LEN
+    assert experiment.num_train_steps == QSPLIT240_520M_NUM_TRAIN_STEPS
+    assert experiment.experiment_budget == QSPLIT240_520M_NUM_TRAIN_STEPS * experiment.tokens_per_step
+    assert experiment.optimizer_config.learning_rate == pytest.approx(regmix_520m_muonh_base.learning_rate)
+    assert experiment.optimizer_config.adam_lr == pytest.approx(regmix_520m_muonh_base.adam_lr)
+    assert experiment.optimizer_config.momentum == pytest.approx(regmix_520m_muonh_base.momentum)
+    assert list(experiment.resources.regions or []) == [QSPLIT240_520M_DEFAULT_TPU_REGION]
+    assert experiment.resources.zone == QSPLIT240_520M_DEFAULT_TPU_ZONE
+    assert "us-central1 merged cache" in stack_edu_domain.description
+
+
+def test_qsplit240_1_2b_pilot_builds_expected_manifest_and_weights():
+    run_specs = build_qsplit240_1_2b_pilot_run_specs()
+    panel_runs = load_original_qsplit240_named_panel(REPRESENTATIVE12_PANEL_RUN_NAMES)
+    panel_by_name = {run.run_name: run for run in panel_runs}
+
+    assert len(run_specs) == 12
+    assert [spec.run_name for spec in run_specs] == list(REPRESENTATIVE12_PANEL_RUN_NAMES)
+    assert [spec.run_id for spec in run_specs] == [run.run_id for run in panel_runs]
+    assert {spec.cohort for spec in run_specs} == {"original_swarm_1_2b_chinchilla_pilot"}
+    assert {spec.model_family for spec in run_specs} == {QSPLIT240_1_2B_MODEL_FAMILY}
+    assert {spec.experiment_budget for spec in run_specs} == {QSPLIT240_1_2B_BUDGET}
+    assert {spec.num_train_steps for spec in run_specs} == {QSPLIT240_1_2B_NUM_TRAIN_STEPS}
+    assert QSPLIT240_1_2B_NUM_TRAIN_STEPS == REGMIX_1_2B_CHINCHILLA_BUDGET // (QSPLIT240_1_2B_BATCH_SIZE * 2048)
+    assert all(spec.candidate_run_name == spec.run_name for spec in run_specs)
+    assert all(spec.phase_weights == panel_by_name[spec.run_name].phase_weights for spec in run_specs)
+    assert QSPLIT240_1_2B_DEFAULT_PANEL == "representative12"
+
+
+def test_qsplit240_1_2b_pilot_experiment_uses_expected_model_resources_region_and_tasks():
+    experiment = create_qsplit240_1_2b_pilot_experiment(
+        name=qsplit240_1_2b_pilot.NAME,
+        tpu_type="v5p-64",
+        tpu_region="us-central1",
+        tpu_zone="us-central1-a",
+    )
+    stack_edu_domain = next(domain for domain in experiment.domains if domain.name == "dolma3_stack_edu")
+
+    assert experiment.name == qsplit240_1_2b_pilot.NAME
+    assert experiment.model_config is regmix_1_2b_proxy
+    assert experiment.batch_size == QSPLIT240_1_2B_BATCH_SIZE
+    assert experiment.seq_len == qsplit240_1_2b_pilot.SEQ_LEN
+    assert experiment.num_train_steps == QSPLIT240_1_2B_NUM_TRAIN_STEPS
+    assert experiment.experiment_budget == QSPLIT240_1_2B_NUM_TRAIN_STEPS * experiment.tokens_per_step
+    assert experiment.optimizer_config.learning_rate == pytest.approx(regmix_1_2b_muonh_base.learning_rate)
+    assert experiment.optimizer_config.adam_lr == pytest.approx(regmix_1_2b_muonh_base.adam_lr)
+    assert experiment.optimizer_config.momentum == pytest.approx(regmix_1_2b_muonh_base.momentum)
+    assert experiment.optimizer_config.max_grad_norm == pytest.approx(regmix_1_2b_muonh_base.max_grad_norm)
+    assert list(experiment.resources.regions or []) == [QSPLIT240_1_2B_DEFAULT_TPU_REGION]
+    assert experiment.resources.zone == QSPLIT240_1_2B_DEFAULT_TPU_ZONE
+    assert "us-central1 merged cache" in stack_edu_domain.description
+
+
+def test_stratified_weight_config_is_uniform_across_domains_and_phases():
+    domain_weights = create_stratified_domain_weights()
+    weight_config = create_stratified_weight_config()
+
+    assert set(domain_weights) == set(weight_config.phase_weights["phase_0"])
+    assert sum(domain_weights.values()) == pytest.approx(1.0)
+    assert len(set(domain_weights.values())) == 1
+    assert weight_config.phase_weights["phase_0"] == weight_config.phase_weights["phase_1"]
+    assert weight_config.run_id == 3
+
+
+def test_stratified_scale_specs_match_expected_model_and_resource_defaults():
+    spec_60m = stratified_baseline_launch.resolve_scale_spec(stratified_baseline_launch.StratifiedScale.REGMIX_60M_1P2B)
+    spec_300m = stratified_baseline_launch.resolve_scale_spec(stratified_baseline_launch.StratifiedScale.REGMIX_300M_6B)
+    spec_520m = stratified_baseline_launch.resolve_scale_spec(
+        stratified_baseline_launch.StratifiedScale.REGMIX_520M_10P4B
+    )
+    spec_1_2b = stratified_baseline_launch.resolve_scale_spec(stratified_baseline_launch.StratifiedScale.REGMIX_1_2B_24B)
+
+    assert spec_60m.model_config is regmix_60m_proxy
+    assert spec_60m.experiment_budget == 1_200_000_000
+    assert spec_60m.tpu_type == "v5p-8"
+    assert spec_60m.tpu_region == "us-central1"
+    assert spec_300m.model_config is regmix_300m_proxy
+    assert spec_300m.optimizer_config is regmix_300m_muonh_base
+    assert spec_300m.tpu_region == "us-central1"
+    assert spec_520m.model_config is regmix_520m_proxy
+    assert spec_520m.optimizer_config is regmix_520m_muonh_base
+    assert spec_520m.tpu_type == "v5p-32"
+    assert spec_520m.tpu_region == "us-central1"
+    assert spec_1_2b.model_config is regmix_1_2b_proxy
+    assert spec_1_2b.optimizer_config is regmix_1_2b_muonh_base
+    assert spec_1_2b.tpu_type == "v5p-64"
+    assert spec_1_2b.tpu_zone == "us-central1-a"
+
+
+def test_stratified_baseline_main_builds_selected_scale_in_ci_without_launching(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("CI", "1")
+
+    def fail_executor_main(*args, **kwargs):
+        raise AssertionError("executor_main should not run in CI for the stratified baseline launcher")
+
+    monkeypatch.setattr(stratified_baseline_launch, "executor_main", fail_executor_main)
+    monkeypatch.setattr(
+        stratified_baseline_launch.sys,
+        "argv",
+        [
+            "launcher",
+            "--scale",
+            "520m_10p4b",
+            "--tpu-type",
+            "v5p-32",
+            "--tpu-region",
+            "us-central1",
+            "--tpu-zone",
+            "us-central1-a",
+        ],
+    )
+
+    stratified_baseline_launch.main()
+    captured["run_name"] = STRATIFIED_RUN_NAME
+
+    assert captured["run_name"] == "baseline_stratified"
 
 
 def test_qsplit240_mmlu_sl_verb_rerun_builds_expected_manifest():
@@ -1467,6 +1669,104 @@ def test_qsplit240_seedpanel_mmlu_sl_verb_rerun_main_wires_max_concurrent(monkey
     assert len(captured["steps"]) == 8
     assert "fixed-subset seedpanel" in captured["description"]
     assert qsplit240_seedpanel_slverb_rerun.DEFAULT_MAX_CONCURRENT == 24
+
+
+def test_qsplit240_520m_pilot_main_builds_graph_in_ci_without_launching(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("CI", "1")
+    monkeypatch.setattr(
+        qsplit240_520m_pilot,
+        "build_launch_artifacts",
+        lambda **kwargs: (
+            captured.update({"build_kwargs": kwargs})
+            or SimpleNamespace(
+                run_specs=build_qsplit240_520m_pilot_run_specs(),
+                execution_name_prefix=qsplit240_520m_pilot.NAME,
+                steps=["manifest", "cache", "train", "results", "fit"],
+            )
+        ),
+    )
+
+    def fail_executor_main(*args, **kwargs):
+        raise AssertionError("executor_main should not run in CI for the 520M pilot launcher")
+
+    monkeypatch.setattr(qsplit240_520m_pilot, "executor_main", fail_executor_main)
+    monkeypatch.setattr(
+        qsplit240_520m_pilot.sys,
+        "argv",
+        [
+            "launcher",
+            "--tpu-type",
+            "v5p-32",
+            "--tpu-region",
+            "us-central1",
+            "--tpu-zone",
+            "us-central1-a",
+            "--panel",
+            "representative12",
+            "--max-concurrent",
+            "1",
+        ],
+    )
+
+    qsplit240_520m_pilot.main()
+
+    assert captured["build_kwargs"]["name_prefix"] == qsplit240_520m_pilot.NAME
+    assert captured["build_kwargs"]["panel"] == "representative12"
+    assert captured["build_kwargs"]["tpu_type"] == "v5p-32"
+    assert captured["build_kwargs"]["tpu_region"] == "us-central1"
+    assert captured["build_kwargs"]["tpu_zone"] == "us-central1-a"
+    assert captured["build_kwargs"]["eval_datasets_cache_path"].startswith("gs://marin-us-central1/")
+
+
+def test_qsplit240_1_2b_pilot_main_builds_graph_in_ci_without_launching(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("CI", "1")
+    monkeypatch.setattr(
+        qsplit240_1_2b_pilot,
+        "build_launch_artifacts",
+        lambda **kwargs: (
+            captured.update({"build_kwargs": kwargs})
+            or SimpleNamespace(
+                run_specs=build_qsplit240_1_2b_pilot_run_specs(),
+                execution_name_prefix=qsplit240_1_2b_pilot.NAME,
+                steps=["manifest", "cache", "train", "results", "fit"],
+            )
+        ),
+    )
+
+    def fail_executor_main(*args, **kwargs):
+        raise AssertionError("executor_main should not run in CI for the 1.2B pilot launcher")
+
+    monkeypatch.setattr(qsplit240_1_2b_pilot, "executor_main", fail_executor_main)
+    monkeypatch.setattr(
+        qsplit240_1_2b_pilot.sys,
+        "argv",
+        [
+            "launcher",
+            "--tpu-type",
+            "v5p-64",
+            "--tpu-region",
+            "us-central1",
+            "--tpu-zone",
+            "us-central1-a",
+            "--panel",
+            "representative12",
+            "--max-concurrent",
+            "1",
+        ],
+    )
+
+    qsplit240_1_2b_pilot.main()
+
+    assert captured["build_kwargs"]["name_prefix"] == qsplit240_1_2b_pilot.NAME
+    assert captured["build_kwargs"]["panel"] == "representative12"
+    assert captured["build_kwargs"]["tpu_type"] == "v5p-64"
+    assert captured["build_kwargs"]["tpu_region"] == "us-central1"
+    assert captured["build_kwargs"]["tpu_zone"] == "us-central1-a"
+    assert captured["build_kwargs"]["eval_datasets_cache_path"].startswith("gs://marin-us-central1/")
 
 
 def test_qsplit240_olmo_base_easy_overlap_rerun_main_wires_cache_and_max_concurrent(monkeypatch):
@@ -3013,3 +3313,59 @@ def test_create_model_size_noise_report_writes_summary_and_runtime_context(tmp_p
     payload = json.loads((output_dir / NOISE_SUMMARY_JSON).read_text())
     assert payload["fixed_subset_baseline_experiment"] == fixed_subset_manifest["experiment_name"]
     assert payload["compute_baseline_experiment"] == compute_manifest["experiment_name"]
+
+
+def test_qsplit240_520m_pilot_analysis_reports_panel_ranks_and_projection(tmp_path, monkeypatch):
+    panel_runs = list(REPRESENTATIVE12_PANEL_RUN_NAMES)
+    results_csv = tmp_path / "pilot_results.csv"
+    source_60m_csv = tmp_path / "two_phase_many.csv"
+    source_300m_csv = tmp_path / "completed_300m.csv"
+
+    pd.DataFrame(
+        {
+            "run_name": panel_runs,
+            "eval/uncheatable_eval/bpb": np.linspace(1.00, 1.11, len(panel_runs)),
+        }
+    ).to_csv(source_60m_csv, index=False)
+    pd.DataFrame(
+        {
+            "run_name": panel_runs[:3],
+            "bpb_300m_6b": [0.98, 1.02, 1.00],
+        }
+    ).to_csv(source_300m_csv, index=False)
+    pd.DataFrame(
+        {
+            "run_name": panel_runs,
+            "eval/uncheatable_eval/bpb": np.linspace(0.91, 1.02, len(panel_runs))[::-1],
+            "wandb_run_id": [f"pilot-{idx}" for idx in range(len(panel_runs))],
+            "status": ["completed"] * len(panel_runs),
+        }
+    ).to_csv(results_csv, index=False)
+
+    monkeypatch.setattr(
+        qsplit240_520m_analysis,
+        "active_compute_hours_for_run",
+        lambda run_id, **_: float(int(run_id.split("-")[-1]) + 1),
+    )
+
+    comparison_frame, summary = qsplit240_520m_analysis.build_pilot_comparison_frame(
+        pilot_results_csv=results_csv,
+        source_60m_csv=source_60m_csv,
+        source_300m_csv=source_300m_csv,
+    )
+
+    assert summary["panel_size"] == 12
+    assert summary["completed_520m_runs"] == 12
+    assert summary["completed_300m_shared_runs"] == 3
+    assert summary["best_60m_run_name"] == panel_runs[0]
+    assert summary["best_520m_run_name"] == panel_runs[-1]
+    assert summary["active_compute_hours_mean_520m"] == pytest.approx(6.5)
+    assert summary["projected_serialized_full_240_hours"] == pytest.approx(1560.0)
+
+    best_row = comparison_frame.iloc[0]
+    assert best_row["run_name"] == panel_runs[-1]
+    assert best_row["rank_520m_in_panel"] == pytest.approx(1.0)
+    assert comparison_frame.loc[
+        comparison_frame["run_name"] == panel_runs[0], "rank_60m_in_panel"
+    ].item() == pytest.approx(1.0)
+    assert np.isnan(comparison_frame.loc[comparison_frame["run_name"] == panel_runs[5], "rank_300m_6b_in_panel"].item())

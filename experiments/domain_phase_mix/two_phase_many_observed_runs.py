@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+from collections.abc import Sequence
 
 import pandas as pd
 
@@ -17,6 +18,20 @@ _THIS_DIR = Path(__file__).resolve().parent
 TWO_PHASE_MANY_CSV_PATH = _THIS_DIR / "exploratory" / "two_phase_many" / "two_phase_many.csv"
 ORIGINAL_QSPLIT240_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_qsplit240"
 CORE_BASELINE_RUN_NAMES = ("baseline_proportional", "baseline_unimax")
+REPRESENTATIVE12_PANEL_RUN_NAMES = (
+    "baseline_proportional",
+    "baseline_unimax",
+    "run_00125",
+    "run_00213",
+    "run_00152",
+    "run_00180",
+    "run_00018",
+    "run_00021",
+    "run_00050",
+    "run_00090",
+    "run_00056",
+    "run_00155",
+)
 _RUN_NAME_PATTERN = re.compile(r"run_\d{5}")
 
 
@@ -108,3 +123,12 @@ def load_original_qsplit240_with_core_baselines() -> list[ObservedTwoPhaseManyRu
     if len(observed_runs) != 240:
         raise ValueError(f"Expected 240 baseline+qsplit240 runs, found {len(observed_runs)}")
     return observed_runs
+
+
+def load_original_qsplit240_named_panel(run_names: Sequence[str]) -> list[ObservedTwoPhaseManyRun]:
+    """Load a named qsplit240 panel in exactly the requested run-name order."""
+    observed_by_name = {run.run_name: run for run in load_original_qsplit240_with_core_baselines()}
+    missing = [run_name for run_name in run_names if run_name not in observed_by_name]
+    if missing:
+        raise ValueError(f"Unknown qsplit240 panel run names: {missing}")
+    return [observed_by_name[run_name] for run_name in run_names]
