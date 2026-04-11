@@ -340,6 +340,40 @@ def test_run_rl_coordinator_enables_transfer_debug_env_vars(monkeypatch):
         assert request.environment.env_vars["TF_CPP_MIN_LOG_LEVEL"] == "0"
 
 
+def test_run_rl_coordinator_forwards_runtime_env_vars(monkeypatch):
+    client = _FakeClient()
+    hosted_runtime = _HostedRuntime(runtime=SimpleNamespace(), hosted_actors=[])
+    config = SimpleNamespace(
+        run_id="rl-test",
+        resolved_instance_id="rl-test",
+        pip_dependency_groups=["math"],
+        runtime_env_vars=["OPENREWARD_API_KEY", "OPENAI_API_KEY"],
+        run_config=RunConfig(
+            train_tpu_type="v5p-8",
+            inference_tpu_type="v5p-8",
+            num_rollout_workers=1,
+            regions=["us-central1"],
+        ),
+    )
+
+    monkeypatch.setenv("OPENREWARD_API_KEY", "openreward-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "tool-secret")
+    monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
+    monkeypatch.setattr("marin.rl.orchestration.RLJob", _FakeRLJob)
+    monkeypatch.setattr(
+        "marin.rl.orchestration._create_runtime_handles",
+        lambda _client, _config: hosted_runtime,
+    )
+    monkeypatch.setattr("marin.rl.orchestration.wait_all", lambda _jobs, raise_on_failure: None)
+
+    _run_rl_coordinator(config)
+
+    assert len(client.submissions) == 2
+    for request in client.submissions:
+        assert request.environment.env_vars["OPENREWARD_API_KEY"] == "openreward-secret"
+        assert request.environment.env_vars["OPENAI_API_KEY"] == "tool-secret"
+
+
 def test_run_rl_coordinator_assigns_stable_rollout_wandb_names(monkeypatch):
     client = _FakeClient()
     hosted_runtime = _HostedRuntime(runtime=SimpleNamespace(), hosted_actors=[])

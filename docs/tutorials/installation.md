@@ -74,6 +74,14 @@ You might find it convenient to store `WANDB_API_KEY` and `HF_TOKEN` and
 
 Marin runs on multiple types of hardware (CPU, GPU, TPU).
 
+!!! info "RL and OpenReward workflows"
+
+    Add `--extra=rl` to the install command for RL training, Verifiers, and OpenReward support. For example:
+
+    ```bash
+    uv sync --all-packages --extra=tpu --extra=rl
+    ```
+
 !!! info "Install `marin` for different accelerators"
 
     Marin requires different JAX installations depending on your hardware accelerator. These installation options are defined in our `pyproject.toml` file and will install the appropriate JAX version for your hardware.
