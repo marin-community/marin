@@ -305,22 +305,20 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
             endpoint_id="ep1",
             name="pending-svc",
             address="h:1",
-            job_id=pending_id,
+            task_id=pending_id.task(0),
             metadata={},
             registered_at=Timestamp.now(),
         ),
-        task_id=pending_id.task(0),
     )
     state.add_endpoint(
         EndpointRow(
             endpoint_id="ep2",
             name="running-svc",
             address="h:2",
-            job_id=running_id,
+            task_id=running_id.task(0),
             metadata={},
             registered_at=Timestamp.now(),
         ),
-        task_id=running_id.task(0),
     )
 
     resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
@@ -342,11 +340,10 @@ def test_list_endpoints_returns_task_id(client, state, job_request):
             endpoint_id="ep-task",
             name="my-actor",
             address="h:1",
-            job_id=job_id,
+            task_id=task_id,
             metadata={},
             registered_at=Timestamp.now(),
         ),
-        task_id=task_id,
     )
 
     resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
