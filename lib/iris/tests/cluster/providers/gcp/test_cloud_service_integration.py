@@ -19,11 +19,13 @@ from dataclasses import dataclass, field
 import httpx
 import pytest
 
+from iris.cluster.providers.gcp import service as gcp_service
 from iris.cluster.providers.gcp.service import (
     CloudGcpService,
     TpuCreateRequest,
     VmCreateRequest,
 )
+from iris.cluster.providers.types import QuotaExhaustedError
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -51,6 +53,8 @@ class GcpFakeBackend:
     tpus: dict[tuple[str, str], dict] = field(default_factory=dict)  # (name, zone) -> tpu_data
     operations: dict[str, dict] = field(default_factory=dict)  # op_name -> op_data
     http_log: list[HttpLog] = field(default_factory=list)
+    # Number of remaining 429 responses to return for DELETE requests
+    delete_429_remaining: int = 0
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -125,6 +129,9 @@ class GcpFakeBackend:
             op = self.operations.get(op_name)
             if op is None:
                 return httpx.Response(404, json={"error": {"code": 404, "message": "Operation not found"}})
+            # If the operation has an injected error, surface it
+            if "error" in op:
+                return httpx.Response(200, json={"name": op_name, "done": True, "error": op["error"]})
             # Complete the operation and make TPU READY with endpoints
             tpu_key = op.get("tpu_key")
             if tpu_key and tpu_key in self.tpus:
@@ -152,6 +159,18 @@ class GcpFakeBackend:
 
         # DELETE .../nodes/NAME
         if method == "DELETE" and "/nodes/" in url:
+            if self.delete_429_remaining > 0:
+                self.delete_429_remaining -= 1
+                return httpx.Response(
+                    429,
+                    json={
+                        "error": {
+                            "code": 429,
+                            "message": "Quota exceeded for DeleteNode requests per minute.",
+                            "status": "RESOURCE_EXHAUSTED",
+                        }
+                    },
+                )
             parts = url.split("/nodes/")
             node_name = parts[1].split("?")[0]
             zone = self._extract_tpu_zone(url)
@@ -504,3 +523,92 @@ def test_serial_port_output(svc: CloudGcpService, backend: GcpFakeBackend):
 
     output = svc.vm_get_serial_port_output("serial-vm", ZONE_EU, start=0)
     assert output == "serial output"
+
+
+# ========================================================================
+# TPU operation error classification (issue #4664)
+# ========================================================================
+
+
+def test_tpu_create_lro_resource_exhausted_raises_quota_error(svc: CloudGcpService, backend: GcpFakeBackend):
+    """LRO finishing with code=8 (RESOURCE_EXHAUSTED) raises QuotaExhaustedError,
+    not generic InfraError. This lets the autoscaler log it without a stack trace."""
+    # Inject a pending operation whose poll returns an error with code 8
+    op_name = f"projects/{PROJECT}/locations/{ZONE_EU}/operations/op-tpu-stockout"
+    backend.operations[op_name] = {
+        "name": op_name,
+        "done": True,
+        "error": {
+            "code": 8,
+            "message": 'There is no more capacity in the zone "europe-west4-b"',
+        },
+    }
+
+    # Patch the POST to return this operation name
+    orig_handle = backend._handle_tpu
+
+    def _patched_tpu(method, url, body):
+        if method == "POST" and "/nodes" in url and "nodeId=" in url:
+            return httpx.Response(200, json={"name": op_name, "done": False})
+        return orig_handle(method, url, body)
+
+    backend._handle_tpu = _patched_tpu
+
+    with pytest.raises(QuotaExhaustedError, match="no more capacity"):
+        svc.tpu_create(
+            TpuCreateRequest(
+                name="stockout-tpu",
+                zone=ZONE_EU,
+                accelerator_type="v5litepod-16",
+                runtime_version="v2-alpha-tpuv5-lite",
+                capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+            )
+        )
+
+
+def test_tpu_delete_retries_on_quota(svc: CloudGcpService, backend: GcpFakeBackend, monkeypatch: pytest.MonkeyPatch):
+    """tpu_delete retries when GCP returns 429 on the DeleteNode quota limit."""
+    monkeypatch.setattr(gcp_service, "_TPU_DELETE_RETRY_BACKOFF", 0.0)
+
+    # Create a TPU then arm the backend to return 429 on the first delete attempt
+    svc.tpu_create(
+        TpuCreateRequest(
+            name="retry-tpu",
+            zone=ZONE_EU,
+            accelerator_type="v5litepod-16",
+            runtime_version="v2-alpha-tpuv5-lite",
+            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+        )
+    )
+    backend.delete_429_remaining = 1
+
+    # Delete should succeed after the retry
+    svc.tpu_delete("retry-tpu", ZONE_EU)
+
+    # Verify it made 2 DELETE requests (1 rejected + 1 succeeded)
+    delete_requests = [e for e in backend.http_log if e.method == "DELETE" and "/nodes/" in e.url]
+    assert len(delete_requests) == 2
+    assert delete_requests[0].status == 429
+    assert delete_requests[1].status == 200
+
+
+def test_tpu_delete_raises_after_exhausted_retries(
+    svc: CloudGcpService, backend: GcpFakeBackend, monkeypatch: pytest.MonkeyPatch
+):
+    """tpu_delete raises QuotaExhaustedError when all retry attempts fail."""
+    monkeypatch.setattr(gcp_service, "_TPU_DELETE_RETRY_BACKOFF", 0.0)
+
+    svc.tpu_create(
+        TpuCreateRequest(
+            name="fail-tpu",
+            zone=ZONE_EU,
+            accelerator_type="v5litepod-16",
+            runtime_version="v2-alpha-tpuv5-lite",
+            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+        )
+    )
+    # More 429s than the retry budget
+    backend.delete_429_remaining = 10
+
+    with pytest.raises(QuotaExhaustedError, match="Quota exceeded"):
+        svc.tpu_delete("fail-tpu", ZONE_EU)

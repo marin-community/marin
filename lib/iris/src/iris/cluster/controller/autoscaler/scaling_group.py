@@ -20,7 +20,7 @@ from enum import Enum, StrEnum
 from collections.abc import Sequence
 
 from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import Labels, SliceHandle
+from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
 from iris.cluster.constraints import (
     AttributeValue,
     CONSTRAINT_REGISTRY,
@@ -572,6 +572,17 @@ class ScalingGroup:
     def _terminate_slice_handle(self, handle: SliceHandle, *, context: str) -> None:
         try:
             handle.terminate()
+        except QuotaExhaustedError as e:
+            # Delete quota retries are exhausted inside the provider; log a
+            # terse warning without a stack trace since this is a known-benign
+            # rate limit, not a crash.
+            logger.warning(
+                "Scale group %s: terminate() rate-limited for slice %s (%s), %s",
+                self.name,
+                handle.slice_id,
+                e,
+                context,
+            )
         except Exception:
             logger.warning(
                 "Scale group %s: terminate() failed for slice %s, %s",
@@ -1083,6 +1094,13 @@ class ScalingGroup:
         for handle in snapshot:
             try:
                 handle.terminate()
+            except QuotaExhaustedError as e:
+                logger.warning(
+                    "Scale group %s: terminate() rate-limited for slice %s (%s) during terminate_all, continuing",
+                    self.name,
+                    handle.slice_id,
+                    e,
+                )
             except Exception:
                 logger.warning(
                     "Scale group %s: terminate() failed for slice %s during terminate_all, continuing",
