@@ -102,7 +102,11 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: tpu-ubuntu2204-base
     sizes:
-      32: { buffer_slices: 0, max_slices: 1 }
+      32:  { buffer_slices: 0, max_slices: 1 }
+      64:  { buffer_slices: 0, max_slices: 1 }
+      128: { buffer_slices: 0, max_slices: 1 }
+      256: { buffer_slices: 0, max_slices: 1 }
+      512: { buffer_slices: 0, max_slices: 1 }
 
 scale_groups:
   cpu_vm_e2_highmem_2_ondemand:
