@@ -743,14 +743,12 @@ def make_demand_entries(
     if required_zones:
         for z in sorted(required_zones):
             constraint_list.append(zone_constraint(z))
-    proto_constraints = [c.to_proto() for c in constraint_list]
-
     return [
         DemandEntry(
             task_ids=[f"{task_prefix}-{i}"],
             coschedule_group_id=None,
             normalized=normalized,
-            constraints=proto_constraints,
+            constraints=constraint_list,
             resources=resources,
         )
         for i in range(count)

@@ -199,13 +199,9 @@ def test_task_name_attempt_zero():
 # ---------------------------------------------------------------------------
 
 
-def _proto_constraint(key: str, string_value: str, op: int = job_pb2.CONSTRAINT_OP_EQ) -> job_pb2.Constraint:
-    """Build a proto Constraint with a string value."""
-    return job_pb2.Constraint(
-        key=key,
-        op=op,
-        value=job_pb2.AttributeValue(string_value=string_value),
-    )
+def _proto_constraint(key: str, string_value: str, op: int = job_pb2.CONSTRAINT_OP_EQ) -> Constraint:
+    """Build a native Constraint with a string value (normalized at construction)."""
+    return Constraint(key=key, op=ConstraintOp(op), value=string_value.strip().lower())
 
 
 # ---------------------------------------------------------------------------
@@ -450,12 +446,9 @@ def test_constraint_in_proto_roundtrip():
 # ---------------------------------------------------------------------------
 
 
-def _proto_in_constraint(key: str, string_values: list[str]) -> job_pb2.Constraint:
-    """Build a proto Constraint with IN op and multiple string values."""
-    c = job_pb2.Constraint(key=key, op=job_pb2.CONSTRAINT_OP_IN)
-    for sv in string_values:
-        c.values.append(job_pb2.AttributeValue(string_value=sv))
-    return c
+def _proto_in_constraint(key: str, string_values: list[str]) -> Constraint:
+    """Build a native IN Constraint with multiple string values."""
+    return Constraint(key=key, op=ConstraintOp.IN, values=tuple(v.strip().lower() for v in string_values))
 
 
 def test_required_regions_in_multiple():
@@ -472,7 +465,7 @@ def test_required_regions_in_single():
 
 def test_required_regions_in_empty_values_raises():
     """IN constraint with no values is invalid."""
-    c = job_pb2.Constraint(key=WellKnownAttribute.REGION, op=job_pb2.CONSTRAINT_OP_IN)
+    c = Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=())
     with pytest.raises(ValueError, match="at least one value"):
         extract_placement_requirements([c])
 

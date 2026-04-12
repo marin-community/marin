@@ -21,12 +21,14 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
     AttributeValue,
     Constraint,
+    ConstraintOp,
     PlacementRequirements,
     WellKnownAttribute,
     constraints_from_resources,
     evaluate_constraint,
     extract_placement_requirements,
     merge_constraints,
+    region_constraint as make_region_constraint,
 )
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.codec import (
@@ -673,8 +675,7 @@ def _worker_matches_reservation_entry(
     explicit = [Constraint.from_proto(c) for c in res_entry.constraints]
     merged = merge_constraints(auto, explicit)
 
-    merged_protos = [c.to_proto() for c in merged]
-    for constraint in merged_protos:
+    for constraint in merged:
         attr = worker.attributes.get(constraint.key)
         if not evaluate_constraint(attr, constraint):
             return False
@@ -732,18 +733,15 @@ def _inject_taint_constraints(
     if has_direct_reservation is None:
         has_direct_reservation = set()
 
-    taint_constraint = job_pb2.Constraint(
-        key=RESERVATION_TAINT_KEY,
-        op=job_pb2.CONSTRAINT_OP_NOT_EXISTS,
-    )
+    taint_constraint = Constraint(key=RESERVATION_TAINT_KEY, op=ConstraintOp.NOT_EXISTS)
 
     modified: dict[JobName, JobRequirements] = {}
     for job_id, req in jobs.items():
         if job_id in has_direct_reservation:
-            eq_constraint = job_pb2.Constraint(
+            eq_constraint = Constraint(
                 key=RESERVATION_TAINT_KEY,
-                op=job_pb2.CONSTRAINT_OP_EQ,
-                value=job_pb2.AttributeValue(string_value=job_id.to_wire()),
+                op=ConstraintOp.EQ,
+                value=job_id.to_wire(),
             )
             modified[job_id] = replace(
                 req,
@@ -782,8 +780,8 @@ def _reservation_region_constraints(
     job_id_wire: str,
     claims: dict[WorkerId, ReservationClaim],
     queries: ControllerDB,
-    existing_constraints: list[job_pb2.Constraint],
-) -> list[job_pb2.Constraint]:
+    existing_constraints: list[Constraint],
+) -> list[Constraint]:
     """Derive region constraints from claimed reservation workers.
 
     When a reservation job has no explicit region constraint, this function
@@ -812,21 +810,7 @@ def _reservation_region_constraints(
     if not regions:
         return existing_constraints
 
-    region_list = sorted(regions)
-    if len(region_list) == 1:
-        region_constraint = job_pb2.Constraint(
-            key=WellKnownAttribute.REGION,
-            op=job_pb2.CONSTRAINT_OP_EQ,
-            value=job_pb2.AttributeValue(string_value=region_list[0]),
-        )
-    else:
-        region_constraint = job_pb2.Constraint(
-            key=WellKnownAttribute.REGION,
-            op=job_pb2.CONSTRAINT_OP_IN,
-            values=[job_pb2.AttributeValue(string_value=r) for r in region_list],
-        )
-
-    return [*existing_constraints, region_constraint]
+    return [*existing_constraints, make_region_constraint(sorted(regions))]
 
 
 def _preference_pass(

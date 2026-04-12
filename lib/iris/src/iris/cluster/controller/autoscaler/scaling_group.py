@@ -24,6 +24,7 @@ from iris.cluster.providers.types import Labels, SliceHandle
 from iris.cluster.constraints import (
     AttributeValue,
     CONSTRAINT_REGISTRY,
+    Constraint,
     DeviceType,
     ResourceCapacity,
     WellKnownAttribute,
@@ -958,8 +959,8 @@ class ScalingGroup:
             attrs[WellKnownAttribute.ZONE] = AttributeValue(zone)
         return attrs
 
-    def matches_constraints(self, constraints: Sequence[job_pb2.Constraint]) -> bool:
-        """Check if this group satisfies the given proto constraints.
+    def matches_constraints(self, constraints: Sequence[Constraint]) -> bool:
+        """Check if this group satisfies the given constraints.
 
         Only evaluates routing constraints (device-type, device-variant,
         preemptible, region, zone). Non-routing constraints (tpu-name, etc.)

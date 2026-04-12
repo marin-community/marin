@@ -649,7 +649,7 @@ def test_taint_constraint_added_to_non_reservation_jobs():
     constraints = result[JobName.root("test-user", "regular")].constraints
     not_exists = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(not_exists) == 1
-    assert not_exists[0].op == job_pb2.CONSTRAINT_OP_NOT_EXISTS
+    assert not_exists[0].op == ConstraintOp.NOT_EXISTS
 
 
 def test_taint_constraint_not_added_to_reservation_jobs():
@@ -666,8 +666,8 @@ def test_taint_constraint_not_added_to_reservation_jobs():
     constraints = result[res_job].constraints
     eq = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(eq) == 1
-    assert eq[0].op == job_pb2.CONSTRAINT_OP_EQ
-    assert eq[0].value.string_value == res_job.to_wire()
+    assert eq[0].op == ConstraintOp.EQ
+    assert eq[0].value == res_job.to_wire()
 
 
 def test_taint_constraint_mixed_jobs():
@@ -688,8 +688,8 @@ def test_taint_constraint_mixed_jobs():
     # Direct reservation job: EQ constraint
     res_constraints = [c for c in result[res_job].constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(res_constraints) == 1
-    assert res_constraints[0].op == job_pb2.CONSTRAINT_OP_EQ
-    assert res_constraints[0].value.string_value == res_job.to_wire()
+    assert res_constraints[0].op == ConstraintOp.EQ
+    assert res_constraints[0].value == res_job.to_wire()
 
     # Descendant: no taint constraint
     desc_constraints = [c for c in result[descendant_job].constraints if c.key == RESERVATION_TAINT_KEY]
@@ -698,15 +698,15 @@ def test_taint_constraint_mixed_jobs():
     # Regular job: NOT_EXISTS constraint
     reg_constraints = [c for c in result[reg_job].constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(reg_constraints) == 1
-    assert reg_constraints[0].op == job_pb2.CONSTRAINT_OP_NOT_EXISTS
+    assert reg_constraints[0].op == ConstraintOp.NOT_EXISTS
 
 
 def test_taint_constraint_preserves_existing_constraints():
     """Existing constraints are preserved when the taint constraint is added."""
-    existing = job_pb2.Constraint(
+    existing = Constraint(
         key=WellKnownAttribute.REGION,
-        op=job_pb2.CONSTRAINT_OP_EQ,
-        value=job_pb2.AttributeValue(string_value="us-central1"),
+        op=ConstraintOp.EQ,
+        value="us-central1",
     )
     jobs = {
         JobName.root("test-user", "regular"): JobRequirements(
@@ -922,8 +922,8 @@ def test_region_constraint_injected_from_claimed_workers():
 
     assert len(result) == 1
     assert result[0].key == WellKnownAttribute.REGION
-    assert result[0].op == job_pb2.CONSTRAINT_OP_EQ
-    assert result[0].value.string_value == "us-central1"
+    assert result[0].op == ConstraintOp.EQ
+    assert result[0].value == "us-central1"
 
 
 def test_region_constraint_not_injected_when_already_present():
@@ -936,10 +936,10 @@ def test_region_constraint_not_injected_when_already_present():
     jid = _submit_job(ctrl.state, "j1", req)
     ctrl._claim_workers_for_reservations()
 
-    existing = job_pb2.Constraint(
+    existing = Constraint(
         key=WellKnownAttribute.REGION,
-        op=job_pb2.CONSTRAINT_OP_EQ,
-        value=job_pb2.AttributeValue(string_value="us-east1"),
+        op=ConstraintOp.EQ,
+        value="us-east1",
     )
     result = _reservation_region_constraints(
         jid.to_wire(),
@@ -994,9 +994,8 @@ def test_region_constraint_multiple_regions():
 
     assert len(result) == 1
     assert result[0].key == WellKnownAttribute.REGION
-    assert result[0].op == job_pb2.CONSTRAINT_OP_IN
-    regions = {v.string_value for v in result[0].values}
-    assert regions == {"us-central1", "us-east1"}
+    assert result[0].op == ConstraintOp.IN
+    assert set(result[0].values) == {"us-central1", "us-east1"}
 
 
 def test_no_injection_for_non_reservation_job():

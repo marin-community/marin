@@ -161,6 +161,13 @@ class ConstraintOp(IntEnum):
         return mapping[self]
 
 
+def _normalize_value(v: str | int | float) -> str | int | float:
+    """Strip and lowercase string values so constraint evaluation is case-insensitive."""
+    if isinstance(v, str):
+        return v.strip().lower()
+    return v
+
+
 @dataclass(frozen=True)
 class Constraint:
     """Worker constraint for job scheduling.
@@ -203,14 +210,18 @@ class Constraint:
 
     @staticmethod
     def from_proto(proto: job_pb2.Constraint) -> Constraint:
-        """Convert from protobuf representation."""
+        """Convert from protobuf representation.
+
+        String values are stripped and lowercased at ingestion so that
+        downstream constraint evaluation never needs case-normalization.
+        """
         op = ConstraintOp(proto.op)
         value: str | int | float | None = None
         if proto.HasField("value"):
-            value = AttributeValue.from_proto(proto.value).value
+            value = _normalize_value(AttributeValue.from_proto(proto.value).value)
         values: tuple[str | int | float, ...] | None = None
         if proto.values:
-            values = tuple(AttributeValue.from_proto(v).value for v in proto.values)
+            values = tuple(_normalize_value(AttributeValue.from_proto(v).value) for v in proto.values)
         return Constraint(key=proto.key, op=op, value=value, values=values, mode=proto.mode)
 
 
@@ -411,16 +422,13 @@ def _extract_device_type(constraints: list[Constraint]) -> DeviceType | None:
         raise ValueError(f"unknown device type: {raw}") from e
 
 
-def extract_placement_requirements(constraints: Sequence[job_pb2.Constraint]) -> PlacementRequirements:
-    """Extract canonical placement requirements from protobuf constraints.
+def extract_placement_requirements(constraints: Sequence[Constraint]) -> PlacementRequirements:
+    """Extract canonical placement requirements from constraints.
 
-    Parses proto constraints once, groups by key, then extracts each field
-    using shared helpers.
+    Groups constraints by key, then extracts each field using shared helpers.
     """
-    parsed = [Constraint.from_proto(c) for c in constraints]
-
     by_key: dict[str, list[Constraint]] = {}
-    for c in parsed:
+    for c in constraints:
         by_key.setdefault(c.key, []).append(c)
 
     return PlacementRequirements(
@@ -494,26 +502,6 @@ class ConstraintDescriptor:
     allowed_ops: frozenset[int]
     canonical: bool
     routing: bool
-    extract: Callable[..., Any] | None
-
-
-# --- Extract functions ---
-
-
-def _extract_string(constraint: job_pb2.Constraint) -> str:
-    return constraint.value.string_value.strip()
-
-
-def _extract_string_lower(constraint: job_pb2.Constraint) -> str:
-    return constraint.value.string_value.strip().lower()
-
-
-def _extract_bool_string(constraint: job_pb2.Constraint) -> str:
-    return constraint.value.string_value.strip().lower()
-
-
-def _extract_int(constraint: job_pb2.Constraint) -> int:
-    return constraint.value.int_value
 
 
 _EQ_IN = frozenset({job_pb2.CONSTRAINT_OP_EQ, job_pb2.CONSTRAINT_OP_IN})
@@ -543,68 +531,32 @@ def _register(desc: ConstraintDescriptor) -> ConstraintDescriptor:
 
 _register(
     ConstraintDescriptor(
-        key="device-type",
-        kind=ConstraintKind.TAG,
-        python_type=str,
-        allowed_ops=_EQ_IN,
-        canonical=True,
-        routing=True,
-        extract=_extract_string_lower,
+        key="device-type", kind=ConstraintKind.TAG, python_type=str, allowed_ops=_EQ_IN, canonical=True, routing=True
     )
 )
 _register(
     ConstraintDescriptor(
-        key="device-variant",
-        kind=ConstraintKind.TAG,
-        python_type=str,
-        allowed_ops=_EQ_IN,
-        canonical=True,
-        routing=True,
-        extract=_extract_string,
+        key="device-variant", kind=ConstraintKind.TAG, python_type=str, allowed_ops=_EQ_IN, canonical=True, routing=True
     )
 )
 _register(
     ConstraintDescriptor(
-        key="preemptible",
-        kind=ConstraintKind.TAG,
-        python_type=bool,
-        allowed_ops=_EQ_ONLY,
-        canonical=True,
-        routing=True,
-        extract=_extract_bool_string,
+        key="preemptible", kind=ConstraintKind.TAG, python_type=bool, allowed_ops=_EQ_ONLY, canonical=True, routing=True
     )
 )
 _register(
     ConstraintDescriptor(
-        key="region",
-        kind=ConstraintKind.TAG,
-        python_type=str,
-        allowed_ops=_EQ_IN,
-        canonical=True,
-        routing=True,
-        extract=_extract_string,
+        key="region", kind=ConstraintKind.TAG, python_type=str, allowed_ops=_EQ_IN, canonical=True, routing=True
     )
 )
 _register(
     ConstraintDescriptor(
-        key="zone",
-        kind=ConstraintKind.TAG,
-        python_type=str,
-        allowed_ops=_EQ_IN,
-        canonical=True,
-        routing=True,
-        extract=_extract_string,
+        key="zone", kind=ConstraintKind.TAG, python_type=str, allowed_ops=_EQ_IN, canonical=True, routing=True
     )
 )
 _register(
     ConstraintDescriptor(
-        key="tpu-name",
-        kind=ConstraintKind.TAG,
-        python_type=str,
-        allowed_ops=_ALL_OPS,
-        canonical=False,
-        routing=False,
-        extract=_extract_string,
+        key="tpu-name", kind=ConstraintKind.TAG, python_type=str, allowed_ops=_ALL_OPS, canonical=False, routing=False
     )
 )
 _register(
@@ -615,7 +567,6 @@ _register(
         allowed_ops=_ALL_OPS,
         canonical=False,
         routing=False,
-        extract=_extract_int,
     )
 )
 _register(
@@ -626,7 +577,6 @@ _register(
         allowed_ops=_ALL_OPS,
         canonical=False,
         routing=False,
-        extract=_extract_string,
     )
 )
 _register(
@@ -637,18 +587,11 @@ _register(
         allowed_ops=_ALL_OPS,
         canonical=False,
         routing=False,
-        extract=_extract_int,
     )
 )
 _register(
     ConstraintDescriptor(
-        key="gpu-variant",
-        kind=ConstraintKind.TAG,
-        python_type=str,
-        allowed_ops=_ALL_OPS,
-        canonical=False,
-        routing=False,
-        extract=_extract_string,
+        key="gpu-variant", kind=ConstraintKind.TAG, python_type=str, allowed_ops=_ALL_OPS, canonical=False, routing=False
     )
 )
 _register(
@@ -659,7 +602,6 @@ _register(
         allowed_ops=_ALL_OPS,
         canonical=False,
         routing=False,
-        extract=_extract_int,
     )
 )
 
@@ -818,67 +760,52 @@ def _compare_ordered(
 
 def evaluate_constraint(
     attr: AttributeValue | None,
-    constraint: job_pb2.Constraint,
+    constraint: Constraint,
 ) -> bool:
     """Evaluate a single constraint against an entity's attribute.
 
     Works for any entity (worker, scaling group, etc.) that has typed attributes.
-
-    Args:
-        attr: Attribute value (None if attribute doesn't exist on the entity)
-        constraint: Constraint to evaluate
-
-    Returns:
-        True if constraint is satisfied, False otherwise
+    Constraint values are already normalized (stripped, lowercased) at ingestion.
     """
     op = constraint.op
 
-    # EXISTS/NOT_EXISTS don't need a value comparison
-    if op == job_pb2.CONSTRAINT_OP_EXISTS:
+    if op == ConstraintOp.EXISTS:
         return attr is not None
-    if op == job_pb2.CONSTRAINT_OP_NOT_EXISTS:
+    if op == ConstraintOp.NOT_EXISTS:
         return attr is None
 
-    # All other operators require the attribute to exist
     if attr is None:
         return False
 
-    target = AttributeValue.from_proto(constraint.value)
-
     match op:
-        case job_pb2.CONSTRAINT_OP_EQ:
-            return attr.value == target.value
-        case job_pb2.CONSTRAINT_OP_NE:
-            return attr.value != target.value
-        case job_pb2.CONSTRAINT_OP_GT:
-            return _compare_ordered(attr.value, target.value, "gt")
-        case job_pb2.CONSTRAINT_OP_GE:
-            return _compare_ordered(attr.value, target.value, "ge")
-        case job_pb2.CONSTRAINT_OP_LT:
-            return _compare_ordered(attr.value, target.value, "lt")
-        case job_pb2.CONSTRAINT_OP_LE:
-            return _compare_ordered(attr.value, target.value, "le")
-        case job_pb2.CONSTRAINT_OP_IN:
-            target_values = {AttributeValue.from_proto(v).value for v in constraint.values}
-            return attr.value in target_values
+        case ConstraintOp.EQ:
+            return attr.value == constraint.value
+        case ConstraintOp.NE:
+            return attr.value != constraint.value
+        case ConstraintOp.GT:
+            return _compare_ordered(attr.value, constraint.value, "gt")
+        case ConstraintOp.GE:
+            return _compare_ordered(attr.value, constraint.value, "ge")
+        case ConstraintOp.LT:
+            return _compare_ordered(attr.value, constraint.value, "lt")
+        case ConstraintOp.LE:
+            return _compare_ordered(attr.value, constraint.value, "le")
+        case ConstraintOp.IN:
+            return attr.value in constraint.values if constraint.values else False
         case _:
             return False
 
 
-def is_cpu_device_type_constraint(c: job_pb2.Constraint) -> bool:
+def is_cpu_device_type_constraint(c: Constraint) -> bool:
     """True if this constraint is device-type=cpu.
 
     CPU jobs match any scaling group, so this constraint is stripped
-    before routing evaluation.
+    before routing evaluation. Values are already normalized at ingestion.
     """
-    return (
-        c.key == WellKnownAttribute.DEVICE_TYPE
-        and c.op == job_pb2.CONSTRAINT_OP_EQ
-        and c.value.string_value.strip().lower() == "cpu"
-    )
+    return c.key == WellKnownAttribute.DEVICE_TYPE and c.op == ConstraintOp.EQ and c.value == "cpu"
 
 
-def routing_constraints(constraints: Sequence[job_pb2.Constraint]) -> list[job_pb2.Constraint]:
+def routing_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
     """Filter to routing-only constraints, stripping CPU device-type.
 
     Non-routing constraints (tpu-name, tpu-worker-id, etc.) and unknown
@@ -897,16 +824,16 @@ def routing_constraints(constraints: Sequence[job_pb2.Constraint]) -> list[job_p
 
 
 def split_hard_soft(
-    constraints: Sequence[job_pb2.Constraint],
-) -> tuple[list[job_pb2.Constraint], list[job_pb2.Constraint]]:
-    """Split proto constraints into (hard, soft) lists based on mode.
+    constraints: Sequence[Constraint],
+) -> tuple[list[Constraint], list[Constraint]]:
+    """Split constraints into (hard, soft) lists based on mode.
 
     Hard constraints filter candidates; soft constraints only influence ranking.
     """
-    hard: list[job_pb2.Constraint] = []
-    soft: list[job_pb2.Constraint] = []
+    hard: list[Constraint] = []
+    soft: list[Constraint] = []
     for c in constraints:
-        if c.mode == job_pb2.CONSTRAINT_MODE_PREFERRED:
+        if c.is_soft:
             soft.append(c)
         else:
             hard.append(c)
@@ -915,7 +842,7 @@ def split_hard_soft(
 
 def soft_constraint_score(
     entity_attrs: dict[str, AttributeValue],
-    soft_constraints: Sequence[job_pb2.Constraint],
+    soft_constraints: Sequence[Constraint],
 ) -> int:
     """Count how many soft constraints an entity satisfies.
 
@@ -966,7 +893,7 @@ class ConstraintIndex:
             _entity_attributes=dict(entities),
         )
 
-    def matching_entities(self, constraints: Sequence[job_pb2.Constraint]) -> set[str]:
+    def matching_entities(self, constraints: Sequence[Constraint]) -> set[str]:
         """Get entity IDs matching ALL constraints."""
         if not constraints:
             return set(self._all_ids)
@@ -981,16 +908,15 @@ class ConstraintIndex:
                 return set()
         return result or set()
 
-    def _evaluate_constraint_set(self, constraint: job_pb2.Constraint) -> set[str]:
+    def _evaluate_constraint_set(self, constraint: Constraint) -> set[str]:
         """Evaluate a single constraint, returning matching entity IDs."""
         key = constraint.key
         op = constraint.op
 
-        if op == job_pb2.CONSTRAINT_OP_EQ and key in self._discrete_lists:
-            target = AttributeValue.from_proto(constraint.value).value
-            return self._discrete_lists[key].get(target, set())
+        if op == ConstraintOp.EQ and key in self._discrete_lists:
+            return self._discrete_lists[key].get(constraint.value, set())
 
-        if op == job_pb2.CONSTRAINT_OP_EXISTS:
+        if op == ConstraintOp.EXISTS:
             if key in self._discrete_lists:
                 result: set[str] = set()
                 for entities in self._discrete_lists[key].values():
@@ -998,7 +924,7 @@ class ConstraintIndex:
                 return result
             return set()
 
-        if op == job_pb2.CONSTRAINT_OP_NOT_EXISTS:
+        if op == ConstraintOp.NOT_EXISTS:
             if key in self._discrete_lists:
                 has_attr: set[str] = set()
                 for entities in self._discrete_lists[key].values():
@@ -1006,11 +932,10 @@ class ConstraintIndex:
                 return set(self._all_ids) - has_attr
             return set(self._all_ids)
 
-        if op == job_pb2.CONSTRAINT_OP_IN and key in self._discrete_lists:
+        if op == ConstraintOp.IN and key in self._discrete_lists and constraint.values:
             in_result: set[str] = set()
-            for av in constraint.values:
-                target_val = AttributeValue.from_proto(av).value
-                in_result |= self._discrete_lists[key].get(target_val, set())
+            for val in constraint.values:
+                in_result |= self._discrete_lists[key].get(val, set())
             return in_result
 
         # Slow path for NE, GT, GE, LT, LE, or non-indexed attributes

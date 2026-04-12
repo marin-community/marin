@@ -254,12 +254,12 @@ def test_preemptible_constraint_soft_override():
 
 def test_split_hard_soft():
     hard = eq_constraint("region", "us-central1")
-    soft = job_pb2.Constraint(
+    soft = Constraint(
         key="preemptible",
-        op=job_pb2.CONSTRAINT_OP_EQ,
+        op=ConstraintOp.EQ,
+        value="true",
         mode=job_pb2.CONSTRAINT_MODE_PREFERRED,
     )
-    soft.value.string_value = "true"
     hard_list, soft_list = split_hard_soft([hard, soft])
     assert len(hard_list) == 1
     assert hard_list[0].key == "region"
@@ -275,25 +275,25 @@ def test_split_hard_soft_all_required():
     assert len(soft_list) == 0
 
 
+def _soft_eq(key: str, value: str) -> Constraint:
+    return Constraint(key=key, op=ConstraintOp.EQ, value=value.lower(), mode=job_pb2.CONSTRAINT_MODE_PREFERRED)
+
+
 def test_soft_constraint_score_counts_matches():
     attrs = {
         "preemptible": AttributeValue("true"),
         "region": AttributeValue("us-central1"),
     }
-    soft1 = eq_constraint("preemptible", "true")
-    soft1.mode = job_pb2.CONSTRAINT_MODE_PREFERRED
-    soft2 = eq_constraint("region", "eu-west1")
-    soft2.mode = job_pb2.CONSTRAINT_MODE_PREFERRED
+    soft1 = _soft_eq("preemptible", "true")
+    soft2 = _soft_eq("region", "eu-west1")
     # Only preemptible matches
     assert soft_constraint_score(attrs, [soft1, soft2]) == 1
     # Both match
-    soft2_match = eq_constraint("region", "us-central1")
-    soft2_match.mode = job_pb2.CONSTRAINT_MODE_PREFERRED
+    soft2_match = _soft_eq("region", "us-central1")
     assert soft_constraint_score(attrs, [soft1, soft2_match]) == 2
 
 
 def test_soft_constraint_score_zero_when_no_match():
     attrs = {"preemptible": AttributeValue("false")}
-    soft = eq_constraint("preemptible", "true")
-    soft.mode = job_pb2.CONSTRAINT_MODE_PREFERRED
+    soft = _soft_eq("preemptible", "true")
     assert soft_constraint_score(attrs, [soft]) == 0

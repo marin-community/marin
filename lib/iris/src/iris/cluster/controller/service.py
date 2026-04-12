@@ -404,7 +404,7 @@ def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Control
     )
 
     for c in constraints_from_json(job.constraints_json):
-        req.constraints.append(c)
+        req.constraints.append(c.to_proto())
     for port in json.loads(job.ports_json):
         req.ports.append(port)
 
@@ -925,7 +925,7 @@ class AutoscalerProtocol(Protocol):
     def check_coscheduling_feasibility(
         self,
         replicas: int,
-        constraints: list[job_pb2.Constraint],
+        constraints: list[Constraint],
     ) -> str | None:
         """Check if a coscheduled job can be scheduled. Returns error message or None."""
         ...
@@ -1162,7 +1162,7 @@ class ControllerServiceImpl:
             if autoscaler is not None:
                 error = autoscaler.check_coscheduling_feasibility(
                     replicas=request.replicas,
-                    constraints=list(request.constraints),
+                    constraints=[Constraint.from_proto(c) for c in request.constraints],
                 )
                 if error:
                     raise ConnectError(

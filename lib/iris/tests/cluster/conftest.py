@@ -16,7 +16,7 @@ from unittest.mock import Mock
 import pytest
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import (
     TASK_DETAIL_PROJECTION,
@@ -43,20 +43,14 @@ from rigging.timing import Timestamp
 # ---------------------------------------------------------------------------
 
 
-def eq_constraint(key: str, value: str) -> job_pb2.Constraint:
-    """Build an EQ constraint proto for the given key and string value."""
-    c = job_pb2.Constraint(key=key, op=job_pb2.CONSTRAINT_OP_EQ)
-    c.value.string_value = value
-    return c
+def eq_constraint(key: str, value: str) -> Constraint:
+    """Build an EQ constraint for the given key and string value."""
+    return Constraint(key=key, op=ConstraintOp.EQ, value=value.strip().lower())
 
 
-def in_constraint(key: str, values: list[str]) -> job_pb2.Constraint:
-    """Build an IN constraint proto for the given key and string values."""
-    c = job_pb2.Constraint(key=key, op=job_pb2.CONSTRAINT_OP_IN)
-    for v in values:
-        av = c.values.add()
-        av.string_value = v
-    return c
+def in_constraint(key: str, values: list[str]) -> Constraint:
+    """Build an IN constraint for the given key and string values."""
+    return Constraint(key=key, op=ConstraintOp.IN, values=tuple(v.strip().lower() for v in values))
 
 
 # ---------------------------------------------------------------------------
