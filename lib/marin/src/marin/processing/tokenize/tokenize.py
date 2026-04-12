@@ -338,6 +338,7 @@ def tokenize(config: TokenizeConfigBase):
     train_file_stats = _glob_with_sizes(train_patterns)
     train_file_stats = [f for f in train_file_stats if "provenance.json" not in f["filename"]]
     validation_file_stats = _glob_with_sizes(validation_patterns)
+    validation_file_stats = [f for f in validation_file_stats if "provenance.json" not in f["filename"]]
 
     if isinstance(config, TokenizeConfig):
         _validate_train_urls([f["filename"] for f in train_file_stats], warn=config.allow_test_in_train)
