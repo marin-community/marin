@@ -149,10 +149,33 @@ export interface GetJobStatusResponse {
   resourceMax?: ResourceUsage
 }
 
+export interface CommandEntrypoint {
+  argv?: string[]
+}
+
+export interface RuntimeEntrypoint {
+  setupCommands?: string[]
+  runCommand?: CommandEntrypoint
+  workdirFiles?: Record<string, string>
+  workdirFileRefs?: Record<string, string>
+}
+
+export interface EnvironmentConfig {
+  pipPackages?: string[]
+  envVars?: Record<string, string>
+  extras?: string[]
+  pythonVersion?: string
+  dockerfile?: string
+}
+
 export interface LaunchJobRequest {
   name: string
+  entrypoint?: RuntimeEntrypoint
+  environment?: EnvironmentConfig
   resources?: ResourceSpecProto
   constraints?: Constraint[]
+  ports?: string[]
+  bundleId?: string
   replicas?: number
   priorityBand?: string
 }
