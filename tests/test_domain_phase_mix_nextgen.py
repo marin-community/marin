@@ -7,6 +7,7 @@ from dataclasses import asdict
 
 import numpy as np
 import pandas as pd
+from fray.cluster import ResourceConfig
 from levanter.data.text import DatasetComponent as LmDatasetComponent
 from levanter.data.text import HierarchicalMixtureDatasetComponent
 
@@ -63,7 +64,6 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     MIN_RECOMMENDED_SAMPLED_RUNS,
     MIN_RECOMMENDED_SWARM_RUNS,
     PHASE_BOUNDARIES,
-    PREFERRED_MERGED_RUNTIME_DOMAIN_NAMES,
     build_top_level_domains,
     build_top_level_domain_steps,
     create_two_phase_dolma3_dolmino_top_level_experiment,
@@ -356,12 +356,20 @@ def test_build_top_level_domain_steps_only_materializes_cc_split_domains_in_east
     assert "dolmino_common_crawl_hq" not in steps
 
 
-def test_build_top_level_domain_steps_includes_stackedu_and_stemheavy_for_central1():
+def test_build_top_level_domain_steps_uses_prebuilt_stackedu_and_stemheavy_for_central1():
     steps = build_top_level_domain_steps(runtime_cache_region="us-central1")
-    assert set(steps) == set(PREFERRED_MERGED_RUNTIME_DOMAIN_NAMES)
-    assert len(steps) == 28
-    assert "dolma3_stack_edu" in steps
-    assert "dolmino_stem_heavy_crawl" in steps
+    assert set(steps) == set(MERGED_CC_DOMAIN_NAMES)
+    assert len(steps) == 26
+    assert "dolma3_stack_edu" not in steps
+    assert "dolmino_stem_heavy_crawl" not in steps
+
+
+def test_build_top_level_domain_steps_region_agnostic_uses_prebuilt_mirror_caches():
+    steps = build_top_level_domain_steps(runtime_cache_region=("us-east5", "us-central1"))
+    assert set(steps) == set(MERGED_CC_DOMAIN_NAMES)
+    assert len(steps) == 26
+    assert "dolma3_stack_edu" not in steps
+    assert "dolmino_stem_heavy_crawl" not in steps
 
 
 def test_top_level_experiment_uses_linear_80_20_wsd():
@@ -387,6 +395,15 @@ def test_top_level_experiment_includes_sl_verb_mmlu_in_default_eval_tasks():
     experiment = create_two_phase_dolma3_dolmino_top_level_experiment()
 
     assert experiment.eval_harness_tasks == (MMLU_5_SHOT, MMLU_SL_VERB_5_SHOT, MMLU_PRO_5_SHOT)
+
+
+def test_top_level_experiment_region_agnostic_uses_mirror_backed_prebuilt_domains():
+    experiment = create_two_phase_dolma3_dolmino_top_level_experiment(
+        resources=ResourceConfig.with_tpu("v5p-32", regions=["us-east5", "us-central1"], zone=None)
+    )
+    stack_edu_domain = next(domain for domain in experiment.domains if domain.name == "dolma3_stack_edu")
+
+    assert "mirror://" in stack_edu_domain.description
 
 
 def test_top_level_experiment_allows_budget_and_model_override():

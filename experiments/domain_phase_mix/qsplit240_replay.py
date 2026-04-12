@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import cast
 
@@ -40,9 +42,12 @@ from experiments.domain_phase_mix.two_phase_many_observed_runs import (
 )
 
 DEFAULT_QSPLIT240_EVAL_DATASETS_CACHE_PATH = "gs://marin-us-central1/raw/eval-datasets/qsplit240-300m-6b-expanded-tasks"
+DEFAULT_REGION_AGNOSTIC_TPU_REGIONS = ("us-east5", "us-central1")
 EVAL_DATASETS_CACHE_DEP_ENV_VAR = "MARIN_EVAL_DATASETS_CACHE_DEPENDENCY"
 ALL_PANEL = "all"
 REPRESENTATIVE12_PANEL = "representative12"
+CHECKPOINT_STEP_METADATA_GLOB = "checkpoints/step-*/metadata.json"
+CHECKPOINT_STEP_PATTERN = re.compile(r"/checkpoints/step-(\d+)/")
 
 
 @dataclass(frozen=True)
@@ -100,9 +105,12 @@ class Qsplit240ReplayLaunchArtifacts:
         ]
 
 
-def _region_local_marin_path(default_path: str) -> str:
-    """Map a Marin GCS path to the current region bucket when possible."""
-    current_prefix = marin_prefix().rstrip("/")
+def _region_local_marin_path(default_path: str, region: str | None = None) -> str:
+    """Map a Marin GCS path to a specific region bucket when possible."""
+    if region is None:
+        current_prefix = marin_prefix().rstrip("/")
+    else:
+        current_prefix = f"gs://marin-{region}"
     if not default_path.startswith("gs://marin-") or not current_prefix.startswith("gs://marin-"):
         return default_path
 
@@ -113,6 +121,37 @@ def _region_local_marin_path(default_path: str) -> str:
     return f"{current_prefix}/{object_key}"
 
 
+def mirror_path(path: str) -> str:
+    """Return a mirror-backed filesystem path for a GCS path."""
+    if path.startswith("mirror://"):
+        return path
+    if path.startswith("gs://"):
+        return f"mirror://{path}"
+    return path
+
+
+def _checkpoint_root_from_metadata_path(metadata_path: str) -> tuple[str, int] | None:
+    match = CHECKPOINT_STEP_PATTERN.search(metadata_path)
+    if match is None:
+        return None
+    step = int(match.group(1))
+    checkpoint_root = metadata_path.split("/checkpoints/step-", 1)[0]
+    return checkpoint_root, step
+
+
+def normalize_tpu_regions(tpu_regions: str | Sequence[str]) -> tuple[str, ...]:
+    """Normalize a region spec into a stable tuple without duplicates."""
+    raw_regions: Sequence[str]
+    if isinstance(tpu_regions, str):
+        raw_regions = tpu_regions.split(",")
+    else:
+        raw_regions = tpu_regions
+    normalized = tuple(dict.fromkeys(region.strip() for region in raw_regions if region.strip()))
+    if not normalized:
+        raise ValueError("tpu_regions must contain at least one region")
+    return normalized
+
+
 def resolve_qsplit240_eval_cache_path(eval_datasets_cache_path: str | None = None) -> str:
     """Resolve the eval-dataset cache path for qsplit240 replay launches."""
     return eval_datasets_cache_path or DEFAULT_QSPLIT240_EVAL_DATASETS_CACHE_PATH
@@ -121,6 +160,45 @@ def resolve_qsplit240_eval_cache_path(eval_datasets_cache_path: str | None = Non
 def resolve_qsplit240_eval_cache_path_for_current_region(eval_datasets_cache_path: str | None = None) -> str:
     """Resolve the eval cache path and rewrite it to the current Marin bucket prefix."""
     return _region_local_marin_path(resolve_qsplit240_eval_cache_path(eval_datasets_cache_path))
+
+
+def resolve_qsplit240_eval_cache_path_for_regions(
+    tpu_regions: str | Sequence[str],
+    eval_datasets_cache_path: str | None = None,
+) -> str:
+    """Resolve the eval cache path for a single-region or region-agnostic launch."""
+    resolved_path = resolve_qsplit240_eval_cache_path(eval_datasets_cache_path)
+    normalized_regions = normalize_tpu_regions(tpu_regions)
+    if len(normalized_regions) == 1:
+        return _region_local_marin_path(resolved_path, normalized_regions[0])
+    return mirror_path(resolved_path)
+
+
+def resolve_latest_checkpoint_root(
+    *,
+    experiment_name_prefix: str,
+    run_name: str,
+    checkpoint_regions: str | Sequence[str] = DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
+) -> str | None:
+    """Resolve the highest-step checkpoint root for a run across one or more regions."""
+    best_checkpoint: tuple[int, str] | None = None
+    for region in normalize_tpu_regions(checkpoint_regions):
+        pattern = (
+            f"gs://marin-{region}/checkpoints/{experiment_name_prefix}/{run_name}-*/{CHECKPOINT_STEP_METADATA_GLOB}"
+        )
+        fs, _, _ = fsspec.get_fs_token_paths(pattern)
+        for match in fs.glob(pattern):
+            full_match = match if str(match).startswith("gs://") else f"gs://{match}"
+            resolved = _checkpoint_root_from_metadata_path(full_match)
+            if resolved is None:
+                continue
+            checkpoint_root, step = resolved
+            if best_checkpoint is None or step > best_checkpoint[0]:
+                best_checkpoint = (step, checkpoint_root)
+
+    if best_checkpoint is None:
+        return None
+    return best_checkpoint[1]
 
 
 def load_panel_observed_runs(panel: str):
@@ -243,13 +321,22 @@ def create_qsplit240_replay_experiment(
     model_config: LmConfig,
     optimizer_config: MuonHConfig,
     tpu_type: str,
-    tpu_region: str,
-    tpu_zone: str,
+    tpu_regions: Sequence[str],
+    tpu_zone: str | None,
     eval_tasks: tuple[EvalTaskConfig, ...],
     eval_datasets_cache_path: str | None = None,
 ) -> object:
     """Create a qsplit240 replay experiment for a specific model size and region."""
-    resolved_eval_cache_path = resolve_qsplit240_eval_cache_path(eval_datasets_cache_path)
+    normalized_regions = normalize_tpu_regions(tpu_regions)
+    resolved_eval_cache_path = resolve_qsplit240_eval_cache_path_for_regions(
+        normalized_regions,
+        eval_datasets_cache_path,
+    )
+    runtime_cache_region: str | tuple[str, ...]
+    if len(normalized_regions) == 1:
+        runtime_cache_region = normalized_regions[0]
+    else:
+        runtime_cache_region = normalized_regions
     return create_two_phase_dolma3_dolmino_top_level_experiment(
         name=name,
         experiment_budget=experiment_budget,
@@ -257,10 +344,10 @@ def create_qsplit240_replay_experiment(
         seq_len=seq_len,
         model_config=model_config,
         optimizer_config=optimizer_config,
-        resources=ResourceConfig.with_tpu(tpu_type, regions=[tpu_region], zone=tpu_zone),
+        resources=ResourceConfig.with_tpu(tpu_type, regions=list(normalized_regions), zone=tpu_zone),
         eval_harness_tasks=eval_tasks,
         eval_datasets_cache_path=resolved_eval_cache_path,
-        runtime_cache_region=tpu_region,
+        runtime_cache_region=runtime_cache_region,
     )
 
 
@@ -300,8 +387,8 @@ def build_qsplit240_replay_launch_artifacts(
     model_config: LmConfig,
     optimizer_config: MuonHConfig,
     tpu_type: str,
-    tpu_region: str,
-    tpu_zone: str,
+    tpu_regions: Sequence[str],
+    tpu_zone: str | None,
     eval_tasks: tuple[EvalTaskConfig, ...],
     panel: str,
     shard_count: int,
@@ -309,6 +396,7 @@ def build_qsplit240_replay_launch_artifacts(
     wandb_entity: str,
     wandb_project: str,
     eval_datasets_cache_path: str | None = None,
+    resume_latest_checkpoints: bool = False,
 ) -> Qsplit240ReplayLaunchArtifacts:
     """Resolve the full step graph for a qsplit240 replay launch."""
     experiment = create_qsplit240_replay_experiment(
@@ -319,7 +407,7 @@ def build_qsplit240_replay_launch_artifacts(
         model_config=model_config,
         optimizer_config=optimizer_config,
         tpu_type=tpu_type,
-        tpu_region=tpu_region,
+        tpu_regions=tpu_regions,
         tpu_zone=tpu_zone,
         eval_tasks=eval_tasks,
         eval_datasets_cache_path=eval_datasets_cache_path,
@@ -340,7 +428,7 @@ def build_qsplit240_replay_launch_artifacts(
         shard_index=shard_index,
         shard_count=shard_count,
     )
-    resolved_eval_cache_path = resolve_qsplit240_eval_cache_path(eval_datasets_cache_path)
+    resolved_eval_cache_path = resolve_qsplit240_eval_cache_path_for_regions(tpu_regions, eval_datasets_cache_path)
     run_manifest_step = create_run_manifest_step(
         step_name_prefix=execution_name_prefix,
         experiment_name=name_prefix,
@@ -358,11 +446,22 @@ def build_qsplit240_replay_launch_artifacts(
 
     training_steps: list[ExecutorStep] = []
     for spec in run_specs:
+        train_kwargs: dict[str, object] = {}
+        if resume_latest_checkpoints:
+            latest_checkpoint_root = resolve_latest_checkpoint_root(
+                experiment_name_prefix=name_prefix,
+                run_name=spec.run_name,
+                checkpoint_regions=tpu_regions,
+            )
+            if latest_checkpoint_root is not None:
+                train_kwargs["initialize_from_checkpoint_path"] = mirror_path(latest_checkpoint_root)
+                train_kwargs["reset_data_loader_on_init"] = False
         training_step = experiment.create_training_step(
             weight_config=WeightConfig(run_id=spec.run_id, phase_weights=spec.phase_weights),
             name_prefix=name_prefix,
             run_name=spec.run_name,
             data_seed=spec.data_seed,
+            **train_kwargs,
         )
         training_steps.append(add_eval_cache_dependency_to_training_step(training_step, cache_eval_datasets_step))
 

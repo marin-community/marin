@@ -47,6 +47,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import fsspec
+import rigging.filesystem  # noqa: F401
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch a representative 12-run qsplit240 pilot at 520M on central1."""
+"""Launch a representative 12-run qsplit240 pilot at 520M."""
 
 from __future__ import annotations
 
@@ -24,12 +24,13 @@ from experiments.domain_phase_mix.proxy_sweep import (
     regmix_520m_proxy,
 )
 from experiments.domain_phase_mix.qsplit240_replay import (
+    DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
     REPRESENTATIVE12_PANEL,
     build_qsplit240_replay_launch_artifacts,
     build_qsplit240_replay_run_specs,
     create_qsplit240_replay_experiment,
+    normalize_tpu_regions,
     replay_description,
-    resolve_qsplit240_eval_cache_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,10 +43,11 @@ SEQ_LEN = 2048
 NUM_TRAIN_STEPS = get_num_train_steps(EXPERIMENT_BUDGET, BATCH_SIZE, SEQ_LEN)
 DEFAULT_MAX_CONCURRENT = 1
 DEFAULT_TPU_TYPE = "v5p-32"
-DEFAULT_TPU_REGION = "us-central1"
-DEFAULT_TPU_ZONE = "us-central1-a"
+DEFAULT_TPU_REGIONS = DEFAULT_REGION_AGNOSTIC_TPU_REGIONS
+DEFAULT_TPU_ZONE = None
 DEFAULT_PANEL = REPRESENTATIVE12_PANEL
 EVAL_DATASETS_CACHE_PATH = "gs://marin-us-central1/raw/eval-datasets/qsplit240-300m-6b-expanded-tasks"
+DEFAULT_RESUME_LATEST_CHECKPOINTS = True
 
 
 def build_run_specs(*, panel: str = DEFAULT_PANEL):
@@ -63,8 +65,8 @@ def create_experiment(
     *,
     name: str,
     tpu_type: str = DEFAULT_TPU_TYPE,
-    tpu_region: str = DEFAULT_TPU_REGION,
-    tpu_zone: str = DEFAULT_TPU_ZONE,
+    tpu_regions: tuple[str, ...] = DEFAULT_TPU_REGIONS,
+    tpu_zone: str | None = DEFAULT_TPU_ZONE,
     eval_datasets_cache_path: str | None = None,
 ):
     """Create the 520M qsplit240 pilot experiment on the requested region."""
@@ -76,7 +78,7 @@ def create_experiment(
         model_config=regmix_520m_proxy,
         optimizer_config=regmix_520m_muonh_base,
         tpu_type=tpu_type,
-        tpu_region=tpu_region,
+        tpu_regions=tpu_regions,
         tpu_zone=tpu_zone,
         eval_tasks=QSPLIT240_300M_EVAL_TASKS,
         eval_datasets_cache_path=eval_datasets_cache_path,
@@ -87,10 +89,11 @@ def build_launch_artifacts(
     *,
     name_prefix: str,
     tpu_type: str,
-    tpu_region: str,
-    tpu_zone: str,
+    tpu_regions: tuple[str, ...],
+    tpu_zone: str | None,
     panel: str,
     eval_datasets_cache_path: str,
+    resume_latest_checkpoints: bool,
 ):
     """Resolve the 520M pilot launch graph without submitting it."""
     return build_qsplit240_replay_launch_artifacts(
@@ -104,7 +107,7 @@ def build_launch_artifacts(
         model_config=regmix_520m_proxy,
         optimizer_config=regmix_520m_muonh_base,
         tpu_type=tpu_type,
-        tpu_region=tpu_region,
+        tpu_regions=tpu_regions,
         tpu_zone=tpu_zone,
         eval_tasks=QSPLIT240_300M_EVAL_TASKS,
         panel=panel,
@@ -113,6 +116,7 @@ def build_launch_artifacts(
         wandb_entity=WANDB_ENTITY,
         wandb_project=WANDB_PROJECT,
         eval_datasets_cache_path=eval_datasets_cache_path,
+        resume_latest_checkpoints=resume_latest_checkpoints,
     )
 
 
@@ -120,25 +124,33 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description="Launch the qsplit240 representative 520M pilot.")
     parser.add_argument("--name-prefix", default=NAME)
     parser.add_argument("--tpu-type", default=DEFAULT_TPU_TYPE)
-    parser.add_argument("--tpu-region", default=DEFAULT_TPU_REGION)
+    parser.add_argument("--tpu-regions", default=",".join(DEFAULT_TPU_REGIONS))
+    parser.add_argument("--tpu-region")
     parser.add_argument("--tpu-zone", default=DEFAULT_TPU_ZONE)
     parser.add_argument("--panel", default=DEFAULT_PANEL)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
     parser.add_argument("--eval-datasets-cache-path", default=EVAL_DATASETS_CACHE_PATH)
+    parser.add_argument(
+        "--resume-latest-checkpoints",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_RESUME_LATEST_CHECKPOINTS,
+    )
     return parser.parse_known_args()
 
 
 def main() -> None:
     args, remaining = _parse_args()
     sys.argv = [sys.argv[0], *remaining]
+    tpu_regions = normalize_tpu_regions(args.tpu_region or args.tpu_regions)
 
     artifacts = build_launch_artifacts(
         name_prefix=args.name_prefix,
         tpu_type=args.tpu_type,
-        tpu_region=args.tpu_region,
+        tpu_regions=tpu_regions,
         tpu_zone=args.tpu_zone,
         panel=args.panel,
-        eval_datasets_cache_path=resolve_qsplit240_eval_cache_path(args.eval_datasets_cache_path),
+        eval_datasets_cache_path=args.eval_datasets_cache_path,
+        resume_latest_checkpoints=args.resume_latest_checkpoints,
     )
     if os.getenv("CI") is not None:
         logger.info(
@@ -149,11 +161,11 @@ def main() -> None:
         return
 
     logger.info(
-        "Launching %d qsplit240 520M pilot runs on %s in %s/%s with max_concurrent=%d.",
+        "Launching %d qsplit240 520M pilot runs on %s across %s%s with max_concurrent=%d.",
         len(artifacts.run_specs),
         args.tpu_type,
-        args.tpu_region,
-        args.tpu_zone,
+        ",".join(tpu_regions),
+        f" (zone={args.tpu_zone})" if args.tpu_zone else "",
         args.max_concurrent,
     )
     executor_main(

@@ -36,6 +36,7 @@ import experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline as
 import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b as qsplit240_300m
 import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot as qsplit240_1_2b_pilot
 import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot as qsplit240_520m_pilot
+import experiments.domain_phase_mix.qsplit240_replay as qsplit240_replay
 from experiments.domain_phase_mix import (
     launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3_mmlu_sl_verb_rerun as qsplit240_seedpanel_slverb_rerun,
 )
@@ -108,7 +109,7 @@ from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import
 from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot import (
     BATCH_SIZE as QSPLIT240_1_2B_BATCH_SIZE,
     DEFAULT_PANEL as QSPLIT240_1_2B_DEFAULT_PANEL,
-    DEFAULT_TPU_REGION as QSPLIT240_1_2B_DEFAULT_TPU_REGION,
+    DEFAULT_TPU_REGIONS as QSPLIT240_1_2B_DEFAULT_TPU_REGIONS,
     DEFAULT_TPU_ZONE as QSPLIT240_1_2B_DEFAULT_TPU_ZONE,
     EXPERIMENT_BUDGET as QSPLIT240_1_2B_BUDGET,
     MODEL_FAMILY as QSPLIT240_1_2B_MODEL_FAMILY,
@@ -119,7 +120,7 @@ from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchill
 from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot import (
     BATCH_SIZE as QSPLIT240_520M_BATCH_SIZE,
     DEFAULT_PANEL as QSPLIT240_520M_DEFAULT_PANEL,
-    DEFAULT_TPU_REGION as QSPLIT240_520M_DEFAULT_TPU_REGION,
+    DEFAULT_TPU_REGIONS as QSPLIT240_520M_DEFAULT_TPU_REGIONS,
     DEFAULT_TPU_ZONE as QSPLIT240_520M_DEFAULT_TPU_ZONE,
     EXPERIMENT_BUDGET as QSPLIT240_520M_BUDGET,
     MODEL_FAMILY as QSPLIT240_520M_MODEL_FAMILY,
@@ -715,8 +716,8 @@ def test_qsplit240_520m_pilot_experiment_uses_expected_model_resources_region_an
     experiment = create_qsplit240_520m_pilot_experiment(
         name=qsplit240_520m_pilot.NAME,
         tpu_type="v5p-32",
-        tpu_region="us-central1",
-        tpu_zone="us-central1-a",
+        tpu_regions=QSPLIT240_520M_DEFAULT_TPU_REGIONS,
+        tpu_zone=None,
     )
     stack_edu_domain = next(domain for domain in experiment.domains if domain.name == "dolma3_stack_edu")
 
@@ -729,9 +730,9 @@ def test_qsplit240_520m_pilot_experiment_uses_expected_model_resources_region_an
     assert experiment.optimizer_config.learning_rate == pytest.approx(regmix_520m_muonh_base.learning_rate)
     assert experiment.optimizer_config.adam_lr == pytest.approx(regmix_520m_muonh_base.adam_lr)
     assert experiment.optimizer_config.momentum == pytest.approx(regmix_520m_muonh_base.momentum)
-    assert list(experiment.resources.regions or []) == [QSPLIT240_520M_DEFAULT_TPU_REGION]
+    assert list(experiment.resources.regions or []) == list(QSPLIT240_520M_DEFAULT_TPU_REGIONS)
     assert experiment.resources.zone == QSPLIT240_520M_DEFAULT_TPU_ZONE
-    assert "us-central1 merged cache" in stack_edu_domain.description
+    assert "mirror://" in stack_edu_domain.description
 
 
 def test_qsplit240_1_2b_pilot_builds_expected_manifest_and_weights():
@@ -756,8 +757,8 @@ def test_qsplit240_1_2b_pilot_experiment_uses_expected_model_resources_region_an
     experiment = create_qsplit240_1_2b_pilot_experiment(
         name=qsplit240_1_2b_pilot.NAME,
         tpu_type="v5p-64",
-        tpu_region="us-central1",
-        tpu_zone="us-central1-a",
+        tpu_regions=QSPLIT240_1_2B_DEFAULT_TPU_REGIONS,
+        tpu_zone=None,
     )
     stack_edu_domain = next(domain for domain in experiment.domains if domain.name == "dolma3_stack_edu")
 
@@ -771,9 +772,9 @@ def test_qsplit240_1_2b_pilot_experiment_uses_expected_model_resources_region_an
     assert experiment.optimizer_config.adam_lr == pytest.approx(regmix_1_2b_muonh_base.adam_lr)
     assert experiment.optimizer_config.momentum == pytest.approx(regmix_1_2b_muonh_base.momentum)
     assert experiment.optimizer_config.max_grad_norm == pytest.approx(regmix_1_2b_muonh_base.max_grad_norm)
-    assert list(experiment.resources.regions or []) == [QSPLIT240_1_2B_DEFAULT_TPU_REGION]
+    assert list(experiment.resources.regions or []) == list(QSPLIT240_1_2B_DEFAULT_TPU_REGIONS)
     assert experiment.resources.zone == QSPLIT240_1_2B_DEFAULT_TPU_ZONE
-    assert "us-central1 merged cache" in stack_edu_domain.description
+    assert "mirror://" in stack_edu_domain.description
 
 
 def test_stratified_weight_config_is_uniform_across_domains_and_phases():
@@ -798,18 +799,18 @@ def test_stratified_scale_specs_match_expected_model_and_resource_defaults():
     assert spec_60m.model_config is regmix_60m_proxy
     assert spec_60m.experiment_budget == 1_200_000_000
     assert spec_60m.tpu_type == "v5p-8"
-    assert spec_60m.tpu_region == "us-central1"
+    assert spec_60m.tpu_regions == ("us-east5", "us-central1")
     assert spec_300m.model_config is regmix_300m_proxy
     assert spec_300m.optimizer_config is regmix_300m_muonh_base
-    assert spec_300m.tpu_region == "us-central1"
+    assert spec_300m.tpu_regions == ("us-east5", "us-central1")
     assert spec_520m.model_config is regmix_520m_proxy
     assert spec_520m.optimizer_config is regmix_520m_muonh_base
     assert spec_520m.tpu_type == "v5p-32"
-    assert spec_520m.tpu_region == "us-central1"
+    assert spec_520m.tpu_regions == ("us-east5", "us-central1")
     assert spec_1_2b.model_config is regmix_1_2b_proxy
     assert spec_1_2b.optimizer_config is regmix_1_2b_muonh_base
     assert spec_1_2b.tpu_type == "v5p-64"
-    assert spec_1_2b.tpu_zone == "us-central1-a"
+    assert spec_1_2b.tpu_zone is None
 
 
 def test_stratified_baseline_main_builds_selected_scale_in_ci_without_launching(monkeypatch):
@@ -1699,10 +1700,8 @@ def test_qsplit240_520m_pilot_main_builds_graph_in_ci_without_launching(monkeypa
             "launcher",
             "--tpu-type",
             "v5p-32",
-            "--tpu-region",
-            "us-central1",
-            "--tpu-zone",
-            "us-central1-a",
+            "--tpu-regions",
+            "us-east5,us-central1",
             "--panel",
             "representative12",
             "--max-concurrent",
@@ -1715,9 +1714,10 @@ def test_qsplit240_520m_pilot_main_builds_graph_in_ci_without_launching(monkeypa
     assert captured["build_kwargs"]["name_prefix"] == qsplit240_520m_pilot.NAME
     assert captured["build_kwargs"]["panel"] == "representative12"
     assert captured["build_kwargs"]["tpu_type"] == "v5p-32"
-    assert captured["build_kwargs"]["tpu_region"] == "us-central1"
-    assert captured["build_kwargs"]["tpu_zone"] == "us-central1-a"
+    assert captured["build_kwargs"]["tpu_regions"] == ("us-east5", "us-central1")
+    assert captured["build_kwargs"]["tpu_zone"] is None
     assert captured["build_kwargs"]["eval_datasets_cache_path"].startswith("gs://marin-us-central1/")
+    assert captured["build_kwargs"]["resume_latest_checkpoints"] is True
 
 
 def test_qsplit240_1_2b_pilot_main_builds_graph_in_ci_without_launching(monkeypatch):
@@ -1748,10 +1748,8 @@ def test_qsplit240_1_2b_pilot_main_builds_graph_in_ci_without_launching(monkeypa
             "launcher",
             "--tpu-type",
             "v5p-64",
-            "--tpu-region",
-            "us-central1",
-            "--tpu-zone",
-            "us-central1-a",
+            "--tpu-regions",
+            "us-east5,us-central1",
             "--panel",
             "representative12",
             "--max-concurrent",
@@ -1764,9 +1762,33 @@ def test_qsplit240_1_2b_pilot_main_builds_graph_in_ci_without_launching(monkeypa
     assert captured["build_kwargs"]["name_prefix"] == qsplit240_1_2b_pilot.NAME
     assert captured["build_kwargs"]["panel"] == "representative12"
     assert captured["build_kwargs"]["tpu_type"] == "v5p-64"
-    assert captured["build_kwargs"]["tpu_region"] == "us-central1"
-    assert captured["build_kwargs"]["tpu_zone"] == "us-central1-a"
+    assert captured["build_kwargs"]["tpu_regions"] == ("us-east5", "us-central1")
+    assert captured["build_kwargs"]["tpu_zone"] is None
     assert captured["build_kwargs"]["eval_datasets_cache_path"].startswith("gs://marin-us-central1/")
+    assert captured["build_kwargs"]["resume_latest_checkpoints"] is True
+
+
+def test_resolve_latest_checkpoint_root_picks_highest_step_across_regions(monkeypatch):
+    class FakeFs:
+        def glob(self, pattern: str) -> list[str]:
+            return {
+                "gs://marin-us-east5/checkpoints/unit/prefix/run_00125-*/checkpoints/step-*/metadata.json": [
+                    "marin-us-east5/checkpoints/unit/prefix/run_00125-east/checkpoints/step-4000/metadata.json",
+                ],
+                "gs://marin-us-central1/checkpoints/unit/prefix/run_00125-*/checkpoints/step-*/metadata.json": [
+                    "gs://marin-us-central1/checkpoints/unit/prefix/run_00125-central/checkpoints/step-6000/metadata.json",
+                ],
+            }.get(pattern, [])
+
+    monkeypatch.setattr(qsplit240_replay.fsspec, "get_fs_token_paths", lambda pattern: (FakeFs(), None, None))
+
+    checkpoint_root = qsplit240_replay.resolve_latest_checkpoint_root(
+        experiment_name_prefix="unit/prefix",
+        run_name="run_00125",
+        checkpoint_regions=("us-east5", "us-central1"),
+    )
+
+    assert checkpoint_root == "gs://marin-us-central1/checkpoints/unit/prefix/run_00125-central"
 
 
 def test_qsplit240_olmo_base_easy_overlap_rerun_main_wires_cache_and_max_concurrent(monkeypatch):

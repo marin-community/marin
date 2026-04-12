@@ -88,6 +88,7 @@ PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION = {
         ),
     },
 }
+PREBUILT_MERGED_RUNTIME_CACHE_CANONICAL_REGION = "us-central1"
 
 SAMPLING_PARAMS = DirichletSamplingParams(
     strategy=SamplingStrategy.DIRICHLET,
@@ -110,21 +111,63 @@ assert MIN_RECOMMENDED_SWARM_RUNS == 234, MIN_RECOMMENDED_SWARM_RUNS
 assert MIN_RECOMMENDED_SAMPLED_RUNS == 231, MIN_RECOMMENDED_SAMPLED_RUNS
 
 
-def _resolved_runtime_cache_region(
-    *, runtime_cache_region: str | None = None, resources: ResourceConfig | None = None
-) -> str:
+def _normalize_regions(regions: str | Sequence[str]) -> tuple[str, ...]:
+    if isinstance(regions, str):
+        raw_regions = regions.split(",")
+    else:
+        raw_regions = regions
+    normalized = tuple(dict.fromkeys(region.strip() for region in raw_regions if region.strip()))
+    if not normalized:
+        raise ValueError("runtime_cache_region must contain at least one region")
+    return normalized
+
+
+def _mirror_path(path: str) -> str:
+    if path.startswith("mirror://"):
+        return path
+    if path.startswith("gs://"):
+        return f"mirror://{path}"
+    return path
+
+
+def _resolved_runtime_cache_regions(
+    *,
+    runtime_cache_region: str | Sequence[str] | None = None,
+    resources: ResourceConfig | None = None,
+) -> tuple[str, ...]:
     if runtime_cache_region is not None:
-        return runtime_cache_region
+        return _normalize_regions(runtime_cache_region)
     if resources is not None:
         if resources.zone:
-            return resources.zone.rsplit("-", 1)[0]
+            return (resources.zone.rsplit("-", 1)[0],)
         if resources.regions:
-            return resources.regions[0]
-    return DEFAULT_RUNTIME_CACHE_REGION
+            return _normalize_regions(resources.regions)
+    return (DEFAULT_RUNTIME_CACHE_REGION,)
 
 
-def _prebuilt_merged_runtime_cache_paths(runtime_cache_region: str) -> dict[str, str]:
-    return PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION.get(runtime_cache_region, {})
+def _prebuilt_merged_runtime_cache_paths(runtime_cache_regions: Sequence[str]) -> dict[str, str]:
+    normalized_regions = _normalize_regions(runtime_cache_regions)
+    if len(normalized_regions) == 1:
+        return dict(PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION.get(normalized_regions[0], {}))
+
+    prebuilt_paths: dict[str, str] = {}
+    canonical_paths = PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION.get(
+        PREBUILT_MERGED_RUNTIME_CACHE_CANONICAL_REGION, {}
+    )
+    for domain_name in PREFERRED_MERGED_RUNTIME_DOMAIN_NAMES:
+        cache_path = canonical_paths.get(domain_name)
+        if cache_path is None:
+            cache_path = next(
+                (
+                    PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION[region][domain_name]
+                    for region in normalized_regions
+                    if domain_name in PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION.get(region, {})
+                ),
+                None,
+            )
+        if cache_path is not None:
+            prebuilt_paths[domain_name] = _mirror_path(cache_path)
+    return prebuilt_paths
 
 
 @dataclass(frozen=True)
@@ -150,8 +193,7 @@ def _partition_step_fn(partition_name: str):
 
 
 @cache
-def _existing_merged_runtime_cache_config(domain_name: str, runtime_cache_region: str) -> ExistingTokenizedCacheConfig:
-    cache_path = _prebuilt_merged_runtime_cache_paths(runtime_cache_region)[domain_name]
+def _existing_merged_runtime_cache_config(domain_name: str, cache_path: str) -> ExistingTokenizedCacheConfig:
     return ExistingTokenizedCacheConfig(
         cache_path=cache_path,
         tokenizer=marin_tokenizer,
@@ -174,7 +216,7 @@ def _merged_top_level_domain_step(domain_name: str):
     )
 
 
-def build_top_level_domains(*, runtime_cache_region: str = DEFAULT_RUNTIME_CACHE_REGION) -> list[Domain]:
+def build_top_level_domains(*, runtime_cache_region: str | Sequence[str] = DEFAULT_RUNTIME_CACHE_REGION) -> list[Domain]:
     """Build top-level domains with hybrid runtime loading.
 
     The runtime uses:
@@ -185,21 +227,32 @@ def build_top_level_domains(*, runtime_cache_region: str = DEFAULT_RUNTIME_CACHE
     - hierarchical loading for the remaining multi-partition Dolmino domains.
     """
     domains: list[Domain] = []
-    prebuilt_merged_runtime_cache_paths = _prebuilt_merged_runtime_cache_paths(runtime_cache_region)
+    normalized_regions = _resolved_runtime_cache_regions(runtime_cache_region=runtime_cache_region)
+    prebuilt_merged_runtime_cache_paths = _prebuilt_merged_runtime_cache_paths(normalized_regions)
     for domain_name in DOMAIN_NAMES:
         partition_counts = top_level_domain_partition_counts(domain_name)
         if domain_name in prebuilt_merged_runtime_cache_paths:
+            cache_path = prebuilt_merged_runtime_cache_paths[domain_name]
+            if len(normalized_regions) == 1:
+                cache_description = (
+                    f"Top-level domain reusing an existing finished {normalized_regions[0]} merged cache."
+                )
+            else:
+                cache_description = (
+                    "Top-level domain reusing an existing finished merged cache via mirror:// across "
+                    f"{', '.join(normalized_regions)}."
+                )
             domains.append(
                 Domain(
                     name=domain_name,
                     components=[
                         DatasetComponent(
                             name=domain_name,
-                            step_fn=partial(_existing_merged_runtime_cache_config, domain_name, runtime_cache_region),
+                            step_fn=partial(_existing_merged_runtime_cache_config, domain_name, cache_path),
                             weight=TOP_LEVEL_DOMAIN_TOKEN_COUNTS[domain_name],
                         )
                     ],
-                    description=f"Top-level domain reusing an existing finished {runtime_cache_region} merged cache.",
+                    description=cache_description,
                 )
             )
             continue
@@ -261,9 +314,13 @@ def build_top_level_domains(*, runtime_cache_region: str = DEFAULT_RUNTIME_CACHE
     return domains
 
 
-def build_top_level_domain_steps(*, runtime_cache_region: str = DEFAULT_RUNTIME_CACHE_REGION) -> dict[str, object]:
+def build_top_level_domain_steps(
+    *, runtime_cache_region: str | Sequence[str] = DEFAULT_RUNTIME_CACHE_REGION
+) -> dict[str, object]:
     """Build the shared prep steps for domains that should be physically merged in this region."""
-    prebuilt_merged_runtime_cache_paths = _prebuilt_merged_runtime_cache_paths(runtime_cache_region)
+    prebuilt_merged_runtime_cache_paths = _prebuilt_merged_runtime_cache_paths(
+        _resolved_runtime_cache_regions(runtime_cache_region=runtime_cache_region)
+    )
     return {
         domain_name: _merged_top_level_domain_step(domain_name)
         for domain_name in PREFERRED_MERGED_RUNTIME_DOMAIN_NAMES
@@ -394,7 +451,7 @@ def create_two_phase_dolma3_dolmino_top_level_experiment(
     optimizer_config: MuonHConfig | None = None,
     resources: ResourceConfig | None = None,
     eval_harness_tasks: Sequence[EvalTaskConfig] | None = None,
-    runtime_cache_region: str | None = None,
+    runtime_cache_region: str | Sequence[str] | None = None,
 ) -> MixtureExperiment:
     """Create the top-level Dolma 3 + Dolmino two-phase nextgen experiment."""
     phase_schedule = PhaseSchedule.from_boundaries(
@@ -408,13 +465,13 @@ def create_two_phase_dolma3_dolmino_top_level_experiment(
         phase_schedule=phase_schedule,
         optimizer_config=optimizer_config,
     )
-    resolved_runtime_cache_region = _resolved_runtime_cache_region(
+    resolved_runtime_cache_regions = _resolved_runtime_cache_regions(
         runtime_cache_region=runtime_cache_region,
         resources=resources,
     )
     return MixtureExperiment(
         name=name,
-        domains=build_top_level_domains(runtime_cache_region=resolved_runtime_cache_region),
+        domains=build_top_level_domains(runtime_cache_region=resolved_runtime_cache_regions),
         phase_schedule=phase_schedule,
         model_config=model_config or regmix_60m_proxy,
         batch_size=batch_size,

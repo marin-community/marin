@@ -29,7 +29,13 @@ from experiments.domain_phase_mix.proxy_sweep import (
     regmix_520m_proxy,
     regmix_60m_proxy,
 )
-from experiments.domain_phase_mix.qsplit240_replay import resolve_qsplit240_eval_cache_path
+from experiments.domain_phase_mix.qsplit240_replay import (
+    DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
+    mirror_path,
+    normalize_tpu_regions,
+    resolve_latest_checkpoint_root,
+    resolve_qsplit240_eval_cache_path_for_regions,
+)
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     EXPERIMENT_BUDGET as REGMIX_60M_1P2B_BUDGET,
     STRATIFIED_RUN_NAME,
@@ -40,6 +46,7 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
 logger = logging.getLogger(__name__)
 
 EVAL_DATASETS_CACHE_PATH = "gs://marin-us-central1/raw/eval-datasets/qsplit240-300m-6b-expanded-tasks"
+DEFAULT_RESUME_LATEST_CHECKPOINTS = True
 
 
 class StratifiedScale(StrEnum):
@@ -61,8 +68,8 @@ class StratifiedScaleSpec:
     model_config: LmConfig
     optimizer_config: MuonHConfig | None
     tpu_type: str
-    tpu_region: str
-    tpu_zone: str
+    tpu_regions: tuple[str, ...]
+    tpu_zone: str | None
 
 
 SCALE_SPECS = {
@@ -73,8 +80,8 @@ SCALE_SPECS = {
         model_config=regmix_60m_proxy,
         optimizer_config=None,
         tpu_type="v5p-8",
-        tpu_region="us-central1",
-        tpu_zone="us-central1-a",
+        tpu_regions=DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
+        tpu_zone=None,
     ),
     StratifiedScale.REGMIX_300M_6B: StratifiedScaleSpec(
         scale=StratifiedScale.REGMIX_300M_6B,
@@ -83,8 +90,8 @@ SCALE_SPECS = {
         model_config=regmix_300m_proxy,
         optimizer_config=regmix_300m_muonh_base,
         tpu_type="v5p-8",
-        tpu_region="us-central1",
-        tpu_zone="us-central1-a",
+        tpu_regions=DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
+        tpu_zone=None,
     ),
     StratifiedScale.REGMIX_520M_10P4B: StratifiedScaleSpec(
         scale=StratifiedScale.REGMIX_520M_10P4B,
@@ -93,8 +100,8 @@ SCALE_SPECS = {
         model_config=regmix_520m_proxy,
         optimizer_config=regmix_520m_muonh_base,
         tpu_type="v5p-32",
-        tpu_region="us-central1",
-        tpu_zone="us-central1-a",
+        tpu_regions=DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
+        tpu_zone=None,
     ),
     StratifiedScale.REGMIX_1_2B_24B: StratifiedScaleSpec(
         scale=StratifiedScale.REGMIX_1_2B_24B,
@@ -103,8 +110,8 @@ SCALE_SPECS = {
         model_config=regmix_1_2b_proxy,
         optimizer_config=regmix_1_2b_muonh_base,
         tpu_type="v5p-64",
-        tpu_region="us-central1",
-        tpu_zone="us-central1-a",
+        tpu_regions=DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
+        tpu_zone=None,
     ),
 }
 
@@ -114,22 +121,20 @@ def resolve_scale_spec(scale: StratifiedScale) -> StratifiedScaleSpec:
     return SCALE_SPECS[scale]
 
 
-def _resolve_eval_cache_path_for_region(eval_datasets_cache_path: str, tpu_region: str) -> str:
-    resolved_path = resolve_qsplit240_eval_cache_path(eval_datasets_cache_path)
-    source_prefix = "gs://marin-us-central1/"
-    if resolved_path.startswith(source_prefix):
-        return resolved_path.replace(source_prefix, f"gs://marin-{tpu_region}/", 1)
-    return resolved_path
-
-
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scale", type=StratifiedScale, choices=list(StratifiedScale), required=True)
     parser.add_argument("--name-prefix")
     parser.add_argument("--tpu-type")
+    parser.add_argument("--tpu-regions")
     parser.add_argument("--tpu-region")
     parser.add_argument("--tpu-zone")
     parser.add_argument("--eval-datasets-cache-path", default=EVAL_DATASETS_CACHE_PATH)
+    parser.add_argument(
+        "--resume-latest-checkpoints",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_RESUME_LATEST_CHECKPOINTS,
+    )
     return parser.parse_known_args()
 
 
@@ -140,34 +145,49 @@ def main() -> None:
     spec = resolve_scale_spec(args.scale)
     name_prefix = args.name_prefix or spec.name_prefix
     tpu_type = args.tpu_type or spec.tpu_type
-    tpu_region = args.tpu_region or spec.tpu_region
+    tpu_regions = normalize_tpu_regions(args.tpu_region or args.tpu_regions or spec.tpu_regions)
     tpu_zone = args.tpu_zone or spec.tpu_zone
 
     if os.getenv("CI") is not None:
         logger.info("Skipping stratified baseline launch in CI environment for scale %s", spec.scale)
         return
 
+    train_kwargs: dict[str, object] = {}
+    if args.resume_latest_checkpoints:
+        latest_checkpoint_root = resolve_latest_checkpoint_root(
+            experiment_name_prefix=name_prefix,
+            run_name=STRATIFIED_RUN_NAME,
+            checkpoint_regions=tpu_regions,
+        )
+        if latest_checkpoint_root is not None:
+            train_kwargs["initialize_from_checkpoint_path"] = mirror_path(latest_checkpoint_root)
+            train_kwargs["reset_data_loader_on_init"] = False
+
     experiment = create_two_phase_dolma3_dolmino_top_level_experiment(
         name=name_prefix,
         experiment_budget=spec.experiment_budget,
         model_config=spec.model_config,
         optimizer_config=spec.optimizer_config,
-        resources=ResourceConfig.with_tpu(tpu_type, regions=[tpu_region], zone=tpu_zone),
+        resources=ResourceConfig.with_tpu(tpu_type, regions=list(tpu_regions), zone=tpu_zone),
         eval_harness_tasks=QSPLIT240_300M_EVAL_TASKS,
-        eval_datasets_cache_path=_resolve_eval_cache_path_for_region(args.eval_datasets_cache_path, tpu_region),
-        runtime_cache_region=tpu_region,
+        eval_datasets_cache_path=resolve_qsplit240_eval_cache_path_for_regions(
+            tpu_regions,
+            args.eval_datasets_cache_path,
+        ),
+        runtime_cache_region=tpu_regions if len(tpu_regions) > 1 else tpu_regions[0],
     )
     training_step = experiment.create_training_step(
         weight_config=create_stratified_weight_config(),
         name_prefix=name_prefix,
         run_name=STRATIFIED_RUN_NAME,
+        **train_kwargs,
     )
     logger.info(
-        "Launching stratified baseline on %s with budget=%d, tpu=%s, region=%s, zone=%s",
+        "Launching stratified baseline on %s with budget=%d, tpu=%s, regions=%s, zone=%s",
         spec.scale,
         spec.experiment_budget,
         tpu_type,
-        tpu_region,
+        ",".join(tpu_regions),
         tpu_zone,
     )
     executor_main(
