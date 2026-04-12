@@ -77,7 +77,7 @@ def _build_state(params: DummyModel, optimizer: optax.GradientTransformation) ->
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
-        ema_params=params,
+        ema_params=jax.tree_util.tree_map(lambda x: jnp.array(x, copy=True), params),
     )
 
 
@@ -93,12 +93,12 @@ def test_grug_base_train_step_with_watch_matches_base_step():
         attn_mask=GrugAttentionMask.causal(),
     )
 
-    base_step = _make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+    base_step = _make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=0.9)
     watch_step = _make_train_step(
         optimizer,
         mp,
         z_loss_weight=0.0,
-        ema_beta=None,
+        ema_beta=0.9,
         watch_config=WatchConfig(
             watch_targets=["grads", "params", "updates"],
             include_norms=True,
