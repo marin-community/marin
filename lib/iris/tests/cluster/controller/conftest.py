@@ -732,7 +732,7 @@ def make_demand_entries(
     constraint_list: list[Constraint] = []
     if device_type is not None:
         constraint_list.append(
-            Constraint(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value=device_type.value)
+            Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value=device_type.value)
         )
     if effective_variants:
         constraint_list.append(device_variant_constraint(sorted(effective_variants)))
@@ -743,14 +743,12 @@ def make_demand_entries(
     if required_zones:
         for z in sorted(required_zones):
             constraint_list.append(zone_constraint(z))
-    proto_constraints = [c.to_proto() for c in constraint_list]
-
     return [
         DemandEntry(
             task_ids=[f"{task_prefix}-{i}"],
             coschedule_group_id=None,
             normalized=normalized,
-            constraints=proto_constraints,
+            constraints=constraint_list,
             resources=resources,
         )
         for i in range(count)

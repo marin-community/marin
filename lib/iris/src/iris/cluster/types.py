@@ -343,7 +343,8 @@ class ReservationEntry:
 
     Example:
         >>> ReservationEntry(resources=ResourceSpec(cpu=2, memory="8g"))
-        >>> ReservationEntry(resources=ResourceSpec(cpu=2), constraints=[Constraint("region", value="us-central1")])
+        >>> ReservationEntry(resources=ResourceSpec(cpu=2),
+        ...                  constraints=[Constraint.create(key="region", op=ConstraintOp.EQ, value="us-central1")])
     """
 
     resources: "ResourceSpec"

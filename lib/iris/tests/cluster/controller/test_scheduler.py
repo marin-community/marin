@@ -419,7 +419,7 @@ def test_constraint_filters_workers_by_attribute(scheduler, state):
 
     # Job with constraint requiring tpu-name = "tpu-a"
     req = make_job_request()
-    req.constraints.append(eq_constraint(WellKnownAttribute.TPU_NAME, "tpu-a"))
+    req.constraints.append(eq_constraint(WellKnownAttribute.TPU_NAME, "tpu-a").to_proto())
     tasks = submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -602,7 +602,7 @@ def test_constraint_in_operator_matches_any_value(scheduler, state):
 
     # Job with IN constraint: region IN (us-central1, us-central2)
     req = make_job_request()
-    req.constraints.append(in_constraint(WellKnownAttribute.REGION, ["us-central1", "us-central2"]))
+    req.constraints.append(in_constraint(WellKnownAttribute.REGION, ["us-central1", "us-central2"]).to_proto())
 
     submit_job(state, "j1", req)
 
@@ -621,7 +621,7 @@ def test_constraint_in_operator_no_match(scheduler, state):
     register_worker(state, "w1", "addr1", meta)
 
     req = make_job_request()
-    req.constraints.append(in_constraint(WellKnownAttribute.REGION, ["us-central1", "us-central2"]))
+    req.constraints.append(in_constraint(WellKnownAttribute.REGION, ["us-central1", "us-central2"]).to_proto())
     submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -652,7 +652,7 @@ def test_multiple_constraints_all_must_match(scheduler, state):
 
     # Job requiring tpu-name=tpu-a AND tpu-worker-id=0
     req = make_job_request()
-    req.constraints.append(eq_constraint(WellKnownAttribute.TPU_NAME, "tpu-a"))
+    req.constraints.append(eq_constraint(WellKnownAttribute.TPU_NAME, "tpu-a").to_proto())
     c2 = req.constraints.add()
     c2.key = WellKnownAttribute.TPU_WORKER_ID
     c2.op = job_pb2.CONSTRAINT_OP_EQ
@@ -675,7 +675,7 @@ def test_constraint_with_missing_attribute_fails(scheduler, state):
 
     # Job requiring tpu-name = "tpu-a"
     req = make_job_request()
-    req.constraints.append(eq_constraint(WellKnownAttribute.TPU_NAME, "tpu-a"))
+    req.constraints.append(eq_constraint(WellKnownAttribute.TPU_NAME, "tpu-a").to_proto())
     submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -896,7 +896,7 @@ def test_coscheduled_job_with_constraints(scheduler, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
-    req.constraints.append(eq_constraint(WellKnownAttribute.REGION, "us-east"))
+    req.constraints.append(eq_constraint(WellKnownAttribute.REGION, "us-east").to_proto())
     submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -1153,7 +1153,7 @@ def test_preemptible_constraint_routes_to_matching_worker(scheduler, state):
 
     # Job requiring non-preemptible worker
     req = make_job_request()
-    req.constraints.append(eq_constraint(WellKnownAttribute.PREEMPTIBLE, "false"))
+    req.constraints.append(eq_constraint(WellKnownAttribute.PREEMPTIBLE, "false").to_proto())
     tasks = submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -2027,7 +2027,7 @@ def test_device_variant_in_constraint_matches_probed_workers(scheduler, state):
     _register_worker_with_probed_attributes(state, "w3", "addr3", meta3)
 
     req = make_job_request()
-    req.constraints.append(in_constraint(WellKnownAttribute.DEVICE_VARIANT, ["v5litepod-8", "v4-8"]))
+    req.constraints.append(in_constraint(WellKnownAttribute.DEVICE_VARIANT, ["v5litepod-8", "v4-8"]).to_proto())
 
     submit_job(state, "flex-job", req)
     result = schedule_until_done(scheduler, state)

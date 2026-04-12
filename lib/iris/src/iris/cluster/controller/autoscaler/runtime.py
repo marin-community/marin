@@ -30,7 +30,7 @@ from iris.cluster.providers.types import (
     RemoteWorkerHandle,
     SliceHandle,
 )
-from iris.cluster.constraints import ConstraintIndex, routing_constraints
+from iris.cluster.constraints import Constraint, ConstraintIndex, routing_constraints
 from iris.cluster.controller.autoscaler.models import (
     DemandEntry,
     ScalingAction,
@@ -53,7 +53,6 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.types import WorkerStatusMap
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2, vm_pb2
-from iris.rpc import job_pb2
 from iris.time_proto import duration_from_proto, timestamp_to_proto
 from rigging.timing import Duration, Timestamp
 
@@ -533,7 +532,7 @@ class Autoscaler:
     def check_coscheduling_feasibility(
         self,
         replicas: int,
-        constraints: list[job_pb2.Constraint],
+        constraints: list[Constraint],
     ) -> str | None:
         """Check if a coscheduled job with the given replicas can ever be scheduled.
 

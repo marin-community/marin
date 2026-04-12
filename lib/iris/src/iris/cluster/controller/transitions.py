@@ -1611,7 +1611,7 @@ class ControllerTransitions:
                         resources=resources,
                         ports=json.loads(job.ports_json),
                         attempt_id=attempt_id,
-                        constraints=constraints_from_json(job.constraints_json),
+                        constraints=[c.to_proto() for c in constraints_from_json(job.constraints_json)],
                         task_image=job.task_image,
                     )
                     enqueue_run_dispatch(cur, str(assignment.worker_id), run_request.SerializeToString(), now_ms)
@@ -3203,7 +3203,7 @@ class ControllerTransitions:
                     resources=resources,
                     ports=json.loads(str(row["ports_json"])),
                     attempt_id=attempt_id,
-                    constraints=constraints_from_json(row["constraints_json"]),
+                    constraints=[c.to_proto() for c in constraints_from_json(row["constraints_json"])],
                     task_image=str(row["task_image"]),
                 )
                 # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
