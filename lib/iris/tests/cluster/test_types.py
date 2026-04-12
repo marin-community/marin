@@ -79,7 +79,7 @@ def test_job_name_roundtrip_and_hierarchy():
 
     parsed = JobName.from_string("/test-user/root/child/0")
     assert parsed == task
-    assert parsed.namespace == "test-user/root"
+    assert parsed.namespace == "/test-user/root"
     assert parsed.is_task
     assert parsed.task_index == 0
     assert JobName.root("test-user", "root").is_ancestor_of(parsed)

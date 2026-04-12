@@ -1612,12 +1612,12 @@ class ControllerServiceImpl:
             endpoint_id=endpoint_id,
             name=request.name,
             address=request.address,
-            job_id=job_id,
+            task_id=task_id,
             metadata=dict(request.metadata),
             registered_at=Timestamp.now(),
         )
 
-        if not self._transitions.add_endpoint(endpoint, task_id=task_id):
+        if not self._transitions.add_endpoint(endpoint):
             raise ConnectError(
                 Code.FAILED_PRECONDITION,
                 f"Task {request.task_id} is already terminal; endpoint not registered",
@@ -1662,7 +1662,7 @@ class ControllerServiceImpl:
                     endpoint_id=e.endpoint_id,
                     name=e.name,
                     address=e.address,
-                    task_id=e.job_id.to_wire(),
+                    task_id=e.task_id.to_wire(),
                     metadata=e.metadata,
                 )
                 for e in endpoints

@@ -1637,7 +1637,7 @@ class EndpointRow:
     endpoint_id: str
     name: str
     address: str
-    job_id: JobName
+    task_id: JobName
     metadata: dict
     registered_at: Timestamp
 
@@ -1950,7 +1950,7 @@ ENDPOINT_PROJECTION = ENDPOINTS.projection(
     "endpoint_id",
     "name",
     "address",
-    "job_id",
+    "task_id",
     "metadata_json",
     "registered_at_ms",
     row_cls=EndpointRow,
