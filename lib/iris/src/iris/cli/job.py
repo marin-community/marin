@@ -1157,7 +1157,7 @@ def summary(ctx, job_id: str, json_output: bool) -> None:
     default=0,
     help="Maximum number of log lines to return (0 = server default, currently 1000).",
 )
-@click.option("--tail", is_flag=True, help="Return the most recent lines instead of the earliest.")
+@click.option("--tail/--no-tail", default=True, help="Return the most recent lines instead of the earliest.")
 @click.option(
     "--level",
     type=click.Choice(["debug", "info", "warning", "error", "critical"], case_sensitive=False),
