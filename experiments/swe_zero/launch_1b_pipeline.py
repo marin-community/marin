@@ -52,6 +52,7 @@ def _build_iris_cmd(
     disk: str,
     extras: list[str],
     env_vars: list[tuple[str, str]],
+    regions: list[str],
 ) -> list[str]:
     output_dir = f"{output_root.rstrip('/')}/shard_{shard_index:03d}_of_{total_shards:03d}"
     cmd: list[str] = [
@@ -77,6 +78,8 @@ def _build_iris_cmd(
         str(max_retries),
         "--no-wait",
     ]
+    for region in regions:
+        cmd.extend(["--region", region])
     for e in extras:
         cmd.extend(["--extra", e])
     for k, v in env_vars:
@@ -145,6 +148,12 @@ def main():
         default=None,
         help="Optional 'START:END' to launch only a sub-range of shards (useful for retries).",
     )
+    parser.add_argument(
+        "--regions",
+        default="us-east5,us-east1",
+        help="Comma-separated Iris region constraint. Default avoids europe-west4 "
+        "where some workers have a broken vllm-tpu venv (CUDA torch instead of CPU).",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print commands without submitting")
     args = parser.parse_args()
 
@@ -175,6 +184,7 @@ def main():
         args.max_retries,
     )
 
+    regions = [r.strip() for r in args.regions.split(",") if r.strip()]
     submitted = []
     failed = []
     for shard in range(start, end):
@@ -192,6 +202,7 @@ def main():
             disk=args.disk,
             extras=extras,
             env_vars=env_vars,
+            regions=regions,
         )
         if args.dry_run:
             print(" ".join(shlex.quote(c) for c in cmd))
