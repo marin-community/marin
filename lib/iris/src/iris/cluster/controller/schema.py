@@ -1640,6 +1640,7 @@ class EndpointRow:
     job_id: JobName
     metadata: dict
     registered_at: Timestamp
+    task_id: JobName | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1951,6 +1952,7 @@ ENDPOINT_PROJECTION = ENDPOINTS.projection(
     "name",
     "address",
     "job_id",
+    "task_id",
     "metadata_json",
     "registered_at_ms",
     row_cls=EndpointRow,

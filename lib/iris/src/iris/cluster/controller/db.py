@@ -728,7 +728,7 @@ class ControllerDB:
 
         with self.transaction() as cur:
             row = cur.execute(
-                "SELECT endpoint_id, name, address, job_id, metadata_json, registered_at_ms "
+                "SELECT endpoint_id, name, address, job_id, task_id, metadata_json, registered_at_ms "
                 "FROM endpoints WHERE endpoint_id = ?",
                 (endpoint_id,),
             ).fetchone()

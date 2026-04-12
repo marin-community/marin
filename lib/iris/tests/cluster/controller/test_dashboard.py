@@ -331,6 +331,32 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     assert endpoint_names == {"pending-svc", "running-svc"}
 
 
+def test_list_endpoints_returns_task_id(client, state, job_request):
+    """ListEndpoints returns the task_id so the dashboard can derive the owning job."""
+    job_id = submit_job(state, "ep-job", job_request)
+    set_job_state(state, job_id, job_pb2.JOB_STATE_RUNNING)
+
+    task_id = job_id.task(0)
+    state.add_endpoint(
+        EndpointRow(
+            endpoint_id="ep-task",
+            name="my-actor",
+            address="h:1",
+            job_id=job_id,
+            metadata={},
+            registered_at=Timestamp.now(),
+        ),
+        task_id=task_id,
+    )
+
+    resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
+    endpoints = resp.get("endpoints", [])
+    assert len(endpoints) == 1
+    # The response must carry the full task_id (including task index) so the
+    # dashboard's jobIdFromTaskId() can strip the index and show the job name.
+    assert endpoints[0]["taskId"] == task_id.to_wire()
+
+
 def test_list_jobs_includes_retry_counts(client, state, job_request):
     """ListJobs RPC includes retry count fields aggregated from tasks."""
     job_id = submit_job(state, "test-job", job_request)

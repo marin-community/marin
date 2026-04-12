@@ -1662,7 +1662,7 @@ class ControllerServiceImpl:
                     endpoint_id=e.endpoint_id,
                     name=e.name,
                     address=e.address,
-                    task_id=e.job_id.to_wire(),
+                    task_id=e.task_id.to_wire() if e.task_id else e.job_id.to_wire(),
                     metadata=e.metadata,
                 )
                 for e in endpoints

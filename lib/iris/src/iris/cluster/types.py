@@ -112,7 +112,7 @@ class JobName:
     @property
     def namespace(self) -> str:
         """Get the actor namespace (user/root job) for actor isolation."""
-        return "/".join(self.root_job._parts)
+        return "/" + "/".join(self.root_job._parts)
 
     @property
     def name(self) -> str:
