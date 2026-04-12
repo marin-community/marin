@@ -138,6 +138,23 @@ def _sample_all_prs_sharded(
     return sampled_prs, summary
 
 
+def _remove_tpu_lockfile() -> None:
+    """Best-effort delete of stale TPU lockfiles left by a prior aborted vLLM run.
+
+    Mirrors ``marin.utils.remove_tpu_lockfile_on_exit`` but as a one-shot
+    pre-start step so we recover after `--max-retries` re-attempts on the
+    same Iris worker. The lockfile is the most common cause of "TPU device
+    busy" / "open(/dev/vfio/N): Device or resource busy" failures.
+    """
+    for path in ("/tmp/libtpu_lockfile", "/tmp/libtpu.so_lockfile"):
+        try:
+            if os.path.exists(path):
+                os.unlink(path)
+                logger.info("Removed stale TPU lockfile: %s", path)
+        except OSError as e:
+            logger.warning("Could not remove %s: %s", path, e)
+
+
 def _start_vllm_server(
     *,
     model_name_or_path: str,
@@ -154,6 +171,7 @@ def _start_vllm_server(
     in a way that doesn't transitively import ``transformers`` / ``torch``
     into THIS Python process. Returns ``(process, server_url, log_dir)``.
     """
+    _remove_tpu_lockfile()
     vllm_bin = shutil.which("vllm") or "vllm"
     cmd = [
         vllm_bin,
@@ -194,9 +212,12 @@ def _start_vllm_server(
             stdout_f.close()
             stderr_f.close()
             with open(stderr_path) as f:
-                stderr_tail = "".join(f.readlines()[-50:])
+                # 400 lines = enough to capture the *original* TPU/jax/sharding
+                # error from a child engine-core process, not just the wrapper
+                # tracebacks from the API server in the last few lines.
+                stderr_tail = "".join(f.readlines()[-400:])
             raise RuntimeError(
-                f"vLLM exited before becoming ready (rc={process.returncode}).\n" f"stderr tail:\n{stderr_tail}"
+                f"vLLM exited before becoming ready (rc={process.returncode}).\nstderr tail:\n{stderr_tail}"
             )
         try:
             with urllib.request.urlopen(models_url, timeout=5) as resp:
