@@ -105,6 +105,7 @@ from iris.cluster.controller.transitions import (
     SchedulingEvent,
 )
 from iris.cluster.log_store import CONTROLLER_LOG_KEY, LogStoreHandler
+from iris.log_server.client import LogPusher, RemoteLogHandler, RemoteLogService
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.types import (
     JobName,
@@ -116,7 +117,6 @@ from iris.cluster.types import (
 )
 from rigging.log_setup import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import logging_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from iris.rpc.auth import TokenVerifier
@@ -134,21 +134,6 @@ _SLOW_HEARTBEAT_MS = 5000
 # How often the prune loop trims worker_task_history (independent of the
 # full data-prune interval, which is typically 1 hour).
 _HISTORY_CLEANUP_INTERVAL_S = 60.0
-
-
-class _InProcessLogPusher:
-    """Adapts LogServiceImpl to the LogPusherProtocol for in-process use.
-
-    Avoids a network round-trip when the K8s provider is co-hosted with
-    the controller: calls push_logs() directly on the service impl.
-    """
-
-    def __init__(self, log_service: LogServiceImpl) -> None:
-        self._log_service = log_service
-
-    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-        if entries:
-            self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries), ctx=None)
 
 
 class SchedulingOutcome(enum.Enum):
@@ -966,6 +951,11 @@ class ControllerConfig:
     user_budget_defaults: UserBudgetDefaults = field(default_factory=UserBudgetDefaults)
     """Default budget settings applied when a new user is first seen."""
 
+    log_service_address: str | None = None
+    """Address of a separately-running log server (e.g. http://localhost:10001).
+    When set, the controller pushes logs and proxies fetches over RPC instead
+    of hosting LogServiceImpl in-process. None means in-process (tests)."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -1029,21 +1019,44 @@ class Controller:
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
 
-        self._log_service = LogServiceImpl(
-            log_dir=config.local_state_dir / "logs",
-            remote_log_dir=f"{config.remote_state_dir.rstrip('/')}/logs",
-        )
+        # --- Log service setup ---
+        # Two modes:
+        # 1. Remote (production): log_service_address points to a separate
+        #    log server process. Push via LogPusher, fetch via RemoteLogService.
+        # 2. In-process (tests): LogServiceImpl co-hosted with controller.
+        self._log_service: LogServiceImpl | None = None
+        self._remote_log_service: RemoteLogService | None = None
+        self._log_pusher: LogPusher | None = None
 
-        # Wire an in-process log pusher into providers so log entries are
-        # forwarded through the LogService without a network hop.
-        # - K8sTaskProvider: its LogCollector pushes logs directly.
-        # - WorkerProvider: forwards log_entries piggybacked on heartbeat
-        #   responses from old workers that predate push-based logging.
-        in_process_log_pusher = _InProcessLogPusher(self._log_service)
-        if isinstance(self._provider, K8sTaskProvider):
-            self._provider.log_pusher = in_process_log_pusher
-        elif isinstance(self._provider, WorkerProvider):
-            self._provider.log_pusher = in_process_log_pusher
+        if config.log_service_address:
+            self._remote_log_service = RemoteLogService(config.log_service_address)
+            log_service_for_rpc: LogServiceImpl | RemoteLogService = self._remote_log_service
+
+            # Providers push directly to the log server via RPC.
+            provider_log_pusher = LogPusher(config.log_service_address)
+            if isinstance(self._provider, K8sTaskProvider):
+                self._provider.log_pusher = provider_log_pusher
+            elif isinstance(self._provider, WorkerProvider):
+                self._provider.log_pusher = provider_log_pusher
+
+            # Controller process logs ship to the log server via RemoteLogHandler.
+            self._log_pusher = LogPusher(config.log_service_address)
+            self._log_handler: RemoteLogHandler | LogStoreHandler = RemoteLogHandler(
+                self._log_pusher, key=CONTROLLER_LOG_KEY
+            )
+        else:
+            self._log_service = LogServiceImpl(
+                log_dir=config.local_state_dir / "logs",
+                remote_log_dir=f"{config.remote_state_dir.rstrip('/')}/logs",
+            )
+            log_service_for_rpc = self._log_service
+
+            # In-process: write controller logs directly to the co-hosted LogStore.
+            self._log_handler = LogStoreHandler(self._log_service.log_store, key=CONTROLLER_LOG_KEY)
+
+        self._log_handler.setLevel(logging.DEBUG)
+        self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        logging.getLogger("iris").addHandler(self._log_handler)
 
         self._transitions = ControllerTransitions(
             db=self._db,
@@ -1059,26 +1072,19 @@ class Controller:
             self._db,
             controller=self,
             bundle_store=self._bundle_store,
-            log_service=self._log_service,
+            log_service=log_service_for_rpc,
             auth=config.auth,
             system_endpoints={},
         )
         self._dashboard = ControllerDashboard(
             self._service,
-            log_service=self._log_service,
+            log_service=log_service_for_rpc,
             host=config.host,
             port=config.port,
             auth_verifier=config.auth_verifier,
             auth_provider=config.auth_provider,
             auth_optional=config.auth.optional if config.auth else False,
         )
-
-        # Ingest controller process logs into the LogStore via LogStoreHandler.
-        # This writes directly to the co-hosted LogStore (no RPC round-trip).
-        self._log_store_handler = LogStoreHandler(self._log_service.log_store, key=CONTROLLER_LOG_KEY)
-        self._log_store_handler.setLevel(logging.DEBUG)
-        self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-        logging.getLogger("iris").addHandler(self._log_store_handler)
 
         # Background loop state
         self._threads = threads if threads is not None else get_thread_container()
@@ -1186,8 +1192,12 @@ class Controller:
 
         # Register system endpoints with the externally-reachable URL so
         # workers can resolve them via ListEndpoints.
-        self._service._system_endpoints["/system/log-server"] = self.url
-        logger.info("Registered system endpoint /system/log-server -> %s", self.url)
+        # When a separate log server is running, advertise its address so
+        # workers push logs directly to it. Otherwise fall back to self.url
+        # (in-process mode / tests).
+        log_server_url = self._config.log_service_address or self.url
+        self._service._system_endpoints["/system/log-server"] = log_server_url
+        logger.info("Registered system endpoint /system/log-server -> %s", log_server_url)
 
     def stop(self) -> None:
         """Stop all background components gracefully.
@@ -1224,11 +1234,16 @@ class Controller:
         self._threads.stop()
         self._provider.close()
 
-        # Remove log handler before closing the log store to avoid
-        # sqlite3.ProgrammingError spam from late log records.
-        logging.getLogger("iris").removeHandler(self._log_store_handler)
-        self._log_store_handler.close()
-        self._log_service.close()
+        # Remove log handler before closing log resources to avoid errors
+        # from late log records hitting a closed store or connection.
+        logging.getLogger("iris").removeHandler(self._log_handler)
+        self._log_handler.close()
+        if self._log_pusher:
+            self._log_pusher.close()
+        if self._remote_log_service:
+            self._remote_log_service.close()
+        if self._log_service:
+            self._log_service.close()
         self._db.close()
         self._bundle_store.close()
 

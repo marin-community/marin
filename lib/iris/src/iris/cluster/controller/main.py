@@ -13,6 +13,9 @@ import logging
 import os
 import shutil
 import signal
+import socket
+import subprocess
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -23,13 +26,51 @@ from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
 from iris.rpc import config_pb2
-from rigging.timing import Duration
+from rigging.timing import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
 
 LOCAL_STATE_DIR_DEFAULT = Path("/var/cache/iris/controller")
 HOURLY_CHECKPOINT_SECONDS = 3600.0
+
+# Default offset from the controller port for the log server.
+LOG_SERVER_PORT_OFFSET = 1
+
+
+def _port_is_open(port: int) -> bool:
+    """Check if a TCP port is accepting connections on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.1)
+        return s.connect_ex(("localhost", port)) == 0
+
+
+def _start_log_server(
+    *,
+    port: int,
+    log_dir: Path,
+    remote_log_dir: str,
+) -> subprocess.Popen:
+    """Start the log server as a subprocess and wait for it to be ready."""
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "iris.log_server.main",
+            "--port",
+            str(port),
+            "--log-dir",
+            str(log_dir),
+            "--remote-log-dir",
+            remote_log_dir,
+        ],
+    )
+    ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
+        lambda: _port_is_open(port),
+        timeout=Duration.from_seconds(10.0),
+    )
+    logger.info("Log server started (pid=%d, port=%d)", proc.pid, port)
+    return proc
 
 
 def run_controller_serve(
@@ -157,6 +198,18 @@ def run_controller_serve(
 
     logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
 
+    # --- Start log server subprocess ---
+    log_port = port + LOG_SERVER_PORT_OFFSET
+    log_dir = local_state_dir / "logs"
+    remote_log_dir = f"{remote_state_dir.rstrip('/')}/logs"
+
+    log_server_proc = _start_log_server(
+        port=log_port,
+        log_dir=log_dir,
+        remote_log_dir=remote_log_dir,
+    )
+    log_service_address = f"http://{host}:{log_port}"
+
     auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
     if auth.worker_token and base_worker_config is not None:
         base_worker_config.auth_token = auth.worker_token
@@ -172,6 +225,7 @@ def run_controller_serve(
         auth_provider=auth.provider,
         auth=auth,
         dry_run=dry_run,
+        log_service_address=log_service_address,
     )
 
     controller = Controller(
@@ -212,6 +266,9 @@ def run_controller_serve(
                 )
             except Exception:
                 logger.exception("Final checkpoint on shutdown failed")
+        # Stop the log server after the controller to allow final log flushes.
+        log_server_proc.terminate()
+        log_server_proc.wait(timeout=5)
         logger.info("Controller exiting")
         stop_event.set()
 

@@ -40,6 +40,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from iris.cluster.controller.actor_proxy import PROXY_ROUTE, ActorProxy
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, on_shutdown, static_files_mount
+from iris.log_server.client import RemoteLogService
 from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.controller_connect import ControllerServiceWSGIApplication
@@ -230,7 +231,7 @@ class ControllerDashboard:
     def __init__(
         self,
         service: ControllerServiceImpl,
-        log_service: LogServiceImpl,
+        log_service: LogServiceImpl | RemoteLogService,
         host: str = "0.0.0.0",
         port: int = 8080,
         auth_verifier: TokenVerifier | None = None,
@@ -265,6 +266,12 @@ class ControllerDashboard:
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
 
         log_wsgi_app = LogServiceWSGIApplication(service=self._log_service, interceptors=interceptors)
+
+        # Workers push directly to the log server; remove PushLogs from the
+        # controller so there is no stale proxy path.
+        _LOG_PUSH_ENDPOINT = "/iris.logging.LogService/PushLogs"
+        log_wsgi_app._endpoints.pop(_LOG_PUSH_ENDPOINT, None)
+
         log_app = WSGIMiddleware(log_wsgi_app)
 
         # Backward-compat: old clients call ControllerService/FetchLogs (removed

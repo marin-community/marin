@@ -103,6 +103,34 @@ class LogPusher:
         self._client.close()
 
 
+class RemoteLogService:
+    """Proxy that forwards push_logs/fetch_logs to a remote LogService over RPC.
+
+    Satisfies the LogServiceSync protocol so it can be used as a drop-in
+    replacement for LogServiceImpl in the controller and dashboard.
+    """
+
+    def __init__(self, address: str, timeout_ms: int = 10_000) -> None:
+        self._client = LogServiceClientSync(address=address, timeout_ms=timeout_ms)
+
+    def push_logs(
+        self,
+        request: logging_pb2.PushLogsRequest,
+        ctx: object,
+    ) -> logging_pb2.PushLogsResponse:
+        return self._client.push_logs(request)
+
+    def fetch_logs(
+        self,
+        request: logging_pb2.FetchLogsRequest,
+        ctx: object,
+    ) -> logging_pb2.FetchLogsResponse:
+        return self._client.fetch_logs(request)
+
+    def close(self) -> None:
+        self._client.close()
+
+
 class RemoteLogHandler(logging.Handler):
     """Python logging.Handler that pushes records through a LogPusher.
 
