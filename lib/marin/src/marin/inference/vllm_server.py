@@ -801,6 +801,31 @@ def _vllm_env() -> dict[str, str]:
     return env
 
 
+_TPU_LOCKFILE_PATHS = ("/tmp/libtpu_lockfile", "/tmp/libtpu.so_lockfile")
+
+
+def _remove_stale_tpu_lockfiles() -> None:
+    """Best-effort delete of stale TPU lockfiles left by a prior aborted vLLM run.
+
+    ``remove_tpu_lockfile_on_exit`` (registered via ``atexit``) only fires on
+    clean exits. When an Iris worker is preempted (SIGKILL) or OOM-killed,
+    the handler never runs and the lockfile persists. The next task on the
+    same worker then fails with "TPU initialization failed: open(/dev/vfio/N):
+    Device or resource busy" and all ``--max-retries`` retries fail because
+    Iris re-assigns to the same worker.
+
+    Calling this *before* starting vLLM ensures the lock is released even
+    after an unclean previous exit.
+    """
+    for path in _TPU_LOCKFILE_PATHS:
+        try:
+            if os.path.exists(path):
+                os.unlink(path)
+                logger.info("Removed stale TPU lockfile: %s", path)
+        except OSError as e:
+            logger.warning("Could not remove TPU lockfile %s: %s", path, e)
+
+
 def _start_vllm_native_server(
     *,
     model_name_or_path: str,
@@ -811,6 +836,7 @@ def _start_vllm_native_server(
 ) -> VllmServerHandle:
     """Start `vllm serve` in-process and wait until `/v1/models` responds."""
 
+    _remove_stale_tpu_lockfiles()
     resolved_port = port if port is not None else 8000
 
     vllm_bin = shutil.which("vllm") or "vllm"
