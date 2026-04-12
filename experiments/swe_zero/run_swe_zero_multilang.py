@@ -95,6 +95,49 @@ def _sample_prs_per_language(
     return sampled_prs, summary
 
 
+def _sample_all_prs_sharded(
+    loader,
+    seed: int,
+    shard_index: int,
+    total_shards: int,
+):
+    """Sample EVERY PR in SWE-rebench V2 (no per-language cap), partitioned across shards.
+
+    Round-robin assignment over a globally-shuffled list of all instance_ids,
+    so each shard sees a roughly proportional mix of all 20 languages and
+    similar total work. Use ``shard_index`` 0..total_shards-1 to pick which
+    slice this worker runs.
+
+    Returns ``(sampled_prs, summary)`` matching ``_sample_prs_per_language``.
+    """
+    all_ids = sorted(loader._by_id.keys())
+    rng = random.Random(seed)
+    rng.shuffle(all_ids)
+    my_ids = all_ids[shard_index::total_shards]
+
+    by_lang: dict[str, list[str]] = defaultdict(list)
+    sampled_prs = []
+    for iid in my_ids:
+        pr = loader.get(iid)
+        sampled_prs.append(pr)
+        by_lang[pr.language].append(iid)
+
+    summary: dict[str, dict] = {}
+    for lang, ids in by_lang.items():
+        summary[lang] = {
+            "available": -1,  # not meaningful in shard mode
+            "sampled": len(ids),
+            "instance_ids": ids,
+        }
+    summary["__shard__"] = {
+        "shard_index": shard_index,
+        "total_shards": total_shards,
+        "total_prs_in_dataset": len(all_ids),
+        "sampled": len(my_ids),
+    }
+    return sampled_prs, summary
+
+
 def _start_vllm_server(
     *,
     model_name_or_path: str,
@@ -203,6 +246,9 @@ def _run_with_vllm(
     max_total_tokens: int,
     resume_from: str | None = None,
     languages: list[str] | None = None,
+    all_prs: bool = False,
+    shard_index: int = 0,
+    total_shards: int = 1,
 ) -> None:
     # Local imports of swe_zero modules only — no marin.evaluation /
     # marin.inference imports, to avoid pulling in transformers / torch.
@@ -218,12 +264,42 @@ def _run_with_vllm(
     os.environ.setdefault("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "1")
     os.environ.setdefault("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1")
 
-    # Load the WHOLE dataset (no language filter — we want all 20).
     loader = SWERebenchV2Loader()
-    sampled_prs, summary = _sample_prs_per_language(loader, n_per_language, seed, languages=languages)
-    logger.info("Sampling summary: %d total PRs across %d languages", len(sampled_prs), len(summary))
-    for lang, info in sorted(summary.items()):
-        logger.info("  %-10s: %d sampled / %d available", lang, info["sampled"], info["available"])
+    if all_prs:
+        sampled_prs, summary = _sample_all_prs_sharded(
+            loader, seed=seed, shard_index=shard_index, total_shards=total_shards
+        )
+        logger.info(
+            "Sharded ALL-PR sampling: shard %d/%d, %d PRs",
+            shard_index,
+            total_shards,
+            len(sampled_prs),
+        )
+    else:
+        sampled_prs, summary = _sample_prs_per_language(loader, n_per_language, seed, languages=languages)
+        logger.info("Sampling summary: %d total PRs across %d languages", len(sampled_prs), len(summary))
+        for lang, info in sorted(summary.items()):
+            logger.info("  %-10s: %d sampled / %d available", lang, info["sampled"], info["available"])
+
+    # Auto-resume from output_dir/rollouts.json if it exists and no explicit
+    # --resume-from was given. This makes sharded jobs idempotent under preemption:
+    # a re-launched shard reads its own previous incremental save and only runs
+    # the per-PR shortfall.
+    auto_resume_path = os.path.join(output_dir, "rollouts.json")
+    if resume_from is None:
+        try:
+            if auto_resume_path.startswith("gs://"):
+                import fsspec
+
+                fs, _ = fsspec.core.url_to_fs(auto_resume_path)
+                if fs.exists(auto_resume_path):
+                    resume_from = auto_resume_path
+                    logger.info("Auto-resume: found existing rollouts at %s", auto_resume_path)
+            elif os.path.exists(auto_resume_path):
+                resume_from = auto_resume_path
+                logger.info("Auto-resume: found existing rollouts at %s", auto_resume_path)
+        except Exception as e:
+            logger.warning("Auto-resume probe failed (will run full shard): %s", e)
 
     # Save the sampling plan up front so we can reproduce / inspect even if
     # the rollout phase crashes mid-run.
@@ -417,6 +493,25 @@ def main():
         help="Comma-separated list of languages to sample (e.g. scala,swift,ts). "
         "Default: all 20 languages in SWE-rebench V2.",
     )
+    parser.add_argument(
+        "--all-prs",
+        action="store_true",
+        help="Sample EVERY PR in SWE-rebench V2 (all 32k+) instead of n-per-language. "
+        "Combine with --shard-index/--total-shards to partition the corpus across workers.",
+    )
+    parser.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help="Zero-based shard index for --all-prs mode. PRs are round-robin assigned "
+        "to shards over a globally-shuffled instance_id list.",
+    )
+    parser.add_argument(
+        "--total-shards",
+        type=int,
+        default=1,
+        help="Total number of shards for --all-prs mode.",
+    )
     args = parser.parse_args()
 
     model_path = args.model_path or args.model
@@ -438,6 +533,9 @@ def main():
         max_total_tokens=args.max_total_tokens,
         resume_from=args.resume_from,
         languages=[s.strip() for s in args.languages.split(",")] if args.languages else None,
+        all_prs=args.all_prs,
+        shard_index=args.shard_index,
+        total_shards=args.total_shards,
     )
 
 
