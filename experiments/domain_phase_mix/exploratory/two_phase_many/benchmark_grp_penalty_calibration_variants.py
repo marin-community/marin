@@ -36,21 +36,20 @@ DEFAULT_VARIANTS = (
     "power_family",
     "power_boxcox_family",
     "power_family_penalty",
+    "power_shared_penalty",
     "power_boxcox_family_penalty",
     "power_family_penalty_global_ftotal",
+    "power_shared_penalty_global_ftotal",
     "power_boxcox_family_penalty_global_ftotal",
     "power_family_penalty_global_ftotal_pairces",
+    "power_shared_penalty_global_ftotal_pairces",
     "power_boxcox_family_penalty_global_ftotal_pairces",
 )
 FAMILY_CURVATURE_BEST_CSV = Path(__file__).resolve().parent / "grp_family_curvature_benchmark_best.csv"
 REFERENCE_STATE_PATH = (
     Path(__file__).resolve().parent / "chatgpt_pro_grp_recovery_packet" / "data" / "current_reference_state.json"
 )
-COARSE_CSV = Path(__file__).resolve().parent / "grp_penalty_calibration_variants_coarse.csv"
-REFINE_CSV = Path(__file__).resolve().parent / "grp_penalty_calibration_variants_refine.csv"
-BEST_CSV = Path(__file__).resolve().parent / "grp_penalty_calibration_variants_best.csv"
-DEPLOY_CSV = Path(__file__).resolve().parent / "grp_penalty_calibration_variants_deployments.csv"
-SUMMARY_JSON = Path(__file__).resolve().parent / "grp_penalty_calibration_variants_summary.json"
+DEFAULT_OUTPUT_STEM = "grp_penalty_calibration_variants"
 
 POWER_FAMILY_PENALTY_SEED = {
     "eta": 5.9558,
@@ -84,6 +83,17 @@ FAMILY_TAU_TEMPLATES = (
 )
 GLOBAL_TAU_TEMPLATES = (2.8, 3.5, 4.2)
 PAIR_RHO_TEMPLATES = (0.6, 0.8, 1.0)
+
+
+def _output_paths(output_stem: str) -> dict[str, Path]:
+    base_dir = Path(__file__).resolve().parent
+    return {
+        "coarse_csv": base_dir / f"{output_stem}_coarse.csv",
+        "refine_csv": base_dir / f"{output_stem}_refine.csv",
+        "best_csv": base_dir / f"{output_stem}_best.csv",
+        "deploy_csv": base_dir / f"{output_stem}_deployments.csv",
+        "summary_json": base_dir / f"{output_stem}_summary.json",
+    }
 
 
 def _validated_anchor_arrays() -> tuple[np.ndarray, np.ndarray]:
@@ -146,6 +156,22 @@ def _with_family_taus(
     return row
 
 
+def _geometric_mean(values: tuple[float, ...]) -> float:
+    return float(np.exp(np.mean(np.log(np.asarray(values, dtype=float)))))
+
+
+def _collapse_family_curvature(params: dict[str, float]) -> dict[str, float]:
+    row = dict(params)
+    row["a"] = _geometric_mean(
+        (
+            float(row.pop("a_broad_text")),
+            float(row.pop("a_tech_code")),
+            float(row.pop("a_reasoning")),
+        )
+    )
+    return row
+
+
 def _baseline_start_bank(variant_name: str) -> tuple[dict[str, float], ...]:
     base = _existing_best_params(variant_name)
     starts = [
@@ -171,6 +197,42 @@ def _baseline_start_bank(variant_name: str) -> tuple[dict[str, float], ...]:
 def _variant_start_bank(variant_name: str) -> tuple[dict[str, float], ...]:
     if variant_name in {"power_family", "power_boxcox_family"}:
         return _baseline_start_bank(variant_name)
+    if variant_name.startswith("power_shared_"):
+        starts: list[dict[str, float]] = []
+        if "pairces" in variant_name or "global_ftotal" in variant_name:
+            seed = _collapse_family_curvature(POWER_FAMILY_GLOBAL_FTOTAL_SEED)
+        else:
+            seed = _collapse_family_curvature(POWER_FAMILY_PENALTY_SEED)
+        if "pairces" in variant_name:
+            seed["pair_rho"] = 0.8
+        starts.append(dict(seed))
+
+        shared_base = _collapse_family_curvature(_existing_best_params("power_family"))
+        for tau_broad, tau_tech, tau_reason in FAMILY_TAU_TEMPLATES:
+            row = _with_family_taus(shared_base, tau_broad, tau_tech, tau_reason)
+            if "global_ftotal" in variant_name:
+                row["tau"] = float(seed["tau"])
+            if "pairces" in variant_name:
+                row["pair_rho"] = 0.8
+            starts.append(row)
+
+        for a_scale in (0.7, 1.0, 1.3):
+            row = dict(seed)
+            row["a"] = float(np.clip(seed["a"] * a_scale, 0.02, 2.0))
+            starts.append(row)
+
+        if "global_ftotal" in variant_name:
+            for tau in GLOBAL_TAU_TEMPLATES:
+                row = dict(seed)
+                row["tau"] = float(tau)
+                starts.append(row)
+
+        if "pairces" in variant_name:
+            pair_base = dict(seed)
+            for pair_rho in PAIR_RHO_TEMPLATES:
+                starts.append({**pair_base, "pair_rho": float(pair_rho)})
+
+        return _dedupe_start_bank(starts)
 
     is_mixed = variant_name.startswith("power_boxcox")
     base_variant = "power_boxcox_family" if is_mixed else "power_family"
@@ -277,7 +339,9 @@ def _write_outputs(
     deploy_rows: list[dict[str, Any]],
     *,
     variants: list[str],
+    output_stem: str,
 ) -> None:
+    paths = _output_paths(output_stem)
     coarse_frame = pd.concat(coarse_frames, ignore_index=True) if coarse_frames else pd.DataFrame()
     refine_frame = pd.concat(refine_frames, ignore_index=True) if refine_frames else pd.DataFrame()
     best_frame = pd.DataFrame(best_rows)
@@ -293,20 +357,20 @@ def _write_outputs(
             ascending=[True, True],
         )
 
-    coarse_frame.to_csv(COARSE_CSV, index=False)
-    refine_frame.to_csv(REFINE_CSV, index=False)
-    best_frame.to_csv(BEST_CSV, index=False)
-    deploy_frame.to_csv(DEPLOY_CSV, index=False)
-    SUMMARY_JSON.write_text(
+    coarse_frame.to_csv(paths["coarse_csv"], index=False)
+    refine_frame.to_csv(paths["refine_csv"], index=False)
+    best_frame.to_csv(paths["best_csv"], index=False)
+    deploy_frame.to_csv(paths["deploy_csv"], index=False)
+    paths["summary_json"].write_text(
         json.dumps(
             {
                 "variants": variants,
                 "best_rows": best_frame.to_dict(orient="records"),
                 "deployment_rows": deploy_frame.to_dict(orient="records"),
-                "coarse_csv": str(COARSE_CSV),
-                "refine_csv": str(REFINE_CSV),
-                "best_csv": str(BEST_CSV),
-                "deployment_csv": str(DEPLOY_CSV),
+                "coarse_csv": str(paths["coarse_csv"]),
+                "refine_csv": str(paths["refine_csv"]),
+                "best_csv": str(paths["best_csv"]),
+                "deployment_csv": str(paths["deploy_csv"]),
             },
             indent=2,
         )
@@ -319,7 +383,9 @@ def main() -> None:
     parser.add_argument("--variants", nargs="*", default=list(DEFAULT_VARIANTS))
     parser.add_argument("--method", default="coarse")
     parser.add_argument("--coarse-top-k", type=int, default=3)
+    parser.add_argument("--max-start-bank", type=int)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--output-stem", default=DEFAULT_OUTPUT_STEM)
     args = parser.parse_args()
 
     for variant in args.variants:
@@ -339,6 +405,8 @@ def main() -> None:
 
     for variant in args.variants:
         start_bank = _variant_start_bank(variant)
+        if args.max_start_bank is not None:
+            start_bank = start_bank[: max(int(args.max_start_bank), 1)]
         print(f"[{variant}] tuning from {len(start_bank)} starts", flush=True)
         coarse, refine, tuned, _ = tune_penalty_calibration_params(
             packet,
@@ -376,6 +444,7 @@ def main() -> None:
             best_rows,
             deploy_rows,
             variants=args.variants,
+            output_stem=args.output_stem,
         )
 
 

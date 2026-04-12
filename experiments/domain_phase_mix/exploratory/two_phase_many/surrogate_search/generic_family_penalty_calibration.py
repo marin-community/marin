@@ -15,6 +15,7 @@ from scipy.optimize import nnls
 from sklearn.model_selection import KFold
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_flexible_signal import (
+    domain_exponent_key,
     signal_derivative,
     signal_transform,
 )
@@ -46,9 +47,11 @@ class PenaltyCalibrationVariantSpec:
     name: str
     signal_kind: str
     family_signal_kind: str
+    family_curvature: bool
     global_group_penalty: bool
     family_group_penalty: bool
     family_total_penalty: bool
+    domain_curvature: bool = False
     pair_aggregator: str = "linear"
 
 
@@ -57,6 +60,7 @@ VARIANT_SPECS = {
         name="power_family",
         signal_kind="power",
         family_signal_kind="power",
+        family_curvature=True,
         global_group_penalty=True,
         family_group_penalty=False,
         family_total_penalty=False,
@@ -65,6 +69,7 @@ VARIANT_SPECS = {
         name="power_boxcox_family",
         signal_kind="power",
         family_signal_kind="boxcox",
+        family_curvature=True,
         global_group_penalty=True,
         family_group_penalty=False,
         family_total_penalty=False,
@@ -73,6 +78,28 @@ VARIANT_SPECS = {
         name="power_family_penalty",
         signal_kind="power",
         family_signal_kind="power",
+        family_curvature=True,
+        domain_curvature=False,
+        global_group_penalty=False,
+        family_group_penalty=True,
+        family_total_penalty=False,
+    ),
+    "power_shared_penalty": PenaltyCalibrationVariantSpec(
+        name="power_shared_penalty",
+        signal_kind="power",
+        family_signal_kind="power",
+        family_curvature=False,
+        domain_curvature=False,
+        global_group_penalty=False,
+        family_group_penalty=True,
+        family_total_penalty=False,
+    ),
+    "power_domain_penalty": PenaltyCalibrationVariantSpec(
+        name="power_domain_penalty",
+        signal_kind="power",
+        family_signal_kind="power",
+        family_curvature=False,
+        domain_curvature=True,
         global_group_penalty=False,
         family_group_penalty=True,
         family_total_penalty=False,
@@ -81,6 +108,8 @@ VARIANT_SPECS = {
         name="power_boxcox_family_penalty",
         signal_kind="power",
         family_signal_kind="boxcox",
+        family_curvature=True,
+        domain_curvature=False,
         global_group_penalty=False,
         family_group_penalty=True,
         family_total_penalty=False,
@@ -89,6 +118,16 @@ VARIANT_SPECS = {
         name="power_family_penalty_global_ftotal",
         signal_kind="power",
         family_signal_kind="power",
+        family_curvature=True,
+        global_group_penalty=True,
+        family_group_penalty=True,
+        family_total_penalty=True,
+    ),
+    "power_shared_penalty_global_ftotal": PenaltyCalibrationVariantSpec(
+        name="power_shared_penalty_global_ftotal",
+        signal_kind="power",
+        family_signal_kind="power",
+        family_curvature=False,
         global_group_penalty=True,
         family_group_penalty=True,
         family_total_penalty=True,
@@ -97,6 +136,7 @@ VARIANT_SPECS = {
         name="power_boxcox_family_penalty_global_ftotal",
         signal_kind="power",
         family_signal_kind="boxcox",
+        family_curvature=True,
         global_group_penalty=True,
         family_group_penalty=True,
         family_total_penalty=True,
@@ -105,6 +145,17 @@ VARIANT_SPECS = {
         name="power_family_penalty_global_ftotal_pairces",
         signal_kind="power",
         family_signal_kind="power",
+        family_curvature=True,
+        global_group_penalty=True,
+        family_group_penalty=True,
+        family_total_penalty=True,
+        pair_aggregator="ces",
+    ),
+    "power_shared_penalty_global_ftotal_pairces": PenaltyCalibrationVariantSpec(
+        name="power_shared_penalty_global_ftotal_pairces",
+        signal_kind="power",
+        family_signal_kind="power",
+        family_curvature=False,
         global_group_penalty=True,
         family_group_penalty=True,
         family_total_penalty=True,
@@ -114,6 +165,7 @@ VARIANT_SPECS = {
         name="power_boxcox_family_penalty_global_ftotal_pairces",
         signal_kind="power",
         family_signal_kind="boxcox",
+        family_curvature=True,
         global_group_penalty=True,
         family_group_penalty=True,
         family_total_penalty=True,
@@ -140,7 +192,7 @@ def _family_tau(params: dict[str, float], family_name: str) -> float:
 
 
 class GenericFamilyPenaltyCalibrationSurrogate:
-    """Flexible GRP surrogate with richer penalties and optional pair CES."""
+    """Flexible GRP surrogate with optional family curvature, richer penalties, and pair CES."""
 
     def __init__(
         self,
@@ -184,8 +236,19 @@ class GenericFamilyPenaltyCalibrationSurrogate:
         signal_kind: str,
         family_name: str | None = None,
         other_family_name: str | None = None,
+        domain_indices: tuple[int, ...] | None = None,
     ) -> np.ndarray:
-        return signal_transform(values, self.params, signal_kind, family_name, other_family_name)
+        resolved_family_name = family_name if self.spec.family_curvature else None
+        resolved_other_family_name = other_family_name if self.spec.family_curvature else None
+        resolved_domain_indices = domain_indices if self.spec.domain_curvature else None
+        return signal_transform(
+            values,
+            self.params,
+            signal_kind,
+            resolved_family_name,
+            resolved_other_family_name,
+            resolved_domain_indices,
+        )
 
     def _feature_derivative(
         self,
@@ -194,8 +257,19 @@ class GenericFamilyPenaltyCalibrationSurrogate:
         signal_kind: str,
         family_name: str | None = None,
         other_family_name: str | None = None,
+        domain_indices: tuple[int, ...] | None = None,
     ) -> np.ndarray:
-        return signal_derivative(values, self.params, signal_kind, family_name, other_family_name)
+        resolved_family_name = family_name if self.spec.family_curvature else None
+        resolved_other_family_name = other_family_name if self.spec.family_curvature else None
+        resolved_domain_indices = domain_indices if self.spec.domain_curvature else None
+        return signal_derivative(
+            values,
+            self.params,
+            signal_kind,
+            resolved_family_name,
+            resolved_other_family_name,
+            resolved_domain_indices,
+        )
 
     def _pair_signal_total(self, x_hi: np.ndarray, x_lo: np.ndarray) -> np.ndarray:
         hi = np.asarray(x_hi, dtype=float)
@@ -239,7 +313,12 @@ class GenericFamilyPenaltyCalibrationSurrogate:
         for idx in singleton_indices:
             family_name = self.domain_to_family[idx]
             features.append(
-                self._feature_transform(x[:, idx], signal_kind=self.spec.signal_kind, family_name=family_name)[:, None]
+                self._feature_transform(
+                    x[:, idx],
+                    signal_kind=self.spec.signal_kind,
+                    family_name=family_name,
+                    domain_indices=(idx,),
+                )[:, None]
             )
             group_totals.append(x[:, idx])
             family_group_totals[family_name].append(x[:, idx])
@@ -254,6 +333,7 @@ class GenericFamilyPenaltyCalibrationSurrogate:
                     signal_kind=self.spec.signal_kind,
                     family_name=hi_family,
                     other_family_name=lo_family,
+                    domain_indices=(hi, lo),
                 )[:, None]
             )
             total = x[:, hi] + x[:, lo]
@@ -269,6 +349,7 @@ class GenericFamilyPenaltyCalibrationSurrogate:
                     family_total,
                     signal_kind=self.spec.family_signal_kind,
                     family_name=family_name,
+                    domain_indices=tuple(int(member) for member in members),
                 )[:, None]
             )
 
@@ -387,7 +468,12 @@ def penalty_calibration_param_keys(variant_name: str) -> tuple[str, ...]:
     keys = ["eta", "lam", "reg", "beta"]
     if "boxcox" in {spec.signal_kind, spec.family_signal_kind}:
         keys.append("alpha")
-    keys.extend(f"a_{family_name}" for family_name in GENERIC_FAMILY_NAMES)
+    if spec.domain_curvature:
+        keys.extend(domain_exponent_key(domain_idx) for domain_idx in range(39))
+    elif spec.family_curvature:
+        keys.extend(f"a_{family_name}" for family_name in GENERIC_FAMILY_NAMES)
+    else:
+        keys.append("a")
     if spec.global_group_penalty:
         keys.append("tau")
     if spec.family_group_penalty or spec.family_total_penalty:
@@ -417,8 +503,14 @@ def pack_penalty_calibration_params(params: dict[str, float], variant_name: str)
     ]
     if "boxcox" in {spec.signal_kind, spec.family_signal_kind}:
         z.append(np.log(float(params["alpha"])))
-    for family_name in GENERIC_FAMILY_NAMES:
-        z.append(np.log(float(params[f"a_{family_name}"])))
+    if spec.domain_curvature:
+        for domain_idx in range(39):
+            z.append(np.log(float(params[domain_exponent_key(domain_idx)])))
+    elif spec.family_curvature:
+        for family_name in GENERIC_FAMILY_NAMES:
+            z.append(np.log(float(params[f"a_{family_name}"])))
+    else:
+        z.append(np.log(float(params["a"])))
     if spec.global_group_penalty:
         z.append(float(params["tau"]))
     if spec.family_group_penalty or spec.family_total_penalty:
@@ -442,8 +534,16 @@ def unpack_penalty_calibration_params(z: np.ndarray, variant_name: str) -> dict[
     if "boxcox" in {spec.signal_kind, spec.family_signal_kind}:
         params["alpha"] = float(np.exp(np.clip(z[idx], -8.0, 8.0)))
         idx += 1
-    for family_name in GENERIC_FAMILY_NAMES:
-        params[f"a_{family_name}"] = float(np.exp(np.clip(z[idx], np.log(0.02), np.log(2.0))))
+    if spec.domain_curvature:
+        for domain_idx in range(39):
+            params[domain_exponent_key(domain_idx)] = float(np.exp(np.clip(z[idx], np.log(0.02), np.log(2.0))))
+            idx += 1
+    elif spec.family_curvature:
+        for family_name in GENERIC_FAMILY_NAMES:
+            params[f"a_{family_name}"] = float(np.exp(np.clip(z[idx], np.log(0.02), np.log(2.0))))
+            idx += 1
+    else:
+        params["a"] = float(np.exp(np.clip(z[idx], np.log(0.02), np.log(2.0))))
         idx += 1
     if spec.global_group_penalty:
         params["tau"] = float(np.clip(z[idx], -2.0, 8.0))
@@ -547,6 +647,7 @@ def optimize_penalty_calibration_model(
                     np.asarray([x_value]),
                     signal_kind=model.spec.signal_kind,
                     family_name=family_name,
+                    domain_indices=(domain_idx,),
                 )[0]
             )
             grad_x[domain_idx] -= (
@@ -555,6 +656,7 @@ def optimize_penalty_calibration_model(
                     np.asarray([x_value]),
                     signal_kind=model.spec.signal_kind,
                     family_name=family_name,
+                    domain_indices=(domain_idx,),
                 )[0]
             )
             group_info.append(((domain_idx,), x_value, family_name))
@@ -571,6 +673,7 @@ def optimize_penalty_calibration_model(
                     signal_kind=model.spec.signal_kind,
                     family_name=hi_family,
                     other_family_name=lo_family,
+                    domain_indices=(hi, lo),
                 )[0]
             )
             d_hi, d_lo = model._pair_signal_partials(float(x[hi]), float(x[lo]))
@@ -581,6 +684,7 @@ def optimize_penalty_calibration_model(
                     signal_kind=model.spec.signal_kind,
                     family_name=hi_family,
                     other_family_name=lo_family,
+                    domain_indices=(hi, lo),
                 )[0]
             )
             grad_x[hi] -= chain * d_hi
@@ -598,6 +702,7 @@ def optimize_penalty_calibration_model(
                     np.asarray([family_total]),
                     signal_kind=model.spec.family_signal_kind,
                     family_name=family_name,
+                    domain_indices=tuple(int(member) for member in members),
                 )[0]
             )
             grad_x[members] -= (
@@ -606,6 +711,7 @@ def optimize_penalty_calibration_model(
                     np.asarray([family_total]),
                     signal_kind=model.spec.family_signal_kind,
                     family_name=family_name,
+                    domain_indices=tuple(int(member) for member in members),
                 )[0]
             )
 

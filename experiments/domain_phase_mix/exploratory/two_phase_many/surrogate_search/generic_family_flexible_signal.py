@@ -38,24 +38,42 @@ OBSERVED_ONLY_TAIL_WEIGHT = 0.5
 OBSERVED_ONLY_LOWER_TAIL_FRAC = 0.15
 TRUSTBLEND_TOPK_ACTUAL = 8
 TRUSTBLEND_LINE_GRID = 81
+DOMAIN_EXPONENT_PREFIX = "a_domain_"
 
 
-def _resolve_family_curvature(
+def domain_exponent_key(domain_idx: int) -> str:
+    """Return the parameter key for a domain-specific exponent."""
+    return f"{DOMAIN_EXPONENT_PREFIX}{domain_idx:02d}"
+
+
+def _resolve_exponent_value(params: dict[str, float], key: str) -> float:
+    if key in params:
+        return float(params[key])
+    if "a" in params:
+        return float(params["a"])
+    raise KeyError(f"Missing curvature parameter {key!r}")
+
+
+def _resolve_curvature(
     params: dict[str, float],
     signal_kind: str,
     family_name: str | None = None,
     other_family_name: str | None = None,
+    domain_indices: tuple[int, ...] | None = None,
 ) -> float:
     if signal_kind not in {"power", "boxcox"}:
         raise ValueError(f"Family curvature is only defined for power/boxcox, got {signal_kind!r}")
+    if domain_indices:
+        values = [_resolve_exponent_value(params, domain_exponent_key(domain_idx)) for domain_idx in domain_indices]
+        return float(np.mean(np.asarray(values, dtype=float)))
     if family_name is None:
         return float(params["a"])
     key = f"a_{family_name}"
-    first = float(params[key] if key in params else params["a"])
+    first = _resolve_exponent_value(params, key)
     if other_family_name is None:
         return first
     other_key = f"a_{other_family_name}"
-    second = float(params[other_key] if other_key in params else params["a"])
+    second = _resolve_exponent_value(params, other_key)
     return 0.5 * (first + second)
 
 
@@ -65,17 +83,30 @@ def signal_transform(
     signal_kind: str,
     family_name: str | None = None,
     other_family_name: str | None = None,
+    domain_indices: tuple[int, ...] | None = None,
 ) -> np.ndarray:
     values = np.maximum(np.asarray(values, dtype=float), 0.0)
     if signal_kind == "log":
         alpha = float(params["alpha"])
         return np.log1p(alpha * values)
     if signal_kind == "power":
-        a = _resolve_family_curvature(params, signal_kind, family_name, other_family_name)
+        a = _resolve_curvature(
+            params,
+            signal_kind,
+            family_name,
+            other_family_name,
+            domain_indices,
+        )
         return np.power(np.maximum(values, 1e-12), a)
     if signal_kind == "boxcox":
         alpha = float(params["alpha"])
-        a = _resolve_family_curvature(params, signal_kind, family_name, other_family_name)
+        a = _resolve_curvature(
+            params,
+            signal_kind,
+            family_name,
+            other_family_name,
+            domain_indices,
+        )
         u = 1.0 + alpha * values
         if abs(a) < 1e-8:
             return np.log(u)
@@ -89,18 +120,31 @@ def signal_derivative(
     signal_kind: str,
     family_name: str | None = None,
     other_family_name: str | None = None,
+    domain_indices: tuple[int, ...] | None = None,
 ) -> np.ndarray:
     values = np.maximum(np.asarray(values, dtype=float), 0.0)
     if signal_kind == "log":
         alpha = float(params["alpha"])
         return alpha / (1.0 + alpha * values)
     if signal_kind == "power":
-        a = _resolve_family_curvature(params, signal_kind, family_name, other_family_name)
+        a = _resolve_curvature(
+            params,
+            signal_kind,
+            family_name,
+            other_family_name,
+            domain_indices,
+        )
         safe = np.maximum(values, 1e-12)
         return a * np.power(safe, a - 1.0)
     if signal_kind == "boxcox":
         alpha = float(params["alpha"])
-        a = _resolve_family_curvature(params, signal_kind, family_name, other_family_name)
+        a = _resolve_curvature(
+            params,
+            signal_kind,
+            family_name,
+            other_family_name,
+            domain_indices,
+        )
         u = 1.0 + alpha * values
         if abs(a) < 1e-8:
             return alpha / u
