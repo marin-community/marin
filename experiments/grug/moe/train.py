@@ -239,16 +239,23 @@ class GrugTrainState:
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
+    new_biases = -qb_betas
+    new_biases = new_biases - jnp.mean(new_biases, axis=-1, keepdims=True)
+    if model.stacked_blocks is not None:
+        # Stacked path: router_bias inside the stacked pytree has shape
+        # (num_layers, num_experts); replace it directly with the stacked beta.
+        return eqx.tree_at(
+            lambda t: t.stacked_blocks.stacked.mlp.router_bias,
+            model,
+            new_biases,
+        )
+    assert model.blocks is not None
     new_blocks = list(model.blocks)
-    moe_idx = 0
     for i, block in enumerate(model.blocks):
         if block.mlp is None:
             continue
-        new_bias = -qb_betas[moe_idx]
-        new_bias = new_bias - jnp.mean(new_bias)
-        new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_bias)
+        new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_biases[i])
         new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
-        moe_idx += 1
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
@@ -261,7 +268,10 @@ def initial_state(
     ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
-    num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
+    if params.blocks is not None:
+        num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
+    else:
+        num_moe_layers = model_config.num_layers
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,

@@ -26,7 +26,11 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
 from experiments.defaults import default_validation_sets
-from experiments.grug.moe.heuristic import build_from_heuristic
+from experiments.grug.moe.heuristic import (
+    MoeAdamHHeuristic,
+    build_from_heuristic,
+    compute_flops_per_token,
+)
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.pretraining_datasets import nemotron_mix_block_shuffle
@@ -94,8 +98,8 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         checkpointer=CheckpointerConfig(
             base_path=os.path.join(config.output_path, "checkpoints"),
             append_run_id_to_base_path=False,
-            save_interval=timedelta(minutes=10),
-            keep=[{"every": 1000}],
+            save_interval=timedelta(minutes=30),
+            keep=[{"every": 10_000}],
         ),
     )
 
@@ -112,7 +116,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     run_grug(run_config)
 
 
-RESOLVED_RUN_ID = _resolve_run_id("v42048_mfu_test1")
+RESOLVED_RUN_ID = _resolve_run_id("moe_1e23_d5120_bs2048_ep4_ring")
 
 
 # 1e23 compute budget, d5120 (48 layers hardcoded in heuristic). Model +
@@ -127,10 +131,25 @@ _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_f
     hidden_dim=_BASELINE_HIDDEN_DIM,
     target_steps=_BASELINE_TARGET_STEPS,
 )
+# Stack MoE blocks via jax.lax.scan to keep XLA compile + peak HBM tractable at
+# 48 layers.
+_baseline_model = dataclasses.replace(_baseline_model, use_array_stacked_blocks=True)
+
+# Override the heuristic-derived batch_size (round_up_pow2 only produces powers
+# of two; we want something in between). Recompute the optimizer at the new
+# batch + matching tokens so the LR formula stays consistent.
+_BASELINE_BATCH_OVERRIDE: int | None = 2048
+if _BASELINE_BATCH_OVERRIDE is not None:
+    _heuristic = MoeAdamHHeuristic()
+    _fpt = compute_flops_per_token(_baseline_model)
+    _tokens = _BASELINE_BUDGET / (3 * _fpt)
+    _baseline_batch = _BASELINE_BATCH_OVERRIDE
+    _baseline_steps = max(1, round(_tokens / (_baseline_batch * 4096)))
+    _baseline_optimizer = _heuristic.build_optimizer_config(_baseline_batch, _tokens, _BASELINE_HIDDEN_DIM)
 
 
 baseline_moe = ExecutorStep(
-    name="grug/v42048_mfu_test1",
+    name="grug/moe_1e23_d5120_bs2048_ep4_ring",
     fn=run_grug_moe_trial,
     config=GrugMoeLaunchConfig(
         model=versioned(_baseline_model),
@@ -139,10 +158,10 @@ baseline_moe = ExecutorStep(
         output_path=this_output_path(),
         # Keep run id out of versioning so changing job metadata doesn't create a new output path.
         run_id=RESOLVED_RUN_ID,
-        resources=versioned(ResourceConfig.with_tpu("v4-2048")),
-        steps=versioned(25),
+        resources=versioned(ResourceConfig.with_tpu("v4-1024")),
+        steps=versioned(_baseline_steps),
         batch_size=versioned(_baseline_batch),
-        expert_parallel=versioned(16),
+        expert_parallel=versioned(4),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
@@ -161,7 +180,7 @@ baseline_moe = ExecutorStep(
         ),
         eval=versioned(
             GrugEvalConfig(
-                eval_batch_size=512,
+                eval_batch_size=1024,
                 steps_per_eval=1000,
                 max_eval_batches=8,
                 eval_current=True,

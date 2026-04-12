@@ -17,6 +17,7 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 from einops import rearrange
 from haliax.jax_utils import named_call
+from haliax.nn import ArrayStacked
 from jax import random
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
@@ -25,7 +26,7 @@ try:
     from jax.shard_map import shard_map
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
-from jaxtyping import Array, Float, Int, PRNGKeyArray
+from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 
 from levanter.grug.attention import AttentionMask, RotaryConfig, align_kv_heads, apply_rotary_embedding, attention
 from levanter.grug.grug_moe import MoeActivation, moe_mlp
@@ -73,6 +74,10 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # When True, stack all MoE blocks into a single `ArrayStacked[Block]` and
+    # apply them with `jax.lax.scan`. Collapses 48 per-layer subgraphs into one
+    # scan body, dramatically reducing XLA compile time and peak HBM at scale.
+    use_array_stacked_blocks: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -267,13 +272,19 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     routing_counts = router_metrics["routing_counts_per_layer"]
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
+    capacity_overflow = router_metrics["capacity_overflow_per_layer"]
     num_layers = int(routing_entropy.shape[0])
+
+    # Per-layer total assignments = sum of routing_counts over experts (= tokens * k).
+    assignments_per_layer = jnp.sum(routing_counts.astype(jnp.float32), axis=-1)
+    capacity_overflow_rate = capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
 
     out: dict[str, jax.Array | Histogram] = {
         "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
         "train/router/load_balancing_loss": jnp.mean(load_balancing_loss),
         "train/router/router_z_loss": jnp.mean(router_z_loss),
         "train/router/routing_counts_per_layer": routing_counts,
+        "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
         "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
     }
     for i in range(num_layers):
@@ -281,6 +292,7 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         out[f"train/router/layer_{i}/load_balancing_loss"] = load_balancing_loss[i]
         out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
         out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
+        out[f"train/router/layer_{i}/capacity_overflow_rate"] = capacity_overflow_rate[i]
     return out
 
 
@@ -390,7 +402,7 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        routed_flat = moe_mlp(
+        routed_flat, dropped_assignments = moe_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
@@ -398,8 +410,11 @@ class MoEMLP(eqx.Module):
             self.w_down,
             activation=ActivationFunctionEnum.silu,
             mesh=get_abstract_mesh(),
+            implementation="ring",
             capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+            report_capacity_overflow=True,
         )
+        router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
@@ -437,10 +452,20 @@ class Block(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
-        mask: AttentionMask | jax.Array,
+        short_mask: AttentionMask | jax.Array,
+        long_mask: AttentionMask | jax.Array,
+        use_long_mask: Bool[Array, ""] | bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask)
+        # Per-layer mask selection via jax.lax.cond so scan can vary the mask
+        # between iterations without unrolling.
+        attn_out = jax.lax.cond(
+            jnp.asarray(use_long_mask, dtype=jnp.bool_),
+            lambda _: self.attn(attn_in, long_mask),
+            lambda _: self.attn(attn_in, short_mask),
+            operand=None,
+        )
+        x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -454,25 +479,40 @@ class Transformer(eqx.Module):
     embed_norm: RMSNorm
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
-    blocks: tuple[Block, ...]
+    # Exactly one of `blocks` / `stacked_blocks` is populated, selected by
+    # `GrugModelConfig.use_array_stacked_blocks`.
+    blocks: tuple[Block, ...] | None
+    stacked_blocks: ArrayStacked[Block] | None
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
-        embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
+        keys = random.split(key, cfg.num_layers + 4)
+        embed_key, out_key, embed_gn_key, final_gn_key = keys[:4]
+        block_keys = keys[4:]
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
-        blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+
+        blocks: tuple[Block, ...] | None
+        stacked_blocks: ArrayStacked[Block] | None
+        if cfg.use_array_stacked_blocks:
+            blocks = None
+            stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg=cfg, key=block_keys)
+        else:
+            blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+            stacked_blocks = None
+
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
             blocks=blocks,
+            stacked_blocks=stacked_blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
@@ -495,20 +535,45 @@ class Transformer(eqx.Module):
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        # Every 4th layer uses the full sliding_window; others use half.
+        mask_schedule = (jnp.arange(cfg.num_layers) % 4) == 3
 
-        moe_router_stats: list[dict[str, jax.Array]] = []
-        for i, block in enumerate(self.blocks):
-            layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
-            moe_router_stats.append(router_stats)
+        if self.blocks is not None:
+            moe_router_stats: list[dict[str, jax.Array]] = []
+            for i, block in enumerate(self.blocks):
+                hidden, router_stats = eqx.filter_checkpoint(block)(hidden, short_mask, long_mask, mask_schedule[i])
+                moe_router_stats.append(router_stats)
+            router_metrics = {
+                "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
+                "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
+                "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
+                "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
+                "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
+                "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
+            }
+        else:
+            assert self.stacked_blocks is not None
 
-        router_metrics = {
-            "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
-            "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
-            "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
-            "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
-            "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
-        }
+            def _scan_layers(
+                carry_hidden: Float[Array, "B S D"],
+                scan_inputs: tuple[Block, Bool[Array, ""]],
+            ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+                layer, layer_use_long_mask = scan_inputs
+                return eqx.filter_checkpoint(layer)(carry_hidden, short_mask, long_mask, layer_use_long_mask)
+
+            hidden, stacked_router_stats = jax.lax.scan(
+                _scan_layers,
+                hidden,
+                xs=(self.stacked_blocks.stacked, mask_schedule),
+            )
+            router_metrics = {
+                "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
+                "routing_counts_per_layer": stacked_router_stats["routing_counts"],
+                "load_balancing_loss_per_layer": stacked_router_stats["load_balancing_loss"],
+                "router_z_loss_per_layer": stacked_router_stats["router_z_loss"],
+                "qb_beta_per_layer": stacked_router_stats["qb_beta"],
+                "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
+            }
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
 

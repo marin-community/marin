@@ -135,17 +135,20 @@ def apply_rotary_embedding(
 
 
 def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[Array, "B K Hq D"]:
-    """Expand grouped-query KV heads to match query-head layout."""
+    """Expand grouped-query KV heads to match query-head layout.
+
+    Uses broadcast+reshape instead of ``jnp.repeat`` because the latter
+    fails under sharded execution with
+    ``ValueError: Please pass sharding to jnp.repeat via out_sharding parameter``.
+    """
     num_kv_heads = x.shape[2]
     if num_q_heads == num_kv_heads:
         return x
     if num_q_heads % num_kv_heads != 0:
         raise ValueError(f"num_heads ({num_q_heads}) must be divisible by num_kv_heads ({num_kv_heads})")
     repeat = num_q_heads // num_kv_heads
-    # Use reshape + broadcast instead of jnp.repeat to avoid sharding issues.
-    expanded = jnp.expand_dims(x, axis=3)
-    tiled = jnp.broadcast_to(expanded, (*x.shape[:3], repeat, x.shape[3]))
-    return tiled.reshape(*x.shape[:2], num_q_heads, x.shape[3])
+    expanded = jnp.broadcast_to(x[:, :, :, None, :], (*x.shape[:3], repeat, x.shape[3]))
+    return expanded.reshape(*x.shape[:2], num_q_heads, x.shape[3])
 
 
 def reference_attention(

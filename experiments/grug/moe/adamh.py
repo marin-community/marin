@@ -60,8 +60,14 @@ def scale_by_adamh(
                 return None
             if p.ndim <= 2:
                 return _scale_invariant_2d(p, u)
-            # For higher-rank tensors, vmap the 2-D logic over the leading axis.
-            return jax.vmap(_scale_invariant_2d)(p, u)
+            # For higher-rank tensors, vmap the 2-D logic over *all* leading
+            # axes so each trailing (d, i) matrix gets its own Frobenius-norm
+            # scale. Handles both unstacked expert weights (num_experts, d, i)
+            # and ArrayStacked block weights (num_layers, [num_experts,] d, i).
+            fn = _scale_invariant_2d
+            for _ in range(p.ndim - 2):
+                fn = jax.vmap(fn)
+            return fn(p, u)
 
         adamh_updates = jax.tree_util.tree_map(
             scale_invariant_update,
