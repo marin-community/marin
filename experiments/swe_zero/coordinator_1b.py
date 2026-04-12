@@ -32,7 +32,7 @@ import logging
 import time
 
 from iris.client.client import IrisClient
-from iris.cluster.constraints import device_variant_constraint
+from iris.cluster.constraints import device_variant_constraint, preemptible_constraint, region_constraint
 from iris.cluster.types import Entrypoint, ResourceSpec, tpu_device
 from iris.rpc import job_pb2
 
@@ -118,11 +118,16 @@ def main():
             # Note: priority_band is not available in the swe-zero-mvp branch's
             # Iris client. Children inherit the parent coordinator's priority
             # (batch) automatically, so we don't need to set it explicitly.
+            child_constraints = [
+                device_variant_constraint([args.tpu]),
+                preemptible_constraint(True),
+                region_constraint(["europe-west4", "us-central1", "us-central2", "us-east1", "us-east5", "us-west4"]),
+            ]
             job = client.submit(
                 entrypoint=Entrypoint(command=cmd),
                 name=name,
                 resources=child_resources,
-                constraints=[device_variant_constraint([args.tpu])],
+                constraints=child_constraints,
                 max_retries_failure=args.child_max_retries,
                 max_retries_preemption=args.child_max_retries,
             )
