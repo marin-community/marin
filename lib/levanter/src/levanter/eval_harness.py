@@ -42,7 +42,7 @@ from haliax import NamedArray
 from jax.sharding import PartitionSpec
 
 import levanter.tracker
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data.packing import (
     PromptCompletion,
     greedy_pack_prompt_completions,
@@ -56,7 +56,7 @@ from levanter.inference.utils import INVALID
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
 from levanter.utils.background_iterable import BackgroundIterator
-from levanter.tokenizers import MarinTokenizer
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.utils.py_utils import set_global_rng_seeds
 
 try:
