@@ -72,12 +72,12 @@ architecture described above, QB routing, shared expert, GQA 4:1, seq_len
 
 | Budget | Best dim | Layers | Paloma macro | c4_en BPB | Run |
 |--------|----------|--------|-------------|-----------|-----|
-| 1e18   | d768     | 10     | **3.5273**  | 1.0658 | [isoflop-moe-v16-1e+18-d768](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e%2B18-d768) |
-| 3e18   | d768     | 10     | **3.3398**  | 1.0122 | [isoflop-moe-v16-3e+18-d768](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e%2B18-d768) |
-| 1e19   | d1024    | 11     | **3.1494**  | 0.9541 | [isoflop-moe-v16-1e+19-d1024](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e%2B19-d1024) |
-| 3e19   | d1536    | 14     | **3.0066**  | 0.9123 | [isoflop-moe-v16-3e+19-d1536-v2](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e%2B19-d1536-v2) |
-| 1e20   | d1536    | 14     | **2.8509**  | 0.8665 | [isoflop-moe-v16-1e+20-d1536-v2](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e%2B20-d1536-v2) |
-| 3e20   | d2048    | 18     | **2.7222**  | 0.8289 | [isoflop-moe-v16-3e+20-d2048](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e%2B20-d2048) |
+| 1e18   | d768     | 8      | **3.5273**  | 1.0658 | [isoflop-moe-v16-1e+18-d768](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+18-d768) |
+| 3e18   | d768     | 8      | **3.3398**  | 1.0122 | [isoflop-moe-v16-3e+18-d768](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+18-d768) |
+| 1e19   | d1024    | 11     | **3.1494**  | 0.9541 | [isoflop-moe-v16-1e+19-d1024](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+19-d1024) |
+| 3e19   | d1536    | 16     | **3.0066**  | 0.9123 | [isoflop-moe-v16-3e+19-d1536-v2](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+19-d1536-v2) |
+| 1e20   | d1536    | 16     | **2.8509**  | 0.8665 | [isoflop-moe-v16-1e+20-d1536-v2](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+20-d1536-v2) |
+| 3e20   | d2048    | 21     | **2.7222**  | 0.8289 | [isoflop-moe-v16-3e+20-d2048](https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+20-d2048) |
 
 Derived scaling laws (fit on 1e18–3e20 optima):
 
