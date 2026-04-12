@@ -56,7 +56,13 @@ def main():
     parser.add_argument("--poll-interval", type=int, default=120, help="Seconds between status checks")
     args = parser.parse_args()
 
-    client = IrisClient.connect()
+    import os
+
+    controller_addr = os.environ.get("IRIS_CONTROLLER_ADDRESS") or os.environ.get("IRIS_CONTROLLER_URL")
+    bundle_id = os.environ.get("IRIS_BUNDLE_ID")
+    if not controller_addr:
+        raise RuntimeError("IRIS_CONTROLLER_ADDRESS not set — this script must run inside an Iris task")
+    client = IrisClient.remote(controller_addr, bundle_id=bundle_id)
     logger.info(
         "Coordinator: %d shards, tpu=%s, priority=%s, output=%s",
         args.total_shards,
