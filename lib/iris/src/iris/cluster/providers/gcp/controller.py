@@ -30,6 +30,7 @@ from iris.cluster.providers.types import (
 from iris.cluster.providers.remote_exec import resolve_current_os_login_user
 from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
@@ -73,11 +74,12 @@ class GcpControllerProvider:
             )
         return f"{vms[0].internal_address}:{port}"
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
         address, _vm = vm_start_controller(
             self.worker_provider,
             config,
             resolve_image=self.worker_provider.resolve_image,
+            fresh=fresh,
         )
         return address
 
@@ -222,6 +224,86 @@ def _build_tunnel_ssh_cmd(
     return cmd
 
 
+_TRANSIENT_SSH_ERROR_MARKERS = (
+    "connection reset by peer",
+    "connection refused",
+    "connection timed out",
+    "no route to host",
+    "network is unreachable",
+)
+
+
+def _is_transient_ssh_error(error: str) -> bool:
+    normalized = error.lower()
+    return any(marker in normalized for marker in _TRANSIENT_SSH_ERROR_MARKERS)
+
+
+def _establish_tunnel(
+    *,
+    project: str,
+    zone: str,
+    vm_name: str,
+    local_port: int,
+    ssh_config: config_pb2.SshConfig | None,
+    effective_service_account: str | None,
+    timeout: float,
+) -> subprocess.Popen:
+    """Start an SSH tunnel subprocess and wait for the port to be ready.
+
+    Returns the running Popen; raises RuntimeError on failure.
+    """
+    auth_mode = _ssh_auth_mode(ssh_config)
+    cmd = _build_tunnel_ssh_cmd(
+        project=project,
+        zone=zone,
+        vm_name=vm_name,
+        local_port=local_port,
+        ssh_config=ssh_config,
+        effective_service_account=effective_service_account,
+    )
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+
+    if auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN and not wait_for_port(
+        local_port, host="127.0.0.1", timeout=timeout
+    ):
+        stderr = proc.stderr.read().decode() if proc.stderr else ""
+        proc.terminate()
+        proc.wait()
+        if _should_retry_metadata(stderr):
+            logger.warning("OS Login tunnel failed; retrying controller tunnel with metadata SSH fallback")
+            cmd = _build_tunnel_ssh_cmd(
+                project=project,
+                zone=zone,
+                vm_name=vm_name,
+                local_port=local_port,
+                ssh_config=ssh_config,
+                effective_service_account=effective_service_account,
+                force_metadata=True,
+            )
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+        else:
+            raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
+
+    if not wait_for_port(local_port, host="127.0.0.1", timeout=timeout):
+        stderr = proc.stderr.read().decode() if proc.stderr else ""
+        proc.terminate()
+        proc.wait()
+        raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
+
+    return proc
+
+
 @contextmanager
 def _gcp_tunnel(
     project: str,
@@ -267,56 +349,23 @@ def _gcp_tunnel(
 
     logger.info("Establishing SSH tunnel to %s (zone=%s)...", vm_name, zone)
 
-    auth_mode = _ssh_auth_mode(ssh_config)
-    cmd = _build_tunnel_ssh_cmd(
-        project=project,
-        zone=zone,
-        vm_name=vm_name,
-        local_port=local_port,
-        ssh_config=ssh_config,
-        effective_service_account=effective_service_account,
+    proc = retry_with_backoff(
+        lambda: _establish_tunnel(
+            project=project,
+            zone=zone,
+            vm_name=vm_name,
+            local_port=local_port,
+            ssh_config=ssh_config,
+            effective_service_account=effective_service_account,
+            timeout=timeout,
+        ),
+        retryable=lambda e: isinstance(e, RuntimeError) and _is_transient_ssh_error(str(e)),
+        max_attempts=3,
+        backoff=ExponentialBackoff(initial=5.0, maximum=30.0, factor=2.0),
+        operation=f"SSH tunnel to {vm_name}",
     )
-
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
-
-    if auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN and not wait_for_port(
-        local_port, host="127.0.0.1", timeout=timeout
-    ):
-        stderr = proc.stderr.read().decode() if proc.stderr else ""
-        proc.terminate()
-        proc.wait()
-        if _should_retry_metadata(stderr):
-            logger.warning("OS Login tunnel failed; retrying controller tunnel with metadata SSH fallback")
-            cmd = _build_tunnel_ssh_cmd(
-                project=project,
-                zone=zone,
-                vm_name=vm_name,
-                local_port=local_port,
-                ssh_config=ssh_config,
-                effective_service_account=effective_service_account,
-                force_metadata=True,
-            )
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                start_new_session=True,
-            )
-        else:
-            raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
 
     try:
-        if not wait_for_port(local_port, host="127.0.0.1", timeout=timeout):
-            stderr = proc.stderr.read().decode() if proc.stderr else ""
-            proc.terminate()
-            proc.wait()
-            raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
-
         logger.info("Tunnel ready: 127.0.0.1:%d -> %s:10000", local_port, vm_name)
         yield f"http://127.0.0.1:{local_port}"
     finally:

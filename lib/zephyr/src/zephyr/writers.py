@@ -373,6 +373,7 @@ def write_levanter_cache(
     output_path: str,
     *,
     metadata: dict[str, Any],
+    batch_size: int = _LEVANTER_BATCH_SIZE,
 ) -> dict:
     """Write tokenized records to Levanter cache format.
 
@@ -380,7 +381,11 @@ def write_levanter_cache(
         records: Tokenized records (iterable of dicts with array values)
         output_path: Path to output cache directory
         metadata: Metadata for the cache
+        batch_size: Number of records to accumulate before flushing to disk.
     """
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
     from levanter.store.cache import CacheMetadata, SerialCacheWriter
 
     ensure_parent_dir(output_path)
@@ -392,7 +397,7 @@ def write_levanter_cache(
         return {"path": output_path, "count": 0}
 
     count = 0
-    logger.info("write_levanter_cache: starting write to %s (batch_size=%d)", output_path, _LEVANTER_BATCH_SIZE)
+    logger.info("write_levanter_cache: starting write to %s (batch_size=%d)", output_path, batch_size)
 
     with atomic_rename(output_path) as tmp_path:
         with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
@@ -405,7 +410,7 @@ def write_levanter_cache(
                 threaded.submit([exemplar])
                 count += 1
                 counters.increment("zephyr/records_out")
-                for batch in batchify(record_iter, n=_LEVANTER_BATCH_SIZE):
+                for batch in batchify(record_iter, n=batch_size):
                     threaded.submit(batch)
                     count += len(batch)
                     counters.increment("zephyr/records_out", len(batch))

@@ -161,6 +161,7 @@ class WriteOp:
 
     # Format-specific parameters (only used by relevant writer)
     levanter_metadata: dict[str, Any] | None = None
+    levanter_batch_size: int | None = None
     schema: object | None = None  # For parquet (pyarrow.Schema)
     skip_existing: bool = False  # Skip writing if output file already exists
 
@@ -309,7 +310,7 @@ class Dataset(Generic[T]):
         ...     .filter(lambda x: x % 2 == 0)
         ...     .map(lambda x: x * 2)
         ... )
-        >>> results = ctx.execute(ds)
+        >>> results = ctx.execute(ds).results
         [4, 8]
     """
 
@@ -359,7 +360,7 @@ class Dataset(Generic[T]):
             ...     .map(lambda path: process_file(path))
             ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         # Normalize double slashes while preserving protocol (e.g., gs://, s3://, http://)
         pattern = re.sub(r"(?<!:)//+", "/", pattern)
@@ -526,7 +527,7 @@ class Dataset(Generic[T]):
             ...     .filter(lambda r: r["score"] > 0.5)
             ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         return Dataset(self.source, [*self.operations, FlatMapOp(fn)])
 
@@ -546,7 +547,7 @@ class Dataset(Generic[T]):
             ...     .filter(lambda r: r["score"] > 0.5)
             ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         return Dataset(self.source, [*self.operations, LoadFileOp("auto", columns)])
 
@@ -597,7 +598,7 @@ class Dataset(Generic[T]):
             ...     .map_shard(deduplicate_shard)
             ...     .write_jsonl("output/deduped-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         return Dataset(self.source, [*self.operations, MapShardOp(fn)])
 
@@ -624,7 +625,7 @@ class Dataset(Generic[T]):
             ...     .reshard(num_shards=20)              # Redistribute to 20 shards
             ...     .map(expensive_transform)            # Now uses up to 20 workers
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         if num_shards is not None and num_shards <= 0:
             raise ValueError(f"num_shards must be positive, got {num_shards}")
@@ -727,6 +728,7 @@ class Dataset(Generic[T]):
         output_pattern: str | Callable[[int, int], str],
         metadata: dict[str, Any],
         skip_existing: bool = False,
+        batch_size: int | None = None,
     ) -> Dataset[str]:
         """Write tokenized records to Levanter cache format.
 
@@ -734,6 +736,10 @@ class Dataset(Generic[T]):
         in training. Each shard creates a separate cache directory.
         The output pattern supports substitutions: {shard:05d}, {total:05d}, {basename}
         or can be a callable that takes (shard_idx, total_shards) and returns the output path.
+
+        Args:
+            batch_size: Number of records to accumulate before flushing to disk.
+                Defaults to 16384. Lower values reduce peak memory for large documents.
         """
         return Dataset(
             self.source,
@@ -743,6 +749,7 @@ class Dataset(Generic[T]):
                     _normalize_output_pattern(output_pattern),
                     writer_type="levanter_cache",
                     levanter_metadata=metadata,
+                    levanter_batch_size=batch_size,
                     skip_existing=skip_existing,
                 ),
             ],
@@ -873,7 +880,7 @@ class Dataset(Generic[T]):
 
         Example:
             >>> ds = Dataset.from_list(range(100)).reduce(sum)
-            >>> result = list(ctx.execute(ds))[0]
+            >>> result = ctx.execute(ds).results[0]
             4950
         """
         if global_reducer is None:
@@ -889,7 +896,7 @@ class Dataset(Generic[T]):
 
         Example:
             >>> ds = Dataset.from_list(range(100)).filter(lambda x: x % 2 == 0)
-            >>> count = list(ctx.execute(ds.count()))[0]
+            >>> count = ctx.execute(ds.count()).results[0]
             50
         """
         return self.reduce(

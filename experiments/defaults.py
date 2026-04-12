@@ -266,6 +266,9 @@ def default_tokenize(
     *,
     sample_count: int | VersionedValue[int] | None = None,
     is_validation: bool = False,
+    levanter_batch_size: int | None = None,
+    resources: ResourceConfig | None = None,
+    worker_resources: ResourceConfig | None = None,
 ) -> ExecutorStep:
     """
     Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
@@ -288,6 +291,11 @@ def default_tokenize(
         An ExecutorStep that represents the tokenized dataset.
     """
 
+    # Common kwargs for config constructors
+    extra_kwargs: dict = {}
+    if worker_resources is not None:
+        extra_kwargs["worker_resources"] = worker_resources
+
     # sniff out if it's a HuggingFace dataset
     if isinstance(dataset, HfDatasetSpec):
         config = HfTokenizeConfig(
@@ -297,6 +305,8 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            levanter_batch_size=levanter_batch_size,
+            **extra_kwargs,
         )
     elif (
         isinstance(dataset, str)
@@ -310,6 +320,8 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            levanter_batch_size=levanter_batch_size,
+            **extra_kwargs,
         )
     else:
         config = TokenizeConfig(
@@ -319,6 +331,8 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            levanter_batch_size=levanter_batch_size,
+            **extra_kwargs,
         )
 
     return ExecutorStep(
@@ -326,7 +340,7 @@ def default_tokenize(
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=remote(
             tokenize,
-            resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
+            resources=resources or ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
             pip_dependency_groups=["cpu"],
             env_vars={
                 "TRANSFORMERS_NO_TORCH": "1",

@@ -9,12 +9,23 @@ def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return column in columns
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+    return row is not None
+
+
 def migrate(conn: sqlite3.Connection) -> None:
+    # On fresh DBs, job_config already has the name column; skip adding to jobs.
+    if _table_exists(conn, "job_config"):
+        return
+
     if not _has_column(conn, "jobs", "name"):
         conn.execute("ALTER TABLE jobs ADD COLUMN name TEXT NOT NULL DEFAULT ''")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_name ON jobs(name)")
 
     # Backfill name from request_proto in batches to avoid holding the write lock too long.
+    if not _has_column(conn, "jobs", "request_proto"):
+        return
     from iris.rpc import controller_pb2
 
     while True:

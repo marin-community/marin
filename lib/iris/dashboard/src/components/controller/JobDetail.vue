@@ -9,7 +9,7 @@ import type {
   GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
   ResourceUsage,
 } from '@/types/rpc'
-import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig } from '@/utils/formatting'
+import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
 import { getLeafJobName } from '@/utils/jobTree'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -38,6 +38,8 @@ const profilingTaskId = ref<string | null>(null)
 const copiedName = ref(false)
 const taskSearch = ref('')
 const stateFilter = ref('')
+const resourceMin = ref<ResourceUsage | null>(null)
+const resourceMax = ref<ResourceUsage | null>(null)
 
 type SortColumn = 'task' | 'state' | 'mem' | 'peakMem' | 'cpu' | 'duration'
 type SortDir = 'asc' | 'desc'
@@ -106,6 +108,8 @@ async function fetchData() {
     }
     job.value = jobResp.job
     jobRequest.value = jobResp.request ?? null
+    resourceMin.value = jobResp.resourceMin ?? null
+    resourceMax.value = jobResp.resourceMax ?? null
     tasks.value = tasksResp.tasks ?? []
 
     const parentIds = [props.jobId, ...expandedChildJobs.value]
@@ -469,6 +473,38 @@ const filteredTasks = computed(() => {
   return result
 })
 
+// -- Task Pagination --
+
+const TASK_PAGE_SIZE = 50
+const taskPage = ref(0)
+
+const totalTaskPages = computed(() => Math.max(1, Math.ceil(filteredTasks.value.length / TASK_PAGE_SIZE)))
+
+const paginatedTasks = computed(() => {
+  // Clamp the effective page against the current filtered length so a shrink
+  // during auto-refresh never yields an empty slice on a stale page. The
+  // watcher below mirrors this into `taskPage` so the paginator footer stays
+  // in sync.
+  const effectivePage = Math.min(taskPage.value, totalTaskPages.value - 1)
+  const start = Math.max(0, effectivePage) * TASK_PAGE_SIZE
+  return filteredTasks.value.slice(start, start + TASK_PAGE_SIZE)
+})
+
+// Reset page when filters or sort change
+watch([taskSearch, stateFilter, sortColumn, sortDir], () => { taskPage.value = 0 })
+
+// Clamp taskPage when the filtered task list shrinks underneath us. This
+// happens during the 10s auto-refresh when task state transitions change
+// which tasks match the active state filter — without clamping, a user on
+// a later page can be left with an empty table body and a stale footer
+// range (e.g. "251-240 of 240"). The computed runs eagerly so the page is
+// corrected before `paginatedTasks` slices against the new length.
+watch(totalTaskPages, (pages) => {
+  if (taskPage.value >= pages) {
+    taskPage.value = Math.max(0, pages - 1)
+  }
+})
+
 // -- Profiling --
 
 function buildProfileType(profilerType: string, format: string | null): Record<string, unknown> {
@@ -659,6 +695,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           <InfoRow label="Failures">
             {{ job.failureCount ?? 0 }}
           </InfoRow>
+          <InfoRow v-if="jobRequest?.priorityBand" label="Priority">
+            <span :class="bandColor(jobRequest.priorityBand)" class="font-semibold">
+              {{ bandDisplayName(jobRequest.priorityBand) }}
+            </span>
+          </InfoRow>
         </InfoCard>
 
         <InfoCard title="Task Summary">
@@ -680,6 +721,34 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         </InfoCard>
       </div>
 
+      <!-- Live resource usage (min/max across running tasks) -->
+      <div
+        v-if="resourceMin && resourceMax"
+        class="mb-6 rounded-lg border border-surface-border bg-surface px-4 py-3"
+      >
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
+          Live Resource Usage (across running tasks)
+        </h3>
+        <div class="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <span class="text-text-muted">CPU:</span>
+            <span class="font-mono ml-1">{{ formatCpuMillicores(resourceMin.cpuMillicores ?? 0) }}</span>
+            <span class="text-text-muted mx-1">&ndash;</span>
+            <span class="font-mono">{{ formatCpuMillicores(resourceMax.cpuMillicores ?? 0) }}</span>
+          </div>
+          <div>
+            <span class="text-text-muted">Memory:</span>
+            <span class="font-mono ml-1">{{ formatBytes((resourceMin.memoryMb ? parseFloat(resourceMin.memoryMb) : 0) * 1024 * 1024) }}</span>
+            <span class="text-text-muted mx-1">&ndash;</span>
+            <span class="font-mono">{{ formatBytes((resourceMax.memoryMb ? parseFloat(resourceMax.memoryMb) : 0) * 1024 * 1024) }}</span>
+          </div>
+          <div v-if="resourceMax.memoryPeakMb">
+            <span class="text-text-muted">Peak Memory:</span>
+            <span class="font-mono ml-1">{{ formatBytes((resourceMax.memoryPeakMb ? parseFloat(resourceMax.memoryPeakMb) : 0) * 1024 * 1024) }}</span>
+          </div>
+        </div>
+      </div>
+
       <!-- Constraints -->
       <div
         v-if="jobRequest?.constraints && jobRequest.constraints.length > 0"
@@ -696,6 +765,62 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           >
             {{ c.key }} {{ c.op }} {{ c.value?.stringValue ?? c.value?.intValue ?? '' }}
           </span>
+        </div>
+      </div>
+
+      <!-- Job Request Details -->
+      <div
+        v-if="jobRequest?.entrypoint?.runCommand?.argv?.length || jobRequest?.environment?.envVars || jobRequest?.environment?.pipPackages?.length || jobRequest?.ports?.length"
+        class="mb-6 rounded-lg border border-surface-border bg-surface px-4 py-3"
+      >
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
+          Job Request
+        </h3>
+        <div class="flex flex-col gap-2 text-sm">
+          <div v-if="jobRequest.entrypoint?.runCommand?.argv?.length">
+            <span class="text-text-muted text-xs">Command</span>
+            <pre class="mt-0.5 px-2 py-1 bg-surface-sunken rounded font-mono text-xs whitespace-pre-wrap break-all">{{ jobRequest.entrypoint.runCommand.argv.join(' ') }}</pre>
+          </div>
+          <div v-if="jobRequest.entrypoint?.setupCommands?.length">
+            <span class="text-text-muted text-xs">Setup Commands</span>
+            <pre class="mt-0.5 px-2 py-1 bg-surface-sunken rounded font-mono text-xs whitespace-pre-wrap break-all">{{ jobRequest.entrypoint.setupCommands.join('\n') }}</pre>
+          </div>
+          <div v-if="jobRequest.environment?.envVars && Object.keys(jobRequest.environment.envVars).length">
+            <span class="text-text-muted text-xs">Environment Variables</span>
+            <div class="mt-0.5 flex flex-wrap gap-1.5">
+              <span
+                v-for="(val, key) in jobRequest.environment.envVars"
+                :key="key"
+                class="inline-block rounded bg-surface-sunken px-2 py-0.5 font-mono text-xs text-text-secondary"
+              >
+                {{ key }}={{ val }}
+              </span>
+            </div>
+          </div>
+          <div v-if="jobRequest.environment?.pipPackages?.length">
+            <span class="text-text-muted text-xs">Pip Packages</span>
+            <div class="mt-0.5 flex flex-wrap gap-1.5">
+              <span
+                v-for="(pkg, i) in jobRequest.environment.pipPackages"
+                :key="i"
+                class="inline-block rounded bg-surface-sunken px-2 py-0.5 font-mono text-xs text-text-secondary"
+              >
+                {{ pkg }}
+              </span>
+            </div>
+          </div>
+          <div v-if="jobRequest.ports?.length">
+            <span class="text-text-muted text-xs">Ports</span>
+            <div class="mt-0.5 flex flex-wrap gap-1.5">
+              <span
+                v-for="(port, i) in jobRequest.ports"
+                :key="i"
+                class="inline-block rounded bg-surface-sunken px-2 py-0.5 font-mono text-xs text-text-secondary"
+              >
+                {{ port }}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -850,7 +975,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </thead>
           <tbody>
             <tr
-              v-for="task in filteredTasks"
+              v-for="task in paginatedTasks"
               :key="task.taskId"
               class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
             >
@@ -871,7 +996,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               <td class="px-3 py-2 text-[13px] truncate" :title="task.workerId ?? ''">
                 <RouterLink
                   v-if="task.workerId"
-                  :to="'/worker/' + encodeURIComponent(task.workerId)"
+                  :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}`"
                   class="text-accent hover:underline font-mono text-xs"
                 >
                   {{ task.workerId }}
@@ -927,6 +1052,30 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             </tr>
           </tbody>
         </table>
+        <!-- Task pagination -->
+        <div v-if="totalTaskPages > 1" class="flex items-center justify-between px-3 py-2 text-xs text-text-secondary border-t border-surface-border">
+          <span>
+            {{ taskPage * TASK_PAGE_SIZE + 1 }}&ndash;{{ Math.min((taskPage + 1) * TASK_PAGE_SIZE, filteredTasks.length) }}
+            of {{ filteredTasks.length }} tasks
+          </span>
+          <div class="flex items-center gap-1">
+            <button
+              :disabled="taskPage === 0"
+              class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+              @click="taskPage--"
+            >
+              &larr; Prev
+            </button>
+            <span class="px-2 font-mono">{{ taskPage + 1 }} / {{ totalTaskPages }}</span>
+            <button
+              :disabled="taskPage >= totalTaskPages - 1"
+              class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+              @click="taskPage++"
+            >
+              Next &rarr;
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Job logs -->

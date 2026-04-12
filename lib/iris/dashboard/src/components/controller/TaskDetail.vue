@@ -10,12 +10,15 @@ import type {
 } from '@/types/rpc'
 import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
 
+import { controllerRpcCall } from '@/composables/useRpc'
+import { useProfileAction } from '@/composables/useProfileAction'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import ResourceGauge from '@/components/shared/ResourceGauge.vue'
 import Sparkline from '@/components/shared/Sparkline.vue'
+import ProfileButtons from '@/components/shared/ProfileButtons.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 
 const props = defineProps<{
@@ -31,6 +34,7 @@ const {
 } = useControllerRpc<GetTaskStatusResponse>('GetTaskStatus', () => ({ taskId: props.taskId }))
 
 const task = computed(() => taskResponse.value?.task ?? null)
+const jobResources = computed(() => taskResponse.value?.jobResources ?? null)
 
 const normalizedState = computed(() => (task.value ? stateToName(task.value.state) : ''))
 
@@ -66,21 +70,36 @@ const diskUsedMb = computed(() => {
   return raw ? parseFloat(raw) : 0
 })
 
-const cpuHistory = ref<number[]>([])
-const memHistory = ref<number[]>([])
-const MAX_HISTORY = 60
+const cpuHistory = computed(() =>
+  (task.value?.resourceHistory ?? []).map(r => (r.cpuMillicores ?? 0) / 1000)
+)
+const memHistory = computed(() =>
+  (task.value?.resourceHistory ?? []).map(r => r.memoryMb ? parseFloat(r.memoryMb) : 0)
+)
 
-watch(task, (t) => {
-  if (!t?.resourceUsage) return
-  cpuHistory.value = [...cpuHistory.value, (t.resourceUsage.cpuMillicores ?? 0) / 1000].slice(-MAX_HISTORY)
-  const memMb = t.resourceUsage.memoryMb ? parseFloat(t.resourceUsage.memoryMb) : 0
-  memHistory.value = [...memHistory.value, memMb].slice(-MAX_HISTORY)
-})
-
+// Use job-level resource limits for gauge totals when available.
 const cpuTotal = computed(() => {
+  const jobCpu = (jobResources.value?.cpuMillicores ?? 0) / 1000
+  if (jobCpu > 0) return jobCpu
   const maxObserved = Math.max(...cpuHistory.value, cpuUsed.value, 0)
   if (maxObserved <= 0) return 1
   return Math.max(1, maxObserved * 1.5)
+})
+
+const memTotalMb = computed(() => {
+  const jobMemBytes = jobResources.value?.memoryBytes
+  if (jobMemBytes) return parseFloat(jobMemBytes) / (1024 * 1024)
+  const historyMax = memHistory.value.length > 0 ? Math.max(...memHistory.value) : 0
+  const best = Math.max(historyMax, memPeakMb.value, memUsedMb.value)
+  if (best <= 0) return 1
+  return best * 1.2
+})
+
+const diskTotalMb = computed(() => {
+  const jobDiskBytes = jobResources.value?.diskBytes
+  if (jobDiskBytes) return parseFloat(jobDiskBytes) / (1024 * 1024)
+  if (diskUsedMb.value <= 0) return 1
+  return diskUsedMb.value * 2
 })
 
 // Build metrics
@@ -107,12 +126,22 @@ onMounted(async () => {
   if (isActive.value) startRefresh()
 })
 
+const { profiling, profile } = useProfileAction(controllerRpcCall, () => props.taskId)
+
+const logViewerRef = ref<{ selectedAttemptId: number } | null>(null)
+
+function selectAttempt(attemptId: number) {
+  if (logViewerRef.value) {
+    logViewerRef.value.selectedAttemptId = attemptId
+  }
+  const logsEl = document.getElementById('task-logs-section')
+  if (logsEl) logsEl.scrollIntoView({ behavior: 'smooth' })
+}
+
 // Re-fetch when navigating between tasks (Vue Router reuses the component).
 // Clear stale data first so loading/error states render correctly if the fetch fails.
 watch(() => props.taskId, async () => {
   taskResponse.value = null
-  cpuHistory.value = []
-  memHistory.value = []
   stopRefresh()
   await fetchTask()
   if (isActive.value) startRefresh()
@@ -177,6 +206,9 @@ watch(() => props.taskId, async () => {
           <InfoRow v-if="task.pendingReason" label="Pending Reason">
             <span class="text-status-warning">{{ task.pendingReason }}</span>
           </InfoRow>
+          <div v-if="isActive" class="mt-3 pt-3 border-t border-surface-border">
+            <ProfileButtons :profiling="profiling" @profile="profile" />
+          </div>
         </InfoCard>
 
         <!-- Resources card -->
@@ -187,14 +219,14 @@ watch(() => props.taskId, async () => {
               <ResourceGauge
                 label="Memory"
                 :used="memUsedMb * 1024 * 1024"
-                :total="(memPeakMb || memUsedMb * 1.5) * 1024 * 1024"
+                :total="memTotalMb * 1024 * 1024"
                 unit="bytes"
               />
               <ResourceGauge
                 v-if="diskUsedMb > 0"
                 label="Disk"
                 :used="diskUsedMb * 1024 * 1024"
-                :total="diskUsedMb * 2 * 1024 * 1024"
+                :total="diskTotalMb * 1024 * 1024"
                 unit="bytes"
               />
             </div>
@@ -255,8 +287,11 @@ watch(() => props.taskId, async () => {
       </div>
 
       <!-- Attempts table -->
-      <div v-if="task.attempts && task.attempts.length > 1" class="mb-6">
-        <h3 class="text-sm font-semibold text-text mb-3">Attempts</h3>
+      <div v-if="task.attempts && task.attempts.length > 0" class="mb-6">
+        <h3 class="text-sm font-semibold text-text mb-3">
+          Attempts
+          <span class="text-text-muted font-normal ml-1">({{ task.attempts.length }})</span>
+        </h3>
         <div class="overflow-x-auto rounded-lg border border-surface-border">
           <table class="w-full border-collapse">
             <thead>
@@ -285,9 +320,14 @@ watch(() => props.taskId, async () => {
               <tr
                 v-for="attempt in task.attempts"
                 :key="attempt.attemptId"
-                class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+                class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors cursor-pointer"
+                :class="attempt.attemptId === task.currentAttemptId ? 'bg-accent-subtle border-l-2 border-l-accent' : ''"
+                @click="selectAttempt(attempt.attemptId)"
               >
-                <td class="px-3 py-2 text-[13px] font-mono">{{ attempt.attemptId }}</td>
+                <td class="px-3 py-2 text-[13px] font-mono">
+                  {{ attempt.attemptId }}
+                  <span v-if="attempt.attemptId === task.currentAttemptId" class="ml-1 text-xs text-accent font-semibold">current</span>
+                </td>
                 <td class="px-3 py-2 text-[13px]">
                   <StatusBadge :status="attempt.state" size="sm" />
                 </td>
@@ -296,6 +336,7 @@ watch(() => props.taskId, async () => {
                     v-if="attempt.workerId"
                     :to="`/worker/${attempt.workerId}`"
                     class="font-mono text-accent hover:underline"
+                    @click.stop
                   >
                     {{ attempt.workerId }}
                   </RouterLink>
@@ -317,9 +358,9 @@ watch(() => props.taskId, async () => {
       </div>
 
       <!-- Task logs -->
-      <div class="mb-6">
+      <div id="task-logs-section" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Logs</h3>
-        <LogViewer :task-id="taskId" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
+        <LogViewer ref="logViewerRef" :task-id="taskId" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
       </div>
     </template>
   </PageShell>

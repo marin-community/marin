@@ -135,6 +135,7 @@ def _build_controller_deployment(
     port: int,
     node_selector: dict[str, str],
     s3_env_vars: list[dict],
+    fresh: bool = False,
 ) -> dict:
     """Build the controller Deployment manifest as a dict."""
     # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod
@@ -172,6 +173,7 @@ def _build_controller_deployment(
                                 "--host=0.0.0.0",
                                 f"--port={port}",
                                 "--config=/etc/iris/config.json",
+                                *(["--fresh"] if fresh else []),
                             ],
                             "ports": [{"containerPort": port}],
                             "env": s3_env_vars,
@@ -266,7 +268,7 @@ class K8sControllerProvider:
         port = cw.port or 10000
         return f"{service_name}.{self._namespace}.svc.cluster.local:{port}"
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start the controller, reconciling all resources. Returns address (host:port).
 
         Fully idempotent: always applies ConfigMap, Deployment, and Service
@@ -309,6 +311,7 @@ class K8sControllerProvider:
             port=port,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
             s3_env_vars=s3_env,
+            fresh=fresh,
         )
         self._kubectl.apply_json(deploy_manifest)
         self._kubectl.rollout_restart(K8sResource.DEPLOYMENTS, "iris-controller")
