@@ -117,7 +117,12 @@ def main(config: EvalLmConfig):
         def compute_logits(model: LmHeadModel, example: GrugLmExample):
             model = mp.cast_to_compute(model)
             with hax.axis_mapping(compute_axis_mapping):
-                logits_array = model.logits_from_token_ids_array(example.tokens, batch_axis=Batch, key=None)
+                logits_array = model.logits_from_token_ids_array(
+                    example.tokens,
+                    attn_mask=example.attn_mask,
+                    batch_axis=Batch,
+                    key=None,
+                )
                 if logits_array.ndim == 2:
                     return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), model.Vocab))
                 if logits_array.ndim == 3:

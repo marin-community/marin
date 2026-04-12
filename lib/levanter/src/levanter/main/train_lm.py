@@ -289,7 +289,12 @@ def main(config: TrainLmConfig):
         @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: GrugLmExample):
             model = trainer.mp.cast_to_compute(model)
-            logits_array = model.logits_from_token_ids_array(example.tokens, batch_axis=EvalBatch, key=None)
+            logits_array = model.logits_from_token_ids_array(
+                example.tokens,
+                attn_mask=example.attn_mask,
+                batch_axis=EvalBatch,
+                key=None,
+            )
             if logits_array.ndim == 2:
                 return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), model.Vocab))
             if logits_array.ndim == 3:

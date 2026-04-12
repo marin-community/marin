@@ -15,6 +15,8 @@ from jaxtyping import PRNGKeyArray
 import haliax as hax
 from haliax import Axis, NamedArray
 
+from levanter.data.text.examples import GrugLmExample
+from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 
@@ -63,8 +65,11 @@ class ToyLmHeadModel(LmHeadModel[ToyLmConfig]):
         key=None,
         pos_ids: NamedArray | None = None,
     ) -> NamedArray | tuple[NamedArray, NamedArray | float]:
-        del attn_mask, key, pos_ids
+        del key, pos_ids
         hidden = self.embed_weight.take(self.Vocab, input_ids)
+        if isinstance(attn_mask, AttentionMask) and attn_mask.segment_ids is not None:
+            q_segment_ids, _ = attn_mask.segment_ids
+            hidden = hidden + q_segment_ids.astype(hidden.dtype).broadcast_axis(self.Embed)
         return hidden, self.aux_loss
 
     def get_lm_head(self) -> NamedArray:
@@ -126,3 +131,38 @@ def test_compute_next_token_loss_includes_aux_loss():
     with_aux = model_with_aux.compute_next_token_loss(example)
 
     assert pytest.approx(float(base) + 0.25, rel=1e-6, abs=1e-6) == float(with_aux)
+
+
+def test_compute_next_token_loss_array_accepts_shorter_grug_sequence():
+    Vocab = Axis("vocab", 32)
+    cfg = ToyLmConfig(max_seq_len=8, embed_dim=16)
+    model = ToyLmHeadModel.init(Vocab, cfg, key=jax.random.PRNGKey(0))
+
+    Batch = Axis("batch", 4)
+    short_seq_len = 4
+    tokens = jax.random.randint(jax.random.PRNGKey(1), (Batch.size, short_seq_len), 0, Vocab.size)
+    loss_weight = jnp.ones_like(tokens, dtype=jnp.float32).at[:, -1].set(0.0)
+    example = GrugLmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=GrugAttentionMask.causal())
+
+    loss = model.compute_next_token_loss_array(example, batch_axis=Batch)
+
+    assert jnp.shape(loss) == ()
+
+
+def test_logits_from_token_ids_array_passes_grug_attention_mask():
+    Vocab = Axis("vocab", 32)
+    cfg = ToyLmConfig(max_seq_len=8, embed_dim=16)
+    model = ToyLmHeadModel.init(Vocab, cfg, key=jax.random.PRNGKey(0))
+
+    Batch = Axis("batch", 2)
+    tokens = jax.random.randint(jax.random.PRNGKey(1), (Batch.size, 4), 0, Vocab.size)
+    segment_ids = jnp.array([[0, 0, 1, 1], [0, 1, 1, 2]], dtype=jnp.int32)
+
+    unmasked_logits = model.logits_from_token_ids_array(tokens, batch_axis=Batch)
+    masked_logits = model.logits_from_token_ids_array(
+        tokens,
+        attn_mask=GrugAttentionMask.causal().with_segment_ids(segment_ids),
+        batch_axis=Batch,
+    )
+
+    assert not jnp.allclose(unmasked_logits, masked_logits)
