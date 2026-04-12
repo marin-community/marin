@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 
 
-def fix_imports(file_path: Path) -> None:
-    """Fix imports in generated Python files for local package layout."""
+def fix_generated_python(file_path: Path) -> None:
+    """Fix generated Python files for local package layout and pinned dependencies."""
     content = file_path.read_text()
 
     # Pattern 1: import <name>_pb2 as <name>__pb2 (used in _pb2.py files)
@@ -30,10 +30,22 @@ def fix_imports(file_path: Path) -> None:
         "from connectrpc.compression import Compression",
         "from connectrpc._compression import Compression",
     )
+    new_content = new_content.replace(
+        "from connectrpc._compression import Compression\n",
+        "",
+    )
+    new_content = new_content.replace(
+        ", compressions: Iterable[Compression] | None = None",
+        "",
+    )
+    new_content = new_content.replace(
+        ",\n            compressions=compressions",
+        "",
+    )
 
     if new_content != content:
         file_path.write_text(new_content)
-        print(f"✓ Fixed imports in {file_path.name}")
+        print(f"✓ Fixed generated Python in {file_path.name}")
     else:
         print(f"✓ No changes needed in {file_path.name}")
 
@@ -66,11 +78,11 @@ def main():
     # Fix imports in all generated Python files (both _pb2.py and _connect.py)
     print("\nFixing imports in generated files...")
     for pb2_file in rpc_dir.glob("*_pb2.py"):
-        fix_imports(pb2_file)
+        fix_generated_python(pb2_file)
     for connect_file in rpc_dir.glob("*_connect.py"):
-        fix_imports(connect_file)
+        fix_generated_python(connect_file)
     for pyi_file in rpc_dir.glob("*_pb2.pyi"):
-        fix_imports(pyi_file)
+        fix_generated_python(pyi_file)
 
     print("\n✓ Generation complete!")
 
