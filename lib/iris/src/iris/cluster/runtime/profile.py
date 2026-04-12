@@ -30,6 +30,15 @@ logger = logging.getLogger(__name__)
 # Target sentinel for profiling the local worker/controller process itself.
 SYSTEM_PROCESS_TARGET = "/system/process"
 
+# Shell expression that resolves to the oldest python PID inside a task
+# container, falling back to PID 1 if none is found. Task entrypoints are
+# typically `uv run python ...`, so PID 1 is the `uv` Rust binary and py-spy
+# cannot fingerprint it as CPython. The user's actual interpreter is a child
+# of uv; `pgrep -o python` selects the oldest matching process (the main
+# interpreter), and py-spy's --subprocesses then walks any further children.
+# The expression must be evaluated inside a shell on the target container.
+PYTHON_PID_EXPR = "$(pgrep -o python || echo 1)"
+
 CPU_FORMAT_MAP: dict[int, tuple[str, str]] = {
     job_pb2.CpuProfile.FLAMEGRAPH: ("flamegraph", "svg"),
     job_pb2.CpuProfile.SPEEDSCOPE: ("speedscope", "json"),

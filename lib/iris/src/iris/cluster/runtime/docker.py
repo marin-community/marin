@@ -29,6 +29,7 @@ from pathlib import Path
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.env import write_workdir_files
 from iris.cluster.runtime.profile import (
+    PYTHON_PID_EXPR,
     build_memray_attach_cmd,
     build_memray_transform_cmd,
     build_pyspy_cmd,
@@ -510,14 +511,20 @@ exec {quoted_cmd}
 
     def _profile_threads(self, container_id: str, *, include_locals: bool = False) -> bytes:
         """Collect thread stacks from the container using py-spy dump."""
-        cmd = build_pyspy_dump_cmd(pid="1", py_spy_bin="/app/.venv/bin/py-spy", include_locals=include_locals)
-        result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=30)
+        cmd = build_pyspy_dump_cmd(
+            pid=PYTHON_PID_EXPR, py_spy_bin="/app/.venv/bin/py-spy", include_locals=include_locals
+        )
+        result = self._docker_exec_shell(container_id, cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
             raise RuntimeError(f"py-spy dump failed: {result.stderr}")
         return result.stdout.encode("utf-8")
 
     def _docker_exec(self, container_id: str, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
         return subprocess.run(["docker", "exec", container_id, *cmd], **kwargs)
+
+    def _docker_exec_shell(self, container_id: str, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+        """Run cmd through `sh -c` so shell expansions like `$(pgrep ...)` apply."""
+        return self._docker_exec(container_id, ["sh", "-c", shlex.join(cmd)], **kwargs)
 
     def _docker_read_file(self, container_id: str, path: str) -> bytes:
         result = self._docker_exec(container_id, ["cat", path], capture_output=True, timeout=5)
@@ -532,7 +539,7 @@ exec {quoted_cmd}
         self, container_id: str, duration_seconds: int, cpu_config: "job_pb2.CpuProfile", profile_id: str
     ) -> bytes:
         """Profile CPU using py-spy."""
-        spec = resolve_cpu_spec(cpu_config, duration_seconds, pid="1")
+        spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=PYTHON_PID_EXPR)
         output_path = f"/tmp/profile-cpu-{profile_id}.{spec.ext}"
         cmd = build_pyspy_cmd(spec, py_spy_bin="/app/.venv/bin/py-spy", output_path=output_path)
 
@@ -545,7 +552,9 @@ exec {quoted_cmd}
         )
         try:
             # py-spy needs extra headroom beyond the sample duration for writing output
-            result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
+            result = self._docker_exec_shell(
+                container_id, cmd, capture_output=True, text=True, timeout=duration_seconds + 30
+            )
             if result.returncode != 0:
                 raise RuntimeError(f"py-spy failed: {result.stderr}")
             return self._docker_read_file(container_id, output_path)
@@ -556,7 +565,7 @@ exec {quoted_cmd}
         self, container_id: str, duration_seconds: int, memory_config: "job_pb2.MemoryProfile", profile_id: str
     ) -> bytes:
         """Profile memory using memray."""
-        spec = resolve_memory_spec(memory_config, duration_seconds, pid="1")
+        spec = resolve_memory_spec(memory_config, duration_seconds, pid=PYTHON_PID_EXPR)
         memray_bin = "/app/.venv/bin/memray"
         trace_path = f"/tmp/memray-trace-{profile_id}.bin"
         output_path = f"/tmp/memray-output-{profile_id}.{spec.ext}"
@@ -571,7 +580,7 @@ exec {quoted_cmd}
             spec.leaks,
         )
         try:
-            result = self._docker_exec(
+            result = self._docker_exec_shell(
                 container_id, attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10
             )
             if result.returncode != 0:

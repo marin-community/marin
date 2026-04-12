@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     git \
     lldb \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Google Cloud SDK (controller needs it for TPU management, worker for discovery)
@@ -144,6 +145,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     build-essential \
     lldb \
+    procps \
     libibverbs1 \
     ibverbs-providers \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \

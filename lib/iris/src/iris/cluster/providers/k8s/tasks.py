@@ -1199,17 +1199,17 @@ class K8sTaskProvider:
 
     def _profile_threads(self, pod_name: str, threads_config: job_pb2.ThreadsProfile) -> job_pb2.ProfileTaskResponse:
         """Get thread stacks via py-spy dump."""
-        from iris.cluster.runtime.profile import build_pyspy_dump_cmd
+        from iris.cluster.runtime.profile import PYTHON_PID_EXPR, build_pyspy_dump_cmd
 
-        cmd = shlex.join(build_pyspy_dump_cmd("1", include_locals=threads_config.locals))
+        cmd = shlex.join(build_pyspy_dump_cmd(PYTHON_PID_EXPR, include_locals=threads_config.locals))
         stdout = self._kubectl_exec_shell(pod_name, cmd, timeout=30)
         return job_pb2.ProfileTaskResponse(profile_data=stdout.encode("utf-8"))
 
     def _profile_cpu(self, pod_name: str, cpu_config: job_pb2.CpuProfile, duration: int) -> job_pb2.ProfileTaskResponse:
         """Record CPU profile via py-spy."""
-        from iris.cluster.runtime.profile import build_pyspy_cmd, resolve_cpu_spec
+        from iris.cluster.runtime.profile import PYTHON_PID_EXPR, build_pyspy_cmd, resolve_cpu_spec
 
-        spec = resolve_cpu_spec(cpu_config, duration, pid="1")
+        spec = resolve_cpu_spec(cpu_config, duration, pid=PYTHON_PID_EXPR)
         output_path = f"/tmp/iris-profile.{spec.ext}"
         cmd = shlex.join(build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path))
         self._kubectl_exec_shell(pod_name, cmd, timeout=duration + 30)
@@ -1222,12 +1222,13 @@ class K8sTaskProvider:
     ) -> job_pb2.ProfileTaskResponse:
         """Record memory profile via memray."""
         from iris.cluster.runtime.profile import (
+            PYTHON_PID_EXPR,
             build_memray_attach_cmd,
             build_memray_transform_cmd,
             resolve_memory_spec,
         )
 
-        spec = resolve_memory_spec(memory_config, duration, pid="1")
+        spec = resolve_memory_spec(memory_config, duration, pid=PYTHON_PID_EXPR)
         trace_path = "/tmp/iris-memray.bin"
         output_path = f"/tmp/iris-memray.{spec.ext}"
 
