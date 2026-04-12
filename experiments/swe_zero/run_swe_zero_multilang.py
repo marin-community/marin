@@ -53,22 +53,36 @@ def _sample_prs_per_language(
     loader,
     n_per_language: int,
     seed: int,
+    languages: list[str] | None = None,
 ):
     """Group all SWE-rebench V2 instances by language and sample n_per_language from each.
 
     Returns a list of PRRecord objects, plus a per-language sampling summary.
     The seeded sampler is per-language so adding/removing a language doesn't
     perturb the others' samples.
+
+    ``languages`` (optional) filters to a specific subset of languages.
     """
+    import hashlib
+
     by_lang: dict[str, list[str]] = defaultdict(list)
     for row in loader._ds:
         by_lang[row.get("language", "unknown")].append(row["instance_id"])
 
+    target_langs = sorted(by_lang.keys()) if languages is None else sorted(languages)
     summary: dict[str, dict] = {}
     sampled_prs = []
-    for lang in sorted(by_lang.keys()):
-        ids = by_lang[lang]
-        rng = random.Random(seed + hash(lang) % 10_000)
+    for lang in target_langs:
+        if lang not in by_lang:
+            logger.warning("Skipping unknown language %s", lang)
+            continue
+        ids = sorted(by_lang[lang])  # stable order across runs
+        # Use a stable hash of the language so the per-language seed is
+        # reproducible across Python invocations. Built-in hash() randomizes
+        # via PYTHONHASHSEED and would shuffle the per-language seed each run,
+        # which breaks --resume-from.
+        lang_seed = seed + int(hashlib.sha256(lang.encode()).hexdigest()[:8], 16) % 10_000
+        rng = random.Random(lang_seed)
         n = min(n_per_language, len(ids))
         chosen = rng.sample(ids, n)
         for iid in chosen:
@@ -188,6 +202,7 @@ def _run_with_vllm(
     tensor_parallel_size: int,
     max_total_tokens: int,
     resume_from: str | None = None,
+    languages: list[str] | None = None,
 ) -> None:
     # Local imports of swe_zero modules only — no marin.evaluation /
     # marin.inference imports, to avoid pulling in transformers / torch.
@@ -205,7 +220,7 @@ def _run_with_vllm(
 
     # Load the WHOLE dataset (no language filter — we want all 20).
     loader = SWERebenchV2Loader()
-    sampled_prs, summary = _sample_prs_per_language(loader, n_per_language, seed)
+    sampled_prs, summary = _sample_prs_per_language(loader, n_per_language, seed, languages=languages)
     logger.info("Sampling summary: %d total PRs across %d languages", len(sampled_prs), len(summary))
     for lang, info in sorted(summary.items()):
         logger.info("  %-10s: %d sampled / %d available", lang, info["sampled"], info["available"])
@@ -396,6 +411,12 @@ def main():
         help="Path (local or gs://) to a partial rollouts.json from a previous run. "
         "Per-PR shortfalls will be filled in; PRs already at n-rollouts are skipped.",
     )
+    parser.add_argument(
+        "--languages",
+        default=None,
+        help="Comma-separated list of languages to sample (e.g. scala,swift,ts). "
+        "Default: all 20 languages in SWE-rebench V2.",
+    )
     args = parser.parse_args()
 
     model_path = args.model_path or args.model
@@ -416,6 +437,7 @@ def main():
         tensor_parallel_size=args.tensor_parallel_size,
         max_total_tokens=args.max_total_tokens,
         resume_from=args.resume_from,
+        languages=[s.strip() for s in args.languages.split(",")] if args.languages else None,
     )
 
 
