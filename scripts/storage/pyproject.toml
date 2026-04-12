@@ -6,6 +6,8 @@ dependencies = [
     "click",
     "duckdb",
     "fastapi",
+    "fsspec",
+    "gcsfs",
     "google-auth",
     "google-cloud-storage",
     "pyarrow",
@@ -15,3 +17,6 @@ dependencies = [
     "tqdm",
     "uvicorn",
 ]
+
+[project.optional-dependencies]
+distributed = ["iris"]

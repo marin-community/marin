@@ -36,18 +36,20 @@ from pydantic import BaseModel
 from starlette.responses import FileResponse, JSONResponse
 
 
-from scripts.storage.db import (
-    DEFAULT_CATALOG,
+from scripts.storage.constants import (
     GCS_DISCOUNT,
-    StorageCatalog,
-    _next_rule_id,
     continent_for_region,
-    flush_delete_rules,
-    flush_protect_rules,
     human_bytes,
-    init_db,
     plan_rows,
     region_from_bucket,
+)
+from scripts.storage.db import (
+    DEFAULT_CATALOG,
+    StorageCatalog,
+    _next_rule_id,
+    flush_delete_rules,
+    flush_protect_rules,
+    init_db,
 )
 
 log = logging.getLogger(__name__)
