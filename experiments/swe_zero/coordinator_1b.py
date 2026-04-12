@@ -32,6 +32,7 @@ import logging
 import time
 
 from iris.client.client import IrisClient
+from iris.cluster.constraints import device_variant_constraint
 from iris.cluster.types import Entrypoint, ResourceSpec, tpu_device
 from iris.rpc import job_pb2
 
@@ -121,6 +122,7 @@ def main():
                 entrypoint=Entrypoint(command=cmd),
                 name=name,
                 resources=child_resources,
+                constraints=[device_variant_constraint([args.tpu])],
                 max_retries_failure=args.child_max_retries,
                 max_retries_preemption=args.child_max_retries,
             )
