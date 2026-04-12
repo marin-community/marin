@@ -78,7 +78,10 @@ def main():
         disk="60GB",
         device=tpu_device(args.tpu),
     )
-    child_priority = PRIORITY_MAP[args.child_priority]
+    # Child priority is inherited from the parent coordinator job; the
+    # PRIORITY_MAP + args.child_priority are kept for future use when the
+    # swe-zero-mvp branch's Iris client supports priority_band on submit().
+    _ = PRIORITY_MAP[args.child_priority]  # validate
 
     # Submit all shards.
     children = {}
@@ -111,13 +114,15 @@ def main():
             args.output_root,
         ]
         try:
+            # Note: priority_band is not available in the swe-zero-mvp branch's
+            # Iris client. Children inherit the parent coordinator's priority
+            # (batch) automatically, so we don't need to set it explicitly.
             job = client.submit(
                 entrypoint=Entrypoint(command=cmd),
                 name=name,
                 resources=child_resources,
                 max_retries_failure=args.child_max_retries,
                 max_retries_preemption=args.child_max_retries,
-                priority_band=child_priority,
             )
             children[shard] = job
             logger.info("[shard %03d] submitted: %s", shard, job.job_id)
