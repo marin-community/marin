@@ -518,20 +518,23 @@ def main():
         "--all-prs",
         action="store_true",
         help="Sample EVERY PR in SWE-rebench V2 (all 32k+) instead of n-per-language. "
-        "Combine with --shard-index/--total-shards to partition the corpus across workers.",
+        "Combine with --shard-index/--total-shards or Iris --replicas to partition "
+        "the corpus across workers.",
     )
     parser.add_argument(
         "--shard-index",
         type=int,
-        default=0,
-        help="Zero-based shard index for --all-prs mode. PRs are round-robin assigned "
-        "to shards over a globally-shuffled instance_id list.",
+        default=None,
+        help="Zero-based shard index for --all-prs mode. If omitted, auto-detected "
+        "from IRIS_TASK_ID env var (set by Iris --replicas). PRs are round-robin "
+        "assigned to shards over a globally-shuffled instance_id list.",
     )
     parser.add_argument(
         "--total-shards",
         type=int,
-        default=1,
-        help="Total number of shards for --all-prs mode.",
+        default=None,
+        help="Total number of shards for --all-prs mode. If omitted, auto-detected "
+        "from IRIS_NUM_TASKS env var (set by Iris --replicas).",
     )
     args = parser.parse_args()
 
@@ -540,10 +543,39 @@ def main():
     if not args.local:
         raise SystemExit("Pass --local to run on a TPU worker via VllmEnvironment.")
 
+    # Resolve shard identity: explicit CLI flags take precedence; fall back to
+    # Iris env vars (set automatically by `iris job run --replicas N`); finally
+    # default to single-shard mode.
+    shard_index = args.shard_index
+    total_shards = args.total_shards
+    if shard_index is None or total_shards is None:
+        iris_task_id = os.environ.get("IRIS_TASK_ID", "")
+        iris_num_tasks = os.environ.get("IRIS_NUM_TASKS", "")
+        if iris_task_id and iris_num_tasks:
+            # IRIS_TASK_ID format: /user/job-name/INDEX or /user/job-name/INDEX:attempt
+            idx_part = iris_task_id.rsplit("/", 1)[-1].split(":")[0]
+            shard_index = shard_index if shard_index is not None else int(idx_part)
+            total_shards = total_shards if total_shards is not None else int(iris_num_tasks)
+            logger.info(
+                "Auto-detected shard identity from Iris: shard_index=%d, total_shards=%d (IRIS_TASK_ID=%s)",
+                shard_index,
+                total_shards,
+                iris_task_id,
+            )
+        else:
+            shard_index = shard_index if shard_index is not None else 0
+            total_shards = total_shards if total_shards is not None else 1
+
+    # In --all-prs mode with multiple shards, auto-suffix the output_dir so
+    # each shard writes to its own prefix (e.g., .../shard_003_of_050/).
+    output_dir = args.output_dir
+    if args.all_prs and total_shards > 1:
+        output_dir = os.path.join(output_dir, f"shard_{shard_index:03d}_of_{total_shards:03d}")
+
     _run_with_vllm(
         model_name=args.model,
         model_path=model_path,
-        output_dir=args.output_dir,
+        output_dir=output_dir,
         n_per_language=args.n_per_language,
         n_rollouts_per_pr=args.n_rollouts,
         seed=args.seed,
@@ -555,8 +587,8 @@ def main():
         resume_from=args.resume_from,
         languages=[s.strip() for s in args.languages.split(",")] if args.languages else None,
         all_prs=args.all_prs,
-        shard_index=args.shard_index,
-        total_shards=args.total_shards,
+        shard_index=shard_index,
+        total_shards=total_shards,
     )
 
 
