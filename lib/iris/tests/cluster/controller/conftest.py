@@ -732,7 +732,7 @@ def make_demand_entries(
     constraint_list: list[Constraint] = []
     if device_type is not None:
         constraint_list.append(
-            Constraint(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value=device_type.value)
+            Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value=device_type.value)
         )
     if effective_variants:
         constraint_list.append(device_variant_constraint(sorted(effective_variants)))

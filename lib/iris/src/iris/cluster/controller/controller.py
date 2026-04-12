@@ -738,7 +738,7 @@ def _inject_taint_constraints(
     modified: dict[JobName, JobRequirements] = {}
     for job_id, req in jobs.items():
         if job_id in has_direct_reservation:
-            eq_constraint = Constraint(
+            eq_constraint = Constraint.create(
                 key=RESERVATION_TAINT_KEY,
                 op=ConstraintOp.EQ,
                 value=job_id.to_wire(),

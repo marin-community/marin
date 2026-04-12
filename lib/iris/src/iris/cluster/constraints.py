@@ -92,9 +92,19 @@ class AttributeValue:
 
     Used for coscheduling and constraint-based worker filtering.
     Values can be strings, integers, or floats.
+
+    String values are stripped and lowercased at construction so that
+    constraint comparisons are case-insensitive by construction — there is
+    no way to hold a non-normalized string in this type. Worker attributes
+    and constraint literals share this type and therefore share the
+    normalization invariant.
     """
 
     value: str | int | float
+
+    def __post_init__(self) -> None:
+        if isinstance(self.value, str):
+            object.__setattr__(self, "value", self.value.strip().lower())
 
     def to_proto(self) -> job_pb2.AttributeValue:
         """Convert to protobuf representation."""
@@ -128,11 +138,11 @@ class ConstraintOp(IntEnum):
 
     Example:
         >>> # Match workers where region equals "us-central1"
-        >>> Constraint(key="region", op=ConstraintOp.EQ, value="us-central1")
+        >>> Constraint.create(key="region", op=ConstraintOp.EQ, value="us-central1")
         >>> # Match workers with memory > 32GB
-        >>> Constraint(key="memory_gb", op=ConstraintOp.GT, value=32)
+        >>> Constraint.create(key="memory_gb", op=ConstraintOp.GT, value=32)
         >>> # Match workers that have the "gpu" attribute set
-        >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
+        >>> Constraint.create(key="gpu", op=ConstraintOp.EXISTS)
     """
 
     EQ = 0
@@ -161,11 +171,19 @@ class ConstraintOp(IntEnum):
         return mapping[self]
 
 
-def _normalize_value(v: str | int | float) -> str | int | float:
-    """Strip and lowercase string values so constraint evaluation is case-insensitive."""
-    if isinstance(v, str):
-        return v.strip().lower()
-    return v
+# Per-op arity bounds (lo, hi) for Constraint.values. hi=None means unbounded.
+# Enforced in Constraint.__post_init__ so invalid constraints cannot be constructed.
+_CONSTRAINT_ARITY: dict[ConstraintOp, tuple[int, int | None]] = {
+    ConstraintOp.EXISTS: (0, 0),
+    ConstraintOp.NOT_EXISTS: (0, 0),
+    ConstraintOp.EQ: (1, 1),
+    ConstraintOp.NE: (1, 1),
+    ConstraintOp.GT: (1, 1),
+    ConstraintOp.GE: (1, 1),
+    ConstraintOp.LT: (1, 1),
+    ConstraintOp.LE: (1, 1),
+    ConstraintOp.IN: (1, None),
+}
 
 
 @dataclass(frozen=True)
@@ -175,54 +193,107 @@ class Constraint:
     Constraints filter which workers are eligible to run a job based on
     worker attributes. Workers must satisfy all constraints to be considered.
 
+    `values` is a tuple of `AttributeValue` — a single type for both worker-side
+    and constraint-side scalars. The arity of `values` is determined by `op`
+    and validated at construction; downstream code can always index into
+    `values` without None checks.
+
+    Prefer ``Constraint.create(...)`` in call sites — it accepts raw
+    ``value=``/``values=`` scalars and wraps them in ``AttributeValue``
+    automatically. The primary constructor is used by ``from_proto`` and
+    tests of the invariant itself.
+
     Example:
         >>> # Require a specific TPU pod
-        >>> Constraint(key="tpu-name", op=ConstraintOp.EQ, value="my-tpu-pod")
-        >>> # Require workers in a specific zone
-        >>> Constraint(key="zone", op=ConstraintOp.EQ, value="us-central1-a")
+        >>> Constraint.create(key="tpu-name", op=ConstraintOp.EQ, value="my-tpu-pod")
         >>> # Require workers with at least 64GB memory
-        >>> Constraint(key="memory_gb", op=ConstraintOp.GE, value=64)
+        >>> Constraint.create(key="memory_gb", op=ConstraintOp.GE, value=64)
         >>> # Require workers that have a GPU
-        >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
+        >>> Constraint.create(key="gpu", op=ConstraintOp.EXISTS)
         >>> # Require workers in one of several regions
-        >>> Constraint(key="region", op=ConstraintOp.IN, values=("us-central1", "us-central2"))
+        >>> Constraint.create(key="region", op=ConstraintOp.IN,
+        ...                   values=["us-central1", "us-central2"])
     """
 
     key: str
     op: ConstraintOp
-    value: str | int | float | None = None
-    values: tuple[str | int | float, ...] | None = None
+    values: tuple[AttributeValue, ...] = ()
     mode: int = job_pb2.CONSTRAINT_MODE_REQUIRED
+
+    def __post_init__(self) -> None:
+        lo, hi = _CONSTRAINT_ARITY[self.op]
+        n = len(self.values)
+        if n < lo or (hi is not None and n > hi):
+            bound = str(hi) if hi is not None else "∞"
+            raise ValueError(f"Constraint op {self.op.name} requires {lo}..{bound} values, got {n}")
 
     @property
     def is_soft(self) -> bool:
         return self.mode == job_pb2.CONSTRAINT_MODE_PREFERRED
 
     def to_proto(self) -> job_pb2.Constraint:
-        """Convert to protobuf representation."""
+        """Convert to protobuf representation.
+
+        Singular ops (EQ/NE/GT/GE/LT/LE) write `proto.value`; IN writes
+        `proto.values`; EXISTS/NOT_EXISTS write neither.
+        """
         proto = job_pb2.Constraint(key=self.key, op=self.op.to_proto(), mode=self.mode)
-        if self.value is not None:
-            proto.value.CopyFrom(AttributeValue(self.value).to_proto())
-        if self.values is not None:
+        if self.op == ConstraintOp.IN:
             for v in self.values:
-                proto.values.append(AttributeValue(v).to_proto())
+                proto.values.append(v.to_proto())
+        elif self.values:
+            proto.value.CopyFrom(self.values[0].to_proto())
         return proto
 
     @staticmethod
     def from_proto(proto: job_pb2.Constraint) -> Constraint:
         """Convert from protobuf representation.
 
-        String values are stripped and lowercased at ingestion so that
-        downstream constraint evaluation never needs case-normalization.
+        Normalization (strip/lowercase for strings) happens inside
+        AttributeValue.__post_init__, so constraint evaluation never needs
+        to re-normalize.
         """
         op = ConstraintOp(proto.op)
-        value: str | int | float | None = None
-        if proto.HasField("value"):
-            value = _normalize_value(AttributeValue.from_proto(proto.value).value)
-        values: tuple[str | int | float, ...] | None = None
-        if proto.values:
-            values = tuple(_normalize_value(AttributeValue.from_proto(v).value) for v in proto.values)
-        return Constraint(key=proto.key, op=op, value=value, values=values, mode=proto.mode)
+        if op in (ConstraintOp.EXISTS, ConstraintOp.NOT_EXISTS):
+            values: tuple[AttributeValue, ...] = ()
+        elif op == ConstraintOp.IN:
+            values = tuple(AttributeValue.from_proto(v) for v in proto.values)
+        else:
+            values = (AttributeValue.from_proto(proto.value),)
+        return Constraint(key=proto.key, op=op, values=values, mode=proto.mode)
+
+    @classmethod
+    def create(
+        cls,
+        key: str,
+        op: ConstraintOp,
+        *,
+        value: str | int | float | None = None,
+        values: Sequence[str | int | float] | None = None,
+        mode: int = job_pb2.CONSTRAINT_MODE_REQUIRED,
+    ) -> Constraint:
+        """Ergonomic factory: wraps raw scalars in AttributeValue automatically.
+
+        - Singular ops (EQ/NE/GT/GE/LT/LE): pass ``value=``.
+        - IN: pass ``values=``.
+        - EXISTS/NOT_EXISTS: pass neither.
+
+        Raw strings are normalized (stripped + lowercased) via
+        AttributeValue.__post_init__.
+        """
+        if op in (ConstraintOp.EXISTS, ConstraintOp.NOT_EXISTS):
+            if value is not None or values is not None:
+                raise ValueError(f"op={op.name} takes no value/values")
+            tup: tuple[AttributeValue, ...] = ()
+        elif op == ConstraintOp.IN:
+            if value is not None or values is None:
+                raise ValueError("op=IN requires values=, not value=")
+            tup = tuple(AttributeValue(v) for v in values)
+        else:
+            if value is None or values is not None:
+                raise ValueError(f"op={op.name} requires value=, not values=")
+            tup = (AttributeValue(value),)
+        return cls(key=key, op=op, values=tup, mode=mode)
 
 
 # ---------------------------------------------------------------------------
@@ -248,14 +319,14 @@ def preemptible_constraint(preemptible: bool = True, soft: bool | None = None) -
         # preemptible=True is a preference (soft), preemptible=False is a requirement (hard)
         soft = preemptible
     mode = job_pb2.CONSTRAINT_MODE_PREFERRED if soft else job_pb2.CONSTRAINT_MODE_REQUIRED
-    return Constraint(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value=str(preemptible).lower(), mode=mode)
+    return Constraint.create(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value=str(preemptible), mode=mode)
 
 
 def zone_constraint(zone: str) -> Constraint:
     """Constraint requiring workers to be in a given zone."""
     if not zone:
         raise ValueError("zone must be non-empty")
-    return Constraint(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value=zone)
+    return Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value=zone)
 
 
 def region_constraint(regions: list[str]) -> Constraint:
@@ -279,8 +350,8 @@ def region_constraint(regions: list[str]) -> Constraint:
         if not r:
             raise ValueError("region must be non-empty")
     if len(regions) == 1:
-        return Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value=regions[0])
-    return Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=tuple(regions))
+        return Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value=regions[0])
+    return Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=regions)
 
 
 def device_variant_constraint(variants: Sequence[str]) -> Constraint:
@@ -303,10 +374,8 @@ def device_variant_constraint(variants: Sequence[str]) -> Constraint:
         if not v:
             raise ValueError("variant must be non-empty")
     if len(variants) == 1:
-        return Constraint(key=WellKnownAttribute.DEVICE_VARIANT, op=ConstraintOp.EQ, value=variants[0].lower())
-    return Constraint(
-        key=WellKnownAttribute.DEVICE_VARIANT, op=ConstraintOp.IN, values=tuple(v.lower() for v in variants)
-    )
+        return Constraint.create(key=WellKnownAttribute.DEVICE_VARIANT, op=ConstraintOp.EQ, value=variants[0])
+    return Constraint.create(key=WellKnownAttribute.DEVICE_VARIANT, op=ConstraintOp.IN, values=list(variants))
 
 
 @dataclass(frozen=True)
@@ -350,17 +419,17 @@ def _collect_values(
     *,
     allow_in: bool = True,
 ) -> list[str | int | float]:
-    """Flatten a Constraint's value(s) into a list. EQ → [value], IN → list(values)."""
+    """Flatten a Constraint's value(s) into a list of raw scalars.
+
+    EQ → [values[0].value], IN → [v.value for v in values]. Arity is already
+    enforced by Constraint.__post_init__ so no None checks are needed here.
+    """
     if constraint.op == ConstraintOp.EQ:
-        if constraint.value is None:
-            raise ValueError(f"{constraint.key} constraint requires a value")
-        return [constraint.value]
+        return [constraint.values[0].value]
     if constraint.op == ConstraintOp.IN:
         if not allow_in:
             raise ValueError(f"{constraint.key} constraint must use EQ")
-        if not constraint.values:
-            raise ValueError(f"IN {constraint.key} constraint requires at least one value")
-        return list(constraint.values)
+        return [v.value for v in constraint.values]
     raise ValueError(f"{constraint.key} constraint must use EQ or IN, got {constraint.op}")
 
 
@@ -640,23 +709,11 @@ def constraints_from_resources(resources: job_pb2.ResourceSpecProto) -> list[Con
 
     device_type = get_device_type(resources.device)
     if device_type != "cpu":
-        constraints.append(
-            Constraint(
-                key=WellKnownAttribute.DEVICE_TYPE,
-                op=ConstraintOp.EQ,
-                value=device_type,
-            )
-        )
+        constraints.append(Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value=device_type))
 
     variant = get_device_variant(resources.device)
     if variant and variant != "auto":
-        constraints.append(
-            Constraint(
-                key=WellKnownAttribute.DEVICE_VARIANT,
-                op=ConstraintOp.EQ,
-                value=variant.lower(),
-            )
-        )
+        constraints.append(Constraint.create(key=WellKnownAttribute.DEVICE_VARIANT, op=ConstraintOp.EQ, value=variant))
 
     return constraints
 
@@ -779,19 +836,19 @@ def evaluate_constraint(
 
     match op:
         case ConstraintOp.EQ:
-            return attr.value == constraint.value
+            return attr.value == constraint.values[0].value
         case ConstraintOp.NE:
-            return attr.value != constraint.value
+            return attr.value != constraint.values[0].value
         case ConstraintOp.GT:
-            return _compare_ordered(attr.value, constraint.value, "gt")
+            return _compare_ordered(attr.value, constraint.values[0].value, "gt")
         case ConstraintOp.GE:
-            return _compare_ordered(attr.value, constraint.value, "ge")
+            return _compare_ordered(attr.value, constraint.values[0].value, "ge")
         case ConstraintOp.LT:
-            return _compare_ordered(attr.value, constraint.value, "lt")
+            return _compare_ordered(attr.value, constraint.values[0].value, "lt")
         case ConstraintOp.LE:
-            return _compare_ordered(attr.value, constraint.value, "le")
+            return _compare_ordered(attr.value, constraint.values[0].value, "le")
         case ConstraintOp.IN:
-            return attr.value in constraint.values if constraint.values else False
+            return any(attr.value == v.value for v in constraint.values)
         case _:
             return False
 
@@ -802,7 +859,7 @@ def is_cpu_device_type_constraint(c: Constraint) -> bool:
     CPU jobs match any scaling group, so this constraint is stripped
     before routing evaluation. Values are already normalized at ingestion.
     """
-    return c.key == WellKnownAttribute.DEVICE_TYPE and c.op == ConstraintOp.EQ and c.value == "cpu"
+    return c.key == WellKnownAttribute.DEVICE_TYPE and c.op == ConstraintOp.EQ and c.values[0].value == "cpu"
 
 
 def routing_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
@@ -914,7 +971,7 @@ class ConstraintIndex:
         op = constraint.op
 
         if op == ConstraintOp.EQ and key in self._discrete_lists:
-            return self._discrete_lists[key].get(constraint.value, set())
+            return self._discrete_lists[key].get(constraint.values[0].value, set())
 
         if op == ConstraintOp.EXISTS:
             if key in self._discrete_lists:
@@ -932,10 +989,10 @@ class ConstraintIndex:
                 return set(self._all_ids) - has_attr
             return set(self._all_ids)
 
-        if op == ConstraintOp.IN and key in self._discrete_lists and constraint.values:
+        if op == ConstraintOp.IN and key in self._discrete_lists:
             in_result: set[str] = set()
             for val in constraint.values:
-                in_result |= self._discrete_lists[key].get(val, set())
+                in_result |= self._discrete_lists[key].get(val.value, set())
             return in_result
 
         # Slow path for NE, GT, GE, LT, LE, or non-indexed attributes

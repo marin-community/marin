@@ -959,9 +959,9 @@ def test_launch_job_injects_device_constraints_from_tpu_resource(service, state)
     assert WellKnownAttribute.DEVICE_VARIANT in keys
 
     dt = next(c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_TYPE)
-    assert dt.value == "tpu"
+    assert dt.values[0].value == "tpu"
     dv = next(c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_VARIANT)
-    assert dv.value == "v5litepod-16"
+    assert dv.values[0].value == "v5litepod-16"
 
 
 def test_launch_job_user_constraints_override_auto(service, state):
@@ -990,7 +990,7 @@ def test_launch_job_user_constraints_override_auto(service, state):
     # device-type should still be auto-injected
     dt_constraints = [c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_TYPE]
     assert len(dt_constraints) == 1
-    assert dt_constraints[0].value == "tpu"
+    assert dt_constraints[0].values[0].value == "tpu"
 
 
 def test_launch_job_cpu_resource_no_constraints_injected(service, state):

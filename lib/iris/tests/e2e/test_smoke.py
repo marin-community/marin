@@ -367,9 +367,9 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
 def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
     """Constraint chips rendered on job detail."""
     constraints = [
-        Constraint(key="region", op=ConstraintOp.EQ, value="local"),
-        Constraint(key="env-tag", op=ConstraintOp.EXISTS),
-        Constraint(key="device-variant", op=ConstraintOp.IN, values=("v5p-8", "v6e-4")),
+        Constraint.create(key="region", op=ConstraintOp.EQ, value="local"),
+        Constraint.create(key="env-tag", op=ConstraintOp.EXISTS),
+        Constraint.create(key="device-variant", op=ConstraintOp.IN, values=["v5p-8", "v6e-4"]),
     ]
     with smoke_cluster.launched_job(TestJobs.quick, "smoke-constraints", constraints=constraints) as job:
         time.sleep(3)

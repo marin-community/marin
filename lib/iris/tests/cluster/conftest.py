@@ -45,12 +45,12 @@ from rigging.timing import Timestamp
 
 def eq_constraint(key: str, value: str) -> Constraint:
     """Build an EQ constraint for the given key and string value."""
-    return Constraint(key=key, op=ConstraintOp.EQ, value=value.strip().lower())
+    return Constraint.create(key=key, op=ConstraintOp.EQ, value=value)
 
 
 def in_constraint(key: str, values: list[str]) -> Constraint:
     """Build an IN constraint for the given key and string values."""
-    return Constraint(key=key, op=ConstraintOp.IN, values=tuple(v.strip().lower() for v in values))
+    return Constraint.create(key=key, op=ConstraintOp.IN, values=values)
 
 
 # ---------------------------------------------------------------------------

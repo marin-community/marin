@@ -201,7 +201,7 @@ def test_task_name_attempt_zero():
 
 def _proto_constraint(key: str, string_value: str, op: int = job_pb2.CONSTRAINT_OP_EQ) -> Constraint:
     """Build a native Constraint with a string value (normalized at construction)."""
-    return Constraint(key=key, op=ConstraintOp(op), value=string_value.strip().lower())
+    return Constraint.create(key=key, op=ConstraintOp(op), value=string_value)
 
 
 # ---------------------------------------------------------------------------
@@ -213,15 +213,14 @@ def test_region_constraint_single_region_produces_eq():
     c = region_constraint(["us-west4"])
     assert c.key == WellKnownAttribute.REGION
     assert c.op == ConstraintOp.EQ
-    assert c.value == "us-west4"
+    assert c.values[0].value == "us-west4"
 
 
 def test_region_constraint_multiple_regions_produces_in():
     c = region_constraint(["us-central1", "us-central2"])
     assert c.key == WellKnownAttribute.REGION
     assert c.op == ConstraintOp.IN
-    assert c.values == ("us-central1", "us-central2")
-    assert c.value is None
+    assert tuple(v.value for v in c.values) == ("us-central1", "us-central2")
 
 
 def test_region_constraint_empty_list_raises():
@@ -366,7 +365,7 @@ def test_merge_child_overrides_region():
     result = merge_constraints(parent, child)
     regions = [c for c in result if c.key == WellKnownAttribute.REGION]
     assert len(regions) == 1
-    assert regions[0].value == "eu-west4"
+    assert regions[0].values[0].value == "eu-west4"
 
 
 def test_merge_child_overrides_preemptible():
@@ -375,32 +374,32 @@ def test_merge_child_overrides_preemptible():
     result = merge_constraints(parent, child)
     preemptibles = [c for c in result if c.key == WellKnownAttribute.PREEMPTIBLE]
     assert len(preemptibles) == 1
-    assert preemptibles[0].value == "false"
+    assert preemptibles[0].values[0].value == "false"
 
 
 def test_merge_child_overrides_zone():
     """Child zone constraint replaces parent's (zone is canonical)."""
-    parent = [Constraint(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value="a")]
-    child = [Constraint(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value="b")]
+    parent = [Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value="a")]
+    child = [Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value="b")]
     result = merge_constraints(parent, child)
     zone_constraints = [c for c in result if c.key == WellKnownAttribute.ZONE]
     assert len(zone_constraints) == 1
-    assert zone_constraints[0].value == "b"
+    assert zone_constraints[0].values[0].value == "b"
 
 
 def test_merge_non_canonical_key_both_present():
     """Non-canonical keys from parent and child are both kept."""
-    parent = [Constraint(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="a")]
-    child = [Constraint(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="b")]
+    parent = [Constraint.create(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="a")]
+    child = [Constraint.create(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="b")]
     result = merge_constraints(parent, child)
     tpu_constraints = [c for c in result if c.key == WellKnownAttribute.TPU_NAME]
     assert len(tpu_constraints) == 2
-    assert {c.value for c in tpu_constraints} == {"a", "b"}
+    assert {c.values[0].value for c in tpu_constraints} == {"a", "b"}
 
 
 def test_merge_non_canonical_key_dedup():
     """Duplicate non-canonical constraints are deduplicated."""
-    shared = Constraint(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="a")
+    shared = Constraint.create(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="a")
     result = merge_constraints([shared], [shared])
     tpu_constraints = [c for c in result if c.key == WellKnownAttribute.TPU_NAME]
     assert len(tpu_constraints) == 1
@@ -414,11 +413,11 @@ def test_merge_multiple_canonical_keys_partial_override():
 
     regions = [c for c in result if c.key == WellKnownAttribute.REGION]
     assert len(regions) == 1
-    assert regions[0].value == "eu-west4"
+    assert regions[0].values[0].value == "eu-west4"
 
     preemptibles = [c for c in result if c.key == WellKnownAttribute.PREEMPTIBLE]
     assert len(preemptibles) == 1
-    assert preemptibles[0].value == "true"
+    assert preemptibles[0].values[0].value == "true"
 
 
 def test_region_constraint_empty_string_in_multi_raises():
@@ -433,7 +432,7 @@ def test_region_constraint_empty_string_in_multi_raises():
 
 def test_constraint_in_proto_roundtrip():
     """IN constraint survives a proto round-trip."""
-    original = Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=("us-central1", "eu-west4"))
+    original = Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=["us-central1", "eu-west4"])
     proto = original.to_proto()
     assert proto.op == job_pb2.CONSTRAINT_OP_IN
     assert len(proto.values) == 2
@@ -448,7 +447,7 @@ def test_constraint_in_proto_roundtrip():
 
 def _proto_in_constraint(key: str, string_values: list[str]) -> Constraint:
     """Build a native IN Constraint with multiple string values."""
-    return Constraint(key=key, op=ConstraintOp.IN, values=tuple(v.strip().lower() for v in string_values))
+    return Constraint.create(key=key, op=ConstraintOp.IN, values=list(string_values))
 
 
 def test_required_regions_in_multiple():
@@ -464,10 +463,9 @@ def test_required_regions_in_single():
 
 
 def test_required_regions_in_empty_values_raises():
-    """IN constraint with no values is invalid."""
-    c = Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=())
-    with pytest.raises(ValueError, match="at least one value"):
-        extract_placement_requirements([c])
+    """IN constraint with no values is invalid — rejected at construction."""
+    with pytest.raises(ValueError, match="IN requires"):
+        Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=())
 
 
 def test_extract_placement_requirements_with_in_region():
@@ -497,9 +495,9 @@ def test_constraints_from_resources_tpu():
     assert WellKnownAttribute.DEVICE_TYPE in keys
     assert WellKnownAttribute.DEVICE_VARIANT in keys
     type_c = next(c for c in result if c.key == WellKnownAttribute.DEVICE_TYPE)
-    assert type_c.value == "tpu"
+    assert type_c.values[0].value == "tpu"
     variant_c = next(c for c in result if c.key == WellKnownAttribute.DEVICE_VARIANT)
-    assert variant_c.value == "v5litepod-16"
+    assert variant_c.values[0].value == "v5litepod-16"
 
 
 def test_constraints_from_resources_gpu():
@@ -507,9 +505,9 @@ def test_constraints_from_resources_gpu():
     resources.device.CopyFrom(gpu_device("H100", count=8))
     result = constraints_from_resources(resources)
     type_c = next(c for c in result if c.key == WellKnownAttribute.DEVICE_TYPE)
-    assert type_c.value == "gpu"
+    assert type_c.values[0].value == "gpu"
     variant_c = next(c for c in result if c.key == WellKnownAttribute.DEVICE_VARIANT)
-    assert variant_c.value == "h100"
+    assert variant_c.values[0].value == "h100"
 
 
 def test_constraints_from_resources_cpu_produces_nothing():
@@ -543,12 +541,12 @@ def test_constraints_from_resources_auto_variant_skipped():
 
 def test_merge_child_overrides_device_type():
     """Child device-type constraint replaces parent's."""
-    parent = [Constraint(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value="tpu")]
-    child = [Constraint(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value="gpu")]
+    parent = [Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value="tpu")]
+    child = [Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value="gpu")]
     result = merge_constraints(parent, child)
     dt = [c for c in result if c.key == WellKnownAttribute.DEVICE_TYPE]
     assert len(dt) == 1
-    assert dt[0].value == "gpu"
+    assert dt[0].values[0].value == "gpu"
 
 
 # ---------------------------------------------------------------------------
@@ -593,10 +591,10 @@ def test_merge_auto_constraints_with_user_variant_override():
     # device-type from auto should be kept
     dt = [c for c in merged if c.key == WellKnownAttribute.DEVICE_TYPE]
     assert len(dt) == 1
-    assert dt[0].value == "tpu"
+    assert dt[0].values[0].value == "tpu"
 
     # device-variant should be the user's IN constraint, not auto's EQ
     dv = [c for c in merged if c.key == WellKnownAttribute.DEVICE_VARIANT]
     assert len(dv) == 1
     assert dv[0].op == ConstraintOp.IN
-    assert dv[0].values == ("v5litepod-16", "v6e-16")
+    assert tuple(v.value for v in dv[0].values) == ("v5litepod-16", "v6e-16")
