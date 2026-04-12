@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 def fix_imports(file_path: Path) -> None:
-    """Fix imports in generated Python files to use relative imports."""
+    """Fix imports in generated Python files for local package layout."""
     content = file_path.read_text()
 
     # Pattern 1: import <name>_pb2 as <name>__pb2 (used in _pb2.py files)
@@ -26,6 +26,10 @@ def fix_imports(file_path: Path) -> None:
 
     new_content = re.sub(pattern1, replacement1, content, flags=re.MULTILINE)
     new_content = re.sub(pattern2, replacement2, new_content, flags=re.MULTILINE)
+    new_content = new_content.replace(
+        "from connectrpc.compression import Compression",
+        "from connectrpc._compression import Compression",
+    )
 
     if new_content != content:
         file_path.write_text(new_content)
