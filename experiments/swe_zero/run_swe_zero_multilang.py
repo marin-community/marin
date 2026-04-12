@@ -485,7 +485,10 @@ def _run_with_vllm(
             r["n_rollouts"],
             r["top_first_words"][:3],
         )
-    logger.info("Overall submission rate: %d/%d (%.1f%%)", total_finished, total_n, 100 * total_finished / total_n)
+    if total_n > 0:
+        logger.info("Overall submission rate: %d/%d (%.1f%%)", total_finished, total_n, 100 * total_finished / total_n)
+    else:
+        logger.info("No rollouts produced (all PRs already at target via auto-resume)")
 
 
 def main():
