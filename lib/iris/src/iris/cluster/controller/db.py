@@ -16,7 +16,7 @@ from threading import Lock, RLock
 from typing import Any
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
+from iris.cluster.controller.schema import ENDPOINT_PROJECTION, decode_timestamp_ms, decode_worker_id
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 from rigging.timing import Deadline, Duration, Timestamp
@@ -265,8 +265,6 @@ def _decode_attribute_rows(rows: Sequence[Any]) -> dict[WorkerId, dict[str, Attr
 
 def endpoint_query_sql(query: EndpointQuery) -> tuple[str, list[object]]:
     """Build SQL query for endpoint lookups."""
-    from iris.cluster.controller.schema import ENDPOINT_PROJECTION
-
     from_clause = f"SELECT {ENDPOINT_PROJECTION.select_clause()} FROM endpoints e"
     conditions: list[str] = []
     params: list[object] = []
@@ -716,8 +714,6 @@ class ControllerDB:
     # to keep relation assembly explicit in controller/service/state query flows.
 
     def delete_endpoint(self, endpoint_id: str):
-        from iris.cluster.controller.schema import ENDPOINT_PROJECTION
-
         with self.transaction() as cur:
             row = cur.execute(
                 f"SELECT {ENDPOINT_PROJECTION.select_clause()} " "FROM endpoints e WHERE e.endpoint_id = ?",
