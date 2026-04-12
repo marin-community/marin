@@ -4,14 +4,14 @@
 import tempfile
 
 import pytest
-from datasets import load_dataset
+from datasets import Audio, load_dataset
 
-from levanter.data.sharded_datasource import AudioTextUrlDataSource
 from levanter.tokenizers import load_tokenizer
 from test_utils import skip_if_hf_model_not_accessible, skip_if_no_soundlibs
 from transformers import AutoProcessor
 
 from levanter.data.audio import AudioDatasetSourceConfig, AudioIODatasetConfig, BatchAudioProcessor
+from levanter.data.sharded_datasource import AudioTextUrlDataSource
 from levanter.store.cache import SerialCacheWriter
 
 
@@ -21,10 +21,17 @@ def test_whisper_batch_processor():
     try:
         processor = AutoProcessor.from_pretrained("openai/whisper-tiny")
         tokenizer = load_tokenizer("openai/whisper-tiny")
-        ds = load_dataset("WillHeld/test_librispeech_parquet", split="validation").select_columns(["audio", "text"])
+        ds = load_dataset("WillHeld/test_librispeech_parquet", split="validation")
+        ds = ds.cast_column("audio", Audio(decode=False)).select_columns(["audio", "text"])
         batch_processor = BatchAudioProcessor(processor, tokenizer)
         inputs = [
-            (audio["array"], audio["sampling_rate"], text) for audio, text in zip(ds[:4]["audio"], ds[:4]["text"])
+            (
+                decoded["array"],
+                decoded["sampling_rate"],
+                text,
+            )
+            for audio, text in zip(ds[:4]["audio"], ds[:4]["text"])
+            for decoded in [AudioTextUrlDataSource.resolve_audio_pointer(audio, 16_000)]
         ]
         batch_processor(inputs)
     except FileNotFoundError:

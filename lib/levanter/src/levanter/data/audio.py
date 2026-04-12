@@ -166,7 +166,13 @@ class AudioDatasetSourceConfig:
     def get_shard_source(self, split) -> Optional[ShardedDataSource[Tuple[np.ndarray, int, str]]]:
         if self.id is not None:
             try:
-                ds = WrappedHFDataSource(self.id, split=split, name=self.name, streaming=self.stream)
+                ds = WrappedHFDataSource(
+                    self.id,
+                    split=split,
+                    name=self.name,
+                    streaming=self.stream,
+                    column_casts={self.audio_key: datasets.Audio(decode=False)},
+                )
             except ValueError as e:
                 # if the message starts with Bad split, then just return None
                 if str(e).startswith("Bad split"):
@@ -194,8 +200,10 @@ class AudioDatasetSourceConfig:
     def doc_iterator(self, split: str) -> Iterator[Tuple[np.ndarray, int, str]]:
         if self.id is not None:
             data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
+            data = data.cast_column(self.audio_key, datasets.Audio(decode=False))
             for doc in data:
-                yield (doc[self.audio_key]["array"], doc[self.audio_key]["sampling_rate"], doc[self.text_key])
+                audio = AudioTextUrlDataSource.resolve_audio_pointer(doc[self.audio_key], self.sampling_rate)
+                yield (audio["array"], audio["sampling_rate"], doc[self.text_key])
         else:
             urls = self.urls_for_split(split)
 

@@ -7,7 +7,7 @@ import json
 import os
 import warnings
 from functools import cached_property
-from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, Sized, Tuple, TypeVar
+from typing import Any, Callable, Generic, Iterable, Iterator, List, Mapping, Sequence, Sized, Tuple, TypeVar
 
 import datasets
 import numpy as np
@@ -174,10 +174,19 @@ class WrappedHFDataSource(ShardedDataSource[dict]):
     kwargs are passed to load_dataset
     """
 
-    def __init__(self, id, *, split, streaming: bool = True, **kwargs):
+    def __init__(
+        self,
+        id,
+        *,
+        split,
+        streaming: bool = True,
+        column_casts: Mapping[str, Any] | None = None,
+        **kwargs,
+    ):
         self.id = id
         self.split = split
         self.streaming = streaming
+        self.column_casts = dict(column_casts or {})
         self.kwargs = kwargs
         self._shard_names = self._compute_shard_names()
 
@@ -215,7 +224,10 @@ class WrappedHFDataSource(ShardedDataSource[dict]):
     def _load_dataset(self):
         # obnoxiously, the dataset loading stuff doesn't work with ray because of multiprocessing
         # so we have to do this hacky thing where we load the dataset in the worker
-        return datasets.load_dataset(self.id, split=self.split, streaming=self.streaming, **self.kwargs)
+        dataset = datasets.load_dataset(self.id, split=self.split, streaming=self.streaming, **self.kwargs)
+        for column_name, feature in self.column_casts.items():
+            dataset = dataset.cast_column(column_name, feature)
+        return dataset
 
 
 class TextUrlDataSource(ShardedDataSource[str]):

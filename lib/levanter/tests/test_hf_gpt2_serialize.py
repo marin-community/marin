@@ -26,8 +26,9 @@ from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.optim import AdamConfig
+from levanter.trainer_state import trainables_only
 from levanter.utils.tree_utils import inference_mode
-from test_utils import arrays_only, skip_if_hf_model_not_accessible, skip_if_no_torch
+from test_utils import skip_if_hf_model_not_accessible, skip_if_no_torch
 from tests.test_utils import use_test_mesh
 
 TEST_GPT2_MODEL_ID = "sshleifer/tiny-gpt2"
@@ -192,8 +193,10 @@ def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2
     torch_optimizer.step()
 
     jax_optimizer = optimizer_config.build(1000)
-    state = jax_optimizer.init(arrays_only(model))
-    updates, state = jax_optimizer.update(updates=jax_grad, state=state, params=model)
+    trainable_model = trainables_only(model, True)
+    trainable_grads = trainables_only(jax_grad, True)
+    state = jax_optimizer.init(trainable_model)
+    updates, state = jax_optimizer.update(updates=trainable_grads, state=state, params=trainable_model)
     new_model = equinox.apply_updates(model, updates)
 
     new_model_dict = hax.state_dict.to_torch_compatible_state_dict(new_model)

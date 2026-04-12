@@ -139,6 +139,17 @@ def _batch_spec_from_x(x: jax.Array, mesh: jax.sharding.AbstractMesh | None) -> 
     return _batch_spec(mesh)
 
 
+def _full_spec_from_x(x: jax.Array, mesh: jax.sharding.AbstractMesh | None) -> P:
+    sharding = getattr(x, "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    if spec is not None and len(spec) == x.ndim:
+        return spec
+
+    batch_spec = _batch_spec_from_x(x, mesh)
+    leading_axis = batch_spec[0] if len(batch_spec) > 0 else None
+    return P(leading_axis, *([None] * (x.ndim - 1)))
+
+
 def _sort_activations(inputs: jax.Array, sort_indices: jax.Array) -> jax.Array:
     if inputs.shape[0] != sort_indices.shape[0]:
         raise ValueError(f"Expected matching leading dims, got {inputs.shape[0]} and {sort_indices.shape[0]}")
@@ -492,8 +503,6 @@ def moe_mlp(
         return out
 
     batch_spec = _batch_spec_from_x(x, mesh)
-    local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
-
     if has_expert_axis and expert_axis_size > 1:
         if num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
@@ -530,6 +539,7 @@ def moe_mlp(
 
     # Fallback path for no expert axis (or expert axis size 1) keeps routing
     # semantics without EP collectives.
+    output_spec = _full_spec_from_x(x, mesh)
     shard_fn = shard_map(
         partial(
             _moe_mlp_local,
@@ -537,14 +547,7 @@ def moe_mlp(
             num_experts=num_experts,
         ),
         mesh=mesh,
-        in_specs=(
-            batch_spec,
-            batch_spec,
-            batch_spec,
-            local_expert_spec,
-            local_expert_spec,
-        ),
-        out_specs=(batch_spec, P()),
+        out_specs=(output_spec, P()),
         check_vma=False,
     )
     out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
