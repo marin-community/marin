@@ -1,0 +1,345 @@
+[
+  {
+    "budget": 1e+18,
+    "dim": 1536,
+    "bpb": 1.1782900094985962,
+    "name": "isoflop-moe-v16-1e+18-d1536",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+18-d1536"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 512,
+    "bpb": 1.0374560356140137,
+    "name": "isoflop-moe-v16-3e+18-d512",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+18-d512"
+  },
+  {
+    "budget": 1e+18,
+    "dim": 1280,
+    "bpb": 1.1254481077194214,
+    "name": "isoflop-moe-v16-1e+18-d1280",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+18-d1280"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 2048,
+    "bpb": 1.1229931116104126,
+    "name": "isoflop-moe-v16-3e+18-d2048",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+18-d2048"
+  },
+  {
+    "budget": 1e+18,
+    "dim": 512,
+    "bpb": 1.074018120765686,
+    "name": "isoflop-moe-v16-1e+18-d512",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+18-d512"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 768,
+    "bpb": 1.0122312307357788,
+    "name": "isoflop-moe-v16-3e+18-d768",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+18-d768"
+  },
+  {
+    "budget": 1e+18,
+    "dim": 768,
+    "bpb": 1.065784215927124,
+    "name": "isoflop-moe-v16-1e+18-d768",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+18-d768"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 512,
+    "bpb": 1.0129190683364868,
+    "name": "isoflop-moe-v16-1e+19-d512",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+19-d512"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 2048,
+    "bpb": 1.0034514665603638,
+    "name": "isoflop-moe-v16-1e+19-d2048",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+19-d2048"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 1280,
+    "bpb": 0.9579063057899476,
+    "name": "isoflop-moe-v16-1e+19-d1280",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+19-d1280"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 1536,
+    "bpb": 0.9686749577522278,
+    "name": "isoflop-moe-v16-1e+19-d1536",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+19-d1536"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 1792,
+    "bpb": 0.9853507280349731,
+    "name": "isoflop-moe-v16-1e+19-d1792",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+19-d1792"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 1024,
+    "bpb": 0.9541351795196532,
+    "name": "isoflop-moe-v16-1e+19-d1024",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+19-d1024"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 768,
+    "bpb": 0.97293883562088,
+    "name": "isoflop-moe-v16-1e+19-d768",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+19-d768"
+  },
+  {
+    "budget": 1e+18,
+    "dim": 1024,
+    "bpb": 1.0905778408050537,
+    "name": "isoflop-moe-v16-1e+18-d1024",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+18-d1024"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 1024,
+    "bpb": 0.9157812595367432,
+    "name": "isoflop-moe-v16-3e+19-d1024",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+19-d1024"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 1024,
+    "bpb": 1.0135109424591064,
+    "name": "isoflop-moe-v16-3e+18-d1024",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+18-d1024"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 1280,
+    "bpb": 0.9118062257766724,
+    "name": "isoflop-moe-v16-3e+19-d1280",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+19-d1280"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 768,
+    "bpb": 0.945410132408142,
+    "name": "isoflop-moe-v16-3e+19-d768",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+19-d768"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 2048,
+    "bpb": 0.9298531413078308,
+    "name": "isoflop-moe-v16-3e+19-d2048",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+19-d2048"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 1536,
+    "bpb": 1.0562198162078855,
+    "name": "isoflop-moe-v16-3e+18-d1536",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+18-d1536"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 1792,
+    "bpb": 1.0867712497711182,
+    "name": "isoflop-moe-v16-3e+18-d1792",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+18-d1792"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 1280,
+    "bpb": 1.0274500846862793,
+    "name": "isoflop-moe-v16-3e+18-d1280",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+18-d1280"
+  },
+  {
+    "budget": 1e+18,
+    "dim": 1792,
+    "bpb": 1.2321083545684814,
+    "name": "isoflop-moe-v16-1e+18-d1792",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+18-d1792"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 640,
+    "bpb": 0.985026240348816,
+    "name": "isoflop-moe-v16-1e+19-d640",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+19-d640"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 896,
+    "bpb": 0.9253579378128052,
+    "name": "isoflop-moe-v16-3e+19-d896",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+19-d896"
+  },
+  {
+    "budget": 1e+18,
+    "dim": 896,
+    "bpb": 1.080352783203125,
+    "name": "isoflop-moe-v16-1e+18-d896",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+18-d896"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 896,
+    "bpb": 1.0121777057647705,
+    "name": "isoflop-moe-v16-3e+18-d896",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+18-d896"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 640,
+    "bpb": 0.9616966247558594,
+    "name": "isoflop-moe-v16-3e+19-d640",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+19-d640"
+  },
+  {
+    "budget": 1e+19,
+    "dim": 896,
+    "bpb": 0.959280014038086,
+    "name": "isoflop-moe-v16-1e+19-d896",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+19-d896"
+  },
+  {
+    "budget": 1e+18,
+    "dim": 640,
+    "bpb": 1.0667572021484375,
+    "name": "isoflop-moe-v16-1e+18-d640",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+18-d640"
+  },
+  {
+    "budget": 3e+18,
+    "dim": 640,
+    "bpb": 1.0202412605285645,
+    "name": "isoflop-moe-v16-3e+18-d640",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+18-d640"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 1536,
+    "bpb": 0.9123398661613464,
+    "name": "isoflop-moe-v16-3e+19-d1536-v2",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+19-d1536-v2"
+  },
+  {
+    "budget": 3e+19,
+    "dim": 1792,
+    "bpb": 0.9208377599716188,
+    "name": "isoflop-moe-v16-3e+19-d1792-v2",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+19-d1792-v2"
+  },
+  {
+    "budget": 1e+20,
+    "dim": 1792,
+    "bpb": 0.8684056401252747,
+    "name": "isoflop-moe-v16-1e+20-d1792-v2",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+20-d1792-v2"
+  },
+  {
+    "budget": 1e+20,
+    "dim": 768,
+    "bpb": 0.9277527928352356,
+    "name": "isoflop-moe-v16-1e+20-d768-v2",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+20-d768-v2"
+  },
+  {
+    "budget": 1e+20,
+    "dim": 1536,
+    "bpb": 0.8664644360542297,
+    "name": "isoflop-moe-v16-1e+20-d1536-v2",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+20-d1536-v2"
+  },
+  {
+    "budget": 1e+20,
+    "dim": 1024,
+    "bpb": 0.8872485160827637,
+    "name": "isoflop-moe-v16-1e+20-d1024-v2",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+20-d1024-v2"
+  },
+  {
+    "budget": 1e+20,
+    "dim": 2048,
+    "bpb": 0.8720173835754395,
+    "name": "isoflop-moe-v16-1e+20-d2048-v3",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+20-d2048-v3"
+  },
+  {
+    "budget": 3e+20,
+    "dim": 2048,
+    "bpb": 0.8289453387260437,
+    "name": "isoflop-moe-v16-3e+20-d2048",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+20-d2048"
+  },
+  {
+    "budget": 3e+20,
+    "dim": 1792,
+    "bpb": 0.8305750489234924,
+    "name": "isoflop-moe-v16-3e+20-d1792",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+20-d1792"
+  },
+  {
+    "budget": 3e+20,
+    "dim": 1536,
+    "bpb": 0.8346078395843506,
+    "name": "isoflop-moe-v16-3e+20-d1536",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+20-d1536"
+  },
+  {
+    "budget": 1e+21,
+    "dim": 2560,
+    "bpb": 0.7938650250434875,
+    "name": "isoflop-moe-v16-1e+21-d2560",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+21-d2560"
+  },
+  {
+    "budget": 1e+21,
+    "dim": 2048,
+    "bpb": 0.7954626083374023,
+    "name": "isoflop-moe-v16-1e+21-d2048",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+21-d2048"
+  },
+  {
+    "budget": 3e+20,
+    "dim": 1280,
+    "bpb": 0.8478723168373108,
+    "name": "isoflop-moe-v16-3e+20-d1280-v2",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+20-d1280-v2"
+  },
+  {
+    "budget": 1e+20,
+    "dim": 1280,
+    "bpb": 0.8739312887191772,
+    "name": "isoflop-moe-v16-1e+20-d1280-v3",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+20-d1280-v3"
+  },
+  {
+    "budget": 3e+20,
+    "dim": 2304,
+    "bpb": 0.8305988907814026,
+    "name": "isoflop-moe-v16-3e+20-d2304-v2",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-3e+20-d2304-v2"
+  },
+  {
+    "budget": 1e+21,
+    "dim": 2560,
+    "bpb": 0.7922527194023132,
+    "name": "isoflop-moe-v16-1e+21-d2560-v2",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+21-d2560-v2"
+  },
+  {
+    "budget": 1e+21,
+    "dim": 2048,
+    "bpb": 0.7935415506362915,
+    "name": "isoflop-moe-v16-1e+21-d2048-v2",
+    "url": "https://wandb.ai/marin-community/dial_moe/runs/isoflop-moe-v16-1e+21-d2048-v2"
+  }
+]

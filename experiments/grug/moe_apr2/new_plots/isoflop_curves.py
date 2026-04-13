@@ -406,6 +406,73 @@ def main():
         plt.close(fig2)
         print("Saved isoflop_scaling_law.png")
 
+    # ---- Plot 2b: Scaling law with L_inf pinned at 1.6, projected to 1e23 ----
+    if len(macro_optima) >= 2:
+        fig2b, ax2b = plt.subplots(figsize=(10, 6))
+
+        C_arr = np.array([o["budget"] for o in macro_optima])
+        macro_arr = np.array([o["opt_macro"] for o in macro_optima])
+
+        # Fit with fixed L_inf = 1.6: log(y - 1.6) = log(A) - alpha * log(C)
+        L_inf_fixed = 1.6
+        z = macro_arr - L_inf_fixed
+        logC = np.log(C_arr)
+        logz = np.log(z)
+        b1, b0 = np.polyfit(logC, logz, 1)
+        alpha = -b1
+        A = np.exp(b0)
+
+        # Project from 1e17 to 1e23
+        C_grid = np.logspace(17, 23, 500)
+        yhat = L_inf_fixed + A * C_grid ** (-alpha)
+
+        ax2b.plot(C_arr, macro_arr, "o", color="C0", markersize=10, zorder=5, label="v16 sweep optima")
+        ax2b.plot(
+            C_grid,
+            yhat,
+            "--",
+            color="C0",
+            alpha=0.6,
+            label=f"L∞=1.6 + {A:.2f}\u00b7C^(-{alpha:.4f})",
+        )
+
+        # Mark projections at 1e21 and 1e23
+        for C_proj in [1e21, 1e23]:
+            y_proj = L_inf_fixed + A * C_proj ** (-alpha)
+            ax2b.plot(C_proj, y_proj, "D", color="C3", markersize=10, zorder=5)
+            ax2b.annotate(
+                f"{C_proj:.0e} → {y_proj:.3f}",
+                (C_proj, y_proj),
+                textcoords="offset points",
+                xytext=(8, 8),
+                fontsize=9,
+                fontweight="bold",
+                color="C3",
+            )
+
+        for o in macro_optima:
+            ax2b.annotate(
+                f"{o['budget']:.0e}",
+                (o["budget"], o["opt_macro"]),
+                textcoords="offset points",
+                xytext=(5, 5),
+                fontsize=8,
+            )
+
+        ax2b.set_xscale("log")
+        ax2b.set_xlabel("Compute (FLOPs)")
+        ax2b.set_ylabel("Optimal paloma macro_loss")
+        ax2b.set_title("Scaling Law Projection (L∞ = 1.6)")
+        ax2b.legend()
+        ax2b.grid(True, alpha=0.3)
+        fig2b.tight_layout()
+        fig2b.savefig(f"{PLOT_DIR}/isoflop_scaling_law_pinned.png", dpi=150)
+        plt.close(fig2b)
+        print(f"Pinned scaling law: L∞=1.6, A={A:.4f}, alpha={alpha:.4f}")
+        print(f"  1e21 projection: {L_inf_fixed + A * 1e21 ** (-alpha):.4f}")
+        print(f"  1e23 projection: {L_inf_fixed + A * 1e23 ** (-alpha):.4f}")
+        print("Saved isoflop_scaling_law_pinned.png")
+
     # ---- Plot 3: N*(C) and T*(C) on separate subplots ----
     if len(optima) >= 2:
         fig3, (ax3a, ax3b) = plt.subplots(1, 2, figsize=(14, 5))
