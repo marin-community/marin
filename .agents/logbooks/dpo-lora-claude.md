@@ -3297,6 +3297,21 @@ also applies to v6e-16.
 This was NOT an Iris bug — coscheduling works correctly. It was a region mismatch
 between where the CPU executor runs and where v6e-16 hardware is available.
 
+#### v6e-16 Probe Launch — 2026-04-13T01:42Z
+
+Launched v6e-16 probes with explicit regions + mirrored() data paths:
+
+- `/ahmed/v6e16-probe-ew4` (europe-west4) — train_dpo submitted, 4 tasks pending
+- `/ahmed/v6e16-probe-ue5` (us-east5) — train_dpo submitted, 4 tasks pending
+
+Both accepted by controller (no scheduling rejection). Coscheduling by tpu-name working
+correctly with 4 VMs per v6e-16 slice. Waiting for capacity — all v6e-16 workers currently
+occupied, autoscaler blocked by quota-pool tier monotonicity.
+
+Config: batch=64, per_device=4 (native, NO gradient accumulation), seq=4096, LoRA r=64.
+Expected memory: ~24 GB/chip (from first-principles model), well within 31.25 GB.
+Expected throughput: faster than v6e-8 (no grad accum overhead).
+
 #### v6e-8 Probe — 2026-04-12T21:17Z
 
 Pivoted to v6e-8 (single-VM, 8 chips × 32 GiB, no coscheduling needed).

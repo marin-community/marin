@@ -51,9 +51,14 @@ tokenized_preferences = lm_data_config(
 )
 
 
-def make_v6e8_probe(regions: list[str] | None = None, name_suffix: str = "", per_device: int = 4):
+def make_v6e_probe(
+    tpu_type: str = "v6e-8",
+    regions: list[str] | None = None,
+    name_suffix: str = "",
+    per_device: int = 4,
+):
     config = SimpleDPOConfig(
-        resources=ResourceConfig.with_tpu("v6e-8", regions=regions) if regions else ResourceConfig.with_tpu("v6e-8"),
+        resources=ResourceConfig.with_tpu(tpu_type, regions=regions) if regions else ResourceConfig.with_tpu(tpu_type),
         per_device_parallelism=per_device,
         per_device_eval_parallelism=per_device,
         train_batch_size=64,
@@ -84,7 +89,7 @@ def make_v6e8_probe(regions: list[str] | None = None, name_suffix: str = "", per
         seed=0,
     )
     return default_dpo(
-        name=f"dpo/tune_lora/v6e8_probe{name_suffix}",
+        name=f"dpo/tune_lora/v6e_probe{name_suffix}",
         tokenized=tokenized_preferences,
         model_config=llama_8b,
         dpo_config=config,
