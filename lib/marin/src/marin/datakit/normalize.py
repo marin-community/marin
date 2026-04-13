@@ -23,6 +23,7 @@ from typing import Any
 
 import dupekit
 from rigging.filesystem import url_to_fs
+from zephyr import counters
 from marin.execution.step_spec import StepSpec
 from fray.v2 import ResourceConfig
 from zephyr import Dataset, ZephyrContext
@@ -75,18 +76,18 @@ def _make_normalize_fn(
     """Return a record-level transform function.
 
     The returned function:
-    1. Extracts ``text`` from *text_field* (raises on missing/empty).
+    1. Extracts ``text`` from *text_field*.
     2. Generates a deterministic ``id`` via xxh3_128.
     3. If *id_field* exists in the record, preserves it as ``source_id``.
     4. Keeps all other columns.
+
+    Records with missing or blank text must be filtered out before calling
+    the returned function.
     """
 
     def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
         # --- text ---
-        text = record.get(text_field)
-        if text is None or not str(text).strip():
-            raise ValueError(f"Record missing or empty text in field {text_field!r}: {record!r:.200}")
-        text = str(text)
+        text = str(record[text_field])
 
         # --- source_id (skip silently if id_field absent) ---
         source_id = record.get(id_field)
@@ -189,9 +190,17 @@ def _build_pipeline(
                 prev_id = rid
                 yield record
 
+    def has_text(record: dict[str, Any]) -> bool:
+        text = record.get(text_field)
+        if text is None or str(text).strip() == "":
+            counters.increment("normalize/empty_text_filtered")
+            return False
+        return True
+
     return (
         Dataset.from_list(files)
         .flat_map(load_file)
+        .filter(has_text)
         .map(normalize_record)
         .group_by(
             key=lambda r: int(r["id"], 16) % num_shards,
