@@ -499,6 +499,7 @@ interface FleetChipSummary {
   chip: string
   total: number
   inUse: number
+  vmTotal: number
   avgUptimeMs: number | null
   regions: RegionCount[]
   bands: BandCount[]
@@ -582,13 +583,13 @@ function regionFromGroupName(name: string): string {
 
 const fleetSummary = computed<FleetChipSummary[]>(() => {
   const now = Date.now()
-  const chips = new Map<string, { total: number; inUse: number; uptimes: number[]; regions: Map<string, number> }>()
+  const chips = new Map<string, { total: number; inUse: number; vmTotal: number; uptimes: number[]; regions: Map<string, number>; bands: Map<string, number>; capacityByRegion: Map<string, { statuses: string[]; failures: number }> }>()
 
   for (const g of groups.value) {
     const chip = chipFromGroupName(g.name)
     if (chip == null) continue
     const region = regionFromGroupName(g.name)
-    const entry = chips.get(chip) ?? { total: 0, inUse: 0, uptimes: [], regions: new Map(), bands: new Map<string, number>(), capacityByRegion: new Map<string, { statuses: string[]; failures: number }>() }
+    const entry = chips.get(chip) ?? { total: 0, inUse: 0, vmTotal: 0, uptimes: [], regions: new Map(), bands: new Map<string, number>(), capacityByRegion: new Map<string, { statuses: string[]; failures: number }>() }
 
     const readyCount = g.sliceStateCounts?.['ready'] ?? 0
     const readySlices = (g.slices ?? []).filter(s => {
@@ -609,19 +610,26 @@ const fleetSummary = computed<FleetChipSummary[]>(() => {
     entry.capacityByRegion.set(region, capEntry)
 
     // Collect band usage from scheduler running tasks via workerId join.
-    // Count each slice once per band (a slice is "used by" a band if any of
-    // its VMs has a running task in that band).
+    // Count each VM (worker) at most once in its dominant band so band shares
+    // partition VM capacity rather than double-counting slices that host
+    // multiple bands.
     for (const slice of readySlices) {
-      const sliceBands = new Set<string>()
       for (const vm of slice.vms ?? []) {
+        entry.vmTotal += 1
         if (!vm.workerId) continue
         const bands = workerBands.value.get(vm.workerId)
-        if (bands) {
-          for (const band of bands.keys()) sliceBands.add(band)
+        if (!bands || bands.size === 0) continue
+        let topBand: string | null = null
+        let topCount = 0
+        for (const [band, count] of bands) {
+          if (count > topCount) {
+            topBand = band
+            topCount = count
+          }
         }
-      }
-      for (const band of sliceBands) {
-        entry.bands.set(band, (entry.bands.get(band) ?? 0) + 1)
+        if (topBand) {
+          entry.bands.set(topBand, (entry.bands.get(topBand) ?? 0) + 1)
+        }
       }
     }
 
@@ -644,6 +652,7 @@ const fleetSummary = computed<FleetChipSummary[]>(() => {
       chip,
       total: c.total,
       inUse: c.inUse,
+      vmTotal: c.vmTotal,
       avgUptimeMs: c.uptimes.length > 0
         ? c.uptimes.reduce((a, b) => a + b, 0) / c.uptimes.length
         : null,
@@ -841,7 +850,7 @@ function formatUptimeShort(ms: number | null): string {
           <div v-if="c.bands.length > 0" class="mt-0.5 text-text-muted" style="font-size: clamp(8px, 0.6vw, 11px)">
             <span v-for="(b, i) in c.bands" :key="b.band">
               <span v-if="i > 0">, </span>
-              {{ c.total > 0 ? Math.round(b.count / c.total * 100) : 0 }}% {{ b.band }}
+              {{ c.vmTotal > 0 ? Math.round(b.count / c.vmTotal * 100) : 0 }}% {{ b.band }}
             </span>
           </div>
         </div>
