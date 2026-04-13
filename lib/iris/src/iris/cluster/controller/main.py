@@ -13,18 +13,19 @@ import logging
 import os
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
 import threading
 from pathlib import Path
 
+
 import click
 
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
+from iris.cluster.providers.types import port_is_open, resolve_external_host
 from iris.log_server.main import (
     AUTH_STRICT_ENV_VAR as LOG_SERVER_AUTH_STRICT_ENV_VAR,
     JWT_KEY_ENV_VAR as LOG_SERVER_JWT_KEY_ENV_VAR,
@@ -40,30 +41,6 @@ HOURLY_CHECKPOINT_SECONDS = 3600.0
 
 # Default offset from the controller port for the log server.
 LOG_SERVER_PORT_OFFSET = 1
-
-
-def _port_is_open(port: int) -> bool:
-    """Check if a TCP port is accepting connections on localhost."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.1)
-        return s.connect_ex(("localhost", port)) == 0
-
-
-def _resolve_external_host(host: str) -> str:
-    """Return an externally-reachable address for a bind host.
-
-    Workers running off-host cannot connect to the unspecified address
-    ``0.0.0.0``; probe for a real network IP instead. Mirrors the same
-    technique Controller.external_host uses for the dashboard URL.
-    """
-    if host != "0.0.0.0":
-        return host
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-    except Exception:
-        return "127.0.0.1"
 
 
 def _start_log_server(
@@ -95,7 +72,7 @@ def _start_log_server(
         env=env,
     )
     ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-        lambda: _port_is_open(port),
+        lambda: port_is_open(port),
         timeout=Duration.from_seconds(10.0),
     )
     logger.info("Log server started (pid=%d, port=%d)", proc.pid, port)
@@ -248,7 +225,7 @@ def run_controller_serve(
     # Advertise the externally-reachable host so workers on other nodes can
     # route to the log server. Binding to 0.0.0.0 is fine; advertising it is
     # not — remote workers cannot connect to an unspecified address.
-    log_service_address = f"http://{_resolve_external_host(host)}:{log_port}"
+    log_service_address = f"http://{resolve_external_host(host)}:{log_port}"
 
     config = ControllerConfig(
         host=host,
