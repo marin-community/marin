@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from fray.cluster import ResourceConfig
 from levanter.adaptation import AdaptationConfig, NoAdaptationConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.trainer import MeshConfig
 from levanter.dpo import ReferenceEvalCacheConfig
 from levanter.main.train_dpo import DpoReferenceConfig, SeparateReferenceConfig
 from levanter.schedule import IntSchedule
@@ -75,6 +76,7 @@ class SimpleDPOConfig:
 
     per_device_parallelism: int = -1
     per_device_eval_parallelism: int = -1
+    mesh: MeshConfig | None = None
 
     seed: int = 0
     initialize_from_hf: bool | None = None

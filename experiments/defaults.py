@@ -756,7 +756,8 @@ def default_dpo(
                 keep=_checkpoint_keep(steps_per_export),
             ),
             model_averaging=None,
-            mesh=MeshConfig(
+            mesh=dpo_config.mesh
+            or MeshConfig(
                 compute_mapping={
                     "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
