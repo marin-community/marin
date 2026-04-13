@@ -132,7 +132,12 @@ def main() -> None:
     run_id = os.environ["SMOKE_RUN_ID"]
 
     _write_status("running", marin_prefix)
+    import time
+
+    t0 = time.monotonic()
     StepRunner().run(build_steps(run_id))
+    elapsed = time.monotonic() - t0
+    logger.info("Datakit ferry total wall time: %.1fs (%.1fm)", elapsed, elapsed / 60)
     _write_status("succeeded", marin_prefix)
 
 

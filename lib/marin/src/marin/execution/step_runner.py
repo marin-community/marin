@@ -322,15 +322,17 @@ def run_step(step: StepSpec) -> None:
         with step_lock(output_path, step_label) as status_file:
             # 3. Run the function
             try:
+                t0 = time.monotonic()
                 if isinstance(step.fn, RemoteCallable):
                     _run_remote_step(step, output_path)
                 else:
                     result = step.fn(output_path)  # pyrefly: ignore[not-callable]
                     Artifact.save(result, output_path)
+                elapsed = time.monotonic() - t0
 
                 # 4. Mark success
                 status_file.write_status(STATUS_SUCCESS)
-                logger.info(f"Step {step_label} succeeded")
+                logger.info(f"Step {step_label} succeeded in {elapsed:.1f}s ({elapsed / 60:.1f}m)")
             except Exception:
                 status_file.write_status(STATUS_FAILED)
                 raise
