@@ -98,6 +98,7 @@ from iris.cluster.log_store import build_log_source, worker_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, WorkerId, get_gpu_count, get_tpu_count
+from iris.log_server.client import LogServiceProxy
 from iris.log_server.server import LogServiceImpl
 from iris.rpc import logging_pb2, vm_pb2
 from iris.rpc import job_pb2
@@ -1001,7 +1002,7 @@ class ControllerServiceImpl:
         db: Query interface for direct DB reads
         controller: Controller runtime for scheduling and worker management
         bundle_store: Bundle store for zip storage.
-        log_service: LogService that owns the log store.
+        log_service: LogService for fetching logs (in-process or remote proxy).
     """
 
     def __init__(
@@ -1010,7 +1011,7 @@ class ControllerServiceImpl:
         db: ControllerDB,
         controller: ControllerProtocol,
         bundle_store: BundleStore,
-        log_service: LogServiceImpl,
+        log_service: LogServiceImpl | LogServiceProxy,
         auth: ControllerAuth | None = None,
         system_endpoints: dict[str, str] | None = None,
     ):

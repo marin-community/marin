@@ -104,8 +104,12 @@ from iris.cluster.controller.transitions import (
     ReservationClaim,
     SchedulingEvent,
 )
-from iris.cluster.log_store import CONTROLLER_LOG_KEY, LogStoreHandler
+from iris.cluster.log_store import CONTROLLER_LOG_KEY
+from iris.cluster.providers.types import find_free_port, resolve_external_host
+from iris.log_server.client import LogPusher, LogServiceProxy, RemoteLogHandler
+from iris.log_server.main import build_log_server_asgi
 from iris.log_server.server import LogServiceImpl
+from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider
 from iris.cluster.types import (
     JobName,
     WorkerStatus,
@@ -116,7 +120,6 @@ from iris.cluster.types import (
 )
 from rigging.log_setup import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import logging_pb2
 from iris.rpc import job_pb2
 from iris.rpc import controller_pb2
 from iris.rpc.auth import TokenVerifier
@@ -134,21 +137,6 @@ _SLOW_HEARTBEAT_MS = 5000
 # How often the prune loop trims worker_task_history (independent of the
 # full data-prune interval, which is typically 1 hour).
 _HISTORY_CLEANUP_INTERVAL_S = 60.0
-
-
-class _InProcessLogPusher:
-    """Adapts LogServiceImpl to the LogPusherProtocol for in-process use.
-
-    Avoids a network round-trip when the K8s provider is co-hosted with
-    the controller: calls push_logs() directly on the service impl.
-    """
-
-    def __init__(self, log_service: LogServiceImpl) -> None:
-        self._log_service = log_service
-
-    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-        if entries:
-            self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries), ctx=None)
 
 
 class SchedulingOutcome(enum.Enum):
@@ -966,6 +954,26 @@ class ControllerConfig:
     user_budget_defaults: UserBudgetDefaults = field(default_factory=UserBudgetDefaults)
     """Default budget settings applied when a new user is first seen."""
 
+    log_service_address: str | None = None
+    """Address of an externally-hosted log server (e.g. http://localhost:10001).
+    When set, the controller connects to the existing server. When None,
+    the Controller starts an in-process LogServiceImpl on a free port.
+    Either way, all controller code accesses the log server via RPC clients."""
+
+
+def _log_client_interceptors(config: "ControllerConfig") -> tuple:
+    """Return Connect interceptors for controller-originated LogService RPCs.
+
+    When auth is configured, attach the worker JWT as a bearer token so the
+    log server accepts PushLogs/FetchLogs. The worker token is signed with
+    the same key the log server verifies against; no separate admin token
+    is required for controller-initiated pushes.
+    """
+    token = config.auth.worker_token if config.auth and config.auth.worker_token else None
+    if not token:
+        return ()
+    return (AuthTokenInjector(StaticTokenProvider(token)),)
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -1029,21 +1037,39 @@ class Controller:
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
 
-        self._log_service = LogServiceImpl(
-            log_dir=config.local_state_dir / "logs",
-            remote_log_dir=f"{config.remote_state_dir.rstrip('/')}/logs",
-        )
+        # ThreadContainer must be initialized before the log service setup
+        # because _start_local_log_server spawns a uvicorn thread.
+        self._threads = threads if threads is not None else get_thread_container()
 
-        # Wire an in-process log pusher into providers so log entries are
-        # forwarded through the LogService without a network hop.
-        # - K8sTaskProvider: its LogCollector pushes logs directly.
-        # - WorkerProvider: forwards log_entries piggybacked on heartbeat
-        #   responses from old workers that predate push-based logging.
-        in_process_log_pusher = _InProcessLogPusher(self._log_service)
-        if isinstance(self._provider, K8sTaskProvider):
-            self._provider.log_pusher = in_process_log_pusher
-        elif isinstance(self._provider, WorkerProvider):
-            self._provider.log_pusher = in_process_log_pusher
+        # --- Log service setup ---
+        # The log server is always accessed via RPC. In production the
+        # controller's main() starts a subprocess; in tests/local mode
+        # the Controller spins up an in-process uvicorn thread. After the
+        # server is running, all access goes through RPC clients — no
+        # branching on hosting mode.
+        self._log_service: LogServiceImpl | None = None
+        self._log_server: uvicorn.Server | None = None
+
+        if config.log_service_address:
+            self._log_service_address = config.log_service_address
+        else:
+            self._log_service_address = self._start_local_log_server()
+
+        log_client_interceptors = _log_client_interceptors(config)
+        self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
+
+        # Providers push directly to the log server via RPC.
+        provider_log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
+        if isinstance(self._provider, (K8sTaskProvider, WorkerProvider)):
+            self._provider.log_pusher = provider_log_pusher
+
+        # Controller process logs ship to the log server via RemoteLogHandler.
+        self._log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)
+        self._log_handler = RemoteLogHandler(self._log_pusher, key=CONTROLLER_LOG_KEY)
+
+        self._log_handler.setLevel(logging.DEBUG)
+        self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        logging.getLogger("iris").addHandler(self._log_handler)
 
         self._transitions = ControllerTransitions(
             db=self._db,
@@ -1059,13 +1085,13 @@ class Controller:
             self._db,
             controller=self,
             bundle_store=self._bundle_store,
-            log_service=self._log_service,
+            log_service=self._remote_log_service,
             auth=config.auth,
             system_endpoints={},
         )
         self._dashboard = ControllerDashboard(
             self._service,
-            log_service=self._log_service,
+            log_service=self._remote_log_service,
             host=config.host,
             port=config.port,
             auth_verifier=config.auth_verifier,
@@ -1073,15 +1099,7 @@ class Controller:
             auth_optional=config.auth.optional if config.auth else False,
         )
 
-        # Ingest controller process logs into the LogStore via LogStoreHandler.
-        # This writes directly to the co-hosted LogStore (no RPC round-trip).
-        self._log_store_handler = LogStoreHandler(self._log_service.log_store, key=CONTROLLER_LOG_KEY)
-        self._log_store_handler.setLevel(logging.DEBUG)
-        self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-        logging.getLogger("iris").addHandler(self._log_store_handler)
-
         # Background loop state
-        self._threads = threads if threads is not None else get_thread_container()
         self._wake_event = threading.Event()
         self._heartbeat_event = threading.Event()
         self._server: uvicorn.Server | None = None
@@ -1139,11 +1157,48 @@ class Controller:
         """Whether the controller loops have been started."""
         return self._started
 
+    def _start_local_log_server(self) -> str:
+        """Start an in-process log server on a free port and return its address.
+
+        Used in local/test mode when no external log server is configured.
+        The server runs in a background thread managed by the ThreadContainer.
+        """
+        log_server_port = find_free_port()
+        self._log_service = LogServiceImpl(
+            log_dir=self._config.local_state_dir / "logs",
+            remote_log_dir=f"{self._config.remote_state_dir.rstrip('/')}/logs",
+        )
+
+        # Wrap the verifier in NullAuthInterceptor so anonymous calls are
+        # still accepted in null-auth/test mode, matching the dashboard's
+        # behaviour. Real workers attach JWTs that the verifier validates.
+        interceptors = (NullAuthInterceptor(verifier=self._config.auth_verifier),)
+        app = build_log_server_asgi(self._log_service, interceptors=interceptors)
+        log_server_config = uvicorn.Config(
+            app,
+            host=self._config.host,
+            port=log_server_port,
+            log_level="warning",
+            log_config=None,
+            timeout_keep_alive=120,
+        )
+        self._log_server = uvicorn.Server(log_server_config)
+        self._threads.spawn_server(self._log_server, name="log-server")
+        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
+            lambda: self._log_server is not None and self._log_server.started,
+            timeout=Duration.from_seconds(5.0),
+        )
+
+        address = f"http://{self.external_host}:{log_server_port}"
+        logger.info("Local log server ready at %s", address)
+        return address
+
     def start(self) -> None:
         """Start main controller loop, dashboard server, and optionally autoscaler."""
         self._started = True
         if self._config.dry_run:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
+
         if isinstance(self._provider, K8sTaskProvider):
             self._heartbeat_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
         else:
@@ -1184,10 +1239,9 @@ class Controller:
             timeout=Duration.from_seconds(5.0),
         )
 
-        # Register system endpoints with the externally-reachable URL so
-        # workers can resolve them via ListEndpoints.
-        self._service._system_endpoints["/system/log-server"] = self.url
-        logger.info("Registered system endpoint /system/log-server -> %s", self.url)
+        # Register log server endpoint so workers can resolve it via ListEndpoints.
+        self._service._system_endpoints["/system/log-server"] = self._log_service_address
+        logger.info("Registered system endpoint /system/log-server -> %s", self._log_service_address)
 
     def stop(self) -> None:
         """Stop all background components gracefully.
@@ -1224,11 +1278,14 @@ class Controller:
         self._threads.stop()
         self._provider.close()
 
-        # Remove log handler before closing the log store to avoid
-        # sqlite3.ProgrammingError spam from late log records.
-        logging.getLogger("iris").removeHandler(self._log_store_handler)
-        self._log_store_handler.close()
-        self._log_service.close()
+        # Remove log handler before closing log resources to avoid errors
+        # from late log records hitting a closed store or connection.
+        logging.getLogger("iris").removeHandler(self._log_handler)
+        self._log_handler.close()
+        self._log_pusher.close()
+        self._remote_log_service.close()
+        if self._log_service:
+            self._log_service.close()
         self._db.close()
         self._bundle_store.close()
 
@@ -2360,17 +2417,7 @@ class Controller:
         When bound to 0.0.0.0, probes for the real network IP (same technique
         workers use in env_probe._get_ip_address).
         """
-        host = self._config.host
-        if host == "0.0.0.0":
-            import socket
-
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                    s.connect(("8.8.8.8", 80))
-                    return s.getsockname()[0]
-            except Exception:
-                return "127.0.0.1"
-        return host
+        return resolve_external_host(self._config.host)
 
     @property
     def url(self) -> str:

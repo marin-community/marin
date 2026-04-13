@@ -467,7 +467,10 @@ class Worker:
         log_addr = self._resolve_log_service()
         if not log_addr:
             return
-        self._log_pusher = LogPusher(log_addr)
+        log_interceptors = ()
+        if self._config.auth_token:
+            log_interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
+        self._log_pusher = LogPusher(log_addr, interceptors=log_interceptors)
         self._log_handler = RemoteLogHandler(
             self._log_pusher,
             key=worker_log_key(self._worker_id),
