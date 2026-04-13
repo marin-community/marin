@@ -829,6 +829,14 @@ def test_list_jobs_job_query_roots_and_children(service, state):
     )
     assert [job.job_id for job in children_response.jobs] == [child_id.to_wire()]
 
+    # Legacy flat parent_job_id field (no JobQuery sub-message) must also
+    # filter to children only — see issue #4705.
+    legacy_children_response = service.list_jobs(
+        controller_pb2.Controller.ListJobsRequest(parent_job_id=parent_id.to_wire()),
+        None,
+    )
+    assert [job.job_id for job in legacy_children_response.jobs] == [child_id.to_wire()]
+
 
 # =============================================================================
 # SQL Aggregation Tests

@@ -716,8 +716,16 @@ def _query_from_list_jobs_request(
         query = controller_pb2.Controller.JobQuery()
         query.CopyFrom(request.query)
     else:
+        # Legacy parent_job_id is only honored under SCOPE_CHILDREN; without
+        # this mapping the filter is silently dropped and all jobs are
+        # returned. See https://github.com/marin-community/marin/issues/4705.
+        scope = (
+            controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN
+            if request.parent_job_id
+            else controller_pb2.Controller.JOB_QUERY_SCOPE_ALL
+        )
         query = controller_pb2.Controller.JobQuery(
-            scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ALL,
+            scope=scope,
             parent_job_id=request.parent_job_id,
             name_filter=request.name_filter,
             state_filter=request.state_filter,
