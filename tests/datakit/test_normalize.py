@@ -148,7 +148,7 @@ def test_all_records_empty_text_raises(tmp_path: Path, write_jsonl_gz):
 
     write_jsonl_gz(input_dir / "data.jsonl.gz", [{"text": "   "}, {"text": ""}, {"text": None}])
 
-    with pytest.raises(ValueError, match="All 3 records were filtered out.*wrong column"):
+    with pytest.raises(ValueError, match=r"All 3 records were filtered out.*wrong column"):
         normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
 
 
