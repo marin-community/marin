@@ -82,12 +82,19 @@ function emptyResources(): WorkerResourceTotals {
   };
 }
 
+// Hard ceiling so the TTLCache inflight promise can never hang indefinitely.
+// If the inner queries don't settle in 20s (10s per-query timeout + margin),
+// we return an error snapshot instead of blocking all future callers.
+const SNAPSHOT_DEADLINE_MS = 20_000;
+
 export async function workerSnapshot(): Promise<WorkersSnapshot> {
   const fetchedAt = new Date().toISOString();
   try {
-    const [totalsResult, regionsResult] = await Promise.all([
-      executeRawQuery(TOTALS_SQL),
-      executeRawQuery(REGION_SQL),
+    const [totalsResult, regionsResult] = await Promise.race([
+      Promise.all([executeRawQuery(TOTALS_SQL), executeRawQuery(REGION_SQL)]),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("workerSnapshot deadline exceeded")), SNAPSHOT_DEADLINE_MS),
+      ),
     ]);
     const totalsRow = totalsResult.rows[0];
     if (!totalsRow) {

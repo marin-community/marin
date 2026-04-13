@@ -48,6 +48,7 @@ const workerHistory = new WorkerHistory(HISTORY_CAPACITY);
 async function sampleWorkers(): Promise<void> {
   const snapshot = await workersCache.get("workers", () => workerSnapshot());
   if (snapshot.error) {
+    console.error("worker sampler: snapshot error:", snapshot.error);
     // Don't pollute history with zeros when the controller is unreachable.
     return;
   }
