@@ -3312,6 +3312,28 @@ Config: batch=64, per_device=4 (native, NO gradient accumulation), seq=4096, LoR
 Expected memory: ~24 GB/chip (from first-principles model), well within 31.25 GB.
 Expected throughput: faster than v6e-8 (no grad accum overhead).
 
+#### v6e-16 Multi-Host JAX Init Bug — 2026-04-13T02:34Z
+
+ew4 probe got a v6e-16 slice and **failed** with:
+```
+RuntimeError: multihost_broadcast_sync requires jax distributed client to be initialized
+```
+
+**Root cause:** `lib/iris/src/iris/runtime/jax_init.py` line 130 unconditionally skips
+`jax.distributed.initialize()` for ALL TPU jobs (`PJRT_DEVICE=TPU`), assuming the TPU
+runtime handles multi-host discovery via `TPU_WORKER_HOSTNAMES`. But on Iris-managed
+multi-host TPU, the Docker container doesn't inherit `TPU_WORKER_HOSTNAMES` from the
+host VM, so JAX can't auto-discover other hosts.
+
+**Fix:** Only skip for single-task TPU jobs (num_tasks ≤ 1). Multi-task TPU jobs
+(num_tasks > 1, i.e. multi-host) now fall through to the Iris coordinator dance
+(endpoint registration + jax.distributed.initialize with coordinator address), same
+as GPU multi-host.
+
+Committed as `2fe470a13`, relaunched as:
+- `/ahmed/v6e16-probe-ew4-v2` (europe-west4)
+- `/ahmed/v6e16-probe-ue5-v2` (us-east5)
+
 #### v6e-8 Probe — 2026-04-12T21:17Z
 
 Pivoted to v6e-8 (single-VM, 8 chips × 32 GiB, no coscheduling needed).
