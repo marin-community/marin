@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { SLICE_STATE_STYLES, SLICE_BADGE_ORDER, CATEGORICAL_COLORS, vmStateToName } from '@/types/status'
@@ -10,6 +11,7 @@ import type {
   AutoscalerStatus,
   ScaleGroupStatus,
   SliceInfo,
+  VmInfo,
   GroupRoutingStatus,
   UnmetDemand,
   AutoscalerAction,
@@ -515,6 +517,22 @@ const workerBands = computed<Map<string, Map<string, number>>>(() => {
   }
   return map
 })
+
+/** Map workerId → running tasks currently assigned to that worker. */
+const workerTasks = computed<Map<string, SchedulerRunningTask[]>>(() => {
+  const map = new Map<string, SchedulerRunningTask[]>()
+  for (const task of (schedulerData.value?.runningTasks ?? []) as SchedulerRunningTask[]) {
+    if (!task.workerId) continue
+    if (!map.has(task.workerId)) map.set(task.workerId, [])
+    map.get(task.workerId)!.push(task)
+  }
+  return map
+})
+
+function tasksForVm(vm: VmInfo): SchedulerRunningTask[] {
+  if (!vm.workerId) return []
+  return workerTasks.value.get(vm.workerId) ?? []
+}
 
 /** Extract chip type + size from scale group name.
  *  e.g. "TPU_V5E_PREEMPTIBLE_16_US_EAST" → "v5e-16"
@@ -1052,11 +1070,25 @@ function formatUptimeShort(ms: number | null): string {
                       <span class="text-text-muted text-[11px]">
                         {{ timestampMs(slice.createdAt) ? formatRelativeTime(timestampMs(slice.createdAt)) : '-' }}
                       </span>
-                      <!-- Per-VM task counts -->
-                      <span v-if="(slice.vms ?? []).length > 0" class="text-text-muted text-[11px]">
-                        <span v-for="(vm, vi) in (slice.vms ?? [])" :key="vm.vmId" :title="`${vm.vmId}: ${vm.runningTaskCount ?? 0} tasks`">
-                          {{ vi > 0 ? ', ' : '' }}vm{{ vi }}: {{ vm.runningTaskCount ?? 0 }}t
-                        </span>
+                      <!-- Per-VM task counts + job links -->
+                      <span v-if="(slice.vms ?? []).length > 0" class="text-text-muted text-[11px] flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                        <template v-for="(vm, vi) in (slice.vms ?? [])" :key="vm.vmId">
+                          <span v-if="vi > 0" class="text-text-muted">·</span>
+                          <span :title="`${vm.vmId}: ${vm.runningTaskCount ?? 0} tasks`">
+                            vm{{ vi }}: {{ vm.runningTaskCount ?? 0 }}t
+                          </span>
+                          <template v-if="tasksForVm(vm).length > 0">
+                            <RouterLink
+                              v-for="task in tasksForVm(vm)"
+                              :key="task.taskId"
+                              :to="`/job/${encodeURIComponent(task.jobId)}`"
+                              class="text-accent hover:underline font-mono"
+                              :title="`${task.jobId} (user: ${task.userId})`"
+                            >
+                              {{ task.jobId }}<span v-if="task.userId" class="text-text-muted"> · {{ task.userId }}</span>
+                            </RouterLink>
+                          </template>
+                        </template>
                       </span>
                     </div>
                   </div>
