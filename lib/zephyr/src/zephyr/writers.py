@@ -39,6 +39,10 @@ _MICRO_BATCH_SIZE = 8
 # Fixed batch size for Levanter cache writes (2^14).
 _LEVANTER_BATCH_SIZE = 16384
 
+# Number of items per intermediate chunk for pickle and scatter writes.
+# Used by both _write_pickle_chunks (execution.py) and _write_parquet_scatter (shuffle.py).
+INTERMEDIATE_CHUNK_SIZE = 100_000
+
 
 def unique_temp_path(output_path: str) -> str:
     """Return a unique temporary path derived from ``output_path``.

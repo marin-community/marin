@@ -32,7 +32,7 @@ from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import log_time
 
 from zephyr.plan import deterministic_hash
-from zephyr.writers import ensure_parent_dir
+from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -365,18 +365,22 @@ def _build_scatter_shard_from_manifest(manifest_path: str, target_shard: int) ->
     entries = _read_scatter_manifest(manifest_path)
     iterators: list[ScatterParquetIterator] = []
     with log_time(f"Building ScatterShard for target shard {target_shard} from manifest ({len(entries)} files)"):
-        # First pass: count files that have data for this shard
+        # Filter to entries that have data for this shard
+        shard_key = str(target_shard)
         file_entries = []
         for entry in entries:
-            count = entry["chunk_counts"].get(str(target_shard), 0)
-            if count == 0:
-                continue
-            file_entries.append(entry)
+            count = entry["chunk_counts"].get(shard_key, 0)
+            if count > 0:
+                file_entries.append((entry, count))
 
-        sample_path = file_entries[0]["path"] if file_entries else ""
+        sample_path = file_entries[0][0]["path"] if file_entries else ""
         filesystem = _get_scatter_read_fs(len(file_entries), sample_path)
-        for entry in file_entries:
-            count = entry["chunk_counts"].get(str(target_shard), 0)
+
+        # Single pass: build iterators and aggregate stats
+        max_rg_rows = 0
+        total_chunks_for_avg = 0
+        weighted_bytes = 0.0
+        for entry, count in file_entries:
             iterators.append(
                 ScatterParquetIterator(
                     path=entry["path"],
@@ -387,29 +391,21 @@ def _build_scatter_shard_from_manifest(manifest_path: str, target_shard: int) ->
                 )
             )
 
-        # Aggregate stats from manifest entries for this shard.
-        # max_chunk_rows is a per-shard dict so we only look at target_shard's value.
-        # Fall back to the old scalar max_row_group_rows for pre-migration manifests.
-        max_rg_rows = 0
-        for entry in file_entries:
+            # max_chunk_rows is a per-shard dict; fall back to old scalar max_row_group_rows
             per_shard = entry.get("max_chunk_rows", {})
             if per_shard:
-                max_rg_rows = max(max_rg_rows, per_shard.get(str(target_shard), 0))
+                max_rg_rows = max(max_rg_rows, per_shard.get(shard_key, 0))
             else:
-                # old manifest: scalar max across all shards — use as conservative fallback
                 max_rg_rows = max(max_rg_rows, entry.get("max_row_group_rows", 0))
-        if max_rg_rows == 0:
-            max_rg_rows = 100_000  # fallback for old manifests without stats
 
-        # Weighted avg item bytes (weight by chunk_count for this shard)
-        total_chunks_for_avg = 0
-        weighted_bytes = 0.0
-        for entry in file_entries:
-            count = entry["chunk_counts"].get(str(target_shard), 0)
+            # Weighted avg item bytes (weight by chunk_count for this shard)
             ab = entry.get("avg_item_bytes", 0.0)
             if ab > 0:
                 weighted_bytes += ab * count
                 total_chunks_for_avg += count
+
+        if max_rg_rows == 0:
+            max_rg_rows = 100_000  # fallback for old manifests without stats
         avg_item_bytes = weighted_bytes / total_chunks_for_avg if total_chunks_for_avg > 0 else 0.0
 
     return ScatterShard(iterators=iterators, max_row_group_rows=max_rg_rows, avg_item_bytes=avg_item_bytes)
@@ -494,8 +490,7 @@ def _write_parquet_scatter(
     else:
         _sort_key = key_fn
 
-    # TODO: make chunk_size configurable per writer
-    chunk_size = 100_000
+    chunk_size = INTERMEDIATE_CHUNK_SIZE
 
     # Per-segment per-shard chunk counts
     seg_shard_counts: dict[int, dict[int, int]] = defaultdict(lambda: defaultdict(int))

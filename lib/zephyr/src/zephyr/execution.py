@@ -24,6 +24,7 @@ import sys
 from datetime import datetime, timezone
 import threading
 import time
+import traceback
 import uuid
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
@@ -53,7 +54,7 @@ from zephyr.plan import (
     StageType,
     compute_plan,
 )
-from zephyr.writers import ensure_parent_dir
+from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -191,8 +192,7 @@ def _write_pickle_chunks(
 
     Returns a ListShard containing PickleDiskChunk references.
     """
-    # TODO: make chunk_size configurable per writer
-    chunk_size = 100_000
+    chunk_size = INTERMEDIATE_CHUNK_SIZE
     chunks: list[Iterable] = []
     batch: list = []
     pidx = 0
@@ -1192,8 +1192,6 @@ class ZephyrWorker:
                 task_count += 1
             except Exception as e:
                 logger.error("Worker %s error on shard %d: %s", self._worker_id, task.shard_idx, e)
-                import traceback
-
                 coordinator.report_error.remote(
                     self._worker_id,
                     task.shard_idx,
