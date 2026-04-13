@@ -121,6 +121,9 @@ _READ_MAX_BLOCKS = 2
 class InputFileSpec:
     """Specification for reading a file or portion of a file.
 
+    Pure read-spec: everything here is caller-supplied. Discovered metadata
+    (e.g. file size from a bulk listing) lives on ``FileEntry`` instead.
+
     Attributes:
         path: Path to the file
         format: File format ("parquet", "jsonl", or "auto" to detect)

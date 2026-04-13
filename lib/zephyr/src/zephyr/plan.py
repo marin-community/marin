@@ -29,8 +29,10 @@ from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
 
 from zephyr.dataset import (
     Dataset,
+    FileEntry,
     FilterOp,
     FlatMapOp,
+    GlobSource,
     GroupByOp,
     JoinOp,
     LoadFileOp,
@@ -43,6 +45,7 @@ from zephyr.dataset import (
     TakePerShardOp,
     WindowOp,
     WriteOp,
+    resolve_glob,
 )
 from zephyr.expr import Expr
 from zephyr.readers import InputFileSpec
@@ -470,14 +473,14 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
 
 
 def _compute_file_pushdown(
-    paths: list[str],
+    files: list[FileEntry],
     load_op: LoadFileOp,
     operations: list,
 ) -> tuple[list[SourceItem], list]:
     """Create source items for file pipeline with pushdown optimizations applied.
 
     Args:
-        paths: List of file paths to load
+        files: List of FileEntry objects (path + size from bulk listing)
         load_op: The LoadFileOp specifying format and default columns
         operations: Full operations list (first op is LoadFileOp)
 
@@ -510,13 +513,13 @@ def _compute_file_pushdown(
         SourceItem(
             shard_idx=i,
             data=InputFileSpec(
-                path=path,
+                path=entry.path,
                 format=load_op.format,
                 columns=select_columns,
                 filter_expr=filter_expr,
             ),
         )
-        for i, path in enumerate(paths)
+        for i, entry in enumerate(files)
     ]
 
     # Build final operations list: LoadFileOp + remaining ops
@@ -528,15 +531,30 @@ def _compute_file_pushdown(
 def compute_plan(dataset: Dataset) -> PhysicalPlan:
     """Compute physical execution plan from logical dataset."""
     operations = list(dataset.operations)
+    source = dataset.source
 
-    if operations and isinstance(operations[0], LoadFileOp):
+    # Resolve lazy glob sources into concrete FileEntry objects (with sizes).
+    if isinstance(source, GlobSource):
+        file_entries = resolve_glob(source)
+        if operations and isinstance(operations[0], LoadFileOp):
+            source_items, operations = _compute_file_pushdown(
+                file_entries,
+                operations[0],
+                operations[1:],
+            )
+        else:
+            # from_files() without load_file() — source items are plain paths
+            source_items = [SourceItem(shard_idx=i, data=entry.path) for i, entry in enumerate(file_entries)]
+    elif operations and isinstance(operations[0], LoadFileOp):
+        # Non-glob source (e.g. from_list of paths) — wrap as FileEntry without sizes
+        entries = [FileEntry(spec=InputFileSpec(path=p), size=0) for p in source]
         source_items, operations = _compute_file_pushdown(
-            list(dataset.source),
+            entries,
             operations[0],
             operations[1:],
         )
     else:
-        source_list = list(dataset.source)
+        source_list = list(source)
         source_items = [SourceItem(shard_idx=i, data=item) for i, item in enumerate(source_list)]
 
     stages = _fuse_operations(operations)
