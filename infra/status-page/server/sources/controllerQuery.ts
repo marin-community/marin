@@ -32,17 +32,26 @@ interface RawQueryWireResponse {
 
 export async function executeRawQuery(sql: string): Promise<RawQueryResult> {
   const base = await getControllerUrl();
-  const res = await fetch(`${base}/iris.cluster.ControllerService/ExecuteRawQuery`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sql }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`ExecuteRawQuery ${res.status}: ${body.slice(0, 300)}`);
+  // Keep a strong reference to the AbortController so the timer is not
+  // garbage-collected before it fires (observed on Node 20 / undici when
+  // multiple concurrent fetches create inline AbortSignal.timeout objects).
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(new Error("query timed out after 10s")), 10_000);
+  try {
+    const res = await fetch(`${base}/iris.cluster.ControllerService/ExecuteRawQuery`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sql }),
+      signal: ac.signal,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`ExecuteRawQuery ${res.status}: ${body.slice(0, 300)}`);
+    }
+    const body = (await res.json()) as RawQueryWireResponse;
+    const rows = body.rows.map((r) => JSON.parse(r) as unknown[]);
+    return { columns: body.columns, rows };
+  } finally {
+    clearTimeout(timer);
   }
-  const body = (await res.json()) as RawQueryWireResponse;
-  const rows = body.rows.map((r) => JSON.parse(r) as unknown[]);
-  return { columns: body.columns, rows };
 }

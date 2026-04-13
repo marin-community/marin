@@ -30,11 +30,16 @@ function getClient(): InstancesClient {
 }
 
 async function queryControllerIp(): Promise<string> {
-  const [instances] = await getClient().list({
-    project: GCP_PROJECT,
-    zone: CONTROLLER_ZONE,
-    filter: `labels.${CONTROLLER_LABEL}=true AND status=RUNNING`,
-  });
+  const [instances] = await Promise.race([
+    getClient().list({
+      project: GCP_PROJECT,
+      zone: CONTROLLER_ZONE,
+      filter: `labels.${CONTROLLER_LABEL}=true AND status=RUNNING`,
+    }),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("GCE discovery timed out after 15s")), 15_000),
+    ),
+  ]);
   if (!instances || instances.length === 0) {
     throw new Error(
       `No controller VM found (label=${CONTROLLER_LABEL}=true, ` +
