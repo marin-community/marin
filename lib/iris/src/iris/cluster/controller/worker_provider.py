@@ -17,7 +17,6 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.log_store._types import LogPusherProtocol, TaskAttempt, task_log_key
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 from iris.rpc import worker_pb2
@@ -105,7 +104,6 @@ class WorkerProvider:
     """
 
     stub_factory: WorkerStubFactory
-    log_pusher: LogPusherProtocol | None = None
     parallelism: int = 32
     _pool: ThreadPoolExecutor = field(init=False)
 
@@ -160,16 +158,6 @@ class WorkerProvider:
         if not response.worker_healthy:
             health_error = response.health_error or "worker reported unhealthy"
             raise ProviderError(f"worker {batch.worker_id} reported unhealthy: {health_error}")
-
-        # Forward log entries from old workers that still piggyback logs on
-        # heartbeat responses.  New workers push logs directly via LogPusher.
-        if self.log_pusher:
-            for entry in response.tasks:
-                if entry.log_entries:
-                    key = task_log_key(
-                        TaskAttempt(task_id=JobName.from_wire(entry.task_id), attempt_id=entry.attempt_id)
-                    )
-                    self.log_pusher.push(key, list(entry.log_entries))
 
         return _apply_request_from_response(batch.worker_id, response)
 
