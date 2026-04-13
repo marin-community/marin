@@ -3273,13 +3273,29 @@ Launched v6e-16 LoRA DPO probe on Iris to test memory fit.
 - **Expected per_device_parallelism**: 64 / 16 chips = 4
 - **Executor parent**: 3 GB memory, CPU-only
 
-#### v6e-16 Scheduling Failure
+#### v6e-16 Scheduling Failure — Root Cause Found (2026-04-13)
 
 Probes 1–3 all failed with `Job is unschedulable: no scaling group matches the job constraints`.
-- v6e-16 is multi-host (4 VMs), requires coscheduling
-- Workers exist and report `device_variant=v6e-16`, but the controller's `check_coscheduling_feasibility` rejects the request
-- Root cause unclear — may be a controller-side constraint mismatch (controller git hash `7e68242e8`)
-- Merging latest main did not help (the issue is server-side)
+
+**Root cause: inherited region constraint from parent executor.**
+
+The Iris client (`lib/iris/src/iris/client/client.py:651`) automatically inherits the
+parent job's region when submitting child jobs. The executor parent runs on a **CPU node
+in us-central1**. The child train_dpo sub-job inherits `region=us-central1`. But there
+are **no v6e-16 scaling groups in us-central1** — they only exist in europe-west4-a,
+us-east5-b, and us-east1-d. The constraint `device-variant=v6e-16 AND region=us-central1`
+matches zero groups → unschedulable.
+
+Confirmed by successfully submitting `iris job run --tpu v6e-16 --region europe-west4`
+directly (no executor, no inherited region). The controller accepted it immediately.
+
+**Fix: set `regions=["europe-west4"]` (or another v6e-16 region) on the ResourceConfig.**
+This makes Fray pass an explicit region constraint that overrides the inherited us-central1.
+The same fix that worked for v6e-8 cross-region (using `mirrored()` + explicit regions)
+also applies to v6e-16.
+
+This was NOT an Iris bug — coscheduling works correctly. It was a region mismatch
+between where the CPU executor runs and where v6e-16 hardware is available.
 
 #### v6e-8 Probe — 2026-04-12T21:17Z
 
