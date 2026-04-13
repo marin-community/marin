@@ -1,5 +1,17 @@
 # DPO LoRA Claude Logbook
 
+## v6e Operating Rules
+
+**ALWAYS launch v6e jobs across ALL 3 regions in parallel:**
+- europe-west4
+- us-east5
+- us-east1
+
+Capacity is unpredictable — preemptible v6e workers cycle constantly. First region to get
+a TPU wins. Use `mirrored()` dataset paths so tokenization caches are region-agnostic
+(the mirror filesystem copies data on-demand). Set `regions=[...]` on `ResourceConfig`
+to override the inherited us-central1/us-central2 region from the CPU executor parent.
+
 ## Tune-LoRA Sweep Jobs (2026-03-31)
 
 ### Job Launch — 2026-03-31T07:27Z
@@ -3414,6 +3426,34 @@ Launched `/ahmed/v6e8-offload-probe` with `gradient_checkpointing="offload"`:
 - Regions: europe-west4 + us-east5
 - Expected HBM: ~27 GB (down from 44.23 at pd=8 without offloading)
 - Expected step time: ~9-10s (down from 14.2s with grad accum)
+
+#### Carry Offloading XLA Crash — 2026-04-13T07:02Z
+
+ew4 offload probe got a v6e-8 TPU, loaded model, traced and lowered HLO successfully,
+then **crashed during XLA TPU compilation** with SIGABRT:
+
+```
+F0413 07:02:09 async_dynamic_index_emitter.cc:584] Check failed:
+  intermediate_calc.slice_size % intermediate_calc.update_detail.num_sublanes_per_chunk == 0
+  (1 vs. 0)
+  Sublane slicing size not multiple of update chunk sublane size.
+```
+
+Timeline: trace 3.7s → lower 2.3s → XLA compile starts → crash 14s later.
+
+**Root cause:** XLA TPU codegen bug in `async_dynamic_index_emitter` when generating DMA
+transfer code for `save_and_offload_only_these_names` checkpoint policy (JAX 0.8.0 on v6e).
+The carry offloading triggers dynamic slice operations for HBM→host memory transfers. The
+v6e codegen's sublane alignment calculation produces `num_sublanes_per_chunk=0`, causing a
+division-by-zero assertion. Not fixable in our code.
+
+W&B run with HLO artifact: `v6e8_offload-995ff4`
+
+**Alternatives:**
+1. TP=4+FSDP=2 (eliminates grad accum without offloading — DPO_SPEED_V6E.md strategy #2)
+2. File JAX bug report with the HLO artifact
+3. Try partial offloading (`save_inputs="offload"` only, not carries) — might avoid the bug
+4. Wait for JAX fix
 
 #### v6e-8 Probe — 2026-04-12T21:17Z
 
