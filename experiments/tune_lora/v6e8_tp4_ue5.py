@@ -13,7 +13,7 @@ step = make_v6e_probe(
     per_device=-1,
     num_train_steps=20,
     profiler=ProfilerConfig(enabled=True, start_step=5, num_steps=10),
-    mesh=MeshConfig(axes={"data": -1, "model": 4}),
+    mesh=MeshConfig(axes={"data": -1, "model": 4}, shared_mapping={"kv_head": "model"}),
 )
 
 if __name__ == "__main__":
