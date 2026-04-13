@@ -515,7 +515,6 @@ def _compute_file_pushdown(
             data=InputFileSpec(
                 path=entry.path,
                 format=load_op.format,
-                size=entry.size,
                 columns=select_columns,
                 filter_expr=filter_expr,
             ),
@@ -548,7 +547,7 @@ def compute_plan(dataset: Dataset) -> PhysicalPlan:
             source_items = [SourceItem(shard_idx=i, data=entry.path) for i, entry in enumerate(file_entries)]
     elif operations and isinstance(operations[0], LoadFileOp):
         # Non-glob source (e.g. from_list of paths) — wrap as FileEntry without sizes
-        entries = [FileEntry(path=p, size=0) for p in source]
+        entries = [FileEntry(spec=InputFileSpec(path=p), size=0) for p in source]
         source_items, operations = _compute_file_pushdown(
             entries,
             operations[0],

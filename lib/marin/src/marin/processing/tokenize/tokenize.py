@@ -34,7 +34,8 @@ from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
 from levanter.store.cache import consolidate_shard_caches
 from levanter.store.tree_store import TreeStore
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
-from zephyr.readers import load_file
+from zephyr.dataset import FileEntry
+from zephyr.readers import InputFileSpec, load_file
 
 from marin.execution.executor import InputName, VersionedValue
 from marin.utils import fsspec_exists, fsspec_isdir
@@ -207,16 +208,28 @@ def _validate_train_urls(train_paths: list[str | InputName], warn):
                 )
 
 
-_TOKENIZE_EXTENSIONS = ["json.{gz,zst,zstd}", "jsonl.{gz,zst,zstd}", "parquet", "json"]
+_TOKENIZE_EXTENSIONS = ["json.{gz,zst,zstd}", "jsonl.{gz,zst,zstd}", "parquet"]
 
 
-def _glob_with_sizes(patterns: list[str]) -> list[dict]:
-    """Glob patterns and return [{"filename": path, "size": bytes}].
+# NOTE(chris): Marin's `default_download` writes a `provenance.json` sidecar next to
+# downloaded HF data. Downstream TokenizeConfig jobs glob those directories and must
+# exclude sidecars so we don't train on provenance records. Applied uniformly to both
+# splits and both config types — HF hub datasets don't ship sidecars named this way,
+# so the filter is a no-op on the HfTokenizeConfig path.
+_MARIN_SIDECAR_NAMES = frozenset({"provenance.json"})
+
+
+def _drop_sidecars(files: list[FileEntry]) -> list[FileEntry]:
+    return [f for f in files if os.path.basename(f.path) not in _MARIN_SIDECAR_NAMES]
+
+
+def _glob_with_sizes(patterns: list[str]) -> list[FileEntry]:
+    """Glob patterns and return FileEntry objects (spec + size).
 
     Uses fsspec glob(detail=True) which returns file metadata from the same
     list-objects API call — no per-file stat RPCs needed. Works for gs://, hf://, s3://, local.
     """
-    results: list[dict] = []
+    results: list[FileEntry] = []
     for pattern in patterns:
         pattern = re.sub(r"(?<!:)//+", "/", pattern)
         fs, _ = url_to_fs(pattern)
@@ -225,7 +238,7 @@ def _glob_with_sizes(patterns: list[str]) -> list[dict]:
             detail = fs.glob(expanded, detail=True)
             for path, info in detail.items():
                 full = f"{protocol}://{path}" if protocol else path
-                results.append({"filename": full, "size": info.get("size", 0)})
+                results.append(FileEntry(spec=InputFileSpec(path=full), size=info.get("size", 0)))
     return results
 
 
@@ -250,18 +263,18 @@ def _expand_tokenize_paths(input_paths: list[str]) -> list[str]:
     return patterns
 
 
-def _bundle_files_by_size(file_infos, max_bytes: int):
+def _bundle_files_by_size(files: list[FileEntry], max_bytes: int):
     """Bundle files into groups, with each group having a total size less than max_bytes."""
-    current_group = []
+    current_group: list[str] = []
     current_size = 0
 
-    for info in file_infos:
-        if current_size + info["size"] >= max_bytes and current_group:
+    for f in files:
+        if current_size + f.size >= max_bytes and current_group:
             yield current_group
             current_group = []
             current_size = 0
-        current_group.append(info["filename"])
-        current_size += info["size"]
+        current_group.append(f.path)
+        current_size += f.size
 
     if current_group:
         yield current_group
@@ -335,33 +348,35 @@ def tokenize(config: TokenizeConfigBase):
         raise ValueError(f"Unknown config type: {type(config)}")
 
     # Resolve patterns → concrete files with sizes (single list-objects call per pattern)
-    train_file_stats = _glob_with_sizes(train_patterns)
-    train_file_stats = [f for f in train_file_stats if "provenance.json" not in f["filename"]]
-    validation_file_stats = _glob_with_sizes(validation_patterns)
-    validation_file_stats = [f for f in validation_file_stats if "provenance.json" not in f["filename"]]
+    train_files = _drop_sidecars(_glob_with_sizes(train_patterns))
+    validation_files = _drop_sidecars(_glob_with_sizes(validation_patterns))
 
     if isinstance(config, TokenizeConfig):
-        _validate_train_urls([f["filename"] for f in train_file_stats], warn=config.allow_test_in_train)
+        _validate_train_urls([f.path for f in train_files], warn=config.allow_test_in_train)
 
-    if train_file_stats:
-        logger.info(f"Found {len(train_file_stats)} training files")
-    if validation_file_stats:
-        logger.info(f"Found {len(validation_file_stats)} validation files")
+    if train_files:
+        logger.info(f"Found {len(train_files)} training files")
+    if validation_files:
+        logger.info(f"Found {len(validation_files)} validation files")
 
-    if not train_file_stats and not validation_file_stats:
+    if train_patterns and not train_files:
+        raise ValueError(f"No training files matched configured patterns: {train_patterns}")
+    if validation_patterns and not validation_files:
+        raise ValueError(f"No validation files matched configured patterns: {validation_patterns}")
+    if not train_files and not validation_files:
         raise ValueError("No input files specified. Nothing to do.")
 
-    def local_preprocess_paths(file_stats: list[dict]) -> list[list[str]]:
+    def local_preprocess_paths(files: list[FileEntry]) -> list[list[str]]:
         """Bundle files into size-balanced groups for distributed processing."""
-        file_stats = sorted(file_stats, key=lambda f: f["filename"])
-        total_input_bytes = sum(f["size"] for f in file_stats)
+        files = sorted(files, key=lambda f: f.path)
+        total_input_bytes = sum(f.size for f in files)
         if config.num_shards is not None:
             target_group_bytes = _compute_target_group_bytes(total_input_bytes, config.num_shards)
         else:
             target_group_bytes = _compute_target_group_bytes(total_input_bytes, config.max_workers)
-        file_groups = list(_bundle_files_by_size(file_stats, target_group_bytes))
+        file_groups = list(_bundle_files_by_size(files, target_group_bytes))
         logger.info(
-            f"Grouped {len(file_stats):,} files ({total_input_bytes / 1e9:.2f} GB) into {len(file_groups):,} groups "
+            f"Grouped {len(files):,} files ({total_input_bytes / 1e9:.2f} GB) into {len(file_groups):,} groups "
             f"(target {target_group_bytes / 1e9:.2f} GB/group)."
         )
         return file_groups
@@ -447,8 +462,8 @@ def tokenize(config: TokenizeConfigBase):
         )
 
     # TODO (rav): both train and val could run at the same time
-    if train_file_stats and not split_already_done("train"):
-        train_groups = local_preprocess_paths(train_file_stats)
+    if train_files and not split_already_done("train"):
+        train_groups = local_preprocess_paths(train_files)
         ctx = ZephyrContext(
             resources=config.worker_resources,
             max_workers=min(config.max_workers, len(train_groups)),
@@ -456,8 +471,8 @@ def tokenize(config: TokenizeConfigBase):
         )
         run_pipeline(ctx, train_groups, "train")
 
-    if validation_file_stats and not split_already_done("validation"):
-        validation_groups = local_preprocess_paths(validation_file_stats)
+    if validation_files and not split_already_done("validation"):
+        validation_groups = local_preprocess_paths(validation_files)
         ctx = ZephyrContext(
             resources=config.worker_resources,
             max_workers=min(config.max_workers, len(validation_groups)),

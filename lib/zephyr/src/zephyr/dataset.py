@@ -16,6 +16,7 @@ from braceexpand import braceexpand
 from rigging.filesystem import url_to_fs
 
 from zephyr.expr import Expr
+from zephyr.readers import InputFileSpec
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,19 @@ class GlobSource:
 
 @dataclass(frozen=True)
 class FileEntry:
-    """A file path with its size from the bulk listing."""
+    """A discovered input file: read-spec plus metadata from the bulk listing.
 
-    path: str
+    ``spec`` is the pure read-specification (how to read the file); ``size`` is
+    discovered metadata (from glob ``detail=True``). Keeping these separate means
+    readers only depend on ``InputFileSpec`` while planners can still size shards.
+    """
+
+    spec: InputFileSpec
     size: int
+
+    @property
+    def path(self) -> str:
+        return self.spec.path
 
 
 def resolve_glob(source: GlobSource) -> list[FileEntry]:
@@ -56,7 +66,7 @@ def resolve_glob(source: GlobSource) -> list[FileEntry]:
         detail = fs.glob(expanded, detail=True)
         for path, info in detail.items():
             full = f"{protocol}://{path}" if protocol else path
-            entries.append(FileEntry(path=full, size=info.get("size", 0)))
+            entries.append(FileEntry(spec=InputFileSpec(path=full), size=info.get("size", 0)))
     entries.sort(key=lambda e: e.path)
 
     if not entries and not source.empty_glob_ok:
