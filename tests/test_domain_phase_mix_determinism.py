@@ -30,6 +30,7 @@ from experiments.domain_phase_mix import (
 )
 from experiments.domain_phase_mix import (
     launch_two_phase_many_genericfamily_no_penalty_baseline as genericfamily_no_penalty_launch,
+    launch_two_phase_many_genericfamily_penalty_raw_optima_300m_6b as genericfamily_penalty_raw_optima_300m_launch,
 )
 import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3 as qsplit240_seedpanel
 import experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline as stratified_baseline_launch
@@ -136,6 +137,12 @@ from experiments.domain_phase_mix import (
 )
 from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_olmo_base_easy_overlap_rerun import (
     build_run_specs as build_qsplit240_olmo_base_easy_overlap_rerun_specs,
+)
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_selected_baselines_olmo_base_easy_overlap_rerun as selected_overlap_rerun,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_selected_baselines_olmo_base_easy_overlap_rerun import (
+    build_run_specs as build_selected_baselines_olmo_base_easy_overlap_rerun_specs,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3_mmlu_sl_verb_rerun import (
     build_run_specs as build_qsplit240_seedpanel_mmlu_sl_verb_rerun_specs,
@@ -298,6 +305,7 @@ from experiments.domain_phase_mix.two_phase_many_observed_runs import (
 )
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import Executor, InputName, collect_dependencies_and_version
+from marin.processing.tokenize import TokenizeConfig
 from rigging.filesystem import marin_prefix
 
 
@@ -613,6 +621,30 @@ def test_qsplit240_300m_6b_builds_expected_manifest_and_weights():
     assert all(spec.phase_weights == observed_by_name[spec.run_name].phase_weights for spec in run_specs)
 
 
+def test_genericfamily_penalty_raw_optimum_300m_builds_expected_manifest_and_weights():
+    run_specs = genericfamily_penalty_raw_optima_300m_launch.build_run_specs(variants=("power_family_penalty",))
+
+    assert len(run_specs) == 1
+    run_spec = run_specs[0]
+    assert run_spec.run_id == 412
+    assert run_spec.run_name == "baseline_genericfamily_power_family_penalty_raw_optimum_300m_6b"
+    assert run_spec.cohort == "grp_penalty_raw_optimum_300m_6b"
+    assert run_spec.model_family == QSPLIT240_300M_6B_MODEL_FAMILY
+    assert run_spec.experiment_budget == QSPLIT240_300M_6B_BUDGET
+    assert run_spec.num_train_steps == QSPLIT240_300M_6B_NUM_TRAIN_STEPS
+    assert run_spec.trainer_seed is None
+    assert run_spec.data_seed == 0
+    assert run_spec.simulated_epoch_subset_seed is None
+    assert run_spec.candidate_run_id == 412
+    assert run_spec.candidate_run_name == "baseline_genericfamily_power_family_penalty_raw_optimum"
+    assert (
+        run_spec.candidate_source_experiment
+        == "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_penalty_raw_optima_uncheatable_bpb"
+    )
+    assert abs(sum(run_spec.phase_weights["phase_0"].values()) - 1.0) < 1e-12
+    assert abs(sum(run_spec.phase_weights["phase_1"].values()) - 1.0) < 1e-12
+
+
 def test_load_original_qsplit240_named_panel_returns_expected_runs():
     panel_runs = load_original_qsplit240_named_panel(REPRESENTATIVE12_PANEL_RUN_NAMES)
 
@@ -720,6 +752,16 @@ def test_qsplit240_520m_pilot_experiment_uses_expected_model_resources_region_an
         tpu_zone=None,
     )
     stack_edu_domain = next(domain for domain in experiment.domains if domain.name == "dolma3_stack_edu")
+    tokenized_step = next(
+        step
+        for domain in experiment.domains
+        for component in domain.components
+        if (
+            hasattr((step := component.get_step()), "config")
+            and isinstance(step.config, TokenizeConfig)
+            and step.name.startswith(("tokenized/dolma3_pool/", "tokenized/dolma3_dolmino_pool/"))
+        )
+    )
 
     assert experiment.name == qsplit240_520m_pilot.NAME
     assert experiment.model_config is regmix_520m_proxy
@@ -732,16 +774,24 @@ def test_qsplit240_520m_pilot_experiment_uses_expected_model_resources_region_an
     assert experiment.optimizer_config.momentum == pytest.approx(regmix_520m_muonh_base.momentum)
     assert list(experiment.resources.regions or []) == list(QSPLIT240_520M_DEFAULT_TPU_REGIONS)
     assert experiment.resources.zone == QSPLIT240_520M_DEFAULT_TPU_ZONE
+    assert list(tokenized_step.config.worker_resources.regions or []) == list(QSPLIT240_520M_DEFAULT_TPU_REGIONS)
     assert "mirror://" in stack_edu_domain.description
+    assert stack_edu_domain.components[0].get_step().cache_path == (
+        "mirror://tokenized/merged/dolma3_dolmino_top_level/dolma3_stack_edu-a7297b"
+    )
 
 
 def test_qsplit240_1_2b_pilot_builds_expected_manifest_and_weights():
     run_specs = build_qsplit240_1_2b_pilot_run_specs()
-    panel_runs = load_original_qsplit240_named_panel(REPRESENTATIVE12_PANEL_RUN_NAMES)
+    panel_runs = qsplit240_replay.load_panel_observed_runs(qsplit240_replay.BASELINES3_PANEL)
     panel_by_name = {run.run_name: run for run in panel_runs}
 
-    assert len(run_specs) == 12
-    assert [spec.run_name for spec in run_specs] == list(REPRESENTATIVE12_PANEL_RUN_NAMES)
+    assert len(run_specs) == 3
+    assert [spec.run_name for spec in run_specs] == [
+        "baseline_proportional",
+        "baseline_unimax",
+        "baseline_olmix_loglinear_uncheatable_bpb",
+    ]
     assert [spec.run_id for spec in run_specs] == [run.run_id for run in panel_runs]
     assert {spec.cohort for spec in run_specs} == {"original_swarm_1_2b_chinchilla_pilot"}
     assert {spec.model_family for spec in run_specs} == {QSPLIT240_1_2B_MODEL_FAMILY}
@@ -750,7 +800,7 @@ def test_qsplit240_1_2b_pilot_builds_expected_manifest_and_weights():
     assert QSPLIT240_1_2B_NUM_TRAIN_STEPS == REGMIX_1_2B_CHINCHILLA_BUDGET // (QSPLIT240_1_2B_BATCH_SIZE * 2048)
     assert all(spec.candidate_run_name == spec.run_name for spec in run_specs)
     assert all(spec.phase_weights == panel_by_name[spec.run_name].phase_weights for spec in run_specs)
-    assert QSPLIT240_1_2B_DEFAULT_PANEL == "representative12"
+    assert QSPLIT240_1_2B_DEFAULT_PANEL == qsplit240_replay.BASELINES3_PANEL
 
 
 def test_qsplit240_1_2b_pilot_experiment_uses_expected_model_resources_region_and_tasks():
@@ -761,6 +811,16 @@ def test_qsplit240_1_2b_pilot_experiment_uses_expected_model_resources_region_an
         tpu_zone=None,
     )
     stack_edu_domain = next(domain for domain in experiment.domains if domain.name == "dolma3_stack_edu")
+    tokenized_step = next(
+        step
+        for domain in experiment.domains
+        for component in domain.components
+        if (
+            hasattr((step := component.get_step()), "config")
+            and isinstance(step.config, TokenizeConfig)
+            and step.name.startswith(("tokenized/dolma3_pool/", "tokenized/dolma3_dolmino_pool/"))
+        )
+    )
 
     assert experiment.name == qsplit240_1_2b_pilot.NAME
     assert experiment.model_config is regmix_1_2b_proxy
@@ -774,7 +834,11 @@ def test_qsplit240_1_2b_pilot_experiment_uses_expected_model_resources_region_an
     assert experiment.optimizer_config.max_grad_norm == pytest.approx(regmix_1_2b_muonh_base.max_grad_norm)
     assert list(experiment.resources.regions or []) == list(QSPLIT240_1_2B_DEFAULT_TPU_REGIONS)
     assert experiment.resources.zone == QSPLIT240_1_2B_DEFAULT_TPU_ZONE
+    assert list(tokenized_step.config.worker_resources.regions or []) == list(QSPLIT240_1_2B_DEFAULT_TPU_REGIONS)
     assert "mirror://" in stack_edu_domain.description
+    assert stack_edu_domain.components[0].get_step().cache_path == (
+        "mirror://tokenized/merged/dolma3_dolmino_top_level/dolma3_stack_edu-a7297b"
+    )
 
 
 def test_stratified_weight_config_is_uniform_across_domains_and_phases():
@@ -892,6 +956,47 @@ def test_qsplit240_olmo_base_easy_overlap_rerun_select_run_specs_for_shard():
         shard_index=2,
         shard_count=8,
     ).endswith("shard_03of08")
+
+
+def test_selected_baselines_olmo_base_easy_overlap_rerun_builds_expected_manifest():
+    run_specs = build_selected_baselines_olmo_base_easy_overlap_rerun_specs()
+
+    assert len(run_specs) == 3
+    assert [spec.run_id for spec in run_specs] == [412, 3, 248]
+    assert {spec.cohort for spec in run_specs} == {"selected_baselines_olmo_base_easy_overlap_rerun"}
+    assert [spec.run_name for spec in run_specs] == [
+        "baseline_genericfamily_power_family_penalty_raw_optimum",
+        "baseline_stratified",
+        "baseline_olmix_loglinear_uncheatable_bpb",
+    ]
+    assert [spec.source_experiment for spec in run_specs] == [
+        "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_penalty_raw_optima_uncheatable_bpb",
+        "pinlin_calvin_xu/data_mixture/ngd3dm2_stratified_60m_1p2b",
+        "pinlin_calvin_xu/data_mixture/ngd3dm2_olmix_uncheatable_bpb",
+    ]
+    assert all(spec.checkpoint_root is None for spec in run_specs)
+    assert all(abs(sum(spec.phase_weights["phase_0"].values()) - 1.0) < 1e-12 for spec in run_specs)
+    assert all(abs(sum(spec.phase_weights["phase_1"].values()) - 1.0) < 1e-12 for spec in run_specs)
+
+
+def test_selected_baselines_olmo_base_easy_overlap_resolve_checkpoint_roots_uses_requested_regions(monkeypatch):
+    seen: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(
+        selected_overlap_rerun,
+        "resolve_latest_checkpoint_root",
+        lambda *, experiment_name_prefix, run_name, checkpoint_regions: (
+            seen.append(tuple(checkpoint_regions)) or f"gs://unit-test/{run_name}"
+        ),
+    )
+
+    resolved = selected_overlap_rerun.resolve_checkpoint_roots(
+        build_selected_baselines_olmo_base_easy_overlap_rerun_specs(),
+        checkpoint_regions=("us-east5",),
+    )
+
+    assert len(resolved) == 3
+    assert seen == [("us-east5",), ("us-east5",), ("us-east5",)]
 
 
 def test_qsplit240_seedpanel_mmlu_sl_verb_rerun_builds_expected_manifest():
@@ -1751,7 +1856,7 @@ def test_qsplit240_1_2b_pilot_main_builds_graph_in_ci_without_launching(monkeypa
             "--tpu-regions",
             "us-east5,us-central1",
             "--panel",
-            "representative12",
+            "baselines3",
             "--max-concurrent",
             "1",
         ],
@@ -1760,7 +1865,7 @@ def test_qsplit240_1_2b_pilot_main_builds_graph_in_ci_without_launching(monkeypa
     qsplit240_1_2b_pilot.main()
 
     assert captured["build_kwargs"]["name_prefix"] == qsplit240_1_2b_pilot.NAME
-    assert captured["build_kwargs"]["panel"] == "representative12"
+    assert captured["build_kwargs"]["panel"] == "baselines3"
     assert captured["build_kwargs"]["tpu_type"] == "v5p-64"
     assert captured["build_kwargs"]["tpu_regions"] == ("us-east5", "us-central1")
     assert captured["build_kwargs"]["tpu_zone"] is None
@@ -1789,6 +1894,20 @@ def test_resolve_latest_checkpoint_root_picks_highest_step_across_regions(monkey
     )
 
     assert checkpoint_root == "gs://marin-us-central1/checkpoints/unit/prefix/run_00125-central"
+
+
+def test_mirror_path_rebases_marin_bucket_urls_to_bucket_relative_paths():
+    assert (
+        qsplit240_replay.mirror_path("gs://marin-us-central1/checkpoints/unit/prefix/run_00125-central")
+        == "mirror://checkpoints/unit/prefix/run_00125-central"
+    )
+    assert (
+        qsplit240_replay.resolve_qsplit240_eval_cache_path_for_regions(
+            ("us-east5", "us-central1"),
+            "gs://marin-us-central1/raw/eval-datasets/qsplit240-300m-6b-expanded-tasks",
+        )
+        == "mirror://raw/eval-datasets/qsplit240-300m-6b-expanded-tasks"
+    )
 
 
 def test_qsplit240_olmo_base_easy_overlap_rerun_main_wires_cache_and_max_concurrent(monkeypatch):
@@ -1848,6 +1967,75 @@ def test_qsplit240_olmo_base_easy_overlap_rerun_main_wires_cache_and_max_concurr
     assert len(captured["steps"]) == 5
     assert "shard_02of03" in captured["description"]
     assert qsplit240_olmo_base_easy_overlap_rerun.DEFAULT_MAX_CONCURRENT == 12
+
+
+def test_selected_baselines_olmo_base_easy_overlap_rerun_main_wires_cache_and_max_concurrent(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(
+        selected_overlap_rerun,
+        "resolve_checkpoint_roots",
+        lambda run_specs, checkpoint_regions=selected_overlap_rerun.CHECKPOINT_REGIONS: [
+            replace(spec, checkpoint_root=f"gs://unit-test/checkpoints/{spec.run_name}") for spec in run_specs
+        ],
+    )
+    monkeypatch.setattr(
+        selected_overlap_rerun,
+        "evaluate_levanter_lm_evaluation_harness",
+        lambda **kwargs: captured.setdefault("eval_kwargs", []).append(kwargs)
+        or SimpleNamespace(name=kwargs["model_name"]),
+    )
+    monkeypatch.setattr(
+        selected_overlap_rerun,
+        "output_path_of",
+        lambda step, filename=None: (
+            f"gs://unit-test/{step.name}" if filename is None else f"gs://unit-test/{step.name}/{filename}"
+        ),
+    )
+    monkeypatch.setattr(
+        selected_overlap_rerun,
+        "create_run_manifest_step",
+        lambda **_: SimpleNamespace(name="run_manifest"),
+    )
+
+    def fake_create_cache_eval_datasets_step(**kwargs):
+        captured["cache_kwargs"] = kwargs
+        return SimpleNamespace(name="cache_eval_datasets")
+
+    monkeypatch.setattr(
+        selected_overlap_rerun,
+        "create_cache_eval_datasets_step",
+        fake_create_cache_eval_datasets_step,
+    )
+
+    def fake_executor_main(config=None, *, steps, description):
+        captured["config"] = config
+        captured["steps"] = steps
+        captured["description"] = description
+
+    monkeypatch.setattr(selected_overlap_rerun, "executor_main", fake_executor_main)
+    monkeypatch.setattr(
+        selected_overlap_rerun,
+        "build_run_specs",
+        build_selected_baselines_olmo_base_easy_overlap_rerun_specs,
+    )
+    monkeypatch.setattr(
+        selected_overlap_rerun.sys,
+        "argv",
+        ["launcher", "--max-concurrent", "2", "--tpu-region", "us-central1", "--tpu-zone", "us-central1-a"],
+    )
+
+    selected_overlap_rerun.main()
+
+    assert captured["config"].max_concurrent == 2
+    assert len(captured["steps"]) == 6
+    assert "selected-baseline OLMoBaseEval-overlap rerun" in captured["description"]
+    assert captured["cache_kwargs"]["gcs_path"].startswith("gs://marin-us-central1/")
+    assert all(
+        kwargs["eval_datasets_cache_path"].startswith("gs://marin-us-central1/") for kwargs in captured["eval_kwargs"]
+    )
+    assert selected_overlap_rerun.DEFAULT_MAX_CONCURRENT == 3
 
 
 def test_run00097_olmo_base_easy_overlap_rerun_main_wires_cache_and_max_concurrent(monkeypatch):

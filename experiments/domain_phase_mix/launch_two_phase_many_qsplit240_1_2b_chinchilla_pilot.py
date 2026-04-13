@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch a representative 12-run qsplit240 pilot at 1.2B."""
+"""Launch a reduced qsplit240 baseline pilot at 1.2B."""
 
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ from experiments.domain_phase_mix.proxy_sweep import (
     regmix_1_2b_proxy,
 )
 from experiments.domain_phase_mix.qsplit240_replay import (
+    BASELINES3_PANEL,
     DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
-    REPRESENTATIVE12_PANEL,
     build_qsplit240_replay_launch_artifacts,
     build_qsplit240_replay_run_specs,
     create_qsplit240_replay_experiment,
@@ -45,7 +45,7 @@ DEFAULT_MAX_CONCURRENT = 1
 DEFAULT_TPU_TYPE = "v5p-64"
 DEFAULT_TPU_REGIONS = DEFAULT_REGION_AGNOSTIC_TPU_REGIONS
 DEFAULT_TPU_ZONE = None
-DEFAULT_PANEL = REPRESENTATIVE12_PANEL
+DEFAULT_PANEL = BASELINES3_PANEL
 EVAL_DATASETS_CACHE_PATH = "gs://marin-us-central1/raw/eval-datasets/qsplit240-300m-6b-expanded-tasks"
 DEFAULT_RESUME_LATEST_CHECKPOINTS = True
 
@@ -121,7 +121,7 @@ def build_launch_artifacts(
 
 
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:
-    parser = argparse.ArgumentParser(description="Launch the qsplit240 representative 12-run 1.2B pilot.")
+    parser = argparse.ArgumentParser(description="Launch the qsplit240 reduced 1.2B pilot.")
     parser.add_argument("--name-prefix", default=NAME)
     parser.add_argument("--tpu-type", default=DEFAULT_TPU_TYPE)
     parser.add_argument("--tpu-regions", default=",".join(DEFAULT_TPU_REGIONS))
@@ -173,7 +173,7 @@ def main() -> None:
         steps=artifacts.steps,
         description=replay_description(
             execution_name_prefix=artifacts.execution_name_prefix,
-            label="representative12 qsplit240 pilot at 1.2B / 24B",
+            label="baselines3 qsplit240 pilot at 1.2B / 24B",
         ),
     )
 

@@ -34,6 +34,7 @@ Usage:
     )
 """
 
+from fray.cluster import ResourceConfig
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -336,38 +337,40 @@ DOLMINO_POOL_COMPLETED_PARTITIONS: tuple[str, ...] = tuple(DOLMINO_POOL_TOKEN_CO
 # DOWNLOAD STEP
 # =============================================================================
 
-# Single download step for the entire dataset
-_download_step = ExecutorStep(
-    name="raw/dolma3_dolmino_pool",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id=HF_DATASET_ID,
-        revision=HF_REVISION,
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
-)
-
 # Cache for download step (will be populated after first download with correct hash)
-_download_cache: ExecutorStep | None = None
+_download_cache: dict[str, ExecutorStep] = {}
 
 
-def download_dolmino_pool() -> ExecutorStep:
+def _worker_resources_cache_key(worker_resources: ResourceConfig | None) -> str:
+    return "default" if worker_resources is None else repr(worker_resources)
+
+
+def download_dolmino_pool(*, worker_resources: ResourceConfig | None = None) -> ExecutorStep:
     """Get the download step for the Dolma 3 Dolmino Pool dataset.
 
     Returns:
         ExecutorStep that downloads the full dataset to GCS.
     """
-    global _download_cache
-    if _download_cache is None:
-        _download_cache = _download_step
-    return _download_cache
+    cache_key = _worker_resources_cache_key(worker_resources)
+    if cache_key not in _download_cache:
+        _download_cache[cache_key] = ExecutorStep(
+            name="raw/dolma3_dolmino_pool",
+            fn=download_hf,
+            config=DownloadConfig(
+                hf_dataset_id=HF_DATASET_ID,
+                revision=HF_REVISION,
+                gcs_output_path=this_output_path(),
+                wait_for_completion=True,
+                worker_resources=worker_resources,
+            ),
+        )
+    return _download_cache[cache_key]
 
 
-def _get_partition_base_dir():
+def _get_partition_base_dir(*, worker_resources: ResourceConfig | None = None):
     """Get the base directory for partition data."""
     # Note: append_sha_to_path=False in DownloadConfig, so files are directly under output_path/data/
-    return download_dolmino_pool().cd("data")
+    return download_dolmino_pool(worker_resources=worker_resources).cd("data")
 
 
 # =============================================================================
@@ -377,7 +380,7 @@ def _get_partition_base_dir():
 _tokenize_cache: dict[str, ExecutorStep] = {}
 
 
-def _resolve_partition_paths(partition_name: str) -> list:
+def _resolve_partition_paths(partition_name: str, *, worker_resources: ResourceConfig | None = None) -> list:
     """Resolve partition directory patterns to actual paths.
 
     Args:
@@ -386,7 +389,7 @@ def _resolve_partition_paths(partition_name: str) -> list:
     Returns:
         List of InputName paths for the partition's data files.
     """
-    base_dir = _get_partition_base_dir()
+    base_dir = _get_partition_base_dir(worker_resources=worker_resources)
     dir_patterns = DOLMINO_POOL_PARTITIONS[partition_name]
 
     paths = []
@@ -407,6 +410,7 @@ def _resolve_partition_paths(partition_name: str) -> list:
 def tokenize_dolmino_pool_subset(
     partition_name: str,
     tokenizer: str | None = None,
+    worker_resources: ResourceConfig | None = None,
 ) -> ExecutorStep:
     """Create a tokenization step for a specific partition.
 
@@ -422,21 +426,25 @@ def tokenize_dolmino_pool_subset(
             f"Partition '{partition_name}' not found. " f"Available partitions: {list(DOLMINO_POOL_PARTITIONS.keys())}"
         )
 
-    cache_key = f"{partition_name}:{tokenizer}"
-    if cache_key in _tokenize_cache:
-        return _tokenize_cache[cache_key]
-
     if tokenizer is None:
         from experiments.marin_models import marin_tokenizer
 
         tokenizer = marin_tokenizer
+
+    cache_key = f"{partition_name}:{tokenizer}:{_worker_resources_cache_key(worker_resources)}"
+    if cache_key in _tokenize_cache:
+        return _tokenize_cache[cache_key]
 
     # Create output path
     safe_name = partition_name.replace("/", "_")
     output_path = f"tokenized/dolma3_dolmino_pool/{safe_name}"
 
     # Get data paths
-    train_paths = _resolve_partition_paths(partition_name)
+    train_paths = _resolve_partition_paths(partition_name, worker_resources=worker_resources)
+
+    config_kwargs = {}
+    if worker_resources is not None:
+        config_kwargs["worker_resources"] = worker_resources
 
     step = ExecutorStep(
         name=output_path,
@@ -446,6 +454,7 @@ def tokenize_dolmino_pool_subset(
             validation_paths=versioned([]),
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),
+            **config_kwargs,
         ),
     )
 
@@ -456,6 +465,7 @@ def tokenize_dolmino_pool_subset(
 def tokenize_dolmino_pool(
     tokenizer: str | None = None,
     partitions: list[str] | None = None,
+    worker_resources: ResourceConfig | None = None,
 ) -> dict[str, ExecutorStep]:
     """Create tokenization steps for Dolmino Pool partitions.
 
@@ -471,7 +481,11 @@ def tokenize_dolmino_pool(
 
     steps = {}
     for partition in partitions:
-        steps[partition] = tokenize_dolmino_pool_subset(partition, tokenizer=tokenizer)
+        steps[partition] = tokenize_dolmino_pool_subset(
+            partition,
+            tokenizer=tokenizer,
+            worker_resources=worker_resources,
+        )
 
     return steps
 

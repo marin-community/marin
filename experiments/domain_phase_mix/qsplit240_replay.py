@@ -11,12 +11,14 @@ import os
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from functools import cache
 from typing import cast
 
 import fsspec
 from fray.cluster import ResourceConfig
 from levanter.main.train_lm import LmConfig
 from levanter.optim import MuonHConfig
+import numpy as np
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import Executor, ExecutorStep, output_path_of, this_output_path
@@ -34,8 +36,17 @@ from experiments.domain_phase_mix.determinism_analysis import (
 )
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     create_two_phase_dolma3_dolmino_top_level_experiment,
+    mirror_marin_path,
+)
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_uncheatable import (
+    RUN_ID as OLMIX_UNCHEATABLE_RUN_ID,
+    RUN_NAME as OLMIX_UNCHEATABLE_RUN_NAME,
+    SOURCE_EXPERIMENT as OLMIX_UNCHEATABLE_SOURCE_EXPERIMENT,
+    load_fit_from_local_results,
 )
 from experiments.domain_phase_mix.two_phase_many_observed_runs import (
+    CORE_BASELINE_RUN_NAMES,
+    ObservedTwoPhaseManyRun,
     REPRESENTATIVE12_PANEL_RUN_NAMES,
     load_original_qsplit240_named_panel,
     load_original_qsplit240_with_core_baselines,
@@ -46,6 +57,7 @@ DEFAULT_REGION_AGNOSTIC_TPU_REGIONS = ("us-east5", "us-central1")
 EVAL_DATASETS_CACHE_DEP_ENV_VAR = "MARIN_EVAL_DATASETS_CACHE_DEPENDENCY"
 ALL_PANEL = "all"
 REPRESENTATIVE12_PANEL = "representative12"
+BASELINES3_PANEL = "baselines3"
 CHECKPOINT_STEP_METADATA_GLOB = "checkpoints/step-*/metadata.json"
 CHECKPOINT_STEP_PATTERN = re.compile(r"/checkpoints/step-(\d+)/")
 
@@ -123,11 +135,7 @@ def _region_local_marin_path(default_path: str, region: str | None = None) -> st
 
 def mirror_path(path: str) -> str:
     """Return a mirror-backed filesystem path for a GCS path."""
-    if path.startswith("mirror://"):
-        return path
-    if path.startswith("gs://"):
-        return f"mirror://{path}"
-    return path
+    return mirror_marin_path(path)
 
 
 def _checkpoint_root_from_metadata_path(metadata_path: str) -> tuple[str, int] | None:
@@ -201,12 +209,48 @@ def resolve_latest_checkpoint_root(
     return best_checkpoint[1]
 
 
+@cache
+def _top_level_natural_proportions_and_phase_fractions() -> tuple[np.ndarray, np.ndarray]:
+    """Return the deterministic top-level natural proportions and phase fractions."""
+    experiment = create_two_phase_dolma3_dolmino_top_level_experiment(name="qsplit240_replay")
+    natural_proportions = np.asarray([float(domain.total_weight) for domain in experiment.domains], dtype=float)
+    natural_proportions = natural_proportions / natural_proportions.sum()
+    phase_fractions = np.asarray(
+        [phase.end_fraction - phase.start_fraction for phase in experiment.phase_schedule.phases],
+        dtype=float,
+    )
+    return natural_proportions, phase_fractions
+
+
+@cache
+def _olmix_uncheatable_panel_run() -> ObservedTwoPhaseManyRun:
+    """Return the fitted 60M Olmix-uncheatable mixture as a synthetic observed-panel run."""
+    natural_proportions, phase_fractions = _top_level_natural_proportions_and_phase_fractions()
+    fit = load_fit_from_local_results(
+        natural_proportions=natural_proportions,
+        phase_fractions=phase_fractions,
+    )
+    return ObservedTwoPhaseManyRun(
+        source_experiment=OLMIX_UNCHEATABLE_SOURCE_EXPERIMENT,
+        run_id=OLMIX_UNCHEATABLE_RUN_ID,
+        run_name=OLMIX_UNCHEATABLE_RUN_NAME,
+        status="completed",
+        phase_weights=fit.phase_weights,
+    )
+
+
 def load_panel_observed_runs(panel: str):
     """Load the selected observed-run panel in a stable order."""
     if panel == ALL_PANEL:
         return load_original_qsplit240_with_core_baselines()
     if panel == REPRESENTATIVE12_PANEL:
         return load_original_qsplit240_named_panel(REPRESENTATIVE12_PANEL_RUN_NAMES)
+    if panel == BASELINES3_PANEL:
+        baseline_runs = [
+            run for run in load_original_qsplit240_with_core_baselines() if run.run_name in CORE_BASELINE_RUN_NAMES
+        ]
+        baseline_runs.sort(key=lambda run: CORE_BASELINE_RUN_NAMES.index(run.run_name))
+        return [*baseline_runs, _olmix_uncheatable_panel_run()]
     raise ValueError(f"Unsupported qsplit240 panel {panel!r}")
 
 

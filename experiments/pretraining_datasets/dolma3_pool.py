@@ -41,6 +41,7 @@ Usage:
     )
 """
 
+from fray.cluster import ResourceConfig
 from experiments.llama import llama3_tokenizer
 from experiments.marin_models import marin_tokenizer
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
@@ -545,74 +546,74 @@ DOLMA3_POOL_INCOMPLETE_PARTITIONS: tuple[str, ...] = tuple(
 # DOWNLOAD STEPS
 # =============================================================================
 
-# Main Dolma 3 Pool dataset (Common Crawl + olmOCR)
-_download_dolma3_pool_step = ExecutorStep(
-    name="raw/dolma3_pool",
-    fn=download_hf,
-    config=DownloadConfig(
+_download_step_cache: dict[tuple[str, str], ExecutorStep] = {}
+
+
+def _worker_resources_cache_key(worker_resources: ResourceConfig | None) -> str:
+    return "default" if worker_resources is None else repr(worker_resources)
+
+
+def _download_step(
+    *,
+    name: str,
+    hf_dataset_id: str,
+    revision: str,
+    worker_resources: ResourceConfig | None = None,
+) -> ExecutorStep:
+    cache_key = (name, _worker_resources_cache_key(worker_resources))
+    if cache_key not in _download_step_cache:
+        _download_step_cache[cache_key] = ExecutorStep(
+            name=name,
+            fn=download_hf,
+            config=DownloadConfig(
+                hf_dataset_id=hf_dataset_id,
+                revision=revision,
+                gcs_output_path=this_output_path(),
+                wait_for_completion=True,
+                worker_resources=worker_resources,
+            ),
+        )
+    return _download_step_cache[cache_key]
+
+
+def download_dolma3_pool(*, worker_resources: ResourceConfig | None = None) -> ExecutorStep:
+    """Get the download step for the main Dolma 3 Pool dataset (CC + olmOCR)."""
+    return _download_step(
+        name="raw/dolma3_pool",
         hf_dataset_id=HF_DATASET_ID,
         revision=HF_REVISION,
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
-)
-
-# Stack-Edu (15 programming languages)
-_download_stack_edu_step = ExecutorStep(
-    name="raw/stack_edu",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id=HF_STACK_EDU_ID,
-        revision="main",  # TODO: Pin to specific commit
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
-)
-
-# FineMath
-_download_finemath_step = ExecutorStep(
-    name="raw/finemath",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id=HF_FINEMATH_ID,
-        revision="main",  # TODO: Pin to specific commit
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
-)
-
-# Dolma v1.7 (for arXiv and Wikipedia)
-# Note: This is also defined in dolma.py, but we define here for self-containment
-_download_dolma_v17_step = ExecutorStep(
-    name="raw/dolma_v1.7",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id=HF_DOLMA_V17_ID,
-        revision="main",  # TODO: Pin to specific commit
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
-)
+        worker_resources=worker_resources,
+    )
 
 
-def download_dolma3_pool() -> ExecutorStep:
-    """Get the download step for the main Dolma 3 Pool dataset (CC + olmOCR)."""
-    return _download_dolma3_pool_step
-
-
-def download_stack_edu() -> ExecutorStep:
+def download_stack_edu(*, worker_resources: ResourceConfig | None = None) -> ExecutorStep:
     """Get the download step for Stack-Edu dataset."""
-    return _download_stack_edu_step
+    return _download_step(
+        name="raw/stack_edu",
+        hf_dataset_id=HF_STACK_EDU_ID,
+        revision="main",
+        worker_resources=worker_resources,
+    )
 
 
-def download_finemath() -> ExecutorStep:
+def download_finemath(*, worker_resources: ResourceConfig | None = None) -> ExecutorStep:
     """Get the download step for FineMath dataset."""
-    return _download_finemath_step
+    return _download_step(
+        name="raw/finemath",
+        hf_dataset_id=HF_FINEMATH_ID,
+        revision="main",
+        worker_resources=worker_resources,
+    )
 
 
-def download_dolma_v17() -> ExecutorStep:
+def download_dolma_v17(*, worker_resources: ResourceConfig | None = None) -> ExecutorStep:
     """Get the download step for Dolma v1.7 dataset (arXiv, Wikipedia)."""
-    return _download_dolma_v17_step
+    return _download_step(
+        name="raw/dolma_v1.7",
+        hf_dataset_id=HF_DOLMA_V17_ID,
+        revision="main",
+        worker_resources=worker_resources,
+    )
 
 
 def _uses_reused_equivalent_cache(partition_name: str, tokenizer: str) -> bool:
@@ -626,6 +627,7 @@ def _uses_reused_equivalent_cache(partition_name: str, tokenizer: str) -> bool:
 def download_all_dolma3_pool_sources(
     partitions: list[str] | None = None,
     tokenizer: str | None = None,
+    worker_resources: ResourceConfig | None = None,
 ) -> list[ExecutorStep]:
     """Get the download steps required for the requested Dolma 3 Pool partitions.
 
@@ -644,13 +646,13 @@ def download_all_dolma3_pool_sources(
             continue
 
         if partition_name.startswith("common_crawl/") or partition_name.startswith("olmocr_pdfs/"):
-            step = download_dolma3_pool()
+            step = download_dolma3_pool(worker_resources=worker_resources)
         elif partition_name.startswith("stack_edu/"):
-            step = download_stack_edu()
+            step = download_stack_edu(worker_resources=worker_resources)
         elif partition_name == "finemath_3plus":
-            step = download_finemath()
+            step = download_finemath(worker_resources=worker_resources)
         elif partition_name in {"arxiv", "wikipedia"}:
-            step = download_dolma_v17()
+            step = download_dolma_v17(worker_resources=worker_resources)
         else:
             raise ValueError(f"Unknown partition source: {partition_name}")
 
@@ -659,28 +661,28 @@ def download_all_dolma3_pool_sources(
     return list(download_steps.values())
 
 
-def _get_dolma3_pool_base_dir():
+def _get_dolma3_pool_base_dir(*, worker_resources: ResourceConfig | None = None):
     """Get the base directory for main Dolma 3 Pool data (CC + olmOCR)."""
     # Note: append_sha_to_path=False in DownloadConfig, so files are directly under output_path/data/
-    return download_dolma3_pool().cd("data")
+    return download_dolma3_pool(worker_resources=worker_resources).cd("data")
 
 
-def _get_stack_edu_base_dir():
+def _get_stack_edu_base_dir(*, worker_resources: ResourceConfig | None = None):
     """Get the base directory for Stack-Edu data."""
     # Stack-Edu raw downloads are written directly under the dataset root
     # (e.g. gs://.../raw/stack_edu-<sha>/Python/train-*.parquet), not under
     # an intermediate data/ directory.
-    return download_stack_edu()
+    return download_stack_edu(worker_resources=worker_resources)
 
 
-def _get_finemath_base_dir():
+def _get_finemath_base_dir(*, worker_resources: ResourceConfig | None = None):
     """Get the base directory for FineMath data."""
-    return download_finemath().cd("data")
+    return download_finemath(worker_resources=worker_resources).cd("data")
 
 
-def _get_dolma_v17_base_dir():
+def _get_dolma_v17_base_dir(*, worker_resources: ResourceConfig | None = None):
     """Get the base directory for Dolma v1.7 data."""
-    return download_dolma_v17().cd("data")
+    return download_dolma_v17(worker_resources=worker_resources).cd("data")
 
 
 # =============================================================================
@@ -692,47 +694,59 @@ _stack_edu_hydration_cache: dict[str, ExecutorStep] = {}
 STACK_EDU_HYDRATION_MAX_WORKERS = 200
 
 
-def hydrate_stack_edu_subset(partition_name: str) -> ExecutorStep:
+def hydrate_stack_edu_subset(
+    partition_name: str,
+    *,
+    worker_resources: ResourceConfig | None = None,
+) -> ExecutorStep:
     """Create a hydration step for a Stack-Edu partition."""
     if not partition_name.startswith("stack_edu/"):
         raise ValueError(f"Expected a Stack-Edu partition, got {partition_name}")
 
-    if partition_name in _stack_edu_hydration_cache:
-        return _stack_edu_hydration_cache[partition_name]
+    cache_key = f"{partition_name}:{_worker_resources_cache_key(worker_resources)}"
+    if cache_key in _stack_edu_hydration_cache:
+        return _stack_edu_hydration_cache[cache_key]
 
     language = partition_name.removeprefix("stack_edu/")
     step = ExecutorStep(
         name=f"documents/stack_edu/{language}",
         fn=hydrate_stack_edu_text,
         config=StackEduHydrationConfig(
-            input_path=_get_stack_edu_base_dir() / language,
+            input_path=_get_stack_edu_base_dir(worker_resources=worker_resources) / language,
             output_path=this_output_path(),
             language=language,
             max_rows_per_task=versioned(20_000),
             max_workers=STACK_EDU_HYDRATION_MAX_WORKERS,
+            worker_resources=worker_resources,
             max_retries_per_blob=8,
             pipeline_version=versioned("v1"),
         ),
     )
-    _stack_edu_hydration_cache[partition_name] = step
+    _stack_edu_hydration_cache[cache_key] = step
     return step
 
 
 def get_stack_edu_hydration_steps(
     partitions: list[str] | None = None,
+    *,
+    worker_resources: ResourceConfig | None = None,
 ) -> dict[str, ExecutorStep]:
     """Create hydration steps for the requested Stack-Edu partitions."""
     if partitions is None:
         partitions = get_stack_edu_partitions()
 
     return {
-        partition_name: hydrate_stack_edu_subset(partition_name)
+        partition_name: hydrate_stack_edu_subset(partition_name, worker_resources=worker_resources)
         for partition_name in partitions
         if partition_name.startswith("stack_edu/")
     }
 
 
-def _resolve_partition_paths(partition_name: str) -> list:
+def _resolve_partition_paths(
+    partition_name: str,
+    *,
+    worker_resources: ResourceConfig | None = None,
+) -> list:
     """Resolve partition directory patterns to actual paths.
 
     Args:
@@ -745,18 +759,18 @@ def _resolve_partition_paths(partition_name: str) -> list:
 
     # Determine which source dataset this partition comes from
     if partition_name.startswith("common_crawl/") or partition_name.startswith("olmocr_pdfs/"):
-        base_dir = _get_dolma3_pool_base_dir()
+        base_dir = _get_dolma3_pool_base_dir(worker_resources=worker_resources)
         file_pattern = "**/*.jsonl.zst"
     elif partition_name.startswith("stack_edu/"):
-        return [hydrate_stack_edu_subset(partition_name).cd("train") / "*.jsonl.zst"]
+        return [hydrate_stack_edu_subset(partition_name, worker_resources=worker_resources).cd("train") / "*.jsonl.zst"]
     elif partition_name == "finemath_3plus":
-        base_dir = _get_finemath_base_dir()
+        base_dir = _get_finemath_base_dir(worker_resources=worker_resources)
         file_pattern = "**/*.parquet"  # FineMath uses parquet format
     elif partition_name == "arxiv":
-        base_dir = _get_dolma_v17_base_dir()
+        base_dir = _get_dolma_v17_base_dir(worker_resources=worker_resources)
         file_pattern = "**/*.json.gz"  # Dolma v1.7 uses json.gz
     elif partition_name == "wikipedia":
-        base_dir = _get_dolma_v17_base_dir()
+        base_dir = _get_dolma_v17_base_dir(worker_resources=worker_resources)
         file_pattern = "**/*.json.gz"  # Dolma v1.7 uses json.gz
     else:
         raise ValueError(f"Unknown partition source: {partition_name}")
@@ -771,6 +785,8 @@ def _resolve_partition_paths(partition_name: str) -> list:
 def tokenize_dolma3_pool_subset(
     partition_name: str,
     tokenizer: str | None = None,
+    *,
+    worker_resources: ResourceConfig | None = None,
 ) -> ExecutorStep:
     """Create a tokenization step for a specific partition.
 
@@ -786,12 +802,12 @@ def tokenize_dolma3_pool_subset(
             f"Partition '{partition_name}' not found. " f"Available partitions: {list(DOLMA3_POOL_PARTITIONS.keys())}"
         )
 
-    cache_key = f"{partition_name}:{tokenizer}"
-    if cache_key in _tokenize_cache:
-        return _tokenize_cache[cache_key]
-
     if tokenizer is None:
         tokenizer = marin_tokenizer
+
+    cache_key = f"{partition_name}:{tokenizer}:{_worker_resources_cache_key(worker_resources)}"
+    if cache_key in _tokenize_cache:
+        return _tokenize_cache[cache_key]
 
     if _uses_reused_equivalent_cache(partition_name, tokenizer):
         if partition_name == "finemath_3plus":
@@ -811,7 +827,11 @@ def tokenize_dolma3_pool_subset(
     output_path = f"tokenized/dolma3_pool/{safe_name}"
 
     # Get data paths
-    train_paths = _resolve_partition_paths(partition_name)
+    train_paths = _resolve_partition_paths(partition_name, worker_resources=worker_resources)
+
+    config_kwargs = {}
+    if worker_resources is not None:
+        config_kwargs["worker_resources"] = worker_resources
 
     step = ExecutorStep(
         name=output_path,
@@ -821,6 +841,7 @@ def tokenize_dolma3_pool_subset(
             validation_paths=versioned([]),
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),
+            **config_kwargs,
         ),
     )
 
@@ -831,6 +852,8 @@ def tokenize_dolma3_pool_subset(
 def tokenize_dolma3_pool(
     tokenizer: str | None = None,
     partitions: list[str] | None = None,
+    *,
+    worker_resources: ResourceConfig | None = None,
 ) -> dict[str, ExecutorStep]:
     """Create tokenization steps for Dolma 3 Pool partitions.
 
@@ -846,7 +869,11 @@ def tokenize_dolma3_pool(
 
     steps = {}
     for partition in partitions:
-        steps[partition] = tokenize_dolma3_pool_subset(partition, tokenizer=tokenizer)
+        steps[partition] = tokenize_dolma3_pool_subset(
+            partition,
+            tokenizer=tokenizer,
+            worker_resources=worker_resources,
+        )
 
     return steps
 

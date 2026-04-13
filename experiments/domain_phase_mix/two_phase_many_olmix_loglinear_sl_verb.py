@@ -13,10 +13,10 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
-from experiments.domain_phase_mix.exploratory.two_phase_many.benchmark_dsre_ceq import OLMIX_HUBER_DELTA
 from experiments.domain_phase_mix.nextgen.utils import normalize_phase_weights
 from experiments.domain_phase_mix.static_batch_selection import build_dataset_spec_from_frame
 from experiments.domain_phase_mix.two_phase_many_olmix_loglinear import (
+    OLMIX_LOGLINEAR_HUBER_DELTA,
     OLMIX_LOGLINEAR_KL_LAMBDA,
     OLMIX_LOGLINEAR_PHASE_WEIGHTS,
 )
@@ -138,7 +138,7 @@ def fit_olmix_loglinear_model(
     weights: np.ndarray,
     targets: np.ndarray,
     *,
-    delta: float = OLMIX_HUBER_DELTA,
+    delta: float = OLMIX_LOGLINEAR_HUBER_DELTA,
     seed: int = FIT_START_SEED,
     n_starts: int = FIT_N_STARTS,
 ) -> OlmixLoglinearFit:

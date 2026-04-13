@@ -10,6 +10,9 @@ import pandas as pd
 from fray.cluster import ResourceConfig
 from levanter.data.text import DatasetComponent as LmDatasetComponent
 from levanter.data.text import HierarchicalMixtureDatasetComponent
+from marin.datakit.download.huggingface import DownloadConfig
+from marin.processing.tokenize import TokenizeConfig
+from marin.transform.stack_edu.hydrate import StackEduHydrationConfig
 
 import experiments.domain_phase_mix.nextgen_experiment as nextgen_experiment
 from experiments.domain_phase_mix.config import WeightConfig
@@ -58,6 +61,15 @@ from experiments.domain_phase_mix.nextgen.collect import (
 from experiments.domain_phase_mix.nextgen.model_registry import _propose_top1_candidate
 from experiments.domain_phase_mix.nextgen.state_store import write_loop_state
 from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import REMOVED_DOLMA3_CC_TOPICS
+from experiments.pretraining_datasets.dolma3_dolmino_pool import (
+    download_dolmino_pool,
+    tokenize_dolmino_pool_subset,
+)
+from experiments.pretraining_datasets.dolma3_pool import (
+    download_dolma3_pool,
+    hydrate_stack_edu_subset,
+    tokenize_dolma3_pool_subset,
+)
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     DEFAULT_RUNTIME_CACHE_REGION,
     MERGED_CC_DOMAIN_NAMES,
@@ -402,8 +414,61 @@ def test_top_level_experiment_region_agnostic_uses_mirror_backed_prebuilt_domain
         resources=ResourceConfig.with_tpu("v5p-32", regions=["us-east5", "us-central1"], zone=None)
     )
     stack_edu_domain = next(domain for domain in experiment.domains if domain.name == "dolma3_stack_edu")
+    stack_edu_cache = stack_edu_domain.components[0].get_step()
 
     assert "mirror://" in stack_edu_domain.description
+    assert stack_edu_cache.cache_path == "mirror://tokenized/merged/dolma3_dolmino_top_level/dolma3_stack_edu-a7297b"
+
+
+def test_top_level_experiment_region_agnostic_pins_data_prep_workers_to_tpu_regions():
+    expected_regions = ["us-east5", "us-central1"]
+    experiment = create_two_phase_dolma3_dolmino_top_level_experiment(
+        resources=ResourceConfig.with_tpu("v5p-32", regions=expected_regions, zone=None)
+    )
+
+    tokenized_steps = []
+    for domain in experiment.domains:
+        for component in domain.components:
+            step = component.get_step()
+            if (
+                hasattr(step, "config")
+                and isinstance(step.config, TokenizeConfig)
+                and step.name.startswith(("tokenized/dolma3_pool/", "tokenized/dolma3_dolmino_pool/"))
+            ):
+                tokenized_steps.append(step)
+
+    assert tokenized_steps
+    assert all(list(step.config.worker_resources.regions or []) == expected_regions for step in tokenized_steps)
+
+
+def test_dataset_data_prep_steps_accept_worker_region_pinning():
+    worker_resources = ResourceConfig(regions=["us-east5", "us-central1"])
+
+    dolma3_download = download_dolma3_pool(worker_resources=worker_resources)
+    assert isinstance(dolma3_download.config, DownloadConfig)
+    assert list(dolma3_download.config.worker_resources.regions or []) == ["us-east5", "us-central1"]
+
+    dolmino_download = download_dolmino_pool(worker_resources=worker_resources)
+    assert isinstance(dolmino_download.config, DownloadConfig)
+    assert list(dolmino_download.config.worker_resources.regions or []) == ["us-east5", "us-central1"]
+
+    hydrate_step = hydrate_stack_edu_subset("stack_edu/Python", worker_resources=worker_resources)
+    assert isinstance(hydrate_step.config, StackEduHydrationConfig)
+    assert list(hydrate_step.config.worker_resources.regions or []) == ["us-east5", "us-central1"]
+
+    dolma3_tokenize = tokenize_dolma3_pool_subset(
+        "common_crawl/adult_content/0007",
+        worker_resources=worker_resources,
+    )
+    assert isinstance(dolma3_tokenize.config, TokenizeConfig)
+    assert list(dolma3_tokenize.config.worker_resources.regions or []) == ["us-east5", "us-central1"]
+
+    dolmino_tokenize = tokenize_dolmino_pool_subset(
+        "common_crawl_hq/19_adult_content",
+        worker_resources=worker_resources,
+    )
+    assert isinstance(dolmino_tokenize.config, TokenizeConfig)
+    assert list(dolmino_tokenize.config.worker_resources.regions or []) == ["us-east5", "us-central1"]
 
 
 def test_top_level_experiment_allows_budget_and_model_override():

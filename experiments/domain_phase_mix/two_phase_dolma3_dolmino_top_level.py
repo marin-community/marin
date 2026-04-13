@@ -122,12 +122,19 @@ def _normalize_regions(regions: str | Sequence[str]) -> tuple[str, ...]:
     return normalized
 
 
-def _mirror_path(path: str) -> str:
+def mirror_marin_path(path: str) -> str:
+    """Convert a Marin-bucket GCS path into a mirror:// path."""
     if path.startswith("mirror://"):
         return path
+    if path.startswith("gs://marin-"):
+        without_scheme = path[len("gs://") :]
+        _, sep, object_key = without_scheme.partition("/")
+        if not sep or not object_key:
+            raise ValueError(f"Expected Marin bucket object path, got {path!r}")
+        return f"mirror://{object_key}"
     if path.startswith("gs://"):
-        return f"mirror://{path}"
-    return path
+        raise ValueError(f"Only Marin-bucket GCS paths can be mirrored, got {path!r}")
+    return f"mirror://{path.lstrip('/')}"
 
 
 def _resolved_runtime_cache_regions(
@@ -143,6 +150,11 @@ def _resolved_runtime_cache_regions(
         if resources.regions:
             return _normalize_regions(resources.regions)
     return (DEFAULT_RUNTIME_CACHE_REGION,)
+
+
+def _data_prep_worker_resources(runtime_cache_regions: Sequence[str]) -> ResourceConfig:
+    normalized_regions = _normalize_regions(runtime_cache_regions)
+    return ResourceConfig(regions=list(normalized_regions))
 
 
 def _prebuilt_merged_runtime_cache_paths(runtime_cache_regions: Sequence[str]) -> dict[str, str]:
@@ -166,7 +178,7 @@ def _prebuilt_merged_runtime_cache_paths(runtime_cache_regions: Sequence[str]) -
                 None,
             )
         if cache_path is not None:
-            prebuilt_paths[domain_name] = _mirror_path(cache_path)
+            prebuilt_paths[domain_name] = mirror_marin_path(cache_path)
     return prebuilt_paths
 
 
@@ -180,7 +192,7 @@ class TwoPhaseWsdBoundarySchedule:
     decay_steps: int
 
 
-def _partition_step_fn(partition_name: str):
+def _partition_step_fn(partition_name: str, *, worker_resources: ResourceConfig | None = None):
     if partition_name in TOP_LEVEL_DOMAIN_PARTITIONS:
         raise ValueError(f"Expected a raw partition name, got coarse domain {partition_name}")
     if partition_name.startswith(("common_crawl/", "stack_edu/")) or partition_name in {
@@ -188,8 +200,18 @@ def _partition_step_fn(partition_name: str):
         "finemath_3plus",
         "wikipedia",
     }:
-        return partial(tokenize_dolma3_pool_subset, partition_name, tokenizer=marin_tokenizer)
-    return partial(tokenize_dolmino_pool_subset, partition_name, tokenizer=marin_tokenizer)
+        return partial(
+            tokenize_dolma3_pool_subset,
+            partition_name,
+            tokenizer=marin_tokenizer,
+            worker_resources=worker_resources,
+        )
+    return partial(
+        tokenize_dolmino_pool_subset,
+        partition_name,
+        tokenizer=marin_tokenizer,
+        worker_resources=worker_resources,
+    )
 
 
 @cache
@@ -202,10 +224,11 @@ def _existing_merged_runtime_cache_config(domain_name: str, cache_path: str) -> 
 
 
 @cache
-def _merged_top_level_domain_step(domain_name: str):
+def _merged_top_level_domain_step(domain_name: str, worker_regions: tuple[str, ...] = ()):
     partition_counts = top_level_domain_partition_counts(domain_name)
+    worker_resources = _data_prep_worker_resources(worker_regions) if worker_regions else None
     input_steps = {
-        partition_name: _partition_step_fn(partition_name)()
+        partition_name: _partition_step_fn(partition_name, worker_resources=worker_resources)()
         for partition_name in TOP_LEVEL_DOMAIN_PARTITIONS[domain_name]
     }
     return merge_tokenized_caches(
@@ -228,6 +251,7 @@ def build_top_level_domains(*, runtime_cache_region: str | Sequence[str] = DEFAU
     """
     domains: list[Domain] = []
     normalized_regions = _resolved_runtime_cache_regions(runtime_cache_region=runtime_cache_region)
+    worker_resources = _data_prep_worker_resources(normalized_regions)
     prebuilt_merged_runtime_cache_paths = _prebuilt_merged_runtime_cache_paths(normalized_regions)
     for domain_name in DOMAIN_NAMES:
         partition_counts = top_level_domain_partition_counts(domain_name)
@@ -264,7 +288,7 @@ def build_top_level_domains(*, runtime_cache_region: str | Sequence[str] = DEFAU
                     components=[
                         DatasetComponent(
                             name=domain_name,
-                            step_fn=partial(_merged_top_level_domain_step, domain_name),
+                            step_fn=partial(_merged_top_level_domain_step, domain_name, normalized_regions),
                             weight=TOP_LEVEL_DOMAIN_TOKEN_COUNTS[domain_name],
                         )
                     ],
@@ -284,7 +308,7 @@ def build_top_level_domains(*, runtime_cache_region: str | Sequence[str] = DEFAU
                     components=[
                         DatasetComponent(
                             name=partition_name,
-                            step_fn=_partition_step_fn(partition_name),
+                            step_fn=_partition_step_fn(partition_name, worker_resources=worker_resources),
                             weight=partition_counts[partition_name],
                         )
                     ],
@@ -296,7 +320,7 @@ def build_top_level_domains(*, runtime_cache_region: str | Sequence[str] = DEFAU
         components = [
             DatasetComponent(
                 name=partition_name,
-                step_fn=_partition_step_fn(partition_name),
+                step_fn=_partition_step_fn(partition_name, worker_resources=worker_resources),
                 weight=partition_counts[partition_name],
             )
             for partition_name in TOP_LEVEL_DOMAIN_PARTITIONS[domain_name]
@@ -318,11 +342,10 @@ def build_top_level_domain_steps(
     *, runtime_cache_region: str | Sequence[str] = DEFAULT_RUNTIME_CACHE_REGION
 ) -> dict[str, object]:
     """Build the shared prep steps for domains that should be physically merged in this region."""
-    prebuilt_merged_runtime_cache_paths = _prebuilt_merged_runtime_cache_paths(
-        _resolved_runtime_cache_regions(runtime_cache_region=runtime_cache_region)
-    )
+    normalized_regions = _resolved_runtime_cache_regions(runtime_cache_region=runtime_cache_region)
+    prebuilt_merged_runtime_cache_paths = _prebuilt_merged_runtime_cache_paths(normalized_regions)
     return {
-        domain_name: _merged_top_level_domain_step(domain_name)
+        domain_name: _merged_top_level_domain_step(domain_name, normalized_regions)
         for domain_name in PREFERRED_MERGED_RUNTIME_DOMAIN_NAMES
         if domain_name not in prebuilt_merged_runtime_cache_paths
     }
