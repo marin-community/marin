@@ -3334,6 +3334,54 @@ Committed as `2fe470a13`, relaunched as:
 - `/ahmed/v6e16-probe-ew4-v2` (europe-west4)
 - `/ahmed/v6e16-probe-ue5-v2` (us-east5)
 
+#### xprof Profiling Results — 2026-04-13T04:13Z
+
+Ran 20-step v6e-8 probe with xprof profiling on steps 5-15. W&B run: `v6e_probe_profile_ue5-79b49a`.
+Artifact: `jax-profile-step-5-15:v0`.
+
+**Time breakdown by category (% of device op time):**
+
+| Category | % of Time | Notes |
+|---|---|---|
+| MATMUL (MXU convolution fusion) | 47.0% | Includes LoRA, attention projections, MLP |
+| ATTENTION (SplashMHA Pallas) | 22.0% | Splash attention IS active (not falling back) |
+| ELEMENTWISE / VPU (memory-bound) | 11.6% | Layer norms, activations, residuals |
+| BUFFER ALLOCATION | 9.2% | AllocateBuffer stalls — HBM memory pressure |
+| DATA FORMATTING (reshape, pad, broadcast) | 7.5% | |
+| COMMUNICATION (ICI / FSDP) | 2.7% | FSDP all-gathers well-hidden behind compute |
+
+**Bandwidth bottleneck: CONFIRMED.**
+- Matmul arithmetic intensity: 472 FLOP/byte, below v6e roofline crossover of 522 FLOP/byte
+- Even MXU matmuls are memory-bound: 536 TFLOPS (58% of 918 peak), 1059 GiB/s bandwidth (65%)
+- Elementwise ops: 1243 GiB/s (76% of peak bandwidth)
+- Device is ~100% occupied (no idle gaps) — the low MFU comes from bandwidth, not idleness
+
+**Buffer allocation overhead (9.2% of time):**
+Top 7 longest ops are ALL `AllocateBuffer` calls (53-159ms each) for tiny bf16[64,512] scratch
+buffers. This suggests severe HBM memory pressure at 30.99 GB / 31.25 GB (99% utilization).
+Freeing HBM (via carry offloading or TP) could eliminate this overhead entirely.
+
+**Gradient accumulation confirmed:** 94% of ops wrapped in `microbatched/scan(accum_step)`.
+The while loop hierarchy shows 2-step accumulation scan → layer scans → attention loops.
+
+**Communication NOT a bottleneck:** FSDP all-gathers via collective-permute are only 2.7%
+of device time, fully overlapped with compute.
+
+**Splash attention IS active** — 22% of time in SplashMHA Pallas kernels. No fallback warnings.
+
+**Why 13% MFU but 1.8x faster than v5p:**
+- v6e: 918 TFLOPS × 13% = 119 effective TFLOPS/chip × 8 chips = 952 TFLOPS total
+- v5p: 459 TFLOPS × 29% = 133 effective TFLOPS/chip × 4 chips = 532 TFLOPS total
+- v6e wins on total effective TFLOPS (1.79x) despite lower per-chip efficiency
+
+**Optimization priorities (from xprof data):**
+1. **Eliminate AllocateBuffer stalls (9% free)** — reduce HBM pressure via carry offloading
+   (`gradient_checkpointing="offload"`) to enable pd=8 without grad accum
+2. **Increase matmul arithmetic intensity** — larger per_device batch (pd=8 vs pd=4) means
+   larger GEMMs, better MXU utilization, fewer bandwidth-bound matmuls
+3. **Eliminate gradient accumulation (reduces weight reads by 2x)** — both #1 and #2 achieved
+   by carry offloading to enable pd=8 in a single pass
+
 #### v6e-8 Probe — 2026-04-12T21:17Z
 
 Pivoted to v6e-8 (single-VM, 8 chips × 32 GiB, no coscheduling needed).

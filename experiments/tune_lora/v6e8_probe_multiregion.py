@@ -17,6 +17,7 @@ from experiments.llama import LLAMA3_CHAT_STOP_TOKEN_IDS, llama_8b
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_dpo_config import SimpleDPOConfig
 from fray.cluster import ResourceConfig
+from levanter.callbacks.profiler import ProfilerConfig
 from marin.execution.executor import mirrored
 from marin.processing.tokenize import lm_data_config
 
@@ -56,14 +57,16 @@ def make_v6e_probe(
     regions: list[str] | None = None,
     name_suffix: str = "",
     per_device: int = 4,
+    num_train_steps: int = 10,
+    profiler: ProfilerConfig | None = None,
 ):
     config = SimpleDPOConfig(
         resources=ResourceConfig.with_tpu(tpu_type, regions=regions) if regions else ResourceConfig.with_tpu(tpu_type),
         per_device_parallelism=per_device,
         per_device_eval_parallelism=per_device,
         train_batch_size=64,
-        num_train_steps=10,
-        steps_per_eval=5,
+        num_train_steps=num_train_steps,
+        steps_per_eval=num_train_steps,  # eval only at start and end
         learning_rate=5e-6,
         lr_schedule="cosine",
         warmup=0.1,
@@ -87,6 +90,7 @@ def make_v6e_probe(
         steps_per_hf_export=200,
         hf_generation_eos_token_ids=LLAMA3_CHAT_STOP_TOKEN_IDS,
         seed=0,
+        profiler=profiler or ProfilerConfig(),
     )
     return default_dpo(
         name=f"dpo/tune_lora/v6e_probe{name_suffix}",
