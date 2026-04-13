@@ -299,6 +299,16 @@ def normalize_to_parquet(
 
     # Sort for deterministic output so re-runs produce stable .artifact contents
     subdir_results.sort(key=lambda r: r.subdir)
+
+    total_in = sum(r.counters.get("zephyr/records_in", 0) for r in subdir_results)
+    total_filtered = sum(r.counters.get("normalize/empty_text_filtered", 0) for r in subdir_results)
+    if total_in > 0 and total_filtered == total_in:
+        raise ValueError(
+            f"All {total_in} records were filtered out due to missing/empty text. "
+            f"Your data is either invalid or you have selected the wrong column, "
+            f"current column: {text_field!r}"
+        )
+
     return NormalizeResult(subdirs=subdir_results)
 
 

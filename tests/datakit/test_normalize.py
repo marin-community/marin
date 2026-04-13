@@ -141,6 +141,17 @@ def test_missing_or_empty_text_filtered(tmp_path: Path, write_jsonl_gz, record):
     assert total_empty >= 1
 
 
+def test_all_records_empty_text_raises(tmp_path: Path, write_jsonl_gz):
+    """Pipeline fails when every record has missing/empty text."""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+
+    write_jsonl_gz(input_dir / "data.jsonl.gz", [{"text": "   "}, {"text": ""}, {"text": None}])
+
+    with pytest.raises(ValueError, match="All 3 records were filtered out.*wrong column"):
+        normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+
+
 def test_directory_structure_preserved(tmp_path: Path, write_jsonl_gz):
     """Each input subdirectory gets its own parquet output under the same relative path."""
     input_dir = tmp_path / "input"
