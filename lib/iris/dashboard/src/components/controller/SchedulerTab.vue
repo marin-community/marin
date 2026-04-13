@@ -13,6 +13,7 @@ import type {
   JobQuery,
 } from '@/types/rpc'
 import { timestampMs, formatRelativeTime, bandDisplayName, bandColor } from '@/utils/formatting'
+import { DIVERGING_COLORS } from '@/types/status'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 
@@ -163,10 +164,11 @@ const mergedUsers = computed<MergedUser[]>(() => {
 
 // -- Helpers --
 
-function utilizationColor(pct: number): string {
-  if (pct >= 100) return 'text-status-danger font-semibold'
-  if (pct >= 75) return 'text-status-warning'
-  return 'text-text-primary'
+function utilizationStyle(pct: number): Record<string, string> {
+  const clamped = Math.min(pct, 120)
+  const idx = Math.round((clamped / 120) * (DIVERGING_COLORS.length - 1))
+  const colorIdx = DIVERGING_COLORS.length - 1 - Math.max(0, Math.min(idx, DIVERGING_COLORS.length - 1))
+  return { color: DIVERGING_COLORS[colorIdx] }
 }
 
 const loading = computed(() => (schedulerLoading.value || usersLoading.value) && !schedulerData.value && !usersData.value)
@@ -237,7 +239,7 @@ const hasData = computed(() => schedulerData.value || usersData.value)
               <td class="px-3 py-2 text-[13px] text-right tabular-nums">
                 {{ !user.hasBudget ? '-' : user.budgetLimit === '0' ? 'Unlimited' : user.budgetLimit }}
               </td>
-              <td class="px-3 py-2 text-[13px] text-right tabular-nums" :class="user.hasBudget ? utilizationColor(user.utilizationPercent) : ''">
+              <td class="px-3 py-2 text-[13px] text-right tabular-nums font-semibold" :style="user.hasBudget ? utilizationStyle(user.utilizationPercent) : {}">
                 {{ !user.hasBudget ? '-' : user.budgetLimit === '0' ? '-' : user.utilizationPercent.toFixed(1) + '%' }}
               </td>
               <td class="px-3 py-2 text-[13px]">
