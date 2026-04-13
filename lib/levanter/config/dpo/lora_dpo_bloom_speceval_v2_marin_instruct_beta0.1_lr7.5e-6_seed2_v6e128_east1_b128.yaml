@@ -1,0 +1,109 @@
+# LoRA-DPO config for Bloom SpecEval v2 on marin-8b-instruct.
+# Batch=128 on v6e-128 in us-east1-d.
+# Uses cross-host FSDP: param_mapping embed -> [replica_dcn, data] to shard 128-way.
+data:
+  tokenizer: marin-community/marin-tokenizer
+  shuffle: true
+  permutation_type: feistel
+  components:
+    bloom_speceval_v2_train:
+      source:
+        type: url
+        train_urls:
+          - gs://marin-us-east1/preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite/train/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-east1/tokenized/bloom_speceval_v2_train_prefs_marin_tokenizer-12920b
+    bloom_speceval_v2_val:
+      source:
+        type: url
+        validation_urls:
+          - gs://marin-us-east1/preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite/val/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-east1/tokenized/bloom_speceval_v2_val_prefs_marin_tokenizer-a06ae8
+  train_weights:
+    bloom_speceval_v2_train: 1.0
+    bloom_speceval_v2_val: 0.0
+
+model:
+  type: llama
+  max_seq_len: 4096
+  hidden_dim: 4096
+  intermediate_dim: 14336
+  num_layers: 32
+  num_heads: 32
+  num_kv_heads: 8
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  rope:
+    type: llama3
+
+train_seq_len: 4096
+
+trainer:
+  seed: 2
+  per_device_parallelism: -1
+  per_device_eval_parallelism: 32
+  mesh:
+    param_mapping:
+      embed: [replica_dcn, data]
+  tracker:
+    type: wandb
+    project: dpo
+    name: lora-bsv2-mi-b0p1-s2-lr7p5e6-b128-v6e128-east1-xfsdp
+    group: lora-bsv2-mi-b0p1-s2-batch-sweep
+    tags:
+      - dpo
+      - lora-dpo
+      - bloom
+      - speceval-v2
+      - llama3
+      - marin-instruct
+      - beta0.1
+      - seed2
+      - lr7.5e-6
+      - batch128
+      - v6e-128
+      - us-east1-d
+      - cross-host-fsdp
+  mp: p=f32,c=bfloat16
+  train_batch_size: 128
+  num_train_steps: 850
+  steps_per_eval: 200
+  model_averaging: null
+  checkpointer:
+    save_interval: 10m
+    base_path: gs://marin-us-east1/checkpoints/dpo/lora_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v6e128_b128_xfsdp
+
+optimizer:
+  learning_rate: 7.5e-6
+  weight_decay: 0.0
+  min_lr_ratio: 0.0
+  lr_schedule: cosine
+  warmup: 0.1
+  max_grad_norm: 1.0
+
+adapter:
+  type: lora
+  r: 64
+  alpha: 64.0
+  dropout: 0.0
+  zero_init_b: true
+  target_modules: null
+
+reference:
+  type: adapter_base
+
+beta: 0.1
+validation_split_fraction: null
+
+initialize_from_hf: gs://marin-us-east1/models/marin-community--marin-8b-instruct--0378f9c
+use_hf_model_config: false
+
+hf_save_steps: 200
+merged_hf_save_path: gs://marin-us-east1/checkpoints/dpo/lora_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-6_seed2_v6e128_b128_xfsdp/merged_hf

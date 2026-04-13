@@ -9,6 +9,7 @@ from typing import Tuple
 
 import pytest
 import yaml
+import jax
 
 import levanter.tracker
 from levanter.tracker import CompositeTracker, TrackerConfig
@@ -101,6 +102,56 @@ def test_tracker_logging_without_global_tracker_emits_no_warning(monkeypatch):
         tracker_fns.log_configuration({"metric": 1.0})
 
     assert not caught
+
+
+def test_wandb_config_reapplies_tags_when_init_drops_them(monkeypatch):
+    wandb_config_cls = TrackerConfig.get_choice_class("wandb")
+    if wandb_config_cls is None:
+        pytest.skip("wandb not installed")
+
+    import wandb
+    import levanter.tracker.wandb as wandb_tracker_module
+
+    class FakeRun:
+        def __init__(self):
+            self.step = 0
+            self.project = "dpo"
+            self.name = "fake-run"
+            self.id = "fake-id"
+            self.group = None
+            self._tags = ()
+
+        @property
+        def tags(self):
+            return self._tags
+
+        @tags.setter
+        def tags(self, tags):
+            self._tags = tuple(tags)
+
+        def log_artifact(self, *_args, **_kwargs):
+            pass
+
+    fake_run = FakeRun()
+
+    def fake_init(**kwargs):
+        assert kwargs["tags"] == ["dpo", "lora-dpo"]
+        return fake_run
+
+    monkeypatch.setattr(wandb, "init", fake_init)
+    monkeypatch.setattr(wandb, "run", fake_run, raising=False)
+    monkeypatch.setattr(wandb, "summary", {}, raising=False)
+    monkeypatch.setattr(jax, "process_index", lambda: 0)
+    monkeypatch.setattr(jax, "process_count", lambda: 1)
+    monkeypatch.setattr(jax, "device_count", lambda: 8)
+    monkeypatch.setattr(jax, "default_backend", lambda: "tpu")
+    monkeypatch.setattr(wandb_tracker_module, "generate_pip_freeze", lambda: "")
+    monkeypatch.setattr(wandb_config_cls, "_git_settings", lambda self: {})
+
+    tracker = wandb_config_cls(project="dpo", tags=["dpo", "lora-dpo"], mode="disabled").init(None)
+
+    assert tracker.run is fake_run
+    assert fake_run.tags == ("dpo", "lora-dpo")
 
 
 def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):

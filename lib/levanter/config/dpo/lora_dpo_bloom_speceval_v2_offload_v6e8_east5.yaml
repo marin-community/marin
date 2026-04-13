@@ -1,0 +1,99 @@
+# LoRA-DPO with carry offloading on v6e-8.
+# Tests gradient_checkpointing=offload to enable pd=8 without grad accum.
+data:
+  tokenizer: marin-community/marin-tokenizer
+  shuffle: true
+  permutation_type: feistel
+  components:
+    bloom_speceval_v2_train:
+      source:
+        type: url
+        train_urls:
+          - gs://marin-us-central1/preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite/train/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-central1/tokenized/bloom_speceval_v2_train_prefs_marin_tokenizer-12920b
+    bloom_speceval_v2_val:
+      source:
+        type: url
+        validation_urls:
+          - gs://marin-us-central1/preference/bloom_openai_model_spec_v2_gpt41_vs_mixtral_opposite/val_deduped/shard-00000.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-central1/tokenized/bloom_speceval_v2_val_deduped_prefs_marin_tokenizer-589b86
+  train_weights:
+    bloom_speceval_v2_train: 1.0
+    bloom_speceval_v2_val: 0.0
+
+model:
+  type: llama
+  max_seq_len: 4096
+  hidden_dim: 4096
+  intermediate_dim: 14336
+  num_layers: 32
+  num_heads: 32
+  num_kv_heads: 8
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  gradient_checkpointing: offload
+  rope:
+    type: llama3
+
+train_seq_len: 4096
+
+trainer:
+  seed: 0
+  per_device_parallelism: -1
+  per_device_eval_parallelism: 4
+  tracker:
+    type: wandb
+    project: dpo
+    tags:
+      - dpo
+      - lora-dpo
+      - bloom
+      - speceval-v2
+      - v6e-offload
+      - carry-offload-probe
+  mp: p=f32,c=bfloat16
+  train_batch_size: 64
+  num_train_steps: 20
+  steps_per_eval: 20
+  model_averaging: null
+  checkpointer:
+    save_interval: 10m
+    base_path: gs://marin-us-central1/checkpoints/dpo/lora_offload_probe_v6e8
+  profiler:
+    enabled: true
+    start_step: 5
+    num_steps: 10
+
+optimizer:
+  learning_rate: 5e-6
+  weight_decay: 0.0
+  min_lr_ratio: 0.0
+  lr_schedule: cosine
+  warmup: 0.1
+  max_grad_norm: 1.0
+
+adapter:
+  type: lora
+  r: 64
+  alpha: 64.0
+  dropout: 0.0
+  zero_init_b: true
+  target_modules: null
+
+reference:
+  type: adapter_base
+
+beta: 0.1
+validation_split_fraction: null
+
+initialize_from_hf: marin-community/marin-8b-instruct
+use_hf_model_config: false
+
+hf_save_steps: 200

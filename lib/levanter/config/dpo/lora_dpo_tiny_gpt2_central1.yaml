@@ -1,0 +1,58 @@
+# Tiny LoRA-DPO sanity-check config for lora_dpo.py.
+# Uses the base model as the implicit reference (no second model copy needed).
+
+data:
+  tokenizer: gpt2
+  cache_dir: cache/lora_dpo_tiny
+  components:
+    default:
+      source:
+        type: url
+        train_urls:
+          - config/data/tiny_preference.jsonl
+      format:
+        type: preference_chat
+        chat_template: |
+          {% for message in messages %}
+          {% if message['role'] == 'user' %}
+          {{ message['content'] }}
+          {% elif message['role'] == 'assistant' %}
+          {% generation %}{{ message['content'] }}{% endgeneration %}
+          {% endif %}
+          {% endfor %}
+        pack: false
+        slice_strategy: raise
+      shuffle: true
+
+train_seq_len: 64
+
+trainer:
+  seed: 0
+  mp: f32
+  train_batch_size: 4
+  num_train_steps: 10
+  steps_per_eval: 5
+  model_averaging: null
+  ray:
+    auto_start_cluster: false
+  require_accelerator: false
+  checkpointer:
+    save_interval: 1m
+    keep:
+      - every: 5
+
+optimizer:
+  learning_rate: 1e-3
+  weight_decay: 0.0
+  warmup: 0.0
+
+lora:
+  r: 8
+  alpha: 8.0
+  dropout: 0.0
+  zero_init_b: true  # Critical for DPO: adapter starts as identity so policy = reference at step 0
+
+initialize_from_hf: hf-internal-testing/tiny-random-gpt2
+use_hf_model_config: true
+beta: 0.1
+validation_split_fraction: 0.1
