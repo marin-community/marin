@@ -9,7 +9,7 @@ import type {
   GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
   ResourceUsage,
 } from '@/types/rpc'
-import { timestampMs, formatTimestamp, formatDuration, formatBytes, formatCpuMillicores, formatDeviceConfig } from '@/utils/formatting'
+import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
 import { getLeafJobName } from '@/utils/jobTree'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -38,6 +38,8 @@ const profilingTaskId = ref<string | null>(null)
 const copiedName = ref(false)
 const taskSearch = ref('')
 const stateFilter = ref('')
+const resourceMin = ref<ResourceUsage | null>(null)
+const resourceMax = ref<ResourceUsage | null>(null)
 
 type SortColumn = 'task' | 'state' | 'mem' | 'peakMem' | 'cpu' | 'duration'
 type SortDir = 'asc' | 'desc'
@@ -106,6 +108,8 @@ async function fetchData() {
     }
     job.value = jobResp.job
     jobRequest.value = jobResp.request ?? null
+    resourceMin.value = jobResp.resourceMin ?? null
+    resourceMax.value = jobResp.resourceMax ?? null
     tasks.value = tasksResp.tasks ?? []
 
     const parentIds = [props.jobId, ...expandedChildJobs.value]
@@ -351,6 +355,37 @@ const taskCounts = computed(() => {
   return counts
 })
 
+const MAX_FAILURE_EXAMPLES = 5
+
+interface AttemptSummary {
+  taskId: string
+  taskIndex: string
+  attemptId: number
+  error: string
+  finishedAtMs: number
+}
+
+function collectAttemptsByState(stateName: string): AttemptSummary[] {
+  const results: AttemptSummary[] = []
+  for (const task of tasks.value) {
+    for (const attempt of task.attempts ?? []) {
+      if (stateToName(attempt.state) !== stateName) continue
+      results.push({
+        taskId: task.taskId,
+        taskIndex: taskIndex(task.taskId),
+        attemptId: attempt.attemptId,
+        error: attempt.error ?? '',
+        finishedAtMs: timestampMs(attempt.finishedAt),
+      })
+    }
+  }
+  results.sort((a, b) => b.finishedAtMs - a.finishedAtMs)
+  return results
+}
+
+const recentTaskFailures = computed<AttemptSummary[]>(() => collectAttemptsByState('failed'))
+const recentPreemptions = computed<AttemptSummary[]>(() => collectAttemptsByState('worker_failed'))
+
 const acceleratorDisplay = computed(() => {
   const j = job.value
   const req = jobRequest.value
@@ -436,6 +471,38 @@ const filteredTasks = computed(() => {
     return cmp * dir
   })
   return result
+})
+
+// -- Task Pagination --
+
+const TASK_PAGE_SIZE = 50
+const taskPage = ref(0)
+
+const totalTaskPages = computed(() => Math.max(1, Math.ceil(filteredTasks.value.length / TASK_PAGE_SIZE)))
+
+const paginatedTasks = computed(() => {
+  // Clamp the effective page against the current filtered length so a shrink
+  // during auto-refresh never yields an empty slice on a stale page. The
+  // watcher below mirrors this into `taskPage` so the paginator footer stays
+  // in sync.
+  const effectivePage = Math.min(taskPage.value, totalTaskPages.value - 1)
+  const start = Math.max(0, effectivePage) * TASK_PAGE_SIZE
+  return filteredTasks.value.slice(start, start + TASK_PAGE_SIZE)
+})
+
+// Reset page when filters or sort change
+watch([taskSearch, stateFilter, sortColumn, sortDir], () => { taskPage.value = 0 })
+
+// Clamp taskPage when the filtered task list shrinks underneath us. This
+// happens during the 10s auto-refresh when task state transitions change
+// which tasks match the active state filter — without clamping, a user on
+// a later page can be left with an empty table body and a stale footer
+// range (e.g. "251-240 of 240"). The computed runs eagerly so the page is
+// corrected before `paginatedTasks` slices against the new length.
+watch(totalTaskPages, (pages) => {
+  if (taskPage.value >= pages) {
+    taskPage.value = Math.max(0, pages - 1)
+  }
 })
 
 // -- Profiling --
@@ -544,6 +611,72 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         <pre class="mt-2 p-3 bg-surface rounded text-xs font-mono whitespace-pre-wrap">{{ job.pendingReason }}</pre>
       </div>
 
+      <!-- Recent task attempt failures callout -->
+      <div
+        v-if="recentTaskFailures.length > 0"
+        class="mb-4 px-4 py-3 bg-status-danger-bg border border-status-danger-border rounded-lg"
+      >
+        <span class="font-semibold text-status-danger text-sm">
+          {{ recentTaskFailures.length }} failed task attempt{{ recentTaskFailures.length !== 1 ? 's' : '' }}
+        </span>
+        <div class="mt-2 flex flex-col gap-1">
+          <div
+            v-for="f in recentTaskFailures.slice(0, MAX_FAILURE_EXAMPLES)"
+            :key="`${f.taskId}-${f.attemptId}`"
+            class="text-xs text-text-secondary"
+          >
+            <RouterLink
+              :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(f.taskId)}`"
+              class="text-accent hover:underline font-mono"
+            >
+              task {{ f.taskIndex }}
+            </RouterLink>
+            <span class="text-text-muted"> attempt {{ f.attemptId }}</span>
+            <span v-if="f.finishedAtMs" class="text-text-muted"> · {{ formatRelativeTime(f.finishedAtMs) }}</span>
+            <span v-if="f.error" class="text-status-danger"> · {{ f.error.length > 120 ? f.error.slice(0, 120) + '…' : f.error }}</span>
+          </div>
+          <span
+            v-if="recentTaskFailures.length > MAX_FAILURE_EXAMPLES"
+            class="text-xs text-text-muted"
+          >
+            … and {{ recentTaskFailures.length - MAX_FAILURE_EXAMPLES }} more
+          </span>
+        </div>
+      </div>
+
+      <!-- Recent preemption failures callout -->
+      <div
+        v-if="recentPreemptions.length > 0"
+        class="mb-4 px-4 py-3 bg-status-warning-bg border border-status-warning-border rounded-lg"
+      >
+        <span class="font-semibold text-status-warning text-sm">
+          {{ recentPreemptions.length }} preempted attempt{{ recentPreemptions.length !== 1 ? 's' : '' }}
+        </span>
+        <div class="mt-2 flex flex-col gap-1">
+          <div
+            v-for="f in recentPreemptions.slice(0, MAX_FAILURE_EXAMPLES)"
+            :key="`${f.taskId}-${f.attemptId}`"
+            class="text-xs text-text-secondary"
+          >
+            <RouterLink
+              :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(f.taskId)}`"
+              class="text-accent hover:underline font-mono"
+            >
+              task {{ f.taskIndex }}
+            </RouterLink>
+            <span class="text-text-muted"> attempt {{ f.attemptId }}</span>
+            <span v-if="f.finishedAtMs" class="text-text-muted"> · {{ formatRelativeTime(f.finishedAtMs) }}</span>
+            <span v-if="f.error" class="text-status-warning"> · {{ f.error.length > 120 ? f.error.slice(0, 120) + '…' : f.error }}</span>
+          </div>
+          <span
+            v-if="recentPreemptions.length > MAX_FAILURE_EXAMPLES"
+            class="text-xs text-text-muted"
+          >
+            … and {{ recentPreemptions.length - MAX_FAILURE_EXAMPLES }} more
+          </span>
+        </div>
+      </div>
+
       <!-- Info cards -->
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <InfoCard title="Job Status">
@@ -561,6 +694,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </InfoRow>
           <InfoRow label="Failures">
             {{ job.failureCount ?? 0 }}
+          </InfoRow>
+          <InfoRow v-if="jobRequest?.priorityBand" label="Priority">
+            <span :class="bandColor(jobRequest.priorityBand)" class="font-semibold">
+              {{ bandDisplayName(jobRequest.priorityBand) }}
+            </span>
           </InfoRow>
         </InfoCard>
 
@@ -583,6 +721,34 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         </InfoCard>
       </div>
 
+      <!-- Live resource usage (min/max across running tasks) -->
+      <div
+        v-if="resourceMin && resourceMax"
+        class="mb-6 rounded-lg border border-surface-border bg-surface px-4 py-3"
+      >
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
+          Live Resource Usage (across running tasks)
+        </h3>
+        <div class="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <span class="text-text-muted">CPU:</span>
+            <span class="font-mono ml-1">{{ formatCpuMillicores(resourceMin.cpuMillicores ?? 0) }}</span>
+            <span class="text-text-muted mx-1">&ndash;</span>
+            <span class="font-mono">{{ formatCpuMillicores(resourceMax.cpuMillicores ?? 0) }}</span>
+          </div>
+          <div>
+            <span class="text-text-muted">Memory:</span>
+            <span class="font-mono ml-1">{{ formatBytes((resourceMin.memoryMb ? parseFloat(resourceMin.memoryMb) : 0) * 1024 * 1024) }}</span>
+            <span class="text-text-muted mx-1">&ndash;</span>
+            <span class="font-mono">{{ formatBytes((resourceMax.memoryMb ? parseFloat(resourceMax.memoryMb) : 0) * 1024 * 1024) }}</span>
+          </div>
+          <div v-if="resourceMax.memoryPeakMb">
+            <span class="text-text-muted">Peak Memory:</span>
+            <span class="font-mono ml-1">{{ formatBytes((resourceMax.memoryPeakMb ? parseFloat(resourceMax.memoryPeakMb) : 0) * 1024 * 1024) }}</span>
+          </div>
+        </div>
+      </div>
+
       <!-- Constraints -->
       <div
         v-if="jobRequest?.constraints && jobRequest.constraints.length > 0"
@@ -599,6 +765,62 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           >
             {{ c.key }} {{ c.op }} {{ c.value?.stringValue ?? c.value?.intValue ?? '' }}
           </span>
+        </div>
+      </div>
+
+      <!-- Job Request Details -->
+      <div
+        v-if="jobRequest?.entrypoint?.runCommand?.argv?.length || jobRequest?.environment?.envVars || jobRequest?.environment?.pipPackages?.length || jobRequest?.ports?.length"
+        class="mb-6 rounded-lg border border-surface-border bg-surface px-4 py-3"
+      >
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
+          Job Request
+        </h3>
+        <div class="flex flex-col gap-2 text-sm">
+          <div v-if="jobRequest.entrypoint?.runCommand?.argv?.length">
+            <span class="text-text-muted text-xs">Command</span>
+            <pre class="mt-0.5 px-2 py-1 bg-surface-sunken rounded font-mono text-xs whitespace-pre-wrap break-all">{{ jobRequest.entrypoint.runCommand.argv.join(' ') }}</pre>
+          </div>
+          <div v-if="jobRequest.entrypoint?.setupCommands?.length">
+            <span class="text-text-muted text-xs">Setup Commands</span>
+            <pre class="mt-0.5 px-2 py-1 bg-surface-sunken rounded font-mono text-xs whitespace-pre-wrap break-all">{{ jobRequest.entrypoint.setupCommands.join('\n') }}</pre>
+          </div>
+          <div v-if="jobRequest.environment?.envVars && Object.keys(jobRequest.environment.envVars).length">
+            <span class="text-text-muted text-xs">Environment Variables</span>
+            <div class="mt-0.5 flex flex-wrap gap-1.5">
+              <span
+                v-for="(val, key) in jobRequest.environment.envVars"
+                :key="key"
+                class="inline-block rounded bg-surface-sunken px-2 py-0.5 font-mono text-xs text-text-secondary"
+              >
+                {{ key }}={{ val }}
+              </span>
+            </div>
+          </div>
+          <div v-if="jobRequest.environment?.pipPackages?.length">
+            <span class="text-text-muted text-xs">Pip Packages</span>
+            <div class="mt-0.5 flex flex-wrap gap-1.5">
+              <span
+                v-for="(pkg, i) in jobRequest.environment.pipPackages"
+                :key="i"
+                class="inline-block rounded bg-surface-sunken px-2 py-0.5 font-mono text-xs text-text-secondary"
+              >
+                {{ pkg }}
+              </span>
+            </div>
+          </div>
+          <div v-if="jobRequest.ports?.length">
+            <span class="text-text-muted text-xs">Ports</span>
+            <div class="mt-0.5 flex flex-wrap gap-1.5">
+              <span
+                v-for="(port, i) in jobRequest.ports"
+                :key="i"
+                class="inline-block rounded bg-surface-sunken px-2 py-0.5 font-mono text-xs text-text-secondary"
+              >
+                {{ port }}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -753,7 +975,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </thead>
           <tbody>
             <tr
-              v-for="task in filteredTasks"
+              v-for="task in paginatedTasks"
               :key="task.taskId"
               class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
             >
@@ -774,7 +996,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               <td class="px-3 py-2 text-[13px] truncate" :title="task.workerId ?? ''">
                 <RouterLink
                   v-if="task.workerId"
-                  :to="'/worker/' + encodeURIComponent(task.workerId)"
+                  :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}`"
                   class="text-accent hover:underline font-mono text-xs"
                 >
                   {{ task.workerId }}
@@ -830,6 +1052,30 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             </tr>
           </tbody>
         </table>
+        <!-- Task pagination -->
+        <div v-if="totalTaskPages > 1" class="flex items-center justify-between px-3 py-2 text-xs text-text-secondary border-t border-surface-border">
+          <span>
+            {{ taskPage * TASK_PAGE_SIZE + 1 }}&ndash;{{ Math.min((taskPage + 1) * TASK_PAGE_SIZE, filteredTasks.length) }}
+            of {{ filteredTasks.length }} tasks
+          </span>
+          <div class="flex items-center gap-1">
+            <button
+              :disabled="taskPage === 0"
+              class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+              @click="taskPage--"
+            >
+              &larr; Prev
+            </button>
+            <span class="px-2 font-mono">{{ taskPage + 1 }} / {{ totalTaskPages }}</span>
+            <button
+              :disabled="taskPage >= totalTaskPages - 1"
+              class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+              @click="taskPage++"
+            >
+              Next &rarr;
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Job logs -->

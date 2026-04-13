@@ -27,7 +27,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -111,7 +111,6 @@ class PickleDiskChunk:
 from zephyr.shuffle import (  # noqa: E402
     ListShard,
     MemChunk,
-    ScatterParquetIterator,  # noqa: F401 — re-exported for external callers
     ScatterShard,  # noqa: F401 — re-exported for plan.py and external callers
     _build_scatter_shard_from_manifest,  # noqa: F401 — re-exported for plan.py
     _make_envelope,
@@ -892,9 +891,6 @@ class ZephyrCoordinator:
             for items in materialized:
                 flat_result.extend(items)
 
-            # Signal workers to shut down now that all stages are complete.
-            self.shutdown()
-
             return flat_result
         finally:
             with self._lock:
@@ -975,14 +971,6 @@ class ZephyrCoordinator:
             self._chunk_prefix = prefix
             self._execution_id = execution_id
 
-    def get_chunk_config(self) -> dict:
-        """Return chunk storage configuration for workers."""
-        with self._lock:
-            return {
-                "prefix": self._chunk_prefix,
-                "execution_id": self._execution_id,
-            }
-
     def start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
         """Load a new stage's tasks into the queue (legacy compat)."""
         self._start_stage(stage_name, tasks, is_last_stage=is_last_stage)
@@ -991,14 +979,6 @@ class ZephyrCoordinator:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
         with self._lock:
             self._check_worker_heartbeats(timeout)
-
-    def collect_results(self) -> dict[int, TaskResult]:
-        """Return results for the completed stage (legacy compat)."""
-        return self._collect_results()
-
-    def signal_done(self) -> None:
-        """Signal workers that no more stages will be submitted (legacy compat)."""
-        self._shutdown_event.set()
 
 
 # ---------------------------------------------------------------------------
@@ -1360,6 +1340,25 @@ def _regroup_result_refs(
 
 
 @dataclass(frozen=True)
+class ZephyrExecutionResult:
+    """Result of running a Zephyr pipeline.
+
+    This is also the wire format pickled by ``_run_coordinator_job`` into the
+    result file, so callers of ``ZephyrContext.execute`` receive it as-is.
+
+    Attributes:
+        results: Flat list of items produced by the terminal stage of the
+            pipeline (e.g. output file paths for write stages).
+        counters: Aggregated counter values from the run, including built-in
+            zephyr counters (e.g. ``zephyr/records_in``) and any user counters
+            recorded via ``zephyr.counters.increment``.
+    """
+
+    results: list
+    counters: dict[str, int]
+
+
+@dataclass(frozen=True)
 class _CoordinatorJobConfig:
     """Serializable config for the coordinator job entrypoint."""
 
@@ -1441,10 +1440,12 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
 
     try:
         results = coordinator.run_pipeline.submit(config.plan, config.execution_id).result()
+        counters = coordinator.get_counters.remote().result(timeout=10.0) or {}
+        payload = ZephyrExecutionResult(results=results, counters=counters)
 
         ensure_parent_dir(result_path)
         with open_url(result_path, "wb") as f:
-            f.write(cloudpickle.dumps(results))
+            f.write(cloudpickle.dumps(payload))
     except Exception as e:
         # Persist the exception so the caller can recover the original type
         # (important for non-retryable error detection).
@@ -1592,7 +1593,7 @@ class ZephyrContext:
         dataset: Dataset,
         verbose: bool = False,
         dry_run: bool = False,
-    ) -> Sequence:
+    ) -> ZephyrExecutionResult:
         """Execute a dataset pipeline.
 
         Submits a coordinator *job* that creates coordinator and worker
@@ -1600,12 +1601,19 @@ class ZephyrContext:
         disk. If the coordinator job dies (e.g., VM preemption), the
         pipeline is retried up to ``max_execution_retries`` times.
         Application errors (``ZephyrWorkerError``) are never retried.
+
+        Returns:
+            A ``ZephyrExecutionResult`` containing the flat list of results
+            produced by the terminal stage and the aggregated counters from
+            the run. Callers that only care about the results should access
+            ``.results``; counters are exposed for callers that want to
+            persist or surface them.
         """
         plan = compute_plan(dataset)
         if verbose or dry_run:
             _print_plan(dataset.operations, plan)
         if dry_run:
-            return []
+            return ZephyrExecutionResult(results=[], counters={})
 
         # NOTE: pipeline ID incremented on clean completion only
         self._pipeline_id += 1
@@ -1665,10 +1673,10 @@ class ZephyrContext:
 
                 # Read results written by the coordinator job.
                 # This must succeed — the job completed successfully.
-                result = _read_coordinator_result(result_path)
-                if isinstance(result, Exception):
-                    raise result
-                return result
+                payload = _read_coordinator_result(result_path)
+                if isinstance(payload, Exception):
+                    raise payload
+                return payload
 
             except _NON_RETRYABLE_ERRORS:
                 raise

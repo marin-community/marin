@@ -58,7 +58,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --all-packages --extra=cpu --no-default-groups
+        run: uv sync --all-packages --extra=cpu --extra=controller --no-default-groups
 
       - name: Write CoreWeave kubeconfig
         run: |
@@ -89,7 +89,7 @@ jobs:
         run: |
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
-            --memory=16G --disk=16G --cpu=1 --extra=cpu \
+            --memory=2G --disk=4G --cpu=1 --extra=cpu \
             -e MARIN_PREFIX s3://marin-na/marin/ \
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
@@ -195,7 +195,7 @@ jobs:
             Read .agents/skills/canary-triage/SKILL.md and follow it.
           claude_args: |
             --model opus
-            --max-turns 50
+            --max-turns 500
             --allowedTools "Bash(kubectl:*),Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*)"
         env:
           CANARY_LANE: gpu

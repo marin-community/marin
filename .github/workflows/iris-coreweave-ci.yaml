@@ -104,7 +104,7 @@ jobs:
         run: |
           cd lib/iris && uv run --group dev iris -v \
             --config=examples/coreweave-ci.yaml \
-            cluster start
+            cluster start --fresh
 
       - name: Run integration tests
         env:

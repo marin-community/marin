@@ -13,6 +13,7 @@ They focus on:
 import threading
 
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
+from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import (
@@ -109,13 +110,17 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions
         if job_id and job_id not in jobs:
             job = _query_job(state, job_id)
             if job:
+                resources = resource_spec_from_scalars(
+                    job.res_cpu_millicores,
+                    job.res_memory_bytes,
+                    job.res_disk_bytes,
+                    job.res_device_json,
+                )
                 jobs[job_id] = JobRequirements(
-                    resources=job.request.resources,
-                    constraints=list(job.request.constraints),
-                    is_coscheduled=job.request.HasField("coscheduling"),
-                    coscheduling_group_by=(
-                        job.request.coscheduling.group_by if job.request.HasField("coscheduling") else None
-                    ),
+                    resources=resources,
+                    constraints=constraints_from_json(job.constraints_json),
+                    is_coscheduled=job.has_coscheduling,
+                    coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
                 )
     return scheduler.create_scheduling_context(
         workers,
@@ -322,22 +327,20 @@ def test_cancel_job_removes_endpoints_for_job_tree(state):
             endpoint_id="parent-ep",
             name="parent/actor",
             address="host1:9000",
-            job_id=JobName.root("test-user", "parent"),
+            task_id=parent_tasks[0].task_id,
             metadata={},
             registered_at=Timestamp.now(),
         ),
-        task_id=parent_tasks[0].task_id,
     )
     state.add_endpoint(
         EndpointRow(
             endpoint_id="child-ep",
             name="parent/child/actor",
             address="host2:9000",
-            job_id=JobName.from_string("/test-user/parent/child"),
+            task_id=child_tasks[0].task_id,
             metadata={},
             registered_at=Timestamp.now(),
         ),
-        task_id=child_tasks[0].task_id,
     )
 
     assert len(_endpoints(state, EndpointQuery())) == 2
@@ -594,11 +597,11 @@ def test_terminal_states_clean_up_endpoints(state):
         endpoint_id="ep1",
         name="j1/actor",
         address="a:1",
-        job_id=JobName.root("test-user", "j1"),
+        task_id=task.task_id,
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep, task.task_id)
+    state.add_endpoint(ep)
 
     # Verify endpoint visible while running
     assert len(_endpoints(state, EndpointQuery(exact_name="j1/actor"))) == 1
@@ -624,11 +627,11 @@ def test_endpoint_visibility_by_job_state(state):
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
-        job_id=JobName.root("test-user", "ns-1"),
+        task_id=task.task_id,
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep, task_id=task.task_id)
+    state.add_endpoint(ep)
 
     # Visible while pending
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
@@ -660,11 +663,11 @@ def test_endpoint_deleted_on_task_failure_with_retry(state):
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
-        job_id=JobName.root("test-user", "ns-1"),
+        task_id=task.task_id,
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep, task_id=task.task_id)
+    state.add_endpoint(ep)
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
     # Task fails but retries (goes back to PENDING)
@@ -691,11 +694,11 @@ def test_endpoint_deleted_on_worker_failure(state):
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
-        job_id=JobName.root("test-user", "ns-1"),
+        task_id=task.task_id,
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep, task_id=task.task_id)
+    state.add_endpoint(ep)
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
     # Worker fails -> task retries to PENDING
@@ -737,11 +740,11 @@ def test_endpoint_survives_building_state(state):
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
-        job_id=JobName.root("test-user", "ns-1"),
+        task_id=task.task_id,
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep, task_id=task.task_id)
+    state.add_endpoint(ep)
     assert len(_endpoints(state, EndpointQuery(exact_name="ns-1/actor"))) == 1
 
     # Transition to RUNNING — endpoint should survive
@@ -781,7 +784,7 @@ def test_namespace_isolation(state):
             endpoint_id="ep-1",
             name="ns-1/actor",
             address="10.0.0.1:8080",
-            job_id=JobName.root("test-user", "ns-1"),
+            task_id=tasks1[0].task_id,
             metadata={},
             registered_at=Timestamp.now(),
         )
@@ -791,7 +794,7 @@ def test_namespace_isolation(state):
             endpoint_id="ep-2",
             name="ns-2/actor",
             address="10.0.0.2:8080",
-            job_id=JobName.root("test-user", "ns-2"),
+            task_id=tasks2[0].task_id,
             metadata={},
             registered_at=Timestamp.now(),
         )
@@ -1045,7 +1048,7 @@ def test_coscheduled_task_failure_kills_siblings(state):
     tasks = submit_job(state, "j1", req)
 
     job = _query_job(state, JobName.root("test-user", "j1"))
-    assert job.request.HasField("coscheduling")
+    assert job.has_coscheduling
 
     # Dispatch all tasks
     for i, task in enumerate(tasks):
@@ -1207,7 +1210,7 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(state):
     tasks = submit_job(state, "j1", req)
 
     job = _query_job(state, JobName.root("test-user", "j1"))
-    assert not job.request.HasField("coscheduling")
+    assert not job.has_coscheduling
 
     for i, task in enumerate(tasks):
         dispatch_task(state, task, WorkerId(f"w{i}"))
@@ -3041,11 +3044,11 @@ def test_endpoint_registered_after_task_terminal_is_orphaned(state):
         endpoint_id="orphan-ep",
         name="leak/actor",
         address="a:1",
-        job_id=JobName.root("test-user", "leak"),
+        task_id=task.task_id,
         metadata={},
         registered_at=Timestamp.now(),
     )
-    state.add_endpoint(ep, task_id=task.task_id)
+    state.add_endpoint(ep)
 
     # BUG: The endpoint is now orphaned — the task is terminal so no
     # future transition will clean it up.
@@ -3250,6 +3253,20 @@ def test_drain_dispatch_all_drains_dispatch_queue(state):
 
     rows_after = state._db.fetchall("SELECT * FROM dispatch_queue WHERE worker_id = ?", (str(wid),))
     assert len(rows_after) == 0
+
+
+def test_dispatch_propagates_task_image(state):
+    """task_image set on the LaunchJobRequest is copied into the dispatched RunTaskRequest."""
+    wid = register_worker(state, "w1", "host:8080", make_worker_metadata())
+
+    req = make_job_request("img-job", task_image="custom/swetrace:dev")
+    tasks = submit_job(state, "img-job", req)
+    state.queue_assignments([Assignment(task_id=tasks[0].task_id, worker_id=wid)])
+
+    batches = state.drain_dispatch_all()
+    assert len(batches) == 1
+    assert len(batches[0].tasks_to_run) == 1
+    assert batches[0].tasks_to_run[0].task_image == "custom/swetrace:dev"
 
 
 def test_prune_old_data_short_circuits_when_nothing_prunable(state):

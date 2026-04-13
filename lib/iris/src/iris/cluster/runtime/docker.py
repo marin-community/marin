@@ -348,7 +348,8 @@ class DockerContainerHandle:
         setup_script = self._generate_setup_script()
         self._write_setup_script(setup_script)
 
-        # Build containers get max(8 GB, task request) memory
+        # Build containers get max(32 GB, task request) memory — uv sync on a large
+        # workspace OOMed at the old 8 GB ceiling on a host with 1.4 TB free.
         task_memory_bytes = self.config.resources.memory_bytes if self.config.resources else 0
         build_memory_bytes = (
             max(self._BUILD_MEMORY_LIMIT_BYTES, task_memory_bytes)
@@ -602,7 +603,7 @@ exec {quoted_cmd}
     # Docker CLI helpers
     # -------------------------------------------------------------------------
 
-    _BUILD_MEMORY_LIMIT_BYTES = 8 * 1024**3
+    _BUILD_MEMORY_LIMIT_BYTES = 32 * 1024**3
 
     def _docker_create(
         self,

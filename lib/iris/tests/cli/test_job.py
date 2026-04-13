@@ -7,9 +7,11 @@ import click
 import pytest
 
 from iris.cli.job import (
+    _parse_tpu_alternatives,
     _render_job_summary_text,
     build_job_summary,
     build_resources,
+    build_tpu_alternatives,
     validate_extra_resources,
     validate_region_zone,
 )
@@ -92,7 +94,7 @@ def test_executor_heuristic_small_cpu_job_gets_non_preemptible():
     preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
     assert preemptible is not None
     assert preemptible.key == WellKnownAttribute.PREEMPTIBLE
-    assert preemptible.value == "false"
+    assert preemptible.values[0].value == "false"
 
 
 def test_executor_heuristic_skipped_for_gpu_job():
@@ -133,7 +135,37 @@ def test_executor_heuristic_with_region_constraint():
 
     preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
     assert preemptible is not None
-    assert preemptible.value == "false"
+    assert preemptible.values[0].value == "false"
+
+
+# --tpu multi-variant parsing
+# ---------------------------------------------------------------------------
+
+
+def test_tpu_multi_variant_parsing():
+    # Single variant
+    primary, alts = _parse_tpu_alternatives("v6e-4")
+    assert (primary, alts) == ("v6e-4", [])
+
+    # Comma-separated list: first is primary, rest are alternatives; whitespace stripped
+    primary, alts = _parse_tpu_alternatives(" v6e-4 , v5litepod-4 , v5p-8 ")
+    assert (primary, alts) == ("v6e-4", ["v5litepod-4", "v5p-8"])
+
+    # Empty / garbage input rejected
+    with pytest.raises(click.BadParameter, match="at least one"):
+        _parse_tpu_alternatives(", ,")
+
+    # Mismatched vm_count across variants rejected
+    with pytest.raises(click.BadParameter, match="vm_count"):
+        _parse_tpu_alternatives("v5p-8,v5p-16")
+
+    # build_tpu_alternatives: None → [], multi-variant → flat list
+    assert build_tpu_alternatives(None) == []
+    assert build_tpu_alternatives("v6e-4,v5litepod-4,v5p-8") == ["v6e-4", "v5litepod-4", "v5p-8"]
+
+    # build_resources picks the first variant as the canonical TPU type
+    spec = build_resources(tpu="v6e-4,v5litepod-4,v5p-8", gpu=None, cpu=8.0, memory="32GB", disk="50GB")
+    assert spec.device.tpu.variant == "v6e-4"
 
 
 # ---------------------------------------------------------------------------

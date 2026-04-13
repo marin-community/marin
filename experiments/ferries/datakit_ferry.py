@@ -7,10 +7,11 @@ Runs against the FineWeb-Edu ``sample/10BT`` subset using the StepSpec DAG runne
 Output paths are placed under ``$MARIN_PREFIX/datakit-smoke/$SMOKE_RUN_ID/...``.
 """
 
+import json
 import logging
 import os
 
-from rigging.filesystem import marin_temp_bucket
+from rigging.filesystem import marin_temp_bucket, url_to_fs
 from rigging.log_setup import configure_logging
 
 from fray import ResourceConfig
@@ -109,14 +110,30 @@ def build_steps(run_id: str) -> list[StepSpec]:
     return [downloaded, normalized, deduped, consolidated, tokenized]
 
 
+def _write_status(status: str, marin_prefix: str) -> None:
+    """Write ferry run status to FERRY_STATUS_PATH if set."""
+    status_path = os.environ.get("FERRY_STATUS_PATH")
+    if not status_path:
+        return
+    payload = json.dumps({"status": status, "marin_prefix": marin_prefix})
+    fs, _ = url_to_fs(status_path)
+    with fs.open(status_path, "w") as f:
+        f.write(payload)
+    logger.info("Wrote ferry status to %s", status_path)
+
+
 def main() -> None:
     configure_logging()
     if not os.environ.get("MARIN_PREFIX"):
         os.environ["MARIN_PREFIX"] = marin_temp_bucket(ttl_days=1)
 
-    logger.info("MARIN_PREFIX defaulted to %s", os.environ["MARIN_PREFIX"])
+    marin_prefix = os.environ["MARIN_PREFIX"]
+    logger.info("MARIN_PREFIX defaulted to %s", marin_prefix)
     run_id = os.environ["SMOKE_RUN_ID"]
+
+    _write_status("running", marin_prefix)
     StepRunner().run(build_steps(run_id))
+    _write_status("succeeded", marin_prefix)
 
 
 if __name__ == "__main__":
