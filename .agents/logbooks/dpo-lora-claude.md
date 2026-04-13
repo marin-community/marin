@@ -3382,6 +3382,23 @@ of device time, fully overlapped with compute.
 3. **Eliminate gradient accumulation (reduces weight reads by 2x)** — both #1 and #2 achieved
    by carry offloading to enable pd=8 in a single pass
 
+**W&B links:**
+- Profiling run: https://wandb.ai/marin-community/dpo/runs/v6e_probe_profile_ue5-79b49a
+- xprof artifact: `jax-profile-step-5-15:v0` (download and open in TensorBoard or Perfetto)
+
+**v6e-8 host RAM:** 1.4 TB available, 128 GB default request. Carry offloading would add
+~17 GB to host RAM usage (~47 GB base + 17 GB carries = ~65 GB, well within 128 GB).
+
+#### Carry Offloading Probe — 2026-04-13T05:38Z
+
+Launched `/ahmed/v6e8-offload-probe` with `gradient_checkpointing="offload"`:
+- Offloads checkpoint saves (carries) from HBM to pinned host memory
+- Enables per_device=8 (auto) without gradient accumulation
+- 20 steps + xprof profiling on steps 5-15
+- Regions: europe-west4 + us-east5
+- Expected HBM: ~27 GB (down from 44.23 at pd=8 without offloading)
+- Expected step time: ~9-10s (down from 14.2s with grad accum)
+
 #### v6e-8 Probe — 2026-04-12T21:17Z
 
 Pivoted to v6e-8 (single-VM, 8 chips × 32 GiB, no coscheduling needed).
