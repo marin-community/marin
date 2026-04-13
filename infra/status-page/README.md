@@ -228,9 +228,9 @@ break** — we'll need to plumb a service-account bearer token.
      so history lives authoritatively next to the workers table.
 - **Iris panel reachability row** is still `/health`-only. Worker counts
   and job-state breakdowns are surfaced in the Workers and Jobs
-  subsections; tasks / autoscaler / detailed state are still behind the
-  full Connect RPC surface and would need generated TypeScript stubs
-  (or more `ExecuteRawQuery` SQL).
+  subsections via `ExecuteRawQuery` SQL. Tasks, autoscaler, and detailed
+  state are available via other Connect RPC methods (all support JSON
+  natively) but would need additional SQL or direct RPC calls wired up.
 - **Single cluster only** (`marin`). Extending to `marin-dev` means
   adding a second Cloud Run service or making the existing one
   multi-cluster.

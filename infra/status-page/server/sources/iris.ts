@@ -1,11 +1,10 @@
-// Iris controller reachability.
+// Iris controller reachability via the /health endpoint.
 //
-// In v1, the controller's only easily-callable JSON endpoint is /health
-// (see lib/iris/src/iris/cluster/controller/dashboard.py:396). Everything
-// else is HTML dashboard or Connect RPC. This source reports reachability
-// + round-trip latency and leaves room in the response shape for richer
-// data later (which is increasingly supplied by the workers and jobs
-// sources reading the controller's SQLite directly via ExecuteRawQuery).
+// All Connect RPC methods on the controller support JSON natively
+// (POST + Content-Type: application/json), which is how the workers
+// and jobs sources call ExecuteRawQuery. This source sticks with the
+// simpler /health GET because it only needs a binary reachable/latency
+// signal, not structured data from the controller's SQLite.
 
 import { getControllerUrl } from "./discovery.js";
 
