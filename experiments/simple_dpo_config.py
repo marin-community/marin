@@ -73,6 +73,7 @@ class SimpleDPOConfig:
     """EOS token IDs to write to generation_config.json. None means no generation config.
     For chat models, include the turn-boundary token (e.g. [128001, 128009])."""
 
+    per_device_parallelism: int = -1
     per_device_eval_parallelism: int = -1
 
     seed: int = 0

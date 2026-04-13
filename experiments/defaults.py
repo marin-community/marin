@@ -762,6 +762,7 @@ def default_dpo(
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                 }
             ),
+            per_device_parallelism=dpo_config.per_device_parallelism,
             per_device_eval_parallelism=dpo_config.per_device_eval_parallelism,
             profiler=dpo_config.profiler,
             allow_partial_checkpoint=dpo_config.allow_partial_checkpoint,

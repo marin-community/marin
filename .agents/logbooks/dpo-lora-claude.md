@@ -3196,3 +3196,375 @@ uv run iris --config=lib/iris/examples/marin.yaml job run --job-name dummy --tpu
 ```
 
 Submission: job `/ahmed/dummy`, pending (coscheduling 2 workers for multinode v5p-16).
+
+## 2026-04-12 v6e Feasibility Analysis For LoRA DPO
+
+### Motivation
+
+v5p capacity is occupied. Investigating whether LoRA DPO (Llama 8B, batch 64, seq 4096) can run on v6e, which has more availability on the cluster.
+
+### Hardware Comparison
+
+| | v5p-8 (used for tune-lora) | v6e-8 (proposed) | v6e-16 |
+|---|---|---|---|
+| Chips | 4 | 8 | 16 |
+| HBM per chip | 95.74 GiB (~102.8 GB) | 32 GiB (~34.4 GB) | 32 GiB (~34.4 GB) |
+| Total HBM | 383 GiB | 256 GiB | 512 GiB |
+| per_device batch (b=64) | 16 | 8 | 4 |
+
+### W&B System Metrics (all 18 tune-lora runs on v5p-8)
+
+- `system.tpu.X.memoryUsage`: **98.4–99.4%** across all 18 runs, all 4 chips
+- `system.tpu.X.memoryUsageBytes`: peak ~102 GB per chip
+- **Caveat**: JAX/XLA preallocates all available HBM at startup. These numbers reflect total allocation, not actual peak usage. Every JAX program on TPU shows ~99%.
+
+### Hard Data Points
+
+1. **batch 128 on v5p-8 (per_device=32)**: OOM at compile time
+   - XLA reported: 111.15 GB needed, 95.74 GiB available
+   - Dominant temporary: `bf16[32,32,4096,4096]` attention broadcast ~32 GB
+   - (From logbook entry 2026-03-30)
+
+2. **batch 64 on v5p-8 (per_device=16)**: succeeded, all 18 runs completed
+   - Actual peak unknown (masked by XLA preallocation), but ≤ 95.74 GiB per chip
+
+3. **Earlier eval-only analysis** (from logbook, v5p-32 = 16 chips):
+   - Model shard (FSDP, 1/16th): ~1 GB/chip
+   - Activations at per_device=32: ~32 GB/chip
+   - Total eval: ~33 GB/chip
+
+### v6e-8 Feasibility: Almost Certainly Won't Fit
+
+The attention-score temporary `bf16[batch, heads, seq, seq]` is the memory bottleneck. On v5p-8 at per_device=32, this was ~32 GB. Scaling:
+
+- v5p-8 per_device=16: attention temp ~16 GB + model shard ~4 GB + optimizer/grads → likely 60–90 GiB/chip
+- v6e-8 per_device=8: attention temp ~8 GB + model shard ~2 GB + optimizer/grads → estimated 30–50 GiB/chip
+- v6e has 32 GiB/chip → **too tight, high OOM risk**
+
+### v6e-16 Feasibility: Likely Fits
+
+- per_device batch = 4 (with batch 64)
+- attention temp ~4 GB + model shard ~1 GB + optimizer/grads → estimated 15–25 GiB/chip
+- v6e has 32 GiB/chip → **should fit with headroom**
+
+### Gradient Accumulation Alternative (v6e-8)
+
+Could force `per_device_parallelism=4` on v6e-8 with 2 gradient accumulation steps:
+- Memory profile similar to v6e-16 per chip (~15–25 GiB)
+- Trade-off: 2× forward/backward passes per step → slower training
+- Untested — would need a probe run
+
+### Recommendation
+
+1. **v6e-16** is the safe choice for LoRA DPO at batch 64
+2. **v6e-8 with grad accumulation** (per_device_parallelism=4) is possible but slower and untested
+3. **v6e-8 without grad accumulation** (per_device=8) is too risky — likely OOM
+
+### Probe Launch — 2026-04-12T20:52Z
+
+Launched v6e-16 LoRA DPO probe on Iris to test memory fit.
+
+- **Script**: `experiments/tune_lora/v6e16_probe.py`
+- **Iris Job**: `/ahmed/v6e16-lora-dpo-probe`
+- **Hardware**: v6e-16 (16 chips × 32 GiB HBM), europe-west4
+- **Config**: same as tune-lora sweep (Llama 8B, LoRA r=64, beta=0.1, lr=5e-6, seed=0, batch 64, seq 4096)
+- **Short run**: `num_train_steps=10`, `steps_per_eval=5` — just testing hardware fit
+- **per_device_eval_parallelism**: 4 (conservative for 32 GiB/chip)
+- **Expected per_device_parallelism**: 64 / 16 chips = 4
+- **Executor parent**: 3 GB memory, CPU-only
+
+#### v6e-16 Scheduling Failure
+
+Probes 1–3 all failed with `Job is unschedulable: no scaling group matches the job constraints`.
+- v6e-16 is multi-host (4 VMs), requires coscheduling
+- Workers exist and report `device_variant=v6e-16`, but the controller's `check_coscheduling_feasibility` rejects the request
+- Root cause unclear — may be a controller-side constraint mismatch (controller git hash `7e68242e8`)
+- Merging latest main did not help (the issue is server-side)
+
+#### v6e-8 Probe — 2026-04-12T21:17Z
+
+Pivoted to v6e-8 (single-VM, 8 chips × 32 GiB, no coscheduling needed).
+
+- **Iris Job**: `/ahmed/v6e8-lora-dpo-probe`
+- **Sub-job**: `/ahmed/v6e8-lora-dpo-probe/train_dpo` — PENDING, waiting for v6e-8 TPU capacity
+- **Config**: same as v6e-16 probe but targeting v6e-8, per_device batch = 8 (auto), per_device_eval = 4
+- **Risk**: v6e-8 has only 32 GiB/chip and per_device=8 may OOM — this is the probe to find out
+- **Status**: sub-job submitted, queued behind 15 other v6e-8 demands in us-east5-b; europe-west4-a has 10 ready workers but all occupied
+
+#### v6e-8 OOM Result — 2026-04-12T23:36Z
+
+The eu-west4 train_dpo sub-job got a TPU (after 1 preemption), loaded model weights, and **OOMed during XLA compilation**:
+
+```
+RESOURCE_EXHAUSTED: XLA:TPU compile permanent error.
+Used 44.23G of 31.25G hbm. Exceeded hbm capacity by 12.98G.
+```
+
+- **v6e-8 HBM per chip**: 31.25 GB
+- **Needed per chip**: 44.23 GB (at per_device_parallelism=8, batch=64, 8 chips)
+- **Over by**: 12.98 GB (42% over capacity)
+- Peak host memory: 32.53 GB
+
+**Conclusion**: v6e-8 with per_device=8 does NOT fit for LoRA DPO on Llama 8B.
+
+#### Cross-Region Mirror Fix
+
+Fixed cross-region executor errors by wrapping source data paths with `mirrored()`:
+- `mirrored("preference/bloom_.../train/*.jsonl.gz")` instead of hardcoded `gs://marin-us-central1/...`
+- The mirror:// protocol bypasses the executor's cross-region GCS check
+- MirrorFileSystem copies data on-demand to the local region
+- Script: `experiments/tune_lora/v6e8_probe_multiregion.py`
+
+#### Revised Memory Model (from v6e-8 OOM data)
+
+Memory per chip = Static + per_device × A
+
+**Static components on v6e-8 (8 chips):**
+- Model shard (FSDP, 8B bf16): 16 GB / 8 = 2 GB
+- LoRA optimizer (Adam m+v, fp32 on ~0.3 GB params): ~0.04 GB/chip
+- All-gather peak (1 Llama layer gathered): ~0.5 GB
+- XLA compilation buffers: ~2-5 GB
+- **Total static estimate: 5-8 GB**
+
+**Activation cost per example per chip:**
+```
+44.23 = Static + 8 × A
+A ≈ (44.23 - 6) / 8 ≈ 4.78 GB/example  (if Static ≈ 6 GB)
+A ≈ (44.23 - 8) / 8 ≈ 4.53 GB/example  (if Static ≈ 8 GB)
+```
+**~4.5-4.8 GB per example per chip** with gradient checkpointing, LoRA r=64, seq_len=4096.
+
+**Predictions:**
+
+| Config | per_device | Est. total/chip | Fits 31.25 GB? |
+|---|---|---|---|
+| v6e-8, batch=64 | 8 | **44.23 GB** (measured) | No (over by 13 GB) |
+| v6e-8, batch=32 | 4 | ~24.8 GB | Yes (~6 GB headroom) |
+| v6e-8, batch=16 | 2 | ~15.4 GB | Yes (safe) |
+| v6e-16, batch=64 | 4 | ~23.8 GB | Yes (~7 GB headroom) |
+
+Note: earlier napkin math underestimated because it guessed "attention temp ~8 GB" from the v5p-8 broadcast tensor shape instead of computing from actual per-example activation cost. The 44.23 GB OOM gives a hard calibration point.
+
+#### Next Steps
+
+1. **v6e-8, batch=32**: most likely to work (~6 GB headroom). Quick to test.
+2. **v6e-16, batch=64**: better throughput (same total batch, more chips, but needs multi-host coscheduling fix on Iris controller)
+3. **v6e-8, batch=64, per_device_parallelism=4**: gradient accumulation path — same memory as batch=32 but preserves global batch size. Needs plumbing through SimpleDPOConfig.
+
+#### v6e-8 Gradient Accumulation Probe — 2026-04-12T23:50Z
+
+Added `per_device_parallelism` to `SimpleDPOConfig` and `default_dpo` TrainerConfig passthrough.
+Launched 3 probes with `per_device_parallelism=4`, `train_batch_size=64` (2 grad accum steps):
+
+- `/ahmed/v6e8-ga4-ew4` (europe-west4) — **TRAINING SUCCESSFULLY**
+- `/ahmed/v6e8-ga4-ue5` (us-east5) — pending, waiting for TPU
+- `/ahmed/v6e8-ga4-ue1` (us-east1) — pending, waiting for TPU
+
+**europe-west4 result:**
+- Traced train_step in 5.7s, lowered in 2.8s
+- **XLA compilation succeeded** — no OOM
+- **Step 1/10 completed**, now running eval
+- **Peak memory: 30.99 GB of 31.25 GB** (0.26 GB headroom — extremely tight)
+- Training rate: ~574s/step (includes first-step compilation overhead)
+
+**Conclusion: v6e-8 with per_device=4 and grad accumulation FITS for LoRA DPO on Llama 8B.**
+
+#### Post-Mortem: Why the Memory Estimates Were Wrong
+
+**Error 1 — Mixed TPU HBM with host RAM.** The "Revised Memory Model" section used
+two numbers in the same linear model: 44.23 GB (from the XLA OOM — this is **TPU HBM**)
+and 30.99 GB (from the Iris `PEAK MEM` column — this is **host RAM / container RSS**).
+These measure completely different memory pools. The linear regression was nonsensical.
+
+**Error 2 — Underestimated static cost by 2-3×.** Estimated 5-8 GB based on visible
+components (model shard 2 GB + optimizer 0.04 GB + all-gather 0.5 GB + "XLA overhead 2-5 GB").
+Missed: XLA pre-plans the entire DPO computation graph (4 forward passes + backward +
+optimizer step) and pre-allocates ALL intermediate buffers. For Llama 8B DPO with gradient
+checkpointing, this includes gradient tensors flowing through every layer (not just LoRA params),
+pipelined all-gather buffers for multiple layers, DPO loss intermediates (log-probs from all
+4 passes retained simultaneously), and the reference eval cache. The actual static cost is
+≤ 18.27 GB per chip — the "2-5 GB XLA overhead" guess was the main source of error.
+
+**Error 3 — Treated attention temp as the only dynamic cost.** Extrapolated the v5p-8
+`bf16[32,32,4096,4096]` attention broadcast (~32 GB at per_device=32) and scaled linearly.
+The attention score tensor estimate itself was correct (~8 GB at per_device=8) but it's only
+one of hundreds of XLA temporary allocations. The total per-example activation cost is
+≥ 3.25 GB/example/chip, which is actually less than the 4.5-4.8 GB I claimed — but because
+the static cost was so underestimated, the total came out too low.
+
+**Error 4 — Presented false precision.** The prediction table claimed "~24.8 GB" for
+per_device=4 when the actual TPU HBM usage is unknown (we only know ≤ 31.25 GB because
+it compiled). The 30.99 GB I called "actual" was host RAM, not TPU HBM.
+
+**What we actually know (TPU HBM only):**
+- per_device=8 on v6e-8: **44.23 GB** needed (hard, from XLA OOM)
+- per_device=4 on v6e-8: **≤ 31.25 GB** (compiled successfully, exact peak unknown)
+- Difference: halving per_device saved ≥ 12.98 GB → **A ≥ 3.25 GB/example/chip**
+- Static: **S ≤ 18.27 GB/chip** (could be anywhere from 10-18 GB)
+
+**Lesson:** Always distinguish TPU HBM from host RAM. State uncertainty bounds, not point
+estimates. And account for the full DPO computation graph, not just one forward pass.
+
+#### Corrected First-Principles HBM Accounting
+
+After empirical validation, here is the correct memory breakdown for DPO LoRA on Llama 8B
+(v6e-8, 8 chips, FSDP, gradient checkpointing, LoRA r=64, seq=4096, vocab=128256):
+
+**Three things the original estimate missed:**
+
+1. **Two sets of checkpoint saves** (biggest error): DPO backward passes through policy(chosen)
+   AND policy(rejected) sequentially. While backward runs through one, the other's checkpoint
+   saves must stay alive. This DOUBLES the largest single cost. With 32 individually-checkpointed
+   layers: 2 × 32 × per_device × 4096 × 4096 × 2 bytes.
+
+2. **lm_head logits tensor**: `per_device × 4096 × 128256 × 2 bytes`. The logs showed
+   `Fused cross-entropy selected implementation: xla` — the XLA fallback materializes the
+   full 128K-vocab logits. 8.4 GB at per_device=8. Completely omitted from original estimate.
+
+3. **32 layers of checkpoint saves, not sqrt(32)≈6**: Levanter's `scan_layers` checkpoints
+   each layer individually. All 32 layer outputs persist simultaneously, not just segment
+   boundaries.
+
+**Complete HBM breakdown:**
+
+| Component | pd=8 | pd=4 | Scales with |
+|---|---|---|---|
+| Model params (bf16, FSDP/8) | 2.0 GB | 2.0 GB | chips |
+| LoRA + Adam m,v (fp32, sharded) | 0.3 GB | 0.3 GB | chips |
+| All-gather buffers (2 layers pipelined) | 0.9 GB | 0.9 GB | fixed |
+| 2× checkpoint saves (policy chosen+rejected, 32 layers) | 17.2 GB | 8.6 GB | per_device |
+| lm_head logits (XLA cross-entropy, 128K vocab) | 8.4 GB | 4.2 GB | per_device |
+| Attention scores (1 layer, backward recompute peak) | 8.6 GB | 4.3 GB | per_device |
+| MLP intermediates (gate+up, 1 layer) | 1.9 GB | 0.9 GB | per_device |
+| QKV + attention output (1 layer) | 0.7 GB | 0.3 GB | per_device |
+| Gradients + XLA overhead | 2.5 GB | 2.5 GB | ~fixed |
+| **Total estimate** | **42.4 GB** | **24.0 GB** | |
+| **Actual** | **44.23 GB** | **≤ 31.25 GB** | |
+| **Error** | **4%** | **consistent** | |
+
+The ~2 GB remaining gap is likely layer norms, residual stream copies, softmax intermediates,
+embedding lookups, and other small allocations.
+
+**Dominant costs at per_device=8:**
+- 2× checkpoint saves: 17.2 GB (39% of total)
+- lm_head logits: 8.4 GB (19%)
+- Attention scores: 8.6 GB (19%)
+- Everything else: 10.2 GB (23%)
+
+**Scaling implications:** Reducing per_device from 8→4 saves ~18 GB (all three dominant
+costs halve). The ~6 GB of fixed costs (model, optimizer, all-gather, XLA) don't change.
+
+#### Tensor Parallel + FSDP Analysis
+
+**Question:** With checkpoint saves as the dominant cost (39%), would TP+FSDP help?
+
+**What TP shards vs doesn't:**
+TP splits computation *within* each layer (heads, MLP intermediate, vocab). But the
+layer OUTPUT — which is what checkpoint saves store — is produced AFTER the TP all-reduce
+and has full `[batch, seq, hidden]` shape on every chip. TP does not shard checkpoint saves.
+
+**TP=2 + FSDP=4 vs pure FSDP=8, per_device=4:**
+
+| Component | Pure FSDP/8 | TP=2+FSDP=4 | Reduction |
+|---|---|---|---|
+| 2× checkpoint saves (32 layers) | 8.6 GB | 8.6 GB | none — full hidden after all-reduce |
+| Attention scores (1 layer) | 4.3 GB | 2.15 GB | 2× — heads split 32→16 |
+| lm_head logits (128K vocab) | 4.2 GB | 2.1 GB | 2× — vocab split |
+| MLP gate+up (1 layer) | 0.9 GB | 0.47 GB | 2× — intermediate split |
+| QKV + output | 0.3 GB | 0.15 GB | 2× |
+| Model + optim + fixed | 6.6 GB | ~6.1 GB | minor |
+| **Total** | **~24.9 GB** | **~19.6 GB** | **saves ~5 GB** |
+
+TP=2 saves ~5 GB by halving within-layer intermediates. Comfortable headroom (12 GB) but
+still needs grad accum at per_device=4.
+
+**TP=4 + FSDP=2, per_device=8 (no grad accum):**
+
+| Component | Size |
+|---|---|
+| 2× checkpoint saves (pd=8, full hidden) | 17.2 GB |
+| Attention scores (8 heads/chip) | 2.15 GB |
+| lm_head logits (32K vocab/chip) | 2.1 GB |
+| MLP gate+up (3584 intermediate/chip) | 0.47 GB |
+| Model + optim + all-gather + XLA | ~6 GB |
+| **Total** | **~28 GB** |
+
+Fits in 31.25 GB with ~3 GB headroom. **Eliminates gradient accumulation entirely.**
+
+**Tradeoff:** TP=4 adds an all-reduce across 4 chips at every layer — 64 all-reduces per
+DPO step (32 layers × 2 policy passes). On a single v6e-8 node this uses ICI (fast, ~few
+μs per all-reduce). The question is whether eliminating the 2× grad accum overhead (2×
+forward+backward per step) outweighs the TP communication cost.
+
+**Why TP can't fix the fundamental bottleneck:** Checkpoint saves (17.2 GB at pd=8) are
+61% of the TP=4 total. They store full `[batch, seq, hidden]` at layer boundaries, after
+TP all-reduce. Reducing them would require:
+1. Segment-level checkpointing (every 6 layers instead of every layer) — trades recompute for memory
+2. Checkpointing before TP all-reduce (save TP-sharded activations) — requires Levanter changes
+3. Reducing per_device (grad accum) — current approach
+4. Reducing seq_len — not an option for this experiment
+
+#### Throughput Comparison: v5p-8 vs v6e-8
+
+**Reference run:** `bloom_speceval_v2_marin_lr5e6_seed0_b64_v5p8-274540` (W&B exported)
+
+Both runs use train_batch_size=64, seq_len=4096, tokens/step=262,144.
+
+| Metric | v5p-8 | v6e-8 (grad accum) |
+|---|---|---|
+| Chips | 4 × v5p (459 TFLOPS/chip) | 8 × v6e |
+| per_device | 16 (no grad accum) | 4 (2× grad accum) |
+| Step 0 (compilation) | 97.2s | 83.5s |
+| Step 1 (warmup) | 70.5s | ~70s (hooks compilation) |
+| Steady-state step time | 25.6s (from step 4+) | ~15s (from step 2+) |
+| Tokens/s (steady) | 10,240 | 18,474 |
+| MFU | 28.7% | 13.0% |
+| Theoretical FLOPS/chip | 459 TFLOPS | 918 TFLOPS |
+| Total theoretical | 1,836 TFLOPS | 7,344 TFLOPS |
+| Periodic recompile | ~30.4s every ~10 steps | not yet observed |
+
+**v6e-8 is 1.8× faster per step** (14.2s vs 25.6s) with 1.8× more tokens/s (18,474 vs 10,240).
+Both do the same work per step: 64 examples × 4 DPO forward passes. v6e-8 does this in
+2 micro-batches of 32 via gradient accumulation.
+
+**MFU paradox:** v6e-8 shows only 13.0% MFU vs v5p-8's 28.7%, despite being faster in
+wall-clock. This is because v6e chips report 918 TFLOPS theoretical (2× v5p's 459 TFLOPS),
+giving 7,344 TFLOPS total (4× v5p-8's 1,836 TFLOPS). The v6e-8 is faster in absolute
+terms but uses its theoretical FLOPS less efficiently — likely because the small per_device=4
+batch makes it more memory-bound, and grad accum adds overhead.
+
+**Stabilization:** Both platforms reach steady state by step 2-4. 10 steps is sufficient
+to measure steady-state throughput. v5p-8 shows periodic ~30s recompile blips every ~10
+steps (eval triggers?); v6e-8 probe too short to observe this pattern.
+
+**v5p-8 data quality (full 1700-step run):**
+- 2000 W&B rows, step 0–1699 (every step logged for this run)
+- 15 preemption/restart events detected (runtime gaps >200s above expected)
+- After excluding warmup (steps 0-3) and preemption-adjacent steps: 1938 clean samples
+- Median: 25.6s across ALL step ranges (4-50, 50-200, 200-500, 500-1000, 1000-1500, 1500+)
+- Mean: 26.2s (slightly elevated by periodic ~30s eval recompile blips)
+- p10=25.5s, p90=30.3s — tight distribution, no drift over 1700 steps
+- 5 outlier steps (37-49s) out of 1938 (0.5%) — likely checkpoint I/O contention
+- **Conclusion: 25.6s/step is rock-solid for the entire run**
+
+**v6e-8 data quality:** W&B run `v6e8_probe_ga_ew4-86ef86`, 10-step probe.
+- 7 steady-state samples (steps 2-8), all at 14.2s ± 0.01s, MFU 13.0%
+- Consistent but limited sample count — a full-length run would confirm no degradation
+- No preemptions during this probe
+
+**Confidence:** v5p-8 number is very high confidence (1938 samples). v6e-8 is moderate
+confidence (7 samples, consistent, but untested at scale).
+
+**v6e-8 per-step timeline (from Iris logs, no preemptions):**
+- 23:51:14 — training starts
+- 23:59:25 — trace (5.7s) + lower (2.8s) + XLA compile begins
+- 00:00:48 — step 1 complete, eval starts (DPO 82 batches: 2:48, LM 503 batches: 7:46)
+- 00:11:47 — "First train step completed in 83.5s"
+- 00:11:50 — hooks compile (3.0s trace + 2.4s lower)
+- 00:13:08 — step 2 complete
+- 00:14:08 — step 6 complete (steps 2-5: 60s for 4 steps = **15s/step steady state**)
+- 00:14:08 — eval starts at step 5 (DPO 2:32, LM ~7:46)
+- 00:24:43 — step 7 complete
+- 00:25:49 — checkpoint saves
+- 00:28:22 — eval starts at step 9 (final)
+- ~00:37:00 — HF export begins
