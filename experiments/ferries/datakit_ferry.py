@@ -13,6 +13,7 @@ import os
 
 from rigging.filesystem import marin_temp_bucket, url_to_fs
 from rigging.log_setup import configure_logging
+from rigging.timing import log_time
 
 from fray import ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
@@ -134,12 +135,8 @@ def main() -> None:
     run_id = os.environ["SMOKE_RUN_ID"]
 
     _write_status("running", marin_prefix)
-    import time
-
-    t0 = time.monotonic()
-    StepRunner().run(build_steps(run_id))
-    elapsed = time.monotonic() - t0
-    logger.info("Datakit ferry total wall time: %.1fs (%.1fm)", elapsed, elapsed / 60)
+    with log_time("Datakit ferry total wall time"):
+        StepRunner().run(build_steps(run_id))
     _write_status("succeeded", marin_prefix)
 
 
