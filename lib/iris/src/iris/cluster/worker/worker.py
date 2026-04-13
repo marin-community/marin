@@ -833,7 +833,7 @@ class Worker:
         self,
         task_id: str,
         attempt_id: int,
-        term_timeout_ms: int = 2000,
+        term_timeout_ms: int = 5000,
         async_kill: bool = False,
     ) -> bool:
         """Kill a specific task attempt.
@@ -899,7 +899,7 @@ class Worker:
             # Container may have already been removed or stopped
             pass
 
-    def kill_task(self, task_id: str, term_timeout_ms: int = 2000) -> bool:
+    def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool:
         """Kill the current (most recent) attempt of a task."""
         current = self._get_current_attempt(task_id)
         if not current:
