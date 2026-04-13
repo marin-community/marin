@@ -94,7 +94,7 @@ def test_executor_heuristic_small_cpu_job_gets_non_preemptible():
     preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
     assert preemptible is not None
     assert preemptible.key == WellKnownAttribute.PREEMPTIBLE
-    assert preemptible.value == "false"
+    assert preemptible.values[0].value == "false"
 
 
 def test_executor_heuristic_skipped_for_gpu_job():
@@ -135,7 +135,7 @@ def test_executor_heuristic_with_region_constraint():
 
     preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
     assert preemptible is not None
-    assert preemptible.value == "false"
+    assert preemptible.values[0].value == "false"
 
 
 # --tpu multi-variant parsing

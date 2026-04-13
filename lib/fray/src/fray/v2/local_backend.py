@@ -249,12 +249,6 @@ class LocalActorHandle:
             raise AttributeError(f"{method_name} is not callable on {type(instance).__name__}")
         return LocalActorMethod(method)
 
-    def shutdown(self) -> None:
-        """Shutdown the actor instance."""
-        instance = _local_actor_registry.get(self._endpoint)
-        if instance is not None:
-            instance.shutdown()
-
     def __getstate__(self) -> dict:
         """Serialize to just the endpoint name."""
         return {"endpoint": self._endpoint}
@@ -336,8 +330,4 @@ class LocalActorGroup:
         for job in self._jobs:
             job.terminate()
         for handle in self._handles:
-            try:
-                handle.shutdown()
-            except Exception as e:
-                logger.warning("Error shutting down actor %s: %s", handle._endpoint, e)
             _local_actor_registry.pop(handle._endpoint, None)

@@ -130,24 +130,22 @@ def dedup_fuzzy_document(
         counter_prefix="dedup/fuzzy/document",
     )
 
-    shard_results = list(
-        ctx.execute(
-            Dataset.from_list(cc_files)
-            .load_parquet()
-            .map(
-                lambda r: {
-                    "id": r["record_id"],
-                    "is_dup": r["component_id"] != r["id_norm"],
-                    "file_idx": r["file_idx"],
-                }
-            )
-            .group_by(
-                lambda r: r["file_idx"],
-                sort_by=lambda r: r["id"],
-                reducer=aggregate_and_write,
-            ),
-            verbose=True,
+    shard_results = ctx.execute(
+        Dataset.from_list(cc_files)
+        .load_parquet()
+        .map(
+            lambda r: {
+                "id": r["record_id"],
+                "is_dup": r["component_id"] != r["id_norm"],
+                "file_idx": r["file_idx"],
+            }
+        )
+        .group_by(
+            lambda r: r["file_idx"],
+            sort_by=lambda r: r["id"],
+            reducer=aggregate_and_write,
         ),
-    )
+        verbose=True,
+    ).results
 
     return finalize_dedup(shard_results, DedupMode.FUZZY_DOCUMENT, method="fuzzy", level="document")

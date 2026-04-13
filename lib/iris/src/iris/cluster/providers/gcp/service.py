@@ -78,6 +78,16 @@ _DEFAULT_TIMEOUT = 120  # seconds
 _OPERATION_POLL_INTERVAL = 2  # seconds between operation status polls
 _OPERATION_TIMEOUT = 600  # seconds to wait for an operation to complete
 
+# google.rpc.Code value for RESOURCE_EXHAUSTED. Used to classify LRO failures
+# where the initial HTTP response was 200 but the async operation ended with a
+# quota/stockout error (e.g. "no more capacity in the zone").
+_RPC_CODE_RESOURCE_EXHAUSTED = 8
+
+# tpu_delete retries on QuotaExhaustedError to absorb the per-minute GCP
+# DeleteNode rate limit. Total worst-case wait is ~30s before giving up.
+_TPU_DELETE_MAX_ATTEMPTS = 3
+_TPU_DELETE_RETRY_BACKOFF = 10.0  # seconds between retries
+
 
 # ============================================================================
 # Data types
@@ -498,6 +508,13 @@ class CloudGcpService:
                 if "error" in data:
                     error = data["error"]
                     msg = error.get("message", str(error))
+                    # Zone stockouts ("no more capacity in the zone ...") come
+                    # back as RESOURCE_EXHAUSTED on the LRO rather than on the
+                    # initial HTTP response. Surface them as QuotaExhaustedError
+                    # so the autoscaler treats them like any other quota hit
+                    # (terse warning + backoff, no stack trace).
+                    if error.get("code") == _RPC_CODE_RESOURCE_EXHAUSTED:
+                        raise QuotaExhaustedError(msg)
                     raise InfraError(f"TPU operation failed: {msg}")
                 return data
             if time.monotonic() >= deadline:
@@ -560,9 +577,27 @@ class CloudGcpService:
     def tpu_delete(self, name: str, zone: str) -> None:
         logger.info("Deleting TPU (async): %s", name)
         url = f"{_TPU_BASE}/{self._tpu_parent(zone)}/nodes/{name}"
-        resp = self._client.delete(url, headers=self._headers())
-        if resp.status_code != 404:
-            self._classify_response(resp)
+        # GCP enforces a per-minute DeleteNode quota. A burst of scale-downs
+        # can hit it; retry with a short backoff so we don't leak slices or
+        # spam the controller log with tracebacks.
+        for attempt in range(_TPU_DELETE_MAX_ATTEMPTS):
+            resp = self._client.delete(url, headers=self._headers())
+            if resp.status_code == 404:
+                return
+            try:
+                self._classify_response(resp)
+                return
+            except QuotaExhaustedError:
+                if attempt + 1 >= _TPU_DELETE_MAX_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "tpu_delete %s rate-limited (attempt %d/%d); retrying in %.0fs",
+                    name,
+                    attempt + 1,
+                    _TPU_DELETE_MAX_ATTEMPTS,
+                    _TPU_DELETE_RETRY_BACKOFF,
+                )
+                time.sleep(_TPU_DELETE_RETRY_BACKOFF)
 
     def _tpu_get(self, name: str, zone: str) -> dict:
         url = f"{_TPU_BASE}/{self._tpu_parent(zone)}/nodes/{name}"

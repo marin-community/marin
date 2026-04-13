@@ -93,6 +93,12 @@ message Controller {
     iris.job.JobPreemptionPolicy preemption_policy = 31;
     iris.job.ExistingJobPolicy existing_job_policy = 32;
     iris.job.PriorityBand priority_band = 33;
+
+    // Per-job override for the task container image. When empty, the worker
+    // uses its cluster-configured default_task_image. Used for jobs that
+    // need a custom runtime (e.g. an image with runsc/skopeo for sandboxing
+    // untrusted child workloads).
+    string task_image = 34;
   }
 
   message LaunchJobResponse {
@@ -108,6 +114,9 @@ message Controller {
   message GetJobStatusResponse {
     iris.job.JobStatus job = 1;
     LaunchJobRequest request = 2;  // Original job request for debugging
+    // Min/max resource usage across currently-running tasks.
+    iris.job.ResourceUsage resource_min = 3;
+    iris.job.ResourceUsage resource_max = 4;
   }
 
   // Lightweight batch state query — returns only the state enum for each job,
@@ -196,6 +205,8 @@ message Controller {
 
   message GetTaskStatusResponse {
     iris.job.TaskStatus task = 1;
+    // Job-level resource limits for this task's parent job.
+    iris.job.ResourceSpecProto job_resources = 2;
   }
 
   message ListTasksRequest {
@@ -249,8 +260,7 @@ message Controller {
     string address = 1;
     iris.job.WorkerMetadata metadata = 2;
     // Worker ID assigned by the autoscaler via WorkerConfig.
-    // When set, the controller uses this as the canonical worker identity
-    // instead of deriving it from vm_address.
+    // The controller uses this as the canonical worker identity.
     string worker_id = 3;
     // Infrastructure identity from WorkerConfig, set by the autoscaler at
     // bootstrap. Stored in the workers table so restart_worker() can look

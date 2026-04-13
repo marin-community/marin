@@ -39,7 +39,7 @@ def test_deduplicate_basic(zephyr_ctx):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
 
     # Should have exactly 3 unique items (ids 1, 2, 3)
     assert len(results) == 3
@@ -52,7 +52,7 @@ def test_deduplicate_basic(zephyr_ctx):
 def test_deduplicate_empty(zephyr_ctx):
     """Test deduplication on empty dataset."""
     ds = Dataset.from_list([]).deduplicate(key=lambda x: x["id"])
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     assert results == []
 
 
@@ -62,7 +62,7 @@ def test_deduplicate_all_unique(zephyr_ctx):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     assert len(results) == 10
 
 
@@ -72,7 +72,7 @@ def test_deduplicate_all_duplicates(zephyr_ctx):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     assert len(results) == 1
     assert results[0]["id"] == 1
 
@@ -92,7 +92,7 @@ def test_group_by_count(zephyr_ctx):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)}
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
 
     # Should have 3 groups
     assert len(results) == 3
@@ -119,7 +119,7 @@ def test_group_by_sum(zephyr_ctx):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "sum": sum(item["val"] for item in items)}
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     results = sorted(results, key=lambda x: x["cat"])
 
     assert results[0] == {"cat": "A", "sum": 4}  # 1 + 3
@@ -139,7 +139,7 @@ def test_group_by_list(zephyr_ctx):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "vals": [item["val"] for item in items]}
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     results = sorted(results, key=lambda x: x["cat"])
 
     assert results[0]["cat"] == "A"
@@ -155,7 +155,7 @@ def test_group_by_empty(zephyr_ctx):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)}
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     assert results == []
 
 
@@ -165,7 +165,7 @@ def test_deduplicate_with_num_output_shards(zephyr_ctx):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"], num_output_shards=5)
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
 
     # Should have exactly 3 unique items (ids 0, 1, 2)
     assert len(results) == 3
@@ -197,7 +197,7 @@ def test_group_by_with_hash_key_large(zephyr_ctx, large_document_dataset):
         .group_by(key=lambda doc: doc["hash"], reducer=count_and_extract)
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
 
     # Should have exactly 100 groups (one per unique content)
     assert len(results) == 100
@@ -230,7 +230,7 @@ def test_group_by_generator_reducer(zephyr_ctx):
         reducer=explode_reducer,
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
 
     # Generator reducer should flatten: 4 items total (2 from A, 2 from B)
     assert len(results) == 4
@@ -259,7 +259,7 @@ def test_group_by_secondary_sort(zephyr_ctx):
         sort_by=lambda x: x["ts"],
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     results = sorted(results, key=lambda x: x["user"])
 
     # Items within each group should be sorted by timestamp
@@ -286,7 +286,7 @@ def test_group_by_secondary_sort_with_generator_reducer(zephyr_ctx):
         sort_by=lambda x: x["rank"],
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     results = sorted(results, key=lambda x: (x["cat"], x["rank"]))
 
     # Items should arrive at reducer sorted by rank
@@ -322,7 +322,7 @@ def test_group_by_with_none_and_filter(zephyr_ctx):
         .filter(lambda x: x is not None)  # Filter out None values
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
 
     # Should only have duplicate keys: "a" and "foo"
     assert len(results) == 2
@@ -354,7 +354,7 @@ def test_group_by_non_vortex_serializable(zephyr_ctx):
         reducer=lambda key, items: {"key": key, "value": frozenset().union(*(item["values"] for item in items))},
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     results = sorted(results, key=lambda x: x["key"])
     assert len(results) == 2
     assert results[0] == {"key": "a", "value": frozenset([1, 2, 3, 4])}
@@ -401,7 +401,7 @@ def test_group_by_schema_evolution(zephyr_ctx):
         reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)},
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     results = sorted(results, key=lambda x: x["cat"])
 
     assert len(results) == 5
@@ -443,7 +443,7 @@ def test_group_by_combiner(zephyr_ctx):
         combiner=dedup_combiner,
     )
 
-    results = sorted(zephyr_ctx.execute(ds), key=lambda x: x["key"])
+    results = sorted(zephyr_ctx.execute(ds).results, key=lambda x: x["key"])
     assert results == [
         {"key": "a", "ids": [1, 2]},
         {"key": "b", "ids": [3, 4]},
@@ -470,7 +470,7 @@ def test_group_by_combiner_sum(zephyr_ctx):
         combiner=sum_combiner,
     )
 
-    results = sorted(zephyr_ctx.execute(ds), key=lambda x: x["cat"])
+    results = sorted(zephyr_ctx.execute(ds).results, key=lambda x: x["cat"])
     assert results == [
         {"cat": "x", "total": 6},
         {"cat": "y", "total": 30},
@@ -491,7 +491,7 @@ def test_deduplicate_basic_integration(integration_ctx):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
 
-    results = list(integration_ctx.execute(ds))
+    results = integration_ctx.execute(ds).results
     assert len(results) == 3
     ids = sorted([r["id"] for r in results])
     assert ids == [1, 2, 3]
@@ -530,7 +530,7 @@ def test_group_by_combiner_integration(integration_ctx):
         combiner=dedup_combiner,
     )
 
-    results = sorted(integration_ctx.execute(ds), key=lambda x: x["key"])
+    results = sorted(integration_ctx.execute(ds).results, key=lambda x: x["key"])
     assert results == [
         {"key": "a", "ids": [1, 2]},
         {"key": "b", "ids": [3, 4]},

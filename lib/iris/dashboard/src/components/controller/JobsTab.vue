@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName, stateDisplayName } from '@/types/status'
+import { SEGMENT_COLORS, stateToName, stateDisplayName } from '@/types/status'
 import type { JobState } from '@/types/status'
 import type { JobStatus, JobQuery, ListJobsResponse } from '@/types/rpc'
 import { timestampMs, formatDuration, formatRelativeTime } from '@/utils/formatting'
@@ -24,6 +24,9 @@ const SORT_FIELD_MAP: Record<string, string> = {
 type SortField = 'date' | 'name' | 'state' | 'failures' | 'preemptions'
 type SortDir = 'asc' | 'desc'
 
+const SORT_FIELDS: SortField[] = ['date', 'name', 'state', 'failures', 'preemptions']
+const SORT_DIRS: SortDir[] = ['asc', 'desc']
+
 const copiedJob = ref<string | null>(null)
 
 async function copyJobName(name: string) {
@@ -32,16 +35,36 @@ async function copyJobName(name: string) {
   setTimeout(() => { copiedJob.value = null }, 1500)
 }
 
+const route = useRoute()
+const router = useRouter()
+
 const EXPANDED_JOBS_KEY = 'iris.controller.expandedJobs'
 
-// -- State --
+// -- State (hydrated from URL query params) --
 
-const page = ref(0)
-const sortField = ref<SortField>('date')
-const sortDir = ref<SortDir>('desc')
-const nameFilter = ref('')
-const localFilter = ref('')
-const stateFilter = ref('')
+/** Safely extract a single string from a Vue Router query value (string | string[] | null). */
+function queryStr(v: string | string[] | null | undefined): string {
+  if (Array.isArray(v)) return v[0] ?? ''
+  return v ?? ''
+}
+
+function parseSort(v: string): SortField {
+  return SORT_FIELDS.includes(v as SortField) ? (v as SortField) : 'date'
+}
+function parseDir(v: string): SortDir {
+  return SORT_DIRS.includes(v as SortDir) ? (v as SortDir) : 'desc'
+}
+function parsePage(v: string): number {
+  const n = Number(v)
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0
+}
+
+const page = ref(parsePage(queryStr(route.query.page)))
+const sortField = ref<SortField>(parseSort(queryStr(route.query.sort)))
+const sortDir = ref<SortDir>(parseDir(queryStr(route.query.dir)))
+const nameFilter = ref(queryStr(route.query.name))
+const localFilter = ref(queryStr(route.query.name))
+const stateFilter = ref(queryStr(route.query.state))
 const expandedJobs = ref<Set<string>>(loadExpandedJobs())
 const childJobsByParent = ref<Map<string, JobStatus[]>>(new Map())
 const loadingChildJobs = ref<Set<string>>(new Set())
@@ -134,6 +157,20 @@ watch(stateFilter, () => {
   page.value = 0
 })
 
+// Sync filter/sort/page state into the URL so back-button and link sharing work.
+watch([page, sortField, sortDir, nameFilter, stateFilter], () => {
+  router.replace({
+    query: {
+      ...route.query,
+      sort: sortField.value !== 'date' ? sortField.value : undefined,
+      dir: sortDir.value !== 'desc' ? sortDir.value : undefined,
+      page: page.value !== 0 ? String(page.value) : undefined,
+      name: nameFilter.value || undefined,
+      state: stateFilter.value || undefined,
+    },
+  })
+})
+
 // -- Job tree (lazy-loaded children) --
 
 const flattenedJobs = computed(() => flattenLoadedJobTree(jobs.value, childJobsByParent.value, expandedJobs.value))
@@ -200,17 +237,8 @@ interface ProgressSegment {
   label: string
 }
 
-const SEGMENT_COLORS: Record<string, string> = {
-  succeeded: 'bg-status-success',
-  running: 'bg-accent',
-  building: 'bg-status-purple',
-  assigned: 'bg-status-orange',
-  failed: 'bg-status-danger',
-  worker_failed: 'bg-status-danger',
-  preempted: 'bg-status-warning',
-  killed: 'bg-text-muted',
-  pending: 'bg-surface-border',
-}
+// SEGMENT_COLORS lives in @/types/status so the dashboard legend can stay in
+// sync with a single canonical definition.
 
 function progressSegments(job: JobStatus): ProgressSegment[] {
   const counts = job.taskStateCounts ?? {}

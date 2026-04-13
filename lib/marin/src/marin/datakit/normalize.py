@@ -18,16 +18,46 @@ import logging
 import os
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from typing import Any
 
 import dupekit
 from rigging.filesystem import url_to_fs
+from zephyr import counters
 from marin.execution.step_spec import StepSpec
 from fray.v2 import ResourceConfig
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class NormalizeSubdirResult:
+    """Per-subdirectory outcome of :func:`normalize_to_parquet`.
+
+    Attributes:
+        subdir: Relative subdirectory under the input root (``""`` for root).
+        output_files: Absolute paths of the Parquet partitions written.
+        counters: Aggregated zephyr counters from the subdirectory's pipeline
+            run (builtin ``zephyr/records_in``/``records_out`` plus any user
+            counters).
+    """
+
+    subdir: str
+    output_files: list[str]
+    counters: dict[str, int]
+
+
+@dataclass
+class NormalizeResult:
+    """Full outcome of :func:`normalize_to_parquet`, one entry per subdir.
+
+    Persisted as the step's ``.artifact`` so counters and output paths are
+    available to downstream consumers without re-running the pipeline.
+    """
+
+    subdirs: list[NormalizeSubdirResult] = field(default_factory=list)
 
 
 def generate_id(text: str) -> str:
@@ -46,18 +76,18 @@ def _make_normalize_fn(
     """Return a record-level transform function.
 
     The returned function:
-    1. Extracts ``text`` from *text_field* (raises on missing/empty).
+    1. Extracts ``text`` from *text_field*.
     2. Generates a deterministic ``id`` via xxh3_128.
     3. If *id_field* exists in the record, preserves it as ``source_id``.
     4. Keeps all other columns.
+
+    Records with missing or blank text must be filtered out before calling
+    the returned function.
     """
 
     def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
         # --- text ---
-        text = record.get(text_field)
-        if text is None or not str(text).strip():
-            raise ValueError(f"Record missing or empty text in field {text_field!r}: {record!r:.200}")
-        text = str(text)
+        text = str(record[text_field])
 
         # --- source_id (skip silently if id_field absent) ---
         source_id = record.get(id_field)
@@ -85,14 +115,21 @@ def _make_normalize_fn(
 
 def _discover_file_groups(
     input_path: str,
+    file_extensions: tuple[str, ...] | None = None,
 ) -> dict[str, list[str]]:
     """Walk *input_path* and group data files by their subdirectory.
 
     Returns a mapping from relative subdirectory (``""`` for root) to a sorted
-    list of file paths.  Only files with extensions supported by
-    ``zephyr.readers.load_file`` are included; dotfiles and ``.metrics``
-    directories are skipped.
+    list of file paths.  Only files with matching extensions are included;
+    dotfiles and ``.metrics`` directories are skipped.
+
+    Args:
+        input_path: Root directory to walk.
+        file_extensions: Tuple of file extensions to include (e.g.
+            ``(".parquet",)``).  Defaults to all extensions supported by
+            ``zephyr.readers.load_file``.
     """
+    extensions = file_extensions or SUPPORTED_EXTENSIONS
     fs, resolved = url_to_fs(input_path)
     protocol = input_path.split("://")[0] if "://" in input_path else ""
 
@@ -113,7 +150,7 @@ def _discover_file_groups(
         for fname in sorted(files):
             if fname.startswith("."):
                 continue
-            if not fname.endswith(SUPPORTED_EXTENSIONS):
+            if not fname.endswith(extensions):
                 continue
             full = _full_path(os.path.join(root, fname))
             groups.setdefault(rel_root, []).append(full)
@@ -153,9 +190,17 @@ def _build_pipeline(
                 prev_id = rid
                 yield record
 
+    def has_text(record: dict[str, Any]) -> bool:
+        text = record.get(text_field)
+        if text is None or str(text).strip() == "":
+            counters.increment("normalize/empty_text_filtered")
+            return False
+        return True
+
     return (
         Dataset.from_list(files)
         .flat_map(load_file)
+        .filter(has_text)
         .map(normalize_record)
         .group_by(
             key=lambda r: int(r["id"], 16) % num_shards,
@@ -178,7 +223,8 @@ def normalize_to_parquet(
     id_field: str = "id",
     target_partition_bytes: int = 256 * 1024 * 1024,
     worker_resources: ResourceConfig | None = None,
-) -> None:
+    file_extensions: tuple[str, ...] | None = None,
+) -> NormalizeResult:
     """Normalize raw downloaded data to the datakit standard Parquet format.
 
     Discovers all data files under *input_path*, groups them by subdirectory,
@@ -200,16 +246,23 @@ def normalize_to_parquet(
             Defaults to 2 CPU / 16GB RAM / 10GB disk, sized for
             ``target_partition_bytes`` of 256MB.  Scale up when increasing
             partition size.
+        file_extensions: Tuple of file extensions to include (e.g.
+            ``(".parquet",)``).  Defaults to all extensions supported by
+            ``zephyr.readers.load_file``.
+
+    Returns:
+        A :class:`NormalizeResult` describing the output files and zephyr
+        counters for each subdirectory that was processed.
     """
     resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="10g")
 
-    file_groups = _discover_file_groups(input_path)
+    file_groups = _discover_file_groups(input_path, file_extensions=file_extensions)
     if not file_groups:
         raise FileNotFoundError(f"No data files found under {input_path}")
 
     logger.info("Discovered %d subdirectories under %s", len(file_groups), input_path)
 
-    def _run_subdir(subdir: str, files: list[str]) -> None:
+    def _run_subdir(subdir: str, files: list[str]) -> NormalizeSubdirResult:
         total_bytes = _compute_total_bytes(files)
         num_shards = max(1, total_bytes // target_partition_bytes)
         output_dir = os.path.join(output_path, subdir) if subdir else output_path
@@ -228,15 +281,35 @@ def normalize_to_parquet(
             name=f"normalize-{subdir.replace('/', '-') if subdir else 'all'}",
             resources=resources,
         )
-        ctx.execute(pipeline)
+        outcome = ctx.execute(pipeline)
+        return NormalizeSubdirResult(
+            subdir=subdir,
+            output_files=list(outcome.results),
+            counters=dict(outcome.counters),
+        )
 
     # Launch all subdirectory pipelines concurrently
+    subdir_results: list[NormalizeSubdirResult] = []
     with ThreadPoolExecutor(max_workers=len(file_groups)) as pool:
         futures = {pool.submit(_run_subdir, subdir, files): subdir for subdir, files in file_groups.items()}
         for future in as_completed(futures):
             subdir = futures[future]
-            future.result()  # Propagate exceptions
+            subdir_results.append(future.result())  # Propagate exceptions
             logger.info("Completed normalization for %s", os.path.join(output_path, subdir) if subdir else output_path)
+
+    # Sort for deterministic output so re-runs produce stable .artifact contents
+    subdir_results.sort(key=lambda r: r.subdir)
+
+    total_in = sum(r.counters.get("zephyr/records_in", 0) for r in subdir_results)
+    total_filtered = sum(r.counters.get("normalize/empty_text_filtered", 0) for r in subdir_results)
+    if total_in > 0 and total_filtered == total_in:
+        raise ValueError(
+            f"All {total_in} records were filtered out due to missing/empty text. "
+            f"Your data is either invalid or you have selected the wrong column, "
+            f"current column: {text_field!r}"
+        )
+
+    return NormalizeResult(subdirs=subdir_results)
 
 
 def normalize_step(
@@ -249,6 +322,7 @@ def normalize_step(
     worker_resources: ResourceConfig | None = None,
     override_output_path: str | None = None,
     input_path: str | None = None,
+    file_extensions: tuple[str, ...] | None = None,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
 
@@ -263,6 +337,9 @@ def normalize_step(
         override_output_path: Override the computed output path.
         input_path: Override the input path. Defaults to ``download.output_path``.
             Useful when normalizing a subdirectory of the download output.
+        file_extensions: Tuple of file extensions to include (e.g.
+            ``(".parquet",)``).  Defaults to all extensions supported by
+            ``zephyr.readers.load_file``.
     """
     resolved_input = input_path or download.output_path
 
@@ -275,6 +352,7 @@ def normalize_step(
             id_field=id_field,
             target_partition_bytes=target_partition_bytes,
             worker_resources=worker_resources,
+            file_extensions=file_extensions,
         ),
         deps=[download],
         hash_attrs={
@@ -282,6 +360,7 @@ def normalize_step(
             "id_field": id_field,
             "target_partition_bytes": target_partition_bytes,
             "input_path": resolved_input,
+            "file_extensions": file_extensions,
         },
         override_output_path=override_output_path,
     )

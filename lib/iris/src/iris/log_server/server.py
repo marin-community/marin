@@ -4,9 +4,8 @@
 """LogService RPC implementation.
 
 Owns a LogStore instance and exposes push (ingest) and fetch (query)
-operations via Connect/RPC. The LogStore is an internal implementation
-detail — all external consumers access logs through the RPC interface
-(or, for in-process callers, via push_logs/fetch_logs methods directly).
+operations via Connect/RPC. In production, hosted in a standalone process
+(see log_server/main.py). Tests use LogServiceImpl in-process directly.
 """
 
 from __future__ import annotations
