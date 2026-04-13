@@ -62,7 +62,6 @@ from iris.cluster.controller.db import (
     TaskJobSummary,
     UserStats,
     attempt_is_worker_failure,
-    endpoint_query_sql,
     job_is_finished,
     running_tasks_by_worker,
     task_row_can_be_scheduled,
@@ -70,7 +69,6 @@ from iris.cluster.controller.db import (
 from iris.cluster.controller.schema import (
     API_KEY_PROJECTION,
     ATTEMPT_PROJECTION,
-    ENDPOINT_PROJECTION,
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     JOB_ROW_PROJECTION,
@@ -729,11 +727,13 @@ def _query_from_list_jobs_request(
             limit=request.limit,
         )
 
-    # Clamp paging: 0 means "unbounded" (used by the Python client); otherwise cap at MAX.
-    if query.limit > MAX_LIST_JOBS_LIMIT:
+    # Clamp paging: 0 (unset) defaults to MAX; explicit values are capped at MAX.
+    # We no longer support unbounded listing — callers that previously relied on
+    # limit=0 must paginate. Unbounded queries scale poorly because downstream
+    # per-page work (_task_summaries_for_jobs, _parent_ids_with_children) grows
+    # an IN-clause with one placeholder per returned row.
+    if query.limit <= 0 or query.limit > MAX_LIST_JOBS_LIMIT:
         query.limit = MAX_LIST_JOBS_LIMIT
-    if query.limit < 0:
-        query.limit = 0
     if query.offset < 0:
         query.offset = 0
     return query
@@ -813,12 +813,6 @@ def _worker_roster(db: ControllerDB) -> list[WorkerDetailRow]:
                 attrs_by_worker.setdefault(wid, {})[key] = value
             workers = [dataclasses.replace(w, attributes=attrs_by_worker.get(str(w.worker_id), {})) for w in workers]
         return workers
-
-
-def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -> list[EndpointRow]:
-    sql, params = endpoint_query_sql(query)
-    with db.read_snapshot() as q:
-        return ENDPOINT_PROJECTION.decode(q.fetchall(sql, tuple(params)))
 
 
 def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetailRow]:
@@ -1649,8 +1643,7 @@ class ControllerServiceImpl:
         if prefix.startswith("/system/"):
             return self._list_system_endpoints(prefix, exact=request.exact)
 
-        endpoints = _query_endpoints(
-            self._db,
+        endpoints = self._db.endpoints.query(
             EndpointQuery(
                 exact_name=prefix if request.exact else None,
                 name_prefix=None if request.exact else prefix,

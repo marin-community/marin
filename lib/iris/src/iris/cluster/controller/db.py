@@ -16,7 +16,7 @@ from threading import Lock, RLock
 from typing import Any
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.schema import ENDPOINT_PROJECTION, decode_timestamp_ms, decode_worker_id
+from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 from rigging.timing import Deadline, Duration, Timestamp
@@ -263,45 +263,19 @@ def _decode_attribute_rows(rows: Sequence[Any]) -> dict[WorkerId, dict[str, Attr
     return attrs_by_worker
 
 
-def endpoint_query_sql(query: EndpointQuery) -> tuple[str, list[object]]:
-    """Build SQL query for endpoint lookups."""
-    from_clause = f"SELECT {ENDPOINT_PROJECTION.select_clause()} FROM endpoints e"
-    conditions: list[str] = []
-    params: list[object] = []
-
-    if query.task_ids:
-        from_clause += " JOIN endpoints et ON e.endpoint_id = et.endpoint_id"
-        placeholders = ",".join("?" for _ in query.task_ids)
-        conditions.append(f"et.task_id IN ({placeholders})")
-        params.extend(tid.to_wire() for tid in query.task_ids)
-
-    if query.endpoint_ids:
-        placeholders = ",".join("?" for _ in query.endpoint_ids)
-        conditions.append(f"e.endpoint_id IN ({placeholders})")
-        params.extend(query.endpoint_ids)
-
-    if query.name_prefix:
-        conditions.append("e.name LIKE ?")
-        params.append(f"{query.name_prefix}%")
-
-    if query.exact_name:
-        conditions.append("e.name = ?")
-        params.append(query.exact_name)
-
-    sql = from_clause
-    if conditions:
-        sql += " WHERE " + " AND ".join(conditions)
-    if query.limit is not None:
-        sql += " LIMIT ?"
-        params.append(query.limit)
-    return sql, params
-
-
 class TransactionCursor:
-    """Wraps a raw sqlite3.Cursor for use within controller transactions."""
+    """Wraps a raw sqlite3.Cursor for use within controller transactions.
+
+    Post-commit hooks registered via :meth:`on_commit` run after the wrapping
+    ``ControllerDB.transaction()`` block commits successfully. They are used
+    by caches (e.g. ``EndpointRegistry``) to update in-memory state atomically
+    with the DB write: rollback suppresses the hook so memory never drifts
+    from disk.
+    """
 
     def __init__(self, cursor: sqlite3.Cursor):
         self._cursor = cursor
+        self._commit_hooks: list[Callable[[], None]] = []
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         """Raw SQL escape hatch."""
@@ -315,6 +289,14 @@ class TransactionCursor:
         """Raw SQL script escape hatch."""
         return self._cursor.executescript(sql)
 
+    def on_commit(self, hook: Callable[[], None]) -> None:
+        """Register ``hook`` to run after the transaction commits successfully."""
+        self._commit_hooks.append(hook)
+
+    def _run_commit_hooks(self) -> None:
+        for hook in self._commit_hooks:
+            hook()
+
     @property
     def lastrowid(self) -> int | None:
         return self._cursor.lastrowid
@@ -327,7 +309,7 @@ class TransactionCursor:
 class ControllerDB:
     """Thread-safe SQLite wrapper with typed query and migration helpers."""
 
-    _READ_POOL_SIZE = 8
+    _READ_POOL_SIZE = 32
     DB_FILENAME = "controller.sqlite3"
     AUTH_DB_FILENAME = "auth.sqlite3"
     PROFILES_DB_FILENAME = "profiles.sqlite3"
@@ -369,6 +351,20 @@ class ControllerDB:
         # Eliminates the per-cycle attribute SQL query from the scheduling hot path.
         self._attr_cache: dict[WorkerId, dict[str, AttributeValue]] | None = None
         self._attr_cache_lock = Lock()
+
+        # Write-through in-memory cache over the ``endpoints`` table. Imported
+        # locally to break the ``db -> endpoint_registry -> db`` import cycle;
+        # this is the single exception to "no local imports" (see AGENTS.md).
+        from iris.cluster.controller.endpoint_registry import EndpointRegistry
+
+        t0 = time.monotonic()
+        self._endpoint_registry = EndpointRegistry(self)
+        logger.info("EndpointRegistry initialized in %.2fs", time.monotonic() - t0)
+
+    @property
+    def endpoints(self) -> EndpointRegistry:  # noqa: F821
+        """Process-local cache for the ``endpoints`` table; authoritative for reads."""
+        return self._endpoint_registry
 
     def _populate_attr_cache(self) -> dict[WorkerId, dict[str, AttributeValue]]:
         """Load all worker attributes from the DB into the cache.
@@ -454,6 +450,23 @@ class ControllerDB:
         with self._lock:
             self._conn.execute("PRAGMA optimize")
 
+    def wal_checkpoint(self, mode: str = "TRUNCATE") -> tuple[int, int, int]:
+        """Run ``PRAGMA wal_checkpoint`` to move pages from the WAL into the main DB.
+
+        Left unchecked, the WAL grows unbounded under continuous write load and
+        makes every reader walk more frames to assemble a snapshot. TRUNCATE also
+        shrinks the WAL file on disk once all frames are checkpointed.
+
+        Returns ``(busy, log_frames, checkpointed_frames)`` exactly as SQLite does.
+        """
+        mode = mode.upper()
+        assert mode in ("PASSIVE", "FULL", "RESTART", "TRUNCATE"), f"invalid checkpoint mode {mode!r}"
+        # Pin to the main schema so the attached auth/profiles DBs (which may
+        # not even be in WAL mode) cannot raise SQLITE_LOCKED here.
+        with self._lock:
+            row = self._conn.execute(f"PRAGMA main.wal_checkpoint({mode})").fetchone()
+        return (int(row[0]), int(row[1]), int(row[2]))
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()
@@ -465,17 +478,25 @@ class ControllerDB:
 
     @contextmanager
     def transaction(self):
-        """Open an IMMEDIATE transaction and yield a TransactionCursor."""
+        """Open an IMMEDIATE transaction and yield a TransactionCursor.
+
+        On successful commit, any hooks registered via ``TransactionCursor.on_commit``
+        fire while the write lock is still held — keeping in-memory caches
+        (e.g. ``EndpointRegistry``) in sync with the DB without exposing a
+        torn snapshot to concurrent readers.
+        """
         with self._lock:
             cur = self._conn.cursor()
             cur.execute("BEGIN IMMEDIATE")
+            tx_cur = TransactionCursor(cur)
             try:
-                yield TransactionCursor(cur)
+                yield tx_cur
             except Exception:
                 self._conn.rollback()
                 raise
             else:
                 self._conn.commit()
+                tx_cur._run_commit_hooks()
 
     def fetchall(self, query: str, params: tuple | list = ()) -> list[sqlite3.Row]:
         with self._lock:
@@ -561,26 +582,54 @@ class ControllerDB:
                 continue
             pending.append(path)
 
-        if pending:
-            logger.info("Applying %d pending migration(s): %s", len(pending), [p.name for p in pending])
+        if not pending:
+            return
 
-        for path in pending:
-            t0 = time.monotonic()
-            spec = importlib.util.spec_from_file_location(path.stem, path)
-            assert spec is not None and spec.loader is not None
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            module.migrate(self._conn)
-            # Commit any implicit transaction left open by migrate() (e.g.
-            # row-by-row UPDATEs in 0008) so the next BEGIN IMMEDIATE succeeds.
+        logger.info("Applying %d pending migration(s): %s", len(pending), [p.name for p in pending])
+
+        # Flip to fast-mode PRAGMAs for the duration of the migration loop.
+        # Safe: migrations run at startup before any concurrent access, and a
+        # crash re-runs the migration from schema_migrations. journal_mode
+        # cannot change inside a transaction, so commit first and restore at
+        # the end.
+        self._conn.commit()
+        self._conn.execute("PRAGMA synchronous=OFF")
+        # journal_mode returns a row; consume it so the cursor is closed and
+        # cannot hold a statement-level lock that would block wal_checkpoint.
+        self._conn.execute("PRAGMA journal_mode=MEMORY").fetchall()
+        self._conn.execute("PRAGMA temp_store=MEMORY")
+        try:
+            for path in pending:
+                t0 = time.monotonic()
+                spec = importlib.util.spec_from_file_location(path.stem, path)
+                assert spec is not None and spec.loader is not None
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                module.migrate(self._conn)
+                # Commit any implicit transaction left open by migrate() (e.g.
+                # row-by-row UPDATEs in 0008) so the next BEGIN IMMEDIATE succeeds.
+                self._conn.commit()
+                logger.info("Migration %s applied in %.2fs", path.name, time.monotonic() - t0)
+
+                with self.transaction() as cur:
+                    cur.execute(
+                        "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
+                        (path.name, Timestamp.now().epoch_ms()),
+                    )
+        finally:
             self._conn.commit()
-            logger.info("Migration %s applied in %.2fs", path.name, time.monotonic() - t0)
-
-            with self.transaction() as cur:
-                cur.execute(
-                    "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
-                    (path.name, Timestamp.now().epoch_ms()),
-                )
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.execute("PRAGMA journal_mode=WAL").fetchall()
+            # Checkpoint and truncate the WAL so the migration's write volume
+            # does not linger as a giant WAL file that every subsequent reader
+            # must walk to build a snapshot.
+            busy, log_frames, checkpointed = self.wal_checkpoint("TRUNCATE")
+            logger.info(
+                "Post-migration wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
+                busy,
+                log_frames,
+                checkpointed,
+            )
 
     @property
     def api_keys_table(self) -> str:
@@ -662,6 +711,22 @@ class ControllerDB:
         vacuumed.rename(destination)
         logger.info("Checkpoint vacuumed in %.1fs", time.monotonic() - t0)
 
+    @staticmethod
+    def _sidecar_paths(path: Path) -> tuple[Path, Path]:
+        return (path.with_name(f"{path.name}-wal"), path.with_name(f"{path.name}-shm"))
+
+    @staticmethod
+    def _remove_sidecars(path: Path) -> None:
+        for sidecar in ControllerDB._sidecar_paths(path):
+            sidecar.unlink(missing_ok=True)
+
+    def _close_read_pool_connections(self) -> None:
+        while True:
+            try:
+                self._read_pool.get_nowait().close()
+            except queue.Empty:
+                break
+
     def replace_from(self, source_dir: str | Path) -> None:
         """Replace current DB files from ``source_dir`` and reopen connection.
 
@@ -675,12 +740,15 @@ class ControllerDB:
         source_dir_str = str(source_dir).rstrip("/")
 
         with self._lock:
+            self._close_read_pool_connections()
+            self._conn.close()
+
             # Download main DB
             main_source = f"{source_dir_str}/{self.DB_FILENAME}"
             tmp_path = self._db_path.with_suffix(".tmp")
             with fsspec.core.open(main_source, "rb") as src, open(tmp_path, "wb") as dst:
                 dst.write(src.read())
-            self._conn.close()
+            self._remove_sidecars(self._db_path)
             tmp_path.rename(self._db_path)
 
             # Download auth DB if present in source
@@ -690,6 +758,7 @@ class ControllerDB:
                 auth_tmp = self._auth_db_path.with_suffix(".tmp")
                 with fsspec.core.open(auth_source, "rb") as src, open(auth_tmp, "wb") as dst:
                     dst.write(src.read())
+                self._remove_sidecars(self._auth_db_path)
                 auth_tmp.rename(self._auth_db_path)
 
             # Download profiles DB if present in source
@@ -699,6 +768,7 @@ class ControllerDB:
                 profiles_tmp = self._profiles_db_path.with_suffix(".tmp")
                 with fsspec.core.open(profiles_source, "rb") as src, open(profiles_tmp, "wb") as dst:
                     dst.write(src.read())
+                self._remove_sidecars(self._profiles_db_path)
                 profiles_tmp.rename(self._profiles_db_path)
 
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
@@ -708,27 +778,11 @@ class ControllerDB:
             self._conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
             self._init_read_pool()
         self.apply_migrations()
+        self._endpoint_registry._load_all()
 
     # SQL-canonical read access is exposed through ``snapshot()`` and typed table
     # metadata at module scope. Legacy list/get/count helper methods were removed
     # to keep relation assembly explicit in controller/service/state query flows.
-
-    def delete_endpoint(self, endpoint_id: str):
-        with self.transaction() as cur:
-            row = cur.execute(
-                f"SELECT {ENDPOINT_PROJECTION.select_clause()} " "FROM endpoints e WHERE e.endpoint_id = ?",
-                (endpoint_id,),
-            ).fetchone()
-            if row is None:
-                return None
-            cur.execute("DELETE FROM endpoints WHERE endpoint_id = ?", (endpoint_id,))
-            return ENDPOINT_PROJECTION.decode_one([row])
-
-    def delete_endpoints(self, endpoint_ids: Sequence[str]) -> None:
-        if not endpoint_ids:
-            return
-        placeholders = ",".join("?" for _ in endpoint_ids)
-        self.execute(f"DELETE FROM endpoints WHERE endpoint_id IN ({placeholders})", tuple(endpoint_ids))
 
     # -- User budget accessors --------------------------------------------------
 
