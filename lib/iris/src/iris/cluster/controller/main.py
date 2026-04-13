@@ -25,6 +25,10 @@ import click
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
+from iris.log_server.main import (
+    AUTH_STRICT_ENV_VAR as LOG_SERVER_AUTH_STRICT_ENV_VAR,
+    JWT_KEY_ENV_VAR as LOG_SERVER_JWT_KEY_ENV_VAR,
+)
 from iris.rpc import config_pb2
 from rigging.timing import Duration, ExponentialBackoff
 
@@ -45,13 +49,37 @@ def _port_is_open(port: int) -> bool:
         return s.connect_ex(("localhost", port)) == 0
 
 
+def _resolve_external_host(host: str) -> str:
+    """Return an externally-reachable address for a bind host.
+
+    Workers running off-host cannot connect to the unspecified address
+    ``0.0.0.0``; probe for a real network IP instead. Mirrors the same
+    technique Controller.external_host uses for the dashboard URL.
+    """
+    if host != "0.0.0.0":
+        return host
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+
+
 def _start_log_server(
     *,
     port: int,
     log_dir: Path,
     remote_log_dir: str,
+    signing_key: str | None = None,
+    strict_auth: bool = False,
 ) -> subprocess.Popen:
     """Start the log server as a subprocess and wait for it to be ready."""
+    env = os.environ.copy()
+    if signing_key:
+        env[LOG_SERVER_JWT_KEY_ENV_VAR] = signing_key
+    if strict_auth:
+        env[LOG_SERVER_AUTH_STRICT_ENV_VAR] = "1"
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -64,6 +92,7 @@ def _start_log_server(
             "--remote-log-dir",
             remote_log_dir,
         ],
+        env=env,
     )
     ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
         lambda: _port_is_open(port),
@@ -198,6 +227,12 @@ def run_controller_serve(
 
     logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
 
+    # Resolve auth first so we can hand the log server subprocess a
+    # signing key for verifying worker JWTs on PushLogs/FetchLogs.
+    auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
+    if auth.worker_token and base_worker_config is not None:
+        base_worker_config.auth_token = auth.worker_token
+
     # --- Start log server subprocess ---
     log_port = port + LOG_SERVER_PORT_OFFSET
     log_dir = local_state_dir / "logs"
@@ -207,12 +242,13 @@ def run_controller_serve(
         port=log_port,
         log_dir=log_dir,
         remote_log_dir=remote_log_dir,
+        signing_key=auth.jwt_manager.signing_key if auth.jwt_manager else None,
+        strict_auth=auth.provider is not None,
     )
-    log_service_address = f"http://{host}:{log_port}"
-
-    auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
-    if auth.worker_token and base_worker_config is not None:
-        base_worker_config.auth_token = auth.worker_token
+    # Advertise the externally-reachable host so workers on other nodes can
+    # route to the log server. Binding to 0.0.0.0 is fine; advertising it is
+    # not — remote workers cannot connect to an unspecified address.
+    log_service_address = f"http://{_resolve_external_host(host)}:{log_port}"
 
     config = ControllerConfig(
         host=host,

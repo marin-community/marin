@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Iterable
+
+from connectrpc.interceptor import Interceptor
 
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
@@ -35,8 +38,9 @@ class LogPusher:
         timeout_ms: int = 10_000,
         batch_size: int = 1000,
         flush_interval: float = 5.0,
+        interceptors: Iterable[Interceptor] = (),
     ) -> None:
-        self._client = LogServiceClientSync(address=server_url, timeout_ms=timeout_ms)
+        self._client = LogServiceClientSync(address=server_url, timeout_ms=timeout_ms, interceptors=tuple(interceptors))
         self._batch_size = batch_size
         self._flush_interval = flush_interval
         self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
@@ -110,8 +114,13 @@ class RemoteLogService:
     replacement for LogServiceImpl in the controller and dashboard.
     """
 
-    def __init__(self, address: str, timeout_ms: int = 10_000) -> None:
-        self._client = LogServiceClientSync(address=address, timeout_ms=timeout_ms)
+    def __init__(
+        self,
+        address: str,
+        timeout_ms: int = 10_000,
+        interceptors: Iterable[Interceptor] = (),
+    ) -> None:
+        self._client = LogServiceClientSync(address=address, timeout_ms=timeout_ms, interceptors=tuple(interceptors))
 
     def push_logs(
         self,
