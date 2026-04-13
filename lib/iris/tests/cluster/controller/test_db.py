@@ -101,9 +101,12 @@ def test_worker_scheduling_columns_exist_after_migrations(db: ControllerDB) -> N
 
 
 def test_job_scheduling_columns_exist_after_migrations(db: ControllerDB) -> None:
-    columns = {row[1] for row in db._conn.execute("PRAGMA table_info(jobs)").fetchall()}
-    assert "resources_proto" in columns
-    assert "constraints_proto" in columns
+    columns = {row[1] for row in db._conn.execute("PRAGMA table_info(job_config)").fetchall()}
+    assert "res_cpu_millicores" in columns
+    assert "res_memory_bytes" in columns
+    assert "res_disk_bytes" in columns
+    assert "res_device_json" in columns
+    assert "constraints_json" in columns
     assert "has_coscheduling" in columns
     assert "coscheduling_group_by" in columns
     assert "scheduling_timeout_ms" in columns
@@ -231,6 +234,32 @@ def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
     rows = db.fetchall("SELECT name FROM auth.api_keys WHERE key_hash = 'hash1'")
     assert len(rows) == 1
     assert rows[0]["name"] == "test-key"
+    db.close()
+
+
+def test_replace_from_reattaches_profiles_db(tmp_path: Path) -> None:
+    """replace_from() must re-attach the profiles DB so profile tables remain accessible."""
+    from rigging.timing import Timestamp
+
+    from iris.cluster.controller.db import get_task_profiles, insert_task_profile
+
+    db = ControllerDB(db_dir=tmp_path)
+    insert_task_profile(db, "task-1", b"profile-data", Timestamp.now())
+
+    backup_dir = tmp_path / "backup"
+    backup_dir.mkdir()
+    db.backup_to(backup_dir / "controller.sqlite3")
+
+    # The profiles DB is a separate file; copy it into the backup dir so
+    # replace_from can find it.
+    import shutil
+
+    shutil.copy2(db.profiles_db_path, backup_dir / ControllerDB.PROFILES_DB_FILENAME)
+
+    db.replace_from(str(backup_dir))
+
+    profiles = get_task_profiles(db, "task-1")
+    assert len(profiles) == 1
     db.close()
 
 

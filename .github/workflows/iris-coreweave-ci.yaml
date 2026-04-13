@@ -104,7 +104,7 @@ jobs:
         run: |
           cd lib/iris && uv run --group dev iris -v \
             --config=examples/coreweave-ci.yaml \
-            cluster start
+            cluster start --fresh
 
       - name: Run integration tests
         env:
@@ -120,19 +120,30 @@ jobs:
           FSSPEC_S3: '{"endpoint_url": "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"}'
         run: |
           export KUBECONFIG=~/.kube/coreweave-iris
-          kubectl port-forward -n "$IRIS_NAMESPACE" svc/iris-ci-controller-svc 10000:10000 &
+
+          # Wait for rollout to fully settle (old pod terminated, exactly 1 ready).
+          kubectl rollout status deployment/iris-controller -n "$IRIS_NAMESPACE" --timeout=120s
+          kubectl wait pod -n "$IRIS_NAMESPACE" -l app=iris-controller \
+            --for=condition=Ready --timeout=60s
+
+          LOCAL_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()")
+          kubectl port-forward -n "$IRIS_NAMESPACE" svc/iris-ci-controller-svc "${LOCAL_PORT}:10000" &
           PF_PID=$!
           echo "PF_PID=$PF_PID" >> "$GITHUB_ENV"
+          echo "LOCAL_PORT=$LOCAL_PORT" >> "$GITHUB_ENV"
 
-          IRIS_CONTROLLER_URL="http://localhost:10000"
+          IRIS_CONTROLLER_URL="http://localhost:${LOCAL_PORT}"
 
-          # Controller deployment is already confirmed ready by `cluster start`;
-          # this just waits for the port-forward to be usable.
+          # Wait for the port-forward tunnel to be usable.
           HEALTHY=false
           for i in $(seq 1 60); do
             if ! kill -0 "$PF_PID" 2>/dev/null; then
-              echo "port-forward process died unexpectedly"
-              exit 1
+              echo "port-forward process died — restarting"
+              kubectl port-forward -n "$IRIS_NAMESPACE" svc/iris-ci-controller-svc "${LOCAL_PORT}:10000" &
+              PF_PID=$!
+              echo "PF_PID=$PF_PID" >> "$GITHUB_ENV"
+              sleep 2
+              continue
             fi
             if curl -sf "$IRIS_CONTROLLER_URL/health" > /dev/null 2>&1; then
               HEALTHY=true
@@ -162,8 +173,8 @@ jobs:
           AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
           FSSPEC_S3: '{"endpoint_url": "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"}'
         run: |
-          IRIS_CONTROLLER_URL="http://localhost:10000"
-          timeout 600 uv run tests/integration/iris/run_iris_full_integration.py \
+          IRIS_CONTROLLER_URL="http://localhost:${LOCAL_PORT}"
+          timeout 600 uv run tests/integration_test.py \
             --controller-url "$IRIS_CONTROLLER_URL"
 
       - name: Stop port-forward

@@ -12,10 +12,12 @@ from iris.cluster.providers.k8s.tasks import (
     _LABEL_JOB_ID,
     _LABEL_TASK_HASH,
     _build_init_container_spec,
+    _build_pdb_manifest,
     _build_pod_manifest,
     _build_task_script,
     _build_volumes_and_mounts,
     _constraints_to_node_selector,
+    _is_coordinator_task,
     _is_infrastructure_failure,
     _job_id_from_task,
     _pod_name,
@@ -26,7 +28,7 @@ from iris.cluster.providers.k8s.tasks import (
 from iris.cluster.providers.k8s.types import parse_k8s_quantity
 from iris.cluster.controller.transitions import RunningTaskEntry
 from iris.cluster.types import JobName
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 from .conftest import add_eq_constraint, common_env_from_req, make_pod, make_run_req, pod_config
 
@@ -116,7 +118,7 @@ def test_build_pod_manifest_env_vars():
 
 def test_build_pod_manifest_gpu():
     req = make_run_req("/test-job/0")
-    req.resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="A100", count=4))
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
     manifest = _build_pod_manifest(req, pod_config())
     limits = manifest["spec"]["containers"][0]["resources"]["limits"]
     assert limits["nvidia.com/gpu"] == "4"
@@ -153,11 +155,11 @@ def test_task_hash_distinct_for_sanitization_collisions():
 @pytest.mark.parametrize(
     "phase,expected_state",
     [
-        ("Pending", cluster_pb2.TASK_STATE_BUILDING),
-        ("Running", cluster_pb2.TASK_STATE_RUNNING),
-        ("Succeeded", cluster_pb2.TASK_STATE_SUCCEEDED),
-        ("Failed", cluster_pb2.TASK_STATE_FAILED),
-        ("Unknown", cluster_pb2.TASK_STATE_FAILED),
+        ("Pending", job_pb2.TASK_STATE_BUILDING),
+        ("Running", job_pb2.TASK_STATE_RUNNING),
+        ("Succeeded", job_pb2.TASK_STATE_SUCCEEDED),
+        ("Failed", job_pb2.TASK_STATE_FAILED),
+        ("Unknown", job_pb2.TASK_STATE_FAILED),
     ],
 )
 def test_task_update_from_pod_phases(phase, expected_state):
@@ -172,16 +174,25 @@ def test_task_update_failed_has_exit_code():
     pod = make_pod("iris-job-0-0", "Failed", exit_code=42, reason="Error")
     update = _task_update_from_pod(entry, pod)
     assert update.exit_code == 42
-    assert update.new_state == cluster_pb2.TASK_STATE_FAILED
+    assert update.new_state == job_pb2.TASK_STATE_FAILED
 
 
 @pytest.mark.parametrize("reason", sorted(_INFRASTRUCTURE_FAILURE_REASONS))
 def test_task_update_infrastructure_failure_is_worker_failed(reason):
-    """OOMKilled, Evicted, etc. should be WORKER_FAILED, not FAILED."""
+    """Evicted, Preempting, etc. should be WORKER_FAILED, not FAILED."""
     entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
     pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason=reason)
     update = _task_update_from_pod(entry, pod)
-    assert update.new_state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert update.exit_code == 137
+
+
+def test_task_update_oom_killed_is_application_failure():
+    """OOMKilled is a misconfiguration, not infrastructure — should be FAILED."""
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="OOMKilled")
+    update = _task_update_from_pod(entry, pod)
+    assert update.new_state == job_pb2.TASK_STATE_FAILED
     assert update.exit_code == 137
 
 
@@ -190,7 +201,7 @@ def test_task_update_application_error_is_failed():
     entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
     pod = make_pod("iris-job-0-0", "Failed", exit_code=1, reason="Error")
     update = _task_update_from_pod(entry, pod)
-    assert update.new_state == cluster_pb2.TASK_STATE_FAILED
+    assert update.new_state == job_pb2.TASK_STATE_FAILED
     assert update.exit_code == 1
 
 
@@ -201,11 +212,6 @@ def test_is_infrastructure_failure_with_pod_level_reason():
         "status": {"phase": "Failed", "reason": "Evicted", "containerStatuses": []},
     }
     assert _is_infrastructure_failure(pod)
-
-
-def test_is_infrastructure_failure_false_for_application_error():
-    pod = make_pod("test", "Failed", exit_code=1, reason="Error")
-    assert not _is_infrastructure_failure(pod)
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +284,7 @@ def test_constraints_unknown_key_ignored():
 
 
 def test_constraints_non_eq_op_raises():
-    c = cluster_pb2.Constraint(key="pool", op=cluster_pb2.CONSTRAINT_OP_NE)
+    c = job_pb2.Constraint(key="pool", op=job_pb2.CONSTRAINT_OP_NE)
     c.value.string_value = "h100-8x"
 
     with pytest.raises(ValueError, match=r"Unsupported constraint op.*pool.*CONSTRAINT_OP_EQ"):
@@ -287,7 +293,7 @@ def test_constraints_non_eq_op_raises():
 
 def test_constraints_to_node_selector_function_directly():
     """Unit test the helper in isolation."""
-    c = cluster_pb2.Constraint(key="pool", op=cluster_pb2.CONSTRAINT_OP_EQ)
+    c = job_pb2.Constraint(key="pool", op=job_pb2.CONSTRAINT_OP_EQ)
     c.value.string_value = "a100-4x"
     assert _constraints_to_node_selector([c]) == {"iris.pool": "a100-4x"}
 
@@ -309,21 +315,21 @@ def test_build_pod_manifest_no_gpu_no_toleration():
 
 
 def test_nvidia_gpu_toleration_added():
-    """GPU pods get both CW interruptable and NVIDIA GPU tolerations."""
+    """GPU pods get NVIDIA GPU toleration."""
     req = make_run_req("/my-job/task-0")
-    req.resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="A100", count=4))
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
 
     manifest = _build_pod_manifest(req, pod_config())
     tolerations = manifest["spec"].get("tolerations", [])
     toleration_keys = {t.get("key") for t in tolerations}
     assert "nvidia.com/gpu" in toleration_keys
-    assert "qos.coreweave.cloud/interruptable" in toleration_keys
+    assert "qos.coreweave.cloud/interruptable" not in toleration_keys
 
 
 def test_coreweave_constraints_end_to_end():
     """Constraints from a coreweave h100-8x scale group map to correct nodeSelector."""
     req = make_run_req("/my-job/task-0", attempt_id=1)
-    req.resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="H100", count=8))
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
     add_eq_constraint(req, "pool", "h100-8x")
     add_eq_constraint(req, "region", "US-WEST-04A")
 
@@ -332,7 +338,7 @@ def test_coreweave_constraints_end_to_end():
 
     assert spec["nodeSelector"]["iris.pool"] == "h100-8x"
     assert spec["nodeSelector"]["iris.region"] == "US-WEST-04A"
-    assert any(t.get("key") == "qos.coreweave.cloud/interruptable" for t in spec["tolerations"])
+    assert not any(t.get("key") == "qos.coreweave.cloud/interruptable" for t in spec["tolerations"])
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +469,7 @@ def test_build_pod_manifest_includes_standard_volumes():
 def test_build_pod_manifest_shm_size_limit_with_gpu():
     """dshm volume gets sizeLimit=100Gi when GPU resources are requested."""
     req = make_run_req("/test-job/0")
-    req.resources.device.gpu.CopyFrom(cluster_pb2.GpuDevice(variant="A100", count=4))
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
     manifest = _build_pod_manifest(req, pod_config())
 
     dshm_volumes = [v for v in manifest["spec"]["volumes"] if v["name"] == "dshm"]
@@ -486,7 +492,7 @@ def test_build_pod_manifest_shm_no_size_limit_without_gpu():
 def test_build_pod_manifest_shm_size_limit_with_tpu():
     """dshm volume gets sizeLimit=100Gi when TPU resources are requested."""
     req = make_run_req("/test-job/0")
-    req.resources.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v4", count=4))
+    req.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
     manifest = _build_pod_manifest(req, pod_config())
 
     dshm_volumes = [v for v in manifest["spec"]["volumes"] if v["name"] == "dshm"]
@@ -497,7 +503,7 @@ def test_build_pod_manifest_shm_size_limit_with_tpu():
 def test_tpu_adds_sys_resource_capability():
     """TPU pods get SYS_RESOURCE capability for memlock ulimits."""
     req = make_run_req("/test-job/0")
-    req.resources.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v4", count=4))
+    req.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
     manifest = _build_pod_manifest(req, pod_config())
 
     caps = manifest["spec"]["containers"][0]["securityContext"]["capabilities"]["add"]
@@ -607,7 +613,7 @@ def test_advertise_host_uses_downward_api():
 def test_device_env_vars_tpu():
     """TPU device resources inject JAX_PLATFORMS, PJRT_DEVICE, JAX_FORCE_TPU_INIT."""
     req = make_run_req("/test-job/0")
-    req.resources.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v4-8", count=4))
+    req.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4-8", count=4))
     manifest = _build_pod_manifest(req, pod_config())
 
     env_by_name = {e["name"]: e.get("value") for e in manifest["spec"]["containers"][0]["env"]}
@@ -773,3 +779,43 @@ def test_init_container_bundle_and_workdir_files():
     assert "IRIS_WORKDIR_FILES_SRC" in env_by_name
     assert configmap_name is not None
     assert len(extra_volumes) == 1
+
+
+# ---------------------------------------------------------------------------
+# Coordinator detection and PDB manifest
+# ---------------------------------------------------------------------------
+
+
+def test_is_coordinator_single_task_no_accelerator():
+    """Single-task CPU-only job is a coordinator."""
+    req = make_run_req("/coord-job/0")
+    req.num_tasks = 1
+    assert _is_coordinator_task(req) is True
+
+
+def test_is_coordinator_default_num_tasks():
+    """Default num_tasks (0) is treated as coordinator."""
+    req = make_run_req("/coord-job/0")
+    assert _is_coordinator_task(req) is True
+
+
+def test_is_not_coordinator_multi_task():
+    """Multi-task jobs are not coordinators."""
+    req = make_run_req("/worker-job/0")
+    req.num_tasks = 4
+    assert _is_coordinator_task(req) is False
+
+
+def test_is_not_coordinator_with_gpu():
+    """GPU jobs are not coordinators."""
+    req = make_run_req("/gpu-job/0")
+    req.num_tasks = 1
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
+    assert _is_coordinator_task(req) is False
+
+
+def test_build_pdb_manifest_selector_and_cleanup_labels():
+    """PDB selector targets task hash; labels include task hash for label-based cleanup."""
+    pdb = _build_pdb_manifest("iris-coord-0-abcd1234-0", "iris", "deadbeef12345678")
+    assert pdb["spec"]["selector"]["matchLabels"][_LABEL_TASK_HASH] == "deadbeef12345678"
+    assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == "deadbeef12345678"

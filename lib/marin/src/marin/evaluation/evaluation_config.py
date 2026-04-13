@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
+from levanter.eval_harness import TaskConfig
 from marin.execution.executor import InputName
 
 # Wandb project name for evaluations. Controlled via WANDB_PROJECT env var.
@@ -116,3 +118,36 @@ class EvaluationConfig:
     This field is not read at runtime. It exists so Executor can see an
     `InputName` and block the evaluation step on a cache-population step.
     """
+
+def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
+    """Convert Marin eval task configs into Levanter task configs."""
+    return [
+        TaskConfig(
+            task=task.name,
+            num_fewshot=task.num_fewshot,
+            task_alias=task.task_alias,
+            **_convert_task_kwargs_for_levanter(task),
+        )
+        for task in tasks
+    ]
+
+
+def _convert_task_kwargs_for_levanter(task: EvalTaskConfig) -> dict[str, object]:
+    if not task.task_kwargs:
+        return {}
+
+    converted_kwargs: dict[str, object] = {}
+    unsupported_keys: list[str] = []
+    for key, value in task.task_kwargs.items():
+        mapped_key = _LEVANTER_TASK_KWARG_ALIASES.get(key, key)
+        if mapped_key not in _SUPPORTED_LEVANTER_TASK_KWARGS:
+            unsupported_keys.append(key)
+            continue
+        converted_kwargs[mapped_key] = value
+
+    if unsupported_keys:
+        raise ValueError(
+            f"Unsupported Levanter task kwargs for {task.task_alias or task.name}: {sorted(unsupported_keys)}"
+        )
+
+    return converted_kwargs

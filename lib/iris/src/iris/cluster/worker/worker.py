@@ -13,8 +13,9 @@ from pathlib import Path
 import uvicorn
 
 from iris.chaos import chaos
-from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
+from iris.cluster.log_store import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
+from iris.log_server.client import LogPusher, RemoteLogHandler
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
 from iris.cluster.types import JobName, TaskAttempt as TaskAttemptId
 from iris.cluster.bundle import BundleStore
@@ -35,9 +36,12 @@ from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from rigging.log_setup import slow_log
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc import config_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
+from iris.rpc import worker_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
@@ -64,7 +68,7 @@ class WorkerConfig:
     accelerator_type: int = 0
     accelerator_variant: str = ""
     gpu_count: int = 0
-    preemptible: bool = False
+    capacity_type: int = 0
     storage_prefix: str = ""
     auth_token: str = ""
 
@@ -111,7 +115,7 @@ def worker_config_from_proto(
         accelerator_type=proto.accelerator_type,
         accelerator_variant=proto.accelerator_variant,
         gpu_count=proto.gpu_count,
-        preemptible=proto.preemptible,
+        capacity_type=proto.capacity_type,
         storage_prefix=proto.storage_prefix,
         auth_token=proto.auth_token,
     )
@@ -128,7 +132,7 @@ class Worker:
         environment_provider: EnvironmentProvider | None = None,
         port_allocator: PortAllocator | None = None,
         threads: ThreadContainer | None = None,
-        worker_metadata: cluster_pb2.WorkerMetadata | None = None,
+        worker_metadata: job_pb2.WorkerMetadata | None = None,
     ):
         self._config = config
 
@@ -159,7 +163,7 @@ class Worker:
                 accelerator_type=config.accelerator_type,
                 accelerator_variant=config.accelerator_variant,
                 gpu_count_override=config.gpu_count,
-                preemptible=config.preemptible,
+                capacity_type=config.capacity_type,
                 worker_attributes=config.worker_attributes,
             )
 
@@ -170,13 +174,12 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        self._log_store = LogStore()
-        self._log_store_handler = LogStoreHandler(self._log_store, key=PROCESS_LOG_KEY)
-        self._log_store_handler.setLevel(logging.INFO)
-        self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-        logging.getLogger().addHandler(self._log_store_handler)
+        # LogPusher and RemoteLogHandler are created after registration, once
+        # the worker can resolve /system/log-server via ListEndpoints.
+        self._log_pusher: LogPusher | None = None
+        self._log_handler: RemoteLogHandler | None = None
 
-        self._service = WorkerServiceImpl(self, log_store=self._log_store)
+        self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
             self._service,
             host=config.host,
@@ -290,7 +293,7 @@ class Worker:
             attempt = TaskAttempt.adopt(
                 discovered=container,
                 container_handle=handle,
-                log_store=self._log_store,
+                log_pusher=self._log_pusher,
                 port_allocator=self._port_allocator,
                 poll_interval_seconds=self._config.poll_interval.to_seconds(),
             )
@@ -360,9 +363,9 @@ class Worker:
         self._threads.stop()
         if self._controller_client:
             self._controller_client.close()
-        logging.getLogger().removeHandler(self._log_store_handler)
-        self._log_store_handler.close()
-        self._log_store.close()
+        self._detach_log_handler()
+        if self._log_pusher is not None:
+            self._log_pusher.close()
         self._bundle_store.close()
 
     def _run_lifecycle(self, stop_event: threading.Event) -> None:
@@ -392,6 +395,7 @@ class Worker:
                     # Shutdown requested during registration
                     break
                 self._worker_id = worker_id
+                self._attach_log_handler()
                 self._serve(stop_event)
         except Exception:
             logger.exception("Worker lifecycle crashed")
@@ -419,10 +423,12 @@ class Worker:
                         raise rule.error
 
                 response = self._controller_client.register(
-                    cluster_pb2.Controller.RegisterRequest(
+                    controller_pb2.Controller.RegisterRequest(
                         address=address,
                         metadata=metadata,
                         worker_id=self._worker_id or "",
+                        slice_id=self._config.slice_id or "",
+                        scale_group=self._config.worker_attributes.get("scale-group", ""),
                     )
                 )
                 if response.accepted:
@@ -435,6 +441,50 @@ class Worker:
             stop_event.wait(5.0)
 
         return None
+
+    def _resolve_log_service(self) -> str | None:
+        """Resolve the LogService address via the /system/log-server endpoint."""
+        if not self._controller_client:
+            return None
+        resp = self._controller_client.list_endpoints(
+            controller_pb2.Controller.ListEndpointsRequest(
+                prefix="/system/log-server",
+                exact=True,
+            ),
+        )
+        if not resp.endpoints:
+            logger.warning("No /system/log-server endpoint registered on controller")
+            return None
+        addr = resp.endpoints[0].address
+        logger.info("Resolved /system/log-server -> %s", addr)
+        return addr
+
+    def _attach_log_handler(self) -> None:
+        """Create LogPusher and attach RemoteLogHandler after registration."""
+        self._detach_log_handler()
+        if not self._worker_id:
+            return
+        log_addr = self._resolve_log_service()
+        if not log_addr:
+            return
+        self._log_pusher = LogPusher(log_addr)
+        self._log_handler = RemoteLogHandler(
+            self._log_pusher,
+            key=worker_log_key(self._worker_id),
+        )
+        self._log_handler.setLevel(logging.INFO)
+        self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        logging.getLogger().addHandler(self._log_handler)
+
+    def _detach_log_handler(self) -> None:
+        """Remove and close the current RemoteLogHandler and LogPusher if any."""
+        if self._log_handler is not None:
+            logging.getLogger().removeHandler(self._log_handler)
+            self._log_handler.close()
+            self._log_handler = None
+        if self._log_pusher is not None:
+            self._log_pusher.close()
+            self._log_pusher = None
 
     def _resolve_address(self) -> str:
         """Resolve the address to advertise to the controller."""
@@ -490,10 +540,10 @@ class Worker:
 
     _TERMINAL_STATES = frozenset(
         {
-            cluster_pb2.TASK_STATE_SUCCEEDED,
-            cluster_pb2.TASK_STATE_FAILED,
-            cluster_pb2.TASK_STATE_KILLED,
-            cluster_pb2.TASK_STATE_WORKER_FAILED,
+            job_pb2.TASK_STATE_SUCCEEDED,
+            job_pb2.TASK_STATE_FAILED,
+            job_pb2.TASK_STATE_KILLED,
+            job_pb2.TASK_STATE_WORKER_FAILED,
         }
     )
 
@@ -507,7 +557,7 @@ class Worker:
         matching.sort(key=lambda x: x[0][1], reverse=True)
         return matching[0][1]
 
-    def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str:
+    def submit_task(self, request: job_pb2.RunTaskRequest) -> str:
         """Submit a new task for execution.
 
         If a non-terminal task with the same task_id already exists:
@@ -585,7 +635,7 @@ class Worker:
             default_task_image=self._config.default_task_image,
             resolve_image=self._config.resolve_image,
             port_allocator=self._port_allocator,
-            log_store=self._log_store,
+            log_pusher=self._log_pusher,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
 
@@ -644,7 +694,7 @@ class Worker:
                 by_task[task_id] = task
         return list(by_task.values())
 
-    def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse:
+    def handle_heartbeat(self, request: job_pb2.HeartbeatRequest) -> job_pb2.HeartbeatResponse:
         """Handle controller-initiated heartbeat with reconciliation.
 
         Processing order (sequential, not concurrent):
@@ -690,7 +740,7 @@ class Worker:
                     except Exception as e:
                         logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
 
-            tasks: list[cluster_pb2.Controller.WorkerTaskStatus] = []
+            tasks: list[job_pb2.WorkerTaskStatus] = []
 
             with slow_log(logger, "heartbeat reconciliation", threshold_ms=200):
                 with self._lock:
@@ -703,10 +753,10 @@ class Worker:
 
                         if task is None:
                             tasks.append(
-                                cluster_pb2.Controller.WorkerTaskStatus(
+                                job_pb2.WorkerTaskStatus(
                                     task_id=task_id,
                                     attempt_id=expected_attempt_id,
-                                    state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                                    state=job_pb2.TASK_STATE_WORKER_FAILED,
                                     exit_code=0,
                                     error="Task not found on worker",
                                     finished_at=timestamp_to_proto(Timestamp.now()),
@@ -715,19 +765,15 @@ class Worker:
                         else:
                             task_proto = task.to_proto()
                             reported_state = task.status
-                            if reported_state == cluster_pb2.TASK_STATE_PENDING:
-                                reported_state = cluster_pb2.TASK_STATE_BUILDING
+                            if reported_state == job_pb2.TASK_STATE_PENDING:
+                                reported_state = job_pb2.TASK_STATE_BUILDING
 
-                            is_terminal = task.status in self._TERMINAL_STATES
-                            log_cap = 50000 if is_terminal else 5000
-                            log_entries = task.drain_heartbeat_logs(max_entries=log_cap, final=is_terminal)
-                            entry = cluster_pb2.Controller.WorkerTaskStatus(
+                            entry = job_pb2.WorkerTaskStatus(
                                 task_id=task_id,
                                 attempt_id=task_proto.current_attempt_id,
                                 state=reported_state,
                                 exit_code=task_proto.exit_code,
                                 error=task_proto.error or "",
-                                log_entries=log_entries,
                                 container_id=task_proto.container_id or "",
                             )
                             if task.status in self._TERMINAL_STATES:
@@ -761,7 +807,7 @@ class Worker:
                 total_processes = 0
                 with self._lock:
                     for task in self._tasks.values():
-                        if task.status == cluster_pb2.TASK_STATE_RUNNING:
+                        if task.status == job_pb2.TASK_STATE_RUNNING:
                             running_count += 1
                             total_processes += task.process_count
                 resource_snapshot.running_task_count = running_count
@@ -773,7 +819,7 @@ class Worker:
                 if not health.healthy:
                     logger.warning("Worker health check failed: %s", health.error)
 
-            return cluster_pb2.HeartbeatResponse(
+            return job_pb2.HeartbeatResponse(
                 tasks=tasks,
                 resource_snapshot=resource_snapshot,
                 worker_healthy=health.healthy,
@@ -803,9 +849,9 @@ class Worker:
 
         # Check if already in terminal state
         if task.status not in (
-            cluster_pb2.TASK_STATE_RUNNING,
-            cluster_pb2.TASK_STATE_BUILDING,
-            cluster_pb2.TASK_STATE_PENDING,
+            job_pb2.TASK_STATE_RUNNING,
+            job_pb2.TASK_STATE_BUILDING,
+            job_pb2.TASK_STATE_PENDING,
         ):
             return False
 
@@ -835,7 +881,7 @@ class Worker:
         try:
             task.stop(force=False)
 
-            running_states = (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
+            running_states = (job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_BUILDING)
             stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
                 lambda: task.status not in running_states,
                 timeout=Duration.from_ms(term_timeout_ms),
@@ -861,7 +907,7 @@ class Worker:
         self,
         task_id: str,
         duration_seconds: int,
-        profile_type: cluster_pb2.ProfileType,
+        profile_type: job_pb2.ProfileType,
         attempt_id: int | None = None,
     ) -> bytes:
         """Profile a running task by delegating to its container handle.
@@ -881,27 +927,27 @@ class Worker:
             attempt = self._get_current_attempt(task_id)
             if not attempt:
                 raise ValueError(f"Task {task_id} not found")
-        if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
-            raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
+        if attempt.status != job_pb2.TASK_STATE_RUNNING:
+            raise ValueError(f"Task {task_id} is not running (state={job_pb2.TaskState.Name(attempt.status)})")
         return attempt.profile(duration_seconds, profile_type)
 
     def exec_in_container(
         self, task_id: str, command: list[str], timeout_seconds: int = 60
-    ) -> cluster_pb2.Worker.ExecInContainerResponse:
+    ) -> worker_pb2.Worker.ExecInContainerResponse:
         """Execute a command in a running task's container.
 
         Delegates to the container handle's underlying runtime (docker exec, subprocess, kubectl exec).
         """
         attempt = self._get_current_attempt(task_id)
         if not attempt:
-            return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} not found")
-        if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
-            return cluster_pb2.Worker.ExecInContainerResponse(
-                error=f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})"
+            return worker_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} not found")
+        if attempt.status != job_pb2.TASK_STATE_RUNNING:
+            return worker_pb2.Worker.ExecInContainerResponse(
+                error=f"Task {task_id} is not running (state={job_pb2.TaskState.Name(attempt.status)})"
             )
         container_id = attempt.container_id
         if not container_id:
-            return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} has no container")
+            return worker_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} has no container")
         return attempt.exec_in_container(command, timeout_seconds)
 
     @property

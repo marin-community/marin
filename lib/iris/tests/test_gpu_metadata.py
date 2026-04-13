@@ -11,8 +11,8 @@ from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.managed_thread import ThreadContainer
-from iris.rpc import cluster_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.timing import Duration, ExponentialBackoff
 
 from .conftest import _make_controller_only_config
@@ -62,7 +62,7 @@ def test_gpu_worker_metadata(tmp_path):
 
                 def _has_healthy_worker() -> bool:
                     nonlocal workers
-                    response = controller_client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+                    response = controller_client.list_workers(controller_pb2.Controller.ListWorkersRequest())
                     workers = [w for w in response.workers if w.healthy]
                     return len(workers) > 0
 
@@ -83,7 +83,7 @@ def test_gpu_worker_metadata(tmp_path):
 
                 attrs = meta.attributes
                 assert WellKnownAttribute.GPU_VARIANT in attrs
-                assert "H100" in attrs[WellKnownAttribute.GPU_VARIANT].string_value
+                assert "h100" in attrs[WellKnownAttribute.GPU_VARIANT].string_value
                 assert WellKnownAttribute.GPU_COUNT in attrs
                 assert attrs[WellKnownAttribute.GPU_COUNT].int_value == 8
 

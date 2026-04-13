@@ -3,8 +3,6 @@
 
 from collections.abc import Sequence
 
-from levanter.eval_harness import TaskConfig
-
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
 _LEVANTER_TASK_KWARG_ALIASES = {
@@ -547,42 +545,6 @@ MULTILINGUAL_LM_EVAL_LOGPROB_TASKS = (
 )
 
 MULTILINGUAL_LM_EVAL_GENERATIVE_TASKS = MGSM_MULTILINGUAL_TASKS
-
-
-def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
-    """
-    Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects.
-    """
-    return [
-        TaskConfig(
-            task=task.name,
-            num_fewshot=task.num_fewshot,
-            task_alias=task.task_alias,
-            **_convert_task_kwargs_for_levanter(task),
-        )
-        for task in tasks
-    ]
-
-
-def _convert_task_kwargs_for_levanter(task: EvalTaskConfig) -> dict[str, object]:
-    if not task.task_kwargs:
-        return {}
-
-    converted_kwargs: dict[str, object] = {}
-    unsupported_keys: list[str] = []
-    for key, value in task.task_kwargs.items():
-        mapped_key = _LEVANTER_TASK_KWARG_ALIASES.get(key, key)
-        if mapped_key not in _SUPPORTED_LEVANTER_TASK_KWARGS:
-            unsupported_keys.append(key)
-            continue
-        converted_kwargs[mapped_key] = value
-
-    if unsupported_keys:
-        raise ValueError(
-            f"Unsupported Levanter task kwargs for {task.task_alias or task.name}: {sorted(unsupported_keys)}"
-        )
-
-    return converted_kwargs
 
 
 def convert_to_task_metrics(tasks: Sequence[EvalTaskConfig], metric: str) -> list[str]:

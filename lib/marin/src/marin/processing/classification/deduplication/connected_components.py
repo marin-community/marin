@@ -6,7 +6,7 @@ from collections.abc import Iterator, Sequence
 from typing import Any, TypedDict
 
 import dupekit
-from zephyr import Dataset, ZephyrContext, counters, write_vortex_file, ShardInfo
+from zephyr import Dataset, ZephyrContext, counters, write_parquet_file, ShardInfo
 
 logger = logging.getLogger(__name__)
 
@@ -140,9 +140,9 @@ def connected_components(
             lambda x: x["source_id_norm"],
             reducer=_build_adjacency,
             num_output_shards=num_reduce_shards,
-        ).write_vortex(f"{output_dir}/it_0/part-{{shard:05d}}.vortex"),
+        ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
         verbose=True,
-    )
+    ).results
 
     def _get_write_shard_and_count_fn(iteration: int):
         # NOTE: this function exists to make the iteration number closure capture explicit
@@ -158,8 +158,10 @@ def connected_components(
                         counters.increment("cc/changes")
                     yield node
 
-            path = f"{output_dir}/it_{iteration}/part-{shard_info.shard_idx:05d}-of-{shard_info.total_shards:05d}.vortex"
-            result = write_vortex_file(counting_iter(), path)
+            path = (
+                f"{output_dir}/it_{iteration}/part-{shard_info.shard_idx:05d}-of-{shard_info.total_shards:05d}.parquet"
+            )
+            result = write_parquet_file(counting_iter(), path)
             yield {**result, "num_changes": num_changes}
 
         return _write_shard_and_count
@@ -168,17 +170,15 @@ def connected_components(
     for i in range(1, max_iterations + 1):  # type: ignore[bad-assignment]
         logger.info(f"Connected components iteration {i}...")
 
-        shard_results = list(
-            ctx.execute(
-                Dataset.from_list(curr_it)
-                .load_vortex()
-                .map(lambda record: CCNode(**record))
-                .flat_map(_emit_messages)
-                .group_by(key=lambda x: x["key"], reducer=_reduce_node_step, num_output_shards=num_reduce_shards)
-                .map_shard(_get_write_shard_and_count_fn(i)),
-                verbose=True,
-            )
-        )
+        shard_results = ctx.execute(
+            Dataset.from_list(curr_it)
+            .load_parquet()
+            .map(lambda record: CCNode(**record))
+            .flat_map(_emit_messages)
+            .group_by(key=lambda x: x["key"], reducer=_reduce_node_step, num_output_shards=num_reduce_shards)
+            .map_shard(_get_write_shard_and_count_fn(i)),
+            verbose=True,
+        ).results
 
         curr_it = [r["path"] for r in shard_results]
         num_changes = sum(r["num_changes"] for r in shard_results)

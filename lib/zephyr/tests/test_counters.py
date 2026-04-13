@@ -4,7 +4,7 @@
 """Tests for Zephyr user-defined counters: worker API and heartbeat plumbing."""
 
 from zephyr import counters
-from zephyr.execution import CounterSnapshot, _worker_ctx_var
+from zephyr.execution import CounterSnapshot, ZephyrExecutionResult, _worker_ctx_var
 
 
 class FakeWorker:
@@ -48,3 +48,17 @@ def test_counters_noop_outside_worker():
         assert counters.get_counters() == {}
     finally:
         _worker_ctx_var.reset(token)
+
+
+def test_zephyr_execution_result_fields():
+    """ZephyrExecutionResult exposes both results and counters."""
+    result = ZephyrExecutionResult(results=["a.jsonl", "b.jsonl"], counters={"docs": 7})
+    assert result.results == ["a.jsonl", "b.jsonl"]
+    assert result.counters == {"docs": 7}
+
+
+def test_zephyr_execution_result_empty():
+    """ZephyrExecutionResult handles empty results and counters (e.g. dry_run)."""
+    result = ZephyrExecutionResult(results=[], counters={})
+    assert result.results == []
+    assert result.counters == {}

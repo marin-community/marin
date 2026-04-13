@@ -12,7 +12,7 @@ from iris.cluster.controller.db import (
     get_task_profiles,
     insert_task_profile,
 )
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 
 
@@ -31,10 +31,14 @@ def _ensure_task(db: ControllerDB, task_id: str) -> None:
     )
     db.execute(
         "INSERT OR IGNORE INTO jobs "
-        "(job_id, user_id, name, state, depth, root_job_id, submitted_at_ms, "
-        "root_submitted_at_ms, request_proto, num_tasks, is_reservation_holder) "
-        "VALUES (?, ?, ?, ?, 1, ?, 0, 0, ?, 1, 0)",
-        (job_id, user_id, job_id, cluster_pb2.JOB_STATE_RUNNING, job_id, b""),
+        "(job_id, user_id, state, depth, root_job_id, submitted_at_ms, "
+        "root_submitted_at_ms, num_tasks, is_reservation_holder) "
+        "VALUES (?, ?, ?, 1, ?, 0, 0, 1, 0)",
+        (job_id, user_id, job_pb2.JOB_STATE_RUNNING, job_id),
+    )
+    db.execute(
+        "INSERT OR IGNORE INTO job_config (job_id, name) VALUES (?, ?)",
+        (job_id, job_id),
     )
     db.execute(
         "INSERT OR IGNORE INTO tasks "
@@ -42,7 +46,7 @@ def _ensure_task(db: ControllerDB, task_id: str) -> None:
         "max_retries_failure, max_retries_preemption, failure_count, preemption_count, "
         "current_attempt_id, priority_neg_depth, priority_root_submitted_ms, priority_insertion) "
         "VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)",
-        (task_id, job_id, cluster_pb2.TASK_STATE_RUNNING),
+        (task_id, job_id, job_pb2.TASK_STATE_RUNNING),
     )
 
 

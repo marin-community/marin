@@ -5,20 +5,19 @@
 """Benchmark Iris controller DB queries against a local checkpoint.
 
 Usage:
-    # Download a checkpoint
-    gsutil cp gs://<bucket>/<prefix>/controller-state/latest.sqlite3 ./controller.sqlite3
+    # Auto-download latest archive from the marin cluster and run all benchmarks
+    uv run python lib/iris/scripts/benchmark_db_queries.py
 
-    # Run all benchmarks
+    # Use a specific local checkpoint
     uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3
 
-    # Run specific benchmark group
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only scheduling
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only dashboard
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only heartbeat
+    # Re-download even if cached
+    uv run python lib/iris/scripts/benchmark_db_queries.py --fresh
 
-    # Compare with/without ANALYZE statistics
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only heartbeat
-    uv run python lib/iris/scripts/benchmark_db_queries.py ./controller.sqlite3 --only heartbeat --no-analyze
+    # Run specific benchmark group
+    uv run python lib/iris/scripts/benchmark_db_queries.py --only scheduling
+    uv run python lib/iris/scripts/benchmark_db_queries.py --only dashboard
+    uv run python lib/iris/scripts/benchmark_db_queries.py --only heartbeat
 """
 
 import shutil
@@ -31,6 +30,7 @@ from collections.abc import Callable
 
 import click
 
+from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     _building_counts,
     _find_reservation_ancestor,
@@ -49,15 +49,16 @@ from iris.cluster.controller.db import (
     tasks_for_job_with_attempts,
 )
 from iris.cluster.controller.schema import (
+    JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
     _descendant_jobs,
-    _descendants_for_roots,
-    _jobs_paginated,
     _live_user_stats,
+    _parent_ids_with_children,
     _query_endpoints,
+    _query_jobs,
     _read_job,
     _read_task_with_attempts,
     _read_worker,
@@ -77,13 +78,16 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
 )
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
+from iris.rpc import controller_pb2
 
 _results: list[tuple[str, float, float, int]] = []
 
 # Tables needed for write-path benchmarks (queue_assignments, heartbeat, prune).
 _CLONE_TABLES = [
     "jobs",
+    "job_config",
+    "job_workdir_files",
     "tasks",
     "task_attempts",
     "workers",
@@ -181,7 +185,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     with db.read_snapshot() as snap:
         running_jobs = snap.fetchall(
             "SELECT job_id FROM jobs WHERE state = ? LIMIT 50",
-            (cluster_pb2.JOB_STATE_RUNNING,),
+            (job_pb2.JOB_STATE_RUNNING,),
         )
     pending_count = 0
     for job_row in running_jobs:
@@ -190,7 +194,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
             "UPDATE tasks SET state = ?, current_worker_id = NULL, current_worker_address = NULL "
             "WHERE job_id = ? AND state = ? AND rowid IN "
             "(SELECT rowid FROM tasks WHERE job_id = ? AND state = ? LIMIT 3)",
-            (cluster_pb2.TASK_STATE_PENDING, jid, cluster_pb2.TASK_STATE_RUNNING, jid, cluster_pb2.TASK_STATE_RUNNING),
+            (job_pb2.TASK_STATE_PENDING, jid, job_pb2.TASK_STATE_RUNNING, jid, job_pb2.TASK_STATE_RUNNING),
         )
         pending_count += db.fetchone("SELECT changes() as c")["c"]
     if pending_count:
@@ -225,9 +229,9 @@ def benchmark_scheduling(db: ControllerDB) -> None:
         print("  _find_reservation_ancestor                        (skipped, no pending jobs)")
 
     reservable_states = (
-        cluster_pb2.JOB_STATE_PENDING,
-        cluster_pb2.JOB_STATE_BUILDING,
-        cluster_pb2.JOB_STATE_RUNNING,
+        job_pb2.JOB_STATE_PENDING,
+        job_pb2.JOB_STATE_BUILDING,
+        job_pb2.JOB_STATE_RUNNING,
     )
     bench(
         "_jobs_with_reservations",
@@ -236,7 +240,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # --- Write-path benchmarks (use a lightweight clone) ---
     write_db = clone_db(db)
-    write_txns = ControllerTransitions(write_db, log_store=None)  # type: ignore[arg-type]
+    write_txns = ControllerTransitions(write_db)
 
     try:
         # queue_assignments: the main write-lock holder in scheduling.
@@ -372,7 +376,7 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         with db.read_snapshot() as q:
             return JOB_DETAIL_PROJECTION.decode(
                 q.fetchall(
-                    f"SELECT * FROM jobs WHERE state IN ({placeholders}) AND depth = 1",
+                    f"SELECT * FROM jobs j {JOB_CONFIG_JOIN} " f"WHERE j.state IN ({placeholders}) AND j.depth = 1",
                     (*USER_JOB_STATES,),
                 ),
             )
@@ -384,21 +388,33 @@ def benchmark_dashboard(db: ControllerDB) -> None:
 
     bench("_task_summaries_for_jobs (all)", lambda: _task_summaries_for_jobs(db, job_ids))
 
+    roots_by_date = controller_pb2.Controller.JobQuery(
+        scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
+        limit=50,
+    )
     bench(
-        "_jobs_paginated (by date)",
-        lambda: _jobs_paginated(db, USER_JOB_STATES, limit=50),
+        "_query_jobs (roots, by date)",
+        lambda: _query_jobs(db, roots_by_date, USER_JOB_STATES),
     )
 
+    roots_by_name = controller_pb2.Controller.JobQuery(
+        scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
+        name_filter="test",
+        limit=50,
+    )
     bench(
-        "_jobs_paginated (name filter)",
-        lambda: _jobs_paginated(db, USER_JOB_STATES, name_filter="test", limit=50),
+        "_query_jobs (roots, name filter)",
+        lambda: _query_jobs(db, roots_by_name, USER_JOB_STATES),
     )
 
+    roots_by_failures = controller_pb2.Controller.JobQuery(
+        scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
+        sort_field=controller_pb2.Controller.JOB_SORT_FIELD_FAILURES,
+        limit=50,
+    )
     bench(
-        "_jobs_paginated (sort failures)",
-        lambda: _jobs_paginated(
-            db, USER_JOB_STATES, sort_field=cluster_pb2.Controller.JOB_SORT_FIELD_FAILURES, limit=50
-        ),
+        "_query_jobs (roots, sort failures)",
+        lambda: _query_jobs(db, roots_by_failures, USER_JOB_STATES),
     )
 
     sample_job = jobs[0] if jobs else None
@@ -438,12 +454,19 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         bench("_descendant_jobs", lambda: _descendant_jobs(db, sample_job.job_id))
 
     # Use paginated roots (limit=50) like the real list_jobs RPC does, not all jobs
-    paginated_jobs, _ = _jobs_paginated(db, USER_JOB_STATES, limit=50)
-    root_job_ids = [j.job_id.to_wire() for j in paginated_jobs]
+    roots_query = controller_pb2.Controller.JobQuery(
+        scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
+        limit=50,
+    )
+    paginated_jobs, _ = _query_jobs(db, roots_query, USER_JOB_STATES)
+    root_job_ids = [j.job_id for j in paginated_jobs]
     if root_job_ids:
-        bench(f"_descendants_for_roots ({len(root_job_ids)} roots)", lambda: _descendants_for_roots(db, root_job_ids))
+        bench(
+            f"_parent_ids_with_children ({len(root_job_ids)} roots)",
+            lambda: _parent_ids_with_children(db, root_job_ids),
+        )
     else:
-        print("  _descendants_for_roots                            (skipped, no jobs)")
+        print("  _parent_ids_with_children                         (skipped, no jobs)")
 
     if sample_job:
         bench("_read_job", lambda: _read_job(db, sample_job.job_id))
@@ -468,11 +491,10 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         bench("_tasks_for_worker", lambda: _tasks_for_worker(db, sample_worker_id))
 
     def _list_jobs_full(db):
-        paginated_jobs, _total = _jobs_paginated(db, USER_JOB_STATES, limit=50)
-        root_ids = [j.job_id.to_wire() for j in paginated_jobs]
-        descendants = _descendants_for_roots(db, root_ids)
-        all_jobs = paginated_jobs + descendants
-        _task_summaries_for_jobs(db, {j.job_id for j in all_jobs})
+        paginated_jobs, _total = _query_jobs(db, roots_query, USER_JOB_STATES)
+        root_ids = [j.job_id for j in paginated_jobs]
+        _task_summaries_for_jobs(db, {j.job_id for j in paginated_jobs})
+        _parent_ids_with_children(db, root_ids)
 
     bench("list_jobs_full (composite)", lambda: _list_jobs_full(db))
 
@@ -515,7 +537,7 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
 
     bench("running_tasks_by_worker", lambda: running_tasks_by_worker(db, worker_ids))
 
-    transitions = ControllerTransitions(db, log_store=None)  # type: ignore[arg-type]
+    transitions = ControllerTransitions(db)
     bench(
         f"drain_dispatch_all ({len(workers)} workers)",
         lambda: transitions.drain_dispatch_all(),
@@ -540,11 +562,11 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
     if not running_tasks_per_worker:
         return
 
-    resource_usage_proto = cluster_pb2.ResourceUsage()
+    resource_usage_proto = job_pb2.ResourceUsage()
     resource_usage_proto.cpu_millicores = 1000
     resource_usage_proto.memory_mb = 1024
 
-    snapshot_proto = cluster_pb2.WorkerResourceSnapshot()
+    snapshot_proto = job_pb2.WorkerResourceSnapshot()
 
     heartbeat_requests: list[HeartbeatApplyRequest] = []
     for wid, task_list in running_tasks_per_worker.items():
@@ -554,7 +576,7 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
                 TaskUpdate(
                     task_id=JobName.from_wire(task_id),
                     attempt_id=attempt_id,
-                    new_state=cluster_pb2.TASK_STATE_RUNNING,
+                    new_state=job_pb2.TASK_STATE_RUNNING,
                     resource_usage=resource_usage_proto,
                 )
             )
@@ -567,13 +589,32 @@ def benchmark_heartbeat(db: ControllerDB) -> None:
         )
 
     hb_db = clone_db(db)
-    hb_transitions = ControllerTransitions(hb_db, log_store=None)  # type: ignore[arg-type]
+    hb_transitions = ControllerTransitions(hb_db)
 
     try:
         bench(
             f"apply_heartbeats_batch ({len(heartbeat_requests)}w, {total_tasks}t)",
             lambda: hb_transitions.apply_heartbeats_batch(heartbeat_requests),
         )
+
+        # prune_worker_resource_history runs in the background prune loop every
+        # 10 minutes. It was previously inlined into apply_heartbeats_batch as
+        # a per-worker SELECT+DELETE pair, adding ~N*2 queries to each sync
+        # cycle's write transaction. Benchmark it here so we can track its cost
+        # as a background operation.
+        workers_over_limit = hb_db.fetchall(
+            "SELECT COUNT(DISTINCT worker_id) as cnt FROM worker_resource_history "
+            "GROUP BY worker_id HAVING COUNT(*) >= ?",
+            (500,),
+        )
+        n_over = len(workers_over_limit)
+        if n_over:
+            bench(
+                f"prune_worker_resource_history ({n_over} workers over limit)",
+                lambda: hb_transitions.prune_worker_resource_history(),
+            )
+        else:
+            print("  prune_worker_resource_history                     (skipped, no workers over limit)")
     finally:
         hb_db.close()
         shutil.rmtree(hb_db._db_dir, ignore_errors=True)
@@ -597,8 +638,32 @@ def print_db_stats(db: ControllerDB) -> None:
     print(f"  DB stats: {', '.join(f'{t}={c}' for t, c in row_counts.items())}")
 
 
+MARIN_REMOTE_STATE_DIR = "gs://marin-us-central2/iris/marin/state"
+DEFAULT_DB_DIR = Path("/tmp/iris_benchmark")
+
+
+def _ensure_db(db_path: Path | None) -> Path:
+    """Download latest archive from the marin cluster if no local DB is provided."""
+    if db_path is not None:
+        return db_path
+
+    db_dir = DEFAULT_DB_DIR
+    db_file = db_dir / ControllerDB.DB_FILENAME
+    if db_file.exists():
+        print(f"Using cached DB at {db_file}")
+        return db_file
+
+    print(f"Downloading latest controller archive from {MARIN_REMOTE_STATE_DIR} ...")
+    db_dir.mkdir(parents=True, exist_ok=True)
+    ok = download_checkpoint_to_local(MARIN_REMOTE_STATE_DIR, db_dir)
+    if not ok:
+        raise click.ClickException("No checkpoint found in remote state dir")
+    print(f"Downloaded to {db_file}\n")
+    return db_file
+
+
 @click.command()
-@click.argument("db_path", type=click.Path(exists=True, path_type=Path))
+@click.argument("db_path", type=click.Path(exists=True, path_type=Path), required=False, default=None)
 @click.option(
     "--only",
     "only_group",
@@ -606,10 +671,17 @@ def print_db_stats(db: ControllerDB) -> None:
     help="Run only this group",
 )
 @click.option("--no-analyze", is_flag=True, help="Skip ANALYZE to test unoptimized query plans")
-def main(db_path: Path, only_group: str | None, no_analyze: bool) -> None:
+@click.option("--fresh", is_flag=True, help="Re-download the archive even if cached")
+def main(db_path: Path | None, only_group: str | None, no_analyze: bool, fresh: bool) -> None:
     """Benchmark Iris controller DB queries against a local checkpoint."""
     _results.clear()
 
+    if fresh and db_path is None:
+        cached = DEFAULT_DB_DIR / ControllerDB.DB_FILENAME
+        if cached.exists():
+            cached.unlink()
+
+    db_path = _ensure_db(db_path)
     db = ControllerDB(db_dir=db_path.parent)
     db.apply_migrations()
     if no_analyze:

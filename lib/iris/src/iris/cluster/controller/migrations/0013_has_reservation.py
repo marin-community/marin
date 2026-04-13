@@ -9,7 +9,16 @@ def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return column in columns
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+    return row is not None
+
+
 def migrate(conn: sqlite3.Connection) -> None:
+    # On fresh DBs, job_config already has these columns; skip adding to jobs.
+    if _table_exists(conn, "job_config"):
+        return
+
     if not _has_column(conn, "jobs", "has_reservation"):
         conn.execute("ALTER TABLE jobs ADD COLUMN has_reservation INTEGER NOT NULL DEFAULT 0")
     conn.execute(
@@ -23,12 +32,15 @@ def migrate(conn: sqlite3.Connection) -> None:
     if already_backfilled:
         return
 
+    if not _has_column(conn, "jobs", "request_proto"):
+        return
+
     from iris.cluster.controller.transitions import _has_reservation_flag
-    from iris.rpc import cluster_pb2
+    from iris.rpc import controller_pb2
 
     rows = conn.execute("SELECT job_id, request_proto FROM jobs WHERE request_proto IS NOT NULL").fetchall()
     for row in rows:
-        proto = cluster_pb2.Controller.LaunchJobRequest()
+        proto = controller_pb2.Controller.LaunchJobRequest()
         proto.ParseFromString(row[1])
         if _has_reservation_flag(proto):
             conn.execute("UPDATE jobs SET has_reservation = 1 WHERE job_id = ?", (row[0],))

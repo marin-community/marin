@@ -5,6 +5,17 @@ Start with the shared practices below. Consult subproject manuals for directory-
 - `lib/levanter/AGENTS.md` — Levanter (JAX training library)
 - `lib/marin/AGENTS.md` — Marin (pipeline framework)
 - `lib/iris/AGENTS.md` — Iris (job orchestration)
+- `lib/zephyr/AGENTS.md` — Zephyr (dataset processing)
+- `lib/fray/AGENTS.md` — Fray (distributed execution)
+
+## Operational Guides
+
+For debugging and operating live infrastructure, read the relevant OPS.md:
+
+- `lib/iris/OPS.md` — cluster lifecycle, job/task management, profiling, SQL queries, GCP/CoreWeave operations
+- `lib/zephyr/OPS.md` — pipeline debugging, straggler diagnosis, coordinator queries, diagnostic patterns
+
+Zephyr OPS.md references Iris OPS.md for shared infrastructure commands — read Iris first when debugging zephyr jobs on Iris.
 
 ## Workflow Playbooks
 

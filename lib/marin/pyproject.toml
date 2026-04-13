@@ -5,7 +5,7 @@ requires-python = ">=3.11,<3.13"
 
 [project]
 name = "marin"
-version = "0.1.0"
+version = "0.99"
 
 requires-python = ">=3.11"
 dependencies = [
@@ -17,20 +17,18 @@ dependencies = [
     "draccus>=0.11.5",
     "fasteners>=0.19",
     "flask",
-    "floret",
-    "fray",
-    "rigging",
+    "marin-fray",
+    "marin-rigging",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "haliax",
+    "marin-haliax",
     "jax==0.8.0",  # vllm-tpu currently requires this exact version
     "jaxopt>=0.8.3",
-    "levanter[serve]",
+    "marin-levanter[serve]",
     "lxml[html_clean]",
-    "lz4",
     "markdownify==0.12.1",
     "multiprocess==0.70.16",
     "numpy",
@@ -48,7 +46,7 @@ dependencies = [
     "tqdm-loggable",
     "wandb",
     "warcio",
-    "zephyr",
+    "marin-zephyr",
 ]
 
 [project.license]

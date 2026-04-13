@@ -31,7 +31,7 @@ from iris.cluster.controller.controller import (
 from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.vm_lifecycle import ControllerStatus
-from iris.cluster.controller.scaling_group import (
+from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_DOWN_RATE_LIMIT,
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
@@ -323,7 +323,7 @@ def make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
 
     sg = config_pb2.ScaleGroupConfig(
         name="local-cpu",
-        min_slices=1,
+        buffer_slices=1,
         max_slices=max_workers,
         num_vms=1,
         resources=config_pb2.ScaleGroupResources(

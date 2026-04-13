@@ -277,6 +277,28 @@ def lit(value: Any) -> LiteralExpr:
     return LiteralExpr(value)
 
 
+def referenced_columns(expr: Expr) -> set[str]:
+    """Return the set of column names referenced by an expression.
+
+    Walks the expression tree and collects all ColumnExpr.name values.
+
+    Example:
+        >>> referenced_columns((col("score") > 0.5) & (col("category") == "A"))
+        {'score', 'category'}
+    """
+    if isinstance(expr, ColumnExpr):
+        return {expr.name}
+    if isinstance(expr, LiteralExpr):
+        return set()
+    if isinstance(expr, (CompareExpr, LogicalExpr, ArithmeticExpr)):
+        return referenced_columns(expr.left) | referenced_columns(expr.right)
+    if isinstance(expr, (NotExpr, IsNullExpr)):
+        return referenced_columns(expr.child)
+    if isinstance(expr, FieldAccessExpr):
+        return referenced_columns(expr.parent)
+    return set()
+
+
 def to_pyarrow_expr(expr: Expr) -> pc.Expression:
     """Convert a Zephyr expression to a PyArrow compute expression.
 

@@ -33,6 +33,14 @@ export function formatBytes(bytes: number): string {
   return (val >= 100 ? Math.round(val) : val.toFixed(1)) + ' ' + units[i]
 }
 
+/** Format CPU millicores as "750m", "1.2c", etc. */
+export function formatCpuMillicores(millicores?: number): string {
+  if (!millicores) return '-'
+  if (millicores < 1000) return `${millicores}m`
+  const cores = millicores / 1000
+  return Number.isInteger(cores) ? `${cores}c` : `${cores.toFixed(1)}c`
+}
+
 /** Format a byte rate as "1.5 MB/s", etc. */
 export function formatRate(bytesPerSec: number): string {
   if (!bytesPerSec) return '0 B/s'
@@ -103,6 +111,23 @@ export function formatWorkerDevice(metadata: { gpuCount?: number; gpuName?: stri
   if (metadata.device?.tpu) return `TPU: ${metadata.device.tpu.variant || 'unknown'}`
   if (metadata.device?.gpu) return `GPU: ${metadata.device.gpu.count || 1}x ${metadata.device.gpu.variant || 'unknown'}`
   return 'CPU'
+}
+
+/** Human-readable name for a `PRIORITY_BAND_*` enum value. */
+export function bandDisplayName(band: string | undefined): string {
+  if (!band) return 'Unknown'
+  const name = band.replace(/^PRIORITY_BAND_/, '')
+  return name.charAt(0) + name.slice(1).toLowerCase()
+}
+
+/** Tailwind text color class for a `PRIORITY_BAND_*` enum value. */
+export function bandColor(band: string | undefined): string {
+  if (!band) return 'text-text-muted'
+  const name = band.replace(/^PRIORITY_BAND_/, '')
+  if (name === 'PRODUCTION') return 'text-status-danger'
+  if (name === 'INTERACTIVE') return 'text-accent'
+  if (name === 'BATCH') return 'text-text-muted'
+  return 'text-text-muted'
 }
 
 /** Format a DeviceConfig proto as a human-readable string. */

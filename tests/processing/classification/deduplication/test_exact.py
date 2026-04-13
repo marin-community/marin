@@ -3,7 +3,7 @@
 
 from marin.processing.classification.deduplication.dedup_commons import DedupMode
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph, dedup_exact_document
-from tests.processing.classification.deduplication.conftest import load_dedup_vortex_outputs
+from tests.processing.classification.deduplication.conftest import load_dedup_parquet_outputs
 
 
 def test_exact_paragraph_deduplication(fox_corpus):
@@ -22,7 +22,7 @@ def test_exact_paragraph_deduplication(fox_corpus):
     assert result["dedup/exact/paragraph/unique"] == 11
 
     # Load outputs keyed by output file stem (mirrors input shard names)
-    by_file = load_dedup_vortex_outputs(fox_corpus["output_dir"])
+    by_file = load_dedup_parquet_outputs(fox_corpus["output_dir"])
 
     # Output files should mirror the input shard structure
     assert "test_shard_0" in by_file
@@ -67,7 +67,7 @@ def test_exact_document_deduplication(fox_corpus):
     assert result["dedup/exact/document/dups"] == 2
     assert result["dedup/exact/document/unique"] == 9
 
-    by_file = load_dedup_vortex_outputs(fox_corpus["output_dir"])
+    by_file = load_dedup_parquet_outputs(fox_corpus["output_dir"])
 
     # Output files should mirror input shard structure
     assert "test_shard_0" in by_file

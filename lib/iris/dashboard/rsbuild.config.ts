@@ -24,7 +24,12 @@ export default defineConfig({
   server: {
     proxy: {
       '/iris.cluster.ControllerService': 'http://localhost:8080',
+      '/iris.logging.LogService': 'http://localhost:8080',
       '/iris.cluster.WorkerService': 'http://localhost:8081',
+      '/bundles': 'http://localhost:8080',
+      '/blobs': 'http://localhost:8080',
+      '/health': 'http://localhost:8080',
+      '/auth': 'http://localhost:8080',
       '/api': 'http://localhost:8080',
     },
   },

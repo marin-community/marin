@@ -15,7 +15,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from experiments.defaults import _prepare_data_config
-from experiments.evals.task_configs import convert_to_levanter_task_config
+from marin.evaluation.evaluation_config import convert_to_levanter_task_config
 from experiments.two_stage.data import data_dict
 from experiments.two_stage.models import model_dict
 from marin.evaluation.evaluation_config import EvalTaskConfig

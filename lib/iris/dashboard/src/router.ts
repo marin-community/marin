@@ -35,8 +35,8 @@ const routes = [
     component: () => import('./components/controller/TransactionsTab.vue'),
   },
   {
-    path: '/users',
-    component: () => import('./components/controller/UsersTab.vue'),
+    path: '/scheduler',
+    component: () => import('./components/controller/SchedulerTab.vue'),
   },
   {
     path: '/account',

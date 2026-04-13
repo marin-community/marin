@@ -16,9 +16,9 @@ from threading import Lock, RLock
 from typing import Any
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
+from iris.cluster.controller.schema import ENDPOINT_PROJECTION, decode_timestamp_ms, decode_worker_id
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 from rigging.timing import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -112,38 +112,13 @@ def task_is_finished(
     state: int, failure_count: int, max_retries_failure: int, preemption_count: int, max_retries_preemption: int
 ) -> bool:
     """Whether a task has reached a terminal state with no remaining retries."""
-    if state == cluster_pb2.TASK_STATE_SUCCEEDED:
+    if state == job_pb2.TASK_STATE_SUCCEEDED:
         return True
-    if state in (cluster_pb2.TASK_STATE_KILLED, cluster_pb2.TASK_STATE_UNSCHEDULABLE):
+    if state in (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_UNSCHEDULABLE):
         return True
-    if state == cluster_pb2.TASK_STATE_FAILED:
+    if state == job_pb2.TASK_STATE_FAILED:
         return failure_count > max_retries_failure
-    if state == cluster_pb2.TASK_STATE_WORKER_FAILED:
-        return preemption_count > max_retries_preemption
-    return False
-
-
-def task_can_be_scheduled(
-    state: int,
-    current_attempt_id: int,
-    failure_count: int,
-    max_retries_failure: int,
-    preemption_count: int,
-    max_retries_preemption: int,
-) -> bool:
-    if state != cluster_pb2.TASK_STATE_PENDING:
-        return False
-    return current_attempt_id < 0 or not task_is_finished(
-        state, failure_count, max_retries_failure, preemption_count, max_retries_preemption
-    )
-
-
-def task_is_retry_exhausted(
-    state: int, failure_count: int, max_retries_failure: int, preemption_count: int, max_retries_preemption: int
-) -> bool:
-    if state == cluster_pb2.TASK_STATE_FAILED:
-        return failure_count > max_retries_failure
-    if state == cluster_pb2.TASK_STATE_WORKER_FAILED:
+    if state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED):
         return preemption_count > max_retries_preemption
     return False
 
@@ -155,73 +130,56 @@ def task_row_is_finished(task: Any) -> bool:
 
 
 def task_row_can_be_scheduled(task: Any) -> bool:
-    return task_can_be_scheduled(
-        task.state,
-        task.current_attempt_id,
-        task.failure_count,
-        task.max_retries_failure,
-        task.preemption_count,
-        task.max_retries_preemption,
+    if task.state != job_pb2.TASK_STATE_PENDING:
+        return False
+    return task.current_attempt_id < 0 or not task_is_finished(
+        task.state, task.failure_count, task.max_retries_failure, task.preemption_count, task.max_retries_preemption
     )
-
-
-def worker_available_cpu_millicores(total_cpu_millicores: int, committed_cpu_millicores: int) -> int:
-    return total_cpu_millicores - committed_cpu_millicores
-
-
-def worker_available_memory(total_memory_bytes: int, committed_mem_bytes: int) -> int:
-    return total_memory_bytes - committed_mem_bytes
-
-
-def worker_available_gpus(total_gpu_count: int, committed_gpu: int) -> int:
-    return total_gpu_count - committed_gpu
-
-
-def worker_available_tpus(total_tpu_count: int, committed_tpu: int) -> int:
-    return total_tpu_count - committed_tpu
 
 
 TERMINAL_TASK_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.TASK_STATE_SUCCEEDED,
-        cluster_pb2.TASK_STATE_FAILED,
-        cluster_pb2.TASK_STATE_KILLED,
-        cluster_pb2.TASK_STATE_UNSCHEDULABLE,
-        cluster_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_SUCCEEDED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_KILLED,
+        job_pb2.TASK_STATE_UNSCHEDULABLE,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_PREEMPTED,
     }
 )
 
 TERMINAL_JOB_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.JOB_STATE_SUCCEEDED,
-        cluster_pb2.JOB_STATE_FAILED,
-        cluster_pb2.JOB_STATE_KILLED,
-        cluster_pb2.JOB_STATE_WORKER_FAILED,
-        cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+        job_pb2.JOB_STATE_SUCCEEDED,
+        job_pb2.JOB_STATE_FAILED,
+        job_pb2.JOB_STATE_KILLED,
+        job_pb2.JOB_STATE_WORKER_FAILED,
+        job_pb2.JOB_STATE_UNSCHEDULABLE,
     }
 )
 
 ACTIVE_TASK_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.TASK_STATE_ASSIGNED,
-        cluster_pb2.TASK_STATE_BUILDING,
-        cluster_pb2.TASK_STATE_RUNNING,
+        job_pb2.TASK_STATE_ASSIGNED,
+        job_pb2.TASK_STATE_BUILDING,
+        job_pb2.TASK_STATE_RUNNING,
     }
 )
 
 # Tasks executing on a worker (subset of ACTIVE that excludes ASSIGNED).
 EXECUTING_TASK_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.TASK_STATE_BUILDING,
-        cluster_pb2.TASK_STATE_RUNNING,
+        job_pb2.TASK_STATE_BUILDING,
+        job_pb2.TASK_STATE_RUNNING,
     }
 )
 
 # Failure states that trigger coscheduled sibling cascades.
 FAILURE_TASK_STATES: frozenset[int] = frozenset(
     {
-        cluster_pb2.TASK_STATE_FAILED,
-        cluster_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_PREEMPTED,
     }
 )
 
@@ -254,8 +212,8 @@ def attempt_is_terminal(state: int) -> bool:
 
 
 def attempt_is_worker_failure(state: int) -> bool:
-    """Check if an attempt is a worker failure."""
-    return state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    """Check if an attempt is a worker failure or preemption."""
+    return state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED)
 
 
 @dataclass(frozen=True)
@@ -276,12 +234,18 @@ class TaskJobSummary:
 
 
 @dataclass(frozen=True)
+class UserBudget:
+    user_id: str
+    budget_limit: int
+    max_band: int
+    updated_at: Timestamp
+
+
+@dataclass(frozen=True)
 class EndpointQuery:
     endpoint_ids: tuple[str, ...] = ()
     name_prefix: str | None = None
     exact_name: str | None = None
-    job_ids: tuple[JobName, ...] = ()
-    job_id: JobName | None = None
     task_ids: tuple[JobName, ...] = ()
     limit: int | None = None
 
@@ -301,7 +265,7 @@ def _decode_attribute_rows(rows: Sequence[Any]) -> dict[WorkerId, dict[str, Attr
 
 def endpoint_query_sql(query: EndpointQuery) -> tuple[str, list[object]]:
     """Build SQL query for endpoint lookups."""
-    from_clause = "SELECT e.* FROM endpoints e"
+    from_clause = f"SELECT {ENDPOINT_PROJECTION.select_clause()} FROM endpoints e"
     conditions: list[str] = []
     params: list[object] = []
 
@@ -323,14 +287,6 @@ def endpoint_query_sql(query: EndpointQuery) -> tuple[str, list[object]]:
     if query.exact_name:
         conditions.append("e.name = ?")
         params.append(query.exact_name)
-
-    job_ids = list(query.job_ids)
-    if query.job_id is not None:
-        job_ids.append(query.job_id)
-    if job_ids:
-        placeholders = ",".join("?" for _ in job_ids)
-        conditions.append(f"e.job_id IN ({placeholders})")
-        params.extend(jid.to_wire() for jid in job_ids)
 
     sql = from_clause
     if conditions:
@@ -375,6 +331,7 @@ class ControllerDB:
     _READ_POOL_SIZE = 8
     DB_FILENAME = "controller.sqlite3"
     AUTH_DB_FILENAME = "auth.sqlite3"
+    PROFILES_DB_FILENAME = "profiles.sqlite3"
 
     def __init__(self, db_dir: Path):
         import time
@@ -383,6 +340,7 @@ class ControllerDB:
         self._db_dir.mkdir(parents=True, exist_ok=True)
         self._db_path = self._db_dir / self.DB_FILENAME
         self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
+        self._profiles_db_path = self._db_dir / self.PROFILES_DB_FILENAME
         self._lock = RLock()
 
         t0 = time.monotonic()
@@ -390,6 +348,7 @@ class ControllerDB:
         self._conn.row_factory = sqlite3.Row
         self._configure(self._conn)
         self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
+        self._conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
         logger.info("DB opened in %.2fs (path=%s)", time.monotonic() - t0, self._db_path)
 
         t0 = time.monotonic()
@@ -460,6 +419,7 @@ class ControllerDB:
             conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             conn.row_factory = sqlite3.Row
             self._configure(conn)
+            conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
             conn.execute("PRAGMA query_only = ON")
             self._read_pool.put(conn)
 
@@ -474,6 +434,10 @@ class ControllerDB:
     @property
     def auth_db_path(self) -> Path:
         return self._auth_db_path
+
+    @property
+    def profiles_db_path(self) -> Path:
+        return self._profiles_db_path
 
     @staticmethod
     def _configure(conn: sqlite3.Connection) -> None:
@@ -627,6 +591,10 @@ class ControllerDB:
     def secrets_table(self) -> str:
         return "auth.controller_secrets"
 
+    @property
+    def task_profiles_table(self) -> str:
+        return "profiles.task_profiles"
+
     def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:
         """Create user if not exists. Does not update role for existing users."""
         self.execute(
@@ -640,7 +608,7 @@ class ControllerDB:
 
     def get_user_role(self, user_id: str) -> str:
         """Get a user's role. Returns 'user' if not found."""
-        with self.snapshot() as q:
+        with self.read_snapshot() as q:
             rows = q.raw(
                 "SELECT role FROM users WHERE user_id = ?",
                 (user_id,),
@@ -725,10 +693,20 @@ class ControllerDB:
                     dst.write(src.read())
                 auth_tmp.rename(self._auth_db_path)
 
+            # Download profiles DB if present in source
+            profiles_source = f"{source_dir_str}/{self.PROFILES_DB_FILENAME}"
+            fs2, fs_path2 = fsspec.core.url_to_fs(profiles_source)
+            if fs2.exists(fs_path2):
+                profiles_tmp = self._profiles_db_path.with_suffix(".tmp")
+                with fsspec.core.open(profiles_source, "rb") as src, open(profiles_tmp, "wb") as dst:
+                    dst.write(src.read())
+                profiles_tmp.rename(self._profiles_db_path)
+
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)
             self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
+            self._conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
             self._init_read_pool()
         self.apply_migrations()
 
@@ -737,12 +715,9 @@ class ControllerDB:
     # to keep relation assembly explicit in controller/service/state query flows.
 
     def delete_endpoint(self, endpoint_id: str):
-        from iris.cluster.controller.schema import ENDPOINT_PROJECTION
-
         with self.transaction() as cur:
             row = cur.execute(
-                "SELECT endpoint_id, name, address, job_id, metadata_json, registered_at_ms "
-                "FROM endpoints WHERE endpoint_id = ?",
+                f"SELECT {ENDPOINT_PROJECTION.select_clause()} " "FROM endpoints e WHERE e.endpoint_id = ?",
                 (endpoint_id,),
             ).fetchone()
             if row is None:
@@ -755,6 +730,52 @@ class ControllerDB:
             return
         placeholders = ",".join("?" for _ in endpoint_ids)
         self.execute(f"DELETE FROM endpoints WHERE endpoint_id IN ({placeholders})", tuple(endpoint_ids))
+
+    # -- User budget accessors --------------------------------------------------
+
+    def set_user_budget(self, user_id: str, budget_limit: int, max_band: int, now: Timestamp) -> None:
+        """Insert or update a user's budget configuration."""
+        self.execute(
+            "INSERT INTO user_budgets(user_id, budget_limit, max_band, updated_at_ms) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET budget_limit=?, max_band=?, updated_at_ms=?",
+            (user_id, budget_limit, max_band, now.epoch_ms(), budget_limit, max_band, now.epoch_ms()),
+        )
+
+    def get_user_budget(self, user_id: str) -> UserBudget | None:
+        """Get budget config for a user. Returns None if user has no budget row."""
+        with self.read_snapshot() as q:
+            row = q.fetchone(
+                "SELECT user_id, budget_limit, max_band, updated_at_ms FROM user_budgets WHERE user_id = ?",
+                (user_id,),
+            )
+        if row is None:
+            return None
+        return UserBudget(
+            user_id=row["user_id"],
+            budget_limit=row["budget_limit"],
+            max_band=row["max_band"],
+            updated_at=Timestamp.from_ms(row["updated_at_ms"]),
+        )
+
+    def list_user_budgets(self) -> list[UserBudget]:
+        """List all user budgets."""
+        with self.read_snapshot() as q:
+            rows = q.fetchall("SELECT user_id, budget_limit, max_band, updated_at_ms FROM user_budgets", ())
+        return [
+            UserBudget(
+                user_id=row["user_id"],
+                budget_limit=row["budget_limit"],
+                max_band=row["max_band"],
+                updated_at=Timestamp.from_ms(row["updated_at_ms"]),
+            )
+            for row in rows
+        ]
+
+    def get_all_user_budget_limits(self) -> dict[str, int]:
+        """Return ``{user_id: budget_limit}`` for every user with a budget row."""
+        rows = self.list_user_budgets()
+        return {row.user_id: row.budget_limit for row in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -784,6 +805,48 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
     for row in rows:
         running[row.worker_id].add(row.task_id)
     return running
+
+
+@dataclass(frozen=True, slots=True)
+class TimedOutTask:
+    """A running task that has exceeded its execution timeout."""
+
+    task_id: JobName
+    worker_id: WorkerId | None
+
+
+def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOutTask]:
+    """Find executing tasks whose current attempt has exceeded the job's execution timeout.
+
+    Reads the timeout from job_config.timeout_ms. Uses the current attempt's
+    started_at_ms so that retried tasks get a fresh timeout budget per attempt.
+    """
+    now_ms = now.epoch_ms()
+    executing_states = tuple(sorted(EXECUTING_TASK_STATES))
+    placeholders = ",".join("?" for _ in executing_states)
+    with db.read_snapshot() as q:
+        rows = q.raw(
+            f"SELECT t.task_id, t.current_worker_id AS worker_id, "
+            f"ta.started_at_ms AS attempt_started_at_ms, jc.timeout_ms "
+            f"FROM tasks t "
+            f"JOIN job_config jc ON jc.job_id = t.job_id "
+            f"JOIN task_attempts ta ON ta.task_id = t.task_id AND ta.attempt_id = t.current_attempt_id "
+            f"WHERE t.state IN ({placeholders}) "
+            f"AND jc.timeout_ms IS NOT NULL AND jc.timeout_ms > 0 "
+            f"AND ta.started_at_ms IS NOT NULL",
+            (*executing_states,),
+            decoders={
+                "task_id": JobName.from_wire,
+                "worker_id": lambda v: WorkerId(v) if v is not None else None,
+                "attempt_started_at_ms": int,
+                "timeout_ms": int,
+            },
+        )
+    result: list[TimedOutTask] = []
+    for row in rows:
+        if row.attempt_started_at_ms + row.timeout_ms <= now_ms:
+            result.append(TimedOutTask(task_id=row.task_id, worker_id=row.worker_id))
+    return result
 
 
 def tasks_for_job_with_attempts(db: ControllerDB, job_id: JobName) -> list:
@@ -819,7 +882,7 @@ def _worker_row_select() -> str:
 def healthy_active_workers_with_attributes(db: ControllerDB) -> list:
     """Fetch all healthy, active workers with their attributes populated.
 
-    Returns WorkerRow (scalar-only) so the scheduling loop never decodes metadata_proto.
+    Returns WorkerRow (scalar-only) so the scheduling loop avoids loading metadata columns.
     Uses the in-memory attribute cache to avoid a per-cycle SQL join.
     """
     from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
@@ -835,10 +898,10 @@ def healthy_active_workers_with_attributes(db: ControllerDB) -> list:
         dc_replace(
             w,
             attributes=attrs_by_worker.get(w.worker_id, {}),
-            available_cpu_millicores=worker_available_cpu_millicores(w.total_cpu_millicores, w.committed_cpu_millicores),
-            available_memory=worker_available_memory(w.total_memory_bytes, w.committed_mem),
-            available_gpus=worker_available_gpus(w.total_gpu_count, w.committed_gpu),
-            available_tpus=worker_available_tpus(w.total_tpu_count, w.committed_tpu),
+            available_cpu_millicores=w.total_cpu_millicores - w.committed_cpu_millicores,
+            available_memory=w.total_memory_bytes - w.committed_mem,
+            available_gpus=w.total_gpu_count - w.committed_gpu,
+            available_tpus=w.total_tpu_count - w.committed_tpu,
         )
         for w in workers
     ]
@@ -852,7 +915,7 @@ def insert_task_profile(
     The DB trigger caps profiles at 10 per (task_id, profile_kind), evicting the oldest automatically.
     """
     db.execute(
-        "INSERT INTO task_profiles (task_id, profile_data, captured_at_ms, profile_kind) VALUES (?, ?, ?, ?)",
+        "INSERT INTO profiles.task_profiles (task_id, profile_data, captured_at_ms, profile_kind) VALUES (?, ?, ?, ?)",
         (task_id, profile_data, captured_at.epoch_ms(), profile_kind),
     )
 
@@ -869,15 +932,16 @@ def get_task_profiles(
     """
     if profile_kind is not None:
         query = (
-            "SELECT profile_data, captured_at_ms, profile_kind FROM task_profiles"
+            "SELECT profile_data, captured_at_ms, profile_kind FROM profiles.task_profiles"
             " WHERE task_id = ? AND profile_kind = ? ORDER BY id DESC"
         )
         params: tuple[str, ...] = (task_id, profile_kind)
     else:
         query = (
-            "SELECT profile_data, captured_at_ms, profile_kind FROM task_profiles" " WHERE task_id = ? ORDER BY id DESC"
+            "SELECT profile_data, captured_at_ms, profile_kind FROM profiles.task_profiles"
+            " WHERE task_id = ? ORDER BY id DESC"
         )
         params = (task_id,)
-    with db.snapshot() as q:
+    with db.read_snapshot() as q:
         rows = q.raw(query, params, decoders={"captured_at_ms": decode_timestamp_ms})
     return [(row.profile_data, row.captured_at_ms, row.profile_kind) for row in rows]

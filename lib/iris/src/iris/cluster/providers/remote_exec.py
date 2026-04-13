@@ -14,6 +14,7 @@ This module provides:
 from __future__ import annotations
 
 import dataclasses
+import functools
 import logging
 import subprocess
 import threading
@@ -25,6 +26,19 @@ from typing import Any, Protocol
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 
 logger = logging.getLogger(__name__)
+
+
+def _extend_gcloud_ssh_options(
+    cmd: list[str],
+    *,
+    ssh_key_file: str | None = None,
+    impersonate_service_account: str | None = None,
+) -> list[str]:
+    if ssh_key_file:
+        cmd.append(f"--ssh-key-file={ssh_key_file}")
+    if impersonate_service_account:
+        cmd.append(f"--impersonate-service-account={impersonate_service_account}")
+    return cmd
 
 
 # ============================================================================
@@ -82,6 +96,9 @@ class GcloudRemoteExec:
     _zone: str
     vm_id: str
     worker_index: int = 0
+    ssh_user: str | None = None
+    ssh_key_file: str | None = None
+    impersonate_service_account: str | None = None
     _address: str = ""
 
     @property
@@ -93,21 +110,32 @@ class GcloudRemoteExec:
         return self._zone
 
     def _build_cmd(self, command: str) -> list[str]:
-        return [
+        target = f"{self.ssh_user}@{self.vm_id}" if self.ssh_user else self.vm_id
+        cmd = [
             "gcloud",
             "compute",
             "tpus",
             "tpu-vm",
             "ssh",
-            self.vm_id,
+            target,
             f"--zone={self._zone}",
             f"--project={self.project_id}",
             f"--worker={self.worker_index}",
-            "--quiet",
-            "--ssh-flag=-oBatchMode=yes",
-            "--command",
-            command,
         ]
+        _extend_gcloud_ssh_options(
+            cmd,
+            ssh_key_file=self.ssh_key_file,
+            impersonate_service_account=self.impersonate_service_account,
+        )
+        cmd.extend(
+            [
+                "--quiet",
+                "--ssh-flag=-oBatchMode=yes",
+                "--command",
+                command,
+            ]
+        )
+        return cmd
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
         return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds())
@@ -139,6 +167,8 @@ class GceRemoteExec:
     zone: str
     vm_name: str
     ssh_user: str | None = None
+    ssh_key_file: str | None = None
+    impersonate_service_account: str | None = None
 
     @property
     def address(self) -> str:
@@ -146,18 +176,28 @@ class GceRemoteExec:
 
     def _build_cmd(self, command: str) -> list[str]:
         target = f"{self.ssh_user}@{self.vm_name}" if self.ssh_user else self.vm_name
-        return [
+        cmd = [
             "gcloud",
             "compute",
             "ssh",
             target,
             f"--zone={self.zone}",
             f"--project={self.project_id}",
-            "--quiet",
-            "--ssh-flag=-oBatchMode=yes",
-            "--command",
-            command,
         ]
+        _extend_gcloud_ssh_options(
+            cmd,
+            ssh_key_file=self.ssh_key_file,
+            impersonate_service_account=self.impersonate_service_account,
+        )
+        cmd.extend(
+            [
+                "--quiet",
+                "--ssh-flag=-oBatchMode=yes",
+                "--command",
+                command,
+            ]
+        )
+        return cmd
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
         return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds())
@@ -225,6 +265,28 @@ class DirectSshRemoteExec:
             stderr=subprocess.STDOUT,
             text=True,
         )
+
+
+@functools.lru_cache(maxsize=8)
+def resolve_current_os_login_user(impersonate_service_account: str | None = None) -> str:
+    """Resolve the current caller's OS Login POSIX username via gcloud."""
+    cmd = [
+        "gcloud",
+        "compute",
+        "os-login",
+        "describe-profile",
+        "--format=value(posixAccounts[0].username)",
+    ]
+    if impersonate_service_account:
+        cmd.append(f"--impersonate-service-account={impersonate_service_account}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to resolve OS Login username: {result.stderr.strip()}")
+
+    username = result.stdout.strip()
+    if not username:
+        raise RuntimeError("OS Login profile has no POSIX username")
+    return username
 
 
 # ============================================================================

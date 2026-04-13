@@ -38,7 +38,7 @@ def test_rollout_worker(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
+            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
         ),
         curriculum=create_test_curriculum_config(),
         tokenizer=DummyTokenizer(),

@@ -19,6 +19,7 @@ import fsspec
 import requests
 import transformers
 from rigging.filesystem import url_to_fs
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 from huggingface_hub.utils import HfHubHTTPError
 
 logger = logging.getLogger(__name__)
@@ -155,14 +156,6 @@ def _hf_should_retry(exc: Exception) -> bool:
     return any(keyword in message for keyword in _HF_RETRY_KEYWORDS)
 
 
-def _hf_sleep_with_jitter(delay: float, max_delay: float) -> tuple[float, float]:
-    jitter = random.uniform(0.5, 1.5)
-    sleep_seconds = min(delay * jitter, max_delay)
-    time.sleep(sleep_seconds)
-    next_delay = min(delay * 2, max_delay)
-    return sleep_seconds, next_delay
-
-
 def call_with_hf_backoff(
     fn: Callable[[], T],
     *,
@@ -170,32 +163,15 @@ def call_with_hf_backoff(
     max_attempts: int = 6,
     initial_delay: float = 2.0,
     max_delay: float = 60.0,
-    logger: logging.Logger | None = None,
 ) -> T:
     """Call ``fn`` with exponential backoff tuned for HF rate limits."""
-
-    log_obj = logger or logging.getLogger(__name__)
-    delay = initial_delay
-
-    for attempt in range(1, max_attempts + 1):
-        try:
-            return fn()
-        except Exception as exc:  # pragma: no cover - network failure
-            retryable = _hf_should_retry(exc)
-            if not retryable or attempt == max_attempts:
-                raise
-
-            sleep_seconds, delay = _hf_sleep_with_jitter(delay, max_delay)
-            log_obj.warning(
-                "HF request failed for %s (attempt %s/%s): %s. Retrying in %.1fs",
-                context,
-                attempt,
-                max_attempts,
-                exc,
-                sleep_seconds,
-            )
-
-    raise RuntimeError(f"Exceeded max attempts ({max_attempts}) for HF request: {context}")
+    return retry_with_backoff(
+        fn,
+        retryable=_hf_should_retry,
+        max_attempts=max_attempts,
+        backoff=ExponentialBackoff(initial=initial_delay, maximum=max_delay, factor=2.0, jitter=0.25),
+        operation=context,
+    )
 
 
 def load_dataset_with_backoff(
@@ -204,7 +180,6 @@ def load_dataset_with_backoff(
     max_attempts: int = 6,
     initial_delay: float = 2.0,
     max_delay: float = 120.0,
-    logger: logging.Logger | None = None,
     **dataset_kwargs: Any,
 ):
     return call_with_hf_backoff(
@@ -213,15 +188,14 @@ def load_dataset_with_backoff(
         max_attempts=max_attempts,
         initial_delay=initial_delay,
         max_delay=max_delay,
-        logger=logger,
     )
 
 
 def load_tokenizer_with_backoff(
     tokenizer_name: str,
     *,
-    tokenizer_kwargs: dict[str, Any] | None = None,
     context: str | None = None,
+    tokenizer_kwargs: dict[str, Any] | None = None,
     max_attempts: int = 10,
     initial_delay: float = 5.0,
     max_delay: float = 120.0,
@@ -298,7 +272,6 @@ def load_tokenizer_with_backoff(
             max_attempts=max_attempts,
             initial_delay=initial_delay,
             max_delay=max_delay,
-            logger=log_obj,
         )
 
         # Mark as successfully downloaded for other processes on this machine
@@ -345,7 +318,6 @@ def save_tokenizer_to_gcs(
     tokenizer = call_with_hf_backoff(
         lambda: transformers.AutoTokenizer.from_pretrained(tokenizer_name, **kwargs),
         context=f"save tokenizer {tokenizer_name} to GCS",
-        logger=log_obj,
     )
 
     # Save to a temporary local directory first, then upload to GCS

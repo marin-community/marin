@@ -9,6 +9,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
+from typing import TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -444,8 +445,10 @@ class TokenBucket:
 
     @property
     def available(self) -> int:
-        """Current available tokens (approximate, no refill)."""
-        return int(self._tokens)
+        """Current available tokens after refilling from elapsed time."""
+        with self._lock:
+            self._refill(Timestamp.now())
+            return int(self._tokens)
 
 
 class ExponentialBackoff:
@@ -554,3 +557,73 @@ class ExponentialBackoff:
     ) -> None:
         if not self.wait_until(condition, timeout):
             raise TimeoutError(error_message)
+
+
+T = TypeVar("T")
+
+
+def retry_with_backoff(
+    call_fn: Callable[[], T],
+    *,
+    retryable: Callable[[Exception], bool] = lambda _: True,
+    max_attempts: int = 10,
+    max_elapsed: float | None = None,
+    backoff: ExponentialBackoff | None = None,
+    on_retry: Callable[[Exception, int], None] | None = None,
+    operation: str = "",
+) -> T:
+    """Execute call_fn with exponential backoff retry.
+
+    Args:
+        call_fn: Function to call and potentially retry.
+        retryable: Returns True to retry this exception, False to re-raise immediately.
+            Defaults to retrying all exceptions.
+        max_attempts: Maximum total attempts (default 10).
+        max_elapsed: Wall-clock budget in seconds; None means no time limit.
+        backoff: Backoff schedule; a fresh copy is made internally so the caller's
+            instance is not mutated. Defaults to
+            ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0).
+        on_retry: Called with (exception, attempt_index) before each sleep.
+        operation: Description used in log messages.
+    """
+    if backoff is None:
+        backoff = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
+    else:
+        backoff = backoff.copy()
+
+    start_time = time.monotonic()
+
+    for attempt in range(max_attempts):
+        try:
+            return call_fn()
+        except Exception as e:
+            if not retryable(e):
+                raise
+
+            if on_retry is not None:
+                on_retry(e, attempt)
+
+            elapsed = time.monotonic() - start_time
+            attempts_exhausted = attempt + 1 >= max_attempts
+            time_exhausted = max_elapsed is not None and elapsed >= max_elapsed
+
+            if attempts_exhausted or time_exhausted:
+                raise
+
+            delay = backoff.next_interval()
+            if max_elapsed is not None:
+                remaining = max_elapsed - elapsed
+                delay = min(delay, max(0, remaining))
+
+            logger.warning(
+                "Operation %s failed (attempt %d/%d, %.1fs elapsed), retrying in %.2fs: %s",
+                operation,
+                attempt + 1,
+                max_attempts,
+                elapsed,
+                delay,
+                e,
+            )
+            time.sleep(delay)
+
+    raise AssertionError("unreachable")

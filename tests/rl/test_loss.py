@@ -3,8 +3,8 @@
 
 import pytest
 import numpy as np
+from marin.rl.rl_losses import RLOOLoss, compute_ppo_loss_objective, compute_rloo_advantages
 from marin.rl.types import Rollout
-from marin.rl.rl_losses import compute_rloo_advantages, compute_ppo_loss_objective
 
 
 def create_test_rollout(
@@ -131,3 +131,13 @@ def test_ppo_objective(
     )
 
     np.testing.assert_allclose(loss, expected_loss, atol=1e-6)
+
+
+def test_rloo_loss_needs_reference_model_only_when_kl_enabled():
+    assert not RLOOLoss(kl_coef=0.0).needs_reference_model()
+    assert RLOOLoss(kl_coef=0.01).needs_reference_model()
+
+
+def test_rloo_loss_rejects_missing_reference_model_when_kl_enabled():
+    with pytest.raises(ValueError, match="reference_model is required"):
+        RLOOLoss(kl_coef=0.01).create_loss_fn(reference_model=None, train_model=None)

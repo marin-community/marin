@@ -103,9 +103,10 @@ class WandbTracker(Tracker):
         self.run.summary.update(_convert_value_to_loggable_rec(metrics))
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
+        artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
         self.run.log_artifact(
             artifact_path,
-            name=_truncate_wandb_artifact_name(name),
+            name=_truncate_wandb_artifact_name(artifact_name),
             type=type,
         )
         self._maybe_replicate_artifact(artifact_path, name=name, type=type)
@@ -419,3 +420,9 @@ def _truncate_wandb_artifact_name(name: Optional[str]) -> Optional[str]:
         truncated,
     )
     return truncated
+
+
+def _default_wandb_artifact_name(artifact_path: Any) -> str:
+    path = os.fspath(artifact_path)
+    basename = os.path.basename(path.rstrip("/\\"))
+    return basename or "artifact"

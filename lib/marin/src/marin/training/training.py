@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import importlib
 import logging
 import os
 from copy import deepcopy
@@ -10,7 +11,6 @@ from collections.abc import Callable
 from typing import TypeVar
 
 import draccus
-import levanter.infra.cli_helpers
 from fray.v2 import (
     CpuConfig,
     Entrypoint,
@@ -21,13 +21,10 @@ from fray.v2 import (
     create_environment,
     current_client,
 )
-from levanter.main import train_dpo
-from levanter.main import train_lm
-from levanter.main.train_dpo import TrainDpoConfig
-from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
 from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
+from marin.training.run_environment import add_run_env_variables
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +33,7 @@ logger = logging.getLogger(__name__)
 class TrainLmOnPodConfig:
     """Configuration for language model training on a pod."""
 
-    train_config: train_lm.TrainLmConfig
+    train_config: object
     resources: ResourceConfig
     output_path: str | None = None
     """Base output directory to be used for training, mainly for use with executor framework."""
@@ -61,7 +58,7 @@ class TrainLmOnPodConfig:
 class TrainDpoOnPodConfig:
     """Configuration for DPO training on a pod."""
 
-    train_config: TrainDpoConfig
+    train_config: object
     resources: ResourceConfig
     output_path: str | None = None
     """Base output directory to be used for training, mainly for use with executor framework."""
@@ -82,7 +79,7 @@ class TrainDpoOnPodConfig:
     """
 
 
-TrainConfigT = TypeVar("TrainConfigT", TrainLmConfig, TrainDpoConfig)
+TrainConfigT = TypeVar("TrainConfigT")
 TrainOnPodConfigT = TypeVar("TrainOnPodConfigT", TrainLmOnPodConfig, TrainDpoOnPodConfig)
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
@@ -90,7 +87,7 @@ DEFAULT_HF_CHECKPOINTS_PATH = "hf"
 
 
 def _runtime_extras_for_training(
-    train_config: TrainLmConfig | TrainDpoConfig,
+    train_config: object,
     device: CpuConfig | TpuConfig | GpuConfig,
 ) -> list[str]:
     """Resolve runtime dependency groups for the submitted job environment.
@@ -107,9 +104,14 @@ def _runtime_extras_for_training(
         extras.append("tpu")
     elif isinstance(device, GpuConfig):
         extras.append("gpu")
-    if isinstance(train_config, TrainLmConfig) and train_config.eval_harness is not None:
+    eval_harness = getattr(train_config, "eval_harness", None)
+    if eval_harness is not None:
         extras.append("eval")
     return extras
+
+
+def _cli_helpers_module():
+    return importlib.import_module("levanter.infra.cli_helpers")
 
 
 def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodConfigT:
@@ -199,7 +201,7 @@ def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
         logger.info(f"Imputing run ID from out path: {run_id}")
 
     if not run_id:
-        run_id = levanter.infra.cli_helpers.default_run_id()
+        run_id = _cli_helpers_module().default_run_id()
         logger.warning(f"Run ID not set. Using default: {run_id}")
 
     append_id_to_checkpoints = not config.impute_run_id_from_output_path
@@ -247,13 +249,13 @@ def _disable_xla_autotune_subcache(env: dict) -> None:
 
 def _prepare_training_run(
     config: TrainOnPodConfigT,
-) -> tuple[TrainOnPodConfigT, TrainLmConfig | TrainDpoConfig, dict[str, str], list[str]]:
+) -> tuple[TrainOnPodConfigT, object, dict[str, str], list[str]]:
     """Shared setup for LM and DPO training: env vars, run ID, config adjustments.
 
     Returns the updated pod config, the ready-to-use train config, the
     environment dict, and the Fray extras list.
     """
-    default_launch_config = levanter.infra.cli_helpers.load_config()
+    default_launch_config = _cli_helpers_module().load_config()
 
     if config.output_path is not None:
         logger.info(f"Using output path: {config.output_path}")
@@ -266,7 +268,7 @@ def _prepare_training_run(
     if isinstance(config.resources.device, TpuConfig):
         _check_for_wandb_key(env)
 
-    env = _add_run_env_variables(env)
+    env = add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
         env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
@@ -313,7 +315,7 @@ def _submit_training_job(
         entrypoint=Entrypoint.from_callable(main_fn, args=[train_config]),
         resources=resources,
         environment=create_environment(env_vars=env, extras=extras),
-        max_retries_failure=10,
+        max_retries_failure=0,
     )
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)
@@ -348,7 +350,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     )
     _submit_training_job(
         job_name=f"train_lm_{config.train_config.trainer.id}",
-        main_fn=train_lm.main,
+        main_fn=importlib.import_module("levanter.main.train_lm").main,
         train_config=train_config,
         resources=config.resources,
         env=env,
@@ -366,7 +368,7 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
 
     _submit_training_job(
         job_name=f"train_dpo_{config.train_config.trainer.id}",
-        main_fn=train_dpo.main,
+        main_fn=importlib.import_module("levanter.main.train_dpo").main,
         train_config=train_config,
         resources=config.resources,
         env=env,
@@ -397,53 +399,6 @@ def _add_default_env_variables(env: dict, default_env: dict | None):
 
     # Ray gets mad if the values aren't all strings, but e.g. ints
     env = {str(k): str(v) for k, v in env.items()}
-    return env
-
-
-def _add_run_env_variables(env: dict):
-    """
-    Add a few environment variables from `os.environ` into `env` that we need for logging as well as for internal evals.
-    Specifically:
-    - GIT_COMMIT
-    - HF_DATASETS_TRUST_REMOTE_CODE
-    - HF_ALLOW_CODE_EVAL (for code evaluation tasks like HumanEval)
-    """
-    env = deepcopy(env)
-
-    git_commit = env.get("GIT_COMMIT") or os.environ.get("GIT_COMMIT")
-
-    if not git_commit:
-        try:
-            git_commit = levanter.infra.cli_helpers.get_git_commit()
-        except:  # noqa
-            pass
-
-    if git_commit:
-        env["GIT_COMMIT"] = git_commit
-    else:
-        logger.warning("Failed to find or infer git commit for logging.")
-
-    # required for internal evals to run some tasks
-    if "HF_DATASETS_TRUST_REMOTE_CODE" not in env:
-        env["HF_DATASETS_TRUST_REMOTE_CODE"] = "1"
-
-    # required for code evaluation tasks like HumanEval
-    if "HF_ALLOW_CODE_EVAL" not in env:
-        env["HF_ALLOW_CODE_EVAL"] = "1"
-
-    if "TOKENIZERS_PARALLELISM" not in env:
-        env["TOKENIZERS_PARALLELISM"] = "false"
-
-    if "TPU_MIN_LOG_LEVEL" not in env:
-        env["TPU_MIN_LOG_LEVEL"] = "2"
-    if "TPU_STDERR_LOG_LEVEL" not in env:
-        env["TPU_STDERR_LOG_LEVEL"] = "2"
-
-    # Allow the caller (or iris -e) to override the compilation cache dir.
-    if "JAX_COMPILATION_CACHE_DIR" not in env:
-        if val := os.environ.get("JAX_COMPILATION_CACHE_DIR"):
-            env["JAX_COMPILATION_CACHE_DIR"] = val
-
     return env
 
 

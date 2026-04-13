@@ -2,8 +2,8 @@ name: Iris - Dev Cluster Daily Restart
 
 on:
   schedule:
-    # Daily at 06:00 UTC
-    - cron: "0 6 * * *"
+    # Daily at 05:00 UTC — staggered before canary ferry (06:00 UTC)
+    - cron: "0 5 * * *"
   workflow_dispatch:
 
 permissions:
@@ -18,6 +18,8 @@ jobs:
   restart:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -53,13 +55,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Write SSH key
+      - name: Set up OS Login SSH key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.MARIN_SSH_KEY }}" > ~/.ssh/marin_ray_cluster.pem
-          chmod 600 ~/.ssh/marin_ray_cluster.pem
+          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q -C "gha-${{ github.run_id }}-${{ github.run_attempt }}"
+          chmod 600 ~/.ssh/google_compute_engine
+          gcloud compute os-login ssh-keys add \
+            --key-file ~/.ssh/google_compute_engine.pub \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --ttl=2h
 
       - name: Restart dev controller
         run: |
           uv run iris --config lib/iris/examples/marin-dev.yaml \
             cluster controller restart
+
+      - name: Remove OS Login SSH key
+        if: always()
+        run: |
+          gcloud compute os-login ssh-keys remove \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --key-file ~/.ssh/google_compute_engine.pub || true

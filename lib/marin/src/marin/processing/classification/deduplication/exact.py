@@ -22,7 +22,7 @@ from marin.utils import rebase_file_path
 import pyarrow as pa
 import logging
 from fray.v2 import ResourceConfig
-from zephyr import ZephyrContext, counters, write_vortex_file
+from zephyr import ZephyrContext, counters, write_parquet_file
 from zephyr.dataset import Dataset
 
 logger = logging.getLogger(__name__)
@@ -92,7 +92,7 @@ def dedup_exact_paragraph(
             input_path,
             f"{output_path}/data/",
             old_extension=_get_extension(input_path),
-            new_extension=".vortex",
+            new_extension=".parquet",
         )
 
         total = 0
@@ -134,7 +134,7 @@ def dedup_exact_paragraph(
             if doc_level_record and doc_level_record["attributes"]["dup_spans"]:
                 yield doc_level_record
 
-        result = write_vortex_file(group_by_doc_id(counting_iter()), output_file)
+        result = write_parquet_file(group_by_doc_id(counting_iter()), output_file)
         return {**result, "total": total, "dups": dups, "unique": total - dups}
 
     def annotate_dups(key_hash: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
@@ -161,24 +161,22 @@ def dedup_exact_paragraph(
                     yield {"file_idx": path_to_idx[path], "id": hash_record.pop("doc_id"), **hash_record}
 
     file_groups = group_files(input_files, max_parallelism)
-    shard_results = list(
-        ctx.execute(
-            Dataset.from_list(file_groups)
-            .flat_map(_flat_map_paragraph_hashes)
-            .group_by(
-                lambda record: record["hash"],
-                # NOTE: selecting the canonical record is deterministic via this sort
-                sort_by=lambda record: record["id"],
-                reducer=annotate_dups,
-            )
-            .group_by(
-                lambda r: r["file_idx"],
-                sort_by=lambda r: r["id"],
-                reducer=aggregate_and_write_to_corresponding_files,
-            ),
-            verbose=True,
+    shard_results = ctx.execute(
+        Dataset.from_list(file_groups)
+        .flat_map(_flat_map_paragraph_hashes)
+        .group_by(
+            lambda record: record["hash"],
+            # NOTE: selecting the canonical record is deterministic via this sort
+            sort_by=lambda record: record["id"],
+            reducer=annotate_dups,
+        )
+        .group_by(
+            lambda r: r["file_idx"],
+            sort_by=lambda r: r["id"],
+            reducer=aggregate_and_write_to_corresponding_files,
         ),
-    )
+        verbose=True,
+    ).results
 
     return finalize_dedup(shard_results, DedupMode.EXACT_PARAGRAPH, method="exact", level="paragraph")
 
@@ -247,19 +245,17 @@ def dedup_exact_document(
                     yield {"file_idx": path_to_idx[path], **hash_record}
 
     file_groups = group_files(input_files, max_parallelism)
-    shard_results = list(
-        ctx.execute(
-            Dataset.from_list(file_groups)
-            .flat_map(_flat_map_document_hashes)
-            .group_by(
-                lambda record: record["hash"],
-                # NOTE: selecting the canonical record is deterministic via this sort
-                sort_by=lambda record: record["id"],
-                reducer=annotate_dups,
-            )
-            .group_by(lambda r: r["file_idx"], sort_by=lambda r: r["id"], reducer=aggregate_and_write),
-            verbose=True,
-        ),
-    )
+    shard_results = ctx.execute(
+        Dataset.from_list(file_groups)
+        .flat_map(_flat_map_document_hashes)
+        .group_by(
+            lambda record: record["hash"],
+            # NOTE: selecting the canonical record is deterministic via this sort
+            sort_by=lambda record: record["id"],
+            reducer=annotate_dups,
+        )
+        .group_by(lambda r: r["file_idx"], sort_by=lambda r: r["id"], reducer=aggregate_and_write),
+        verbose=True,
+    ).results
 
     return finalize_dedup(shard_results, DedupMode.EXACT_DOCUMENT, method="exact", level="document")

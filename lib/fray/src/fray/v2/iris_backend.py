@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,7 +35,7 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 from fray.v2.actor import (
     ActorContext,
@@ -79,18 +80,17 @@ def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingCon
     return None
 
 
-def _convert_device(device: DeviceConfig) -> cluster_pb2.DeviceConfig | None:
+def _convert_device(device: DeviceConfig) -> job_pb2.DeviceConfig | None:
     """Convert fray v2 DeviceConfig to Iris protobuf DeviceConfig."""
     from iris.cluster.types import tpu_device
-    from iris.rpc import cluster_pb2
 
     if isinstance(device, CpuConfig):
         return None
     elif isinstance(device, TpuConfig):
         return tpu_device(device.variant)
     elif isinstance(device, GpuConfig):
-        gpu = cluster_pb2.GpuDevice(variant=device.variant, count=device.count)
-        return cluster_pb2.DeviceConfig(gpu=gpu)
+        gpu = job_pb2.GpuDevice(variant=device.variant, count=device.count)
+        return job_pb2.DeviceConfig(gpu=gpu)
     raise ValueError(f"Unknown device config type: {type(device)}")
 
 
@@ -162,16 +162,15 @@ def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | No
 
 def map_iris_job_state(iris_state: int) -> JobStatus:
     """Map Iris protobuf JobState enum to fray v2 JobStatus."""
-    from iris.rpc import cluster_pb2
 
     _STATE_MAP = {
-        cluster_pb2.JOB_STATE_PENDING: JobStatus.PENDING,
-        cluster_pb2.JOB_STATE_RUNNING: JobStatus.RUNNING,
-        cluster_pb2.JOB_STATE_SUCCEEDED: JobStatus.SUCCEEDED,
-        cluster_pb2.JOB_STATE_FAILED: JobStatus.FAILED,
-        cluster_pb2.JOB_STATE_KILLED: JobStatus.STOPPED,
-        cluster_pb2.JOB_STATE_WORKER_FAILED: JobStatus.FAILED,
-        cluster_pb2.JOB_STATE_UNSCHEDULABLE: JobStatus.FAILED,
+        job_pb2.JOB_STATE_PENDING: JobStatus.PENDING,
+        job_pb2.JOB_STATE_RUNNING: JobStatus.RUNNING,
+        job_pb2.JOB_STATE_SUCCEEDED: JobStatus.SUCCEEDED,
+        job_pb2.JOB_STATE_FAILED: JobStatus.FAILED,
+        job_pb2.JOB_STATE_KILLED: JobStatus.STOPPED,
+        job_pb2.JOB_STATE_WORKER_FAILED: JobStatus.FAILED,
+        job_pb2.JOB_STATE_UNSCHEDULABLE: JobStatus.FAILED,
     }
     return _STATE_MAP.get(iris_state, JobStatus.PENDING)
 
@@ -193,7 +192,9 @@ class IrisJobHandle:
     def wait(
         self, timeout: float | None = None, *, raise_on_failure: bool = True, stream_logs: bool = False
     ) -> JobStatus:
-        effective_timeout = timeout if timeout is not None else 86400.0
+        # Iris client requires a numeric timeout. When None (wait indefinitely),
+        # use ~5 years so the caller is never surprised by a silent timeout.
+        effective_timeout = timeout if timeout is not None else 86400.0 * 365 * 5
         try:
             self._job.wait(timeout=effective_timeout, raise_on_failure=raise_on_failure, stream_logs=stream_logs)
         except Exception:
@@ -329,14 +330,40 @@ class OperationFuture:
             time.sleep(self._poll_interval)
 
 
+class _ThreadFuture:
+    """Future backed by a daemon thread running a direct Call RPC.
+
+    Unlike OperationFuture, this holds a single HTTP connection for the
+    call duration and does not poll. Suitable for short RPCs where the
+    overhead of StartOperation + GetOperation polling is unnecessary.
+    """
+
+    def __init__(self, fn: Any, args: tuple, kwargs: dict):
+        self._future: Future[Any] = Future()
+
+        def run() -> None:
+            try:
+                self._future.set_result(fn(*args, **kwargs))
+            except Exception as e:
+                self._future.set_exception(e)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def result(self, timeout: float | None = None) -> Any:
+        return self._future.result(timeout=timeout)
+
+
 class _IrisActorMethod:
     """Wraps a method on an Iris actor.
 
-    ``remote()`` uses long-running operations: a fast ``StartOperation`` RPC
-    returns an operation ID, and ``OperationFuture.result()`` polls via
-    ``GetOperation``. No client-side thread pool is needed.
+    ``remote()`` spawns a thread running a direct ``Call`` RPC — fast
+    (single RPC) and suitable for short-lived methods.
 
-    ``__call__()`` uses the existing blocking ``Call`` RPC for simplicity.
+    ``submit()`` uses long-running operations: a fast ``StartOperation``
+    RPC returns an operation ID, and ``OperationFuture.result()`` polls
+    via ``GetOperation``. Use for methods that run for minutes/hours.
+
+    ``__call__()`` uses the blocking ``Call`` RPC synchronously.
     """
 
     def __init__(self, handle: IrisActorHandle, method_name: str):
@@ -344,6 +371,11 @@ class _IrisActorMethod:
         self._method = method_name
 
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
+        client = self._handle._resolve()
+        method = getattr(client, self._method)
+        return _ThreadFuture(method, args, kwargs)
+
+    def submit(self, *args: Any, **kwargs: Any) -> ActorFuture:
         client = self._handle._resolve()
         op_id = client.start_operation(self._method, *args, **kwargs)
         return OperationFuture(client, op_id)
@@ -526,7 +558,7 @@ class FrayIrisClient:
         replicas = request.replicas or 1
         coscheduling = resolve_coscheduling(request.resources.device, replicas)
 
-        policy = cluster_pb2.EXISTING_JOB_POLICY_KEEP if adopt_existing else cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED
+        policy = job_pb2.EXISTING_JOB_POLICY_KEEP if adopt_existing else job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED
         try:
             job = self._iris.submit(
                 entrypoint=iris_entrypoint,
@@ -539,6 +571,7 @@ class FrayIrisClient:
                 max_retries_failure=request.max_retries_failure,
                 max_retries_preemption=request.max_retries_preemption,
                 existing_job_policy=policy,
+                task_image=request.resources.image,
             )
         except IrisJobAlreadyExists as e:
             raise FrayJobAlreadyExists(request.name) from e
@@ -627,6 +660,7 @@ class FrayIrisClient:
             constraints=iris_constraints if iris_constraints else None,
             coscheduling=coscheduling,
             replicas=count,  # Create N replicas in a single job
+            task_image=resources.image,
             **retry_kwargs,
         )
 

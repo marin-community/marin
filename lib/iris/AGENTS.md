@@ -5,15 +5,14 @@ Distributed job orchestration replacing Ray with simpler primitives. Start with 
 ## Key Docs
 
 - `README.md` — overview + quick start
-- `OPS.md` — operating / troubleshooting a live cluster
+- `OPS.md` — operating / troubleshooting a live cluster (also used by skills: `debug-infra`, `restart-iris-controller`)
 - `TESTING.md` — testing policy, markers, and commands
-- `docs/autoscaler-fix.md` — autoscaler design + terminology
 - `docs/task-states.md` — task state machine + retry semantics
 - `docs/coreweave.md` — CoreWeave platform + `runtime=kubernetes` behavior
 - `docs/image-push.md` — multi-region image push/pull architecture
 - `docs/constraints.md` — constraint system design
-- `docs/users.md` — user/auth system design
-- `docs/sql-redesign.md` — SQL layer redesign plan (schema registry, write consolidation, normalization, state machine hardening)
+
+Archived design docs (implemented, read code instead): `.agents/project/2026*_iris_*.md`
 
 ## Source Layout
 

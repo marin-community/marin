@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
-import { RouterLink } from 'vue-router'
-import { useControllerRpc } from '@/composables/useRpc'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName, stateDisplayName } from '@/types/status'
+import { SEGMENT_COLORS, stateToName, stateDisplayName } from '@/types/status'
 import type { JobState } from '@/types/status'
-import type { JobStatus, ListJobsResponse } from '@/types/rpc'
+import type { JobStatus, JobQuery, ListJobsResponse } from '@/types/rpc'
 import { timestampMs, formatDuration, formatRelativeTime } from '@/utils/formatting'
-import { flattenJobTree, getLeafJobName, jobsWithChildren } from '@/utils/jobTree'
+import { flattenLoadedJobTree, getLeafJobName } from '@/utils/jobTree'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 
@@ -24,6 +24,9 @@ const SORT_FIELD_MAP: Record<string, string> = {
 type SortField = 'date' | 'name' | 'state' | 'failures' | 'preemptions'
 type SortDir = 'asc' | 'desc'
 
+const SORT_FIELDS: SortField[] = ['date', 'name', 'state', 'failures', 'preemptions']
+const SORT_DIRS: SortDir[] = ['asc', 'desc']
+
 const copiedJob = ref<string | null>(null)
 
 async function copyJobName(name: string) {
@@ -32,17 +35,39 @@ async function copyJobName(name: string) {
   setTimeout(() => { copiedJob.value = null }, 1500)
 }
 
+const route = useRoute()
+const router = useRouter()
+
 const EXPANDED_JOBS_KEY = 'iris.controller.expandedJobs'
 
-// -- State --
+// -- State (hydrated from URL query params) --
 
-const page = ref(0)
-const sortField = ref<SortField>('date')
-const sortDir = ref<SortDir>('desc')
-const nameFilter = ref('')
-const localFilter = ref('')
-const stateFilter = ref('')
+/** Safely extract a single string from a Vue Router query value (string | string[] | null). */
+function queryStr(v: string | string[] | null | undefined): string {
+  if (Array.isArray(v)) return v[0] ?? ''
+  return v ?? ''
+}
+
+function parseSort(v: string): SortField {
+  return SORT_FIELDS.includes(v as SortField) ? (v as SortField) : 'date'
+}
+function parseDir(v: string): SortDir {
+  return SORT_DIRS.includes(v as SortDir) ? (v as SortDir) : 'desc'
+}
+function parsePage(v: string): number {
+  const n = Number(v)
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0
+}
+
+const page = ref(parsePage(queryStr(route.query.page)))
+const sortField = ref<SortField>(parseSort(queryStr(route.query.sort)))
+const sortDir = ref<SortDir>(parseDir(queryStr(route.query.dir)))
+const nameFilter = ref(queryStr(route.query.name))
+const localFilter = ref(queryStr(route.query.name))
+const stateFilter = ref(queryStr(route.query.state))
 const expandedJobs = ref<Set<string>>(loadExpandedJobs())
+const childJobsByParent = ref<Map<string, JobStatus[]>>(new Map())
+const loadingChildJobs = ref<Set<string>>(new Set())
 
 const JOB_STATES: JobState[] = [
   'pending', 'building', 'running', 'succeeded', 'failed', 'killed', 'worker_failed', 'unschedulable',
@@ -54,12 +79,15 @@ const {
   error,
   refresh: fetchJobs,
 } = useControllerRpc<ListJobsResponse>('ListJobs', () => ({
-  offset: page.value * PAGE_SIZE,
-  limit: PAGE_SIZE,
-  sortField: SORT_FIELD_MAP[sortField.value],
-  sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
-  nameFilter: nameFilter.value || undefined,
-  stateFilter: stateFilter.value || undefined,
+  query: {
+    scope: 'JOB_QUERY_SCOPE_ROOTS',
+    offset: page.value * PAGE_SIZE,
+    limit: PAGE_SIZE,
+    sortField: SORT_FIELD_MAP[sortField.value],
+    sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
+    nameFilter: nameFilter.value || undefined,
+    stateFilter: stateFilter.value || undefined,
+  } satisfies JobQuery,
 }))
 
 const jobs = computed(() => listResponse.value?.jobs ?? [])
@@ -85,10 +113,43 @@ function saveExpandedJobs() {
   }
 }
 
-onMounted(fetchJobs)
-useAutoRefresh(fetchJobs, 30_000)
+async function loadChildJobs(parentJobId: string) {
+  if (loadingChildJobs.value.has(parentJobId)) return
+  const nextLoading = new Set(loadingChildJobs.value)
+  nextLoading.add(parentJobId)
+  loadingChildJobs.value = nextLoading
+  try {
+    const payload = await controllerRpcCall<ListJobsResponse>('ListJobs', {
+      query: {
+        scope: 'JOB_QUERY_SCOPE_CHILDREN',
+        parentJobId,
+        sortField: SORT_FIELD_MAP[sortField.value],
+        sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
+        stateFilter: stateFilter.value || undefined,
+      } satisfies JobQuery,
+    })
+    const nextChildren = new Map(childJobsByParent.value)
+    nextChildren.set(parentJobId, payload.jobs ?? [])
+    childJobsByParent.value = nextChildren
+  } finally {
+    const doneLoading = new Set(loadingChildJobs.value)
+    doneLoading.delete(parentJobId)
+    loadingChildJobs.value = doneLoading
+  }
+}
+
+async function fetchAll() {
+  await fetchJobs()
+  await Promise.all([...expandedJobs.value].map(loadChildJobs))
+}
+
+onMounted(fetchAll)
+useAutoRefresh(fetchAll, 30_000)
 
 watch([page, sortField, sortDir, nameFilter, stateFilter], () => {
+  childJobsByParent.value = new Map()
+  expandedJobs.value = new Set()
+  saveExpandedJobs()
   fetchJobs()
 })
 
@@ -96,21 +157,34 @@ watch(stateFilter, () => {
   page.value = 0
 })
 
-// -- Job tree --
+// Sync filter/sort/page state into the URL so back-button and link sharing work.
+watch([page, sortField, sortDir, nameFilter, stateFilter], () => {
+  router.replace({
+    query: {
+      ...route.query,
+      sort: sortField.value !== 'date' ? sortField.value : undefined,
+      dir: sortDir.value !== 'desc' ? sortDir.value : undefined,
+      page: page.value !== 0 ? String(page.value) : undefined,
+      name: nameFilter.value || undefined,
+      state: stateFilter.value || undefined,
+    },
+  })
+})
 
-const flattenedJobs = computed(() => flattenJobTree(jobs.value, expandedJobs.value))
+// -- Job tree (lazy-loaded children) --
 
-// Track which jobs have children for expand/collapse UI
-const expandableJobs = computed(() => jobsWithChildren(jobs.value))
+const flattenedJobs = computed(() => flattenLoadedJobTree(jobs.value, childJobsByParent.value, expandedJobs.value))
 
 // -- Interactions --
-
-function toggleExpanded(jobName: string) {
+function toggleExpanded(job: JobStatus) {
   const next = new Set(expandedJobs.value)
-  if (next.has(jobName)) {
-    next.delete(jobName)
+  if (next.has(job.jobId)) {
+    next.delete(job.jobId)
   } else {
-    next.add(jobName)
+    next.add(job.jobId)
+    if (!childJobsByParent.value.has(job.jobId)) {
+      void loadChildJobs(job.jobId)
+    }
   }
   expandedJobs.value = next
   saveExpandedJobs()
@@ -163,16 +237,8 @@ interface ProgressSegment {
   label: string
 }
 
-const SEGMENT_COLORS: Record<string, string> = {
-  succeeded: 'bg-status-success',
-  running: 'bg-accent',
-  building: 'bg-status-purple',
-  assigned: 'bg-status-orange',
-  failed: 'bg-status-danger',
-  worker_failed: 'bg-status-danger',
-  killed: 'bg-text-muted',
-  pending: 'bg-surface-border',
-}
+// SEGMENT_COLORS lives in @/types/status so the dashboard legend can stay in
+// sync with a single canonical definition.
 
 function progressSegments(job: JobStatus): ProgressSegment[] {
   const counts = job.taskStateCounts ?? {}
@@ -185,8 +251,9 @@ function progressSegments(job: JobStatus): ProgressSegment[] {
   const assigned = counts['assigned'] ?? 0
   const failed = counts['failed'] ?? 0
   const workerFailed = counts['worker_failed'] ?? 0
+  const preempted = counts['preempted'] ?? 0
   const killed = counts['killed'] ?? 0
-  const pending = total - succeeded - running - building - assigned - failed - workerFailed - killed
+  const pending = total - succeeded - running - building - assigned - failed - workerFailed - preempted - killed
 
   return [
     { count: succeeded, colorClass: SEGMENT_COLORS['succeeded'], label: 'succeeded' },
@@ -195,6 +262,7 @@ function progressSegments(job: JobStatus): ProgressSegment[] {
     { count: assigned, colorClass: SEGMENT_COLORS['assigned'], label: 'assigned' },
     { count: failed, colorClass: SEGMENT_COLORS['failed'], label: 'failed' },
     { count: workerFailed, colorClass: SEGMENT_COLORS['worker_failed'], label: 'worker_failed' },
+    { count: preempted, colorClass: SEGMENT_COLORS['preempted'], label: 'preempted' },
     { count: killed, colorClass: SEGMENT_COLORS['killed'], label: 'killed' },
     { count: Math.max(0, pending), colorClass: SEGMENT_COLORS['pending'], label: 'pending' },
   ].filter(s => s.count > 0)
@@ -224,7 +292,7 @@ const SORTABLE_COLS: SortableCol[] = [
   { field: 'name', label: 'Name' },
   { field: 'state', label: 'State' },
   { field: 'date', label: 'Date' },
-  { field: 'failures', label: 'Failures' },
+  { field: 'failures', label: 'Failed Attempts' },
   { field: 'preemptions', label: 'Preemptions' },
 ]
 
@@ -338,11 +406,11 @@ function sortIndicator(field: SortField): string {
           >
             <span class="inline-flex items-center gap-1">
               <button
-                v-if="expandableJobs.has(node.job.name)"
+                v-if="node.job.hasChildren"
                 class="text-text-muted hover:text-text select-none w-4 text-center text-xs"
-                @click.stop="toggleExpanded(node.job.name)"
+                @click.stop="toggleExpanded(node.job)"
               >
-                {{ expandedJobs.has(node.job.name) ? '▼' : '▶' }}
+                {{ loadingChildJobs.has(node.job.jobId) ? '…' : (expandedJobs.has(node.job.jobId) ? '▼' : '▶') }}
               </button>
               <span v-else class="w-4" />
               <RouterLink
@@ -380,7 +448,15 @@ function sortIndicator(field: SortField): string {
 
           <!-- Failures -->
           <td class="px-3 py-2 text-[13px] text-right tabular-nums">
-            {{ node.job.failureCount ?? 0 }}
+            <span
+              v-if="(node.job.failureCount ?? 0) > 0"
+              class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
+                     text-status-danger bg-status-danger-bg border border-status-danger-border"
+              :title="node.job.failureCount + ' failed task attempt' + ((node.job.failureCount ?? 0) !== 1 ? 's' : '') + ' (including retries)'"
+            >
+              {{ node.job.failureCount }}
+            </span>
+            <span v-else class="text-text-muted">0</span>
           </td>
 
           <!-- Preemptions -->

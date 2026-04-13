@@ -9,7 +9,16 @@ def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return column in columns
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+    return row is not None
+
+
 def migrate(conn: sqlite3.Connection) -> None:
+    # On fresh DBs, job_config already has these columns; skip adding to jobs.
+    if _table_exists(conn, "job_config"):
+        return
+
     columns_to_add = (
         ("resources_proto", "BLOB"),
         ("constraints_proto", "BLOB"),
@@ -22,15 +31,21 @@ def migrate(conn: sqlite3.Connection) -> None:
         if not _has_column(conn, "jobs", column):
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {ddl}")
 
-    from iris.rpc import cluster_pb2
+    if not _has_column(conn, "jobs", "resources_proto"):
+        return  # Column already removed by later migration; backfill not needed.
+    if not _has_column(conn, "jobs", "request_proto"):
+        return  # Column already removed by 0028; backfill not needed.
+
+    from iris.rpc import job_pb2
+    from iris.rpc import controller_pb2
 
     rows = conn.execute("SELECT job_id, request_proto FROM jobs WHERE request_proto IS NOT NULL").fetchall()
     for job_id, request_blob in rows:
-        request = cluster_pb2.Controller.LaunchJobRequest()
+        request = controller_pb2.Controller.LaunchJobRequest()
         request.ParseFromString(request_blob)
 
         resources_blob = request.resources.SerializeToString() if request.HasField("resources") else None
-        constraint_list = cluster_pb2.ConstraintList()
+        constraint_list = job_pb2.ConstraintList()
         constraint_list.constraints.extend(request.constraints)
         constraints_blob = constraint_list.SerializeToString() if request.constraints else None
         has_coscheduling = 1 if request.HasField("coscheduling") else 0
