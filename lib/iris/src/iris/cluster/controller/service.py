@@ -458,6 +458,19 @@ def _worker_metadata_to_proto(worker: WorkerDetailRow) -> job_pb2.WorkerMetadata
     return md
 
 
+def _decode_attribute_value(row: Any) -> tuple[str, str | int | float]:
+    """Decode a worker_attributes row into a (key, value) pair."""
+    vtype = str(row["value_type"])
+    key = str(row["key"])
+    if vtype == "str":
+        return key, str(row["str_value"])
+    elif vtype == "int":
+        return key, int(row["int_value"])
+    elif vtype == "float":
+        return key, float(row["float_value"])
+    raise ValueError(f"Unknown attribute value_type: {vtype!r}")
+
+
 @dataclass(frozen=True)
 class _WorkerDetail:
     worker: WorkerDetailRow
@@ -481,15 +494,7 @@ def _read_worker_detail(
             "SELECT key, value_type, str_value, int_value, float_value " "FROM worker_attributes WHERE worker_id = ?",
             (str(worker_id),),
         )
-        attrs: dict[str, str | int | float] = {}
-        for row in attr_rows:
-            vtype = str(row["value_type"])
-            if vtype == "str":
-                attrs[str(row["key"])] = str(row["str_value"])
-            elif vtype == "int":
-                attrs[str(row["key"])] = int(row["int_value"])
-            elif vtype == "float":
-                attrs[str(row["key"])] = float(row["float_value"])
+        attrs = dict(_decode_attribute_value(row) for row in attr_rows)
         if attrs:
             worker = dataclasses.replace(worker, attributes=attrs)
         running_rows = q.raw(
@@ -803,14 +808,8 @@ def _worker_roster(db: ControllerDB) -> list[WorkerDetailRow]:
             attrs_by_worker: dict[str, dict[str, str | int | float]] = {}
             for row in attr_rows:
                 wid = str(row["worker_id"])
-                attrs = attrs_by_worker.setdefault(wid, {})
-                vtype = str(row["value_type"])
-                if vtype == "str":
-                    attrs[str(row["key"])] = str(row["str_value"])
-                elif vtype == "int":
-                    attrs[str(row["key"])] = int(row["int_value"])
-                elif vtype == "float":
-                    attrs[str(row["key"])] = float(row["float_value"])
+                key, value = _decode_attribute_value(row)
+                attrs_by_worker.setdefault(wid, {})[key] = value
             workers = [dataclasses.replace(w, attributes=attrs_by_worker.get(str(w.worker_id), {})) for w in workers]
         return workers
 
@@ -886,12 +885,11 @@ def _tasks_for_worker(db: ControllerDB, worker_id: WorkerId, limit: int = 50) ->
             (str(worker_id), limit),
             decoders={"task_id": JobName.from_wire},
         )
-    task_ids = [r.task_id for r in history_rows]
-    if not task_ids:
-        return []
-    task_wires = [tid.to_wire() for tid in task_ids]
-    placeholders = ",".join("?" for _ in task_wires)
-    with db.read_snapshot() as q:
+        task_ids = [r.task_id for r in history_rows]
+        if not task_ids:
+            return []
+        task_wires = [tid.to_wire() for tid in task_ids]
+        placeholders = ",".join("?" for _ in task_wires)
         tasks = TASK_DETAIL_PROJECTION.decode(
             q.fetchall(
                 f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} "

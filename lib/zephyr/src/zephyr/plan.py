@@ -205,8 +205,8 @@ def _load_file_gen(stream: Iterator) -> Iterator:
         try:
             yield from load_file(spec)
         except Exception as e:
-            logger.exception(f"Failed to load from {spec}")
-            raise RuntimeError(f"Failed to load from {spec}: {e}") from e
+            e.add_note(f"While loading from {spec}")
+            raise
 
 
 def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
