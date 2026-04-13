@@ -56,9 +56,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
 
     # Dedup peaked at ~5 GB mem (default 32g is 6x over), 22 GB disk (default 5g).
     # max_parallelism=128: 10BT has only 106 normalized shards — 1024 created
-    # ~900 empty reduce shards and massive scheduling overhead (~12 min wasted).
-    # cc_max_iterations=1: CC converges in iteration 0 for this dataset size;
-    # iterations 1-3 produced 0 changes but each still ran a full 3-stage pipeline.
+    # ~900 empty reduce shards and massive scheduling overhead.
     deduped = StepSpec(
         name="datakit-smoke/dedup_fuzzy_document",
         deps=[normalized],
@@ -67,7 +65,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
             input_paths=normalized.output_path,
             output_path=output_path,
             max_parallelism=128,
-            cc_max_iterations=1,
+            cc_max_iterations=3,
             worker_resources=ResourceConfig(cpu=5, ram="16g", disk="30g"),
         ),
         override_output_path=f"{base}/dedup",
