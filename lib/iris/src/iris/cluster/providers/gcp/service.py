@@ -83,11 +83,6 @@ _OPERATION_TIMEOUT = 600  # seconds to wait for an operation to complete
 # quota/stockout error (e.g. "no more capacity in the zone").
 _RPC_CODE_RESOURCE_EXHAUSTED = 8
 
-# tpu_delete retries on QuotaExhaustedError to absorb the per-minute GCP
-# DeleteNode rate limit. Total worst-case wait is ~30s before giving up.
-_TPU_DELETE_MAX_ATTEMPTS = 3
-_TPU_DELETE_RETRY_BACKOFF = 10.0  # seconds between retries
-
 
 # ============================================================================
 # Data types
@@ -577,27 +572,9 @@ class CloudGcpService:
     def tpu_delete(self, name: str, zone: str) -> None:
         logger.info("Deleting TPU (async): %s", name)
         url = f"{_TPU_BASE}/{self._tpu_parent(zone)}/nodes/{name}"
-        # GCP enforces a per-minute DeleteNode quota. A burst of scale-downs
-        # can hit it; retry with a short backoff so we don't leak slices or
-        # spam the controller log with tracebacks.
-        for attempt in range(_TPU_DELETE_MAX_ATTEMPTS):
-            resp = self._client.delete(url, headers=self._headers())
-            if resp.status_code == 404:
-                return
-            try:
-                self._classify_response(resp)
-                return
-            except QuotaExhaustedError:
-                if attempt + 1 >= _TPU_DELETE_MAX_ATTEMPTS:
-                    raise
-                logger.warning(
-                    "tpu_delete %s rate-limited (attempt %d/%d); retrying in %.0fs",
-                    name,
-                    attempt + 1,
-                    _TPU_DELETE_MAX_ATTEMPTS,
-                    _TPU_DELETE_RETRY_BACKOFF,
-                )
-                time.sleep(_TPU_DELETE_RETRY_BACKOFF)
+        resp = self._client.delete(url, headers=self._headers())
+        if resp.status_code != 404:
+            self._classify_response(resp)
 
     def _tpu_get(self, name: str, zone: str) -> dict:
         url = f"{_TPU_BASE}/{self._tpu_parent(zone)}/nodes/{name}"
@@ -712,7 +689,9 @@ class CloudGcpService:
         logger.info("Deleting queued resource (force): %s", name)
         qr_name = f"projects/{self._project_id}/locations/{zone}/queuedResources/{name}"
         try:
-            self._tpu_alpha_client.delete_queued_resource(name=qr_name, force=True)
+            self._tpu_alpha_client.delete_queued_resource(
+                request=tpu_v2alpha1.DeleteQueuedResourceRequest(name=qr_name, force=True)
+            )
         except google.api_core.exceptions.NotFound:
             pass
         except google.api_core.exceptions.GoogleAPICallError as exc:

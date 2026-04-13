@@ -1336,6 +1336,7 @@ class Controller:
         """Background pruning loop: history cleanup every 60s, full data prune on the configured interval."""
         last_full_prune = 0.0
         resource_history_limiter = RateLimiter(interval_seconds=600.0)
+        wal_checkpoint_limiter = RateLimiter(interval_seconds=600.0)
         full_prune_interval = self._config.prune_interval.to_seconds()
 
         while not stop_event.is_set():
@@ -1357,6 +1358,18 @@ class Controller:
                     self._transitions.prune_task_resource_history()
                 except Exception:
                     logger.exception("Task resource history cleanup failed")
+
+            if wal_checkpoint_limiter.should_run():
+                try:
+                    busy, log_frames, checkpointed = self._db.wal_checkpoint("TRUNCATE")
+                    logger.info(
+                        "wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
+                        busy,
+                        log_frames,
+                        checkpointed,
+                    )
+                except Exception:
+                    logger.exception("WAL checkpoint failed")
 
             now = time.monotonic()
             if now - last_full_prune >= full_prune_interval:
