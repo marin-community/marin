@@ -3334,6 +3334,22 @@ Committed as `2fe470a13`, relaunched as:
 - `/ahmed/v6e16-probe-ew4-v2` (europe-west4)
 - `/ahmed/v6e16-probe-ue5-v2` (us-east5)
 
+#### v6e-16 OOM — 2026-04-13
+
+Both v6e-16 v2 probes got TPUs (JAX distributed init fix worked!) but **OOMed during XLA
+compilation**: `Used 38.97G of 31.25G hbm. Exceeded by 7.73G.`
+
+v6e-16 at per_device=4 needs 38.97 GB/chip — 8 GB more than v6e-8 at the same per_device=4
+(≤31.25 GB). The extra memory is likely from multi-host DCN communication buffers (v6e-16
+uses 4 VMs connected via DCN, vs v6e-8 which is single-VM with ICI only).
+
+To fit v6e-16, would need either:
+- per_device=2 (with 4× grad accum — slower than v6e-8)
+- Carry offloading (same strategy as v6e-8, would free ~8.6 GB)
+- TP to shard within-layer intermediates
+
+v6e-16 is deprioritized for now — v6e-8 with carry offloading is a better path.
+
 #### xprof Profiling Results — 2026-04-13T04:13Z
 
 Ran 20-step v6e-8 probe with xprof profiling on steps 5-15. W&B run: `v6e_probe_profile_ue5-79b49a`.
