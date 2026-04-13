@@ -1,11 +1,19 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for levanter.utils.hf_export — generation config validation and normalization."""
+"""Tests for generation config validation and normalization."""
+
+import json
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
-from levanter.compat.hf_checkpoints import build_generation_config
+from levanter.compat.hf_checkpoints import (
+    _save_tokenizer_pretrained,
+    build_generation_config,
+    save_hf_checkpoint_callback,
+)
 
 
 class _FakeTokenizer:
@@ -104,3 +112,44 @@ class TestBuildGenerationConfig:
         tok = _FakeTokenizer(vocab_size=100)
         with pytest.raises(ValueError, match="out of range"):
             build_generation_config(tok, [-1])
+
+
+class _CapturingConverter:
+    def __init__(self):
+        self.calls = []
+
+    def save_pretrained(self, model, path, **kwargs):
+        self.calls.append((model, path, kwargs))
+
+
+def test_save_hf_checkpoint_callback_passes_generation_config():
+    converter = _CapturingConverter()
+    generation_config = {"eos_token_id": [2, 50]}
+    callback = save_hf_checkpoint_callback("/tmp/export", converter, generation_config=generation_config)
+
+    model = object()
+    callback(SimpleNamespace(step=1, eval_model=model))
+
+    assert len(converter.calls) == 1
+    saved_model, saved_path, saved_kwargs = converter.calls[0]
+    assert saved_model is model
+    assert saved_path == "/tmp/export/step-1"
+    assert saved_kwargs["generation_config"] == generation_config
+
+
+class _FakeChatTemplateTokenizer:
+    def __init__(self, chat_template: str):
+        self.chat_template = chat_template
+
+    def save_pretrained(self, path: str) -> None:
+        with open(f"{path}/tokenizer_config.json", "w") as f:
+            json.dump({"tokenizer_class": "FakeTokenizer"}, f)
+
+
+def test_save_tokenizer_pretrained_embeds_chat_template(tmp_path):
+    tokenizer = _FakeChatTemplateTokenizer("{{ bos_token }}{{ messages[0]['content'] }}")
+
+    _save_tokenizer_pretrained(cast(Any, tokenizer), str(tmp_path))
+
+    tokenizer_config = json.loads((tmp_path / "tokenizer_config.json").read_text())
+    assert tokenizer_config["chat_template"] == tokenizer.chat_template
