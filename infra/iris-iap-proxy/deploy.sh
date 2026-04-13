@@ -116,6 +116,7 @@ gcloud beta run deploy "${SERVICE}" \
   --cpu=1 \
   --min-instances=1 \
   --max-instances=1 \
+  --concurrency=80 \
   --port=8080
 
 echo "==> Deployed. Service URL:"
