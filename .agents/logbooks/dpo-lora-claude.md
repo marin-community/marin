@@ -3455,6 +3455,28 @@ W&B run with HLO artifact: `v6e8_offload-995ff4`
 3. Try partial offloading (`save_inputs="offload"` only, not carries) — might avoid the bug
 4. Wait for JAX fix
 
+#### TP=4+FSDP=2 OOM — 2026-04-13T07:39Z
+
+Both ew4 and ue1 TP=4 probes compiled successfully (no XLA crash!) but **OOMed at runtime**:
+
+```
+RESOURCE_EXHAUSTED: Allocation (size=34359738368) would exceed memory (size=33822867456)
+shape = 'bf16[32,32,4096,4096]' — output of broadcast
+```
+
+The 34 GB tensor is the **full attention score matrix with all 32 heads** — NOT sharded by
+TP. `MeshConfig(axes={"data": -1, "model": 4})` does not automatically shard the attention
+head dimension. The model axis needs to be explicitly mapped to the head axis in the
+Llama model's compute_mapping or the attention layer.
+
+This means TP isn't working — the model is running as pure FSDP=8 with pd=8, which we
+already know OOMs at 44.23 GB. The 34 GB allocation is the attention scores alone.
+
+**Next steps:**
+1. Investigate how Levanter maps the `model` mesh axis to attention heads for Llama
+2. May need to add head-axis sharding to LlamaConfig or the DPO mesh compute_mapping
+3. The 70b TP=2 config worked — check what's different about 70b model setup vs 8b
+
 #### v6e-8 Probe — 2026-04-12T21:17Z
 
 Pivoted to v6e-8 (single-VM, 8 chips × 32 GiB, no coscheduling needed).
