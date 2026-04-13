@@ -525,9 +525,12 @@ def _component_tpu_pins(
             chosen_region = inherited_region_pin.lower()
             if chosen_region not in component_regions:
                 component_step_names = ", ".join(sorted(s.name for s in component))
+                parent_id = _iris_parent_job_id()
                 raise ValueError(
                     f"TPU-connected executor steps {component_step_names} require one of "
-                    f"{sorted(component_regions)}, but inherited Iris region is {chosen_region!r}."
+                    f"{sorted(component_regions)}, but inherited Iris region is {chosen_region!r} "
+                    f"(from parent job {parent_id}). "
+                    f"Pass an explicit region constraint on the child job to override."
                 )
         else:
             chosen_region = sorted(component_regions)[0]
@@ -556,6 +559,15 @@ def _iris_worker_region_pin() -> str | None:
     if job_info is None:
         return None
     return job_info.worker_region
+
+
+def _iris_parent_job_id() -> str | None:
+    from iris.cluster.client.job_info import get_job_info
+
+    job_info = get_job_info()
+    if job_info is None:
+        return None
+    return str(job_info.job_id)
 
 
 def _maybe_attach_inferred_region_constraint(
@@ -589,9 +601,12 @@ def _maybe_attach_inferred_region_constraint(
                 f"allowed regions are {sorted(allowed_regions)}."
             )
         if inherited_region_pin is not None and inherited_region_pin.lower() != pinned_region:
+            parent_id = _iris_parent_job_id()
             raise ValueError(
                 f"Executor step {step_name!r} must run in {pinned_region!r}, "
-                f"but inherited Iris region is {inherited_region_pin.lower()!r}."
+                f"but inherited Iris region is {inherited_region_pin.lower()!r} "
+                f"(from parent job {parent_id}). "
+                f"Pass an explicit region constraint on the child job to override."
             )
         return dataclasses.replace(
             remote_fn,
@@ -602,9 +617,12 @@ def _maybe_attach_inferred_region_constraint(
         if inherited_region_pin is not None and allowed_regions is not None:
             pinned_region = inherited_region_pin.lower()
             if pinned_region not in allowed_regions:
+                parent_id = _iris_parent_job_id()
                 raise ValueError(
-                    f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
-                    f"but inferred regions are {sorted(allowed_regions)}."
+                    f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r} "
+                    f"(from parent job {parent_id}), "
+                    f"but inferred regions are {sorted(allowed_regions)}. "
+                    f"Pass an explicit region constraint on the child job to override."
                 )
         return remote_fn
 
@@ -614,9 +632,12 @@ def _maybe_attach_inferred_region_constraint(
     if inherited_region_pin is not None:
         pinned_region = inherited_region_pin.lower()
         if pinned_region not in allowed_regions:
+            parent_id = _iris_parent_job_id()
             raise ValueError(
-                f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r}, "
-                f"but inferred regions are {sorted(allowed_regions)}."
+                f"Executor step {step_name!r} is pinned to inherited Iris region {pinned_region!r} "
+                f"(from parent job {parent_id}), "
+                f"but inferred regions are {sorted(allowed_regions)}. "
+                f"Pass an explicit region constraint on the child job to override."
             )
         return remote_fn
 

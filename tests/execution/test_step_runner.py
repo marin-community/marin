@@ -570,8 +570,9 @@ def test_resolve_executor_step_raises_when_inherited_pin_conflicts_with_gcs_regi
     with (
         patch("marin.execution.executor._iris_backend_is_active", return_value=True),
         patch("marin.execution.executor._iris_worker_region_pin", return_value="us-central2"),
+        patch("marin.execution.executor._iris_parent_job_id", return_value="test-user/parent-job/tasks/0"),
     ):
-        with pytest.raises(ValueError, match="pinned to inherited Iris region"):
+        with pytest.raises(ValueError, match=r"pinned to inherited Iris region.*from parent job.*parent-job.*override"):
             resolve_executor_step(
                 step,
                 config={"input_path": "gs://marin-us-east1/data/input"},
@@ -589,8 +590,9 @@ def test_resolve_executor_step_raises_on_inherited_pin_conflict_even_with_overri
     with (
         patch("marin.execution.executor._iris_backend_is_active", return_value=True),
         patch("marin.execution.executor._iris_worker_region_pin", return_value="us-central2"),
+        patch("marin.execution.executor._iris_parent_job_id", return_value="test-user/parent-job/tasks/0"),
     ):
-        with pytest.raises(ValueError, match="pinned to inherited Iris region"):
+        with pytest.raises(ValueError, match=r"pinned to inherited Iris region.*from parent job.*parent-job.*override"):
             resolve_executor_step(
                 step,
                 config={"input_path": "gs://marin-us-east1/data/input"},

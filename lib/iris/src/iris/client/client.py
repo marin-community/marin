@@ -651,6 +651,12 @@ class IrisClient:
             if job_info and job_info.worker_region and not any(c.key == WellKnownAttribute.REGION for c in constraints):
                 inherited_region = region_constraint([job_info.worker_region])
                 constraints = [*constraints, inherited_region]
+                logger.info(
+                    "Auto-inherited region constraint %r from parent job %s. "
+                    "Pass an explicit region constraint to override.",
+                    job_info.worker_region,
+                    job_info.job_id,
+                )
 
         # Convert to wire format
         resources_proto = resources.to_proto()
