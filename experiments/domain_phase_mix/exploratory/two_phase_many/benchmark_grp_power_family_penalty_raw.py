@@ -73,6 +73,7 @@ PLOT_BPB_ONLY_PATH = SCRIPT_DIR / "two_phase_many_grp_power_family_penalty_raw_b
 PLOT_BPB_TV_PATH = SCRIPT_DIR / "two_phase_many_grp_power_family_penalty_raw_bpb_and_tv.png"
 PLOT_PHASE_MOVEMENT_PATH = SCRIPT_DIR / "two_phase_many_grp_power_family_penalty_raw_phase_movements.png"
 PLOT_BPB_PHASE_MOVEMENT_PATH = SCRIPT_DIR / "two_phase_many_grp_power_family_penalty_raw_bpb_and_phase_movements.png"
+TWO_PHASE_MANY_ALL_CSV = SCRIPT_DIR / "two_phase_many_all_60m_1p2b.csv"
 
 VARIANT_NAME = "power_family_penalty"
 RUN_NAME = "baseline_genericfamily_power_family_penalty_raw_optimum"
@@ -83,6 +84,17 @@ SUBSET_CHECKPOINT_ROOT = (
     "marin-us-east5/checkpoints/" + GENERICFAMILY_POWER_FAMILY_PENALTY_RAW_SUBSET_OPTIMA_SOURCE_EXPERIMENT
 )
 MAX_WORKERS = 8
+BPB_LABEL_DECIMALS = 3
+BASELINE_BPB_LINE_SPECS = (
+    ("baseline_olmix_loglinear_uncheatable_bpb", "Olmix", "#B279A2"),
+    ("baseline_proportional", "Proportional", "#4C78A8"),
+    ("baseline_stratified", "Uniform (stratified)", "#6C6F7D"),
+)
+PROPORTIONAL_BPB_LINE_SPEC = (BASELINE_BPB_LINE_SPECS[1],)
+
+
+def _format_bpb_label(value: float) -> str:
+    return f"{value:.{BPB_LABEL_DECIMALS}f}"
 
 
 def _validated_full_bpb() -> float | None:
@@ -283,7 +295,25 @@ def _load_existing_curve_points() -> pd.DataFrame:
     return frame
 
 
-def _plot_bpb_panel(ax_bpb: plt.Axes, frame: pd.DataFrame, *, cmap) -> None:
+def _baseline_bpbs() -> dict[str, float]:
+    frame = pd.read_csv(TWO_PHASE_MANY_ALL_CSV, usecols=["run_name", OBJECTIVE_METRIC])
+    result: dict[str, float] = {}
+    for run_name, _, _ in BASELINE_BPB_LINE_SPECS:
+        matches = frame.loc[frame["run_name"] == run_name, OBJECTIVE_METRIC].dropna()
+        if matches.empty:
+            raise ValueError(f"Missing baseline BPB for {run_name} in {TWO_PHASE_MANY_ALL_CSV}")
+        result[run_name] = float(matches.iloc[-1])
+    return result
+
+
+def _plot_bpb_panel(
+    ax_bpb: plt.Axes,
+    frame: pd.DataFrame,
+    *,
+    cmap,
+    baseline_bpbs: dict[str, float] | None = None,
+    baseline_line_specs: tuple[tuple[str, str, str], ...] = BASELINE_BPB_LINE_SPECS,
+) -> None:
     ax_bpb.plot(
         frame["subset_size"],
         frame["predicted_optimum_value"],
@@ -301,6 +331,17 @@ def _plot_bpb_panel(ax_bpb: plt.Axes, frame: pd.DataFrame, *, cmap) -> None:
         linestyle=":",
         label="Best observed BPB in subset",
     )
+    if baseline_bpbs is not None:
+        for run_name, label, color in baseline_line_specs:
+            ax_bpb.axhline(
+                baseline_bpbs[run_name],
+                color=color,
+                linewidth=1.5,
+                linestyle="--",
+                alpha=0.95,
+                zorder=1,
+                label=f"{label} BPB",
+            )
     validated = frame[frame["actual_validated_bpb"].notna()].copy()
     if not validated.empty:
         ax_bpb.plot(
@@ -330,7 +371,7 @@ def _plot_bpb_panel(ax_bpb: plt.Axes, frame: pd.DataFrame, *, cmap) -> None:
             if idx + 1 < len(validated_sizes) and abs(validated_sizes[idx] - validated_sizes[idx + 1]) <= 40:
                 x_offset -= 6
             ax_bpb.annotate(
-                f"{row.actual_validated_bpb:.4f}",
+                _format_bpb_label(float(row.actual_validated_bpb)),
                 (row.subset_size, row.actual_validated_bpb),
                 textcoords="offset points",
                 xytext=(x_offset, y_offset),
@@ -549,16 +590,23 @@ def _plot_phase_movements(frame: pd.DataFrame) -> None:
 def _plot_bpb_and_phase_movements(frame: pd.DataFrame) -> None:
     cmap = plt.colormaps["RdYlGn_r"]
     movement_frame = _phase_movement_frame(frame)
+    baseline_bpbs = _baseline_bpbs()
     fig, (ax_bpb, ax_move) = plt.subplots(
         2,
         1,
-        figsize=(10.2, 7.2),
+        figsize=(10.2, 7.5),
         dpi=180,
         sharex=True,
         constrained_layout=True,
         gridspec_kw={"height_ratios": [1.45, 1.15], "hspace": 0.08},
     )
-    _plot_bpb_panel(ax_bpb, frame, cmap=cmap)
+    _plot_bpb_panel(
+        ax_bpb,
+        frame,
+        cmap=cmap,
+        baseline_bpbs=baseline_bpbs,
+        baseline_line_specs=PROPORTIONAL_BPB_LINE_SPEC,
+    )
     ax_move.plot(
         movement_frame["subset_size"],
         movement_frame["phase0_tv_vs_prev"],
@@ -589,7 +637,24 @@ def _plot_bpb_and_phase_movements(frame: pd.DataFrame) -> None:
     bpb_handles = ax_bpb.get_lines()
     bpb_labels = [handle.get_label() for handle in bpb_handles if not handle.get_label().startswith("_")]
     if bpb_handles:
-        ax_bpb.legend(bpb_handles, bpb_labels, loc="upper right", frameon=True)
+        ax_bpb.legend(bpb_handles, bpb_labels, loc="upper right", frameon=True, ncol=2)
+
+    proportional_bpb = baseline_bpbs["baseline_proportional"]
+    ax_bpb.annotate(
+        f"Proportional: {_format_bpb_label(proportional_bpb)}",
+        (int(frame["subset_size"].max()), proportional_bpb),
+        textcoords="offset points",
+        xytext=(-6, 8),
+        ha="right",
+        fontsize=8,
+        color="#4C78A8",
+        bbox={
+            "boxstyle": "round,pad=0.18",
+            "facecolor": "white",
+            "edgecolor": "none",
+            "alpha": 0.85,
+        },
+    )
 
     ax_move.grid(True, alpha=0.25)
     move_handles = ax_move.get_lines()

@@ -203,6 +203,12 @@ class GenericFamilyPenaltyCalibrationSurrogate:
         family_totals: tuple[str, ...] = GENERIC_FAMILY_NAMES,
         quality_discount: bool = True,
         pair_cc_domains: bool = True,
+        include_singletons: bool = True,
+        include_pairs: bool = True,
+        include_family_totals: bool = True,
+        include_global_group_penalty: bool = True,
+        include_family_group_penalty: bool = True,
+        include_family_total_penalty: bool = True,
     ):
         self.packet = packet
         self.params = dict(params)
@@ -210,6 +216,14 @@ class GenericFamilyPenaltyCalibrationSurrogate:
         self.family_totals = tuple(family_totals)
         self.quality_discount = bool(quality_discount)
         self.pair_cc_domains = bool(pair_cc_domains)
+        self.include_singletons = bool(include_singletons)
+        self.include_pairs = bool(include_pairs)
+        self.include_family_totals = bool(include_family_totals)
+        self.include_global_group_penalty = bool(self.spec.global_group_penalty and include_global_group_penalty)
+        self.include_family_group_penalty = bool(self.spec.family_group_penalty and include_family_group_penalty)
+        self.include_family_total_penalty = bool(self.spec.family_total_penalty and include_family_total_penalty)
+        if not (self.include_singletons or self.include_pairs or self.include_family_totals):
+            raise ValueError("At least one signal block must be enabled")
         domain_to_family: list[str] = []
         for domain_idx in range(packet.base.m):
             assigned = [family_name for family_name, members in packet.family_map.items() if domain_idx in members]
@@ -307,8 +321,12 @@ class GenericFamilyPenaltyCalibrationSurrogate:
         family_group_totals: dict[str, list[np.ndarray]] = {family_name: [] for family_name in self.family_totals}
         family_totals: dict[str, np.ndarray] = {}
 
-        singleton_indices = self.packet.singletons if self.pair_cc_domains else list(range(self.packet.base.m))
-        pair_map = self.packet.pairs if self.pair_cc_domains else []
+        singleton_indices = (
+            (self.packet.singletons if self.pair_cc_domains else list(range(self.packet.base.m)))
+            if self.include_singletons
+            else []
+        )
+        pair_map = self.packet.pairs if self.pair_cc_domains and self.include_pairs else []
 
         for idx in singleton_indices:
             family_name = self.domain_to_family[idx]
@@ -344,26 +362,29 @@ class GenericFamilyPenaltyCalibrationSurrogate:
             members = self.packet.family_map[family_name]
             family_total = np.sum(x[:, members], axis=1)
             family_totals[family_name] = family_total
-            features.append(
-                self._feature_transform(
-                    family_total,
-                    signal_kind=self.spec.family_signal_kind,
-                    family_name=family_name,
-                    domain_indices=tuple(int(member) for member in members),
-                )[:, None]
-            )
+            if self.include_family_totals:
+                features.append(
+                    self._feature_transform(
+                        family_total,
+                        signal_kind=self.spec.family_signal_kind,
+                        family_name=family_name,
+                        domain_indices=tuple(int(member) for member in members),
+                    )[:, None]
+                )
 
         penalties: list[np.ndarray] = []
-        if self.spec.global_group_penalty:
+        if self.include_global_group_penalty:
             tau = float(self.params["tau"])
             penalty_inputs = np.stack(group_totals, axis=1)
             penalties.append(np.sum(softplus(np.log1p(penalty_inputs) - tau) ** 2, axis=1, keepdims=True))
-        if self.spec.family_group_penalty:
+        if self.include_family_group_penalty:
             for family_name in self.family_totals:
+                if not family_group_totals[family_name]:
+                    continue
                 tau_f = _family_tau(self.params, family_name)
                 penalty_inputs = np.stack(family_group_totals[family_name], axis=1)
                 penalties.append(np.sum(softplus(np.log1p(penalty_inputs) - tau_f) ** 2, axis=1, keepdims=True))
-        if self.spec.family_total_penalty:
+        if self.include_family_total_penalty:
             for family_name in self.family_totals:
                 tau_f = _family_tau(self.params, family_name)
                 penalties.append(softplus(np.log1p(family_totals[family_name]) - tau_f)[:, None] ** 2)
@@ -399,9 +420,13 @@ class GenericFamilyPenaltyCalibrationSurrogate:
     def components(self) -> dict[str, Any]:
         if self.coef_ is None:
             raise RuntimeError("Model must be fit")
-        n_singletons = len(self.packet.singletons) if self.pair_cc_domains else self.packet.base.m
-        n_pairs = len(self.packet.pairs) if self.pair_cc_domains else 0
-        n_families = len(self.family_totals)
+        n_singletons = (
+            (len(self.packet.singletons) if self.pair_cc_domains else self.packet.base.m)
+            if self.include_singletons
+            else 0
+        )
+        n_pairs = (len(self.packet.pairs) if self.pair_cc_domains else 0) if self.include_pairs else 0
+        n_families = len(self.family_totals) if self.include_family_totals else 0
         offset = 0
         singleton_coef = np.asarray(self.coef_[offset : offset + n_singletons], dtype=float)
         offset += n_singletons
@@ -414,12 +439,12 @@ class GenericFamilyPenaltyCalibrationSurrogate:
         offset += n_families
 
         global_penalty_coef = 0.0
-        if self.spec.global_group_penalty:
+        if self.include_global_group_penalty:
             global_penalty_coef = float(self.coef_[offset])
             offset += 1
 
         family_group_penalty_coef = {family_name: 0.0 for family_name in self.family_totals}
-        if self.spec.family_group_penalty:
+        if self.include_family_group_penalty:
             family_group_penalty_coef = {
                 family_name: float(coef)
                 for family_name, coef in zip(self.family_totals, self.coef_[offset : offset + n_families], strict=True)
@@ -427,7 +452,7 @@ class GenericFamilyPenaltyCalibrationSurrogate:
             offset += n_families
 
         family_total_penalty_coef = {family_name: 0.0 for family_name in self.family_totals}
-        if self.spec.family_total_penalty:
+        if self.include_family_total_penalty:
             family_total_penalty_coef = {
                 family_name: float(coef)
                 for family_name, coef in zip(self.family_totals, self.coef_[offset : offset + n_families], strict=True)
@@ -450,6 +475,12 @@ def build_penalty_calibration_surrogate(
     family_totals: tuple[str, ...] = GENERIC_FAMILY_NAMES,
     quality_discount: bool = True,
     pair_cc_domains: bool = True,
+    include_singletons: bool = True,
+    include_pairs: bool = True,
+    include_family_totals: bool = True,
+    include_global_group_penalty: bool = True,
+    include_family_group_penalty: bool = True,
+    include_family_total_penalty: bool = True,
 ) -> GenericFamilyPenaltyCalibrationSurrogate:
     """Build a calibration surrogate from a named variant."""
     return GenericFamilyPenaltyCalibrationSurrogate(
@@ -459,6 +490,12 @@ def build_penalty_calibration_surrogate(
         family_totals=family_totals,
         quality_discount=quality_discount,
         pair_cc_domains=pair_cc_domains,
+        include_singletons=include_singletons,
+        include_pairs=include_pairs,
+        include_family_totals=include_family_totals,
+        include_global_group_penalty=include_global_group_penalty,
+        include_family_group_penalty=include_family_group_penalty,
+        include_family_total_penalty=include_family_total_penalty,
     )
 
 
@@ -560,18 +597,36 @@ def unpack_penalty_calibration_params(z: np.ndarray, variant_name: str) -> dict[
 def penalty_calibration_variant_parameter_counts(
     packet: GenericFamilyPacket,
     variant_name: str,
+    *,
+    include_singletons: bool = True,
+    include_pairs: bool = True,
+    include_family_totals: bool = True,
+    include_global_group_penalty: bool = True,
+    include_family_group_penalty: bool = True,
+    include_family_total_penalty: bool = True,
 ) -> dict[str, int]:
     """Return nonlinear and linear parameter counts for a variant on this packet."""
     spec = variant_spec(variant_name)
-    signal_feature_count = len(packet.singletons) + len(packet.pairs) + len(GENERIC_FAMILY_NAMES)
+    signal_feature_count = (
+        int(include_singletons) * len(packet.singletons)
+        + int(include_pairs) * len(packet.pairs)
+        + int(include_family_totals) * len(GENERIC_FAMILY_NAMES)
+    )
     penalty_feature_count = (
-        int(spec.global_group_penalty)
-        + len(GENERIC_FAMILY_NAMES) * int(spec.family_group_penalty)
-        + len(GENERIC_FAMILY_NAMES) * int(spec.family_total_penalty)
+        int(spec.global_group_penalty and include_global_group_penalty)
+        + len(GENERIC_FAMILY_NAMES) * int(spec.family_group_penalty and include_family_group_penalty)
+        + len(GENERIC_FAMILY_NAMES) * int(spec.family_total_penalty and include_family_total_penalty)
     )
     linear_coefficient_count = signal_feature_count + penalty_feature_count
     intercept_count = 1
     nonlinear_param_count = len(penalty_calibration_param_keys(variant_name))
+    nonlinear_param_count -= int(spec.global_group_penalty and not include_global_group_penalty)
+    nonlinear_param_count -= len(GENERIC_FAMILY_NAMES) * int(
+        spec.family_group_penalty and not include_family_group_penalty
+    )
+    nonlinear_param_count -= len(GENERIC_FAMILY_NAMES) * int(
+        spec.family_total_penalty and not include_family_total_penalty
+    )
     return {
         "signal_feature_count": signal_feature_count,
         "penalty_feature_count": penalty_feature_count,
@@ -612,7 +667,11 @@ def optimize_penalty_calibration_model(
     lam = float(model.params["lam"])
     eta = float(model.params["eta"])
     pair_map = packet.pairs if model.pair_cc_domains else []
-    singleton_indices = packet.singletons if model.pair_cc_domains else list(range(packet.base.m))
+    if not model.include_pairs:
+        pair_map = []
+    singleton_indices = (
+        (packet.singletons if model.pair_cc_domains else list(range(packet.base.m))) if model.include_singletons else []
+    )
     family_indices = {
         family_name: np.asarray(packet.family_map[family_name], dtype=int) for family_name in model.family_totals
     }
@@ -695,27 +754,28 @@ def optimize_penalty_calibration_model(
             members = family_indices[family_name]
             family_total = float(np.sum(x[members]))
             family_total_values[family_name] = family_total
-            coef = float(family_coef[family_name])
-            value -= (
-                coef
-                * model._feature_transform(
-                    np.asarray([family_total]),
-                    signal_kind=model.spec.family_signal_kind,
-                    family_name=family_name,
-                    domain_indices=tuple(int(member) for member in members),
-                )[0]
-            )
-            grad_x[members] -= (
-                coef
-                * model._feature_derivative(
-                    np.asarray([family_total]),
-                    signal_kind=model.spec.family_signal_kind,
-                    family_name=family_name,
-                    domain_indices=tuple(int(member) for member in members),
-                )[0]
-            )
+            if model.include_family_totals:
+                coef = float(family_coef[family_name])
+                value -= (
+                    coef
+                    * model._feature_transform(
+                        np.asarray([family_total]),
+                        signal_kind=model.spec.family_signal_kind,
+                        family_name=family_name,
+                        domain_indices=tuple(int(member) for member in members),
+                    )[0]
+                )
+                grad_x[members] -= (
+                    coef
+                    * model._feature_derivative(
+                        np.asarray([family_total]),
+                        signal_kind=model.spec.family_signal_kind,
+                        family_name=family_name,
+                        domain_indices=tuple(int(member) for member in members),
+                    )[0]
+                )
 
-        if model.spec.global_group_penalty and global_penalty_coef != 0.0:
+        if model.include_global_group_penalty and global_penalty_coef != 0.0:
             tau = float(model.params["tau"])
             for members, total, _family_name in group_info:
                 inside = np.log1p(total) - tau
@@ -727,7 +787,7 @@ def optimize_penalty_calibration_model(
                 for idx in members:
                     grad_x[idx] += common
 
-        if model.spec.family_group_penalty:
+        if model.include_family_group_penalty:
             for members, total, family_name in group_info:
                 coef = float(family_group_penalty_coef[family_name])
                 if coef == 0.0:
@@ -742,7 +802,7 @@ def optimize_penalty_calibration_model(
                 for idx in members:
                     grad_x[idx] += common
 
-        if model.spec.family_total_penalty:
+        if model.include_family_total_penalty:
             for family_name in model.family_totals:
                 coef = float(family_total_penalty_coef[family_name])
                 if coef == 0.0:

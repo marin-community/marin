@@ -28,6 +28,10 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.ge
     load_generic_family_packet,
     optimize_generic_family_model,
 )
+from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_penalty_calibration import (
+    build_penalty_calibration_surrogate,
+    penalty_calibration_variant_parameter_counts,
+)
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.intrinsic_domain_followup import (
     DEFAULT_INTRINSIC_DOMAIN_COUNT,
     IntrinsicDomainRetainedTotalSurrogate,
@@ -288,3 +292,46 @@ def test_phase_composition_sparse_pls_optimizer_returns_normalized_schedule():
     assert phase1.min() >= 0.0
     assert abs(float(phase0.sum()) - 1.0) < 1e-8
     assert abs(float(phase1.sum()) - 1.0) < 1e-8
+
+
+def test_penalty_calibration_can_disable_group_penalty_when_groups_are_removed():
+    packet = load_generic_family_packet()
+    params = {
+        "eta": 5.9558,
+        "lam": 0.02468,
+        "reg": 1.0e-3,
+        "beta": 0.2613,
+        "a_broad_text": 0.7271,
+        "a_tech_code": 0.02,
+        "a_reasoning": 1.5122,
+        "tau_broad_text": 2.869,
+        "tau_tech_code": 4.013,
+        "tau_reasoning": 5.352,
+    }
+    counts = penalty_calibration_variant_parameter_counts(
+        packet,
+        "power_family_penalty",
+        include_singletons=False,
+        include_pairs=False,
+        include_family_totals=True,
+        include_family_group_penalty=False,
+    )
+    model = build_penalty_calibration_surrogate(
+        packet,
+        params=params,
+        variant_name="power_family_penalty",
+        include_singletons=False,
+        include_pairs=False,
+        include_family_totals=True,
+        include_family_group_penalty=False,
+    ).fit(packet.base.w, packet.base.y)
+    design = model.build_design(packet.base.w[:8])
+    components = model.components()
+
+    assert counts["signal_feature_count"] == len(GENERIC_FAMILY_NAMES)
+    assert counts["penalty_feature_count"] == 0
+    assert counts["linear_head_param_count"] == len(GENERIC_FAMILY_NAMES) + 1
+    assert counts["nonlinear_param_count"] == 7
+    assert design.shape == (8, len(GENERIC_FAMILY_NAMES))
+    assert set(components["family_coef"]) == set(GENERIC_FAMILY_NAMES)
+    assert all(coef == 0.0 for coef in components["family_group_penalty_coef"].values())

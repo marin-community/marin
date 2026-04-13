@@ -1,5 +1,6 @@
 {
   "added_run_names": [
+    "baseline_stratified",
     "baseline_clr_ridge_balanced",
     "baseline_dsre_ceq_st_lite",
     "baseline_dsre_ensemble",
@@ -29,6 +30,14 @@
     "baseline_genericfamily_power_family_penalty_raw_optimum",
     "baseline_genericfamily_power_family_penalty_global_ftotal_pairces_raw_optimum",
     "baseline_genericfamily_power_boxcox_family_penalty_raw_optimum",
+    "baseline_genericfamily_power_family_penalty_raw_optimum_k020_uncheatable_bpb",
+    "baseline_genericfamily_power_family_penalty_raw_optimum_k040_uncheatable_bpb",
+    "baseline_genericfamily_power_family_penalty_raw_optimum_k060_uncheatable_bpb",
+    "baseline_genericfamily_power_family_penalty_raw_optimum_k080_uncheatable_bpb",
+    "baseline_genericfamily_power_family_penalty_raw_optimum_k100_uncheatable_bpb",
+    "baseline_genericfamily_power_family_penalty_raw_optimum_k140_uncheatable_bpb",
+    "baseline_genericfamily_power_family_penalty_raw_optimum_k180_uncheatable_bpb",
+    "baseline_genericfamily_power_family_penalty_raw_optimum_k220_uncheatable_bpb",
     "baseline_genericfamily_k040_uncheatable_bpb",
     "baseline_genericfamily_top8actual_hull_k040_uncheatable_bpb",
     "baseline_genericfamily_k100_uncheatable_bpb",
@@ -50,10 +59,10 @@
     "core_baseline": 2,
     "historical_baseline": 1,
     "original_swarm": 238,
-    "subset_validation": 15,
-    "validated_baseline": 29
+    "subset_validation": 23,
+    "validated_baseline": 30
   },
-  "extra_completed_rows": 44,
+  "extra_completed_rows": 53,
   "missing_specs": [
     {
       "collection": "validated_baseline",
@@ -140,5 +149,5 @@
       "variant": "genericfamily_recovered_hull_subset_optimum"
     }
   ],
-  "total_rows": 285
+  "total_rows": 294
 }

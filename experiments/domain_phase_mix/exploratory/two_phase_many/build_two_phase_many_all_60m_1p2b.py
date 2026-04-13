@@ -52,7 +52,13 @@ import experiments.domain_phase_mix.two_phase_many_thresholdtotal_overfit as thr
 from experiments.domain_phase_mix import (
     two_phase_many_genericfamily_family_curvature_observed_only_trustblend_baselines as gf_family_curvature,
 )
+from experiments.domain_phase_mix import (
+    two_phase_many_genericfamily_power_family_penalty_raw_subset_optima as gf_penalty_raw_subset,
+)
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
+    STRATIFIED_RUN_ID,
+    STRATIFIED_RUN_NAME,
+    create_stratified_weight_config,
     create_two_phase_dolma3_dolmino_top_level_experiment,
 )
 
@@ -68,7 +74,11 @@ BASE_CSV = SCRIPT_DIR / "two_phase_many.csv"
 OUTPUT_CSV = SCRIPT_DIR / "two_phase_many_all_60m_1p2b.csv"
 OUTPUT_JSON = SCRIPT_DIR / "two_phase_many_all_60m_1p2b_summary.json"
 
-CHECKPOINT_ROOT = "marin-us-east5/checkpoints"
+CHECKPOINT_ROOTS = (
+    "marin-us-east5/checkpoints",
+    "marin-us-central1/checkpoints",
+)
+STRATIFIED_60M_1P2B_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_stratified_60m_1p2b"
 SWARM_RUN_PATTERN = re.compile(r"run_\d{5}$")
 WANDB_RUN_URL_PREFIX = "https://wandb.ai/marin-community/marin/runs/"
 METRIC_PREFIXES = ("eval/", "lm_eval/")
@@ -142,6 +152,14 @@ def _olmix_slverb_seedpanel_phase_weights() -> dict[str, dict[str, float]]:
 
 def _extra_validation_specs() -> tuple[ValidationRunSpec, ...]:
     specs: list[ValidationRunSpec] = [
+        ValidationRunSpec(
+            collection="validated_baseline",
+            variant="stratified",
+            source_experiment=STRATIFIED_60M_1P2B_SOURCE_EXPERIMENT,
+            run_id=STRATIFIED_RUN_ID,
+            run_name=STRATIFIED_RUN_NAME,
+            phase_weights_fn=_weight_config_phase_weights(create_stratified_weight_config),
+        ),
         ValidationRunSpec(
             collection="validated_baseline",
             variant="clr_ridge_balanced",
@@ -418,6 +436,28 @@ def _extra_validation_specs() -> tuple[ValidationRunSpec, ...]:
             )
         )
 
+    for (
+        subset_size
+    ) in gf_penalty_raw_subset.GENERICFAMILY_POWER_FAMILY_PENALTY_RAW_SUBSET_OPTIMA_REPRESENTATIVE_SUBSET_SIZES:
+        specs.append(
+            ValidationRunSpec(
+                collection="subset_validation",
+                variant="genericfamily_power_family_penalty_raw_subset_optimum",
+                source_experiment=(
+                    gf_penalty_raw_subset.GENERICFAMILY_POWER_FAMILY_PENALTY_RAW_SUBSET_OPTIMA_SOURCE_EXPERIMENT
+                ),
+                run_id=gf_penalty_raw_subset.genericfamily_power_family_penalty_raw_subset_optimum_run_id(subset_size),
+                run_name=gf_penalty_raw_subset.genericfamily_power_family_penalty_raw_subset_optimum_run_name(
+                    subset_size
+                ),
+                subset_size=subset_size,
+                phase_weights_fn=_subset_weight_config_phase_weights(
+                    gf_penalty_raw_subset.create_genericfamily_power_family_penalty_raw_subset_optimum_weight_config,
+                    subset_size,
+                ),
+            )
+        )
+
     for subset_size in gf_retuned_subset.GENERICFAMILY_RETUNED_SUBSET_OPTIMA_REPRESENTATIVE_SUBSET_SIZES:
         specs.append(
             ValidationRunSpec(
@@ -547,8 +587,11 @@ def _load_wandb_metric_summary(wandb_run_id: str) -> dict[str, float]:
 
 
 def _resolve_eval_metrics_path(fs: fsspec.AbstractFileSystem, spec: ValidationRunSpec) -> str | None:
-    pattern = f"{CHECKPOINT_ROOT}/{spec.source_experiment}/{spec.run_name}-*/checkpoints/eval_metrics.jsonl"
-    matches = sorted(fs.glob(pattern))
+    matches: list[str] = []
+    for checkpoint_root in CHECKPOINT_ROOTS:
+        pattern = f"{checkpoint_root}/{spec.source_experiment}/{spec.run_name}-*/checkpoints/eval_metrics.jsonl"
+        matches.extend(fs.glob(pattern))
+    matches = sorted(dict.fromkeys(matches))
     return None if not matches else matches[-1]
 
 

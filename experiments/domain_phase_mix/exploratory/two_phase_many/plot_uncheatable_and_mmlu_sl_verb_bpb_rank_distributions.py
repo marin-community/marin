@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Plot uncheatable-eval and MMLU-SL-Verb rank distributions."""
+"""Plot uncheatable-eval and MMLU-SL-Verb BPB rank distributions."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import wandb
 
 UNCHEDATABLE_CSV_PATH = Path(__file__).with_name("two_phase_many.csv")
 SL_VERB_CSV_PATH = (
@@ -20,29 +19,18 @@ SL_VERB_CSV_PATH = (
 )
 BPB_OUTPUT_PNG = Path(__file__).with_name("uncheatable_and_mmlu_sl_verb_bpb_rank_distributions.png")
 BPB_OUTPUT_CSV = Path(__file__).with_name("uncheatable_and_mmlu_sl_verb_bpb_rank_distribution_highlights.csv")
-CHOICE_OUTPUT_PNG = Path(__file__).with_name("uncheatable_and_mmlu_sl_verb_choice_logprob_norm_rank_distributions.png")
-CHOICE_OUTPUT_CSV = Path(__file__).with_name(
-    "uncheatable_and_mmlu_sl_verb_choice_logprob_norm_rank_distribution_highlights.csv"
-)
 BASELINE_CSV = Path(__file__).with_name("uncheatable_and_mmlu_sl_verb_rank_distribution_wandb_baselines.csv")
+BASELINE_METRICS_CSV = Path(__file__).with_name("power_family_penalty_vs_baselines_ranked_metrics_common_wide.csv")
 
 UNCHEDATABLE_METRIC = "eval/uncheatable_eval/bpb"
 SL_VERB_BPB_METRIC = "lm_eval/mmlu_sl_verb_5shot/bpb"
-SL_VERB_CHOICE_NORM_METRIC = "lm_eval/mmlu_sl_verb_5shot/choice_logprob_norm"
-WANDB_ENTITY = "marin-community"
-WANDB_PROJECT = "marin"
-
-EXCLUDED_SOURCE_RUN_NAMES = {
-    UNCHEDATABLE_METRIC: {"baseline_olmix_loglinear"},
-    SL_VERB_BPB_METRIC: set(),
-    SL_VERB_CHOICE_NORM_METRIC: set(),
-}
 
 
 @dataclass(frozen=True)
-class WandbBaselineSpec:
+class BaselineSpec:
     run_name: str
-    wandb_run_id: str
+    label: str
+    params: int
 
 
 @dataclass(frozen=True)
@@ -54,120 +42,103 @@ class PanelConfig:
     invert_yaxis: bool = False
 
 
-WANDB_BASELINES: tuple[WandbBaselineSpec, ...] = (
-    WandbBaselineSpec(
-        run_name="baseline_dsre_ceq_predicted",
-        wandb_run_id="baseline_dsre_ceq_predicted-540565",
+BASELINES: tuple[BaselineSpec, ...] = (
+    BaselineSpec(
+        run_name="baseline_proportional",
+        label="Proportional",
+        params=0,
     ),
-    WandbBaselineSpec(
+    BaselineSpec(
+        run_name="baseline_unimax",
+        label="UniMax",
+        params=0,
+    ),
+    BaselineSpec(
+        run_name="baseline_stratified",
+        label="Uniform",
+        params=0,
+    ),
+    BaselineSpec(
         run_name="baseline_olmix_loglinear_uncheatable_bpb",
-        wandb_run_id="baseline_olmix_loglinear_uncheatable_bpb-97ffd9",
+        label="Olmix",
+        params=79,
     ),
-    WandbBaselineSpec(
-        run_name="baseline_genericfamily_retainedtotal_tuned_uncheatable_bpb",
-        wandb_run_id="baseline_genericfamily_retainedtotal_tuned_uncheatable_bpb-d97130",
+    BaselineSpec(
+        run_name="baseline_genericfamily_power_family_penalty_raw_optimum",
+        label="GRP (Power-Family Penalty)",
+        params=43,
     ),
 )
 
 HIGHLIGHT_STYLES = {
     "baseline_proportional": {
         "color": "#E15759",
-        "name": "Proportional",
         "marker": "D",
-        "params": 0,
     },
     "baseline_unimax": {
         "color": "#4E79A7",
-        "name": "UniMax",
         "marker": "s",
-        "params": 0,
     },
-    "baseline_dsre_ceq_predicted": {
-        "color": "#7B1FA2",
-        "name": "DS-RE-CEQ",
-        "marker": "^",
-        "params": 162,
+    "baseline_stratified": {
+        "color": "#59A14F",
+        "marker": "X",
     },
     "baseline_olmix_loglinear_uncheatable_bpb": {
         "color": "#F28E2B",
-        "name": "Olmix loglinear",
         "marker": "P",
-        "params": 79,
     },
-    "baseline_genericfamily_retainedtotal_tuned_uncheatable_bpb": {
+    "baseline_genericfamily_power_family_penalty_raw_optimum": {
         "color": "#2E7D32",
-        "name": "GRP",
         "marker": "o",
-        "params": 37,
     },
 }
 
-PLOT_CONFIGS: tuple[tuple[Path, Path, tuple[PanelConfig, PanelConfig]], ...] = (
+PLOT_CONFIG = (
+    BPB_OUTPUT_PNG,
+    BPB_OUTPUT_CSV,
     (
-        BPB_OUTPUT_PNG,
-        BPB_OUTPUT_CSV,
-        (
-            PanelConfig(
-                metric=UNCHEDATABLE_METRIC,
-                title="Uncheatable-Eval BPB",
-                csv_path=UNCHEDATABLE_CSV_PATH,
-                lower_is_better=True,
-            ),
-            PanelConfig(
-                metric=SL_VERB_BPB_METRIC,
-                title="MMLU-SL-Verb 5-shot BPB",
-                csv_path=SL_VERB_CSV_PATH,
-                lower_is_better=True,
-            ),
+        PanelConfig(
+            metric=UNCHEDATABLE_METRIC,
+            title="Uncheatable-Eval BPB",
+            csv_path=UNCHEDATABLE_CSV_PATH,
+            lower_is_better=True,
         ),
-    ),
-    (
-        CHOICE_OUTPUT_PNG,
-        CHOICE_OUTPUT_CSV,
-        (
-            PanelConfig(
-                metric=UNCHEDATABLE_METRIC,
-                title="Uncheatable-Eval BPB",
-                csv_path=UNCHEDATABLE_CSV_PATH,
-                lower_is_better=True,
-            ),
-            PanelConfig(
-                metric=SL_VERB_CHOICE_NORM_METRIC,
-                title="MMLU-SL-Verb 5-shot choice\\_logprob\\_norm",
-                csv_path=SL_VERB_CSV_PATH,
-                lower_is_better=False,
-                invert_yaxis=False,
-            ),
+        PanelConfig(
+            metric=SL_VERB_BPB_METRIC,
+            title="MMLU-SL-Verb 5-shot BPB",
+            csv_path=SL_VERB_CSV_PATH,
+            lower_is_better=True,
         ),
     ),
 )
 
 
-def _fetch_wandb_baselines() -> pd.DataFrame:
-    api = wandb.Api()
-    rows: list[dict[str, str | float]] = []
-    for spec in WANDB_BASELINES:
-        run = api.run(f"{WANDB_ENTITY}/{WANDB_PROJECT}/{spec.wandb_run_id}")
-        metrics = {
-            UNCHEDATABLE_METRIC: run.summary.get(UNCHEDATABLE_METRIC),
-            SL_VERB_BPB_METRIC: run.summary.get(SL_VERB_BPB_METRIC),
-            SL_VERB_CHOICE_NORM_METRIC: run.summary.get(SL_VERB_CHOICE_NORM_METRIC),
-        }
-        missing = [metric for metric, value in metrics.items() if value is None]
-        if missing:
-            raise ValueError(f"Missing required metrics {missing} in W&B run {spec.wandb_run_id}")
-        rows.append({"run_name": spec.run_name, **{metric: float(value) for metric, value in metrics.items()}})
-    baseline_df = pd.DataFrame(rows).sort_values("run_name", ignore_index=True)
+def _load_baseline_metrics() -> tuple[pd.DataFrame, dict[str, BaselineSpec]]:
+    frame = pd.read_csv(BASELINE_METRICS_CSV)
+    selected_rows: list[dict[str, str | float | int]] = []
+    spec_by_run = {spec.run_name: spec for spec in BASELINES}
+    for spec in BASELINES:
+        row = frame.loc[frame["run_name"] == spec.run_name]
+        if row.empty:
+            raise ValueError(f"Missing baseline row for {spec.run_name!r} in {BASELINE_METRICS_CSV}")
+        selected_rows.append(
+            {
+                "run_name": spec.run_name,
+                UNCHEDATABLE_METRIC: float(row.iloc[0][UNCHEDATABLE_METRIC]),
+                SL_VERB_BPB_METRIC: float(row.iloc[0][SL_VERB_BPB_METRIC]),
+                "label": spec.label,
+                "params": spec.params,
+            }
+        )
+    baseline_df = pd.DataFrame(selected_rows).sort_values("run_name", ignore_index=True)
     baseline_df.to_csv(BASELINE_CSV, index=False)
-    return baseline_df
+    return baseline_df, spec_by_run
 
 
-def _load_metric_frame(panel: PanelConfig, wandb_baselines: pd.DataFrame) -> pd.DataFrame:
+def _load_metric_frame(panel: PanelConfig, baseline_metrics: pd.DataFrame) -> pd.DataFrame:
     df = pd.read_csv(panel.csv_path)
-    excluded = EXCLUDED_SOURCE_RUN_NAMES[panel.metric]
-    if excluded:
-        df = df.loc[~df["run_name"].isin(excluded)].copy()
-    augmented = pd.concat([df, wandb_baselines], ignore_index=True, sort=False)
+    df = df.loc[~df["run_name"].isin(set(baseline_metrics["run_name"]))].copy()
+    augmented = pd.concat([df, baseline_metrics], ignore_index=True, sort=False)
     deduped = augmented.drop_duplicates(subset=["run_name"], keep="last")
     return deduped[["run_name", panel.metric]].dropna().copy()
 
@@ -178,15 +149,16 @@ def _rank_metric_frame(df: pd.DataFrame, panel: PanelConfig) -> pd.DataFrame:
     return ranked
 
 
-def _legend_label(style: dict[str, str | int], rank: int) -> str:
-    return f"{style['name']} ({style['params']} params, rank {rank})"
+def _legend_label(spec: BaselineSpec, value: float) -> str:
+    return f"{spec.label} ({value:.3f})"
 
 
 def _plot_pair(
     output_png: Path,
     output_csv: Path,
     panels: tuple[PanelConfig, PanelConfig],
-    wandb_baselines: pd.DataFrame,
+    baseline_metrics: pd.DataFrame,
+    spec_by_run: dict[str, BaselineSpec],
 ) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(15, 6), dpi=180)
     fig.suptitle("Two-phase many-domain swarm: rank distributions", fontsize=18, y=0.98)
@@ -195,7 +167,7 @@ def _plot_pair(
     highlight_rows: list[dict[str, str | int | float]] = []
 
     for ax, panel in zip(np.atleast_1d(axes), panels, strict=True):
-        ranked = _rank_metric_frame(_load_metric_frame(panel, wandb_baselines), panel)
+        ranked = _rank_metric_frame(_load_metric_frame(panel, baseline_metrics), panel)
         ranks = ranked["rank"].to_numpy()
         values = ranked[panel.metric].to_numpy()
 
@@ -204,6 +176,7 @@ def _plot_pair(
         ax.scatter(ranks, values, c=point_colors, s=26, edgecolors="none", alpha=0.9, zorder=2)
 
         for run_name, style in HIGHLIGHT_STYLES.items():
+            spec = spec_by_run[run_name]
             point = ranked.loc[ranked["run_name"] == run_name].iloc[0]
             rank = int(point["rank"])
             value = float(point[panel.metric])
@@ -211,8 +184,8 @@ def _plot_pair(
                 {
                     "metric": panel.metric,
                     "run_name": run_name,
-                    "name": style["name"],
-                    "params": int(style["params"]),
+                    "name": spec.label,
+                    "params": spec.params,
                     "rank": rank,
                     "value": value,
                 }
@@ -226,7 +199,7 @@ def _plot_pair(
                 edgecolors="black",
                 linewidths=0.7,
                 zorder=4,
-                label=_legend_label(style, rank),
+                label=_legend_label(spec, value),
             )
 
         if panel.invert_yaxis:
@@ -252,12 +225,12 @@ def main() -> None:
     plt.rcParams["font.sans-serif"] = ["DejaVu Sans"]
     plt.rcParams["text.latex.preamble"] = r"\usepackage{DejaVuSans}\renewcommand{\familydefault}{\sfdefault}"
 
-    wandb_baselines = _fetch_wandb_baselines()
-    for output_png, output_csv, panels in PLOT_CONFIGS:
-        _plot_pair(output_png, output_csv, panels, wandb_baselines)
-        print(f"Saved plot to {output_png}")
-        print(f"Saved highlights to {output_csv}")
-    print(f"Saved W&B baseline metrics to {BASELINE_CSV}")
+    baseline_metrics, spec_by_run = _load_baseline_metrics()
+    output_png, output_csv, panels = PLOT_CONFIG
+    _plot_pair(output_png, output_csv, panels, baseline_metrics, spec_by_run)
+    print(f"Saved plot to {output_png}")
+    print(f"Saved highlights to {output_csv}")
+    print(f"Saved baseline metrics to {BASELINE_CSV}")
 
 
 if __name__ == "__main__":
