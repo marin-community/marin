@@ -11,10 +11,6 @@ const routes = [
     component: () => import('./components/controller/JobsTab.vue'),
   },
   {
-    path: '/users',
-    component: () => import('./components/controller/UsersTab.vue'),
-  },
-  {
     path: '/fleet',
     component: () => import('./components/controller/FleetTab.vue'),
   },
