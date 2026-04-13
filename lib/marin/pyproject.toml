@@ -145,6 +145,10 @@ rl = [
     "verifiers==0.1.5",
 ]
 
+reasoning-gym = [
+    "reasoning-gym==0.1.19",
+]
+
 eval = [
     "lm-eval[math,api]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
 ]

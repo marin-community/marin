@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import fsspec
+import numpy as np
 import pytest
 
 from marin.rl.environments.inference_ctx.staging import stage_vllm_metadata_locally
@@ -15,10 +16,44 @@ from marin.rl.rollout_worker import (
     RolloutTrackerConfig,
     RolloutTransferCounterSnapshot,
     RolloutWorker,
+    _compute_batch_stats,
     _should_run_curriculum_eval,
     _should_run_micro_eval,
     create_inference_context,
 )
+from marin.rl.types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
+
+
+def test_compute_batch_stats_uses_correctness_reward_for_pass_metrics():
+    batch = RolloutBatch(
+        groups=[
+            RolloutGroup(
+                rollouts=[
+                    Rollout(
+                        env_name="reasoning_gym:leg_counting",
+                        env_example_id="reasoning_gym:leg_counting:train:0:0",
+                        prompt_tokens=np.array([1, 2], dtype=np.int32),
+                        response_tokens=np.array([3, 4], dtype=np.int32),
+                        response_logprobs=np.array([-1.0, -1.0], dtype=np.float32),
+                        token_rewards=np.array([0.2, 0.2], dtype=np.float32),
+                        episode_reward=0.2,
+                        correctness_reward=0.0,
+                        temperature=1.0,
+                        top_k=None,
+                        is_truncated=False,
+                    )
+                ]
+            )
+        ],
+        metadata=RolloutMetadata(worker_id="worker", timestamp=0.0, weight_step=0),
+    )
+
+    stats = _compute_batch_stats(batch, "rg_lesson")
+
+    assert stats.avg_reward == pytest.approx(0.2)
+    assert stats.pass_at_one == pytest.approx(0.0)
+    assert stats.pass_at_k == pytest.approx(0.0)
+    assert stats.avg_at_k == pytest.approx(0.0)
 
 
 def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
