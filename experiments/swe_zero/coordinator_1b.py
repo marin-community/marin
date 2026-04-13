@@ -32,7 +32,7 @@ import logging
 import time
 
 from iris.client.client import IrisClient
-from iris.cluster.constraints import device_variant_constraint
+from iris.cluster.constraints import device_variant_constraint, region_constraint
 from iris.cluster.types import Entrypoint, ResourceSpec, tpu_device
 from iris.rpc import job_pb2
 
@@ -50,9 +50,11 @@ def main():
     parser = argparse.ArgumentParser(description="Coordinator for SWE-ZERO 1B pipeline")
     parser.add_argument("--total-shards", type=int, default=50)
     parser.add_argument("--n-rollouts", type=int, default=3)
-    parser.add_argument("--tpu", default="v6e-4")
+    parser.add_argument("--tpu", default="v5litepod-4", help="TPU variant (e.g. v5litepod-4, v6e-4, v5p-8)")
     parser.add_argument("--child-priority", default="batch", choices=["production", "interactive", "batch"])
     parser.add_argument("--child-max-retries", type=int, default=10)
+    parser.add_argument("--regions", nargs="*", default=None, help="Restrict to regions (default: all)")
+    parser.add_argument("--tp-size", type=int, default=4, help="Tensor parallel size for vLLM")
     parser.add_argument("--output-root", default="gs://marin-us-central2/experiments/swe_zero_1b")
     parser.add_argument("--poll-interval", type=int, default=120, help="Seconds between status checks")
     args = parser.parse_args()
@@ -100,7 +102,7 @@ def main():
             "--n-rollouts",
             str(args.n_rollouts),
             "--tensor-parallel-size",
-            "4",
+            str(args.tp_size),
             "--max-num-seqs",
             "256",
             "--max-model-len",
@@ -118,11 +120,16 @@ def main():
             # Note: priority_band is not available in the swe-zero-mvp branch's
             # Iris client. Children inherit the parent coordinator's priority
             # (batch) automatically, so we don't need to set it explicitly.
+            child_constraints = [
+                device_variant_constraint([args.tpu]),
+            ]
+            if args.regions:
+                child_constraints.append(region_constraint(args.regions))
             job = client.submit(
                 entrypoint=Entrypoint(command=cmd),
                 name=name,
                 resources=child_resources,
-                constraints=[device_variant_constraint([args.tpu])],
+                constraints=child_constraints,
                 max_retries_failure=args.child_max_retries,
                 max_retries_preemption=args.child_max_retries,
             )
