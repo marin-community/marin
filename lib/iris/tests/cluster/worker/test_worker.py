@@ -346,12 +346,12 @@ def test_duplicate_attempt_rejected(mock_worker, mock_runtime):
     task.thread.join(timeout=15.0)
 
 
-def test_heartbeat_kill_is_non_blocking(mock_worker, mock_runtime):
-    """Heartbeat returns immediately when killing tasks, without waiting for container shutdown."""
+def test_heartbeat_kill_blocks_until_stopped(mock_worker, mock_runtime):
+    """Heartbeat blocks on tasks_to_kill so the old task releases resources before returning."""
     mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
 
     def slow_stop(force=False):
-        time.sleep(0.5)
+        time.sleep(0.3)
 
     mock_handle.stop_hook = slow_stop
     mock_runtime.create_container = Mock(return_value=mock_handle)
@@ -376,17 +376,12 @@ def test_heartbeat_kill_is_non_blocking(mock_worker, mock_runtime):
 
     response = mock_worker.handle_heartbeat(heartbeat_req)
 
-    # should_stop is set synchronously by the heartbeat before the async stop() runs
     assert task.should_stop is True
-    # The task is not yet KILLED because slow_stop is async — confirms kill is non-blocking
-    assert task.status != job_pb2.TASK_STATE_KILLED
+    # The task is KILLED by the time handle_heartbeat returns — kill is blocking
+    assert task.status == job_pb2.TASK_STATE_KILLED
 
     # The response should still include the task's current state
     assert len(response.tasks) >= 1
-
-    # Wait for the task to finish
-    task.thread.join(timeout=15.0)
-    assert task.status == job_pb2.TASK_STATE_KILLED
 
 
 def test_heartbeat_reconciliation_kill_is_non_blocking(mock_worker, mock_runtime):
