@@ -1,5 +1,28 @@
 # DPO LoRA Claude Logbook
 
+## v6e Working Config (VALIDATED)
+
+**Hardware:** v6e-8 (8 chips, 31.25 GB HBM/chip, single VM)
+
+**Config:**
+- `train_batch_size=64`, `per_device_parallelism=4`, 2× gradient accumulation
+- `seq_len=4096`, LoRA `r=64`, `alpha=64`, all target modules
+- Model: `marin-community/marin-8b-instruct` (Llama 8B)
+- Reference: `AdapterBaseReferenceConfig` (base model with LoRA disabled)
+- `gradient_checkpointing=True` (standard per-layer, NOT offload)
+
+**Throughput (validated across europe-west4 and us-east5):**
+- Step time: **14.2s** (steady state from step 2+)
+- Tokens/s: **18,474**
+- MFU: 13.0% (misleading — real DPO utilization ~43%, bandwidth-bound on v6e)
+- 1.8× faster than v5p-8 (25.6s/step, 10,240 tokens/s)
+
+**Script:** `experiments/tune_lora/v6e8_probe_multiregion.py` → `make_v6e_probe()`
+
+**Optimizations attempted but blocked:**
+- Carry offloading (`gradient_checkpointing="offload"`): XLA v6e codegen crash (JAX 0.8.0 bug)
+- TP=4+FSDP=2: Splash attention doesn't preserve named axes for TP sharding
+
 ## v6e Operating Rules
 
 **ALWAYS launch v6e jobs across ALL 3 regions in parallel:**
