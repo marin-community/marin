@@ -81,7 +81,10 @@ function WorkflowCard({ wf }: { wf: FerryWorkflowStatus }) {
             </span>
           </div>
 
-          <div className="mt-3 flex flex-wrap gap-1">
+          {/* Single-row strip — dots and inter-dot gap shrink on mobile
+              so all 30 fit on a ~340px phone content area without
+              wrapping to a second row. */}
+          <div className="mt-3 flex gap-px sm:gap-1">
             {wf.history.map((run) => (
               <a
                 key={run.id}
@@ -89,7 +92,7 @@ function WorkflowCard({ wf }: { wf: FerryWorkflowStatus }) {
                 target="_blank"
                 rel="noreferrer"
                 title={`${run.shaShort} · ${run.conclusion ?? run.status} · ${formatRelative(run.startedAt)}`}
-                className={`h-5 w-2.5 rounded-sm ${runColor(run)} hover:ring-2 hover:ring-slate-400`}
+                className={`h-5 w-2 rounded-sm sm:w-2.5 ${runColor(run)} hover:ring-2 hover:ring-slate-400`}
               />
             ))}
           </div>

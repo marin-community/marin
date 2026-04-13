@@ -207,8 +207,10 @@ export function BuildPanel() {
 
             {/* Each dot uses flex-1 so the strip stretches to fill the
                 full card width, giving equal space to every commit
-                regardless of how wide the card is. */}
-            <div className="mt-3 flex gap-[3px]">
+                regardless of how wide the card is. The gap shrinks to
+                1px on mobile so 100 dots aren't dominated by spacing
+                in a ~340px wide card. */}
+            <div className="mt-3 flex gap-px sm:gap-[3px]">
               {data.commits.map((c) => (
                 <a
                   key={c.oid}
