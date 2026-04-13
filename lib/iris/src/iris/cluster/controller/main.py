@@ -222,73 +222,81 @@ def run_controller_serve(
         signing_key=auth.jwt_manager.signing_key if auth.jwt_manager else None,
         strict_auth=auth.provider is not None,
     )
-    # Advertise the externally-reachable host so workers on other nodes can
-    # route to the log server. Binding to 0.0.0.0 is fine; advertising it is
-    # not — remote workers cannot connect to an unspecified address.
-    log_service_address = f"http://{resolve_external_host(host)}:{log_port}"
+    try:
+        # Advertise the externally-reachable host so workers on other nodes can
+        # route to the log server. Binding to 0.0.0.0 is fine; advertising it is
+        # not — remote workers cannot connect to an unspecified address.
+        log_service_address = f"http://{resolve_external_host(host)}:{log_port}"
 
-    config = ControllerConfig(
-        host=host,
-        port=port,
-        remote_state_dir=remote_state_dir,
-        heartbeat_failure_threshold=heartbeat_failure_threshold,
-        checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
-        local_state_dir=local_state_dir,
-        auth_verifier=auth.verifier,
-        auth_provider=auth.provider,
-        auth=auth,
-        dry_run=dry_run,
-        log_service_address=log_service_address,
-    )
+        config = ControllerConfig(
+            host=host,
+            port=port,
+            remote_state_dir=remote_state_dir,
+            heartbeat_failure_threshold=heartbeat_failure_threshold,
+            checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
+            local_state_dir=local_state_dir,
+            auth_verifier=auth.verifier,
+            auth_provider=auth.provider,
+            auth=auth,
+            dry_run=dry_run,
+            log_service_address=log_service_address,
+        )
 
-    controller = Controller(
-        config=config,
-        provider=provider,
-        autoscaler=autoscaler,
-        db=db,
-    )
-    logger.info("Controller instance created")
+        controller = Controller(
+            config=config,
+            provider=provider,
+            autoscaler=autoscaler,
+            db=db,
+        )
+        logger.info("Controller instance created")
 
-    controller.start()
-    logger.info("Controller started successfully on %s:%d", host, port)
-    logger.info("Controller is ready to accept connections")
+        controller.start()
+        logger.info("Controller started successfully on %s:%d", host, port)
+        logger.info("Controller is ready to accept connections")
 
-    stop_event = threading.Event()
+        stop_event = threading.Event()
 
-    def handle_shutdown(_signum, _frame):
-        # Second signal force-exits immediately.
-        signal.signal(signal.SIGTERM, signal.SIG_DFL)
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        def handle_shutdown(_signum, _frame):
+            # Second signal force-exits immediately.
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-        # Write a final checkpoint then exit. Do NOT call controller.stop()
-        # here — its shutdown path runs autoscaler.shutdown() which terminates
-        # every worker VM in the cluster. On a controller restart, workers must
-        # survive; the new controller picks them up from the checkpoint. Even on
-        # a full cluster teardown, `iris cluster stop` handles VM cleanup via
-        # stop_all(), so the SIGTERM handler never needs to delete VMs itself.
-        logger.info("Shutdown signal received")
-        if not config.dry_run:
-            try:
-                path, result = controller.begin_checkpoint()
-                logger.info(
-                    "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
-                    path,
-                    result.job_count,
-                    result.task_count,
-                    result.worker_count,
-                )
-            except Exception:
-                logger.exception("Final checkpoint on shutdown failed")
-        # Stop the log server after the controller to allow final log flushes.
-        log_server_proc.terminate()
+            # Write a final checkpoint then exit. Do NOT call controller.stop()
+            # here — its shutdown path runs autoscaler.shutdown() which terminates
+            # every worker VM in the cluster. On a controller restart, workers must
+            # survive; the new controller picks them up from the checkpoint. Even on
+            # a full cluster teardown, `iris cluster stop` handles VM cleanup via
+            # stop_all(), so the SIGTERM handler never needs to delete VMs itself.
+            logger.info("Shutdown signal received")
+            if not config.dry_run:
+                try:
+                    path, result = controller.begin_checkpoint()
+                    logger.info(
+                        "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
+                        path,
+                        result.job_count,
+                        result.task_count,
+                        result.worker_count,
+                    )
+                except Exception:
+                    logger.exception("Final checkpoint on shutdown failed")
+            log_server_proc.kill()
+            log_server_proc.wait(timeout=5)
+            logger.info("Controller exiting")
+            stop_event.set()
+
+        signal.signal(signal.SIGTERM, handle_shutdown)
+        signal.signal(signal.SIGINT, handle_shutdown)
+
+        stop_event.wait()
+    except BaseException:
+        # Startup (or the wait loop) failed before the signal handler ran its
+        # own cleanup: hard-kill the log server so port+1 is freed for the
+        # next restart.
+        logger.exception("Controller startup failed; killing log server subprocess")
+        log_server_proc.kill()
         log_server_proc.wait(timeout=5)
-        logger.info("Controller exiting")
-        stop_event.set()
-
-    signal.signal(signal.SIGTERM, handle_shutdown)
-    signal.signal(signal.SIGINT, handle_shutdown)
-
-    stop_event.wait()
+        raise
 
 
 # ---------------------------------------------------------------------------

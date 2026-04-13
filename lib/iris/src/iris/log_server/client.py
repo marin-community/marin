@@ -107,11 +107,14 @@ class LogPusher:
         self._client.close()
 
 
-class RemoteLogService:
-    """Proxy that forwards push_logs/fetch_logs to a remote LogService over RPC.
+class LogServiceProxy:
+    """Protocol adapter that forwards push_logs/fetch_logs to a remote LogService over RPC.
 
-    Satisfies the LogServiceSync protocol so it can be used as a drop-in
-    replacement for LogServiceImpl in the controller and dashboard.
+    Bridges ``LogServiceClientSync`` (an RPC client with kwargs-only,
+    ctx-less methods) to the ``LogServiceSync`` protocol (positional
+    ``ctx`` arg) expected by ``LogServiceWSGIApplication`` and the
+    controller/dashboard call sites. Used in place of ``LogServiceImpl``
+    when the log service is hosted in a separate process.
     """
 
     def __init__(

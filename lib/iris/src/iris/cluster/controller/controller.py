@@ -106,7 +106,7 @@ from iris.cluster.controller.transitions import (
 )
 from iris.cluster.log_store import CONTROLLER_LOG_KEY
 from iris.cluster.providers.types import find_free_port, resolve_external_host
-from iris.log_server.client import LogPusher, RemoteLogHandler, RemoteLogService
+from iris.log_server.client import LogPusher, LogServiceProxy, RemoteLogHandler
 from iris.log_server.main import build_log_server_asgi
 from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider
@@ -1056,7 +1056,7 @@ class Controller:
             self._log_service_address = self._start_local_log_server()
 
         log_client_interceptors = _log_client_interceptors(config)
-        self._remote_log_service = RemoteLogService(self._log_service_address, interceptors=log_client_interceptors)
+        self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
 
         # Providers push directly to the log server via RPC.
         provider_log_pusher = LogPusher(self._log_service_address, interceptors=log_client_interceptors)

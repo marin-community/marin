@@ -8,12 +8,12 @@ FetchLogs. In production, it runs as a separate process started by the
 controller's main() entry point. Tests use LogServiceImpl in-process.
 """
 
-from iris.log_server.client import LogPusher, RemoteLogHandler, RemoteLogService
+from iris.log_server.client import LogPusher, LogServiceProxy, RemoteLogHandler
 from iris.log_server.server import LogServiceImpl
 
 __all__ = [
     "LogPusher",
     "LogServiceImpl",
+    "LogServiceProxy",
     "RemoteLogHandler",
-    "RemoteLogService",
 ]
