@@ -125,11 +125,20 @@ def initialize_jax(
     """
     import jax
 
-    # TPU has its own distributed init via the TPU runtime; skip the
-    # coordinator dance entirely to avoid conflicts.
-    if os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get("JAX_PLATFORMS", "") == "tpu":
-        logger.info("TPU detected; skipping Iris JAX distributed init (TPU runtime handles it)")
-        return
+    # Single-host TPU has its own distributed init via the TPU runtime;
+    # skip the coordinator dance to avoid conflicts.  Multi-host TPU
+    # (num_tasks > 1) still needs Iris-managed coordinator discovery
+    # because the container doesn't inherit TPU_WORKER_HOSTNAMES.
+    is_tpu = os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get("JAX_PLATFORMS", "") == "tpu"
+    if is_tpu:
+        job_info_peek = get_job_info()
+        if job_info_peek is None or job_info_peek.num_tasks <= 1:
+            logger.info("Single-host TPU detected; skipping Iris JAX distributed init (TPU runtime handles it)")
+            return
+        logger.info(
+            "Multi-host TPU detected (%d tasks); using Iris coordinator for jax.distributed.initialize",
+            job_info_peek.num_tasks,
+        )
 
     job_info = get_job_info()
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
