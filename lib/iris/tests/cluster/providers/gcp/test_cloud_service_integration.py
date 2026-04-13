@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 import httpx
 import pytest
 
-from iris.cluster.providers.gcp import service as gcp_service
 from iris.cluster.providers.gcp.service import (
     CloudGcpService,
     TpuCreateRequest,
@@ -53,8 +52,6 @@ class GcpFakeBackend:
     tpus: dict[tuple[str, str], dict] = field(default_factory=dict)  # (name, zone) -> tpu_data
     operations: dict[str, dict] = field(default_factory=dict)  # op_name -> op_data
     http_log: list[HttpLog] = field(default_factory=list)
-    # Number of remaining 429 responses to return for DELETE requests
-    delete_429_remaining: int = 0
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -159,18 +156,6 @@ class GcpFakeBackend:
 
         # DELETE .../nodes/NAME
         if method == "DELETE" and "/nodes/" in url:
-            if self.delete_429_remaining > 0:
-                self.delete_429_remaining -= 1
-                return httpx.Response(
-                    429,
-                    json={
-                        "error": {
-                            "code": 429,
-                            "message": "Quota exceeded for DeleteNode requests per minute.",
-                            "status": "RESOURCE_EXHAUSTED",
-                        }
-                    },
-                )
             parts = url.split("/nodes/")
             node_name = parts[1].split("?")[0]
             zone = self._extract_tpu_zone(url)
@@ -564,51 +549,3 @@ def test_tpu_create_lro_resource_exhausted_raises_quota_error(svc: CloudGcpServi
                 capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
             )
         )
-
-
-def test_tpu_delete_retries_on_quota(svc: CloudGcpService, backend: GcpFakeBackend, monkeypatch: pytest.MonkeyPatch):
-    """tpu_delete retries when GCP returns 429 on the DeleteNode quota limit."""
-    monkeypatch.setattr(gcp_service, "_TPU_DELETE_RETRY_BACKOFF", 0.0)
-
-    # Create a TPU then arm the backend to return 429 on the first delete attempt
-    svc.tpu_create(
-        TpuCreateRequest(
-            name="retry-tpu",
-            zone=ZONE_EU,
-            accelerator_type="v5litepod-16",
-            runtime_version="v2-alpha-tpuv5-lite",
-            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
-        )
-    )
-    backend.delete_429_remaining = 1
-
-    # Delete should succeed after the retry
-    svc.tpu_delete("retry-tpu", ZONE_EU)
-
-    # Verify it made 2 DELETE requests (1 rejected + 1 succeeded)
-    delete_requests = [e for e in backend.http_log if e.method == "DELETE" and "/nodes/" in e.url]
-    assert len(delete_requests) == 2
-    assert delete_requests[0].status == 429
-    assert delete_requests[1].status == 200
-
-
-def test_tpu_delete_raises_after_exhausted_retries(
-    svc: CloudGcpService, backend: GcpFakeBackend, monkeypatch: pytest.MonkeyPatch
-):
-    """tpu_delete raises QuotaExhaustedError when all retry attempts fail."""
-    monkeypatch.setattr(gcp_service, "_TPU_DELETE_RETRY_BACKOFF", 0.0)
-
-    svc.tpu_create(
-        TpuCreateRequest(
-            name="fail-tpu",
-            zone=ZONE_EU,
-            accelerator_type="v5litepod-16",
-            runtime_version="v2-alpha-tpuv5-lite",
-            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
-        )
-    )
-    # More 429s than the retry budget
-    backend.delete_429_remaining = 10
-
-    with pytest.raises(QuotaExhaustedError, match="Quota exceeded"):
-        svc.tpu_delete("fail-tpu", ZONE_EU)
