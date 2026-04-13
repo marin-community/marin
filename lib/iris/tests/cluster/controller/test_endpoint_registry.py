@@ -300,9 +300,18 @@ def test_concurrent_readers_never_see_torn_snapshot(state):
     def reader():
         try:
             while not stop.is_set():
-                for row in state._db.endpoints.query():
-                    # Every row a query returns must still be reachable by id.
-                    assert state._db.endpoints.get(row.endpoint_id) is not None
+                snapshot = state._db.endpoints.query()
+                # Verify the snapshot itself is internally consistent: every
+                # endpoint_id in the result set is unique (no duplicates from
+                # a torn index).
+                ids = [r.endpoint_id for r in snapshot]
+                assert len(ids) == len(set(ids)), f"duplicate ids in snapshot: {ids}"
+                # Exercise the secondary-index query paths concurrently with
+                # mutations. We cannot assert that a row from query() is still
+                # present in a subsequent get() — the writer may remove it
+                # between the two calls (TOCTOU).
+                for row in snapshot:
+                    state._db.endpoints.get(row.endpoint_id)
                 for i in range(len(task_ids)):
                     state._db.endpoints.query(EndpointQuery(name_prefix=f"svc-{i}"))
                     state._db.endpoints.query(EndpointQuery(exact_name=f"svc-{i}"))
