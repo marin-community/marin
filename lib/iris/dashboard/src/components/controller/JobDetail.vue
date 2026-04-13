@@ -768,6 +768,62 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         </div>
       </div>
 
+      <!-- Job Request Details -->
+      <div
+        v-if="jobRequest?.entrypoint?.runCommand?.argv?.length || jobRequest?.environment?.envVars || jobRequest?.environment?.pipPackages?.length || jobRequest?.ports?.length"
+        class="mb-6 rounded-lg border border-surface-border bg-surface px-4 py-3"
+      >
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
+          Job Request
+        </h3>
+        <div class="flex flex-col gap-2 text-sm">
+          <div v-if="jobRequest.entrypoint?.runCommand?.argv?.length">
+            <span class="text-text-muted text-xs">Command</span>
+            <pre class="mt-0.5 px-2 py-1 bg-surface-sunken rounded font-mono text-xs whitespace-pre-wrap break-all">{{ jobRequest.entrypoint.runCommand.argv.join(' ') }}</pre>
+          </div>
+          <div v-if="jobRequest.entrypoint?.setupCommands?.length">
+            <span class="text-text-muted text-xs">Setup Commands</span>
+            <pre class="mt-0.5 px-2 py-1 bg-surface-sunken rounded font-mono text-xs whitespace-pre-wrap break-all">{{ jobRequest.entrypoint.setupCommands.join('\n') }}</pre>
+          </div>
+          <div v-if="jobRequest.environment?.envVars && Object.keys(jobRequest.environment.envVars).length">
+            <span class="text-text-muted text-xs">Environment Variables</span>
+            <div class="mt-0.5 flex flex-wrap gap-1.5">
+              <span
+                v-for="(val, key) in jobRequest.environment.envVars"
+                :key="key"
+                class="inline-block rounded bg-surface-sunken px-2 py-0.5 font-mono text-xs text-text-secondary"
+              >
+                {{ key }}={{ val }}
+              </span>
+            </div>
+          </div>
+          <div v-if="jobRequest.environment?.pipPackages?.length">
+            <span class="text-text-muted text-xs">Pip Packages</span>
+            <div class="mt-0.5 flex flex-wrap gap-1.5">
+              <span
+                v-for="(pkg, i) in jobRequest.environment.pipPackages"
+                :key="i"
+                class="inline-block rounded bg-surface-sunken px-2 py-0.5 font-mono text-xs text-text-secondary"
+              >
+                {{ pkg }}
+              </span>
+            </div>
+          </div>
+          <div v-if="jobRequest.ports?.length">
+            <span class="text-text-muted text-xs">Ports</span>
+            <div class="mt-0.5 flex flex-wrap gap-1.5">
+              <span
+                v-for="(port, i) in jobRequest.ports"
+                :key="i"
+                class="inline-block rounded bg-surface-sunken px-2 py-0.5 font-mono text-xs text-text-secondary"
+              >
+                {{ port }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Child Jobs -->
       <div v-if="flattenedChildJobs.length > 0" class="mb-6">
         <div class="mb-3 flex items-center justify-between gap-3">

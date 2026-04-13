@@ -148,7 +148,14 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: tpu-ubuntu2204-base
     sizes:
-      32: { buffer_slices: 0, max_slices: 4 }
+      32:   { buffer_slices: 0, max_slices: 4 }
+      64:   { buffer_slices: 0, max_slices: 4 }
+      128:  { buffer_slices: 0, max_slices: 4 }
+      256:  { buffer_slices: 0, max_slices: 4 }
+      512:  { buffer_slices: 0, max_slices: 4 }
+      1024: { buffer_slices: 0, max_slices: 4 }
+      2048: { buffer_slices: 0, max_slices: 4 }
+      4096: { buffer_slices: 0, max_slices: 4 }
 
 # ---------------------------------------------------------------------------
 # Non-TPU scale groups (not part of tpu_pools)

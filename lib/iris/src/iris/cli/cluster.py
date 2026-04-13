@@ -462,28 +462,49 @@ def cluster_dashboard(ctx):
 
 
 @cluster.command("dashboard-proxy")
-@click.option("--port", default=8080, type=int, help="Local port to serve the dashboard on")
+@click.option("--port", default=8080, type=int, help="Local port for the RPC proxy")
 @click.pass_context
 def cluster_dashboard_proxy(ctx, port: int):
-    """Start a local dashboard that proxies RPC calls to the remote controller.
+    """Start a local dev dashboard that proxies RPC calls to the remote controller.
 
-    Serves the Vue dashboard UI locally and forwards all Connect RPC requests
-    to the upstream controller. Useful for viewing a remote controller without
-    SSH tunneling. Rebuilds dashboard assets on each run.
+    Runs the rsbuild dev server (with hot module replacement) for the Vue
+    frontend alongside a Python proxy that forwards Connect RPC requests to
+    the upstream controller. Open the rsbuild URL (printed on startup) in
+    your browser.
     """
+    import signal
+    import subprocess
+
     import uvicorn
 
-    from iris.cli.build import _ensure_dashboard_dist
     from iris.cluster.controller.dashboard import ProxyControllerDashboard
-
-    # Rebuild dashboard assets so the proxy always serves the latest UI.
-    _ensure_dashboard_dist()
+    from iris.cluster.dashboard_common import VUE_DIST_DIR
 
     controller_url = require_controller_url(ctx)
     dashboard = ProxyControllerDashboard(upstream_url=controller_url, port=port)
     click.echo(f"Proxying to controller at {controller_url}")
-    click.echo(f"Dashboard: http://localhost:{port}")
-    uvicorn.run(dashboard.app, host="127.0.0.1", port=port, log_level="info")
+
+    dashboard_dir = VUE_DIST_DIR.parent
+    click.echo(f"Starting rsbuild dev server in {dashboard_dir}")
+    click.echo("Installing npm dependencies...")
+    subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True)
+
+    dev_proc = subprocess.Popen(["npm", "run", "dev"], cwd=dashboard_dir)
+
+    def _cleanup(signum, frame):
+        dev_proc.terminate()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, _cleanup)
+    signal.signal(signal.SIGTERM, _cleanup)
+
+    click.echo(f"RPC proxy: http://localhost:{port}")
+    click.echo("Rsbuild dev server will print its URL above (usually http://localhost:3000)")
+    try:
+        uvicorn.run(dashboard.app, host="127.0.0.1", port=port, log_level="info")
+    finally:
+        dev_proc.terminate()
+        dev_proc.wait()
 
 
 # =============================================================================

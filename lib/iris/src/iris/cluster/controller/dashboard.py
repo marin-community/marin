@@ -455,6 +455,7 @@ class ProxyControllerDashboard:
             Route("/bundles/{bundle_id:str}.zip", self._proxy_bundle),
             Route("/blobs/{blob_id:str}", self._proxy_blob),
             Route("/health", self._health),
+            Route("/auth/{path:path}", self._proxy_auth),
             Route("/iris.cluster.ControllerService/{method}", self._proxy_rpc, methods=["POST"]),
             Route("/iris.logging.LogService/{method}", self._proxy_log_rpc, methods=["POST"]),
             static_files_mount(),
@@ -484,6 +485,20 @@ class ProxyControllerDashboard:
 
     def _health(self, _request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
+
+    async def _proxy_auth(self, request: Request) -> Response:
+        path = request.path_params["path"]
+        upstream_resp = await self._client.request(
+            request.method,
+            f"/auth/{path}",
+            content=await request.body() if request.method in ("POST", "PUT") else None,
+            headers={"content-type": request.headers.get("content-type", "application/json")},
+        )
+        return Response(
+            content=upstream_resp.content,
+            status_code=upstream_resp.status_code,
+            media_type=upstream_resp.headers.get("content-type"),
+        )
 
     async def _proxy_rpc(self, request: Request) -> Response:
         method = request.path_params["method"]

@@ -18,7 +18,6 @@ from threading import Lock
 from typing import Any, Generic, TypeVar
 
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 
 T = TypeVar("T")
@@ -110,14 +109,6 @@ def proto_decoder(proto_factory: Callable[[], T]) -> Callable[[Any], T]:
         return proto
 
     return decode
-
-
-def _constraint_list_decoder(blob: bytes | None) -> list[job_pb2.Constraint]:
-    if blob is None:
-        return []
-    cl = job_pb2.ConstraintList()
-    cl.ParseFromString(blob)
-    return list(cl.constraints)
 
 
 # Sentinel for "no default" -- distinct from dataclasses.MISSING so we can use
@@ -1637,7 +1628,7 @@ class EndpointRow:
     endpoint_id: str
     name: str
     address: str
-    job_id: JobName
+    task_id: JobName
     metadata: dict
     registered_at: Timestamp
 
@@ -1950,7 +1941,7 @@ ENDPOINT_PROJECTION = ENDPOINTS.projection(
     "endpoint_id",
     "name",
     "address",
-    "job_id",
+    "task_id",
     "metadata_json",
     "registered_at_ms",
     row_cls=EndpointRow,

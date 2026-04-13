@@ -1611,7 +1611,7 @@ class ControllerTransitions:
                         resources=resources,
                         ports=json.loads(job.ports_json),
                         attempt_id=attempt_id,
-                        constraints=constraints_from_json(job.constraints_json),
+                        constraints=[c.to_proto() for c in constraints_from_json(job.constraints_json)],
                         task_image=job.task_image,
                     )
                     enqueue_run_dispatch(cur, str(assignment.worker_id), run_request.SerializeToString(), now_ms)
@@ -3070,17 +3070,18 @@ class ControllerTransitions:
 
     # --- Endpoint Management ---
 
-    def add_endpoint(self, endpoint: EndpointRow, task_id: JobName | None = None) -> bool:
+    def add_endpoint(self, endpoint: EndpointRow) -> bool:
         """Add an endpoint row to the DB, associated with a non-terminal task.
 
         Returns True if the endpoint was inserted, False if the task is already
         terminal (to prevent orphaned endpoints that would never be cleaned up).
         """
+        task_id = endpoint.task_id
+        job_id, _task_index = task_id.require_task()
         with self._db.transaction() as cur:
-            if task_id is not None:
-                row = cur.execute("SELECT state FROM tasks WHERE task_id = ?", (task_id.to_wire(),)).fetchone()
-                if row is not None and int(row["state"]) in TERMINAL_TASK_STATES:
-                    return False
+            row = cur.execute("SELECT state FROM tasks WHERE task_id = ?", (task_id.to_wire(),)).fetchone()
+            if row is not None and int(row["state"]) in TERMINAL_TASK_STATES:
+                return False
             cur.execute(
                 "INSERT OR REPLACE INTO endpoints("
                 "endpoint_id, name, address, job_id, task_id, metadata_json, registered_at_ms"
@@ -3089,8 +3090,8 @@ class ControllerTransitions:
                     endpoint.endpoint_id,
                     endpoint.name,
                     endpoint.address,
-                    endpoint.job_id.to_wire(),
-                    task_id.to_wire() if task_id else None,
+                    job_id.to_wire(),
+                    task_id.to_wire(),
                     json.dumps(endpoint.metadata),
                     endpoint.registered_at.epoch_ms(),
                 ),
@@ -3202,7 +3203,7 @@ class ControllerTransitions:
                     resources=resources,
                     ports=json.loads(str(row["ports_json"])),
                     attempt_id=attempt_id,
-                    constraints=constraints_from_json(row["constraints_json"]),
+                    constraints=[c.to_proto() for c in constraints_from_json(row["constraints_json"])],
                     task_image=str(row["task_image"]),
                 )
                 # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).

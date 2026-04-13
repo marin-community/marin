@@ -16,7 +16,7 @@ from threading import Lock, RLock
 from typing import Any
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
+from iris.cluster.controller.schema import ENDPOINT_PROJECTION, decode_timestamp_ms, decode_worker_id
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 from rigging.timing import Deadline, Duration, Timestamp
@@ -246,8 +246,6 @@ class EndpointQuery:
     endpoint_ids: tuple[str, ...] = ()
     name_prefix: str | None = None
     exact_name: str | None = None
-    job_ids: tuple[JobName, ...] = ()
-    job_id: JobName | None = None
     task_ids: tuple[JobName, ...] = ()
     limit: int | None = None
 
@@ -267,7 +265,7 @@ def _decode_attribute_rows(rows: Sequence[Any]) -> dict[WorkerId, dict[str, Attr
 
 def endpoint_query_sql(query: EndpointQuery) -> tuple[str, list[object]]:
     """Build SQL query for endpoint lookups."""
-    from_clause = "SELECT e.* FROM endpoints e"
+    from_clause = f"SELECT {ENDPOINT_PROJECTION.select_clause()} FROM endpoints e"
     conditions: list[str] = []
     params: list[object] = []
 
@@ -289,14 +287,6 @@ def endpoint_query_sql(query: EndpointQuery) -> tuple[str, list[object]]:
     if query.exact_name:
         conditions.append("e.name = ?")
         params.append(query.exact_name)
-
-    job_ids = list(query.job_ids)
-    if query.job_id is not None:
-        job_ids.append(query.job_id)
-    if job_ids:
-        placeholders = ",".join("?" for _ in job_ids)
-        conditions.append(f"e.job_id IN ({placeholders})")
-        params.extend(jid.to_wire() for jid in job_ids)
 
     sql = from_clause
     if conditions:
@@ -724,12 +714,9 @@ class ControllerDB:
     # to keep relation assembly explicit in controller/service/state query flows.
 
     def delete_endpoint(self, endpoint_id: str):
-        from iris.cluster.controller.schema import ENDPOINT_PROJECTION
-
         with self.transaction() as cur:
             row = cur.execute(
-                "SELECT endpoint_id, name, address, job_id, metadata_json, registered_at_ms "
-                "FROM endpoints WHERE endpoint_id = ?",
+                f"SELECT {ENDPOINT_PROJECTION.select_clause()} " "FROM endpoints e WHERE e.endpoint_id = ?",
                 (endpoint_id,),
             ).fetchone()
             if row is None:
