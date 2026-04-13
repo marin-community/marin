@@ -582,7 +582,7 @@ function regionFromGroupName(name: string): string {
 
 const fleetSummary = computed<FleetChipSummary[]>(() => {
   const now = Date.now()
-  const chips = new Map<string, { total: number; inUse: number; uptimes: number[]; regions: Map<string, number> }>()
+  const chips = new Map<string, { total: number; inUse: number; uptimes: number[]; regions: Map<string, number>; bands: Map<string, number>; capacityByRegion: Map<string, { statuses: string[]; failures: number }> }>()
 
   for (const g of groups.value) {
     const chip = chipFromGroupName(g.name)
@@ -609,19 +609,29 @@ const fleetSummary = computed<FleetChipSummary[]>(() => {
     entry.capacityByRegion.set(region, capEntry)
 
     // Collect band usage from scheduler running tasks via workerId join.
-    // Count each slice once per band (a slice is "used by" a band if any of
-    // its VMs has a running task in that band).
+    // Assign each slice to a single dominant band (the band with the most
+    // task-count across its VMs) so band shares partition in-use slices
+    // rather than double-counting slices that host multiple bands.
     for (const slice of readySlices) {
-      const sliceBands = new Set<string>()
+      const sliceBandCounts = new Map<string, number>()
       for (const vm of slice.vms ?? []) {
         if (!vm.workerId) continue
         const bands = workerBands.value.get(vm.workerId)
-        if (bands) {
-          for (const band of bands.keys()) sliceBands.add(band)
+        if (!bands) continue
+        for (const [band, count] of bands) {
+          sliceBandCounts.set(band, (sliceBandCounts.get(band) ?? 0) + count)
         }
       }
-      for (const band of sliceBands) {
-        entry.bands.set(band, (entry.bands.get(band) ?? 0) + 1)
+      let topBand: string | null = null
+      let topCount = 0
+      for (const [band, count] of sliceBandCounts) {
+        if (count > topCount) {
+          topBand = band
+          topCount = count
+        }
+      }
+      if (topBand) {
+        entry.bands.set(topBand, (entry.bands.get(topBand) ?? 0) + 1)
       }
     }
 
