@@ -20,6 +20,7 @@ from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceAxis, ResourceMapping
 from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
+from jax.experimental import multihost_utils
 from jax.experimental.multihost_utils import host_local_array_to_global_array
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
@@ -143,6 +144,20 @@ def move_tree_to_memory_kind(tree: T, *, memory_kind: str) -> T:
 _sync_counter = 0
 
 
+def _multihost_broadcast_sync_via_jax_utils(obj: X, *, is_source: bool) -> X:
+    serialized = json.dumps(obj).encode("utf-8")
+    source_length = len(serialized) if is_source else 0
+    payload_length_array = multihost_utils.broadcast_one_to_all(np.asarray([source_length], dtype=np.int32))
+    payload_length = int(np.asarray(payload_length_array, dtype=np.int32).item())
+    if is_source:
+        payload = np.frombuffer(serialized, dtype=np.uint8)
+    else:
+        payload = np.zeros(payload_length, dtype=np.uint8)
+    payload_array = multihost_utils.broadcast_one_to_all(payload, is_source=is_source)
+    payload_bytes = np.asarray(payload_array, dtype=np.uint8)[:payload_length].tobytes()
+    return json.loads(payload_bytes.decode("utf-8"))
+
+
 def multihost_broadcast_sync(obj: X, is_source: Optional[bool] = None, timeout: float = 200.0) -> X:
     """
     Uses jax's unpublished distributed api to sync a value across hosts using json dump. If is_source is None, then
@@ -161,7 +176,7 @@ def multihost_broadcast_sync(obj: X, is_source: Optional[bool] = None, timeout: 
     client = distributed.global_state.client
 
     if client is None:
-        raise RuntimeError("multihost_broadcast_sync requires jax distributed client to be initialized")
+        return _multihost_broadcast_sync_via_jax_utils(obj, is_source=is_source)
 
     if is_source:
         # serialized = pickle.dumps(obj, 0)  # 0 is pickle protocol. jax only accepts utf-8, and 0 gives us ascii
@@ -199,7 +214,9 @@ def barrier_sync(timeout: float = 200):
     client: Optional[DistributedRuntimeClient] = distributed.global_state.client
 
     if client is None:
-        raise RuntimeError("barrier_sync requires jax distributed client to be initialized")
+        _sync_counter += 1
+        multihost_utils.sync_global_devices(f"levanter_barrier_sync_{_sync_counter}")
+        return
 
     _sync_counter += 1
     client.wait_at_barrier(f"levanter_barrier_sync_{_sync_counter}", timeout_in_ms=int(timeout * 1000.0))
