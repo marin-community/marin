@@ -8,7 +8,6 @@ YAML, ensuring that vm_type and platform configuration are preserved correctly.
 """
 
 from pathlib import Path
-from typing import ClassVar
 
 import pytest
 import yaml
@@ -990,77 +989,33 @@ def _config_with_gcp_sg(
 
 
 class TestWorkerSettingsValidation:
-    """Tests for worker.attributes validation (region/zone consistency, preemptible agreement)."""
+    """Tests for worker.attributes validation (rejection of derived/well-known keys)."""
 
     def test_no_worker_settings_accepted(self):
         """Scale groups without worker settings always pass validation."""
         config = _config_with_gcp_sg("us-west4-b")
         validate_config(config)
 
-    def test_region_matching_zone_prefix_accepted(self):
-        """worker.attributes.region that matches zone prefix passes validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.REGION: "us-west4"})
-        validate_config(config)
-
     @pytest.mark.parametrize(
-        "zone,region",
+        "attr",
         [
-            ("us-west4-b", "us-central1"),
-            ("us-central1-a", "us-west4"),
-            ("europe-west4-a", "us-west4"),
+            WellKnownAttribute.REGION,
+            WellKnownAttribute.ZONE,
+            WellKnownAttribute.DEVICE_TYPE,
+            WellKnownAttribute.DEVICE_VARIANT,
+            WellKnownAttribute.PREEMPTIBLE,
         ],
     )
-    def test_region_mismatching_zone_prefix_rejected(self, zone: str, region: str):
-        """worker.attributes.region that doesn't match zone prefix fails validation."""
-        config = _config_with_gcp_sg(zone, worker_attributes={WellKnownAttribute.REGION: region})
-        with pytest.raises(ValueError, match="must match"):
+    def test_derived_attributes_rejected(self, attr: str):
+        """Well-known attributes derived from resources/slice_template must not be set explicitly."""
+        config = _config_with_gcp_sg("us-west4-b", worker_attributes={attr: "anything"})
+        with pytest.raises(ValueError, match="derived automatically"):
             validate_config(config)
 
-    @pytest.mark.parametrize("attr", [WellKnownAttribute.REGION, WellKnownAttribute.ZONE])
-    def test_empty_attribute_rejected(self, attr: str):
-        """worker.attributes set to empty string fails validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={attr: ""})
-        with pytest.raises(ValueError, match="must be non-empty"):
-            validate_config(config)
-
-    @pytest.mark.parametrize("preemptible_value", ["true", "false", "yes"])
-    def test_preemptible_in_worker_attributes_rejected(self, preemptible_value: str):
-        """worker.attributes.preemptible is now derived from resources and rejected."""
-        config = _config_with_gcp_sg(
-            "us-west4-b",
-            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
-            worker_attributes={WellKnownAttribute.PREEMPTIBLE: preemptible_value},
-        )
-        with pytest.raises(ValueError, match="derived from resources"):
-            validate_config(config)
-
-    def test_region_valid_without_preemptible_attribute(self):
-        """Region in worker.attributes works when capacity_type is only on resources."""
-        config = _config_with_gcp_sg(
-            "us-west4-b",
-            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
-            worker_attributes={WellKnownAttribute.REGION: "us-west4"},
-        )
+    def test_custom_attributes_accepted(self):
+        """Non-well-known attributes are not rejected."""
+        config = _config_with_gcp_sg("us-west4-b", worker_attributes={"team": "frontier"})
         validate_config(config)
-
-    def test_region_check_skipped_for_non_gcp_platform(self):
-        """Region/zone consistency is only checked for GCP slice templates; manual/local groups are unaffected."""
-        sg = _valid_scale_group()  # uses local platform
-        sg.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
-        config = config_pb2.IrisClusterConfig()
-        config.scale_groups["test"].CopyFrom(sg)
-        validate_config(config)  # no GCP zone — region check does not apply
-
-    def test_zone_matching_gcp_zone_accepted(self):
-        """worker.attributes.zone matching slice_template.gcp.zone passes validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.ZONE: "us-west4-b"})
-        validate_config(config)
-
-    def test_zone_mismatching_gcp_zone_rejected(self):
-        """worker.attributes.zone not matching slice_template.gcp.zone fails validation."""
-        config = _config_with_gcp_sg("us-west4-b", worker_attributes={WellKnownAttribute.ZONE: "us-west4-a"})
-        with pytest.raises(ValueError, match="must match"):
-            validate_config(config)
 
 
 class TestMultiZoneExpansion:
@@ -1103,14 +1058,10 @@ scale_groups:
 
         eu = config.scale_groups["tpu_v5e_16-europe-west4-b"]
         assert eu.slice_template.gcp.zone == "europe-west4-b"
-        assert eu.worker.attributes[WellKnownAttribute.ZONE] == "europe-west4-b"
-        assert eu.worker.attributes[WellKnownAttribute.REGION] == "europe-west4"
         assert eu.buffer_slices == 0
 
         us = config.scale_groups["tpu_v5e_16-us-west4-a"]
         assert us.slice_template.gcp.zone == "us-west4-a"
-        assert us.worker.attributes[WellKnownAttribute.ZONE] == "us-west4-a"
-        assert us.worker.attributes[WellKnownAttribute.REGION] == "us-west4"
 
     def test_buffer_slices_preserved_when_explicit(self, tmp_path: Path):
         config_content = """\
@@ -1341,39 +1292,9 @@ scale_groups:
         with pytest.raises(ValueError, match="non-empty string"):
             load_config(p)
 
-    _ZONES_CONFLICT_CONFIGS: ClassVar[dict[str, str]] = {
-        "gcp_zone": (
-            """\
-    slice_template:
-      gcp:
-        zone: europe-west4-b
-        runtime_version: v2-alpha-tpuv5-lite"""
-        ),
-        "worker_zone": (
-            """\
-    slice_template:
-      gcp:
-        runtime_version: v2-alpha-tpuv5-lite
-    worker:
-      attributes:
-        zone: "us-west4-a" """
-        ),
-        "worker_region": (
-            """\
-    slice_template:
-      gcp:
-        runtime_version: v2-alpha-tpuv5-lite
-    worker:
-      attributes:
-        region: "us-west4" """
-        ),
-    }
-
-    @pytest.mark.parametrize("conflict_type", ["gcp_zone", "worker_zone", "worker_region"])
-    def test_conflicting_field_with_zones_rejected(self, tmp_path: Path, conflict_type: str):
-        """Fields that conflict with zones expansion are rejected."""
-        extra_yaml = self._ZONES_CONFLICT_CONFIGS[conflict_type]
-        config_content = f"""\
+    def test_gcp_zone_with_zones_rejected(self, tmp_path: Path):
+        """Setting both zones: and slice_template.gcp.zone is rejected by expansion."""
+        config_content = """\
 platform:
   gcp:
     project_id: test
@@ -1390,7 +1311,10 @@ scale_groups:
       device_variant: v5litepod-4
       device_count: 1
       capacity_type: preemptible
-{extra_yaml}
+    slice_template:
+      gcp:
+        zone: europe-west4-b
+        runtime_version: v2-alpha-tpuv5-lite
 """
         p = tmp_path / "config.yaml"
         p.write_text(config_content)
@@ -1517,8 +1441,6 @@ v5e-preempt:
         assert g4eu.buffer_slices == 3
         assert g4eu.max_slices == 1024
         assert g4eu.slice_template.gcp.zone == "europe-west4-b"
-        assert g4eu.worker.attributes["zone"] == "europe-west4-b"
-        assert g4eu.worker.attributes["region"] == "europe-west4"
         assert g4eu.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
 
         # Check v5e-16 in us-west4-a (tier 2)
@@ -1842,7 +1764,6 @@ def _config_with_coreweave_gpu_sg(topology_attrs: dict[str, str] | None = None) 
     sg.slice_template.num_vms = 2
     sg.slice_template.coreweave.region = "US-WEST-04A"
     sg.slice_template.coreweave.instance_type = "gd-8xh100ib-i128"
-    sg.worker.attributes["region"] = "US-WEST-04A"
     sg.worker.attributes["pool"] = "h100-16x"
     if topology_attrs:
         for k, v in topology_attrs.items():

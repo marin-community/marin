@@ -92,36 +92,18 @@ def _add_coscheduling_group_4vm(config: config_pb2.IrisClusterConfig) -> None:
     sg.slice_template.local.SetInParent()
 
 
-def _add_multi_region_groups(config: config_pb2.IrisClusterConfig) -> None:
-    """Two CPU scale groups in different regions for constraint routing tests."""
-    for name, region in [("cpu-region-a", "us-central1"), ("cpu-region-b", "europe-west4")]:
-        sg = config.scale_groups[name]
-        sg.name = name
-        sg.num_vms = 1
-        sg.buffer_slices = 1
-        sg.max_slices = 2
-        sg.resources.cpu_millicores = 8000
-        sg.resources.memory_bytes = 16 * 1024**3
-        sg.resources.disk_bytes = 50 * 1024**3
-        sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
-        sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
-        sg.slice_template.local.SetInParent()
-        sg.worker.attributes[WellKnownAttribute.REGION] = region
-
-
 # Total local-mode workers:
-# 2 (local-cpu) + 2 (cosched_2) + 4 (cosched_4) + 2 (region-a + region-b) = 10
-SMOKE_WORKER_COUNT = 10
+# 2 (local-cpu) + 2 (cosched_2) + 4 (cosched_4) = 8
+SMOKE_WORKER_COUNT = 8
 
 
 def _make_smoke_config() -> config_pb2.IrisClusterConfig:
-    """Build a local config with CPU, TPU (coscheduling), and multi-region workers."""
+    """Build a local config with CPU and TPU (coscheduling) workers."""
     config = load_config(DEFAULT_CONFIG)
     config.scale_groups.clear()
     _add_cpu_group(config, num_workers=2)
     _add_coscheduling_group(config)
     _add_coscheduling_group_4vm(config)
-    _add_multi_region_groups(config)
     return make_local_config(config)
 
 
@@ -360,10 +342,17 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
 
 def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
     """Constraint chips rendered on job detail."""
+    # Use soft constraints to avoid submit-time routing feasibility rejection;
+    # the test only checks that constraint chips render on the dashboard.
     constraints = [
-        Constraint.create(key="region", op=ConstraintOp.EQ, value="local"),
+        Constraint.create(key="region", op=ConstraintOp.EQ, value="local", mode=job_pb2.CONSTRAINT_MODE_PREFERRED),
         Constraint.create(key="env-tag", op=ConstraintOp.EXISTS),
-        Constraint.create(key="device-variant", op=ConstraintOp.IN, values=["v5p-8", "v6e-4"]),
+        Constraint.create(
+            key="device-variant",
+            op=ConstraintOp.IN,
+            values=["v5p-8", "v6e-4"],
+            mode=job_pb2.CONSTRAINT_MODE_PREFERRED,
+        ),
     ]
     with smoke_cluster.launched_job(TestJobs.quick, "smoke-constraints", constraints=constraints) as job:
         time.sleep(3)

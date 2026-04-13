@@ -920,12 +920,13 @@ class AutoscalerProtocol(Protocol):
         """Get info for a specific VM."""
         ...
 
-    def check_coscheduling_feasibility(
+    def job_feasibility(
         self,
-        replicas: int,
         constraints: list[Constraint],
+        *,
+        replicas: int | None = None,
     ) -> str | None:
-        """Check if a coscheduled job can be scheduled. Returns error message or None."""
+        """Check if a job can ever be scheduled. Returns error message or None."""
         ...
 
     def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
@@ -1152,21 +1153,21 @@ class ControllerServiceImpl:
         # device-variant, etc.) replace auto-generated ones.
         request = _inject_resource_constraints(request)
 
-        # Reject coscheduled jobs that can never be scheduled: if no scaling
-        # group has num_vms matching the replica count, the job would sit in
-        # the queue forever.
-        if request.HasField("coscheduling"):
-            autoscaler = self._controller.autoscaler
-            if autoscaler is not None:
-                error = autoscaler.check_coscheduling_feasibility(
-                    replicas=request.replicas,
-                    constraints=[Constraint.from_proto(c) for c in request.constraints],
+        # Reject jobs that can never be scheduled so they fail fast instead
+        # of sitting in the pending queue. For coscheduled jobs this also
+        # verifies the replica count is compatible with some group's num_vms.
+        autoscaler = self._controller.autoscaler
+        if autoscaler is not None:
+            replicas = request.replicas if request.HasField("coscheduling") else None
+            error = autoscaler.job_feasibility(
+                constraints=[Constraint.from_proto(c) for c in request.constraints],
+                replicas=replicas,
+            )
+            if error:
+                raise ConnectError(
+                    Code.FAILED_PRECONDITION,
+                    f"Job is unschedulable: {error}",
                 )
-                if error:
-                    raise ConnectError(
-                        Code.FAILED_PRECONDITION,
-                        f"Job is unschedulable: {error}",
-                    )
 
         self._transitions.submit_job(job_id, request, Timestamp.now())
         self._controller.wake()

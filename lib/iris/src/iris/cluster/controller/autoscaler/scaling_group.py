@@ -385,11 +385,7 @@ class ScalingGroup:
 
     @property
     def region(self) -> str | None:
-        """Region derived from worker attributes or slice template."""
-        if self._config.HasField("worker"):
-            region = self._config.worker.attributes.get(WellKnownAttribute.REGION, "").strip()
-            if region:
-                return region
+        """Region derived from the slice template."""
         template = self._config.slice_template
         if template.HasField("gcp") and template.gcp.zone:
             return template.gcp.zone.rsplit("-", 1)[0]
@@ -399,11 +395,7 @@ class ScalingGroup:
 
     @property
     def zone(self) -> str | None:
-        """Zone derived from worker attributes or slice template."""
-        if self._config.HasField("worker"):
-            zone = self._config.worker.attributes.get(WellKnownAttribute.ZONE, "").strip()
-            if zone:
-                return zone
+        """Zone derived from the slice template."""
         template = self._config.slice_template
         if template.HasField("gcp") and template.gcp.zone:
             return template.gcp.zone
