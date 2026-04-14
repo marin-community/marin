@@ -61,6 +61,24 @@ def rollout_to_trajectory_record(rollout: Rollout) -> TrajectoryRecord:
     )
 
 
+def trajectory_record_to_rollout(trajectory: TrajectoryRecord) -> Rollout:
+    """Reconstruct a rollout from the neutral trajectory record."""
+    return Rollout(
+        env_name=trajectory.env_name,
+        env_example_id=trajectory.env_example_id,
+        prompt_tokens=trajectory.prompt_tokens,
+        response_tokens=trajectory.response_tokens,
+        response_logprobs=trajectory.behavior_logprobs,
+        token_rewards=trajectory.token_rewards,
+        episode_reward=trajectory.episode_reward,
+        temperature=trajectory.sampling_temperature,
+        top_k=trajectory.sampling_top_k,
+        is_truncated=trajectory.is_truncated,
+        metadata=trajectory.rollout_metadata,
+        correctness_reward=trajectory.correctness_reward,
+    )
+
+
 def rollout_group_to_trajectory_group_record(group: RolloutGroup) -> TrajectoryGroupRecord:
     """Convert a rollout group into a prompt-level grouped record."""
     if not group.rollouts:
