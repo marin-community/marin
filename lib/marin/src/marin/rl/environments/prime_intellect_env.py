@@ -11,8 +11,10 @@ from typing import Any, ClassVar, cast
 import jax.numpy as jnp
 import numpy as np
 from marin.rl.environments import MarinEnv
-from marin.rl.environments.inference_ctx import BaseInferenceContext
 from marin.rl.environments.process_vllm_results import process_vllm_chat_results
+from marin.rl.environments.spec import EnvironmentIdentity, EnvironmentSample
+from marin.rl.environments.inference_ctx import BaseInferenceContext
+from marin.rl.traces import EpisodeResponseTrace, EpisodeTrace
 from marin.rl.types import Rollout, RolloutGroup
 
 logger = logging.getLogger(__name__)
@@ -69,6 +71,14 @@ class PrimeIntellectEnv(MarinEnv):
 
         return self.ENVS[env_id]
 
+    def environment_identity(self) -> EnvironmentIdentity:
+        return EnvironmentIdentity(
+            task_name=f"prime_intellect:{self.env_id}",
+            task_version="v1",
+            verifier_name=f"verifiers:{self.env_id}",
+            verifier_version="v1",
+        )
+
     def sample(
         self,
         inference_ctx: BaseInferenceContext,
@@ -81,7 +91,7 @@ class PrimeIntellectEnv(MarinEnv):
         top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
-    ) -> tuple[list[RolloutGroup], dict[str, float]]:
+    ) -> EnvironmentSample:
         """Sample problems and generate responses using the model."""
         del prng_key, system_prompt
         self._ensure_verifiers_installed()
@@ -149,9 +159,12 @@ class PrimeIntellectEnv(MarinEnv):
         )
 
         # Convert to RolloutGroups
+        identity = self.environment_identity()
         rollout_groups = []
+        traces = []
         for prompt_idx in range(len(processed_outputs.prompt_ids)):
             rollouts = []
+            response_traces = []
             for gen_idx in range(n_generations):
                 overall_idx = prompt_idx * n_generations + gen_idx
                 if overall_idx >= len(processed_outputs.completion_ids):
@@ -179,9 +192,29 @@ class PrimeIntellectEnv(MarinEnv):
                     is_truncated=False,  # prime intellect doesn't seem to report this easily
                 )
                 rollouts.append(rollout)
+                response_text = result.completion[overall_idx] if overall_idx < len(result.completion) else ""
+                response_traces.append(
+                    EpisodeResponseTrace(
+                        response_text=response_text,
+                        reward=float(reward),
+                    )
+                )
 
             if rollouts:
                 rollout_groups.append(RolloutGroup(rollouts=rollouts))
+                prompt_text = result.prompt[prompt_idx * n_generations] if result.prompt else ""
+                traces.append(
+                    EpisodeTrace(
+                        env_name=f"prime_intellect:{self.env_id}",
+                        env_example_id=f"{self.env_id}_example_{prompt_idx}",
+                        prompt=prompt_text,
+                        responses=tuple(response_traces),
+                        task_name=identity.task_name,
+                        task_version=identity.task_version,
+                        verifier_name=identity.verifier_name,
+                        verifier_version=identity.verifier_version,
+                    )
+                )
 
         # Extract metrics
         metrics = {}
@@ -193,4 +226,4 @@ class PrimeIntellectEnv(MarinEnv):
             metrics[f"{self.env_id}.total_rollouts"] = len(result.reward)
 
         logger.info(f"Generated {len(rollout_groups)} rollout groups")
-        return rollout_groups, metrics
+        return EnvironmentSample(rollout_groups=rollout_groups, metrics=metrics, traces=traces, identity=identity)

@@ -11,6 +11,7 @@ from typing import Any
 import jax
 import numpy as np
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.spec import EnvironmentIdentity, EnvironmentSample
 from marin.rl.environments.tinker_environments.math_env import (
     MathEnv as TinkerMathEnvBase,
 )
@@ -20,6 +21,7 @@ from marin.rl.environments.tinker_environments.math_env import (
 )
 from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer, normalize_answer
 from marin.rl.math_utils import last_boxed_only_string
+from marin.rl.traces import EpisodeResponseTrace, EpisodeTrace
 from marin.rl.types import Rollout, RolloutGroup
 
 from .base import MarinEnv
@@ -123,6 +125,14 @@ class MathEnv(MarinEnv):
             return False
         return grade_answer(answer, ground_truth)
 
+    def environment_identity(self) -> EnvironmentIdentity:
+        return EnvironmentIdentity(
+            task_name="math",
+            task_version="tinker_v1",
+            verifier_name="math.tinker_grader",
+            verifier_version="v1",
+        )
+
     def sample(
         self,
         inference_ctx: BaseInferenceContext,
@@ -135,7 +145,7 @@ class MathEnv(MarinEnv):
         top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
-    ) -> tuple[list[RolloutGroup], dict[str, float]]:
+    ) -> EnvironmentSample:
         """Sample prompts, evaluate responses, and create rollouts."""
 
         if mode not in ("train", "eval"):
@@ -168,7 +178,9 @@ class MathEnv(MarinEnv):
             system_prompt=None,  # No system prompt - use few-shot examples instead
         )
 
+        identity = self.environment_identity()
         rollout_groups: list[RolloutGroup] = []
+        traces: list[EpisodeTrace] = []
         total_choices = 0
         reward_sum = 0.0
         format_sum = 0.0
@@ -178,6 +190,7 @@ class MathEnv(MarinEnv):
 
         for example, completion in zip(sampled_examples, completions, strict=True):
             group_rollouts: list[Rollout] = []
+            response_traces: list[EpisodeResponseTrace] = []
 
             for choice in completion.choices:
                 reward, fmt_score, correct_score = self._score_choice(
@@ -209,8 +222,30 @@ class MathEnv(MarinEnv):
                 if choice.finish_reason == "length":
                     truncated_count += 1
 
+                response_traces.append(
+                    EpisodeResponseTrace(
+                        response_text=choice.message.content,
+                        reward=reward,
+                        correctness_reward=correct_score,
+                        is_truncated=choice.finish_reason == "length",
+                        metadata={"format_score": fmt_score},
+                    )
+                )
+
             if group_rollouts:
                 rollout_groups.append(RolloutGroup(rollouts=group_rollouts))
+                traces.append(
+                    EpisodeTrace(
+                        env_name="math",
+                        env_example_id=example.example_id,
+                        prompt=example.processed_prompt,
+                        responses=tuple(response_traces),
+                        task_name=identity.task_name,
+                        task_version=identity.task_version,
+                        verifier_name=identity.verifier_name,
+                        verifier_version=identity.verifier_version,
+                    )
+                )
 
         if total_choices == 0:
             raise RuntimeError("Inference context returned no choices; cannot compute metrics")
@@ -226,7 +261,7 @@ class MathEnv(MarinEnv):
             f"{prefix}_truncated_percentage": float(truncated_count) / total_choices,
         }
 
-        return rollout_groups, metrics
+        return EnvironmentSample(rollout_groups=rollout_groups, metrics=metrics, traces=traces, identity=identity)
 
     def _score_choice(
         self, example: DataExample, response_text: str, finish_reason: str, tokenizer

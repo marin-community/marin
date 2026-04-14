@@ -5,9 +5,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import fsspec
+import numpy as np
 import pytest
+from marin.rl.environments.spec import EnvironmentIdentity, EnvironmentSample
 from marin.rl.environments.inference_ctx.staging import stage_vllm_metadata_locally
 from marin.rl.environments.inference_ctx.vllm import VLLMSamplingConfig, vLLMInferenceContextConfig
+from marin.rl.run_state import RolloutTransferCounters
+from marin.rl.traces import EpisodeResponseTrace, EpisodeTrace
 from marin.rl.rollout_worker import (
     RolloutTracker,
     RolloutTrackerConfig,
@@ -17,7 +21,7 @@ from marin.rl.rollout_worker import (
     _should_run_micro_eval,
     create_inference_context,
 )
-from marin.rl.run_state import RolloutTransferCounters
+from marin.rl.types import Rollout, RolloutGroup
 
 
 def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
@@ -188,6 +192,83 @@ def test_log_lesson_eval_uses_wandb_default_step_and_context_metrics():
             None,
         )
     ]
+
+
+def test_sample_batch_attaches_trace_and_verifier_metadata():
+    rollout = Rollout(
+        env_name="mock_env:cats",
+        env_example_id="example-1",
+        prompt_tokens=np.array([1, 2, 3], dtype=np.int32),
+        response_tokens=np.array([4, 5], dtype=np.int32),
+        response_logprobs=np.array([-0.1, -0.2], dtype=np.float32),
+        token_rewards=np.array([1.0, 1.0], dtype=np.float32),
+        episode_reward=1.0,
+        temperature=0.7,
+        top_k=5,
+        is_truncated=False,
+    )
+    sample = EnvironmentSample(
+        rollout_groups=[RolloutGroup(rollouts=[rollout])],
+        traces=[
+            EpisodeTrace(
+                env_name="mock_env:cats",
+                env_example_id="example-1",
+                prompt="prompt",
+                responses=(EpisodeResponseTrace(response_text="response", reward=1.0),),
+                task_name="mock_env:cats",
+                task_version="v1",
+                verifier_name="mock_env.reward",
+                verifier_version="v1",
+            )
+        ],
+        identity=EnvironmentIdentity(
+            task_name="mock_env:cats",
+            task_version="v1",
+            verifier_name="mock_env.reward",
+            verifier_version="v1",
+        ),
+    )
+
+    class _FakeEnv:
+        def sample(self, **_kwargs):
+            return sample
+
+    worker = object.__new__(RolloutWorker)
+    worker._load_environment = lambda _lesson_id: _FakeEnv()
+    worker._policy_ctx = object()
+    worker._current_weight_step = 42
+    worker.config = SimpleNamespace(
+        run_id="run-123",
+        system_prompt=None,
+        curriculum_config=SimpleNamespace(
+            lessons={
+                "lesson-a": SimpleNamespace(
+                    sampling_params=SimpleNamespace(
+                        temperature=0.7,
+                        top_k=5,
+                        stop_tokens=None,
+                        max_output_tokens=32,
+                    )
+                )
+            }
+        ),
+    )
+
+    batch, metrics = worker._sample_batch("lesson-a", 1, 1, "train", rng=None)
+
+    assert batch is not None
+    assert metrics == {}
+    assert batch.metadata.run_id == "run-123"
+    assert batch.metadata.lesson_id == "lesson-a"
+    assert batch.metadata.task_name == "mock_env:cats"
+    assert batch.metadata.verifier_name == "mock_env.reward"
+    assert batch.groups[0].metadata.lesson_id == "lesson-a"
+    assert batch.groups[0].metadata.group_id
+    assert batch.groups[0].metadata.trace_id
+    assert batch.groups[0].rollouts[0].metadata.group_id == batch.groups[0].metadata.group_id
+    assert batch.groups[0].rollouts[0].metadata.trace_id == batch.groups[0].metadata.trace_id
+    assert batch.groups[0].rollouts[0].metadata.task_name == "mock_env:cats"
+    assert batch.groups[0].rollouts[0].metadata.verifier_name == "mock_env.reward"
 
 
 def test_stage_vllm_metadata_locally_copies_hf_metadata(tmp_path, monkeypatch):

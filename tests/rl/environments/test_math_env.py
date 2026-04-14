@@ -73,7 +73,7 @@ def test_math_env_reward_calculation(gpt2_tokenizer):
     env = MathEnv(train_dataset=train_data, eval_dataset=[], max_train_examples=1)
 
     prng_key = jax.random.PRNGKey(42)
-    rollout_groups, metrics = env.sample(
+    sample = env.sample(
         inference_ctx=inference_ctx,
         n_examples=1,
         n_generations=1,
@@ -81,6 +81,8 @@ def test_math_env_reward_calculation(gpt2_tokenizer):
         prng_key=prng_key,
         mode="train",
     )
+    rollout_groups = sample.rollout_groups
+    metrics = sample.metrics
 
     # Verify structure
     assert len(rollout_groups) == 1
@@ -102,3 +104,8 @@ def test_math_env_reward_calculation(gpt2_tokenizer):
     # With format_coef=0.1, format_valid=1.0, correct_answer=1.0: reward = 0.1 * 0 + 1.0 = 1.0
     np.testing.assert_allclose(rollout.token_rewards, 1.0), (rollout, metrics)
     assert rollout.episode_reward == pytest.approx(1.0), (rollout, metrics)
+
+    assert sample.identity.task_name == "math"
+    assert sample.identity.verifier_name == "math.tinker_grader"
+    assert len(sample.traces) == 1
+    assert sample.traces[0].env_example_id == rollout.env_example_id
