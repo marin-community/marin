@@ -217,7 +217,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
                 )
 
                 # Sample examples, generate responses, and create rollouts from selected lesson
-                rollout_groups, metrics = env.sample(
+                sample = env.sample(
                     inference_ctx=policy_ctx,
                     n_examples=config.n_examples,
                     n_generations=config.n_generations,
@@ -225,6 +225,8 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
                     prng_key=jrandom.PRNGKey(config.seed),
                     mode="eval",
                 )
+                rollout_groups = sample.rollout_groups
+                metrics = sample.metrics
 
             if len(rollout_groups) == 0:
                 logger.warning("No valid rollouts generated in this batch...")

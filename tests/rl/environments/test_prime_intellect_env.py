@@ -84,7 +84,7 @@ def test_prime_intellect_env_sample(tokenizer, inference_ctx, vf_env):
     # Patch only external dependencies
     with patch.object(env, "load_prime_intellect_env", return_value=vf_env), patch("subprocess.run"):
         prng_key = jax.random.PRNGKey(0)
-        rollout_groups, metrics = env.sample(
+        sample = env.sample(
             inference_ctx=inference_ctx,
             n_examples=2,
             n_generations=2,
@@ -92,6 +92,8 @@ def test_prime_intellect_env_sample(tokenizer, inference_ctx, vf_env):
             prng_key=prng_key,
             mode="train",
         )
+    rollout_groups = sample.rollout_groups
+    metrics = sample.metrics
 
     # Verify rollout groups structure
     assert len(rollout_groups) == 2, "Should have 2 rollout groups (one per prompt)"
@@ -115,6 +117,9 @@ def test_prime_intellect_env_sample(tokenizer, inference_ctx, vf_env):
     # Verify metrics exist
     assert "primeintellect/gsm8k.mean_reward" in metrics
     assert "primeintellect/gsm8k.total_rollouts" in metrics
+    assert sample.identity.task_name == "prime_intellect:primeintellect/gsm8k"
+    assert sample.identity.verifier_name == "verifiers:primeintellect/gsm8k"
+    assert len(sample.traces) == 2
 
 
 def test_prime_intellect_env_openai_client_called(tokenizer, inference_ctx, vf_env):
@@ -123,7 +128,7 @@ def test_prime_intellect_env_openai_client_called(tokenizer, inference_ctx, vf_e
 
     with patch.object(env, "load_prime_intellect_env", return_value=vf_env), patch("subprocess.run"):
         prng_key = jax.random.PRNGKey(42)
-        rollout_groups, _ = env.sample(
+        sample = env.sample(
             inference_ctx=inference_ctx,
             n_examples=1,
             n_generations=1,
@@ -132,7 +137,7 @@ def test_prime_intellect_env_openai_client_called(tokenizer, inference_ctx, vf_e
         )
 
     # Verify we got rollout groups (which means generate() was called successfully)
-    assert len(rollout_groups) >= 0
+    assert len(sample.rollout_groups) >= 0
 
 
 def test_prime_intellect_env_tokenization(tokenizer, inference_ctx, vf_env):
@@ -141,13 +146,14 @@ def test_prime_intellect_env_tokenization(tokenizer, inference_ctx, vf_env):
 
     with patch.object(env, "load_prime_intellect_env", return_value=vf_env), patch("subprocess.run"):
         prng_key = jax.random.PRNGKey(123)
-        rollout_groups, _ = env.sample(
+        sample = env.sample(
             inference_ctx=inference_ctx,
             n_examples=2,
             n_generations=2,
             temperature=0.8,
             prng_key=prng_key,
         )
+    rollout_groups = sample.rollout_groups
 
     # Verify tokenization and chat template application
     for group in rollout_groups:

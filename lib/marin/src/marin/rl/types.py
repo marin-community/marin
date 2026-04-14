@@ -44,6 +44,47 @@ class RolloutMetadata:
     weight_step: int = -1
     """The step at which the model weights were used to generate this rollout."""
 
+    run_id: str = ""
+    """Stable run identifier for the rollout job."""
+
+    lesson_id: str = ""
+    """Lesson identifier associated with this rollout."""
+
+    group_id: str = ""
+    """Stable identifier for the rollout group that owns this rollout."""
+
+    trace_id: str = ""
+    """Stable identifier for the prompt-level trace that owns this rollout."""
+
+    task_name: str = ""
+    """Stable task identifier for this rollout."""
+
+    task_version: str = ""
+    """Version for the task contract used to generate this rollout."""
+
+    verifier_name: str | None = None
+    """Verifier name associated with this rollout, if any."""
+
+    verifier_version: str | None = None
+    """Verifier version associated with this rollout, if any."""
+
+    trace_ref: str | None = None
+    """Optional sidecar reference to richer cold-path trace data."""
+
+
+@dataclass(frozen=True)
+class RolloutGroupMetadata:
+    """Prompt-level metadata shared across all rollouts in a group."""
+
+    group_id: str = ""
+    lesson_id: str = ""
+    trace_id: str = ""
+    task_name: str = ""
+    task_version: str = ""
+    verifier_name: str | None = None
+    verifier_version: str | None = None
+    trace_ref: str | None = None
+
 
 class Rollout(eqx.Module):
     """A single rollout: one prompt + one generated response + rewards."""
@@ -89,6 +130,7 @@ class RolloutGroup(eqx.Module):
     """Multiple rollouts for the same prompt (e.g., n_generations samples)."""
 
     rollouts: list[Rollout]
+    metadata: RolloutGroupMetadata = RolloutGroupMetadata()
 
 
 class RolloutBatch(eqx.Module):
