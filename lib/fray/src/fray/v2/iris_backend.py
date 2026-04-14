@@ -36,6 +36,7 @@ from iris.cluster.constraints import (
 from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import job_pb2
+from iris.rpc.proto_utils import priority_band_value
 
 from fray.v2.actor import (
     ActorContext,
@@ -557,6 +558,9 @@ class FrayIrisClient:
 
         replicas = request.replicas or 1
         coscheduling = resolve_coscheduling(request.resources.device, replicas)
+        priority_band = job_pb2.PRIORITY_BAND_UNSPECIFIED
+        if request.priority_band is not None:
+            priority_band = priority_band_value(request.priority_band)
 
         policy = job_pb2.EXISTING_JOB_POLICY_KEEP if adopt_existing else job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED
         try:
@@ -571,6 +575,7 @@ class FrayIrisClient:
                 max_retries_failure=request.max_retries_failure,
                 max_retries_preemption=request.max_retries_preemption,
                 existing_job_policy=policy,
+                priority_band=priority_band,
             )
         except IrisJobAlreadyExists as e:
             raise FrayJobAlreadyExists(request.name) from e

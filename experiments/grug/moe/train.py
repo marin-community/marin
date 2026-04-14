@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import jmp
 import optax
 from fray.cluster import ResourceConfig
+from fray.v2.types import PriorityBand
 from haliax import Axis
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -85,6 +86,7 @@ class GrugRunConfig:
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    priority_band: PriorityBand | None = None
 
 
 def build_train_dataset(
@@ -565,6 +567,7 @@ def run_grug(config: GrugRunConfig) -> None:
         config=config,
         local_entrypoint=_run_grug_local,
         resources=config.resources,
+        priority_band=config.priority_band,
     )
 
 

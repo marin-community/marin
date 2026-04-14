@@ -163,6 +163,8 @@ GpuType = Literal[
     "auto",
 ]
 
+PriorityBand = Literal["production", "interactive", "batch"]
+
 
 @dataclass(frozen=True)
 class TpuTopologyInfo:
@@ -529,6 +531,7 @@ class JobRequest:
         replicas: Gang-scheduled replicas (e.g. TPU slices for multislice training)
         max_retries_failure: Max retries on failure
         max_retries_preemption: Max retries on preemption
+        priority_band: Iris scheduling priority band
     """
 
     name: str
@@ -538,6 +541,7 @@ class JobRequest:
     replicas: int | None = None
     max_retries_failure: int = 0
     max_retries_preemption: int = 100
+    priority_band: PriorityBand | None = None
 
     def __post_init__(self):
         if " " in self.name:

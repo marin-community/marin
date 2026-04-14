@@ -23,6 +23,7 @@ import jmp
 import optax
 import pytest
 from fray.cluster import ResourceConfig
+from fray.v2 import JobStatus, set_current_client
 from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
 
@@ -262,3 +263,59 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
+
+
+def test_grug_moe_1e23_smoke_uses_formula_depth_and_ragged_dispatch():
+    heuristic_module = importlib.import_module("experiments.grug.moe.heuristic")
+    launch_module = importlib.import_module("experiments.grug.moe.launch")
+
+    heuristic = heuristic_module.MoeAdamHHeuristic()
+    assert heuristic.build_model_config(5120).num_layers == 49
+
+    baseline = launch_module.baseline_moe.config
+    model = baseline.model.value
+    resources = baseline.resources.value
+
+    assert model.num_layers == 49
+    assert model.use_array_stacked_blocks is True
+    assert model.moe_implementation == "ragged_all_to_all"
+    assert resources.device.variant == "v4-2048"
+    assert list(resources.regions) == ["us-central2"]
+    assert baseline.expert_parallel.value == 8
+
+
+def test_grug_dispatch_forwards_priority_band_to_job_request():
+    dispatch_module = importlib.import_module("experiments.grug.dispatch")
+    captured: dict[str, object] = {}
+
+    class _FakeJob:
+        @property
+        def job_id(self) -> str:
+            return "fake-job"
+
+        def wait(self, timeout: float | None = None, *, raise_on_failure: bool = True) -> JobStatus:
+            del timeout, raise_on_failure
+            return JobStatus.SUCCEEDED
+
+        def status(self) -> JobStatus:
+            return JobStatus.SUCCEEDED
+
+        def terminate(self) -> None:
+            return None
+
+    class _FakeClient:
+        def submit(self, request, adopt_existing: bool = True):
+            captured["request"] = request
+            captured["adopt_existing"] = adopt_existing
+            return _FakeJob()
+
+    with set_current_client(_FakeClient()):
+        dispatch_module.dispatch_grug_training_run(
+            run_id="test-run",
+            config={"k": "v"},
+            local_entrypoint=lambda config: None,
+            resources=ResourceConfig.with_tpu("v4-8"),
+            priority_band="production",
+        )
+
+    assert captured["request"].priority_band == "production"

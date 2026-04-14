@@ -29,7 +29,7 @@ except ModuleNotFoundError:
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 
 from levanter.grug.attention import AttentionMask, RotaryConfig, align_kv_heads, apply_rotary_embedding, attention
-from levanter.grug.grug_moe import MoeActivation, moe_mlp
+from levanter.grug.grug_moe import MoeActivation, MoeImplementation, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
 from levanter.tracker.histogram import Histogram
@@ -74,8 +74,9 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    moe_implementation: MoeImplementation = "ring"
     # When True, stack all MoE blocks into a single `ArrayStacked[Block]` and
-    # apply them with `jax.lax.scan`. Collapses 48 per-layer subgraphs into one
+    # apply them with `jax.lax.scan`. Collapses per-layer subgraphs into one
     # scan body, dramatically reducing XLA compile time and peak HBM at scale.
     use_array_stacked_blocks: bool = False
 
@@ -410,7 +411,7 @@ class MoEMLP(eqx.Module):
             self.w_down,
             activation=ActivationFunctionEnum.silu,
             mesh=get_abstract_mesh(),
-            implementation="ring",
+            implementation=self.cfg.moe_implementation,
             capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
             report_capacity_overflow=True,
         )

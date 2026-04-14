@@ -14,9 +14,12 @@ from fray.v2 import (
     JobRequest,
     JobStatus,
     LocalClient,
+    ResourceConfig,
     wait_all,
 )
 from fray.v2.client import JobAlreadyExists
+from fray.v2.iris_backend import FrayIrisClient
+from iris.rpc import job_pb2
 
 
 @pytest.fixture
@@ -183,3 +186,31 @@ def test_submit_with_adopt_existing_true(client: LocalClient):
     assert h1.wait() == JobStatus.SUCCEEDED
     assert h2.wait() == JobStatus.SUCCEEDED
     assert h1.job_id != h2.job_id  # Different job IDs
+
+
+def test_fray_iris_client_forwards_priority_band():
+    class _FakeIrisJob:
+        pass
+
+    class _FakeIrisClient:
+        def __init__(self):
+            self.kwargs = None
+
+        def submit(self, **kwargs):
+            self.kwargs = kwargs
+            return _FakeIrisJob()
+
+    iris_client = _FakeIrisClient()
+    fray_client = FrayIrisClient.from_iris_client(iris_client)
+
+    fray_client.submit(
+        JobRequest(
+            name="priority-job",
+            entrypoint=Entrypoint.from_callable(_noop),
+            resources=ResourceConfig.with_cpu(),
+            priority_band="production",
+        )
+    )
+
+    assert iris_client.kwargs is not None
+    assert iris_client.kwargs["priority_band"] == job_pb2.PRIORITY_BAND_PRODUCTION

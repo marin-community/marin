@@ -14,6 +14,7 @@ from datetime import timedelta
 
 import jmp
 from fray.cluster import ResourceConfig
+from fray.v2.types import PriorityBand
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LmDataConfig
@@ -58,6 +59,7 @@ class GrugMoeLaunchConfig:
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
     expert_parallel: int = 1
+    priority_band: PriorityBand | None = None
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -112,14 +114,15 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         optimizer=config.optimizer,
         trainer=grug_trainer,
         eval=config.eval,
+        priority_band=config.priority_band,
     )
     run_grug(run_config)
 
 
-RESOLVED_RUN_ID = _resolve_run_id("moe_1e23_d5120_bs2048_ep4_ring")
+RESOLVED_RUN_ID = _resolve_run_id("moe_1e23_d5120_bs2048_ep8_ragged")
 
 
-# 1e23 compute budget, d5120 (48 layers hardcoded in heuristic). Model +
+# 1e23 compute budget, d5120. Model +
 # optimizer + batch + steps are all derived from `MoeAdamHHeuristic`. To
 # override any of these, swap in an explicit `GrugModelConfig` /
 # `GrugMoeAdamHConfig` below.
@@ -132,8 +135,13 @@ _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_f
     target_steps=_BASELINE_TARGET_STEPS,
 )
 # Stack MoE blocks via jax.lax.scan to keep XLA compile + peak HBM tractable at
-# 48 layers.
-_baseline_model = dataclasses.replace(_baseline_model, use_array_stacked_blocks=True)
+# the heuristic-derived depth, and force ragged dispatch so the smoke exercises
+# the high-EP path from #4697.
+_baseline_model = dataclasses.replace(
+    _baseline_model,
+    moe_implementation="ragged_all_to_all",
+    use_array_stacked_blocks=True,
+)
 
 # Override the heuristic-derived batch_size (round_up_pow2 only produces powers
 # of two; we want something in between). Recompute the optimizer at the new
@@ -149,7 +157,7 @@ if _BASELINE_BATCH_OVERRIDE is not None:
 
 
 baseline_moe = ExecutorStep(
-    name="grug/moe_1e23_d5120_bs2048_ep4_ring",
+    name="grug/moe_1e23_d5120_bs2048_ep8_ragged",
     fn=run_grug_moe_trial,
     config=GrugMoeLaunchConfig(
         model=versioned(_baseline_model),
@@ -158,10 +166,10 @@ baseline_moe = ExecutorStep(
         output_path=this_output_path(),
         # Keep run id out of versioning so changing job metadata doesn't create a new output path.
         run_id=RESOLVED_RUN_ID,
-        resources=versioned(ResourceConfig.with_tpu("v4-1024")),
+        resources=versioned(ResourceConfig.with_tpu("v4-2048", regions=["us-central2"])),
         steps=versioned(_baseline_steps),
         batch_size=versioned(_baseline_batch),
-        expert_parallel=versioned(4),
+        expert_parallel=versioned(8),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
@@ -171,6 +179,7 @@ baseline_moe = ExecutorStep(
             name=None,
         ),
         optimizer=versioned(_baseline_optimizer),
+        priority_band="production",
         grug_trainer=versioned(
             GrugTrainerConfig(
                 z_loss_weight=1e-4,
