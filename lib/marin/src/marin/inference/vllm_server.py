@@ -236,7 +236,11 @@ class NativeVllmServerBackend(VllmServerBackend):
 
 
 def resolve_vllm_mode(mode: Literal["native", "docker"] | None) -> Literal["native", "docker"]:
-    mode_str = (mode if mode is not None else os.environ.get("MARIN_VLLM_MODE", "docker")).lower()
+    # Default to native vLLM. The Docker sidecar path requires a mounted
+    # /var/run/docker.sock (docker-alongside-docker), which Iris workers do not
+    # provide. Set MARIN_VLLM_MODE=docker to opt in for Ray-era flows that still
+    # need the sidecar.
+    mode_str = (mode if mode is not None else os.environ.get("MARIN_VLLM_MODE", "native")).lower()
     if mode_str not in ("native", "docker"):
         raise ValueError(f"Unknown MARIN_VLLM_MODE={mode_str!r}; expected 'native' or 'docker'.")
     return mode_str  # type: ignore[return-value]
