@@ -7,11 +7,13 @@ import click
 import pytest
 
 from iris.cli.job import (
+    PRODUCTION_PRIORITY_WARNING,
     _parse_tpu_alternatives,
     _render_job_summary_text,
     build_job_summary,
     build_resources,
     build_tpu_alternatives,
+    resolve_priority_band,
     validate_extra_resources,
     validate_region_zone,
 )
@@ -257,6 +259,36 @@ def test_build_job_summary_hides_exit_code_for_non_terminal_tasks():
     assert by_idx["0"]["exit_code"] is None
     assert by_idx["1"]["exit_code"] is None
     assert by_idx["2"]["exit_code"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Priority band resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_priority_band_default_unspecified():
+    assert resolve_priority_band(None) == _job_pb2.PRIORITY_BAND_UNSPECIFIED
+
+
+def test_resolve_priority_band_interactive_no_warning(caplog):
+    with caplog.at_level("WARNING", logger="iris.cli.job"):
+        band = resolve_priority_band("interactive")
+    assert band == _job_pb2.PRIORITY_BAND_INTERACTIVE
+    assert PRODUCTION_PRIORITY_WARNING not in caplog.text
+
+
+def test_resolve_priority_band_batch_no_warning(caplog):
+    with caplog.at_level("WARNING", logger="iris.cli.job"):
+        band = resolve_priority_band("batch")
+    assert band == _job_pb2.PRIORITY_BAND_BATCH
+    assert PRODUCTION_PRIORITY_WARNING not in caplog.text
+
+
+def test_resolve_priority_band_production_warns(caplog):
+    with caplog.at_level("WARNING", logger="iris.cli.job"):
+        band = resolve_priority_band("production")
+    assert band == _job_pb2.PRIORITY_BAND_PRODUCTION
+    assert PRODUCTION_PRIORITY_WARNING in caplog.text
 
 
 def test_render_job_summary_text_shows_peak_memory():

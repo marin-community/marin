@@ -532,6 +532,28 @@ def resolve_multinode_defaults(
     return replicas, coscheduling
 
 
+PRODUCTION_PRIORITY_WARNING = (
+    "PRODUCTION priority preempts other users' INTERACTIVE/BATCH jobs. "
+    "Use it only for work that has been agreed in a weekly meeting or with the PI as "
+    "high-priority and blocked on compute. See lib/iris/docs/priority-bands.md."
+)
+
+
+def resolve_priority_band(priority: str | None) -> int:
+    """Convert a CLI priority name to a PriorityBand proto enum value.
+
+    Logs the chosen band, and a loud warning when PRODUCTION is selected so the
+    submitter knows they are preempting other users' work.
+    """
+    if priority is None:
+        return job_pb2.PRIORITY_BAND_UNSPECIFIED
+    band = priority_band_value(priority)
+    logger.info(f"Priority band: {priority}")
+    if band == job_pb2.PRIORITY_BAND_PRODUCTION:
+        logger.warning(PRODUCTION_PRIORITY_WARNING)
+    return band
+
+
 def run_iris_job(
     command: list[str],
     env_vars: dict[str, str],
@@ -625,10 +647,7 @@ def run_iris_job(
         logger.info(f"Reservation: {len(reservation)} entries")
 
     logger.info(f"Using controller: {controller_url}")
-    priority_band = job_pb2.PRIORITY_BAND_UNSPECIFIED
-    if priority is not None:
-        priority_band = priority_band_value(priority)
-        logger.info(f"Priority band: {priority}")
+    priority_band = resolve_priority_band(priority)
 
     return _submit_and_wait_job(
         controller_url=controller_url,
@@ -818,7 +837,11 @@ Examples:
     "--priority",
     type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
     default=None,
-    help="Priority band for scheduling (default: interactive). Lower bands run first; batch jobs yield to interactive.",
+    help=(
+        "Priority band for scheduling (default: interactive). PRODUCTION preempts other "
+        "users' work and is reserved for org-blocked compute; BATCH yields to everyone. "
+        "See lib/iris/docs/priority-bands.md."
+    ),
 )
 @click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
