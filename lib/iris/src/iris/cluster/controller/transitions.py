@@ -1707,6 +1707,19 @@ class ControllerTransitions:
             ).fetchone()
             if attempt_row is None:
                 continue
+            # The attempt is already terminal (e.g. preempted, killed) but the task has
+            # been rolled back to PENDING for retry and current_attempt_id still points
+            # at the dead attempt. Reviving it would produce an inconsistent row where
+            # state contradicts finished_at_ms/error.
+            if int(attempt_row["state"]) in TERMINAL_TASK_STATES:
+                logger.debug(
+                    "Dropping late update for terminal attempt: task=%s attempt=%d attempt_state=%d reported=%d",
+                    update.task_id,
+                    update.attempt_id,
+                    int(attempt_row["state"]),
+                    int(update.new_state),
+                )
+                continue
             worker_id = attempt_row["worker_id"]
             if update.resource_usage is not None:
                 ru = update.resource_usage
@@ -3290,6 +3303,18 @@ class ControllerTransitions:
                     (update.task_id.to_wire(), update.attempt_id),
                 ).fetchone()
                 if attempt_row is None:
+                    continue
+                # See _apply_task_transitions for rationale: the current attempt may
+                # be terminal while the task is retrying in PENDING; late reports
+                # must not revive it.
+                if int(attempt_row["state"]) in TERMINAL_TASK_STATES:
+                    logger.debug(
+                        "Dropping late update for terminal attempt: task=%s attempt=%d attempt_state=%d reported=%d",
+                        update.task_id,
+                        update.attempt_id,
+                        int(attempt_row["state"]),
+                        int(update.new_state),
+                    )
                     continue
 
                 if update.resource_usage is not None:
