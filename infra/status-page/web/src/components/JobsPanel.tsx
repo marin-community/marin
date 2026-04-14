@@ -79,10 +79,20 @@ export function JobsPanel() {
 
   return (
     <div>
-      <div className="mb-2 flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
-          Jobs
-        </h3>
+      <div className="mb-2 flex items-baseline justify-between gap-3">
+        <div className="flex items-baseline gap-3">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
+            Jobs
+          </h3>
+          <a
+            href="https://iris.oa.dev"
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-slate-500 hover:text-emerald-300"
+          >
+            iris.oa.dev ↗
+          </a>
+        </div>
         <span className="text-xs text-slate-500">root jobs only</span>
       </div>
       <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
