@@ -18,10 +18,12 @@ import pytest
 
 from iris.cluster.providers.gcp.controller import GcpControllerProvider
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
-from iris.cluster.providers.gcp.handles import GcpVmSliceHandle, _build_gce_resource_name
+from iris.cluster.providers.gcp.handles import GcpSliceHandle, GcpVmSliceHandle, _build_gce_resource_name
 from iris.cluster.providers.remote_exec import DirectSshRemoteExec, GceRemoteExec, GcloudRemoteExec
 from iris.cluster.providers.gcp.workers import (
     GcpWorkerProvider,
+    RESERVED_TPU_CLOUD_READY_TIMEOUT,
+    _run_tpu_bootstrap,
     _run_vm_slice_bootstrap,
     _validate_slice_config,
 )
@@ -927,6 +929,49 @@ def test_gcp_tpu_slice_os_login_prefers_external_ip_for_direct_ssh():
     assert status.workers[0].external_address == "34.1.2.3"
     assert isinstance(status.workers[0]._remote_exec, DirectSshRemoteExec)
     assert status.workers[0]._remote_exec.host == "34.1.2.3"
+
+
+# =============================================================================
+# Section 6: TPU Slice Bootstrap Tests
+# =============================================================================
+
+
+class _ImmediateDeadline:
+    def expired(self) -> bool:
+        return True
+
+
+def test_reserved_tpu_bootstrap_uses_extended_cloud_timeout():
+    """Reserved TPU bootstrap uses the longer queued-resource timeout."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    handle = GcpSliceHandle(
+        _slice_id="test-reserved-tpu",
+        _zone="us-central2-b",
+        _project_id="test-project",
+        _labels={},
+        _created_at=Timestamp.now(),
+        _label_prefix="iris",
+        _accelerator_variant="v4-32",
+        _gcp_service=gcp_service,
+        _ssh_config=config_pb2.SshConfig(),
+        _bootstrapping=True,
+        _is_queued_resource=True,
+    )
+    worker_config = config_pb2.WorkerConfig(port=10001)
+    seen_deadlines = []
+
+    def _fake_deadline_from_now(duration):
+        seen_deadlines.append(duration.to_seconds())
+        return _ImmediateDeadline()
+
+    with unittest.mock.patch(
+        "iris.cluster.providers.gcp.workers.Deadline.from_now",
+        side_effect=_fake_deadline_from_now,
+    ):
+        with pytest.raises(InfraError, match=rf"within {RESERVED_TPU_CLOUD_READY_TIMEOUT}s"):
+            _run_tpu_bootstrap(gcp_service, "test-project", handle, worker_config)
+
+    assert seen_deadlines == [RESERVED_TPU_CLOUD_READY_TIMEOUT]
 
 
 # =============================================================================

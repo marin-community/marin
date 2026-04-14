@@ -76,6 +76,7 @@ DEFAULT_MACHINE_TYPE = "n2-standard-4"
 DEFAULT_BOOT_DISK_SIZE_GB = 50
 # pd-ssd provides ~6000 IOPS vs ~38 on pd-standard, critical for controller DB
 DEFAULT_BOOT_DISK_TYPE = "pd-ssd"
+RESERVED_TPU_CLOUD_READY_TIMEOUT = 7200.0
 
 
 def _gcp_instance_metadata(
@@ -692,8 +693,12 @@ def _run_tpu_bootstrap(
     Phase 2: Poll worker health endpoints until all respond healthy.
     On timeout: query Cloud Logging for [iris-init] entries for diagnostics.
     """
+    queued_resource_ready_timeout = (
+        RESERVED_TPU_CLOUD_READY_TIMEOUT if handle.is_queued_resource else cloud_ready_timeout
+    )
+
     # Single deadline covers Phase 0 (queued resource wait) + Phase 1 (cloud READY).
-    cloud_deadline = Deadline.from_now(Duration.from_seconds(cloud_ready_timeout))
+    cloud_deadline = Deadline.from_now(Duration.from_seconds(queued_resource_ready_timeout))
 
     # Phase 0: If this is a queued resource (reserved TPU), wait for ACTIVE
     # before polling the TPU VM state. The queued resource may sit in QUEUED
@@ -712,7 +717,7 @@ def _run_tpu_bootstrap(
             time.sleep(queued_resource_poll_interval)
         else:
             raise InfraError(
-                f"Queued resource {handle.slice_id} did not become ACTIVE " f"within {cloud_ready_timeout}s"
+                f"Queued resource {handle.slice_id} did not become ACTIVE " f"within {queued_resource_ready_timeout}s"
             )
 
     while not cloud_deadline.expired():
@@ -731,7 +736,7 @@ def _run_tpu_bootstrap(
             )
         time.sleep(poll_interval)
     else:
-        raise InfraError(f"Slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s")
+        raise InfraError(f"Slice {handle.slice_id} did not reach cloud READY within {queued_resource_ready_timeout}s")
 
     workers = cloud_status.workers
     worker_addrs = [(w.worker_id, w.internal_address) for w in workers]
