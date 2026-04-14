@@ -27,6 +27,7 @@ import random
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -415,6 +416,20 @@ def _run_with_vllm(
         max_model_len=max_model_len,
         tensor_parallel_size=tensor_parallel_size,
     )
+
+    # Watchdog: if vLLM exits mid-run, abort immediately so the task fails
+    # fast and retries with a fresh vLLM, instead of generating thousands
+    # of useless "Connection error" rollouts.
+    def _vllm_watchdog():
+        ret = process.wait()
+        logger.error("vLLM exited unexpectedly (code %d) — aborting to trigger retry", ret)
+        import signal
+
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    watchdog = threading.Thread(target=_vllm_watchdog, daemon=True)
+    watchdog.start()
+
     try:
         rollouts = run_rollouts_concurrently(
             api_base=server_url,
