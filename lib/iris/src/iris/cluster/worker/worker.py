@@ -28,6 +28,7 @@ from iris.cluster.worker.env_probe import (
     check_worker_health,
     construct_worker_id,
     infer_worker_id,
+    probe_disk_writable,
     probe_hardware,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -140,6 +141,11 @@ class Worker:
             raise ValueError("WorkerConfig.cache_dir is required")
         self._cache_dir = config.cache_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Probe cache-dir writability once at startup. Failures propagate so
+        # the worker aborts and the controller reaps the machine; heartbeats
+        # deliberately do not repeat this probe (see #4732).
+        probe_disk_writable(str(self._cache_dir))
 
         # Use overrides if provided, otherwise create defaults
         self._bundle_store = bundle_store or BundleStore(
