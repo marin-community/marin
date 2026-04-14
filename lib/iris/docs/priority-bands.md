@@ -21,8 +21,7 @@ with the PI (Percy) as high priority for the whole org and blocked on compute.
 For Stanford folks: equivalent to `sphinx` queues on the NLP cluster.
 
 Submitting to PRODUCTION without a prior conversation is antisocial — you are
-preempting other researchers' running jobs. The CLI logs a warning when you
-pass `--priority production` to remind you of this contract.
+preempting other researchers' running jobs.
 
 ### INTERACTIVE
 
