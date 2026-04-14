@@ -11,7 +11,6 @@ from marin.processing.classification.deduplication.exact import dedup_exact_para
 import pytest
 from ddsketch import DDSketch
 from marin.processing.classification.consolidate import (
-    ConsolidateConfig,
     FilterConfig,
     FilterType,
     calculate_percentile_thresholds,
@@ -50,22 +49,17 @@ def test_calculate_percentile_threshold(tmp_path):
         _write_jsonl(attr_path, rows)
 
     keep_fraction = 0.5
-    config = ConsolidateConfig(
-        input_path=str(documents_dir),
-        output_path=str(tmp_path / "output"),
-        filters=[
-            FilterConfig(
-                type=FilterType.CLASSIFY,
-                attribute_path=str(attributes_dir),
-                name="quality",
-                label="good",
-                keep_fraction=keep_fraction,
-            )
-        ],
-        filetype="jsonl",
-    )
+    filters = [
+        FilterConfig(
+            type=FilterType.CLASSIFY,
+            attribute_path=str(attributes_dir),
+            name="quality",
+            label="good",
+            keep_fraction=keep_fraction,
+        )
+    ]
 
-    updated_filters = calculate_percentile_thresholds(config)
+    updated_filters = calculate_percentile_thresholds(input_path=str(documents_dir), filters=filters, filetype="jsonl")
     threshold = updated_filters[0].lower_threshold
 
     # Calculate expected threshold
@@ -109,7 +103,7 @@ def test_consolidate_filters_and_writes_output(tmp_path):
     _write_jsonl_gz(input_file, input_rows)
     _write_jsonl_gz(attribute_file, attribute_rows)
 
-    config = ConsolidateConfig(
+    consolidate(
         input_path=str(input_root),
         output_path=str(output_root),
         filters=[
@@ -122,8 +116,6 @@ def test_consolidate_filters_and_writes_output(tmp_path):
             )
         ],
     )
-
-    consolidate(config)
 
     output_file = output_root / "part-0000.parquet"
     assert (
@@ -161,9 +153,7 @@ def test_dedupe_consolidate_integration(fox_corpus):
     assert len(dedupe_output_files) > 0
 
     # Now run consolidate using the dedupe attributes
-    from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, FilterType, consolidate
-
-    consolidate_config = ConsolidateConfig(
+    consolidate(
         input_path=fox_corpus["test_dir"],
         output_path=consolidated_dir,
         filters=[
@@ -176,8 +166,6 @@ def test_dedupe_consolidate_integration(fox_corpus):
             )
         ],
     )
-
-    consolidate(consolidate_config)
 
     # Read consolidated output from all parquet shards
     consolidated_rows = []
