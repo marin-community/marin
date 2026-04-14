@@ -23,7 +23,7 @@ import logging
 from collections import deque
 from collections.abc import Sequence
 
-from iris.cluster.constraints import Constraint
+from iris.cluster.constraints import Constraint, WellKnownAttribute
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import (
     CloudSliceState,
@@ -378,6 +378,14 @@ class Autoscaler:
         if group.config.HasField("worker"):
             for k, v in group.config.worker.attributes.items():
                 wc.worker_attributes[k] = v
+
+        region = group.region
+        if region and not wc.worker_attributes.get(WellKnownAttribute.REGION):
+            wc.worker_attributes[WellKnownAttribute.REGION] = region
+
+        zone = group.zone
+        if zone and not wc.worker_attributes.get(WellKnownAttribute.ZONE):
+            wc.worker_attributes[WellKnownAttribute.ZONE] = zone
 
         if group.config.name:
             wc.worker_attributes["scale-group"] = group.config.name

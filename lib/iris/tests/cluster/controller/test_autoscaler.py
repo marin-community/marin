@@ -29,7 +29,7 @@ from tests.cluster.providers.conftest import (
     make_mock_slice_handle,
     make_mock_worker_handle,
 )
-from iris.cluster.constraints import DeviceType
+from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.types import WorkerStatus
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_proto import duration_to_proto
@@ -1186,6 +1186,24 @@ class TestPerGroupWorkerConfig:
 
         assert wc is not None
         assert wc.worker_attributes["team"] == "euw4"
+
+    def test_derives_region_and_zone_from_scale_group_when_missing(self):
+        """Derived region and zone are injected when worker attrs omit them."""
+        base_wc = config_pb2.WorkerConfig(
+            docker_image="ghcr.io/marin-community/iris-worker:latest",
+            port=10001,
+            controller_address="controller:10000",
+        )
+        sg_config = make_scale_group_config(name="east-group", max_slices=5, zones=["us-east5-a"])
+
+        group = ScalingGroup(sg_config, make_mock_platform())
+        autoscaler = make_autoscaler({"east-group": group}, base_worker_config=base_wc)
+
+        wc = autoscaler._per_group_worker_config(group)
+
+        assert wc is not None
+        assert wc.worker_attributes[WellKnownAttribute.REGION] == "us-east5"
+        assert wc.worker_attributes[WellKnownAttribute.ZONE] == "us-east5-a"
 
 
 class TestGpuScaleGroupBugs:
