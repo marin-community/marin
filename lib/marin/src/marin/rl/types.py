@@ -4,9 +4,11 @@
 """
 Type definitions for RL/post-training.
 
-This module contains training-focused type definitions:
-- Rollout types (Rollout, RolloutGroup, RolloutBatch, etc.)
-- Training types (TrainingBatch, RolloutWithAdvantage)
+This module contains the shared RL data plane:
+- rollout types (Rollout, RolloutGroup, RolloutBatch)
+- neutral trajectory and batch types (TrajectoryRecord, SequenceBatch, BatchInfo)
+- compatibility types still used by the current trainer path
+  (TrainingBatch, RolloutWithAdvantage)
 
 For inference-related types, see marin.rl.inference_ctx
 """
@@ -140,16 +142,105 @@ class RolloutBatch(eqx.Module):
     metadata: RolloutMetadata
 
 
+@dataclass(frozen=True)
+class TrajectoryRecord:
+    """Objective-neutral per-response training record."""
+
+    trace_id: str
+    env_name: str
+    task_name: str
+    task_version: str
+    lesson_id: str
+    env_example_id: str
+    group_id: str
+    verifier_name: str | None
+    verifier_version: str | None
+    prompt_tokens: np.ndarray
+    response_tokens: np.ndarray
+    behavior_logprobs: np.ndarray
+    token_rewards: np.ndarray
+    episode_reward: float
+    correctness_reward: float | None
+    is_truncated: bool
+    sampling_temperature: float
+    sampling_top_k: int | None
+    rollout_metadata: RolloutMetadata
+    trace_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class TrajectoryGroupRecord:
+    """Prompt-level grouped trajectory record."""
+
+    group_id: str
+    lesson_id: str
+    trace_id: str
+    task_name: str
+    task_version: str
+    verifier_name: str | None
+    verifier_version: str | None
+    prompt_tokens: np.ndarray
+    trajectories: tuple[TrajectoryRecord, ...]
+    trace_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class BatchInfo:
+    """Sidecar metadata carried alongside a SequenceBatch."""
+
+    group_id: tuple[str, ...]
+    lesson_id: tuple[str, ...]
+    env_name: tuple[str, ...]
+    env_example_id: tuple[str, ...]
+    task_name: tuple[str, ...]
+    task_version: tuple[str, ...]
+    verifier_name: tuple[str | None, ...]
+    verifier_version: tuple[str | None, ...]
+    worker_id: tuple[str, ...]
+    run_id: tuple[str, ...]
+    trace_id: tuple[str, ...]
+    trace_ref: tuple[str | None, ...]
+    prompt_length: ht.Int[NamedArray, "batch"]  # noqa: F821
+    response_length: ht.Int[NamedArray, "batch"]  # noqa: F821
+    episode_reward: ht.Float[NamedArray, "batch"]  # noqa: F821
+    token_rewards: ht.Float[NamedArray, "batch position"]
+    correctness_reward: ht.Float[NamedArray, "batch"]  # noqa: F821
+    weight_step: ht.Int[NamedArray, "batch"]  # noqa: F821
+    train_step: ht.Int[NamedArray, "batch"]  # noqa: F821
+    timestamp: tuple[float, ...]
+    """Wall-clock timestamps in seconds, kept host-side to avoid float32 quantization."""
+
+    def __len__(self) -> int:
+        return self.prompt_length.axis_size("batch")
+
+
+class SequenceBatch(eqx.Module):
+    """Objective-neutral batch with only scoring-time tensors."""
+
+    input_ids: ht.Int[NamedArray, "batch position"]
+    position_ids: ht.Int[NamedArray, "batch position"]
+    prompt_mask: ht.Float[NamedArray, "batch position"]
+    response_mask: ht.Float[NamedArray, "batch position"]
+    behavior_logprobs: ht.Float[NamedArray, "batch position"]
+    sampling_temperature: ht.Float[NamedArray, "batch"]  # noqa: F821
+    sampling_top_k: ht.Int[NamedArray, "batch"]  # noqa: F821
+    truncated: jax.Array  # [batch]
+    max_output_tokens: int
+
+    def __len__(self) -> int:
+        return self.input_ids.axis_size("batch")
+
+
 @dataclass
 class RolloutWithAdvantage:
-    """A rollout paired with its computed advantage."""
+    """Compatibility wrapper for the current trainer path."""
 
     rollout: Rollout
     advantage: float
 
 
 class TrainingBatch(eqx.Module):
-    """A batch ready for training with Haliax named arrays."""
+    """Compatibility batch still consumed by the current loss implementation."""
 
     input_ids: ht.Int[NamedArray, "batch position"]
     position_ids: ht.Int[NamedArray, "batch position"]
