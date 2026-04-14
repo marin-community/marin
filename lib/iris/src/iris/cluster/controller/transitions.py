@@ -1135,8 +1135,8 @@ class ControllerTransitions:
                 "entrypoint_json, environment_json, bundle_id, ports_json, "
                 "max_retries_failure, max_retries_preemption, timeout_ms, "
                 "preemption_policy, existing_job_policy, priority_band, "
-                "task_image, reservation_json, fail_if_exists"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "task_image, submit_argv_json, reservation_json, fail_if_exists"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job_id.to_wire(),
                     job_name_lower,
@@ -1161,6 +1161,7 @@ class ControllerTransitions:
                     int(request.existing_job_policy),
                     int(request.priority_band),
                     request.task_image,
+                    json.dumps(list(request.submit_argv)),
                     reservation_json,
                     1 if request.fail_if_exists else 0,
                 ),

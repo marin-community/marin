@@ -17,12 +17,31 @@ REDACTED_VALUE = "**REDACTED**"
 # CLI flags on `iris job run` that take a (KEY, VALUE) pair via Click's
 # type=(str, str). Keep in sync with the Click option definition in
 # iris/cli/job.py; see the `-e/--env-vars` option on the `run` command.
-_ENV_VAR_FLAGS = frozenset({"-e", "--env-vars"})
+_ENV_VAR_LONG_FLAG = "--env-vars"
+_ENV_VAR_SHORT_FLAG = "-e"
 
 
 def is_sensitive_env_key(key: str) -> bool:
     """Return True if *key* looks like a secret env var name."""
     return bool(SENSITIVE_ENV_KEY_RE.search(key))
+
+
+def _env_var_flag_key(token: str, next_token: str | None) -> str | None:
+    """Extract the KEY from an env-var flag token, or None if not such a flag.
+
+    Handles all Click syntaxes for a `(str, str)` option:
+      * bare long form: `--env-vars KEY VALUE` → KEY is *next_token*
+      * attached long form: `--env-vars=KEY VALUE` → KEY is embedded
+      * bare short form: `-e KEY VALUE` → KEY is *next_token*
+      * attached short form: `-eKEY VALUE` → KEY is embedded
+    """
+    if token == _ENV_VAR_LONG_FLAG or token == _ENV_VAR_SHORT_FLAG:
+        return next_token
+    if token.startswith(_ENV_VAR_LONG_FLAG + "="):
+        return token[len(_ENV_VAR_LONG_FLAG) + 1 :]
+    if token.startswith(_ENV_VAR_SHORT_FLAG) and len(token) > 2 and not token.startswith("--"):
+        return token[2:]
+    return None
 
 
 def redact_request_env_vars(
@@ -44,19 +63,37 @@ def redact_request_env_vars(
 def redact_submit_argv(argv: list[str]) -> list[str]:
     """Redact secret-looking values from a captured CLI argv.
 
-    Handles `-e KEY VALUE` / `--env-vars KEY VALUE` pairs (Click's
-    ``type=(str, str)`` form): when KEY matches SENSITIVE_ENV_KEY_RE, VALUE
-    is replaced with REDACTED_VALUE. Other tokens pass through unchanged.
+    Handles every Click syntax for the `-e`/`--env-vars` tuple option:
+
+      * ``-e KEY VALUE`` / ``--env-vars KEY VALUE`` — bare
+      * ``--env-vars=KEY VALUE`` — attached long form
+      * ``-eKEY VALUE`` — attached short form
+
+    When KEY matches SENSITIVE_ENV_KEY_RE, VALUE is replaced with
+    REDACTED_VALUE. Other tokens pass through unchanged.
     """
     out = list(argv)
+    n = len(out)
     i = 0
-    while i < len(out):
+    while i < n:
         tok = out[i]
-        if tok in _ENV_VAR_FLAGS and i + 2 < len(out):
-            key = out[i + 1]
-            if is_sensitive_env_key(key):
-                out[i + 2] = REDACTED_VALUE
-            i += 3
+        next_tok = out[i + 1] if i + 1 < n else None
+        key = _env_var_flag_key(tok, next_tok)
+        if key is None:
+            i += 1
             continue
-        i += 1
+
+        # Locate the VALUE token. For bare forms KEY is the next token and
+        # VALUE is the one after; for attached forms KEY is embedded and
+        # VALUE is the next token.
+        attached = tok != _ENV_VAR_LONG_FLAG and tok != _ENV_VAR_SHORT_FLAG
+        val_idx = i + 1 if attached else i + 2
+        if val_idx >= n:
+            # Malformed (no VALUE token present); leave argv alone.
+            i += 1
+            continue
+
+        if is_sensitive_env_key(key):
+            out[val_idx] = REDACTED_VALUE
+        i = val_idx + 1
     return out

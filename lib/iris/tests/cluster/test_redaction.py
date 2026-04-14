@@ -90,3 +90,56 @@ def test_redact_submit_argv_trailing_env_flag_without_value_is_passthrough():
     # Malformed input (missing value) should not crash; we bail out cleanly.
     argv = ["iris", "-e", "HF_TOKEN"]
     assert redact_submit_argv(argv) == argv
+
+
+def test_redact_submit_argv_attached_long_form():
+    # Click accepts --env-vars=KEY with VALUE as the next token.
+    argv = ["iris", "job", "run", "--env-vars=HF_TOKEN", "hf_xyz", "--", "python", "t.py"]
+    out = redact_submit_argv(argv)
+    assert out[3] == "--env-vars=HF_TOKEN"
+    assert out[4] == REDACTED_VALUE
+
+
+def test_redact_submit_argv_attached_long_form_benign_key():
+    argv = ["iris", "--env-vars=LOG_LEVEL", "info", "--"]
+    assert redact_submit_argv(argv) == argv
+
+
+def test_redact_submit_argv_attached_short_form():
+    # Click accepts -eKEY with VALUE as the next token.
+    argv = ["iris", "job", "run", "-eAPI_KEY", "sk-xyz", "--", "python", "t.py"]
+    out = redact_submit_argv(argv)
+    assert out[3] == "-eAPI_KEY"
+    assert out[4] == REDACTED_VALUE
+
+
+def test_redact_submit_argv_attached_short_form_benign_key():
+    argv = ["iris", "-eLOG_LEVEL", "info", "--"]
+    assert redact_submit_argv(argv) == argv
+
+
+def test_redact_submit_argv_mixed_forms():
+    argv = [
+        "iris",
+        "job",
+        "run",
+        "-e",
+        "LOG_LEVEL",
+        "info",
+        "--env-vars=HF_TOKEN",
+        "hf_xyz",
+        "-eAPI_KEY",
+        "sk-abc",
+        "--",
+        "python",
+        "t.py",
+    ]
+    out = redact_submit_argv(argv)
+    assert out[5] == "info"
+    assert out[7] == REDACTED_VALUE
+    assert out[9] == REDACTED_VALUE
+
+
+def test_redact_submit_argv_attached_long_form_missing_value():
+    argv = ["iris", "--env-vars=HF_TOKEN"]
+    assert redact_submit_argv(argv) == argv
