@@ -39,9 +39,9 @@ from levanter.tokenizers import load_tokenizer
 
 from fray.v2 import current_client
 from marin.rl.curriculum import Curriculum
+from marin.rl.objectives import make_rloo_objective
 from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
 from marin.rl.replay_buffer import ReplayBufferConfig
-from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig
 from marin.rl.rollout_worker import RolloutWorker, find_open_port
 from marin.rl.run_state import RLRunState
@@ -321,7 +321,8 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
             max_samples=1,
             max_rollout_step_delay=0,
         ),
-        loss=RLOOLoss(kl_coef=0.0, clip_epsilon=5.0),
+        objective=make_rloo_objective(kl_coef=0.0, clip_epsilon_low=5.0, clip_epsilon_high=5.0),
+        scorer_vocab_tile_size=None,
         initial_checkpoint=None,
     )
 

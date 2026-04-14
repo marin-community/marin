@@ -22,9 +22,9 @@ from transformers import AutoConfig
 
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
+from marin.rl.objectives import make_rloo_objective
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
-from marin.rl.rl_losses import RLOOLoss
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from tests.rl.integration.config import (
     RolloutWorkerRunner,
@@ -134,7 +134,7 @@ def test_llama_math_integration(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=opt_config,
-            rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
+            objective=make_rloo_objective(kl_coef=0.01, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
             replay_buffer=ReplayBufferConfig(
                 capacity=2048,
                 alpha=3.0,
