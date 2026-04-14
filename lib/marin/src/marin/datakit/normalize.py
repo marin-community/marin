@@ -177,6 +177,7 @@ def _build_pipeline(
     num_shards: int,
     text_field: str,
     id_field: str | None,
+    exact_dedup: bool,
 ) -> Dataset:
     """Build a single Zephyr pipeline for one subdirectory."""
     normalize_record = _make_normalize_fn(text_field, id_field)
@@ -189,6 +190,10 @@ def _build_pipeline(
             if rid != prev_id:
                 prev_id = rid
                 yield record
+
+    def passthrough(_key: int, items: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        """Yield items unchanged; used when exact dedup is disabled."""
+        yield from items
 
     def has_text(record: dict[str, Any]) -> bool:
         text = record.get(text_field)
@@ -204,7 +209,7 @@ def _build_pipeline(
         .map(normalize_record)
         .group_by(
             key=lambda r: int(r["id"], 16) % num_shards,
-            reducer=dedup_and_sort,
+            reducer=dedup_and_sort if exact_dedup else passthrough,
             sort_by=lambda r: r["id"],
             num_output_shards=num_shards,
         )
@@ -224,14 +229,15 @@ def normalize_to_parquet(
     target_partition_bytes: int = 256 * 1024 * 1024,
     worker_resources: ResourceConfig | None = None,
     file_extensions: tuple[str, ...] | None = None,
+    exact_dedup: bool = True,
 ) -> NormalizeResult:
     """Normalize raw downloaded data to the datakit standard Parquet format.
 
     Discovers all data files under *input_path*, groups them by subdirectory,
     and launches one Zephyr pipeline per subdirectory concurrently.  Each
     pipeline normalizes records (``id``, ``text``, preserves all other columns),
-    deduplicates by content, sorts by ``id``, and writes Parquet partitions
-    sized by *target_partition_bytes*.
+    optionally exact-deduplicates by content, sorts by ``id``, and writes
+    Parquet partitions sized by *target_partition_bytes*.
 
     Args:
         input_path: Root directory containing raw downloaded data.
@@ -249,6 +255,9 @@ def normalize_to_parquet(
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
+        exact_dedup: If True (the default), drop records with duplicate ``id``
+            values (i.e. exact text duplicates) within each output shard.  Set
+            to False to skip the dedup pass and preserve all input records.
 
     Returns:
         A :class:`NormalizeResult` describing the output files and zephyr
@@ -276,7 +285,7 @@ def normalize_to_parquet(
             num_shards,
         )
 
-        pipeline = _build_pipeline(files, output_dir, num_shards, text_field, id_field)
+        pipeline = _build_pipeline(files, output_dir, num_shards, text_field, id_field, exact_dedup)
         ctx = ZephyrContext(
             name=f"normalize-{subdir.replace('/', '-') if subdir else 'all'}",
             resources=resources,
@@ -323,6 +332,7 @@ def normalize_step(
     override_output_path: str | None = None,
     input_path: str | None = None,
     file_extensions: tuple[str, ...] | None = None,
+    exact_dedup: bool = True,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
 
@@ -340,6 +350,8 @@ def normalize_step(
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
+        exact_dedup: If True (the default), drop records with duplicate ``id``
+            values (i.e. exact text duplicates) within each output shard.
     """
     resolved_input = input_path or download.output_path
 
@@ -353,6 +365,7 @@ def normalize_step(
             target_partition_bytes=target_partition_bytes,
             worker_resources=worker_resources,
             file_extensions=file_extensions,
+            exact_dedup=exact_dedup,
         ),
         deps=[download],
         hash_attrs={
@@ -361,6 +374,7 @@ def normalize_step(
             "target_partition_bytes": target_partition_bytes,
             "input_path": resolved_input,
             "file_extensions": file_extensions,
+            "exact_dedup": exact_dedup,
         },
         override_output_path=override_output_path,
     )
