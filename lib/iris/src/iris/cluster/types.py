@@ -587,14 +587,30 @@ class Namespace(str):
         return cls(job_id.namespace)
 
 
-def is_job_finished(state: int) -> bool:
-    return state in (
+TERMINAL_JOB_STATES: frozenset[int] = frozenset(
+    {
         job_pb2.JOB_STATE_SUCCEEDED,
         job_pb2.JOB_STATE_FAILED,
         job_pb2.JOB_STATE_KILLED,
         job_pb2.JOB_STATE_WORKER_FAILED,
         job_pb2.JOB_STATE_UNSCHEDULABLE,
-    )
+    }
+)
+
+TERMINAL_TASK_STATES: frozenset[int] = frozenset(
+    {
+        job_pb2.TASK_STATE_SUCCEEDED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_KILLED,
+        job_pb2.TASK_STATE_UNSCHEDULABLE,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_PREEMPTED,
+    }
+)
+
+
+def is_job_finished(state: int) -> bool:
+    return state in TERMINAL_JOB_STATES
 
 
 def is_task_finished(state: int) -> bool:
@@ -603,18 +619,7 @@ def is_task_finished(state: int) -> bool:
     This is a simple check for whether the state is a terminal state.
     For ControllerTask, use task.is_finished() which also considers retry budgets.
     """
-    # Avoid circular import - define inline since this is a stable set
-    terminal_states = frozenset(
-        {
-            job_pb2.TASK_STATE_SUCCEEDED,
-            job_pb2.TASK_STATE_FAILED,
-            job_pb2.TASK_STATE_KILLED,
-            job_pb2.TASK_STATE_WORKER_FAILED,
-            job_pb2.TASK_STATE_PREEMPTED,
-            job_pb2.TASK_STATE_UNSCHEDULABLE,
-        }
-    )
-    return state in terminal_states
+    return state in TERMINAL_TASK_STATES
 
 
 JobState = job_pb2.JobState

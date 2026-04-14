@@ -17,7 +17,7 @@ from typing import Any
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
 from iris.rpc import job_pb2
 from rigging.timing import Deadline, Duration, Timestamp
 
@@ -137,26 +137,7 @@ def task_row_can_be_scheduled(task: Any) -> bool:
     )
 
 
-TERMINAL_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_SUCCEEDED,
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_KILLED,
-        job_pb2.TASK_STATE_UNSCHEDULABLE,
-        job_pb2.TASK_STATE_WORKER_FAILED,
-        job_pb2.TASK_STATE_PREEMPTED,
-    }
-)
-
-TERMINAL_JOB_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.JOB_STATE_SUCCEEDED,
-        job_pb2.JOB_STATE_FAILED,
-        job_pb2.JOB_STATE_KILLED,
-        job_pb2.JOB_STATE_WORKER_FAILED,
-        job_pb2.JOB_STATE_UNSCHEDULABLE,
-    }
-)
+# TERMINAL_TASK_STATES and TERMINAL_JOB_STATES are imported from iris.cluster.types.
 
 ACTIVE_TASK_STATES: frozenset[int] = frozenset(
     {
@@ -184,9 +165,7 @@ FAILURE_TASK_STATES: frozenset[int] = frozenset(
 )
 
 
-def job_is_finished(state: int) -> bool:
-    """Check if a job is in a terminal state."""
-    return state in TERMINAL_JOB_STATES
+# job_is_finished is imported from iris.cluster.types (canonical definition).
 
 
 def job_scheduling_deadline(scheduling_deadline_epoch_ms: int | None) -> Deadline | None:
@@ -194,16 +173,6 @@ def job_scheduling_deadline(scheduling_deadline_epoch_ms: int | None) -> Deadlin
     if scheduling_deadline_epoch_ms is None:
         return None
     return Deadline.after(Timestamp.from_ms(scheduling_deadline_epoch_ms), Duration.from_ms(0))
-
-
-def task_is_live(state: int) -> bool:
-    """Check if a task is in a non-terminal state."""
-    return state not in TERMINAL_TASK_STATES
-
-
-def task_is_dead(state: int) -> bool:
-    """Check if a task is in a terminal state."""
-    return state in TERMINAL_TASK_STATES
 
 
 def attempt_is_terminal(state: int) -> bool:
