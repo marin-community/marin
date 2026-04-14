@@ -1151,14 +1151,15 @@ class ControllerServiceImpl:
         autoscaler = self._controller.autoscaler
         if autoscaler is not None:
             replicas = request.replicas if request.HasField("coscheduling") else None
+            constraints = [Constraint.from_proto(c) for c in request.constraints]
             error = autoscaler.job_feasibility(
-                constraints=[Constraint.from_proto(c) for c in request.constraints],
+                constraints=constraints,
                 replicas=replicas,
             )
             if error:
                 raise ConnectError(
                     Code.FAILED_PRECONDITION,
-                    f"Job is unschedulable: {error}",
+                    f"Job {job_id} is unschedulable: {error} (constraints: {constraints})",
                 )
 
         self._transitions.submit_job(job_id, request, Timestamp.now())
