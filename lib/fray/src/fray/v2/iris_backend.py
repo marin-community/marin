@@ -641,6 +641,7 @@ class FrayIrisClient:
 
         iris_resources = convert_resources(resources)
         iris_constraints = convert_constraints(resources)
+        iris_environment = convert_environment(None, device=resources.device)
 
         coscheduling = resolve_coscheduling(resources.device, count)
 
@@ -656,6 +657,7 @@ class FrayIrisClient:
             entrypoint=entrypoint,
             name=name,
             resources=iris_resources,
+            environment=iris_environment,
             ports=["actor"],
             constraints=iris_constraints if iris_constraints else None,
             coscheduling=coscheduling,
