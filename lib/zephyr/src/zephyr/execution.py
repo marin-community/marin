@@ -26,7 +26,7 @@ import threading
 import time
 import traceback
 import uuid
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
@@ -513,7 +513,8 @@ class ZephyrCoordinator:
             dead,
         )
         if retried:
-            logger.warning("[%s] Shards retried (shard: attempts): %s", self._execution_id, retried)
+            attempts_histogram = dict(sorted(Counter(retried.values()).items()))
+            logger.warning("[%s] Shards retried (attempts: shard count): %s", self._execution_id, attempts_histogram)
 
     def _record_shard_failure(self, worker_id: str, error_info: str | None = None) -> bool:
         """Record a failure for the worker's in-flight shard. Must be called with lock held.
