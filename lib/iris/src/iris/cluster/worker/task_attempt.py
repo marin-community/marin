@@ -882,7 +882,7 @@ class TaskAttempt:
         try:
             self._log_pusher.push(self._log_key, entries)
         except Exception:
-            logger.debug("Failed to push %d logs for task %s", len(entries), self.task_id, exc_info=True)
+            logger.warning("Failed to push %d logs for task %s", len(entries), self.task_id, exc_info=True)
 
     def _append_log(self, *, source: str, data: str) -> None:
         """Push a single log entry (for rare events like errors)."""
@@ -894,7 +894,7 @@ class TaskAttempt:
             entries = [self._make_log_entry(source=line.source, data=line.data) for line in reader.read()]
             self._push_logs(entries)
         except Exception:
-            logger.debug("Log streaming failed for task %s", self.task_id, exc_info=True)
+            logger.warning("Log streaming failed for task %s", self.task_id, exc_info=True)
 
     def _cleanup(self) -> None:
         """Clean up task resources: container, ports, image protection, workdir.
@@ -917,7 +917,7 @@ class TaskAttempt:
             try:
                 self._log_pusher.flush()
             except Exception as e:
-                logger.debug("Failed to flush logs for task %s: %s", self.task_id, e)
+                logger.warning("Failed to flush logs for task %s: %s", self.task_id, e)
 
         # Clean up container handle (logs already captured in monitor loop)
         if self._container_handle:

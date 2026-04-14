@@ -164,6 +164,126 @@ def test_log_pusher_flushes_at_batch_size():
     assert sent[0] == ("k", 2)
 
 
+def test_send_warns_on_rpc_failure(caplog):
+    """LogPusher._send() emits a warning (not debug) on RPC failure."""
+    sent_count = 0
+
+    class FailingPusher(LogPusher):
+        def __init__(self):
+            self._batch_size = 1000
+            self._flush_interval = 999.0
+            self._buffers: dict[str, list[logging_pb2.LogEntry]] = {}
+            self._lock = threading.Lock()
+            self._send_lock = threading.Lock()
+            self._closed = False
+            self._flush_timer = None
+            self._consecutive_failures = 0
+            self._last_fail_warn_time = 0.0
+
+        def _send(self, key, entries):
+            nonlocal sent_count
+            # Simulate an RPC failure by calling the real _send with a broken client.
+            raise ConnectionError("server unavailable")
+
+    # Instead of subclassing, directly test the real _send with a failing client.
+    class FailingClient:
+        def push_logs(self, request):
+            raise ConnectionError("server unavailable")
+
+        def close(self):
+            pass
+
+    pusher = LogPusher.__new__(LogPusher)
+    pusher._client = FailingClient()
+    pusher._batch_size = 1000
+    pusher._flush_interval = 999.0
+    pusher._buffers = {}
+    pusher._lock = threading.Lock()
+    pusher._send_lock = threading.Lock()
+    pusher._closed = False
+    pusher._flush_timer = None
+    pusher._consecutive_failures = 0
+    pusher._last_fail_warn_time = 0.0
+
+    entry = logging_pb2.LogEntry(source="test", data="line")
+    with caplog.at_level(logging.WARNING, logger="iris.log_server.client"):
+        pusher._send("k", [entry])
+
+    assert any("Failed to push" in r.message and r.levelno == logging.WARNING for r in caplog.records)
+    assert pusher._consecutive_failures == 1
+
+
+def test_send_warns_rate_limited(caplog):
+    """Repeated failures only warn on the first, then respect the rate limit."""
+
+    class FailingClient:
+        def push_logs(self, request):
+            raise ConnectionError("server unavailable")
+
+        def close(self):
+            pass
+
+    pusher = LogPusher.__new__(LogPusher)
+    pusher._client = FailingClient()
+    pusher._batch_size = 1000
+    pusher._flush_interval = 999.0
+    pusher._buffers = {}
+    pusher._lock = threading.Lock()
+    pusher._send_lock = threading.Lock()
+    pusher._closed = False
+    pusher._flush_timer = None
+    pusher._consecutive_failures = 0
+    pusher._last_fail_warn_time = 0.0
+
+    entry = logging_pb2.LogEntry(source="test", data="line")
+    with caplog.at_level(logging.WARNING, logger="iris.log_server.client"):
+        # First failure should warn
+        pusher._send("k", [entry])
+        # Subsequent failures within the interval should not warn
+        pusher._send("k", [entry])
+        pusher._send("k", [entry])
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "Failed to push" in r.message]
+    assert len(warnings) == 1, f"Expected 1 warning, got {len(warnings)}"
+    assert pusher._consecutive_failures == 3
+
+
+def test_send_logs_recovery(caplog):
+    """LogPusher logs info when sends recover after failures."""
+    call_count = 0
+
+    class FlakeyClient:
+        def push_logs(self, request):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                raise ConnectionError("server unavailable")
+
+        def close(self):
+            pass
+
+    pusher = LogPusher.__new__(LogPusher)
+    pusher._client = FlakeyClient()
+    pusher._batch_size = 1000
+    pusher._flush_interval = 999.0
+    pusher._buffers = {}
+    pusher._lock = threading.Lock()
+    pusher._send_lock = threading.Lock()
+    pusher._closed = False
+    pusher._flush_timer = None
+    pusher._consecutive_failures = 0
+    pusher._last_fail_warn_time = 0.0
+
+    entry = logging_pb2.LogEntry(source="test", data="line")
+    with caplog.at_level(logging.INFO, logger="iris.log_server.client"):
+        pusher._send("k", [entry])  # fail
+        pusher._send("k", [entry])  # fail
+        pusher._send("k", [entry])  # succeed
+
+    assert any("recovered" in r.message and r.levelno == logging.INFO for r in caplog.records)
+    assert pusher._consecutive_failures == 0
+
+
 def test_close_waits_for_inflight_send():
     """close() must not destroy the client while _send() is in flight.
 

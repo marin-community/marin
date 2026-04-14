@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Iterable
 
 from connectrpc.interceptor import Interceptor
@@ -23,6 +24,9 @@ from iris.rpc import logging_pb2
 from iris.rpc.logging_connect import LogServiceClientSync
 
 logger = logging.getLogger(__name__)
+
+# Minimum interval between repeated failure warnings (seconds).
+_WARN_INTERVAL = 60
 
 
 class LogPusher:
@@ -50,6 +54,8 @@ class LogPusher:
         self._closed = False
 
         self._flush_timer: threading.Timer | None = None
+        self._consecutive_failures = 0
+        self._last_fail_warn_time = 0.0
         self._schedule_flush()
 
     def _schedule_flush(self) -> None:
@@ -92,7 +98,22 @@ class LogPusher:
             try:
                 self._client.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
             except Exception:
-                logger.debug("Failed to push %d log entries for key %s", len(entries), key, exc_info=True)
+                self._consecutive_failures += 1
+                now = time.monotonic()
+                if self._consecutive_failures == 1 or now - self._last_fail_warn_time >= _WARN_INTERVAL:
+                    logger.warning(
+                        "Failed to push %d log entries for key %s (%d consecutive failures)",
+                        len(entries),
+                        key,
+                        self._consecutive_failures,
+                        exc_info=True,
+                    )
+                    self._last_fail_warn_time = now
+                return
+            if self._consecutive_failures > 0:
+                logger.info("Log push recovered after %d consecutive failures", self._consecutive_failures)
+                self._consecutive_failures = 0
+                self._last_fail_warn_time = 0.0
 
     def flush(self) -> None:
         """Force-flush all buffered entries."""
