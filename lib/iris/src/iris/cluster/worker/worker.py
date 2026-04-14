@@ -28,6 +28,7 @@ from iris.cluster.worker.env_probe import (
     check_worker_health,
     construct_worker_id,
     infer_worker_id,
+    probe_disk_writable,
     probe_hardware,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -140,6 +141,10 @@ class Worker:
             raise ValueError("WorkerConfig.cache_dir is required")
         self._cache_dir = config.cache_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Probe cache-dir writability once at startup; heartbeats re-surface
+        # this error without repeating the file create/unlink (see #4732).
+        self._writable_error = probe_disk_writable(str(self._cache_dir))
 
         # Use overrides if provided, otherwise create defaults
         self._bundle_store = bundle_store or BundleStore(
@@ -821,7 +826,10 @@ class Worker:
 
             # Run health checks to detect local faults (disk full, write failure)
             with slow_log(logger, "heartbeat health_check", threshold_ms=100):
-                health = check_worker_health(disk_path=str(self._cache_dir))
+                health = check_worker_health(
+                    disk_path=str(self._cache_dir),
+                    writable_error=self._writable_error,
+                )
                 if not health.healthy:
                     logger.warning("Worker health check failed: %s", health.error)
 

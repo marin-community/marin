@@ -516,47 +516,66 @@ class HealthCheckResult:
     error: str = ""
 
 
-def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
-    """Run basic health probes and return a combined result.
+def probe_disk_writable(disk_path: str) -> str:
+    """Write and remove a probe file to verify the work directory accepts writes.
 
-    Checks performed:
-    - Can write and remove a tempfile in the work directory
-    - Root/work volume has >= 5% free space
+    Intended to be called once at worker startup; heartbeat-time checks must not
+    repeat this probe because creating/removing a file on every heartbeat churns
+    file descriptors and can itself fail with EMFILE under load. Startup-time
+    failures are cached and re-reported by `check_worker_health`.
 
-    Docker probing is implicit: if the worker is processing heartbeats
-    and fetching task status, Docker is operational.
-
-    If disk_path is not an existing directory (e.g. during teardown, or on
-    platforms where the path does not exist), the probe is skipped and the
-    worker is considered healthy.
+    Returns an empty string on success, or an error message describing the
+    failure. Returns an empty string when `disk_path` is not an existing
+    directory (the probe is considered not applicable).
     """
     dp = Path(disk_path)
     if not dp.is_dir():
-        return HealthCheckResult(healthy=True)
-
-    errors: list[str] = []
-
-    # Check tempfile write
+        return ""
     try:
         probe_path = dp / ".iris_health_probe"
         probe_path.write_text("ok")
         probe_path.unlink()
     except FileNotFoundError:
         # TOCTOU: directory vanished between is_dir() check and write
-        pass
+        return ""
     except OSError as e:
-        errors.append(f"tempfile write failed: {e}")
+        return f"tempfile write failed: {e}"
+    return ""
 
-    # Check disk free space
-    try:
-        usage = shutil.disk_usage(disk_path)
-        if usage.total > 0:
-            free_fraction = (usage.total - usage.used) / usage.total
-            if free_fraction < MIN_DISK_FREE_FRACTION:
-                pct = free_fraction * 100
-                errors.append(f"disk free space {pct:.1f}% below threshold {MIN_DISK_FREE_FRACTION * 100:.0f}%")
-    except OSError as e:
-        errors.append(f"disk usage check failed: {e}")
+
+def check_worker_health(disk_path: str = "/", writable_error: str = "") -> HealthCheckResult:
+    """Run heartbeat-time health probes and return a combined result.
+
+    Checks performed:
+    - Root/work volume has >= 5% free space
+
+    `writable_error` carries the cached result of `probe_disk_writable` from
+    worker startup; a non-empty value surfaces as unhealthy on every heartbeat.
+    The tempfile write is intentionally not repeated here — see
+    `probe_disk_writable` for the rationale.
+
+    Docker probing is implicit: if the worker is processing heartbeats
+    and fetching task status, Docker is operational.
+
+    If disk_path is not an existing directory (e.g. during teardown, or on
+    platforms where the path does not exist), the disk-free check is skipped.
+    """
+    errors: list[str] = []
+
+    if writable_error:
+        errors.append(writable_error)
+
+    dp = Path(disk_path)
+    if dp.is_dir():
+        try:
+            usage = shutil.disk_usage(disk_path)
+            if usage.total > 0:
+                free_fraction = (usage.total - usage.used) / usage.total
+                if free_fraction < MIN_DISK_FREE_FRACTION:
+                    pct = free_fraction * 100
+                    errors.append(f"disk free space {pct:.1f}% below threshold {MIN_DISK_FREE_FRACTION * 100:.0f}%")
+        except OSError as e:
+            errors.append(f"disk usage check failed: {e}")
 
     if errors:
         return HealthCheckResult(healthy=False, error="; ".join(errors))

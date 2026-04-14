@@ -18,6 +18,7 @@ from iris.cluster.worker.env_probe import (
     build_worker_metadata,
     check_worker_health,
     construct_worker_id,
+    probe_disk_writable,
 )
 from iris.rpc import config_pb2
 
@@ -388,8 +389,48 @@ def test_health_check_writable_dir(tmp_path):
     """Health check succeeds on a writable directory."""
     result = check_worker_health(disk_path=str(tmp_path))
     assert result.healthy
-    # Probe file should be cleaned up
+
+
+def test_health_check_does_not_touch_filesystem(tmp_path):
+    """Heartbeat-path health check must not create the probe file (issue #4732)."""
+    for _ in range(5):
+        result = check_worker_health(disk_path=str(tmp_path))
+        assert result.healthy
+    # No per-heartbeat file churn — the probe file is never created here.
     assert not (tmp_path / ".iris_health_probe").exists()
+
+
+def test_health_check_surfaces_cached_writable_error(tmp_path):
+    """A non-empty writable_error from startup propagates into heartbeat results."""
+    result = check_worker_health(
+        disk_path=str(tmp_path),
+        writable_error="tempfile write failed: read-only mount",
+    )
+    assert not result.healthy
+    assert "read-only mount" in result.error
+
+
+def test_probe_disk_writable_success(tmp_path):
+    """probe_disk_writable returns empty string and cleans up on a writable dir."""
+    assert probe_disk_writable(str(tmp_path)) == ""
+    assert not (tmp_path / ".iris_health_probe").exists()
+
+
+def test_probe_disk_writable_missing_dir():
+    """probe_disk_writable returns empty string when the path is not a directory."""
+    assert probe_disk_writable("/nonexistent/path/that/does/not/exist") == ""
+
+
+def test_probe_disk_writable_reports_error(tmp_path, monkeypatch):
+    """probe_disk_writable surfaces OSError from the write as a descriptive string."""
+
+    def _raise(*args, **kwargs):
+        raise PermissionError("read-only filesystem")
+
+    monkeypatch.setattr("pathlib.Path.write_text", _raise)
+    err = probe_disk_writable(str(tmp_path))
+    assert err.startswith("tempfile write failed:")
+    assert "read-only filesystem" in err
 
 
 def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):
