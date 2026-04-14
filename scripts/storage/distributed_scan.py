@@ -128,6 +128,25 @@ def _write_parquet_to_gcs(table: pa.Table, staging_dir: str) -> str:
     return path
 
 
+def _truncate_staging_dir(staging_dir: str) -> None:
+    """Delete all `objects_*.parquet` segments under staging_dir before a run.
+
+    Segments are written under fresh UUIDs so reruns cannot overwrite prior
+    files — without this, every re-run strictly appends and the consumer
+    sees N-way duplicated (bucket, name) rows.
+    """
+    import fsspec
+
+    fs, _ = fsspec.core.url_to_fs(staging_dir)
+    pattern = f"{staging_dir.rstrip('/')}/objects_*.parquet"
+    existing = fs.glob(pattern)
+    if not existing:
+        return
+    print(f"Truncating {len(existing)} stale segments under {staging_dir}")
+    for path in existing:
+        fs.rm(path)
+
+
 # ---------------------------------------------------------------------------
 # Coordinator actor
 # ---------------------------------------------------------------------------
@@ -556,6 +575,8 @@ def run_distributed(
 
     ctx = iris_ctx()
     client = ctx.client
+
+    _truncate_staging_dir(staging_dir)
 
     # Start coordinator actor
     coordinator = ScanCoordinatorActor(staging_dir)

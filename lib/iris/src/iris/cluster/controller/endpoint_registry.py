@@ -33,9 +33,9 @@ import logging
 from collections.abc import Iterable, Sequence
 from threading import RLock
 
-from iris.cluster.controller.db import TERMINAL_TASK_STATES, EndpointQuery, TransactionCursor
+from iris.cluster.controller.db import EndpointQuery, TransactionCursor
 from iris.cluster.controller.schema import ENDPOINT_PROJECTION, EndpointRow
-from iris.cluster.types import JobName
+from iris.cluster.types import TERMINAL_TASK_STATES, JobName
 
 logger = logging.getLogger(__name__)
 

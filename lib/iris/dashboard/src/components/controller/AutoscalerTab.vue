@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
-import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { SLICE_STATE_STYLES, SLICE_BADGE_ORDER, CATEGORICAL_COLORS, vmStateToName } from '@/types/status'
 import type {
   GetAutoscalerStatusResponse,
@@ -31,7 +31,7 @@ const { data: schedulerData, refresh: refreshScheduler } = useControllerRpc<GetS
 async function refresh() {
   await Promise.all([refreshAutoscaler(), refreshScheduler()])
 }
-useAutoRefresh(refresh, 30_000)
+useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
 onMounted(refresh)
 
 // -- Expand/collapse state --

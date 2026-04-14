@@ -66,7 +66,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
             logger.info(f"WandB Run Name: {name}")
             logger.info(f"Running eval harness on model: {model_name_or_path}")
-            print("after wandb log")
+            logger.debug("after wandb log")
             # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
             # In the future, we should make this user-configurable.
             trainer_config = TrainerConfig(
@@ -75,7 +75,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 per_device_eval_parallelism=1,
                 ray=RayConfig(auto_start_cluster=False),
             )
-            print("after trainer?")
+            logger.debug("after trainer config")
 
             model_config = HFCheckpointConverter.from_hf(model_name_or_path).LevConfigClass()
 
@@ -89,7 +89,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             logger.info(f"Model name: {model.name}")
             logger.info(f"model_name_or_path: {model_name_or_path}")
 
-            print("starting harness")
+            logger.debug("starting harness")
             eval_config = eval_harness.EvalHarnessMainConfig(
                 eval_harness=eval_harness.LmEvalHarnessConfig(
                     task_spec=tasks,
@@ -108,7 +108,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             )
 
             results = eval_harness.run_eval_harness_main(eval_config)
-            print("finished harness")
+            logger.debug("finished harness")
 
             try:
                 # add a results.json to output path

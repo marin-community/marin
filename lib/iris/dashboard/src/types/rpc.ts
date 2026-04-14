@@ -178,6 +178,7 @@ export interface LaunchJobRequest {
   bundleId?: string
   replicas?: number
   priorityBand?: string
+  submitArgv?: string[]
 }
 
 export interface GetTaskStatusResponse {

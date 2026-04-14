@@ -38,6 +38,7 @@ class ClusterClient(Protocol):
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+        submit_argv: list[str] | None = None,
     ) -> JobName: ...
 
     def get_job_status(self, job_id: JobName) -> job_pb2.JobStatus: ...

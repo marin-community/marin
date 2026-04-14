@@ -104,8 +104,9 @@ def ensure_parent_dir(path: str) -> None:
     if "://" in path:
         output_dir = path.rsplit("/", 1)[0]
         fs, dir_path = url_to_fs(output_dir)
-        if not fs.exists(dir_path):
-            fs.mkdirs(dir_path, exist_ok=True)
+        # mkdirs(exist_ok=True) handles the already-exists case internally;
+        # a separate fs.exists() check would add a redundant network round-trip.
+        fs.mkdirs(dir_path, exist_ok=True)
     else:
         output_dir = os.path.dirname(path)
         if output_dir:
