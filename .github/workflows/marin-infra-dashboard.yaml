@@ -80,6 +80,7 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
+          install_components: beta
 
       - name: Deploy to Cloud Run
         run: ./infra/status-page/deploy.sh
