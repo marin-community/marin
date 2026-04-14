@@ -3,7 +3,13 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'infra/iris-iap-proxy/**'
+      - '.github/workflows/iris-iap-proxy.yaml'
   pull_request:
+    paths:
+      - 'infra/iris-iap-proxy/**'
+      - '.github/workflows/iris-iap-proxy.yaml'
 
 
 concurrency:
@@ -11,26 +17,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      should_run: ${{ steps.filter.outputs.relevant }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            relevant:
-              - 'infra/iris-iap-proxy/**'
-              - '.github/workflows/iris-iap-proxy.yaml'
-
   build:
-    needs: changes
-    if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -49,8 +36,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
-    needs: [changes, build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.should_run == 'true'
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
