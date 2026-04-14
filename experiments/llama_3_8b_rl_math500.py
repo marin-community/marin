@@ -21,6 +21,7 @@ from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
+from marin.rl.objectives import make_rloo_objective
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
     RLExperimentConfig,
@@ -28,7 +29,6 @@ from marin.rl.rl_experiment_utils import (
     executor_main_config_for_rl_experiment,
     make_rl_step,
 )
-from marin.rl.rl_losses import RLOOLoss
 
 from experiments.models import llama_3_1_8b_instruct
 
@@ -56,8 +56,8 @@ LLAMA_3_1_8B_INSTRUCT = ModelConfig(
 )
 
 
-def _default_rl_loss() -> RLOOLoss:
-    return RLOOLoss(
+def _default_objective():
+    return make_rloo_objective(
         kl_coef=0.0,
         clip_epsilon_low=0.2,
         clip_epsilon_high=0.28,
@@ -65,7 +65,6 @@ def _default_rl_loss() -> RLOOLoss:
         do_trainer_inference_mismatch_importance_sampling=True,
         tis_importance_sampling_ratio_max=2.0,
         do_overlong_filtering=True,
-        vocab_tile_size=32064,
     )
 
 
@@ -225,7 +224,8 @@ def build_experiment_config(args: argparse.Namespace) -> RLExperimentConfig:
 
     return RLExperimentConfig(
         model_config=LLAMA_3_1_8B_INSTRUCT,
-        rl_loss=_default_rl_loss(),
+        objective=_default_objective(),
+        scorer_vocab_tile_size=32064,
         experiment_name_suffix=args.experiment_name_suffix,
         project_name=args.project_name,
         tags=tags,

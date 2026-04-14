@@ -5,8 +5,8 @@
 Training batch creation utilities for RL training.
 
 This module owns the neutral trajectory-to-batch transform used by the RL
-training stack. The current TrainingBatch remains available as a compatibility
-adapter until replay and objective runtime refactors land.
+training stack. TrainingBatch remains available only as a legacy compatibility
+adapter for parity tests and old helper paths.
 """
 
 import logging

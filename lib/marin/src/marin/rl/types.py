@@ -7,7 +7,7 @@ Type definitions for RL/post-training.
 This module contains the shared RL data plane:
 - rollout types (Rollout, RolloutGroup, RolloutBatch)
 - neutral trajectory and batch types (TrajectoryRecord, SequenceBatch, BatchInfo)
-- compatibility types still used by the current trainer path
+- legacy compatibility types retained for parity checks and helper adapters
   (TrainingBatch, RolloutWithAdvantage)
 
 For inference-related types, see marin.rl.inference_ctx
@@ -233,14 +233,14 @@ class SequenceBatch(eqx.Module):
 
 @dataclass
 class RolloutWithAdvantage:
-    """Compatibility wrapper for the current trainer path."""
+    """Legacy compatibility wrapper retained for parity checks."""
 
     rollout: Rollout
     advantage: float
 
 
 class TrainingBatch(eqx.Module):
-    """Compatibility batch still consumed by the current loss implementation."""
+    """Legacy compatibility batch retained for the old loss implementation."""
 
     input_ids: ht.Int[NamedArray, "batch position"]
     position_ids: ht.Int[NamedArray, "batch position"]

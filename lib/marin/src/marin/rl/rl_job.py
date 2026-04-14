@@ -24,12 +24,12 @@ from levanter.optim import OptimizerConfig
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.trainer import TrainerConfig
 from marin.rl.curriculum import CurriculumConfig
+from marin.rl.objectives import ObjectiveSpec
 from marin.rl.environments.inference_ctx import (
     LevanterInferenceContextConfig,
     vLLMInferenceContextConfig,
 )
 from marin.rl.replay_buffer import ReplayBufferConfig
-from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorkerConfig
@@ -79,7 +79,8 @@ class TrainParams:
     """RL-specific training configuration parameters."""
 
     optimizer: OptimizerConfig
-    rl_loss: "RLLossModule"
+    objective: ObjectiveSpec
+    scorer_vocab_tile_size: int | None = None
     replay_buffer: ReplayBufferConfig = field(
         default_factory=lambda: ReplayBufferConfig(
             capacity=4096,
@@ -286,7 +287,8 @@ class RLJob:
             model=self.config.model,
             trainer=self.config.trainer,
             optimizer=self.config.train_params.optimizer,
-            loss=self.config.train_params.rl_loss,
+            objective=self.config.train_params.objective,
+            scorer_vocab_tile_size=self.config.train_params.scorer_vocab_tile_size,
             tokenizer=tokenizer,
             replay_buffer=self.config.train_params.replay_buffer,
             initial_checkpoint=self.config.initial_checkpoint,
