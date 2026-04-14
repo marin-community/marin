@@ -6,7 +6,7 @@
 import numpy as np
 import pytest
 from marin.rl import train_batch
-from marin.rl.types import Rollout, RolloutWithAdvantage
+from marin.rl.types import Rollout, RolloutGroup, RolloutGroupMetadata, RolloutMetadata, RolloutWithAdvantage
 
 
 def create_test_rollout(
@@ -15,6 +15,8 @@ def create_test_rollout(
     env_name: str = "test_env",
     episode_reward: float = 1.0,
     unique_id: int = 12345,
+    metadata: RolloutMetadata | None = None,
+    correctness_reward: float | None = None,
 ) -> Rollout:
     """Create a test rollout with predictable token values."""
     prompt_tokens = np.full(prompt_len, unique_id, dtype=np.int32)
@@ -33,6 +35,8 @@ def create_test_rollout(
         temperature=1.0,
         top_k=None,
         is_truncated=False,
+        metadata=RolloutMetadata() if metadata is None else metadata,
+        correctness_reward=correctness_reward,
     )
 
 
@@ -212,3 +216,174 @@ def test_batch_dtypes():
     assert batch.loss_weights.array.dtype == np.float32
     assert batch.loss_masks.array.dtype == np.float32
     assert batch.policy_logprobs.array.dtype == np.float32
+
+
+def test_rollout_to_trajectory_record_preserves_trace_and_verifier_metadata():
+    metadata = RolloutMetadata(
+        worker_id="worker-7",
+        timestamp=12.5,
+        weight_step=42,
+        run_id="run-1",
+        lesson_id="lesson-a",
+        group_id="group-3",
+        trace_id="trace-9",
+        task_name="math",
+        task_version="v2",
+        verifier_name="grader",
+        verifier_version="2026-04-14",
+        trace_ref="gs://trace.json",
+    )
+    rollout = create_test_rollout(metadata=metadata, correctness_reward=0.75)
+
+    record = train_batch.rollout_to_trajectory_record(rollout)
+
+    assert record.trace_id == "trace-9"
+    assert record.group_id == "group-3"
+    assert record.lesson_id == "lesson-a"
+    assert record.task_name == "math"
+    assert record.task_version == "v2"
+    assert record.verifier_name == "grader"
+    assert record.verifier_version == "2026-04-14"
+    assert record.trace_ref == "gs://trace.json"
+    assert record.rollout_metadata.run_id == "run-1"
+    assert record.correctness_reward == 0.75
+
+
+def test_create_sequence_batch_from_rollouts_produces_neutral_masks_and_info():
+    rollout_a = create_test_rollout(
+        prompt_len=3,
+        response_len=2,
+        unique_id=10,
+        episode_reward=1.5,
+        metadata=RolloutMetadata(
+            worker_id="worker-a",
+            timestamp=5.0,
+            weight_step=11,
+            run_id="run-a",
+            lesson_id="lesson-1",
+            group_id="group-1",
+            trace_id="trace-1",
+            task_name="task-a",
+            task_version="v1",
+            verifier_name="verifier-a",
+            verifier_version="1.0",
+            trace_ref="trace://1",
+        ),
+        correctness_reward=0.25,
+    )
+    rollout_b = create_test_rollout(
+        prompt_len=2,
+        response_len=4,
+        unique_id=20,
+        episode_reward=2.5,
+        metadata=RolloutMetadata(
+            worker_id="worker-b",
+            timestamp=7.5,
+            weight_step=13,
+            run_id="run-b",
+            lesson_id="lesson-2",
+            group_id="group-2",
+            trace_id="trace-2",
+            task_name="task-b",
+            task_version="v3",
+        ),
+    )
+
+    batch, info = train_batch.create_sequence_batch_from_rollouts([rollout_a, rollout_b], max_tokens=16, pad_token_id=0)
+
+    assert len(batch) == 2
+    assert batch.input_ids.axis_size("position") == 6
+    np.testing.assert_array_equal(batch.prompt_mask.array[0], np.array([1, 1, 1, 0, 0, 0], dtype=np.float32))
+    np.testing.assert_array_equal(batch.response_mask.array[0], np.array([0, 0, 0, 1, 1, 0], dtype=np.float32))
+    np.testing.assert_array_equal(
+        info.token_rewards.array[0],
+        np.array([0.0, 0.0, 0.0, 0.1, 0.1, 0.0], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(info.prompt_length.array, np.array([3, 2], dtype=np.int32))
+    np.testing.assert_array_equal(info.response_length.array, np.array([2, 4], dtype=np.int32))
+    np.testing.assert_allclose(info.episode_reward.array, np.array([1.5, 2.5], dtype=np.float32))
+    np.testing.assert_allclose(info.correctness_reward.array[0], 0.25)
+    assert np.isnan(info.correctness_reward.array[1])
+    assert info.group_id == ("group-1", "group-2")
+    assert info.lesson_id == ("lesson-1", "lesson-2")
+    assert info.task_name == ("task-a", "task-b")
+    assert info.verifier_name == ("verifier-a", None)
+    assert info.trace_id == ("trace-1", "trace-2")
+    assert info.trace_ref == ("trace://1", None)
+    assert info.timestamp == (5.0, 7.5)
+
+
+def test_sequence_batch_lengths_reflect_truncation():
+    rollout = create_test_rollout(prompt_len=5, response_len=4, unique_id=33)
+
+    batch, info = train_batch.create_sequence_batch_from_rollouts([rollout], max_tokens=7, pad_token_id=0)
+
+    np.testing.assert_array_equal(batch.prompt_mask.array[0], np.array([1, 1, 1, 1, 1, 0, 0], dtype=np.float32))
+    np.testing.assert_array_equal(batch.response_mask.array[0], np.array([0, 0, 0, 0, 0, 1, 1], dtype=np.float32))
+    np.testing.assert_array_equal(info.prompt_length.array, np.array([5], dtype=np.int32))
+    np.testing.assert_array_equal(info.response_length.array, np.array([2], dtype=np.int32))
+
+
+def test_batch_info_preserves_timestamp_precision_at_unix_scale():
+    base_timestamp = 1_710_000_000.0
+    rollout_a = create_test_rollout(
+        unique_id=41,
+        metadata=RolloutMetadata(timestamp=base_timestamp, weight_step=1),
+    )
+    rollout_b = create_test_rollout(
+        unique_id=42,
+        metadata=RolloutMetadata(timestamp=base_timestamp + 1.0, weight_step=2),
+    )
+
+    _, info = train_batch.create_sequence_batch_from_rollouts([rollout_a, rollout_b], max_tokens=16, pad_token_id=0)
+
+    assert info.timestamp == (base_timestamp, base_timestamp + 1.0)
+
+
+def test_rollout_group_to_trajectory_group_record_uses_group_metadata():
+    metadata = RolloutMetadata(
+        lesson_id="lesson-shared",
+        group_id="group-shared",
+        trace_id="trace-shared",
+        task_name="task-shared",
+        task_version="v9",
+        verifier_name="verifier-shared",
+        verifier_version="v1",
+        trace_ref="trace://shared",
+    )
+    rollout_a = create_test_rollout(prompt_len=3, response_len=2, unique_id=88, metadata=metadata)
+    rollout_b = create_test_rollout(prompt_len=3, response_len=2, unique_id=88, metadata=metadata)
+    group = RolloutGroup(
+        rollouts=[rollout_a, rollout_b],
+        metadata=RolloutGroupMetadata(
+            group_id="group-override",
+            lesson_id="lesson-override",
+            trace_id="trace-override",
+            task_name="task-override",
+            task_version="v10",
+            verifier_name="verifier-override",
+            verifier_version="v2",
+            trace_ref="trace://override",
+        ),
+    )
+
+    record = train_batch.rollout_group_to_trajectory_group_record(group)
+
+    assert record.group_id == "group-override"
+    assert record.lesson_id == "lesson-override"
+    assert record.trace_id == "trace-override"
+    assert record.task_name == "task-override"
+    assert record.task_version == "v10"
+    assert record.verifier_name == "verifier-override"
+    assert record.verifier_version == "v2"
+    assert record.trace_ref == "trace://override"
+    assert len(record.trajectories) == 2
+
+
+def test_rollout_group_to_trajectory_group_record_rejects_mismatched_prompts():
+    rollout_a = create_test_rollout(prompt_len=3, response_len=2, unique_id=1)
+    rollout_b = create_test_rollout(prompt_len=3, response_len=2, unique_id=2)
+    group = RolloutGroup(rollouts=[rollout_a, rollout_b], metadata=RolloutGroupMetadata())
+
+    with pytest.raises(ValueError, match="share the same prompt tokens"):
+        train_batch.rollout_group_to_trajectory_group_record(group)
