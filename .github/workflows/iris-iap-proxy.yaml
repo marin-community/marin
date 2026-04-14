@@ -1,4 +1,4 @@
-name: Iris - IAP Proxy Deploy
+name: Iris - IAP Proxy
 on:
   push:
     branches:
