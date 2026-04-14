@@ -30,7 +30,7 @@ from iris.log_server.server import LogServiceImpl
 from iris.rpc.auth import AuthInterceptor, NullAuthInterceptor
 from iris.rpc.logging_connect import LogServiceWSGIApplication
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("iris.log_server")
 
 
 # Env var used by the subprocess entrypoint to receive the controller's JWT
