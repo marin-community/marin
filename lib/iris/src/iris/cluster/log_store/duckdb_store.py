@@ -58,7 +58,24 @@ from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
 
+# Local-only logger: does NOT propagate to the root logger.
+#
+# The log store is routinely wired into the root logging chain via
+# LogStoreHandler (see iris.cluster.log_store.__init__). If this module's
+# logs propagated up, every info/warning emitted from the append/flush/GC
+# path would be re-captured by LogStoreHandler and fed back into the store
+# (``append`` -> buffer -> flush -> more logs -> ...), generating re-entrant
+# traffic and polluting user-visible task logs with internal bookkeeping
+# chatter. Install our own stderr handler so these lines still surface in
+# the controller's stderr / log_server stderr without participating in the
+# normal logging hierarchy.
 logger = logging.getLogger(__name__)
+logger.propagate = False
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
 
 _PARQUET_SCHEMA = pa.schema(
     [
