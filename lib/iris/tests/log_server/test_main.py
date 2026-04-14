@@ -61,6 +61,7 @@ def test_fetch_logs_concurrency_cap_enforced_by_interceptor(service: LogServiceI
     num_callers = limit + 3
 
     with TestClient(app) as client:
+
         def call():
             return client.post(
                 "/iris.logging.LogService/FetchLogs",
