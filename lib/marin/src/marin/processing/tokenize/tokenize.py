@@ -16,6 +16,8 @@ import re
 import time
 from collections.abc import Iterator, Sequence
 
+import numpy as np
+
 import braceexpand
 import draccus
 import fsspec
@@ -31,7 +33,7 @@ from levanter.data.text import (
     preprocessor_for_format,
 )
 from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
-from levanter.store.cache import consolidate_shard_caches
+from levanter.store.cache import CacheLedger, CacheMetadata
 from levanter.store.tree_store import TreeStore
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
 from zephyr.dataset import FileEntry
@@ -424,28 +426,36 @@ def tokenize(config: TokenizeConfigBase):
         shard_paths = ctx.execute(temp_shards).results
         tokenize_elapsed = time.monotonic() - tokenize_start
 
-        logger.info("Computing exemplar for cache consolidation")
-        exemplar = ctx.execute(
-            Dataset.from_list(file_groups[0][0:1])
-            .flat_map(load_file)
-            .take_per_shard(1)
-            .map_shard(lambda example, _: _tokenize_batches(config=config, batches=[example])),
-            verbose=False,
-        ).results[0]
+        # Build sharded ledger — each shard is directly readable, no consolidation needed.
+        shard_ledgers = [CacheLedger.load(p) for p in shard_paths]
+        shard_rows = {}
+        total_elements = 0
+        field_counts: dict[str, int] = {}
+        for path, sl in zip(shard_paths, shard_ledgers, strict=True):
+            shard_name = os.path.basename(path)
+            shard_rows[shard_name] = sl.total_num_rows
+            total_elements += sl.total_num_rows
+            for field, count in sl.field_counts.items():
+                field_counts[field] = field_counts.get(field, 0) + count
 
-        consolidate_start = time.monotonic()
-        logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")
-        ledger = consolidate_shard_caches(
-            shard_cache_paths=shard_paths,
-            output_path=prefix,
-            exemplar=exemplar,
-            copy_max_workers=config.cache_copy_max_workers,
+        ledger = CacheLedger(
+            total_num_rows=total_elements,
+            shard_rows=shard_rows,
+            is_finished=True,
+            finished_shards=list(shard_rows.keys()),
+            field_counts=field_counts,
+            metadata=CacheMetadata.empty(),
+            shard_paths=shard_paths,
         )
-        consolidate_elapsed = time.monotonic() - consolidate_start
+        ledger._serialize_and_commit(prefix)
 
-        total_elements = ledger.total_num_rows
-        store = TreeStore.open(exemplar, prefix, mode="r", cache_metadata=True)
-        total_tokens = store.tree["input_ids"].data_size if "input_ids" in store.tree else 0
+        # Sum token counts across shards
+        exemplar = {"input_ids": np.zeros(0, dtype=np.int32)}
+        total_tokens = 0
+        for path in shard_paths:
+            store = TreeStore.open(exemplar, path, mode="r", cache_metadata=True)
+            if "input_ids" in store.tree:
+                total_tokens += store.tree["input_ids"].data_size
 
         stats_path = os.path.join(prefix, ".stats.json")
         with open_url(stats_path, "w") as f:
@@ -457,7 +467,7 @@ def tokenize(config: TokenizeConfigBase):
         logger.info(
             f"{split_name} pipeline complete: {total_elements:,} docs, {total_tokens:,} tokens "
             f"in {pipeline_elapsed:.1f}s (tokenize: {tokenize_elapsed:.1f}s at {overall_tok_per_sec:,.0f} tokens/s "
-            f"{overall_doc_per_sec:,.1f} docs/s, consolidate: {consolidate_elapsed:.1f}s). "
+            f"{overall_doc_per_sec:,.1f} docs/s). "
             f"Wrote stats to {stats_path}"
         )
 

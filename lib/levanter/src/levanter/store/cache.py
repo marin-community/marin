@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import bisect
 import copy
 import dataclasses
 import gc
@@ -139,6 +140,8 @@ class TreeCache(AsyncDataset[T_co]):
 
         if not ledger.is_finished:
             raise FileNotFoundError(f"Cache at {cache_dir} is not finished. Use build_or_load to build it.")
+        if ledger.shard_paths is not None:
+            return ShardedTreeCache(ledger.shard_paths, exemplar, ledger)  # type: ignore[return-value]
         return TreeCache(cache_dir, exemplar, ledger)
 
     @staticmethod
@@ -157,6 +160,94 @@ class TreeCache(AsyncDataset[T_co]):
         return True
 
 
+class ShardedTreeCache(AsyncDataset[T_co]):
+    """Reads across multiple shard caches without requiring a consolidation step.
+
+    Each shard is an independent TreeStore directory. This class maintains a
+    cumulative row index to translate global indices into (shard, local_index).
+    """
+
+    def __init__(self, shard_paths: list[str], exemplar: T_co, ledger: "CacheLedger"):
+        super().__init__()
+        self._exemplar = exemplar
+        self.ledger = ledger
+        self._shard_paths = shard_paths
+
+        # Build cumulative row boundaries: [0, rows_shard0, rows_shard0+rows_shard1, ...]
+        self._cum_rows: list[int] = [0]
+        self._stores: list[TreeStore] = []
+        for path in shard_paths:
+            shard_name = os.path.basename(path)
+            rows = ledger.shard_rows.get(shard_name, 0)
+            self._cum_rows.append(self._cum_rows[-1] + rows)
+            self._stores.append(TreeStore.open(exemplar, path, mode="r", cache_metadata=False))
+
+    def _resolve_index(self, global_idx: int) -> tuple[int, int]:
+        """Return (shard_index, local_row) for a global row index."""
+        if global_idx < 0 or global_idx >= self._cum_rows[-1]:
+            raise IndexError(f"Index {global_idx} out of range [0, {self._cum_rows[-1]})")
+        shard_idx = bisect.bisect_right(self._cum_rows, global_idx) - 1
+        local_idx = global_idx - self._cum_rows[shard_idx]
+        return shard_idx, local_idx
+
+    def __len__(self):
+        return self._cum_rows[-1]
+
+    async def async_len(self) -> int:
+        return len(self)
+
+    def is_finite(self) -> bool:
+        return True
+
+    def __getitem__(self, item):
+        shard_idx, local_idx = self._resolve_index(item)
+        return self._stores[shard_idx][local_idx]
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence:
+        # Group indices by shard, preserving original order
+        shard_groups: dict[int, list[tuple[int, int]]] = {}  # shard_idx -> [(position_in_output, local_idx)]
+        for pos, global_idx in enumerate(indices):
+            shard_idx, local_idx = self._resolve_index(global_idx)
+            shard_groups.setdefault(shard_idx, []).append((pos, local_idx))
+
+        # Fetch per-shard batches concurrently
+        results: list[None | Any] = [None] * len(indices)
+
+        async def _fetch_shard(shard_idx: int, items: list[tuple[int, int]]):
+            local_indices = [local_idx for _, local_idx in items]
+            batch = await self._stores[shard_idx].get_batch(local_indices)
+            for (pos, _), value in zip(items, batch):
+                results[pos] = value
+
+        await asyncio.gather(*[_fetch_shard(si, items) for si, items in shard_groups.items()])
+        return results
+
+    def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None):
+        if isinstance(indices_or_slice, slice):
+            indices_or_slice = range(
+                indices_or_slice.start or 0,
+                indices_or_slice.stop or len(self),
+                indices_or_slice.step or 1,
+            )
+        # Group by shard, fetch per-shard, reassemble
+        shard_groups: dict[int, list[tuple[int, int]]] = {}
+        for pos, global_idx in enumerate(indices_or_slice):
+            shard_idx, local_idx = self._resolve_index(global_idx)
+            shard_groups.setdefault(shard_idx, []).append((pos, local_idx))
+
+        results: list[None | Any] = [None] * len(indices_or_slice)
+        for shard_idx, items in shard_groups.items():
+            local_indices = [local_idx for _, local_idx in items]
+            batch = self._stores[shard_idx].get_batch_sync(local_indices)
+            for (pos, _), value in zip(items, batch):
+                results[pos] = value
+        return results
+
+    @property
+    def is_finished(self):
+        return True
+
+
 @dataclass_json
 @dataclass
 class CacheLedger:
@@ -166,6 +257,7 @@ class CacheLedger:
     finished_shards: List[str] = dataclasses.field(default_factory=list)
     field_counts: Dict[str, int] = dataclasses.field(default_factory=dict)
     metadata: "CacheMetadata" = dataclasses.field(default_factory=lambda: CacheMetadata({}))
+    shard_paths: Optional[List[str]] = None
 
     @staticmethod
     def load_or_initialize(cache_dir: str, source: ShardedDataSource, processor: BatchProcessor):
@@ -332,13 +424,11 @@ def build_cache(
     shard_results = sorted(shard_results, key=lambda r: r["index"])
 
     shard_cache_paths = [s["path"] for s in shard_results]
-    ledger = consolidate_shard_caches(
-        shard_cache_paths=shard_cache_paths,
-        output_path=cache_dir,
-        exemplar=processor.output_exemplar,
-        metadata=metadata,
-    )
-    _safe_remove(temp_root)
+    shard_ledgers = [s["ledger"] for s in shard_results]
+    ledger = _merge_ledgers(cache_dir, shard_cache_paths, shard_ledgers, metadata)
+    # Store shard paths so the reader can find them without consolidation
+    ledger.shard_paths = shard_cache_paths
+    ledger._serialize_and_commit(cache_dir)
     return ledger
 
 
@@ -715,6 +805,7 @@ def _try_load(path, metadata):
 
 __all__ = [
     "TreeCache",
+    "ShardedTreeCache",
     "build_or_load_cache",
     "SerialCacheWriter",
     "CacheLedger",
