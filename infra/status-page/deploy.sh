@@ -70,6 +70,44 @@ echo -n "<paste-github-token>" | gcloud secrets create ${GITHUB_TOKEN_SECRET} \\
 #    infra/iris-iap-proxy/deploy.sh marin --setup. Otherwise see that
 #    script for the one-time project-level steps.
 
+# 3a. Deploy service account (used by the GitHub Actions deploy job).
+#     Separate from the runtime SA above so the CI key's blast radius is
+#     limited to "can deploy this Cloud Run service". Export its key and
+#     store as GitHub Actions secret MARIN_STATUS_PAGE_DEPLOY_SA_KEY.
+DEPLOY_SA=marin-status-page-deploy
+DEPLOY_SA_EMAIL=\${DEPLOY_SA}@${PROJECT}.iam.gserviceaccount.com
+
+gcloud iam service-accounts create \${DEPLOY_SA} \\
+  --project=${PROJECT} \\
+  --display-name="Marin Infra Dashboard CI Deployer"
+
+gcloud projects add-iam-policy-binding ${PROJECT} \\
+  --member="serviceAccount:\${DEPLOY_SA_EMAIL}" \\
+  --role="roles/run.admin"
+
+gcloud projects add-iam-policy-binding ${PROJECT} \\
+  --member="serviceAccount:\${DEPLOY_SA_EMAIL}" \\
+  --role="roles/cloudbuild.builds.editor"
+
+gcloud projects add-iam-policy-binding ${PROJECT} \\
+  --member="serviceAccount:\${DEPLOY_SA_EMAIL}" \\
+  --role="roles/storage.objectAdmin"
+
+# Let the deploy SA act as the runtime SA.
+gcloud iam service-accounts add-iam-policy-binding ${SA_EMAIL} \\
+  --project=${PROJECT} \\
+  --member="serviceAccount:\${DEPLOY_SA_EMAIL}" \\
+  --role="roles/iam.serviceAccountUser"
+
+# Export a JSON key and store as GitHub Actions repo secret
+# MARIN_STATUS_PAGE_DEPLOY_SA_KEY.
+gcloud iam service-accounts keys create /tmp/\${DEPLOY_SA}.json \\
+  --project=${PROJECT} \\
+  --iam-account=\${DEPLOY_SA_EMAIL}
+gh secret set MARIN_STATUS_PAGE_DEPLOY_SA_KEY \\
+  --repo marin-community/marin < /tmp/\${DEPLOY_SA}.json
+rm /tmp/\${DEPLOY_SA}.json
+
 # 4. Deploy (use deploy.sh without --setup)
 
 # 5. Grant the IAP service agent permission to invoke this Cloud Run service.
