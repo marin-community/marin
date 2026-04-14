@@ -40,10 +40,11 @@ from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.weight_transfer import WeightTransferConfig
 
-from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, RolloutWithCount
+from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, StoredTrajectory
 from .rl_losses import RLLossModule
 from .rollout_storage import RolloutStorageConfig
-from .train_batch import create_training_batch_from_rollouts
+from .train_batch import create_training_batch_from_rollouts, trajectory_record_to_rollout
+from .types import RolloutWithAdvantage, TrajectoryRecord
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,41 @@ def _training_step_timing_metrics(step_duration: float, batch_prep_timing: Batch
     }
 
 
+def _trajectory_key(trajectory: TrajectoryRecord) -> tuple[str, str, str]:
+    return (trajectory.group_id, trajectory.env_example_id, trajectory.trace_id)
+
+
+def build_rollouts_with_advantages(
+    sampled_trajectories: list[StoredTrajectory],
+    loss_module: RLLossModule,
+) -> list[RolloutWithAdvantage]:
+    """Build the current trainer-compatible rollout view from neutral replay samples."""
+    advantages_by_key: dict[tuple[str, str, str], float] = {}
+    grouped_records: dict[str, list[TrajectoryRecord]] = {}
+    for stored_trajectory in sampled_trajectories:
+        group_id = stored_trajectory.group_id
+        if group_id in grouped_records:
+            continue
+        grouped_records[group_id] = list(stored_trajectory.group.trajectories)
+
+    for group_trajectories in grouped_records.values():
+        group_rollouts = [trajectory_record_to_rollout(trajectory) for trajectory in group_trajectories]
+        advantages = loss_module.compute_advantages(group_rollouts)
+        for trajectory, advantage in zip(group_trajectories, advantages, strict=True):
+            advantages_by_key[_trajectory_key(trajectory)] = float(advantage)
+
+    rollouts = []
+    for stored_trajectory in sampled_trajectories:
+        trajectory = stored_trajectory.trajectory
+        rollouts.append(
+            RolloutWithAdvantage(
+                rollout=trajectory_record_to_rollout(trajectory),
+                advantage=advantages_by_key[_trajectory_key(trajectory)],
+            )
+        )
+    return rollouts
+
+
 @dataclass
 class TrainWorkerConfig:
     """Configuration for Levanter-based RL training worker."""
@@ -199,7 +235,8 @@ class StreamingRolloutLoader:
 
         # Track batch preparation timing for RL throughput diagnostics.
         self._last_batch_prep_timing = BatchPrepTiming()
-        self._last_rollouts: list[RolloutWithCount] | None = None
+        self._last_rollouts: list[RolloutWithAdvantage] | None = None
+        self._last_trajectories: list[StoredTrajectory] | None = None
 
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
@@ -208,12 +245,12 @@ class StreamingRolloutLoader:
 
         while True:
             fetch_start = time.time()
-            rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
+            trajectories = self.data_loader.get_trajectories(timeout=self.timeout)
             fetch_time = time.time() - fetch_start
 
-            self._last_rollouts = rollouts
+            self._last_trajectories = trajectories
 
-            if not rollouts:
+            if not trajectories:
                 cumulative_wait += fetch_time
                 if cumulative_wait >= max_cumulative_wait:
                     raise TimeoutError(f"No rollouts received after {cumulative_wait:.0f}s total wait")
@@ -224,6 +261,8 @@ class StreamingRolloutLoader:
                 continue
 
             cumulative_wait = 0.0
+            rollouts = build_rollouts_with_advantages(trajectories, self.config.loss)
+            self._last_rollouts = rollouts
 
             # Measure batch creation time
             batch_start = time.time()
@@ -246,7 +285,7 @@ class StreamingRolloutLoader:
                 batch_time,
                 shard_time,
                 timing.total_time,
-                len(rollouts),
+                len(trajectories),
             )
 
             yield sharded_batch
@@ -300,7 +339,6 @@ class TrainWorker:
             config=config.replay_buffer,
             local_batch_size=config.trainer.train_batch_size,
             total_processes=jax.process_count(),
-            loss_module=self.loss_module,
             seed=config.seed,
         )
 
