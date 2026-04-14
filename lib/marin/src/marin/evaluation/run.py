@@ -165,6 +165,7 @@ def _impute_model_config(config):
         generation_params=generation_params,
         apply_chat_template=config.apply_chat_template,
         base_eval_run_name=config.base_eval_run_name,
+        task_metadata=config.task_metadata,
     )
 
 

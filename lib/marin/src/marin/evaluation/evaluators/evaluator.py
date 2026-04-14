@@ -55,6 +55,9 @@ class ModelConfig:
     base_eval_run_name: str | None = None
     """Custom base name for wandb runs."""
 
+    task_metadata: dict[str, Any] | None = None
+    """Additional metadata passed to evaluator task loaders."""
+
 
 class Evaluator(ABC):
     @abstractmethod

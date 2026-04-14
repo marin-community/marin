@@ -4649,6 +4649,8 @@ dedup = [
 ]
 eval = [
     { name = "lm-eval", extra = ["api", "math"] },
+    { name = "nltk" },
+    { name = "wonderwords" },
 ]
 evalchemy = [
     { name = "antlr4-python3-runtime" },
@@ -4801,6 +4803,7 @@ requires-dist = [
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "markdownify", specifier = "==0.12.1" },
     { name = "multiprocess", specifier = "==0.70.16" },
+    { name = "nltk", marker = "extra == 'eval'", specifier = ">=3.9.1" },
     { name = "numpy" },
     { name = "openai" },
     { name = "pandas", specifier = ">=2.0" },
@@ -4834,6 +4837,7 @@ requires-dist = [
     { name = "vllm-tpu", marker = "extra == 'vllm'", specifier = "==0.13.2.post6" },
     { name = "wandb" },
     { name = "warcio" },
+    { name = "wonderwords", marker = "extra == 'eval'" },
 ]
 provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "evalchemy", "vizier", "vllm", "harbor", "dedup", "math"]
 
@@ -12193,6 +12197,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b3/8f/705086c9d734d3b663af0e9bb3d4de6578d08f46b1b101c2442fd9aecaa2/win32_setctime-1.2.0.tar.gz", hash = "sha256:ae1fdf948f5640aae05c511ade119313fb6a30d7eabe25fef9764dca5873c4c0", size = 4867, upload-time = "2024-12-07T15:28:28.314Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/07/c6fe3ad3e685340704d314d765b7912993bcb8dc198f0e7a89382d37974b/win32_setctime-1.2.0-py3-none-any.whl", hash = "sha256:95d644c4e708aba81dc3704a116d8cbc974d70b3bdb8be1d150e36be6e9d1390", size = 4083, upload-time = "2024-12-07T15:28:26.465Z" },
+]
+
+[[package]]
+name = "wonderwords"
+version = "3.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ff/23/e144fc3dfabb845dc1d94c45315d97b308cf75a664e3db3a89aeb1cb505d/wonderwords-3.0.1.tar.gz", hash = "sha256:5ee43ab6f13823a857a7c3d58c7b4db6a1350bd3aa5f914ed379ad49042a1c36", size = 73339, upload-time = "2025-10-30T17:30:44.231Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a4/75/855c2062d28b8e9247939f8262fb2f4ff3b12a49e4bab9fd1ba16cc5df82/wonderwords-3.0.1-py3-none-any.whl", hash = "sha256:4dd66deb6a76ca9e0b0422d1d3e111f9b910d7c16922d42de733ee8def98f8d0", size = 51658, upload-time = "2025-10-30T17:30:42.785Z" },
 ]
 
 [[package]]

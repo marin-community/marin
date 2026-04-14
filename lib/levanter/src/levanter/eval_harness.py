@@ -60,16 +60,11 @@ from levanter.tokenizers import MarinTokenizer
 from levanter.utils.py_utils import set_global_rng_seeds
 
 try:
-    from lm_eval import evaluator
     from lm_eval.api.instance import Instance
     from lm_eval.api.model import TemplateLM
-    from lm_eval.models.utils import handle_stop_sequences, postprocess_generated_text
 except ImportError:
     TemplateLM = object
     Instance = object
-    evaluator = object
-    handle_stop_sequences = None
-    postprocess_generated_text = None
 
 import haliax as hax
 from haliax.partitioning import ResourceMapping, round_axis_for_partitioning
@@ -89,6 +84,36 @@ from levanter.utils.tree_utils import inference_mode
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+
+def _lm_eval_evaluator_module():
+    try:
+        from lm_eval import evaluator
+    except Exception as e:
+        raise ImportError(
+            "lm-eval's evaluator module could not be imported. Install the evaluation dependencies, including torch."
+        ) from e
+    return evaluator
+
+
+def _handle_stop_sequences(until: Optional[List[str]], eos: str):
+    try:
+        from lm_eval.models.utils import handle_stop_sequences
+    except Exception as e:
+        raise ImportError(
+            "lm-eval generation utilities could not be imported. Install the evaluation dependencies, including torch."
+        ) from e
+    return handle_stop_sequences(until, eos=eos)
+
+
+def _postprocess_generated_text(text: str, until: Optional[List[str]], think_end_token: str | None):
+    try:
+        from lm_eval.models.utils import postprocess_generated_text
+    except Exception as e:
+        raise ImportError(
+            "lm-eval generation utilities could not be imported. Install the evaluation dependencies, including torch."
+        ) from e
+    return postprocess_generated_text(text, until, think_end_token)
 
 
 def _call_with_retry(
@@ -722,7 +747,7 @@ class LevanterHarnessLM(TemplateLM):
             return None
 
         # Process stop sequences to ensure EOS is included
-        processed_until = handle_stop_sequences(until, eos=eos)
+        processed_until = _handle_stop_sequences(until, eos=eos)
 
         if not processed_until:
             return None
@@ -909,7 +934,7 @@ class LevanterHarnessLM(TemplateLM):
                 text = self.tokenizer.decode(full_tokens, skip_special_tokens=True)
 
                 # Post-process the generated text using the imported utility function
-                text = postprocess_generated_text(
+                text = _postprocess_generated_text(
                     text, gen_kwargs.get("until"), None  # think_end_token - could be made configurable if needed
                 )
                 outputs.append(text)
@@ -1337,6 +1362,7 @@ def _actually_run_eval_harness(
         harness.clear_sample_outputs()
 
         with set_global_rng_seeds(0):
+            evaluator = _lm_eval_evaluator_module()
             outputs = evaluator.evaluate(
                 harness,
                 tasks_to_run,
