@@ -185,7 +185,8 @@ def _active_worker_id(task: TaskDetailRow) -> WorkerId | None:
 def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> job_pb2.TaskStatus:
     """Convert a task row to a TaskStatus proto.
 
-    Handles attempt conversion, timestamps, and resource_usage.
+    Handles attempt conversion and timestamps.  resource_usage is NOT populated
+    here — callers must attach it separately from task_resource_history.
     The caller is responsible for resolving worker_address from worker_id if needed.
     """
     current_attempt = _current_attempt(task)
@@ -1497,10 +1498,40 @@ class ControllerServiceImpl:
         tasks = _tasks_for_listing(self._db, job_id=job_id)
         worker_addr_by_id = _worker_addresses_for_tasks(self._db, tasks)
 
+        # Batch-fetch latest resource usage per task from task_resource_history.
+        # Join through tasks table (same pattern as the aggregate query in get_job_status).
+        resource_by_task: dict[str, job_pb2.ResourceUsage] = {}
+        if tasks:
+            with self._db.read_snapshot() as q:
+                rows = q.raw(
+                    "SELECT trh.task_id, trh.cpu_millicores, trh.memory_mb, trh.disk_mb, trh.memory_peak_mb "
+                    "FROM task_resource_history trh "
+                    "INNER JOIN ("
+                    "  SELECT trh2.task_id, MAX(trh2.id) as max_id "
+                    "  FROM task_resource_history trh2 "
+                    "  JOIN tasks t ON trh2.task_id = t.task_id AND trh2.attempt_id = t.current_attempt_id "
+                    "  WHERE t.job_id = ? "
+                    "  GROUP BY trh2.task_id"
+                    ") latest ON trh.id = latest.max_id",
+                    (job_id.to_wire(),),
+                )
+            for r in rows:
+                resource_by_task[r.task_id] = job_pb2.ResourceUsage(
+                    cpu_millicores=r.cpu_millicores,
+                    memory_mb=r.memory_mb,
+                    disk_mb=r.disk_mb,
+                    memory_peak_mb=r.memory_peak_mb,
+                )
+
         task_statuses = []
         for task in tasks:
             twid = _task_worker_id(task)
             proto_task_status = task_to_proto(task, worker_address=worker_addr_by_id.get(twid, "") if twid else "")
+
+            # Attach latest resource usage if available.
+            usage = resource_by_task.get(task.task_id.to_wire())
+            if usage is not None:
+                proto_task_status.resource_usage.CopyFrom(usage)
 
             # Don't add scheduling diagnostics in list view - too expensive
             # Users should check job detail page for scheduling diagnostics
