@@ -4,22 +4,8 @@
 """
 Queues for communicating rollout information between inference and training workers.
 
-A rollout is a set of ndarrays containing all of the information required for training a model.
-This includes:
-
-* input_ids: The input token IDs.
-* attention_mask: The attention mask for the input.
-* position_ids: The position IDs for the input.
-* target_ids: The target token IDs for computing loss.
-* loss_weights: Weights for each token in the loss computation.
-* loss_masks: Masks indicating which tokens contribute to the loss.
-
-A RolloutBatch consists of the model information in addition to:
-
-* Environment name
-* Worker ID
-* Creation timestamp
-* Rollout ID
+A RolloutBatch stores grouped prompt/response trajectories plus rollout
+provenance. Training-ready batches are derived later by `train_batch.py`.
 
 During training, rollout batches are read from the file queue and compacted into
 training batches continously. Training data prioritizes recent rollouts and an
