@@ -5,6 +5,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import logging
 from typing import Protocol
 
 import equinox as eqx
@@ -12,14 +13,13 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
-from levanter.layers.attention import AttentionMask
+
+from marin.rl.scoring import LocalScoreSource, ModelRoles, ScoreRequirements, ScoreSource
 from levanter.metrics import Metric, ReductionType
 from levanter.models.lm_model import LmHeadModel
-from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
 from marin.rl.types import Rollout, TrainingBatch
 
-# TODO(power) - these should be refactored to accept the precomputed logits instead
-# of computing outputs themselves.
+logger = logging.getLogger(__name__)
 
 
 class RLLossModule(Protocol):
@@ -83,101 +83,6 @@ def compute_metadata_metrics(
     }
 
     return metrics
-
-
-def compute_logprobs(
-    model: LmHeadModel,
-    batch: TrainingBatch,
-    key: jax.Array | None,
-) -> jax.Array:
-    """Compute log probabilities of target tokens.
-
-    Args:
-        model: The language model
-        batch: Training batch containing input_ids, position_ids, temperature
-        key: JAX random key for dropout
-    Returns:
-        logprobs array of shape [batch, seq_len]
-    """
-    batch_size, _seq_len = batch.input_ids.array.shape
-
-    model_output = model(
-        input_ids=batch.input_ids,
-        attn_mask=AttentionMask.causal(),
-        pos_ids=batch.position_ids,
-        key=key,
-    )
-
-    # logits[i] predicts token at position i+1
-    # We want logprob[j] = P(token[j] | tokens[0:j])
-    # This comes from logits[j-1] indexed by token[j]
-    logits_array = model_output.array.astype(jnp.float32)[:, :-1, :]  # Drop last position [batch, seq_len-1, vocab]
-    target_ids_array = batch.input_ids.array[:, 1:]  # Drop first position [batch, seq_len-1]
-
-    safe_temperature = jnp.where(batch.temperature.array == 0, 1.0, batch.temperature.array).reshape(batch_size, 1, 1)
-    logits_array = logits_array / safe_temperature.astype(jnp.float32)
-
-    log_probs = jax.nn.log_softmax(logits_array, axis=-1)
-    logprobs_shifted = jnp.take_along_axis(log_probs, target_ids_array[..., None], axis=-1).squeeze(
-        -1
-    )  # [batch, seq_len-1]
-
-    logprobs = jnp.concatenate(
-        [jnp.zeros((logprobs_shifted.shape[0], 1), dtype=logprobs_shifted.dtype), logprobs_shifted], axis=1
-    )  # [batch, seq_len]
-
-    return logprobs
-
-
-def chunked_compute_logprobs(
-    model: LmHeadModel,
-    batch: TrainingBatch,
-    key: jax.Array | None,
-    block_size: int,
-) -> jax.Array:
-    """Compute log probabilities of target tokens in a chunked manner to save memory.
-
-    This avoids materializing the full [batch, seq, vocab] logits tensor by using
-    the fused cross-entropy kernel with blockwise processing.
-    """
-    # Get activations
-    activations = model.activations(
-        input_ids=batch.input_ids,
-        attn_mask=AttentionMask.causal(),
-        pos_ids=batch.position_ids,
-        key=key,
-    )
-    if isinstance(activations, tuple):
-        activations, _aux = activations
-
-    pred_embeddings = activations.astype(jnp.float32)
-    pred_lm_head = model.get_lm_head().astype(jnp.float32)
-
-    safe_temperature = hax.where(batch.temperature == 0, 1.0, batch.temperature).astype(jnp.float32)
-    pred_embeddings = pred_embeddings / safe_temperature
-
-    pos_axis = batch.input_ids.resolve_axis("position")
-    target_y = hax.roll(batch.input_ids, -1, pos_axis)
-
-    loss = fused_cross_entropy_loss_and_logsumexp_penalty(
-        pred_embeddings,
-        pred_lm_head,
-        Contract=model.Embed,
-        Label=model.Vocab,
-        target_y=target_y,
-        reduction=None,
-        logsumexp_weight=0.0,
-        block_size=block_size,
-        dtype=jnp.float32,
-    )
-
-    logprobs_shifted = -loss.array[:, :-1]
-    logprobs = jnp.concatenate(
-        [jnp.zeros((logprobs_shifted.shape[0], 1), dtype=logprobs_shifted.dtype), logprobs_shifted],
-        axis=1,
-    )
-
-    return logprobs
 
 
 def compute_ppo_loss_objective(
@@ -268,6 +173,7 @@ def rloo_loss_with_importance_sampling(
     model: LmHeadModel,
     reference_model: LmHeadModel | None,
     batch: TrainingBatch,
+    score_source: ScoreSource,
     *,
     key: jax.Array | None,
     kl_coef: float,
@@ -277,7 +183,6 @@ def rloo_loss_with_importance_sampling(
     do_trainer_inference_mismatch_importance_sampling: bool = False,
     synchronous: bool = False,
     do_overlong_filtering: bool = False,
-    compute_logprobs_fn: Callable = compute_logprobs,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
 
@@ -288,17 +193,25 @@ def rloo_loss_with_importance_sampling(
         kl_coef: Coefficient for KL regularization
         clip_epsilon_low: Lower clipping epsilon for importance sampling ratio
         clip_epsilon_high: Upper clipping epsilon for importance sampling ratio
-        compute_logprobs_fn: Function to compute logprobs (can be chunked)
-
     Returns:
         Tuple of (loss, aux_metrics)
     """
-    policy_logprobs_array = batch.policy_logprobs.array
+    score_bundle = score_source.score(
+        batch,
+        info=None,
+        roles=ModelRoles(student=model, reference=reference_model),
+        key=key,
+    )
+    if score_bundle.student_logprobs is None:
+        raise ValueError("score source did not produce student logprobs")
+    if score_bundle.behavior_logprobs is None:
+        raise ValueError("score source did not produce behavior logprobs")
+
+    policy_logprobs_array = score_bundle.behavior_logprobs
     loss_weights_array = batch.loss_weights.array
     loss_masks_array = batch.loss_masks.array
 
-    # Get logits from current policy
-    current_logprobs = compute_logprobs_fn(model, batch, key)
+    current_logprobs = score_bundle.student_logprobs
     current_logprobs = current_logprobs * loss_masks_array
 
     if synchronous:
@@ -355,7 +268,9 @@ def rloo_loss_with_importance_sampling(
     if kl_coef > 0:
         if reference_model is None:
             raise ValueError("reference_model is required when kl_coef > 0")
-        reference_logprobs = compute_logprobs_fn(reference_model, batch, key)
+        if score_bundle.reference_logprobs is None:
+            raise ValueError("score source did not produce reference logprobs")
+        reference_logprobs = score_bundle.reference_logprobs
         reference_logprobs = reference_logprobs * loss_masks_array
         # log_ratio = (current_logprobs - reference_logprobs_array) * loss_masks_array
         kl_penalty = jnp.exp(reference_logprobs - current_logprobs) - (reference_logprobs - current_logprobs) - 1
@@ -397,6 +312,18 @@ def rloo_loss_with_importance_sampling(
         ),
         "temperature": Metric.from_value(jnp.mean(batch.temperature.array).astype(jnp.float32), ReductionType.MEAN),
         "top_k": Metric.from_value(jnp.mean(batch.top_k.array).astype(jnp.float32), ReductionType.MEAN),
+        "scoring/student_pass_count": Metric.from_value(
+            jnp.asarray(score_bundle.student_pass_count, dtype=jnp.float32),
+            ReductionType.MEAN,
+        ),
+        "scoring/reference_pass_count": Metric.from_value(
+            jnp.asarray(score_bundle.reference_pass_count, dtype=jnp.float32),
+            ReductionType.MEAN,
+        ),
+        "scoring/teacher_pass_count": Metric.from_value(
+            jnp.asarray(score_bundle.teacher_pass_count, dtype=jnp.float32),
+            ReductionType.MEAN,
+        ),
         **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
         **metadata,
     }
@@ -446,19 +373,27 @@ class RLOOLoss(RLLossModule):
         if self.needs_reference_model() and reference_model is None:
             raise ValueError("reference_model is required when kl_coef > 0")
 
+        score_source = LocalScoreSource(
+            score_requirements=ScoreRequirements(
+                student_logprobs=True,
+                behavior_logprobs=True,
+                reference_logprobs=self.needs_reference_model(),
+            ),
+            vocab_tile_size=self.vocab_tile_size,
+        )
+        logger.info(
+            "Using score source backend=%s requirements=%s vocab_tile_size=%s",
+            score_source.backend_name,
+            score_source.requirements(),
+            self.vocab_tile_size,
+        )
+
         def loss_fn(model, batch, key):
-            if self.vocab_tile_size is not None:
-
-                def compute_logprobs_fn(m, b, k):
-                    return chunked_compute_logprobs(m, b, k, self.vocab_tile_size)
-
-            else:
-                compute_logprobs_fn = compute_logprobs
-
             return rloo_loss_with_importance_sampling(
                 model,
                 reference_model,
                 batch,
+                score_source,
                 key=key,
                 kl_coef=self.kl_coef,
                 clip_epsilon_low=self.clip_epsilon_low,
@@ -467,7 +402,6 @@ class RLOOLoss(RLLossModule):
                 synchronous=self.synchronous,
                 do_trainer_inference_mismatch_importance_sampling=self.do_trainer_inference_mismatch_importance_sampling,
                 do_overlong_filtering=self.do_overlong_filtering,
-                compute_logprobs_fn=compute_logprobs_fn,
             )
 
         return loss_fn
