@@ -222,6 +222,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         self,
         input_ids: jax.Array,
         *,
+        attn_mask: Optional[AttentionMask | NamedArray] = None,
         batch_axis: Axis | str | None = "batch",
         key=None,
     ) -> jax.Array:
@@ -231,6 +232,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         This adapter is intended for migration paths that avoid named tensors at
         call sites while keeping existing model internals unchanged.
         """
+        resolved_batch_axis: Axis | None = None
         if input_ids.ndim == 1:
             Pos = self.Pos.resize(input_ids.shape[0])
             named_input_ids = hax.named(input_ids, Pos)
@@ -245,13 +247,21 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
                     raise ValueError(
                         f"Batch axis size ({Batch.size}) must match input batch size ({input_ids.shape[0]})."
                     )
+            resolved_batch_axis = Batch
 
             Pos = self.Pos.resize(input_ids.shape[1])
             named_input_ids = hax.named(input_ids, (Batch, Pos))
         else:
             raise ValueError(f"input_ids must have rank 1 or 2, got rank={input_ids.ndim}")
 
-        activations = self.activations(named_input_ids, key=key)
+        if attn_mask is not None:
+            from levanter.data.text.examples import named_attention_mask_from_grug
+            from levanter.grug.attention import AttentionMask as GrugAttentionMask
+
+            if isinstance(attn_mask, GrugAttentionMask):
+                attn_mask = named_attention_mask_from_grug(attn_mask, Pos, batch_axis=resolved_batch_axis)
+
+        activations = self.activations(named_input_ids, attn_mask=attn_mask, key=key)
         if isinstance(activations, tuple):
             activations, _ = activations
         logits = hax.dot(activations, self.get_lm_head(), axis=self.Embed)
@@ -367,7 +377,8 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
 
             if not isinstance(example, GrugLmExample):
                 raise TypeError(f"Unsupported example type: {type(example)}")
-            named_example = named_lm_example_from_grug(example, Pos=self.Pos, batch_axis=batch_axis)
+            Pos = self.Pos.resize(example.tokens.shape[-1])
+            named_example = named_lm_example_from_grug(example, Pos=Pos, batch_axis=batch_axis)
 
         loss = self.compute_next_token_loss(
             named_example,

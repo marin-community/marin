@@ -22,11 +22,12 @@ from levanter import callbacks
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_callback
+from levanter.data.text.examples import GrugLmExample
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
@@ -111,12 +112,12 @@ def main(config: TrainLmConfig):
     levanter.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
-        return model.compute_next_token_loss(
+    def loss_function(model: LmHeadModel, example: GrugLmExample, *, key=None):
+        return model.compute_next_token_loss_array(
             example,
+            batch_axis=config.trainer.batch_axis_name,
             key=key,
             logsumexp_weight=config.z_loss_weight,
-            axis_mapping=config.trainer.compute_axis_mapping,
         )
 
     # Using the trainer as a context manager does 3 things:
@@ -165,15 +166,15 @@ def main(config: TrainLmConfig):
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 
         # Get the training dataset
-        train_dataset = config.data.train_set(
-            Pos,
-            config.trainer.batch_schedule,
+        train_dataset = config.data.train_grug_set(
+            seq_len=Pos.size,
+            batch_schedule=config.trainer.batch_schedule,
             key=data_key,
         )
         install_tensorstore_metrics_hook_if_enabled(trainer)
 
         # Get the tagged evaluation datasets
-        tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
+        tagged_eval_datasets = config.data.tagged_eval_grug_sets(seq_len=Pos.size)
 
         state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
 
@@ -286,15 +287,24 @@ def main(config: TrainLmConfig):
             )
 
         @named_jit(axis_resources=compute_axis_mapping)
-        def compute_logits(model: LmHeadModel, example: LmExample):
+        def compute_logits(model: LmHeadModel, example: GrugLmExample):
             model = trainer.mp.cast_to_compute(model)
-            activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
-            head = model.get_lm_head()
-            logits = hax.dot(activations, head, axis=model.Embed)
-            return logits
+            logits_array = model.logits_from_token_ids_array(
+                example.tokens,
+                attn_mask=example.attn_mask,
+                batch_axis=EvalBatch,
+                key=None,
+            )
+            if logits_array.ndim == 2:
+                return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), model.Vocab))
+            if logits_array.ndim == 3:
+                batch_axis = Axis(EvalBatch.name, logits_array.shape[0])
+                pos_axis = Pos.resize(logits_array.shape[1])
+                return hax.named(logits_array, (batch_axis, pos_axis, model.Vocab))
+            raise ValueError(f"Unexpected logits rank for analysis callbacks: {logits_array.ndim}")
 
         if config.log_entropy:
-            for name, dataset in config.data.validation_sets(Pos).items():
+            for name, dataset in config.data.validation_grug_sets(seq_len=Pos.size).items():
                 trainer.add_hook(
                     levanter.analysis.cb_compute_entropies(
                         compute_logits,

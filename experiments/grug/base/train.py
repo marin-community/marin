@@ -231,7 +231,7 @@ def initial_state(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
-        ema_params=params if ema_beta is not None else None,
+        ema_params=jax.tree_util.tree_map(lambda x: jnp.array(x, copy=True), params) if ema_beta is not None else None,
     )
 
 
