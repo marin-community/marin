@@ -8,7 +8,7 @@ import threading
 
 import pytest
 
-from iris.log_server.client import LogPusher, RemoteLogHandler, _WARN_INTERVAL
+from iris.log_server.client import LogPusher, RemoteLogHandler, _MAX_BUFFER_PER_KEY, _WARN_INTERVAL, _pusher_logger
 from iris.rpc import logging_pb2
 from rigging.timing import RateLimiter
 
@@ -30,6 +30,20 @@ class FakeLogPusher:
 
     def close(self) -> None:
         pass
+
+
+@pytest.fixture()
+def pusher_caplog(caplog):
+    """Capture logs from the non-propagating _pusher_logger.
+
+    pytest's caplog only attaches its handler to the root logger, so records
+    from loggers with ``propagate=False`` are invisible.  This fixture
+    attaches caplog's handler directly to ``_pusher_logger``.
+    """
+    _pusher_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.DEBUG, logger=_pusher_logger.name)
+    yield caplog
+    _pusher_logger.removeHandler(caplog.handler)
 
 
 @pytest.fixture()
@@ -165,7 +179,7 @@ def test_log_pusher_flushes_at_batch_size():
     assert sent[0] == ("k", 2)
 
 
-def test_send_warns_on_rpc_failure(caplog):
+def test_send_warns_on_rpc_failure(pusher_caplog):
     """LogPusher._send() emits a warning (not debug) on RPC failure."""
 
     class FailingClient:
@@ -188,14 +202,16 @@ def test_send_warns_on_rpc_failure(caplog):
     pusher._warn_limiter = RateLimiter(interval_seconds=_WARN_INTERVAL)
 
     entry = logging_pb2.LogEntry(source="test", data="line")
-    with caplog.at_level(logging.WARNING, logger="iris.log_server.client"):
-        pusher._send("k", [entry])
+    pusher._send("k", [entry])
 
-    assert any("Failed to push" in r.message and r.levelno == logging.WARNING for r in caplog.records)
+    assert any("Failed to push" in r.message and r.levelno == logging.WARNING for r in pusher_caplog.records)
     assert pusher._consecutive_failures == 1
+    # Failed entries are retained in the buffer for retry.
+    assert "k" in pusher._buffers
+    assert len(pusher._buffers["k"]) == 1
 
 
-def test_send_warns_rate_limited(caplog):
+def test_send_warns_rate_limited(pusher_caplog):
     """Repeated failures only warn on the first, then respect the rate limit."""
 
     class FailingClient:
@@ -218,19 +234,20 @@ def test_send_warns_rate_limited(caplog):
     pusher._warn_limiter = RateLimiter(interval_seconds=_WARN_INTERVAL)
 
     entry = logging_pb2.LogEntry(source="test", data="line")
-    with caplog.at_level(logging.WARNING, logger="iris.log_server.client"):
-        # First failure should warn
-        pusher._send("k", [entry])
-        # Subsequent failures within the interval should not warn
-        pusher._send("k", [entry])
-        pusher._send("k", [entry])
+    # First failure should warn
+    pusher._send("k", [entry])
+    # Subsequent failures within the interval should not warn
+    pusher._send("k", [entry])
+    pusher._send("k", [entry])
 
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "Failed to push" in r.message]
+    warnings = [r for r in pusher_caplog.records if r.levelno == logging.WARNING and "Failed to push" in r.message]
     assert len(warnings) == 1, f"Expected 1 warning, got {len(warnings)}"
     assert pusher._consecutive_failures == 3
+    # All three failed batches are retained for retry.
+    assert len(pusher._buffers["k"]) == 3
 
 
-def test_send_logs_recovery(caplog):
+def test_send_logs_recovery(pusher_caplog):
     """LogPusher logs info when sends recover after failures."""
     call_count = 0
 
@@ -257,12 +274,11 @@ def test_send_logs_recovery(caplog):
     pusher._warn_limiter = RateLimiter(interval_seconds=_WARN_INTERVAL)
 
     entry = logging_pb2.LogEntry(source="test", data="line")
-    with caplog.at_level(logging.INFO, logger="iris.log_server.client"):
-        pusher._send("k", [entry])  # fail
-        pusher._send("k", [entry])  # fail
-        pusher._send("k", [entry])  # succeed
+    pusher._send("k", [entry])  # fail
+    pusher._send("k", [entry])  # fail
+    pusher._send("k", [entry])  # succeed
 
-    assert any("recovered" in r.message and r.levelno == logging.INFO for r in caplog.records)
+    assert any("recovered" in r.message and r.levelno == logging.INFO for r in pusher_caplog.records)
     assert pusher._consecutive_failures == 0
 
 
@@ -333,3 +349,79 @@ def test_close_waits_for_inflight_send():
     assert close_done.wait(timeout=5.0), "close() never completed"
     t.join(timeout=1.0)
     assert not client_closed_during_send, "client was destroyed while _send was in flight"
+
+
+def test_failed_entries_retried_on_next_flush():
+    """Failed entries are requeued and retried on the next flush cycle."""
+    call_count = 0
+    sent: list[tuple[str, int]] = []
+
+    class FlakeyClient:
+        def push_logs(self, request):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 1:
+                raise ConnectionError("server unavailable")
+            sent.append((request.key, len(request.entries)))
+
+        def close(self):
+            pass
+
+    pusher = LogPusher.__new__(LogPusher)
+    pusher._client = FlakeyClient()
+    pusher._batch_size = 1000
+    pusher._flush_interval = 999.0
+    pusher._buffers = {}
+    pusher._lock = threading.Lock()
+    pusher._send_lock = threading.Lock()
+    pusher._closed = False
+    pusher._flush_timer = None
+    pusher._consecutive_failures = 0
+    pusher._warn_limiter = RateLimiter(interval_seconds=_WARN_INTERVAL)
+
+    entry = logging_pb2.LogEntry(source="test", data="line")
+    # First send fails — entries should be requeued.
+    pusher._send("k", [entry, entry, entry])
+    assert len(pusher._buffers.get("k", [])) == 3
+
+    # Flush retries the requeued entries (server now healthy).
+    pusher.flush()
+    assert ("k", 3) in sent
+    assert pusher._consecutive_failures == 0
+
+
+def test_requeue_caps_buffer_size():
+    """Buffer overflow drops the oldest entries."""
+
+    class FailingClient:
+        def push_logs(self, request):
+            raise ConnectionError("server unavailable")
+
+        def close(self):
+            pass
+
+    pusher = LogPusher.__new__(LogPusher)
+    pusher._client = FailingClient()
+    pusher._batch_size = 1000
+    pusher._flush_interval = 999.0
+    pusher._buffers = {}
+    pusher._lock = threading.Lock()
+    pusher._send_lock = threading.Lock()
+    pusher._closed = False
+    pusher._flush_timer = None
+    pusher._consecutive_failures = 0
+    pusher._warn_limiter = RateLimiter(interval_seconds=_WARN_INTERVAL)
+
+    # Pre-fill buffer near the cap.
+    existing = [logging_pb2.LogEntry(source="test", data=f"old-{i}") for i in range(_MAX_BUFFER_PER_KEY - 1)]
+    pusher._buffers["k"] = existing
+
+    # Fail to send 5 entries — they get requeued, pushing past the cap.
+    new_entries = [logging_pb2.LogEntry(source="test", data=f"new-{i}") for i in range(5)]
+    pusher._send("k", new_entries)
+
+    buf = pusher._buffers["k"]
+    assert len(buf) == _MAX_BUFFER_PER_KEY
+    # The oldest entries should have been dropped, keeping newer ones.
+    assert buf[-1].data == "new-4"
+    assert buf[-5].data == "new-0"

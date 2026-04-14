@@ -13,7 +13,6 @@ RemoteLogHandler: Python logging.Handler that formats records and pushes
 from __future__ import annotations
 
 import logging
-import sys
 import threading
 from collections.abc import Iterable
 
@@ -26,8 +25,22 @@ from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
 
+# Internal logger for LogPusher diagnostics.  Writes directly to stderr and
+# does NOT propagate to the root logger, which may have a RemoteLogHandler
+# attached in worker mode.  This avoids re-entrant deadlocks when _send()
+# logs a warning that would otherwise be fed back through push() → _send().
+_pusher_logger = logging.getLogger(__name__ + "._internal")
+_pusher_logger.propagate = False
+_pusher_logger.setLevel(logging.DEBUG)
+if not _pusher_logger.handlers:
+    _pusher_logger.addHandler(logging.StreamHandler())
+
 # Minimum interval between repeated failure warnings (seconds).
 _WARN_INTERVAL = 60
+
+# Per-key cap on buffered entries to prevent unbounded memory growth when the
+# log server is down for extended periods.
+_MAX_BUFFER_PER_KEY = 10_000
 
 
 class LogPusher:
@@ -93,9 +106,6 @@ class LogPusher:
             self._send(key, entries)
 
     def _send(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-        warn_args: tuple[int, str, int] | None = None
-        warn_exc_info = None
-        recovery_count: int | None = None
         with self._send_lock:
             if self._closed:
                 return
@@ -104,22 +114,35 @@ class LogPusher:
             except Exception:
                 self._consecutive_failures += 1
                 if self._warn_limiter.should_run():
-                    warn_args = (len(entries), key, self._consecutive_failures)
-                    warn_exc_info = sys.exc_info()
-            else:
-                if self._consecutive_failures > 0:
-                    recovery_count = self._consecutive_failures
-                    self._consecutive_failures = 0
-                    self._warn_limiter.reset()
-        # Log outside the lock to avoid re-entrant deadlock via RemoteLogHandler.
-        if warn_args is not None:
-            logger.warning(
-                "Failed to push %d log entries for key %s (%d consecutive failures)",
-                *warn_args,
-                exc_info=warn_exc_info,
-            )
-        if recovery_count is not None:
-            logger.info("Log push recovered after %d consecutive failures", recovery_count)
+                    _pusher_logger.warning(
+                        "Failed to push %d log entries for key %s (%d consecutive failures)",
+                        len(entries),
+                        key,
+                        self._consecutive_failures,
+                        exc_info=True,
+                    )
+                # Retain failed entries for retry on the next flush cycle.
+                self._requeue(key, entries)
+                return
+            if self._consecutive_failures > 0:
+                _pusher_logger.info("Log push recovered after %d consecutive failures", self._consecutive_failures)
+                self._consecutive_failures = 0
+                self._warn_limiter.reset()
+
+    def _requeue(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
+        """Re-buffer entries that failed to send, for retry on the next flush."""
+        with self._lock:
+            buf = self._buffers.setdefault(key, [])
+            buf.extend(entries)
+            overflow = len(buf) - _MAX_BUFFER_PER_KEY
+            if overflow > 0:
+                del buf[:overflow]
+                _pusher_logger.warning(
+                    "Dropped %d oldest log entries for key %s (buffer cap %d)",
+                    overflow,
+                    key,
+                    _MAX_BUFFER_PER_KEY,
+                )
 
     def flush(self) -> None:
         """Force-flush all buffered entries."""
