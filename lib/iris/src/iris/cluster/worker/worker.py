@@ -142,9 +142,10 @@ class Worker:
         self._cache_dir = config.cache_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Probe cache-dir writability once at startup; heartbeats re-surface
-        # this error without repeating the file create/unlink (see #4732).
-        self._writable_error = probe_disk_writable(str(self._cache_dir))
+        # Probe cache-dir writability once at startup. Failures propagate so
+        # the worker aborts and the controller reaps the machine; heartbeats
+        # deliberately do not repeat this probe (see #4732).
+        probe_disk_writable(str(self._cache_dir))
 
         # Use overrides if provided, otherwise create defaults
         self._bundle_store = bundle_store or BundleStore(
@@ -826,10 +827,7 @@ class Worker:
 
             # Run health checks to detect local faults (disk full, write failure)
             with slow_log(logger, "heartbeat health_check", threshold_ms=100):
-                health = check_worker_health(
-                    disk_path=str(self._cache_dir),
-                    writable_error=self._writable_error,
-                )
+                health = check_worker_health(disk_path=str(self._cache_dir))
                 if not health.healthy:
                     logger.warning("Worker health check failed: %s", health.error)
 
