@@ -161,24 +161,22 @@ def dedup_exact_paragraph(
                     yield {"file_idx": path_to_idx[path], "id": hash_record.pop("doc_id"), **hash_record}
 
     file_groups = group_files(input_files, max_parallelism)
-    shard_results = list(
-        ctx.execute(
-            Dataset.from_list(file_groups)
-            .flat_map(_flat_map_paragraph_hashes)
-            .group_by(
-                lambda record: record["hash"],
-                # NOTE: selecting the canonical record is deterministic via this sort
-                sort_by=lambda record: record["id"],
-                reducer=annotate_dups,
-            )
-            .group_by(
-                lambda r: r["file_idx"],
-                sort_by=lambda r: r["id"],
-                reducer=aggregate_and_write_to_corresponding_files,
-            ),
-            verbose=True,
+    shard_results = ctx.execute(
+        Dataset.from_list(file_groups)
+        .flat_map(_flat_map_paragraph_hashes)
+        .group_by(
+            lambda record: record["hash"],
+            # NOTE: selecting the canonical record is deterministic via this sort
+            sort_by=lambda record: record["id"],
+            reducer=annotate_dups,
+        )
+        .group_by(
+            lambda r: r["file_idx"],
+            sort_by=lambda r: r["id"],
+            reducer=aggregate_and_write_to_corresponding_files,
         ),
-    )
+        verbose=True,
+    ).results
 
     return finalize_dedup(shard_results, DedupMode.EXACT_PARAGRAPH, method="exact", level="paragraph")
 
@@ -247,19 +245,17 @@ def dedup_exact_document(
                     yield {"file_idx": path_to_idx[path], **hash_record}
 
     file_groups = group_files(input_files, max_parallelism)
-    shard_results = list(
-        ctx.execute(
-            Dataset.from_list(file_groups)
-            .flat_map(_flat_map_document_hashes)
-            .group_by(
-                lambda record: record["hash"],
-                # NOTE: selecting the canonical record is deterministic via this sort
-                sort_by=lambda record: record["id"],
-                reducer=annotate_dups,
-            )
-            .group_by(lambda r: r["file_idx"], sort_by=lambda r: r["id"], reducer=aggregate_and_write),
-            verbose=True,
-        ),
-    )
+    shard_results = ctx.execute(
+        Dataset.from_list(file_groups)
+        .flat_map(_flat_map_document_hashes)
+        .group_by(
+            lambda record: record["hash"],
+            # NOTE: selecting the canonical record is deterministic via this sort
+            sort_by=lambda record: record["id"],
+            reducer=annotate_dups,
+        )
+        .group_by(lambda r: r["file_idx"], sort_by=lambda r: r["id"], reducer=aggregate_and_write),
+        verbose=True,
+    ).results
 
     return finalize_dedup(shard_results, DedupMode.EXACT_DOCUMENT, method="exact", level="document")

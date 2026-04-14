@@ -20,10 +20,11 @@ from enum import Enum, StrEnum
 from collections.abc import Sequence
 
 from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import Labels, SliceHandle
+from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
 from iris.cluster.constraints import (
     AttributeValue,
     CONSTRAINT_REGISTRY,
+    Constraint,
     DeviceType,
     ResourceCapacity,
     WellKnownAttribute,
@@ -384,11 +385,7 @@ class ScalingGroup:
 
     @property
     def region(self) -> str | None:
-        """Region derived from worker attributes or slice template."""
-        if self._config.HasField("worker"):
-            region = self._config.worker.attributes.get(WellKnownAttribute.REGION, "").strip()
-            if region:
-                return region
+        """Region derived from the slice template."""
         template = self._config.slice_template
         if template.HasField("gcp") and template.gcp.zone:
             return template.gcp.zone.rsplit("-", 1)[0]
@@ -398,11 +395,7 @@ class ScalingGroup:
 
     @property
     def zone(self) -> str | None:
-        """Zone derived from worker attributes or slice template."""
-        if self._config.HasField("worker"):
-            zone = self._config.worker.attributes.get(WellKnownAttribute.ZONE, "").strip()
-            if zone:
-                return zone
+        """Zone derived from the slice template."""
         template = self._config.slice_template
         if template.HasField("gcp") and template.gcp.zone:
             return template.gcp.zone
@@ -572,6 +565,17 @@ class ScalingGroup:
     def _terminate_slice_handle(self, handle: SliceHandle, *, context: str) -> None:
         try:
             handle.terminate()
+        except QuotaExhaustedError as e:
+            # Delete quota retries are exhausted inside the provider; log a
+            # terse warning without a stack trace since this is a known-benign
+            # rate limit, not a crash.
+            logger.warning(
+                "Scale group %s: terminate() rate-limited for slice %s (%s), %s",
+                self.name,
+                handle.slice_id,
+                e,
+                context,
+            )
         except Exception:
             logger.warning(
                 "Scale group %s: terminate() failed for slice %s, %s",
@@ -958,8 +962,8 @@ class ScalingGroup:
             attrs[WellKnownAttribute.ZONE] = AttributeValue(zone)
         return attrs
 
-    def matches_constraints(self, constraints: Sequence[job_pb2.Constraint]) -> bool:
-        """Check if this group satisfies the given proto constraints.
+    def matches_constraints(self, constraints: Sequence[Constraint]) -> bool:
+        """Check if this group satisfies the given constraints.
 
         Only evaluates routing constraints (device-type, device-variant,
         preemptible, region, zone). Non-routing constraints (tpu-name, etc.)
@@ -1083,6 +1087,13 @@ class ScalingGroup:
         for handle in snapshot:
             try:
                 handle.terminate()
+            except QuotaExhaustedError as e:
+                logger.warning(
+                    "Scale group %s: terminate() rate-limited for slice %s (%s) during terminate_all, continuing",
+                    self.name,
+                    handle.slice_id,
+                    e,
+                )
             except Exception:
                 logger.warning(
                     "Scale group %s: terminate() failed for slice %s during terminate_all, continuing",

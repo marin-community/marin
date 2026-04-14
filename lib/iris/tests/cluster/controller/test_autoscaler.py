@@ -29,7 +29,7 @@ from tests.cluster.providers.conftest import (
     make_mock_slice_handle,
     make_mock_worker_handle,
 )
-from iris.cluster.constraints import DeviceType, WellKnownAttribute
+from iris.cluster.constraints import DeviceType
 from iris.cluster.types import WorkerStatus
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_proto import duration_to_proto
@@ -1099,8 +1099,7 @@ class TestPerGroupWorkerConfig:
         )
         base_wc.task_env["MARIN_PREFIX"] = "s3://bucket/marin"
         sg_config = make_scale_group_config(name="west-group", max_slices=5)
-        sg_config.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
-        sg_config.worker.attributes[WellKnownAttribute.PREEMPTIBLE] = "true"
+        sg_config.worker.attributes["custom-label"] = "west-value"
 
         group = ScalingGroup(sg_config, make_mock_platform())
         autoscaler = make_autoscaler({"west-group": group}, base_worker_config=base_wc)
@@ -1109,8 +1108,7 @@ class TestPerGroupWorkerConfig:
 
         assert wc is not None
         assert wc.docker_image == "test:latest"
-        assert wc.worker_attributes[WellKnownAttribute.REGION] == "us-west4"
-        assert wc.worker_attributes[WellKnownAttribute.PREEMPTIBLE] == "true"
+        assert wc.worker_attributes["custom-label"] == "west-value"
         assert wc.task_env["MARIN_PREFIX"] == "s3://bucket/marin"
         assert wc.worker_attributes["scale-group"] == "west-group"
         assert wc.accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
@@ -1146,7 +1144,7 @@ class TestPerGroupWorkerConfig:
     def test_returns_none_without_base(self):
         """Without a base worker config, returns None."""
         sg_config = make_scale_group_config(name="test-group", max_slices=5)
-        sg_config.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
+        sg_config.worker.attributes["custom-label"] = "value"
         group = ScalingGroup(sg_config, make_mock_platform())
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=None)
 
@@ -1162,14 +1160,14 @@ class TestPerGroupWorkerConfig:
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="west-group", max_slices=5)
-        sg_config.worker.attributes[WellKnownAttribute.REGION] = "us-west4"
+        sg_config.worker.attributes["custom-label"] = "value"
 
         group = ScalingGroup(sg_config, make_mock_platform())
         autoscaler = make_autoscaler({"west-group": group}, base_worker_config=base_wc)
 
         autoscaler._per_group_worker_config(group)
 
-        assert WellKnownAttribute.REGION not in base_wc.worker_attributes
+        assert "custom-label" not in base_wc.worker_attributes
 
     def test_worker_attributes_injected(self):
         """Worker attributes are injected into WorkerConfig."""
@@ -1179,7 +1177,7 @@ class TestPerGroupWorkerConfig:
             controller_address="controller:10000",
         )
         sg_config = make_scale_group_config(name="eu-group", max_slices=5, zones=["europe-west4-b"])
-        sg_config.worker.attributes[WellKnownAttribute.REGION] = "europe-west4"
+        sg_config.worker.attributes["team"] = "euw4"
 
         group = ScalingGroup(sg_config, make_mock_platform())
         autoscaler = make_autoscaler({"eu-group": group}, base_worker_config=base_wc)
@@ -1187,7 +1185,7 @@ class TestPerGroupWorkerConfig:
         wc = autoscaler._per_group_worker_config(group)
 
         assert wc is not None
-        assert wc.worker_attributes[WellKnownAttribute.REGION] == "europe-west4"
+        assert wc.worker_attributes["team"] == "euw4"
 
 
 class TestGpuScaleGroupBugs:

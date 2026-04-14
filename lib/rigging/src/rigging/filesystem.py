@@ -699,6 +699,19 @@ def _all_data_bucket_prefixes() -> list[str]:
     return [f"gs://{bucket}" for bucket in REGION_TO_DATA_BUCKET.values()]
 
 
+def _mirror_remote_prefixes(local_prefix: str) -> list[str]:
+    """Remote marin buckets to scan for mirror reads.
+
+    The cross-region mirror only exists on GCS, and scanning GCS buckets
+    requires GCP credentials.  Return an empty list unless the local prefix
+    is itself a ``gs://`` URL — otherwise non-GCP runs (CoreWeave S3, local
+    dev) would emit anonymous-caller 401s from gcsfs on every mirror read.
+    """
+    if not local_prefix.startswith("gs://"):
+        return []
+    return [p for p in _all_data_bucket_prefixes() if not local_prefix.startswith(p)]
+
+
 class MirrorFileSystem(fsspec.AbstractFileSystem):
     """Fsspec filesystem that mirrors files across marin regional buckets.
 
@@ -719,7 +732,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
     ):
         super().__init__(*args, **kwargs)
         self._local_prefix = marin_prefix().rstrip("/")
-        self._remote_prefixes = [p for p in _all_data_bucket_prefixes() if not self._local_prefix.startswith(p)]
+        self._remote_prefixes = _mirror_remote_prefixes(self._local_prefix)
         self._budget = budget if budget is not None else _global_transfer_budget
         self._worker_id = default_worker_id()
 

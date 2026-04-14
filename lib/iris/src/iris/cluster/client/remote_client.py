@@ -91,6 +91,8 @@ class RemoteClusterClient:
         reservation: job_pb2.ReservationConfig | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        task_image: str | None = None,
+        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     ) -> JobName:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
@@ -114,6 +116,8 @@ class RemoteClusterClient:
             max_retries_preemption=max_retries_preemption,
             preemption_policy=preemption_policy,
             existing_job_policy=existing_job_policy,
+            task_image=task_image or "",
+            priority_band=priority_band,
         )
         if self._bundle_id:
             request.bundle_id = self._bundle_id
@@ -341,13 +345,38 @@ class RemoteClusterClient:
 
         return call_with_retry("list_workers", _call)
 
-    def list_jobs(self) -> list[job_pb2.JobStatus]:
-        def _call():
-            request = controller_pb2.Controller.ListJobsRequest()
-            response = self._client.list_jobs(request)
-            return list(response.jobs)
+    def list_jobs(
+        self,
+        *,
+        query: controller_pb2.Controller.JobQuery | None = None,
+        page_size: int = 500,
+    ) -> list[job_pb2.JobStatus]:
+        """Fetch all jobs matching ``query`` by paging through ``ListJobs``.
 
-        return call_with_retry("list_jobs", _call)
+        The server caps each page at ``MAX_LIST_JOBS_LIMIT``; this helper walks
+        ``has_more`` / ``total_count`` to return the full result set without
+        asking the controller for an unbounded scan.
+        """
+        if query is None:
+            query = controller_pb2.Controller.JobQuery()
+
+        jobs: list[job_pb2.JobStatus] = []
+        offset = query.offset or 0
+        while True:
+            page_query = controller_pb2.Controller.JobQuery()
+            page_query.CopyFrom(query)
+            page_query.offset = offset
+            page_query.limit = page_size
+
+            def _call(q=page_query):
+                request = controller_pb2.Controller.ListJobsRequest(query=q)
+                return self._client.list_jobs(request)
+
+            response = call_with_retry("list_jobs", _call)
+            jobs.extend(response.jobs)
+            if not response.has_more or not response.jobs:
+                return jobs
+            offset += len(response.jobs)
 
     def shutdown(self, wait: bool = True) -> None:
         del wait

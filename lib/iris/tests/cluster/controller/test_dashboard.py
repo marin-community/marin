@@ -14,12 +14,14 @@ import pytest
 from starlette.testclient import TestClient
 
 from iris.cluster.bundle import BundleStore
+from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.log_server.server import LogServiceImpl
 from iris.cluster.controller.db import (
     healthy_active_workers_with_attributes,
 )
 from iris.cluster.controller.schema import (
+    JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
     EndpointRow,
 )
@@ -126,17 +128,24 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     def _get_job_scheduling_diagnostics(job_wire_id):
         """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
         with state._db.snapshot() as q:
-            rows = JOB_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire_id,)))
+            rows = JOB_DETAIL_PROJECTION.decode(
+                q.fetchall(
+                    f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
+                    (job_wire_id,),
+                )
+            )
         if not rows:
             return None
         job = rows[0]
         if job.state != job_pb2.JOB_STATE_PENDING:
             return None
         req = JobRequirements(
-            resources=job.request.resources,
-            constraints=list(job.request.constraints),
-            is_coscheduled=job.request.HasField("coscheduling"),
-            coscheduling_group_by=job.request.coscheduling.group_by if job.request.HasField("coscheduling") else None,
+            resources=resource_spec_from_scalars(
+                job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
+            ),
+            constraints=constraints_from_json(job.constraints_json),
+            is_coscheduled=job.has_coscheduling,
+            coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
         )
         tasks = _query_tasks_with_attempts(state, job.job_id)
         schedulable_task_id = next((t.task_id for t in tasks if check_task_can_be_scheduled(t)), None)
@@ -296,22 +305,20 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
             endpoint_id="ep1",
             name="pending-svc",
             address="h:1",
-            job_id=pending_id,
+            task_id=pending_id.task(0),
             metadata={},
             registered_at=Timestamp.now(),
         ),
-        task_id=pending_id.task(0),
     )
     state.add_endpoint(
         EndpointRow(
             endpoint_id="ep2",
             name="running-svc",
             address="h:2",
-            job_id=running_id,
+            task_id=running_id.task(0),
             metadata={},
             registered_at=Timestamp.now(),
         ),
-        task_id=running_id.task(0),
     )
 
     resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
@@ -320,6 +327,31 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     assert len(endpoints) == 2
     endpoint_names = {ep["name"] for ep in endpoints}
     assert endpoint_names == {"pending-svc", "running-svc"}
+
+
+def test_list_endpoints_returns_task_id(client, state, job_request):
+    """ListEndpoints returns the task_id so the dashboard can derive the owning job."""
+    job_id = submit_job(state, "ep-job", job_request)
+    set_job_state(state, job_id, job_pb2.JOB_STATE_RUNNING)
+
+    task_id = job_id.task(0)
+    state.add_endpoint(
+        EndpointRow(
+            endpoint_id="ep-task",
+            name="my-actor",
+            address="h:1",
+            task_id=task_id,
+            metadata={},
+            registered_at=Timestamp.now(),
+        ),
+    )
+
+    resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
+    endpoints = resp.get("endpoints", [])
+    assert len(endpoints) == 1
+    # The response must carry the full task_id (including task index) so the
+    # dashboard's jobIdFromTaskId() can strip the index and show the job name.
+    assert endpoints[0]["taskId"] == task_id.to_wire()
 
 
 def test_list_jobs_includes_retry_counts(client, state, job_request):

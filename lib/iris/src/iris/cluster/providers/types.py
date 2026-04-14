@@ -83,6 +83,29 @@ def find_free_port(start: int = -1) -> int:
     raise RuntimeError(f"No free port found in range {start}-{start + 1000}")
 
 
+def port_is_open(port: int, host: str = "localhost") -> bool:
+    """Check if a TCP port is accepting connections."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.1)
+        return s.connect_ex((host, port)) == 0
+
+
+def resolve_external_host(host: str) -> str:
+    """Return an externally-reachable address for a bind host.
+
+    Workers running off-host cannot connect to the unspecified address
+    ``0.0.0.0``; probe for a real network IP instead.
+    """
+    if host != "0.0.0.0":
+        return host
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+
+
 def wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> bool:
     """Wait for a TCP port to become connectable.
 

@@ -16,8 +16,63 @@ from braceexpand import braceexpand
 from rigging.filesystem import url_to_fs
 
 from zephyr.expr import Expr
+from zephyr.readers import InputFileSpec
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class GlobSource:
+    """Lazy file source resolved at plan time via a bulk list-objects call.
+
+    Stores the glob pattern and defers expansion to compute_plan(), where
+    fsspec glob(detail=True) returns paths and sizes in a single RPC.
+    """
+
+    pattern: str
+    empty_glob_ok: bool = False
+
+
+@dataclass(frozen=True)
+class FileEntry:
+    """A discovered input file: read-spec plus metadata from the bulk listing.
+
+    ``spec`` is the pure read-specification (how to read the file); ``size`` is
+    discovered metadata (from glob ``detail=True``). Keeping these separate means
+    readers only depend on ``InputFileSpec`` while planners can still size shards.
+    """
+
+    spec: InputFileSpec
+    size: int
+
+    @property
+    def path(self) -> str:
+        return self.spec.path
+
+
+def resolve_glob(source: GlobSource) -> list[FileEntry]:
+    """Expand a GlobSource into FileEntry objects with sizes.
+
+    Uses fsspec glob(detail=True) which returns file metadata from the same
+    list-objects API call — no extra per-file stat RPCs.
+    """
+    pattern = re.sub(r"(?<!:)//+", "/", source.pattern)
+
+    fs, _ = url_to_fs(pattern)
+    protocol = fsspec.core.split_protocol(pattern)[0]
+
+    entries: list[FileEntry] = []
+    for expanded in braceexpand(pattern):
+        detail = fs.glob(expanded, detail=True)
+        for path, info in detail.items():
+            full = f"{protocol}://{path}" if protocol else path
+            entries.append(FileEntry(spec=InputFileSpec(path=full), size=info.get("size", 0)))
+    entries.sort(key=lambda e: e.path)
+
+    if not entries and not source.empty_glob_ok:
+        raise FileNotFoundError(f"No files found matching pattern: {source.pattern}")
+
+    return entries
 
 
 @dataclass(frozen=True)
@@ -161,6 +216,7 @@ class WriteOp:
 
     # Format-specific parameters (only used by relevant writer)
     levanter_metadata: dict[str, Any] | None = None
+    levanter_batch_size: int | None = None
     schema: object | None = None  # For parquet (pyarrow.Schema)
     skip_existing: bool = False  # Skip writing if output file already exists
 
@@ -309,7 +365,7 @@ class Dataset(Generic[T]):
         ...     .filter(lambda x: x % 2 == 0)
         ...     .map(lambda x: x * 2)
         ... )
-        >>> results = ctx.execute(ds)
+        >>> results = ctx.execute(ds).results
         [4, 8]
     """
 
@@ -359,27 +415,9 @@ class Dataset(Generic[T]):
             ...     .map(lambda path: process_file(path))
             ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
-        # Normalize double slashes while preserving protocol (e.g., gs://, s3://, http://)
-        pattern = re.sub(r"(?<!:)//+", "/", pattern)
-
-        fs, _ = url_to_fs(pattern)
-        protocol = fsspec.core.split_protocol(pattern)[0]
-
-        files = []
-        for expanded in braceexpand(pattern):
-            for f in fs.glob(expanded):
-                if protocol:
-                    files.append(f"{protocol}://{f}")
-                else:
-                    files.append(f)
-        files = sorted(files)
-
-        if len(files) == 0 and not empty_glob_ok:
-            raise FileNotFoundError(f"No files found matching pattern: {pattern}")
-
-        return Dataset.from_list(files)
+        return Dataset(GlobSource(pattern, empty_glob_ok))
 
     def map(self, fn: Callable[[T], R]) -> Dataset[R]:
         """Map a function over the dataset.
@@ -526,7 +564,7 @@ class Dataset(Generic[T]):
             ...     .filter(lambda r: r["score"] > 0.5)
             ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         return Dataset(self.source, [*self.operations, FlatMapOp(fn)])
 
@@ -546,7 +584,7 @@ class Dataset(Generic[T]):
             ...     .filter(lambda r: r["score"] > 0.5)
             ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         return Dataset(self.source, [*self.operations, LoadFileOp("auto", columns)])
 
@@ -597,7 +635,7 @@ class Dataset(Generic[T]):
             ...     .map_shard(deduplicate_shard)
             ...     .write_jsonl("output/deduped-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         return Dataset(self.source, [*self.operations, MapShardOp(fn)])
 
@@ -624,7 +662,7 @@ class Dataset(Generic[T]):
             ...     .reshard(num_shards=20)              # Redistribute to 20 shards
             ...     .map(expensive_transform)            # Now uses up to 20 workers
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         if num_shards is not None and num_shards <= 0:
             raise ValueError(f"num_shards must be positive, got {num_shards}")
@@ -727,6 +765,7 @@ class Dataset(Generic[T]):
         output_pattern: str | Callable[[int, int], str],
         metadata: dict[str, Any],
         skip_existing: bool = False,
+        batch_size: int | None = None,
     ) -> Dataset[str]:
         """Write tokenized records to Levanter cache format.
 
@@ -734,6 +773,10 @@ class Dataset(Generic[T]):
         in training. Each shard creates a separate cache directory.
         The output pattern supports substitutions: {shard:05d}, {total:05d}, {basename}
         or can be a callable that takes (shard_idx, total_shards) and returns the output path.
+
+        Args:
+            batch_size: Number of records to accumulate before flushing to disk.
+                Defaults to 16384. Lower values reduce peak memory for large documents.
         """
         return Dataset(
             self.source,
@@ -743,6 +786,7 @@ class Dataset(Generic[T]):
                     _normalize_output_pattern(output_pattern),
                     writer_type="levanter_cache",
                     levanter_metadata=metadata,
+                    levanter_batch_size=batch_size,
                     skip_existing=skip_existing,
                 ),
             ],
@@ -873,7 +917,7 @@ class Dataset(Generic[T]):
 
         Example:
             >>> ds = Dataset.from_list(range(100)).reduce(sum)
-            >>> result = list(ctx.execute(ds))[0]
+            >>> result = ctx.execute(ds).results[0]
             4950
         """
         if global_reducer is None:
@@ -889,7 +933,7 @@ class Dataset(Generic[T]):
 
         Example:
             >>> ds = Dataset.from_list(range(100)).filter(lambda x: x % 2 == 0)
-            >>> count = list(ctx.execute(ds.count()))[0]
+            >>> count = ctx.execute(ds.count()).results[0]
             50
         """
         return self.reduce(
