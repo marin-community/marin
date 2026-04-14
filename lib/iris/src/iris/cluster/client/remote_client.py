@@ -93,6 +93,7 @@ class RemoteClusterClient:
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+        submit_argv: list[str] | None = None,
     ) -> JobName:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
@@ -118,6 +119,7 @@ class RemoteClusterClient:
             existing_job_policy=existing_job_policy,
             task_image=task_image or "",
             priority_band=priority_band,
+            submit_argv=submit_argv or [],
         )
         if self._bundle_id:
             request.bundle_id = self._bundle_id

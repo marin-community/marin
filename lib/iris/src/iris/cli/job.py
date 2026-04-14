@@ -33,6 +33,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -552,6 +553,7 @@ def run_iris_job(
     reserve: tuple[str, ...] | None = None,
     priority: str | None = None,
     token_provider: TokenProvider | None = None,
+    submit_argv: list[str] | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -645,6 +647,7 @@ def run_iris_job(
         reservation=reservation,
         priority_band=priority_band,
         token_provider=token_provider,
+        submit_argv=submit_argv,
     )
 
 
@@ -666,6 +669,7 @@ def _submit_and_wait_job(
     reservation: list[ReservationEntry] | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     token_provider: TokenProvider | None = None,
+    submit_argv: list[str] | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -688,6 +692,7 @@ def _submit_and_wait_job(
         user=user,
         reservation=reservation,
         priority_band=priority_band,
+        submit_argv=submit_argv,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
@@ -853,6 +858,8 @@ def run(
     if not command:
         raise click.UsageError("No command provided after --")
 
+    submit_argv = redact_submit_argv(list(sys.argv))
+
     # ignore_unknown_options silently passes typo'd flags (e.g. --reservation
     # instead of --reserve) into cmd. Catch any flags that leaked through
     # before the actual command starts — these were meant for iris, not the
@@ -889,6 +896,7 @@ def run(
             reserve=reserve or None,
             priority=priority,
             token_provider=ctx.obj.get("token_provider"),
+            submit_argv=submit_argv,
         )
     except Exception:
         bundle = ctx.obj.get("provider_bundle")

@@ -319,7 +319,7 @@ def test_get_job_status_not_found(service):
 
 def test_redact_request_env_vars_does_not_mutate_original():
     """Verify redact_request_env_vars returns a copy and does not mutate the input."""
-    from iris.cluster.controller.service import REDACTED_VALUE, redact_request_env_vars
+    from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 
     original = controller_pb2.Controller.LaunchJobRequest(
         name="/test-user/job",
@@ -335,7 +335,7 @@ def test_redact_request_env_vars_does_not_mutate_original():
 
 def test_get_job_status_redacts_sensitive_env_vars(service):
     """Verify get_job_status redacts env var values whose keys match sensitive patterns."""
-    from iris.cluster.controller.service import REDACTED_VALUE
+    from iris.cluster.redaction import REDACTED_VALUE
 
     job_name = JobName.root("test-user", "redact-test")
     launch_req = controller_pb2.Controller.LaunchJobRequest(
