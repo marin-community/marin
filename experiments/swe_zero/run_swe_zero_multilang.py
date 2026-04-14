@@ -110,7 +110,7 @@ def _sample_all_prs_sharded(
 
     Returns ``(sampled_prs, summary)`` matching ``_sample_prs_per_language``.
     """
-    all_ids = sorted(loader._by_id.keys())
+    all_ids = sorted(loader._id_to_idx.keys())
     rng = random.Random(seed)
     rng.shuffle(all_ids)
     my_ids = all_ids[shard_index::total_shards]
@@ -270,6 +270,7 @@ def _run_with_vllm(
     all_prs: bool = False,
     shard_index: int = 0,
     total_shards: int = 1,
+    dataset_id: str = "nebius/SWE-rebench-V2",
 ) -> None:
     # Local imports of swe_zero modules only — no marin.evaluation /
     # marin.inference imports, to avoid pulling in transformers / torch.
@@ -285,7 +286,7 @@ def _run_with_vllm(
     os.environ.setdefault("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "1")
     os.environ.setdefault("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1")
 
-    loader = SWERebenchV2Loader()
+    loader = SWERebenchV2Loader(dataset_id=dataset_id)
     if all_prs:
         sampled_prs, summary = _sample_all_prs_sharded(
             loader, seed=seed, shard_index=shard_index, total_shards=total_shards
@@ -548,9 +549,14 @@ def main():
         "Default: all 20 languages in SWE-rebench V2.",
     )
     parser.add_argument(
+        "--dataset",
+        default="nebius/SWE-rebench-V2",
+        help="HuggingFace dataset ID. Also supports nebius/SWE-rebench-V2-PRs (126K PRs).",
+    )
+    parser.add_argument(
         "--all-prs",
         action="store_true",
-        help="Sample EVERY PR in SWE-rebench V2 (all 32k+) instead of n-per-language. "
+        help="Sample EVERY PR in the dataset instead of n-per-language. "
         "Combine with --shard-index/--total-shards or Iris --replicas to partition "
         "the corpus across workers.",
     )
@@ -623,6 +629,7 @@ def main():
         all_prs=args.all_prs,
         shard_index=shard_index,
         total_shards=total_shards,
+        dataset_id=args.dataset,
     )
 
 
