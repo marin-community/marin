@@ -10,6 +10,7 @@ import pytest
 from zephyr.execution import ZephyrWorkerError
 
 from levanter.data import BatchProcessor, ShardedDataSource, batched
+from levanter.data.packing import GreedyPrepackedDataset
 from levanter.data.sharded_datasource import TextUrlDataSource
 from levanter.store.cache import (
     CacheLedger,
@@ -334,6 +335,28 @@ def test_sharded_tree_cache_reads_across_shards():
         cache = ShardedTreeCache(shard_paths, exemplar, ledger)
 
         assert len(cache) == 40
+        assert cache.store.tree["data"].num_rows == 40
+        assert cache.store.tree["data"].data_size == 400
+        np.testing.assert_array_equal(
+            cache.store.tree["data"].offsets[0:5].read().result(),
+            np.asarray([40, 10, 20, 30, 40]),
+        )
+        np.testing.assert_array_equal(
+            cache.store.tree["data"].data[95:105].read().result(),
+            np.asarray([9, 9, 9, 9, 9, 10, 10, 10, 10, 10]),
+        )
+        packed = GreedyPrepackedDataset(
+            cache.store.tree,
+            max_length=25,
+            max_segments_per_example=3,
+            slice_strategy="raise",
+        )
+        packed_batch = packed.as_sync_dataset().get_batch([0])
+        assert packed_batch[0][0]["data"].shape == (25,)
+        np.testing.assert_array_equal(
+            packed_batch[0][0]["data"],
+            np.asarray([0] * 10 + [1] * 10 + [0] * 5),
+        )
 
         # Sequential read
         for i in range(40):
